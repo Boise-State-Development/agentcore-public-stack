@@ -12,8 +12,19 @@ import { Construct } from 'constructs';
 import {
   AppConfig,
   buildCorsOrigins,
+  getAutoDeleteObjects,
+  getRemovalPolicy,
   getResourceName,
+  getTruncatedResourceName,
 } from '../../config';
+
+/**
+ * How long SPA access logs are kept. Longer than the ALB's 30 days on
+ * purpose: the question these logs answer ("what 404'd for this user?")
+ * usually arrives as a user report days after the fact, and the edge log is
+ * small next to the ALB's.
+ */
+const ACCESS_LOG_RETENTION_DAYS = 90;
 
 export interface SpaDistributionConstructProps {
   config: AppConfig;
@@ -49,6 +60,18 @@ export interface SpaDistributionConstructProps {
  *     ALL_VIEWER_EXCEPT_HOST_HEADER pass cookies + CSRF + auth headers
  *     untouched. compress=false to preserve `text/event-stream`.
  *
+ *     compress=false does NOT mean `/api/*` responses travel uncompressed:
+ *     it means CloudFront doesn't compress *for* us. app-api gzips its own
+ *     JSON (`apis/shared/middleware/compression.py`), where the response's
+ *     content type is known rather than guessed from a path pattern, and
+ *     CloudFront passes an origin's `Content-Encoding` straight through.
+ *     Accept-Encoding reaches the origin because CACHING_DISABLED leaves
+ *     EnableAcceptEncodingGzip/Brotli off — with both off, CloudFront
+ *     treats Accept-Encoding as an ordinary header, and
+ *     ALL_VIEWER_EXCEPT_HOST_HEADER forwards it verbatim. Turning
+ *     compress=true on would put the edge back in front of the SSE stream
+ *     and gain nothing the origin isn't already doing.
+ *
  * Security headers:
  *   - X-Content-Type-Options, X-Frame-Options=DENY (default-deny iframe
  *     embedding), Referrer-Policy=strict-origin-when-cross-origin, HSTS
@@ -63,6 +86,10 @@ export interface SpaDistributionConstructProps {
  * serves at `config.domainName` and a Route53 ALIAS A record is
  * created in the `config.domainName` hosted zone (looked up at synth).
  *
+ * Access logs: CloudFront standard logging (legacy) to a dedicated S3
+ * bucket under `spa/`, cookies excluded. See the bucket below for why it
+ * is legacy-to-S3 and why the bucket has ACLs enabled.
+ *
  * SSM publications:
  *   /{prefix}/frontend/distribution-id
  *   /{prefix}/frontend/url
@@ -71,6 +98,7 @@ export interface SpaDistributionConstructProps {
 export class SpaDistributionConstruct extends Construct {
   public readonly distribution: cloudfront.Distribution;
   public readonly distributionDomainName: string;
+  public readonly accessLogBucket: s3.Bucket;
 
   constructor(
     scope: Construct,
@@ -156,9 +184,21 @@ export class SpaDistributionConstruct extends Construct {
         runtime: cloudfront.FunctionRuntime.JS_2_0,
         comment:
           'Strip /api prefix before forwarding requests to the app-api ALB origin',
+        // `x-forwarded-prefix` tells app-api what this function removed, so a
+        // redirect it generates for itself (Starlette's trailing-slash
+        // `redirect_slashes`, chiefly) can be put back on the public URL by
+        // `ProxiedRedirectMiddleware`. Without it those redirects come out as
+        // `http://api.<domain>/<path>` — the origin's own hostname, over plain
+        // HTTP, missing the `/api` prefix — and the browser blocks them as
+        // mixed content, so the caller silently gets nothing.
+        //
+        // Set unconditionally (not only on the stripping branches) so a
+        // viewer-supplied `X-Forwarded-Prefix` is always overwritten rather
+        // than passed through to the origin.
         code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
   var req = event.request;
+  req.headers['x-forwarded-prefix'] = { value: '/api' };
   if (req.uri === '/api') {
     req.uri = '/';
   } else if (req.uri.indexOf('/api/') === 0) {
@@ -184,6 +224,70 @@ function handler(event) {
       keepaliveTimeout: cdk.Duration.seconds(60),
     });
 
+    // Security headers for the /api/* behavior. Distinct from the SPA policy
+    // above: an API response must never be usable as a *document*, and the SPA
+    // policy's `frame-src` allowances are irrelevant here.
+    //
+    // This matters because /api/* is served from the SAME origin as the SPA, so
+    // any API response a browser can be navigated to is a potential document on
+    // the SPA's origin. app-api serves user-uploaded bytes (skill resources,
+    // agent icons, exports); without `nosniff` a browser may re-sniff those
+    // bytes into text/html, and without a CSP an HTML-typed body would execute
+    // script with the viewer's session cookie and CSRF token. The app-api routes
+    // apply the same controls per-response — this policy is the origin-wide
+    // backstop so a future route cannot regress the whole origin.
+    //
+    // `default-src 'none'` is the load-bearing directive: in a document it
+    // blocks inline `<script>`, external script, and every fetch, so an
+    // HTML-typed API body has no way to reach the SPA's session even if a
+    // browser does render it. `sandbox` is deliberately NOT set here (unlike on
+    // the skill-resource responses themselves, which are only ever read over
+    // XHR): the edge policy covers every /api/* response including
+    // `Content-Disposition: attachment` bodies and OAuth navigations, and an
+    // opaque-origin directive on that whole surface risks breaking a download
+    // for no additional protection over `default-src 'none'`.
+    //
+    // Note `override: true` on the CSP below: it REPLACES whatever the origin
+    // sent. app-api's RESOURCE_SECURITY_HEADERS
+    // (backend/src/apis/shared/skills/resource_types.py) sets a longer CSP
+    // ending in `; sandbox`, and behind CloudFront the browser does not see
+    // that suffix. Both layers are still load-bearing, on different paths: the
+    // ALB is internet-facing and a localhost SPA reaches the dev backend
+    // directly, and on those paths there is no edge policy at all, so the
+    // backend header is the only CSP the browser gets. Keep `override: true` —
+    // without it any route, middleware or error handler could define the CSP
+    // for the entire origin, which is exactly the regression this policy
+    // exists to prevent. api-security-headers.test.ts pins the omission so the
+    // two layers cannot drift apart unnoticed.
+    const apiResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
+      this,
+      'ApiResponseHeadersPolicy',
+      {
+        responseHeadersPolicyName: getResourceName(config, 'api-headers'),
+        comment: 'Security headers for /api/* (same-origin document defense)',
+        securityHeadersBehavior: {
+          contentTypeOptions: { override: true },
+          frameOptions: {
+            frameOption: cloudfront.HeadersFrameOption.DENY,
+            override: true,
+          },
+          referrerPolicy: {
+            referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER,
+            override: true,
+          },
+          strictTransportSecurity: {
+            accessControlMaxAge: cdk.Duration.seconds(31536000),
+            includeSubdomains: true,
+            override: true,
+          },
+          contentSecurityPolicy: {
+            contentSecurityPolicy: "default-src 'none'; frame-ancestors 'none'",
+            override: true,
+          },
+        },
+      },
+    );
+
     const apiBehavior: cloudfront.BehaviorOptions = {
       origin: appApiOrigin,
       viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -192,6 +296,7 @@ function handler(event) {
       cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
       originRequestPolicy:
         cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      responseHeadersPolicy: apiResponseHeadersPolicy,
       compress: false,
       functionAssociations: [
         {
@@ -227,6 +332,55 @@ function handler(event) {
       },
     );
 
+    // Access logs: the only record of what the edge answered on its own.
+    //
+    // A 404 for a lazy-loaded chunk that a deploy removed, a 403 from S3, a
+    // CloudFront Function rewrite gone wrong — none of these reach app-api or
+    // the ALB, so neither of their logs can see them. CloudFront's 4xx metric
+    // can say *that* they happened, never which URI or which client.
+    //
+    // Standard logging (legacy) to S3, not v2: v2 is configured through
+    // CloudWatch Logs vended-log deliveries whose CloudFront delivery source
+    // must be created in us-east-1, and this single stack deploys to the app
+    // region. Legacy logging is a property on the distribution itself, so it
+    // stays inside PlatformStack with no cross-region resources.
+    //
+    // Legacy delivery writes objects through the bucket ACL (it grants the
+    // `awslogsdelivery` account), so the bucket must have ACLs ENABLED.
+    // BUCKET_OWNER_ENFORCED — the S3 default — makes the distribution update
+    // fail. BUCKET_OWNER_PREFERRED keeps ACLs on while the account still owns
+    // what lands. SSE-S3 rather than KMS for the same reason as the ALB
+    // bucket: the log-delivery service cannot use a customer key without key
+    // policy surgery.
+    //
+    // The bucket is provisioned unconditionally; the kill switch only removes
+    // the distribution's Logging block. Tying the bucket to the flag would
+    // strand a RETAINed bucket on disable and then fail the re-enable on the
+    // name it still holds.
+    this.accessLogBucket = new s3.Bucket(this, 'AccessLogBucket', {
+      bucketName: getTruncatedResourceName(
+        config,
+        63,
+        'frontend-access-logs',
+        config.awsAccount,
+      ),
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_PREFERRED,
+      enforceSSL: true,
+      lifecycleRules: [
+        {
+          id: 'expire-access-logs',
+          expiration: cdk.Duration.days(ACCESS_LOG_RETENTION_DAYS),
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
+        },
+      ],
+      removalPolicy: getRemovalPolicy(config),
+      autoDeleteObjects: getAutoDeleteObjects(config),
+    });
+
+    const accessLogsEnabled = config.frontend.accessLogsEnabled !== false;
+
     let distributionProps: cloudfront.DistributionProps = {
       comment: `${config.projectPrefix} Frontend Distribution`,
       defaultBehavior: {
@@ -253,6 +407,16 @@ function handler(event) {
         ],
       enabled: true,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+      // Never log cookies: the SPA's session is an httpOnly cookie, and a
+      // log line carrying it is a replayable session sitting in S3.
+      ...(accessLogsEnabled
+        ? {
+            enableLogging: true,
+            logBucket: this.accessLogBucket,
+            logFilePrefix: 'spa/',
+            logIncludesCookies: false,
+          }
+        : {}),
     };
 
     if (config.domainName && config.frontend.certificateArn) {

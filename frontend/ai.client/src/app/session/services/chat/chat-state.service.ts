@@ -1,4 +1,24 @@
 import { Injectable, Signal, WritableSignal, computed, signal } from '@angular/core';
+import { ContextBreakdown } from '../models/content-types';
+import { AwaitingInputKind, SessionMetadata } from '../models/session-metadata.model';
+
+/**
+ * How long a live "paused on the user" mark is trusted without the server
+ * agreeing. Matches the interactive `pausedTurn` snapshot TTL the stream
+ * coordinator writes (one hour); past it the resume route refuses the pause,
+ * so a mark older than this would point at a prompt that can no longer resume.
+ */
+const LIVE_AWAITING_INPUT_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * This tab's first-hand knowledge of whether a session's turn is paused on
+ * the user, and when it learned it (epoch ms). `kind: null` records that the
+ * pause was answered, dismissed or superseded.
+ */
+interface AwaitingInputMark {
+    kind: AwaitingInputKind | null;
+    at: number;
+}
 
 /**
  * Mutable chat state for one conversation. Every stream-scoped flag lives
@@ -19,6 +39,9 @@ interface SessionChatState {
     costDollars: WritableSignal<number>;
     contextTokens: WritableSignal<number>;
     contextWindow: WritableSignal<number>;
+    /** What filled the context on the most recent turn, when the backend
+     *  could attribute it (Bedrock Converse only; null until a turn streams). */
+    contextBreakdown: WritableSignal<ContextBreakdown | null>;
     /** In-flight SSE request controller, one per session. */
     abortController: AbortController | null;
 }
@@ -53,6 +76,22 @@ export class ChatStateService {
      */
     private readonly unreadSessionIds = signal<ReadonlySet<string>>(new Set());
 
+    /**
+     * Sessions whose turn this tab saw pause on the user (or saw that pause
+     * end). Overrides the list row's server-derived `awaitingInput` until the
+     * row is newer than the mark, so a background stream that ends on a prompt
+     * shows its dot without a refetch, and an answered prompt's dot goes at
+     * once instead of waiting for the list to catch up.
+     */
+    private readonly awaitingInputMarks = signal<ReadonlyMap<string, AwaitingInputMark>>(new Map());
+
+    /**
+     * When each session's most recent turn finished in this tab (epoch ms).
+     * The model's last call ends with the turn, so this is when the prompt
+     * cache was last refreshed. Read at decision time only, so a plain map.
+     */
+    private readonly turnEndedAt = new Map<string, number>();
+
     readonly isChatLoading = computed(() => this.viewedState()?.loading() ?? false);
     readonly currentStopReason = computed(() => this.viewedState()?.stopReason() ?? null);
     readonly lastTurnContinuable = computed(() => this.viewedState()?.lastTurnContinuable() ?? false);
@@ -66,6 +105,7 @@ export class ChatStateService {
     readonly costDollars = computed(() => this.viewedState()?.costDollars() ?? 0);
     readonly contextTokens = computed(() => this.viewedState()?.contextTokens() ?? 0);
     readonly contextWindowSize = computed(() => this.viewedState()?.contextWindow() ?? 0);
+    readonly contextBreakdown = computed(() => this.viewedState()?.contextBreakdown() ?? null);
 
     readonly contextPct = computed(() => {
         const window = this.contextWindowSize();
@@ -103,14 +143,76 @@ export class ChatStateService {
         const wasLoading = state.loading();
         state.loading.set(loading);
 
-        if (wasLoading && !loading && sessionId !== this.viewedSessionIdSignal()) {
-            this.markSessionUnread(sessionId);
+        // Any new turn in the session ends a pause there: a resume is the
+        // user's answer, and a fresh message supersedes the paused turn.
+        if (!wasLoading && loading) {
+            this.clearSessionAwaitingInput(sessionId);
+        }
+
+        if (wasLoading && !loading) {
+            this.turnEndedAt.set(sessionId, Date.now());
+            if (sessionId !== this.viewedSessionIdSignal()) {
+                this.markSessionUnread(sessionId);
+            }
         }
     }
+
+    /** When a session's last turn finished in this tab (epoch ms), or null. */
+    lastTurnEndedAt(sessionId: string): number | null {
+        return this.turnEndedAt.get(sessionId) ?? null;
+    }
+
+    /**
+     * Whether ANY conversation is streaming, viewed or not. Navigating away
+     * from a streaming session keeps its stream alive on purpose, so "the
+     * viewed session is idle" does not mean a full page load is safe.
+     */
+    readonly anySessionLoading = computed(() =>
+        [...this.states().values()].some(state => state.loading())
+    );
 
     /** Whether a specific session is currently streaming (loading). */
     isSessionLoading(sessionId: string): boolean {
         return this.states().get(sessionId)?.loading() ?? false;
+    }
+
+    // ----- Per-session cost / context reads ----------------------------------
+    // The facades above project the VIEWED session, which is right for the main
+    // composer and wrong for anything else on screen at the same time. An
+    // embedded preview (Designer, marketplace test drive) must never call
+    // `setViewedSession` — that would hand the real composer's spinner and cost
+    // badge to a conversation in a side panel — so it reads its own session
+    // through these instead.
+    //
+    // Deliberately read-only: unlike `stateFor` they never create a bucket, so
+    // they are safe to call from inside a `computed`. A session that has not
+    // streamed yet simply reads zero.
+
+    /** A session's running cost total, in dollars. */
+    costDollarsFor(sessionId: string): number {
+        return this.states().get(sessionId)?.costDollars() ?? 0;
+    }
+
+    /** A session's most-recent-turn context tokens. */
+    contextTokensFor(sessionId: string): number {
+        return this.states().get(sessionId)?.contextTokens() ?? 0;
+    }
+
+    /** A session's context window size, or 0 when unknown. */
+    contextWindowFor(sessionId: string): number {
+        return this.states().get(sessionId)?.contextWindow() ?? 0;
+    }
+
+    /** A session's most-recent-turn context breakdown, or null when unknown. */
+    contextBreakdownFor(sessionId: string): ContextBreakdown | null {
+        return this.states().get(sessionId)?.contextBreakdown() ?? null;
+    }
+
+    /** A session's context usage as a percentage of its window. */
+    contextPctFor(sessionId: string): number {
+        const window = this.contextWindowFor(sessionId);
+        if (!window || window <= 0) return 0;
+        return (this.contextTokensFor(sessionId) / window) * 100;
     }
 
     /**
@@ -149,6 +251,51 @@ export class ChatStateService {
             if (!set.has(sessionId)) return set;
             const next = new Set(set);
             next.delete(sessionId);
+            return next;
+        });
+    }
+
+    /**
+     * Records that a session's turn paused on the user. Set by the stream
+     * parser when a stream ends on `oauth_required` (with an interrupt id),
+     * `tool_approval_required`, `user_question_required` or
+     * `browser_login_required` — viewed or not.
+     */
+    markSessionAwaitingInput(sessionId: string, kind: AwaitingInputKind): void {
+        this.setAwaitingInputMark(sessionId, kind);
+    }
+
+    /**
+     * Records that a session's pause is over: answered (its resume starts a
+     * new stream, see setChatLoading), dismissed, or superseded by a new turn.
+     */
+    clearSessionAwaitingInput(sessionId: string): void {
+        this.setAwaitingInputMark(sessionId, null);
+    }
+
+    /**
+     * What a session-list row's paused turn waits on, or null. The tab's own
+     * mark wins while the server row predates it; a row whose `lastMessageAt`
+     * is newer reflects a later turn (a scheduled run, another tab) and wins.
+     * A live pause mark lapses after the snapshot TTL even if the row never
+     * advances, because the server stops offering that pause then too.
+     */
+    awaitingInputFor(
+        session: Pick<SessionMetadata, 'sessionId' | 'lastMessageAt' | 'awaitingInput'>,
+    ): AwaitingInputKind | null {
+        const serverKind = session.awaitingInput ?? null;
+        const mark = this.awaitingInputMarks().get(session.sessionId);
+        if (!mark) return serverKind;
+        const rowAt = Date.parse(session.lastMessageAt);
+        if (Number.isFinite(rowAt) && rowAt > mark.at) return serverKind;
+        if (mark.kind && Date.now() - mark.at >= LIVE_AWAITING_INPUT_TTL_MS) return null;
+        return mark.kind;
+    }
+
+    private setAwaitingInputMark(sessionId: string, kind: AwaitingInputKind | null): void {
+        this.awaitingInputMarks.update(marks => {
+            const next = new Map(marks);
+            next.set(sessionId, { kind, at: Date.now() });
             return next;
         });
     }
@@ -195,11 +342,22 @@ export class ChatStateService {
         totalCost?: number;
         lastContextTokens?: number;
         contextWindow?: number;
+        contextBreakdown?: ContextBreakdown | null;
     } = {}): void {
         const state = this.stateFor(sessionId);
         state.costDollars.set(values.totalCost ?? 0);
         state.contextTokens.set(values.lastContextTokens ?? 0);
         state.contextWindow.set(values.contextWindow ?? 0);
+        // Session metadata carries no breakdown, and this re-runs whenever that
+        // metadata refreshes — so keep the live one unless a caller has one.
+        if (values.contextBreakdown !== undefined) {
+            state.contextBreakdown.set(values.contextBreakdown);
+        }
+    }
+
+    /** Restore a session's breakdown from persisted history (see MessageMapService). */
+    seedContextBreakdown(sessionId: string, breakdown: ContextBreakdown): void {
+        this.stateFor(sessionId).contextBreakdown.set(breakdown);
     }
 
     /** Add the cost of a completed turn to a session's running total. */
@@ -208,9 +366,20 @@ export class ChatStateService {
         this.stateFor(sessionId).costDollars.update(prev => prev + amount);
     }
 
-    /** Set a session's most-recent-turn context tokens (and optionally the window). */
-    setContext(sessionId: string, tokens: number, window?: number): void {
+    /**
+     * Set a session's most-recent-turn context tokens (and optionally the
+     * window and breakdown). A turn without a breakdown clears the previous
+     * one: it described a different prompt, and pairing it with this turn's
+     * total would misstate what is in the window.
+     */
+    setContext(
+        sessionId: string,
+        tokens: number,
+        window?: number,
+        breakdown?: ContextBreakdown | null,
+    ): void {
         const state = this.stateFor(sessionId);
+        state.contextBreakdown.set(breakdown ?? null);
         if (Number.isFinite(tokens) && tokens >= 0) {
             state.contextTokens.set(tokens);
         }
@@ -235,11 +404,34 @@ export class ChatStateService {
     }
 
     /**
+     * Release a session's controller once its stream has finished.
+     *
+     * The counterpart to `createAbortController`, and what makes
+     * `streamingSessionIds()` honest: without it a controller outlives its
+     * stream for the life of the tab, so every completed turn keeps looking
+     * in-flight and the page-hide attribution below marks turns that
+     * finished minutes (or days) earlier as `navigated_away`. That is a
+     * false "Response interrupted" chip on a complete answer, and a false
+     * interruption note prepended to the session's next prompt.
+     *
+     * Identity-checked: a superseded stream's late teardown must not clear
+     * the controller of the stream that replaced it (`createAbortController`
+     * installs the replacement before the old stream's abort unwinds).
+     */
+    releaseAbortController(sessionId: string, controller: AbortController): void {
+        const state = this.states().get(sessionId);
+        if (state && state.abortController === controller) {
+            state.abortController = null;
+        }
+    }
+
+    /**
      * Session ids with a stream in flight right now.
      *
      * Read at page-hide time to attribute a departure to the turns it
      * actually interrupted. A live controller is the truthful test: it is
-     * created per request and nulled on abort, so it tracks the transport
+     * created per request and released on abort (`abortRequest`) or on
+     * stream teardown (`releaseAbortController`), so it tracks the transport
      * rather than the `loading` flag, which other code also drives.
      */
     streamingSessionIds(): string[] {
@@ -276,6 +468,7 @@ export class ChatStateService {
             costDollars: signal(0),
             contextTokens: signal(0),
             contextWindow: signal(0),
+            contextBreakdown: signal<ContextBreakdown | null>(null),
             abortController: null,
         };
         this.states.update(map => {

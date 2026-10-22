@@ -1,6 +1,20 @@
 import { Injectable, signal } from '@angular/core';
+import { createAudioContext } from './audio-context';
 import { float32ToPcm16, pcm16ToBase64, resampleLinear } from './pcm-utils';
 import { VOICE_SAMPLE_RATE, SAMPLES_PER_CHUNK } from './voice.config';
+
+/** A microphone the browser will let us capture from. */
+export interface AudioInputDevice {
+  deviceId: string;
+  /** Empty until the user has granted microphone access once. */
+  label: string;
+}
+
+/**
+ * Per-device, not per-account: a device id is only meaningful in the browser
+ * that enumerated it, so it lives in localStorage like the view-mode prefs.
+ */
+const INPUT_DEVICE_KEY = 'voice-input-device';
 
 /**
  * Audio capture service using Web Audio API.
@@ -19,6 +33,13 @@ export class AudioRecorderService {
   readonly isRecording = this._isRecording.asReadonly();
   readonly isSupported = this._isSupported.asReadonly();
 
+  /**
+   * The microphone to capture from, or null for the browser's default. Shared
+   * by voice mode and dictation, which both record through this service.
+   */
+  private readonly _inputDeviceId = signal<string | null>(this.loadInputDeviceId());
+  readonly inputDeviceId = this._inputDeviceId.asReadonly();
+
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
@@ -27,6 +48,12 @@ export class AudioRecorderService {
 
   /** Callback invoked with each base64 PCM chunk */
   onAudioChunk: ((base64Pcm: string, sampleRate: number) => void) | null = null;
+
+  /**
+   * Callback invoked with each raw PCM16 chunk (same cadence as `onAudioChunk`).
+   * Dictation sends binary WebSocket frames, so it skips the base64 step.
+   */
+  onPcmChunk: ((pcm: Int16Array) => void) | null = null;
 
   constructor() {
     this._isSupported.set(this.checkSupport());
@@ -37,6 +64,37 @@ export class AudioRecorderService {
     const hasGetUserMedia = typeof navigator.mediaDevices?.getUserMedia === 'function';
     const hasAudioContext = !!(window.AudioContext || (window as any).webkitAudioContext);
     return hasGetUserMedia && hasAudioContext;
+  }
+
+  /** Choose the microphone for the next capture; null returns to the browser default. */
+  setInputDevice(deviceId: string | null): void {
+    this._inputDeviceId.set(deviceId);
+    try {
+      if (deviceId) {
+        localStorage.setItem(INPUT_DEVICE_KEY, deviceId);
+      } else {
+        localStorage.removeItem(INPUT_DEVICE_KEY);
+      }
+    } catch {
+      // Private mode or blocked storage: the choice still applies this visit.
+    }
+  }
+
+  /**
+   * The microphones this browser can see. Labels are blank until the user has
+   * granted microphone access once, which is why the picker says so instead
+   * of listing sixteen "Microphone" rows.
+   */
+  async listInputDevices(): Promise<AudioInputDevice[]> {
+    if (typeof navigator.mediaDevices?.enumerateDevices !== 'function') return [];
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices
+        .filter((d) => d.kind === 'audioinput' && d.deviceId)
+        .map((d) => ({ deviceId: d.deviceId, label: d.label }));
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -50,18 +108,9 @@ export class AudioRecorderService {
     }
 
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: { ideal: VOICE_SAMPLE_RATE },
-          channelCount: { exact: 1 },
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      this.mediaStream = await this.openMicrophone();
 
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      this.audioContext = new AudioContextClass({ sampleRate: VOICE_SAMPLE_RATE });
+      this.audioContext = createAudioContext(VOICE_SAMPLE_RATE);
 
       await this.audioContext.audioWorklet.addModule('/audio/pcm-capture.worklet.js');
 
@@ -81,6 +130,50 @@ export class AudioRecorderService {
     } catch (err) {
       this.cleanup();
       throw err;
+    }
+  }
+
+  /**
+   * Open the chosen microphone, falling back to the default when it is gone.
+   *
+   * A stored device id outlives the device: unplug the headset and `exact`
+   * throws OverconstrainedError, which would turn every later voice session
+   * into an error toast until the user found the picker. The fallback clears
+   * the stale choice so the picker shows the truth.
+   *
+   * `deviceId` must be the only mandatory constraint, or the fallback misreads
+   * a constraint the device can't meet as a missing device and clears a good
+   * choice. Mono is `ideal`, not `exact`: Chrome rejects `exact: 1` on an input
+   * that only delivers stereo, where Firefox downmixes. A stereo track is fine,
+   * because the capture worklet reads channel 0 only.
+   */
+  private async openMicrophone(): Promise<MediaStream> {
+    const base: MediaTrackConstraints = {
+      sampleRate: { ideal: VOICE_SAMPLE_RATE },
+      channelCount: { ideal: 1 },
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    const deviceId = this._inputDeviceId();
+    if (deviceId) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: { ...base, deviceId: { exact: deviceId } },
+        });
+      } catch (err) {
+        if (!(err instanceof DOMException) || err.name !== 'OverconstrainedError') throw err;
+        this.setInputDevice(null);
+      }
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: base });
+  }
+
+  private loadInputDeviceId(): string | null {
+    try {
+      return localStorage.getItem(INPUT_DEVICE_KEY);
+    } catch {
+      return null;
     }
   }
 
@@ -110,19 +203,22 @@ export class AudioRecorderService {
       const chunk = this.sampleBuffer.slice(0, SAMPLES_PER_CHUNK);
       this.sampleBuffer = this.sampleBuffer.slice(SAMPLES_PER_CHUNK);
 
-      const pcm = float32ToPcm16(chunk);
-      const base64 = pcm16ToBase64(pcm);
-      this.onAudioChunk?.(base64, VOICE_SAMPLE_RATE);
+      this.emit(float32ToPcm16(chunk));
     }
   }
 
   /** Flush any remaining samples in the buffer as a final chunk. */
   private flushBuffer(): void {
     if (this.sampleBuffer.length > 0) {
-      const pcm = float32ToPcm16(this.sampleBuffer);
-      const base64 = pcm16ToBase64(pcm);
-      this.onAudioChunk?.(base64, VOICE_SAMPLE_RATE);
+      this.emit(float32ToPcm16(this.sampleBuffer));
       this.sampleBuffer = new Float32Array(0);
+    }
+  }
+
+  private emit(pcm: Int16Array): void {
+    this.onPcmChunk?.(pcm);
+    if (this.onAudioChunk) {
+      this.onAudioChunk(pcm16ToBase64(pcm), VOICE_SAMPLE_RATE);
     }
   }
 

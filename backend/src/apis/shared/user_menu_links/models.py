@@ -34,6 +34,12 @@ def _validate_http_url(value: Optional[str]) -> Optional[str]:
     return value
 
 
+# Public handle on the same check. ``announcements`` validates its ``ctaUrl``
+# for exactly this reason, and one implementation is better than two that can
+# drift apart.
+validate_http_url = _validate_http_url
+
+
 @dataclass
 class UserMenuLink:
     """Admin-managed user-menu link stored in DynamoDB."""

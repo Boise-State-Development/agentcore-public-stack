@@ -177,12 +177,15 @@ def make_workspace_write_tool(session_id: str, user_id: str):
                 "ui_display": "inline",
                 "payload": {
                     "filename": result["filename"],
-                    "download_url": result["download_url"],
+                    "upload_id": result["upload_id"],
                     "size_kb": result["size_kb"],
                 },
                 "summary": (
                     f"Saved {result['filename']} ({result['size_kb']}). "
-                    "Also saved to this chat's Files."
+                    "Also saved to this chat's Files. A download card with a "
+                    "working Download button is already displayed to the user "
+                    "— do not write a download link or URL for this file in "
+                    "your reply."
                 ),
             }
         )

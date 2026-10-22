@@ -95,6 +95,12 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         description="Manage skill bundles, their reference files, and skill role grants.",
     ),
     AdminScope(
+        id="admin.agent_templates",
+        label="Agent Templates",
+        group=GROUP_AI_CONFIG,
+        description="Manage the catalog of agent templates users start new agents from.",
+    ),
+    AdminScope(
         id="admin.connectors",
         label="Connectors",
         group=GROUP_AI_CONFIG,
@@ -122,6 +128,12 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         ),
     ),
     AdminScope(
+        id="admin.projects",
+        label="Projects",
+        group=GROUP_MARKETPLACE,
+        description="See every Shared Project, read its audit trail, and archive or restore it.",
+    ),
+    AdminScope(
         id="admin.users",
         label="Users",
         group=GROUP_IDENTITY,
@@ -138,6 +150,13 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         label="User Menu Links",
         group=GROUP_CUSTOMIZATION,
         description="Manage the custom links shown in the user menu.",
+    ),
+    AdminScope(
+        id="admin.announcements",
+        label="Announcements",
+        group=GROUP_CUSTOMIZATION,
+        description="Author and publish feature announcements shown to all users.",
+        delegable=True,
     ),
     # ── Non-delegable ────────────────────────────────────────────────────────
     # Present in the registry so they are named, documented, and covered by the
@@ -160,6 +179,17 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         description=(
             "Manage identity providers and claim mapping. Never delegable — "
             "controlling which claims arrive controls which roles resolve."
+        ),
+        delegable=False,
+    ),
+    AdminScope(
+        id="admin.user_grants",
+        label="User Grants",
+        group=GROUP_IDENTITY,
+        description=(
+            "Grant tools, models and skills to one user directly, beside their "
+            "roles. Never delegable — a delegated admin could grant themselves "
+            "anything, which is role editing by another route."
         ),
         delegable=False,
     ),

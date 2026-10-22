@@ -20,8 +20,6 @@ Per-kind sourcing (see the write-side rules in ``binding_validation``):
 - ``knowledge_base`` → **empty**. The KB is welded to the agent and its index is not
   user-configurable, so it is never author-settable (``binding_validation`` rejects an
   explicit KB write); the compat layer synthesizes it on read. Nothing to pick.
-- ``memory_space``   → ``MemorySpaceService.list_spaces_for_user`` — **empty when
-  ``memory_spaces_enabled()`` is off**.
 """
 
 import logging
@@ -29,8 +27,7 @@ from typing import List, Optional
 
 from apis.shared.assistants.models import BindableItem
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
-from apis.shared.memory.service import MemorySpaceService
+from apis.shared.feature_flags import skills_enabled
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.shared.skills.access import resolve_accessible_skill_ids
 from apis.shared.skills.repository import get_skill_catalog_repository
@@ -46,7 +43,7 @@ logger = logging.getLogger(__name__)
 # The kinds the catalog can serve. ``model`` is not a binding kind (it is the governed
 # single-select ``modelConfig``) but rides the same palette endpoint so the Designer has
 # one place to fetch every choice.
-BINDABLE_KINDS = ("model", "tool", "skill", "knowledge_base", "memory_space")
+BINDABLE_KINDS = ("model", "tool", "skill", "knowledge_base")
 
 
 async def list_bindable(
@@ -55,7 +52,6 @@ async def list_bindable(
     *,
     model_access_service: Optional[ModelAccessService] = None,
     tool_service: Optional[ToolCatalogService] = None,
-    memory_service: Optional[MemorySpaceService] = None,
 ) -> List[BindableItem]:
     """Return the RBAC-filtered bindable primitives of ``kind`` for ``user``.
 
@@ -72,8 +68,6 @@ async def list_bindable(
     if kind == "knowledge_base":
         # Welded to the agent, synthesized on read, never author-settable (D2/F4).
         return []
-    if kind == "memory_space":
-        return _list_memory_spaces(user, memory_service or MemorySpaceService())
     raise ValueError(f"Unknown bindable kind '{kind}'.")
 
 
@@ -84,8 +78,16 @@ async def _list_models(user: User, svc: ModelAccessService) -> List[BindableItem
     except Exception:
         logger.warning("Failed to list bindable models", exc_info=True)
         return []
+    # Named from the whole catalog, not the accessible slice: the Designer notice
+    # names a successor the author may not hold yet.
+    names = {m.model_id: m.model_name for m in models}
     # ``ref`` is the Bedrock/provider model id — the identifier the runtime resolver,
     # RBAC (``permissions.models``) and invocation all key on. NOT the internal UUID.
+    #
+    # Non-active models stay listed: ``_validate_model`` reads the same list, so
+    # dropping one would 403 an author saving an Agent that keeps it. The SPA
+    # refuses a *new* selection from ``status`` instead
+    # (docs/specs/model-retirement.md §7).
     return [
         BindableItem(
             kind="model",
@@ -102,6 +104,11 @@ async def _list_models(user: User, svc: ModelAccessService) -> List[BindableItem
                 "inputModalities": m.input_modalities,
                 "outputModalities": m.output_modalities,
                 "supportedParams": m.supported_params,
+                "status": m.status.value,
+                "replacedBy": m.replaced_by,
+                "replacedByName": names.get(m.replaced_by) if m.replaced_by else None,
+                "retiresOn": m.retires_on,
+                "retirementNote": m.retirement_note,
             },
         )
         for m in accessible
@@ -123,6 +130,24 @@ async def _list_tools(user: User, svc: ToolCatalogService) -> List[BindableItem]
             meta={
                 "category": t.category,
                 "protocol": t.protocol,
+                # Display only — this is NOT a second access decision. The list
+                # is already RBAC-filtered above and every id in it is one the
+                # author may bind; `status` lets the picker refuse to ADD a
+                # retiring tool while leaving an already-bound one selected and
+                # visible (docs/specs/mcp-server-retirement.md §7).
+                #
+                # Deliberately not filtered out here. `binding_validation.
+                # _validate_tool` reads the same `get_user_accessible_tools`,
+                # so dropping a retiring tool from this list would 403 an
+                # author editing an Agent that keeps the binding — for a tool
+                # that Agent can still run.
+                "status": t.status,
+                # Only ever set on a non-active tool. They ride here rather than
+                # being looked up separately so the Designer's notice can name
+                # the replacement and the date in the same render that decides a
+                # chip is retiring.
+                "retirementNote": t.retirement_note,
+                "retiresOn": t.retires_on,
                 "requiresOauthProvider": t.requires_oauth_provider,
                 "serverTools": [
                     {
@@ -157,24 +182,4 @@ async def _list_skills(user: User) -> List[BindableItem]:
             meta={"compose": s.compose},
         )
         for s in skills
-    ]
-
-
-def _list_memory_spaces(user: User, svc: MemorySpaceService) -> List[BindableItem]:
-    if not memory_spaces_enabled():
-        return []
-    try:
-        spaces = svc.list_spaces_for_user(user.user_id, user.email)
-    except Exception:
-        logger.warning("Failed to list bindable memory spaces", exc_info=True)
-        return []
-    return [
-        BindableItem(
-            kind="memory_space",
-            ref=space.space_id,
-            label=space.name,
-            description=space.template or "",
-            meta={"role": role, "ownerId": space.owner_id, "template": space.template},
-        )
-        for space, role in spaces
     ]

@@ -34,6 +34,8 @@ ASSISTANT_ID = "ast-001"
 USER_ID = "user-001"
 DOC_SERVICE = "apis.app_api.documents.services.document_service"
 CLEANUP_SERVICE = "apis.app_api.documents.services.cleanup_service"
+TEARDOWN = "apis.app_api.kb_migration.teardown"
+DELETION = "apis.app_api.agent_designer.services.agent_deletion"
 ASSISTANT_SERVICE = "apis.shared.assistants.service"
 SYNC_POLICY_SERVICE = "apis.shared.sync_policies.service"
 
@@ -150,6 +152,46 @@ class TestDocumentDeleteEndpoint:
         assert resp.status_code == 204
         sync_policy_cascades.for_source.assert_awaited_once_with(ASSISTANT_ID, "doc-001")
 
+    @pytest.mark.parametrize(
+        "fields, expected",
+        [
+            ({"syncPolicyId": "syn-folder", "sourceFileId": "drive-file-1"}, ("syn-folder", "drive-file-1")),
+            ({"sourceFileId": "drive-file-1"}, None),
+            ({"syncPolicyId": "syn-folder"}, None),
+        ],
+    )
+    def test_delete_keeps_a_folder_file_from_coming_back(self, app, fields, expected):
+        """A folder policy's file someone removed is excluded from its runs
+        (assistant-kb-sync.md §11.4); a document no policy covers excludes nothing."""
+        doc = _make_document(**fields)
+        routes_module = "apis.app_api.documents.routes"
+
+        with patch(
+            f"{routes_module}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_owner_resolve(USER_ID),
+        ), patch(
+            f"{DOC_SERVICE}.soft_delete_document",
+            new_callable=AsyncMock,
+            return_value=doc,
+        ), patch(
+            f"{CLEANUP_SERVICE}.cleanup_document_resources",
+            new_callable=AsyncMock,
+        ), patch(
+            f"{SYNC_POLICY_SERVICE}.exclude_folder_file",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as exclude, patch(
+            "asyncio.ensure_future",
+        ):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}/documents/doc-001")
+
+        assert resp.status_code == 204
+        if expected is None:
+            exclude.assert_not_awaited()
+        else:
+            exclude.assert_awaited_once_with(ASSISTANT_ID, *expected)
+
     def test_delete_returns_404_when_not_found(self, app):
         """Req 1.5: Returns 404 when soft_delete_document returns None."""
         routes_module = "apis.app_api.documents.routes"
@@ -214,9 +256,61 @@ class TestAssistantDeleteEndpoint:
         ``tests/shared/test_assistant_delete_listing_guard.py``.
         """
         with patch(
-            f"{self.ROUTES_MODULE}.assert_deletable", new_callable=AsyncMock
+            f"{DELETION}.assert_deletable", new_callable=AsyncMock
         ) as guard:
             yield guard
+
+    @pytest.fixture(autouse=True)
+    def _teardown(self):
+        """Stub queuing the managed knowledge base for teardown, which writes the KB# record.
+
+        Its own behaviour (what it writes, the worker that acts on it) is covered in
+        ``tests/lambdas/test_kb_teardown.py``; here only whether and when it is called.
+        """
+        with patch(f"{TEARDOWN}.queue_teardown", new_callable=AsyncMock, return_value=True) as queue:
+            yield queue
+
+    @pytest.fixture(autouse=True)
+    def _icons(self):
+        """Stub deleting the icon objects (S3). What it deletes is covered in
+        ``tests/shared/test_agent_icons.py``; here only whether and when it is called."""
+        with patch(f"{DELETION}.delete_agent_icons", new_callable=AsyncMock, return_value=1) as icons:
+            yield icons
+
+    def test_the_icons_are_deleted_after_the_record(self, app, _icons):
+        """They used to stay in S3 forever, with no row left to find them by."""
+        calls = []
+        _icons.side_effect = lambda *_: calls.append("icons") or 1
+
+        async def _delete(**_):
+            calls.append("record")
+            return True
+
+        with patch(
+            f"{DELETION}.list_assistant_documents", new_callable=AsyncMock, return_value=([], None)
+        ), patch(f"{DELETION}.delete_assistant", side_effect=_delete):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 204
+        _icons.assert_awaited_once_with(ASSISTANT_ID)
+        assert calls == ["record", "icons"]
+
+    def test_no_icons_are_deleted_on_the_way_to_a_404(self, app, _deletable, _icons):
+        _deletable.return_value = None
+
+        resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 404
+        _icons.assert_not_awaited()
+
+    def test_no_icons_are_deleted_when_the_record_delete_finds_nothing(self, app, _icons):
+        with patch(
+            f"{DELETION}.list_assistant_documents", new_callable=AsyncMock, return_value=([], None)
+        ), patch(f"{DELETION}.delete_assistant", new_callable=AsyncMock, return_value=False):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 404
+        _icons.assert_not_awaited()
 
     @pytest.fixture
     def app(self):
@@ -225,7 +319,96 @@ class TestAssistantDeleteEndpoint:
         _app.dependency_overrides[get_current_user_from_session] = _make_user
         return _app
 
-    def test_a_listed_agent_is_refused_before_anything_is_cleaned_up(self, app, _deletable):
+    def test_the_managed_knowledge_base_is_queued_before_anything_is_destroyed(self, app, _teardown):
+        """The KB# record and its Bedrock knowledge base used to outlive the agent.
+
+        Queued first so that a failure to queue leaves a delete that can simply be
+        retried, rather than an agent already gone whose knowledge base nothing will
+        ever find again.
+        """
+        calls = []
+        _teardown.side_effect = lambda *_: calls.append("teardown") or True
+
+        async def _docs(**_):
+            calls.append("list")
+            return [], None
+
+        with patch(
+            f"{DELETION}.list_assistant_documents", side_effect=_docs
+        ), patch(
+            f"{DELETION}.delete_assistant", new_callable=AsyncMock, return_value=True
+        ), patch("asyncio.ensure_future"):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 204
+        _teardown.assert_awaited_once_with(ASSISTANT_ID)
+        assert calls == ["teardown", "list"]
+
+    def test_every_page_of_documents_is_soft_deleted(self, app):
+        """Only the first 1,000 used to be listed; the rest stayed ``complete`` forever."""
+        pages = {None: ([_make_document(documentId="doc-001")], "page-2"),
+                 "page-2": ([_make_document(documentId="doc-002")], None)}
+
+        async def _docs(**kwargs):
+            return pages[kwargs.get("next_token")]
+
+        with patch(f"{DELETION}.list_assistant_documents", side_effect=_docs), patch(
+            f"{DOC_SERVICE}.batch_soft_delete_documents", new_callable=AsyncMock
+        ) as soft_delete, patch(
+            f"{DELETION}.delete_assistant", new_callable=AsyncMock, return_value=True
+        ), patch(f"{CLEANUP_SERVICE}.cleanup_assistant_documents", new_callable=AsyncMock), patch(
+            "asyncio.ensure_future"
+        ):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 204
+        soft_delete.assert_awaited_once_with(assistant_id=ASSISTANT_ID, document_ids=["doc-001", "doc-002"])
+
+    def test_nothing_is_cleaned_up_on_the_way_to_a_404(self, app, _deletable, sync_policy_cascades):
+        """Sync policies used to be deleted before the record delete found the agent
+        wasn't the caller's."""
+        _deletable.return_value = None
+
+        with patch(f"{DELETION}.list_assistant_documents", new_callable=AsyncMock) as docs, patch(
+            f"{DELETION}.delete_assistant", new_callable=AsyncMock
+        ) as hard_delete:
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 404
+        docs.assert_not_awaited()
+        hard_delete.assert_not_awaited()
+        sync_policy_cascades.for_assistant.assert_not_awaited()
+
+    def test_a_failure_to_queue_the_teardown_fails_the_delete_before_any_damage(self, app, _teardown):
+        _teardown.side_effect = RuntimeError("dynamodb unavailable")
+
+        with patch(
+            f"{DELETION}.list_assistant_documents", new_callable=AsyncMock
+        ) as docs, patch(
+            f"{DELETION}.delete_assistant", new_callable=AsyncMock
+        ) as hard_delete:
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 500
+        docs.assert_not_awaited()
+        hard_delete.assert_not_awaited()
+
+    def test_nothing_is_queued_for_an_agent_that_is_not_the_callers(self, app, _deletable, _teardown):
+        """``assert_deletable`` returns None for a missing or someone else's agent; the
+        delete then 404s, and nobody else's knowledge base may be queued on the way."""
+        _deletable.return_value = None
+
+        with patch(
+            f"{DELETION}.list_assistant_documents",
+            new_callable=AsyncMock,
+            return_value=([], None),
+        ), patch(f"{DELETION}.delete_assistant", new_callable=AsyncMock, return_value=False):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 404
+        _teardown.assert_not_awaited()
+
+    def test_a_listed_agent_is_refused_before_anything_is_cleaned_up(self, app, _deletable, _teardown):
         """⚠️ Ordering, not just refusal.
 
         Steps 2 and 3 of this handler are destructive. If the guard fired after them, a
@@ -237,11 +420,11 @@ class TestAssistantDeleteEndpoint:
         _deletable.side_effect = AssistantListedError("still listed")
 
         with patch(
-            f"{self.ROUTES_MODULE}.list_assistant_documents", new_callable=AsyncMock
+            f"{DELETION}.list_assistant_documents", new_callable=AsyncMock
         ) as docs, patch(
             f"{DOC_SERVICE}.batch_soft_delete_documents", new_callable=AsyncMock
         ) as soft_delete, patch(
-            f"{self.ROUTES_MODULE}.delete_assistant", new_callable=AsyncMock
+            f"{DELETION}.delete_assistant", new_callable=AsyncMock
         ) as hard_delete:
             resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
 
@@ -249,6 +432,7 @@ class TestAssistantDeleteEndpoint:
         docs.assert_not_awaited()
         soft_delete.assert_not_awaited()
         hard_delete.assert_not_awaited()
+        _teardown.assert_not_awaited()
 
     def test_delete_soft_deletes_all_docs(self, app):
         """Req 8.1: All documents are batch soft-deleted before assistant is removed."""
@@ -258,7 +442,7 @@ class TestAssistantDeleteEndpoint:
         ]
 
         with patch(
-            f"{self.ROUTES_MODULE}.list_assistant_documents",
+            f"{DELETION}.list_assistant_documents",
             new_callable=AsyncMock,
             return_value=(docs, None),
         ), patch(
@@ -266,7 +450,7 @@ class TestAssistantDeleteEndpoint:
             new_callable=AsyncMock,
             return_value=2,
         ) as mock_batch, patch(
-            f"{self.ROUTES_MODULE}.delete_assistant",
+            f"{DELETION}.delete_assistant",
             new_callable=AsyncMock,
             return_value=True,
         ), patch(
@@ -289,7 +473,7 @@ class TestAssistantDeleteEndpoint:
         docs = [_make_document(documentId="doc-001")]
 
         with patch(
-            f"{self.ROUTES_MODULE}.list_assistant_documents",
+            f"{DELETION}.list_assistant_documents",
             new_callable=AsyncMock,
             return_value=(docs, None),
         ), patch(
@@ -297,7 +481,7 @@ class TestAssistantDeleteEndpoint:
             new_callable=AsyncMock,
             return_value=1,
         ), patch(
-            f"{self.ROUTES_MODULE}.delete_assistant",
+            f"{DELETION}.delete_assistant",
             new_callable=AsyncMock,
             return_value=True,
         ) as mock_delete_ast, patch(
@@ -318,11 +502,11 @@ class TestAssistantDeleteEndpoint:
     def test_delete_cascades_sync_policies_for_assistant(self, app, sync_policy_cascades):
         """No sync schedule may outlive its assistant."""
         with patch(
-            f"{self.ROUTES_MODULE}.list_assistant_documents",
+            f"{DELETION}.list_assistant_documents",
             new_callable=AsyncMock,
             return_value=([], None),
         ), patch(
-            f"{self.ROUTES_MODULE}.delete_assistant",
+            f"{DELETION}.delete_assistant",
             new_callable=AsyncMock,
             return_value=True,
         ), patch(
@@ -339,7 +523,7 @@ class TestAssistantDeleteEndpoint:
         docs = [_make_document(documentId="doc-001")]
 
         with patch(
-            f"{self.ROUTES_MODULE}.list_assistant_documents",
+            f"{DELETION}.list_assistant_documents",
             new_callable=AsyncMock,
             return_value=(docs, None),
         ), patch(
@@ -347,7 +531,7 @@ class TestAssistantDeleteEndpoint:
             new_callable=AsyncMock,
             return_value=1,
         ), patch(
-            f"{self.ROUTES_MODULE}.delete_assistant",
+            f"{DELETION}.delete_assistant",
             new_callable=AsyncMock,
             return_value=True,
         ), patch(

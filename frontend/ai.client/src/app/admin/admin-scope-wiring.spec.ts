@@ -16,7 +16,7 @@ import { signal } from '@angular/core';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 import { adminRoutes } from './admin.routes';
-import { AdminLayout } from './admin.layout';
+import { AdminNav } from './admin-nav';
 import { AdminMarketplaceService } from './marketplace/services/admin-marketplace.service';
 import { UserService } from '../auth/user.service';
 import { ADMIN_SCOPE_IDS } from './admin-scope.model';
@@ -72,7 +72,7 @@ describe('admin route scope wiring', () => {
 describe('admin nav scope wiring', () => {
   let userService: { hasAdminScope: ReturnType<typeof vi.fn>; canAccessAdmin: () => boolean };
 
-  function buildLayout(hasScope: (scope: string) => boolean) {
+  function buildNav(hasScope: (scope: string) => boolean) {
     TestBed.resetTestingModule();
     userService = {
       hasAdminScope: vi.fn().mockImplementation(hasScope),
@@ -81,7 +81,7 @@ describe('admin nav scope wiring', () => {
 
     TestBed.configureTestingModule({
       providers: [
-        // A real router: the layout's template uses routerLink, which needs
+        // A real router: the nav's template uses routerLink, which needs
         // more than a Router stub once the component actually renders.
         provideRouter([]),
         { provide: UserService, useValue: userService },
@@ -96,7 +96,7 @@ describe('admin nav scope wiring', () => {
       ],
     });
 
-    return TestBed.createComponent(AdminLayout).componentInstance;
+    return TestBed.createComponent(AdminNav).componentInstance;
   }
 
   afterEach(() => {
@@ -105,7 +105,7 @@ describe('admin nav scope wiring', () => {
   });
 
   it('points every nav entry at a route carrying the same scope', () => {
-    const layout = buildLayout(() => true);
+    const nav = buildNav(() => true);
 
     const routeScopeByPath = new Map<string, unknown>();
     for (const route of adminRoutes) {
@@ -115,7 +115,7 @@ describe('admin nav scope wiring', () => {
     }
 
     const mismatches: string[] = [];
-    for (const group of layout.navGroups()) {
+    for (const group of nav.navGroups()) {
       for (const item of group.items) {
         const routeScope = routeScopeByPath.get(item.route);
         if (routeScope === undefined) {
@@ -132,44 +132,44 @@ describe('admin nav scope wiring', () => {
   });
 
   it('shows every group to a full admin', () => {
-    const layout = buildLayout(() => true);
+    const nav = buildNav(() => true);
 
     // hasAdminScope short-circuits on system_admin, so a full admin's console
     // must be byte-identical to what it was before scopes existed.
-    expect(layout.navGroups().length).toBe(5);
+    expect(nav.navGroups().length).toBe(5);
   });
 
   it('shows a skills-only admin exactly one entry', () => {
-    const layout = buildLayout(scope => scope === 'admin.skills');
+    const nav = buildNav(scope => scope === 'admin.skills');
 
-    const groups = layout.navGroups();
+    const groups = nav.navGroups();
     expect(groups.length).toBe(1);
     expect(groups[0].items.length).toBe(1);
     expect(groups[0].items[0].route).toBe('/admin/skills');
   });
 
   it('drops a group whose items are all filtered out', () => {
-    const layout = buildLayout(scope => scope === 'admin.costs');
+    const nav = buildNav(scope => scope === 'admin.costs');
 
-    const labels = layout.navGroups().map(g => g.label);
+    const labels = nav.navGroups().map(g => g.label);
     expect(labels).toEqual(['Usage & Spend']);
   });
 
   it('skips the marketplace badge fetch without the marketplace scope', () => {
     // Otherwise it is a guaranteed 403 on every admin navigation.
-    const layout = buildLayout(scope => scope === 'admin.costs');
+    const nav = buildNav(scope => scope === 'admin.costs');
     const marketplace = TestBed.inject(AdminMarketplaceService);
 
-    layout.ngOnInit();
+    nav.ngOnInit();
 
     expect(marketplace.refreshQueueCounts).not.toHaveBeenCalled();
   });
 
   it('still fetches the marketplace badge with the scope', () => {
-    const layout = buildLayout(() => true);
+    const nav = buildNav(() => true);
     const marketplace = TestBed.inject(AdminMarketplaceService);
 
-    layout.ngOnInit();
+    nav.ngOnInit();
 
     expect(marketplace.refreshQueueCounts).toHaveBeenCalled();
   });

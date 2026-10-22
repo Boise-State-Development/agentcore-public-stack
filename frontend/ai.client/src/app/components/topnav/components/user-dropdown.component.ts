@@ -19,6 +19,8 @@ import {
   heroCog6Tooth,
   heroArrowTopRightOnSquare,
   heroDocumentText,
+  heroMegaphone,
+  heroQuestionMarkCircle,
 } from '@ng-icons/heroicons/outline';
 import { ThemeService, ThemePreference } from './theme-toggle/theme.service';
 import { VERSION } from '../../../../version';
@@ -28,6 +30,10 @@ import {
   UserMenuLinkModalComponent,
   UserMenuLinkModalData,
 } from './user-menu-link-modal/user-menu-link-modal.component';
+import { WhatsNewPanelComponent } from './whats-new-panel/whats-new-panel.component';
+import { AnnouncementsService } from '../../../services/announcements/announcements.service';
+import { KeyboardShortcutsService } from '../../shortcuts/keyboard-shortcuts.service';
+import { shortcutAria, shortcutLabel } from '../../shortcuts/shortcuts';
 
 export interface User {
   firstName: string;
@@ -56,6 +62,8 @@ export interface User {
       heroCog6Tooth,
       heroArrowTopRightOnSquare,
       heroDocumentText,
+      heroMegaphone,
+      heroQuestionMarkCircle,
     })
   ],
   template: `
@@ -64,19 +72,29 @@ export interface User {
         type="button"
         [cdkMenuTriggerFor]="userMenu"
         [cdkMenuPosition]="menuPositionsComputed()"
-        class="relative flex w-full items-center gap-3 rounded-lg px-2 py-2 hover:bg-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:hover:bg-white/10"
+        class="relative flex w-full items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-gray-200/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:hover:bg-white/5"
         aria-label="User menu"
       >
         <span class="sr-only">Open user menu</span>
+
+        <!-- Unread announcements. The count is in the label, not the colour —
+             a coloured dot alone is not an accessible signal. -->
+        @if (unreadCount() > 0) {
+          <span
+            class="absolute left-6 top-1 size-2.5 rounded-full bg-primary-600 ring-2 ring-white dark:ring-gray-900"
+            role="status"
+            [attr.aria-label]="unreadLabel()"
+          ></span>
+        }
 
         @if (user().picture) {
           <img
             [src]="user().picture"
             [alt]="user().fullName"
-            class="size-8 shrink-0 rounded-full bg-gray-50 outline -outline-offset-1 outline-black/5 dark:bg-gray-800 dark:outline-white/10"
+            class="size-7 shrink-0 rounded-full bg-gray-50 outline -outline-offset-1 outline-black/5 dark:bg-gray-800 dark:outline-white/10"
           />
         } @else {
-          <div class="size-8 shrink-0 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center outline -outline-offset-1 outline-black/5 dark:outline-white/10">
+          <div class="size-7 shrink-0 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center outline -outline-offset-1 outline-black/5 dark:outline-white/10">
             <span class="text-xs font-semibold text-gray-600 dark:text-gray-300">
               {{ getUserInitial() }}
             </span>
@@ -84,12 +102,12 @@ export interface User {
         }
 
         <span class="flex min-w-0 flex-1 items-center justify-between">
-          <span class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">
+          <span class="truncate text-sm/5 font-semibold text-gray-900 dark:text-white">
             {{ user().fullName }}
           </span>
           <ng-icon
             name="heroChevronUpDown"
-            class="size-5 shrink-0 text-gray-400"
+            class="size-4 shrink-0 text-gray-400"
           />
         </span>
       </button>
@@ -144,6 +162,50 @@ export interface User {
                 />
                 <span>Settings</span>
               </a>
+            </div>
+
+            <!-- What's New (feature announcements) -->
+            <div class="border-t border-gray-200 py-1 dark:border-gray-700">
+              <button
+                cdkMenuItem
+                type="button"
+                (click)="openWhatsNew()"
+                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden text-left"
+                role="menuitem"
+              >
+                <ng-icon
+                  name="heroMegaphone"
+                  class="size-5 text-gray-400 dark:text-gray-500"
+                />
+                <span class="flex-1 truncate">What's New</span>
+                @if (unreadCount() > 0) {
+                  <span
+                    class="rounded-full bg-primary-accessible px-1.5 py-0.5 text-xs/4 font-medium text-white"
+                    [attr.aria-label]="unreadLabel()"
+                  >
+                    {{ unreadCount() }}
+                  </span>
+                }
+              </button>
+            </div>
+
+            <!-- Keyboard shortcuts: the way to find Cmd/Ctrl+/ without knowing it. -->
+            <div class="border-t border-gray-200 py-1 dark:border-gray-700">
+              <button
+                cdkMenuItem
+                type="button"
+                (click)="openShortcuts()"
+                [attr.aria-keyshortcuts]="shortcutsAria"
+                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden text-left"
+                role="menuitem"
+              >
+                <ng-icon
+                  name="heroQuestionMarkCircle"
+                  class="size-5 text-gray-400 dark:text-gray-500"
+                />
+                <span class="flex-1 truncate">Keyboard shortcuts</span>
+                <span class="text-xs/5 text-gray-500 dark:text-gray-400" aria-hidden="true">{{ shortcutsLabel }}</span>
+              </button>
             </div>
 
             <!-- Admin-managed custom links -->
@@ -213,10 +275,7 @@ export interface User {
     </div>
   `,
   styles: `
-
-@import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../../styles/theme.css";
 
     @keyframes fade-in {
       from {
@@ -248,7 +307,20 @@ export interface User {
 export class UserDropdownComponent {
   private readonly themeService = inject(ThemeService);
   private readonly userMenuLinksService = inject(UserMenuLinksService);
+  private readonly announcements = inject(AnnouncementsService);
   private readonly dialog = inject(Dialog);
+  private readonly shortcuts = inject(KeyboardShortcutsService);
+  protected readonly shortcutsLabel = shortcutLabel('help');
+  protected readonly shortcutsAria = shortcutAria('help');
+
+  // Unread announcements. The service loads its feed on first read, which is
+  // here — the topnav only renders this dropdown once the session has
+  // resolved, so the request goes out post-auth with the user's roles known.
+  protected readonly unreadCount = this.announcements.unreadCount;
+  protected readonly unreadLabel = computed(() => {
+    const count = this.unreadCount();
+    return `${count} unread ${count === 1 ? 'announcement' : 'announcements'}`;
+  });
 
   // Inputs
   user = input.required<User>();
@@ -258,6 +330,17 @@ export class UserDropdownComponent {
   protected readonly customLinks = computed<UserMenuLink[]>(
     () => this.userMenuLinksService.enabledLinksResource.value()?.links ?? [],
   );
+
+  protected openShortcuts(): void {
+    void this.shortcuts.openHelp();
+  }
+
+  protected openWhatsNew(): void {
+    this.dialog.open<void>(WhatsNewPanelComponent, {
+      hasBackdrop: false, // the dialog component owns its own backdrop
+      panelClass: 'whats-new-panel',
+    });
+  }
 
   protected openLinkModal(link: UserMenuLink): void {
     this.dialog.open<void, UserMenuLinkModalData>(UserMenuLinkModalComponent, {

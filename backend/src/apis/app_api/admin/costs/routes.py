@@ -24,6 +24,9 @@ from .models import (
     CostTrend,
     AdminCostDashboard,
     SessionCostAnatomy,
+    SessionProfile,
+    UserSessionsResponse,
+    PlatformCostSummary,
 )
 from .service import AdminCostService
 
@@ -217,6 +220,13 @@ async def get_session_cost_anatomy(
     deducted from them. Subtract to get unexplained waste — that difference is
     what a prefix-stability regression moves.
 
+    ⚠️ **Check `modelSwitched` too.** A mid-conversation model switch keeps the
+    conversation, and each model has its own cache, so the first call on the new
+    model re-writes the whole prefix with *unchanged* fingerprints and classifies
+    `miss_avoidable`. `modelSwitchMissCount` / `modelSwitchUsd` are the subset it
+    explains, excluding calls already counted as an Agent switch, so subtract
+    both pairs.
+
     Args:
         session_id: Session identifier (any user's session — admin scope)
         admin_user: Authenticated admin user (injected)
@@ -250,6 +260,123 @@ async def get_session_cost_anatomy(
         )
 
     return anatomy
+
+
+@router.get("/users/{user_id}/sessions", response_model=UserSessionsResponse)
+async def get_user_sessions(
+    user_id: str,
+    period: Optional[str] = Query(
+        None,
+        description="Period (YYYY-MM) to scope the list to; defaults to the current month",
+        pattern=r"^\d{4}-\d{2}$",
+    ),
+    all_time: bool = Query(
+        False,
+        alias="allTime",
+        description="List every conversation regardless of period (period is then ignored)",
+    ),
+    sort: str = Query(
+        "cost",
+        pattern=r"^(cost|recent|context|messages)$",
+        description="cost (desc), recent (lastMessageAt desc), context (desc), messages (desc)",
+    ),
+    limit: int = Query(100, ge=1, le=500, description="Maximum rows to return"),
+    admin_user: User = Depends(require_costs_admin),
+    service: AdminCostService = Depends(get_cost_service),
+):
+    """
+    One user's conversations, content-free, for the admin user page.
+
+    The drill-down that was missing between "top users by cost" and the
+    per-session cost anatomy: it starts from a *user* — the person support is
+    looking at because they hit their quota — and lists what they were doing
+    without reading any of it. Each row is counts, tokens, dollars, timestamps,
+    a model id, a tool count, an agent-binding flag and the diagnoses that
+    fired on the row's own numbers; nothing on it carries user text or
+    model-generated prose (no title, no summary).
+
+    ⚠️ **`costKnown=false` rows are unrecorded, not free.** 20% of session rows
+    fleet-wide have never had a cost aggregate written. They are listed, they
+    trail under cost-sort, and `unknownCostCount` says how many there are so a
+    total over this list is understood as a floor.
+
+    Period semantics match `/top-sessions`: `period` selects which sessions
+    are listed (active in it) and supplies the denominator for
+    `shareOfUserPeriod`; a row's `totalCost` is the conversation's **lifetime**
+    cost, because a runaway thread usually spans period boundaries.
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks the admin.costs scope
+            - 500 if server error
+    """
+    logger.info("Admin requesting a user's conversation list")
+
+    try:
+        return await service.get_user_sessions(
+            user_id=user_id,
+            period=None if all_time else period,
+            all_time=all_time,
+            sort=sort,
+            limit=limit,
+        )
+    except Exception as e:
+        logger.error(f"Error getting user sessions: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve user sessions"
+        )
+
+
+@router.get("/sessions/{session_id}/profile", response_model=SessionProfile)
+async def get_session_profile(
+    session_id: str,
+    admin_user: User = Depends(require_costs_admin),
+    service: AdminCostService = Depends(get_cost_service),
+):
+    """
+    The content-free diagnostic profile of one conversation.
+
+    Sits beside `/sessions/{id}/calls` (the cost anatomy) and answers the
+    question that view cannot: *what was the user doing?* Attachments (count
+    and bytes, never names), the context-token trajectory per model call with
+    the compaction threshold to read it against, the model mix, how often each
+    cached-prefix component changed, the tool census when recorded, and the
+    diagnoses that fired — each a named, computable classification with its
+    evidence and the fix a prior investigation landed on.
+
+    `dataCoverage` says which optional signals this session actually has; a
+    session written before a counter shipped reads "not tracked", never "0".
+
+    The whole payload is safe to paste into a model for a second opinion — it
+    is content-free by construction (`apis.shared.observability.content_policy`).
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks the admin.costs scope
+            - 404 if the session has no metadata row
+            - 500 if server error
+    """
+    logger.info("Admin requesting a session profile")
+
+    try:
+        profile = await service.get_session_profile(session_id)
+    except Exception as e:
+        logger.error(f"Error getting session profile: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve session profile"
+        )
+
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No session found for {session_id}"
+        )
+
+    return profile
 
 
 @router.get("/top-users", response_model=List[TopUserCost])
@@ -368,6 +495,59 @@ async def get_system_summary(
         raise HTTPException(
             status_code=500,
             detail="Failed to retrieve system summary"
+        )
+
+
+@router.get("/platform", response_model=PlatformCostSummary)
+async def get_platform_cost_summary(
+    period: Optional[str] = Query(
+        None,
+        description="Period (YYYY-MM), defaults to current month",
+        pattern=r"^\d{4}-\d{2}$"
+    ),
+    admin_user: User = Depends(require_costs_admin),
+    service: AdminCostService = Depends(get_cost_service)
+):
+    """
+    Get all-in platform cost for a period: our inference ledger plus the
+    AWS infrastructure bill, with a per-service breakdown and the per-user
+    economics both halves imply.
+
+    Reads only pre-synced DynamoDB rows. This endpoint NEVER calls Cost
+    Explorer — CE bills $0.01 per request, so it is synced once a day by
+    infrastructure/lambda-assets/platform-cost-sync and read from here for
+    free. `ce:GetCostAndUsage` is granted to that Lambda's role and
+    deliberately not to app-api's, so this path cannot spend billing dollars
+    however often it is called.
+
+    Returns `available: false` (not an error) when the sync has never run for
+    the period — the feature is opt-in per environment, and an admin opening
+    the tab in an environment where it is off should be told that, not shown
+    a zero.
+
+    Args:
+        period: Period string (YYYY-MM), defaults to current month
+        admin_user: Authenticated admin user
+        service: Admin cost service
+
+    Returns:
+        PlatformCostSummary with the service breakdown and per-user figures
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 500 if server error
+    """
+    logger.info("Admin requesting platform cost summary")
+
+    try:
+        return await service.get_platform_cost_summary(period=period)
+    except Exception as e:
+        logger.error(f"Error getting platform cost summary: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve platform cost summary"
         )
 
 

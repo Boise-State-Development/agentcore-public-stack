@@ -34,6 +34,7 @@ describe('AgentService', () => {
     updateAgent: ReturnType<typeof vi.fn>;
     deleteAgent: ReturnType<typeof vi.fn>;
     getBindable: ReturnType<typeof vi.fn>;
+    getShareSkillExposure: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -46,6 +47,7 @@ describe('AgentService', () => {
       updateAgent: vi.fn(),
       deleteAgent: vi.fn(),
       getBindable: vi.fn(),
+      getShareSkillExposure: vi.fn(),
     };
     TestBed.configureTestingModule({
       providers: [AgentService, { provide: AgentApiService, useValue: mockApi }],
@@ -116,6 +118,18 @@ describe('AgentService', () => {
     await service.deleteAgent('ast-001');
 
     expect(service.agents$()).toEqual([]);
+  });
+
+  it('unwraps the skills sharing exposes, and lets a failure reach the caller', async () => {
+    const skills = [{ ref: 'skill-a', label: 'Policy Citation Format' }];
+    mockApi.getShareSkillExposure.mockReturnValueOnce(of({ agentId: 'ast-001', exposedSkills: skills }));
+
+    expect(await service.getShareSkillExposure('ast-001')).toEqual(skills);
+    expect(mockApi.getShareSkillExposure).toHaveBeenCalledWith('ast-001');
+
+    // The dialog decides what a failure means; the facade must not swallow it into "none".
+    mockApi.getShareSkillExposure.mockReturnValueOnce(throwError(() => ({ status: 500 })));
+    await expect(service.getShareSkillExposure('ast-001')).rejects.toEqual({ status: 500 });
   });
 
   it('memoises the bindable palette per kind and returns [] on failure', async () => {

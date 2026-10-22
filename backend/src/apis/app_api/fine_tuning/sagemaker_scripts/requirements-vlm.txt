@@ -1,0 +1,15 @@
+# Packaged AS requirements.txt for generative-VLM jobs only.
+#
+# These cannot go in the shared requirements.txt: bitsandbytes requires
+# torch>=2.4 and the text DLC is torch 2.1, so one shared file would fail to
+# install on the container every existing text job runs in.  The packaging
+# service picks the file by DLC family — see
+# script_packaging_service.REQUIREMENTS_BY_FAMILY.
+#
+# torch, transformers, datasets, evaluate and accelerate are supplied by the
+# DLC and are deliberately unpinned here; pinning them would fight the image.
+pandas
+scikit-learn
+pillow==12.3.0
+peft==0.20.0
+bitsandbytes==0.50.2

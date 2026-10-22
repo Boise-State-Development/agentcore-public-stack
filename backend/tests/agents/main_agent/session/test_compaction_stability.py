@@ -5,8 +5,10 @@ Bedrock prompt caching requires an exact prefix match, so
 a pure function of (stored messages, persisted compaction state). The old
 design truncated tool contents behind a sliding protected-turns window,
 which re-mutated the turn that just aged past the window on every restore —
-breaking the cached prefix and forcing a full prefix re-write (~$2.5/MTok on
-a 35k–150k prefix) nearly every turn (observed in prod session aecd387d:
+breaking the cached prefix and forcing a full re-write of a 35k–150k prefix
+nearly every turn, at the cache-write premium (1.25x the model's own base
+input rate, not a flat per-MTok figure — see CLAUDE.md's prompt-cache
+contract), observed in prod session aecd387d:
 -382/-1035/-1513 inter-turn prefix-token shrinkages with cacheRead=0 well
 inside the cache TTL).
 
@@ -97,7 +99,7 @@ def restore_session(make_session_manager, compaction_config):
             state_store.get("compaction")
         )
 
-        def _save(state: CompactionState) -> None:
+        def _save(state: CompactionState, record_event: bool = False) -> None:
             state.updated_at = _iso(_now())
             state_store["compaction"] = state.to_dict()
 
@@ -139,7 +141,7 @@ def make_wired_manager(make_session_manager, compaction_config):
             state_store.get("compaction")
         )
 
-        def _save(state: CompactionState) -> None:
+        def _save(state: CompactionState, record_event: bool = False) -> None:
             state.updated_at = _iso(_now())
             state_store["compaction"] = state.to_dict()
 
@@ -278,6 +280,76 @@ class TestOpportunisticAnchorAdvance:
         store = {"compaction": CompactionState().to_dict()}  # updated_at=None
         restore_session(store, stored)
         assert store["compaction"]["truncationAnchor"] == 0
+
+
+class TestTruncationAnchorLedger:
+    """Offload spec PR-5: the guard above holds by construction; these pin
+    the rows that prove it in prod — a ``truncation_anchor`` event carrying
+    the gap the decision was made on, and the gap on the restore-time
+    ``applied`` event."""
+
+    @pytest.fixture(autouse=True)
+    def diagnostics_enabled(self, monkeypatch):
+        monkeypatch.delenv("COST_DIAGNOSTICS_ENABLED", raising=False)
+
+    def _restore_with_events(self, make_session_manager, compaction_config, state_store, stored):
+        """Same as ``restore_session`` but hands back the manager so the
+        ledger queue can be drained."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr._load_compaction_state = lambda: CompactionState.from_dict(state_store.get("compaction"))
+
+        def _save(state, record_event=False):
+            state.updated_at = _iso(_now())
+            state_store["compaction"] = state.to_dict()
+
+        mgr._save_compaction_state = _save
+        mgr._retrieve_session_summaries = lambda: []
+        session_agent = MagicMock()
+        session_agent.state = {}
+        session_agent.conversation_manager_state = {}
+        session_messages = []
+        for msg in copy.deepcopy(stored):
+            sm = MagicMock()
+            sm.to_message.return_value = msg
+            session_messages.append(sm)
+        mgr.read_agent = MagicMock(return_value=session_agent)
+        mgr.list_messages = MagicMock(return_value=session_messages)
+        mgr._is_new_session = False
+        agent = MagicMock()
+        agent.agent_id = "default"
+        agent.messages = []
+        agent.conversation_manager.restore_from_session.return_value = []
+        agent.conversation_manager.removed_message_count = 0
+        mgr.initialize(agent)
+        return mgr, agent
+
+    def test_cold_advance_records_the_gap_it_was_decided_on(self, make_session_manager, compaction_config):
+        store = _stale_state(age_seconds=600)
+        mgr, _ = self._restore_with_events(make_session_manager, compaction_config, store, make_tool_conversation(8))
+        events = [e for e in mgr.drain_compaction_events() if e["kind"] == "truncation_anchor"]
+        assert len(events) == 1
+        event = events[0]
+        assert (event["anchorFrom"], event["anchorTo"]) == (0, 20)
+        # Measured before the save re-stamped updated_at — the real gap, not ~0.
+        assert event["cacheGapSeconds"] >= 599
+
+    def test_warm_cache_records_no_anchor_event(self, make_session_manager, compaction_config):
+        store = _fresh_state()
+        mgr, _ = self._restore_with_events(make_session_manager, compaction_config, store, make_tool_conversation(8))
+        assert [e for e in mgr.drain_compaction_events() if e["kind"] == "truncation_anchor"] == []
+
+    def test_restore_applied_event_carries_the_gap(self, make_session_manager, compaction_config):
+        stored = make_tool_conversation(8)
+        store = _stale_state(age_seconds=900, checkpoint=8, truncation_anchor=8, summary="earlier turns")
+        mgr, _ = self._restore_with_events(make_session_manager, compaction_config, store, stored)
+        applied = [e for e in mgr.drain_compaction_events() if e["kind"] == "applied"]
+        assert len(applied) == 1 and applied[0]["checkpoint"] == 8
+        assert applied[0]["cacheGapSeconds"] >= 899
+
+    def test_kind_is_registered(self):
+        from agents.main_agent.session.turn_based_session_manager import COMPACTION_EVENT_KINDS
+
+        assert "truncation_anchor" in COMPACTION_EVENT_KINDS
 
 
 class TestCacheWindowExpired:

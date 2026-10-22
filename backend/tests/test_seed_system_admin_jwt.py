@@ -13,6 +13,7 @@ sys.path.insert(
 )
 
 from seed_bootstrap_data import (  # noqa: E402
+    DEFAULT_TOOLS,
     EXAMPLE_SKILL_ID,
     seed_default_role,
     seed_example_skills,
@@ -131,7 +132,7 @@ class TestSeedDefaultTools:
         """Creates the default tool entries."""
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 9
+        assert result.created == len(DEFAULT_TOOLS)
         assert result.failed == 0
 
         # Verify fetch_url_content
@@ -230,6 +231,40 @@ class TestSeedDefaultTools:
         assert item["GSI1PK"] == "CATEGORY#document"
         assert item["GSI1SK"] == "TOOL#workspace_files"
 
+        # Verify browse_web. enabledByDefault MUST stay False: each session
+        # bills an AgentCore Browser session on top of model tokens, so this
+        # is opt-in per user and granted per role.
+        resp = dynamodb_table.get_item(
+            Key={"PK": "TOOL#browse_web", "SK": "METADATA"}
+        )
+        item = resp["Item"]
+        assert item["toolId"] == "browse_web"
+        assert item["displayName"] == "Web Browser"
+        assert item["category"] == "browser"
+        assert item["protocol"] == "local"
+        assert item["enabledByDefault"] is False
+        assert item["GSI1PK"] == "CATEGORY#browser"
+        assert item["GSI1SK"] == "TOOL#browse_web"
+
+        # Verify request_user_login. enabledByDefault MUST stay False, and
+        # this is the strictest default in the seed: while a takeover is live
+        # the user has a fully interactive Chromium inside our AWS account with
+        # our egress. It is a separate tool_id precisely so it can be granted
+        # to named roles — RBAC has no sub-tool gate, so an action on
+        # browse_web would have shipped it to every user who can browse.
+        resp = dynamodb_table.get_item(
+            Key={"PK": "TOOL#request_user_login", "SK": "METADATA"}
+        )
+        item = resp["Item"]
+        assert item["toolId"] == "request_user_login"
+        assert item["displayName"] == "Browser Sign-In"
+        assert item["category"] == "browser"
+        assert item["protocol"] == "local"
+        assert item["enabledByDefault"] is False
+        assert item["isPublic"] is False
+        assert item["GSI1PK"] == "CATEGORY#browser"
+        assert item["GSI1SK"] == "TOOL#request_user_login"
+
         # Verify create_excel_spreadsheet (single toggle for the whole Excel toolset)
         resp = dynamodb_table.get_item(
             Key={"PK": "TOOL#create_excel_spreadsheet", "SK": "METADATA"}
@@ -264,7 +299,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.skipped == 9
+        assert result.skipped == len(DEFAULT_TOOLS)
         assert result.created == 0
 
     def test_partial_skip(self, dynamodb_table):
@@ -278,7 +313,7 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 8
+        assert result.created == len(DEFAULT_TOOLS) - 1
         assert result.skipped == 1
 
 

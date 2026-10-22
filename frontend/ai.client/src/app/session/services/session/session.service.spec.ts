@@ -3,8 +3,9 @@ import { TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
-import { SessionService, SessionsListResponse, MessagesListResponse, BulkDeleteSessionsResponse } from './session.service';
+import { SessionService, SessionsListResponse, MessagesListResponse, BulkDeleteSessionsResponse, SIDEBAR_PAGE_SIZE } from './session.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { ConfigService } from '../../../services/config.service';
 import { SessionMetadata } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
@@ -71,6 +72,26 @@ describe('SessionService', () => {
         httpMock.expectOne('http://localhost:8000/sessions/test-session-id/metadata').flush(mockSession);
       });
       expect(await promise).toEqual(mockSession);
+    });
+
+    it('shows the global error toast by default', async () => {
+      const promise = service.getSessionMetadata('test-session-id');
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne('http://localhost:8000/sessions/test-session-id/metadata');
+        expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(false);
+        req.flush(mockSession);
+      });
+      await promise;
+    });
+
+    it('suppresses the toast when quiet (a refused first turn leaves no row to read)', async () => {
+      const promise = service.getSessionMetadata('test-session-id', { quiet: true });
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne('http://localhost:8000/sessions/test-session-id/metadata');
+        expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+        req.flush({ detail: 'Session not found' }, { status: 404, statusText: 'Not Found' });
+      });
+      await expect(promise).rejects.toBeTruthy();
     });
   });
 
@@ -158,6 +179,77 @@ describe('SessionService', () => {
       service.updateSessionTitleInCache('s1', 'New');
       expect(service.mergedSessionsResource().sessions[0].title).toBe('New');
       expect(service.isNewSession('s1')).toBe(false);
+    });
+
+    it('takes preferences from the API row for an optimistic row that has none', () => {
+      // A task started in this tab is cached before the backend binds it to the
+      // project; without this the sidebar could not group it until a reload.
+      const local: SessionMetadata = { ...mockSession, sessionId: 's1', title: 'Local title' };
+      const api: SessionMetadata = {
+        ...mockSession, sessionId: 's1', title: 'Api title',
+        preferences: { assistantId: 'ast-1', projectId: 'prj_1' },
+      };
+      const merged: SessionMetadata[] = (service as any).mergeSessions([local], [api, { ...mockSession, sessionId: 's2' }]);
+      expect(merged.map(s => s.sessionId)).toEqual(['s1', 's2']);
+      expect(merged[0].title).toBe('Local title');
+      expect(merged[0].preferences?.projectId).toBe('prj_1');
+
+      const withOwn: SessionMetadata = { ...local, preferences: { assistantId: 'mine' } };
+      expect((service as any).mergeSessions([withOwn], [api])[0].preferences).toEqual({ assistantId: 'mine' });
+    });
+
+    describe('a conversation started in this tab', () => {
+      // The repro: a project composer starts a conversation on the project's
+      // agent. The backend binds the project before it streams, but this tab
+      // shows the optimistic row, and the `session_title` event takes the
+      // session out of `newSessionIds` without reading the row. Until the row
+      // was read back, the share modal had no "Project members" option and the
+      // sidebar did not group the conversation under its project.
+      beforeEach(() => {
+        // Let the signed-out auth effect run its first (cache-clearing) pass.
+        TestBed.tick();
+        service.addSessionToCache('s1', 'u1');
+        service.setSessionMetadataId('s1');
+        TestBed.tick();
+        service.applyServerTitle('s1', 'Lab Safety Review');
+        TestBed.tick();
+      });
+
+      it('awaits its server row until preferences are adopted, after the title arrived', () => {
+        expect(service.isNewSession('s1')).toBe(false);
+        expect(service.awaitsServerRow('s1')).toBe(true);
+        expect(service.currentSession().preferences).toBeUndefined();
+
+        service.adoptServerPreferences('s1', undefined);
+
+        expect(service.awaitsServerRow('s1')).toBe(false);
+      });
+
+      it('puts the bound project on the header session and the list row', () => {
+        service.adoptServerPreferences('s1', { assistantId: 'harness-1', projectId: 'prj_1' });
+
+        expect(service.currentSession().preferences?.projectId).toBe('prj_1');
+        expect(service.currentSession().title).toBe('Lab Safety Review');
+        const row = service.mergedSessionsResource().sessions.find(s => s.sessionId === 's1');
+        expect(row?.preferences).toEqual({ assistantId: 'harness-1', projectId: 'prj_1' });
+      });
+
+      it('keeps preferences this tab set after the row was created', () => {
+        service.currentSession.update(current => ({ ...current, preferences: { lastModel: 'mine' } }));
+
+        service.adoptServerPreferences('s1', { lastModel: 'server', projectId: 'prj_1' });
+
+        expect(service.currentSession().preferences).toEqual({ lastModel: 'mine', projectId: 'prj_1' });
+      });
+
+      it('leaves another session on screen alone', () => {
+        service.setSessionMetadataId(null);
+        TestBed.tick();
+
+        service.adoptServerPreferences('s1', { projectId: 'prj_1' });
+
+        expect(service.currentSession().preferences).toBeUndefined();
+      });
     });
 
     it('should clear cache', () => {
@@ -290,16 +382,90 @@ describe('SessionService', () => {
     });
   });
 
-  describe('updateSessionsParams', () => {
-    it('should update params without error', () => {
-      expect(() => service.updateSessionsParams({ limit: 20 })).not.toThrow();
-    });
-  });
+  describe('sidebar paging', () => {
+    const LIST = 'http://localhost:8000/sessions';
+    const session = (n: number): SessionMetadata => ({ ...mockSession, sessionId: `s${n}` });
+    const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => session(from + i));
 
-  describe('resetSessionsParams', () => {
-    it('should reset params without error', () => {
-      service.updateSessionsParams({ limit: 20 });
-      expect(() => service.resetSessionsParams()).not.toThrow();
+    /** Answer the list request matching `url` once the resource's effect has issued it. */
+    async function flushList(url: string, body: SessionsListResponse): Promise<void> {
+      await vi.waitFor(() => {
+        TestBed.tick();
+        httpMock.expectOne(url).flush(body);
+      });
+      await vi.waitFor(() => expect(service.sessionsResource.isLoading()).toBe(false));
+    }
+
+    beforeEach(() => {
+      // Signed in, or the auth effect's logout branch disables loading on the first tick.
+      (TestBed.inject(BffSessionService).isAuthenticated as ReturnType<typeof signal<boolean>>).set(true);
+    });
+
+    async function loadFirstPage(): Promise<void> {
+      service.enableSessionsLoading();
+      await flushList(`${LIST}?limit=${SIDEBAR_PAGE_SIZE}`, { sessions: range(0, 30), nextToken: 'p2' });
+    }
+
+    it('first load asks for one page, not the whole history', async () => {
+      await loadFirstPage();
+      expect(service.mergedSessionsResource().sessions).toHaveLength(30);
+    });
+
+    it('appends the next page and carries its cursor', async () => {
+      await loadFirstPage();
+      const more = service.loadMoreSessions();
+      httpMock.expectOne(`${LIST}?limit=30&next_token=p2`).flush({ sessions: range(30, 60), nextToken: 'p3' });
+      await more;
+
+      const merged = service.mergedSessionsResource();
+      expect(merged.sessions.map(s => s.sessionId)).toEqual(range(0, 60).map(s => s.sessionId));
+      expect(merged.nextToken).toBe('p3');
+    });
+
+    it('reloads the whole loaded window, so a reload never drops appended rows', async () => {
+      await loadFirstPage();
+      const more = service.loadMoreSessions();
+      httpMock.expectOne(`${LIST}?limit=30&next_token=p2`).flush({ sessions: range(30, 60), nextToken: 'p3' });
+      await more;
+
+      service.refreshSessions();
+      await flushList(`${LIST}?limit=60`, { sessions: range(0, 60), nextToken: 'p3' });
+      expect(service.mergedSessionsResource().sessions).toHaveLength(60);
+    });
+
+    it('drops a page that a reload overtook, rather than aborting the reload', async () => {
+      await loadFirstPage();
+      const more = service.loadMoreSessions();
+      service.refreshSessions();
+      TestBed.tick();
+      httpMock.expectOne(`${LIST}?limit=30&next_token=p2`).flush({ sessions: range(30, 60), nextToken: 'p3' });
+      await more;
+
+      await flushList(`${LIST}?limit=30`, { sessions: range(0, 30), nextToken: 'p2' });
+      expect(service.mergedSessionsResource().sessions).toHaveLength(30);
+      expect(service.mergedSessionsResource().nextToken).toBe('p2');
+    });
+
+    it('does nothing once the list is exhausted', async () => {
+      service.enableSessionsLoading();
+      await flushList(`${LIST}?limit=30`, { sessions: range(0, 5), nextToken: null });
+      await service.loadMoreSessions();
+      httpMock.expectNone(req => req.url === LIST);
+    });
+
+    it('flags a failed page and clears the flag on the next attempt', async () => {
+      await loadFirstPage();
+      const failed = service.loadMoreSessions();
+      httpMock.expectOne(`${LIST}?limit=30&next_token=p2`).flush('boom', { status: 500, statusText: 'Server Error' });
+      await failed;
+      expect(service.loadMoreSessionsError()).toBe(true);
+      expect(service.isLoadingMoreSessions()).toBe(false);
+
+      const retry = service.loadMoreSessions();
+      expect(service.loadMoreSessionsError()).toBe(false);
+      httpMock.expectOne(`${LIST}?limit=30&next_token=p2`).flush({ sessions: range(30, 40), nextToken: null });
+      await retry;
+      expect(service.mergedSessionsResource().sessions).toHaveLength(40);
     });
   });
 

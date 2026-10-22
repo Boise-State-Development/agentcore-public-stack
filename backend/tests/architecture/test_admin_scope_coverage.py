@@ -35,6 +35,7 @@ NON_DELEGABLE_MODULES = {
     "roles/routes.py",
     "auth_providers/routes.py",
     "audit/routes.py",
+    "user_grants/routes.py",
 }
 
 # Scope claimed by each router module. `roles/agent_pins.py` is the one place
@@ -44,15 +45,19 @@ EXPECTED_MODULE_SCOPES = {
     "routes.py": "admin.models",
     "quota/routes.py": "admin.quota",
     "costs/routes.py": "admin.costs",
+    "feedback/routes.py": "admin.costs",  # eval-sampling queue sits beside the cost rows
     "users/routes.py": "admin.users",
     "tools/routes.py": "admin.tools",
     "skills/routes.py": "admin.skills",
     "agents/routes.py": "admin.marketplace",
+    "projects/routes.py": "admin.projects",
     "oauth/routes.py": "admin.connectors",
     "file_sources/routes.py": "admin.file_sources",
     "export_targets/routes.py": "admin.export_targets",
     "user_menu_links/routes.py": "admin.user_menu_links",
+    "announcements/routes.py": "admin.announcements",
     "system_prompts/routes.py": "admin.system_prompts",
+    "agent_templates/routes.py": "admin.agent_templates",
     "fine_tuning/routes.py": "admin.fine_tuning",
 }
 
@@ -203,8 +208,17 @@ def test_every_mounted_admin_route_has_a_scope_dependency() -> None:
         blob = "\n".join(sources)
         # `checker` is the closure returned by require_app_roles /
         # require_admin_scope; require_marketplace_admin wraps one of them.
+        #
+        # Two markers, because the two checkers now resolve permissions differently:
+        # `require_app_roles` calls `resolve_user_permissions` inline, while
+        # `require_admin_scope` delegates to the shared `has_admin_scope` predicate (which
+        # the invocation path's reviewer preview also needs, and which cannot be a FastAPI
+        # dependency there). This is a source grep one level deep, so a checker that moves
+        # its resolution behind another name must add that name here — the guarantee is
+        # unchanged, the string that evidences it is not.
         governed = (
             "resolve_user_permissions" in blob
+            or "has_admin_scope" in blob
             or "require_marketplace_admin" in blob
             or "agent_marketplace_enabled" in blob
         )

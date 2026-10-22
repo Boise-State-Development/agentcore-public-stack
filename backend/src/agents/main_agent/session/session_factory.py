@@ -1,6 +1,7 @@
 """
 Session manager factory for creating AgentCore Memory session managers
 """
+import contextvars
 import os
 import logging
 from typing import Optional, Any, Dict, Tuple
@@ -20,6 +21,18 @@ logger = logging.getLogger(__name__)
 # string "false" disables it — an empty or unset value stays enabled (workflow
 # env vars can materialize as ""). See ``session_async_persistence_enabled``.
 SESSION_ASYNC_PERSISTENCE_ENABLED_ENV = "AGENTCORE_SESSION_ASYNC_PERSISTENCE_ENABLED"
+
+
+MEMORY_SUMMARY_RETRIEVAL_ENV = "MEMORY_SUMMARY_NAMESPACE_RETRIEVAL_ENABLED"
+
+
+def summary_namespace_retrieval_enabled() -> bool:
+    """Whether the current session's own summary is retrieved on every user
+    message and prepended to it. Off unless ``=true``: it re-injects a
+    conversation the model already holds, at a lookup per message. The
+    compaction path still reads summaries where they matter
+    (`TurnBasedSessionManager._retrieve_session_summaries`)."""
+    return os.environ.get(MEMORY_SUMMARY_RETRIEVAL_ENV, "").strip().lower() == "true"
 
 
 def session_async_persistence_enabled() -> bool:
@@ -56,24 +69,91 @@ def session_async_persistence_enabled() -> bool:
 try:
     from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
     from bedrock_agentcore.memory import MemoryClient
+    from bedrock_agentcore.memory.integrations.strands import session_manager as _sdk_session_manager
     AGENTCORE_MEMORY_AVAILABLE = True
 except ImportError:
     AGENTCORE_MEMORY_AVAILABLE = False
 
 
-@lru_cache(maxsize=1)
-def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+# ---------------------------------------------------------------------------
+# One set of AgentCore Memory clients per process
+# ---------------------------------------------------------------------------
+#
+# The SDK's session manager builds its clients from scratch on every
+# construction, twice (see ``agent_build_shared_session_enabled``). Everything
+# below exists to hand it the process-wide session from
+# ``apis.shared.aws_clients`` instead, which warm-up builds at container
+# start (``apis/inference_api/warmup.py``).
+
+# Set by the factory for the duration of one session manager's construction.
+# The SDK builds its ``MemoryClient`` with no session and no session id, so this
+# is how the per-session decision reaches ``_SharedSessionMemoryClient``.
+_use_shared_memory_clients: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "use_shared_memory_clients", default=False
+)
+
+
+if AGENTCORE_MEMORY_AVAILABLE:
+    from apis.shared.aws_clients import shared_boto_session
+
+    class _SharedSessionMemoryClient(MemoryClient):
+        """``MemoryClient`` built from the shared session when the flag is on.
+
+        Through bedrock-agentcore 1.24.1 the SDK session manager built
+        ``MemoryClient(region_name=...)`` with no session — it accepted a
+        ``boto_session`` and then ignored it — so the client could not be
+        handed one, and its clients were replaced a few lines later at pure
+        cost. Rebinding the name in the SDK module was the only seam on offer.
+
+        1.24.2 passes ``boto3_session=`` through, so on the session-manager
+        path this subclass now just forwards what it is given and the
+        contextvar fallback below is unreachable there. It is kept as the seam
+        for any SDK path that still constructs a client without one; removing
+        it is a follow-up, not part of the bump.
+
+        Pinned by ``test_session_factory_shared_clients.py``, which fails if an
+        SDK upgrade stops going through it.
+        """
+
+        def __init__(
+            self,
+            region_name: Optional[str] = None,
+            integration_source: Optional[str] = None,
+            boto3_session: Any = None,
+        ) -> None:
+            if boto3_session is None and _use_shared_memory_clients.get():
+                boto3_session = shared_boto_session()
+            super().__init__(
+                region_name=region_name,
+                integration_source=integration_source,
+                boto3_session=boto3_session,
+            )
+
+    _sdk_session_manager.MemoryClient = _SharedSessionMemoryClient
+
+
+@lru_cache(maxsize=2)
+def _discover_strategy_ids(
+    memory_id: str, region: str, *, shared_session: bool = False
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Discover the actual strategy IDs from the configured memory strategies.
 
     AgentCore Memory stores memories in strategy-specific namespaces:
     /strategies/{strategyId}/actors/{actorId}
 
-    This function queries the memory to find the actual strategy IDs.
+    This function queries the memory to find the actual strategy IDs. It is
+    a control-plane read of static configuration, cached for the life of the
+    process.
 
     Args:
         memory_id: AgentCore Memory ID
         region: AWS region
+        shared_session: Build the ``MemoryClient`` on the process-wide session
+            (``agent_build_shared_session_enabled``) instead of a fresh one.
+            Part of the cache key on purpose: warm-up primes the shared entry
+            at container start, and a process with the kill switch set must
+            still do exactly what it did before.
 
     Returns:
         Tuple of (semantic_strategy_id, preference_strategy_id, summary_strategy_id)
@@ -82,7 +162,10 @@ def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], 
         return None, None, None
 
     try:
-        client = MemoryClient(region_name=region)
+        client = MemoryClient(
+            region_name=region,
+            boto3_session=shared_boto_session() if shared_session else None,
+        )
         strategies = client.get_memory_strategies(memory_id=memory_id)
 
         semantic_id = None
@@ -110,6 +193,19 @@ def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], 
         return None, None, None
 
 
+def warm_strategy_ids() -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Discover the memory's strategy ids on the shared session, once, at container start.
+
+    Called from ``apis/inference_api/warmup.py`` on the startup daemon thread
+    so the first turn finds the ids cached and its clients built. Raises when no memory is configured (``load_memory_config``); the
+    warm-up step logs that and moves on.
+    """
+    if not AGENTCORE_MEMORY_AVAILABLE:
+        return None, None, None
+    config = load_memory_config()
+    return _discover_strategy_ids(config.memory_id, config.region, shared_session=True)
+
+
 class SessionFactory:
     """Factory for creating appropriate session manager based on environment"""
 
@@ -120,6 +216,7 @@ class SessionFactory:
         caching_enabled: bool = True,
         compaction_enabled: Optional[bool] = None,
         compaction_threshold: Optional[int] = None,
+        long_term_memory: bool = True,
     ) -> Any:
         """
         Create appropriate session manager based on environment configuration
@@ -130,6 +227,9 @@ class SessionFactory:
             caching_enabled: Whether to enable prompt caching
             compaction_enabled: Override AGENTCORE_MEMORY_COMPACTION_ENABLED env var
             compaction_threshold: Override AGENTCORE_MEMORY_COMPACTION_TOKEN_THRESHOLD env var
+            long_term_memory: False for a conversation with an Agent (an
+                assistant): the user's long-term memory is neither retrieved
+                into it nor extracted from it. See ``_create_cloud_session_manager``.
 
         Returns:
             Session manager instance (TurnBasedSessionManager or PreviewSessionManager)
@@ -156,6 +256,7 @@ class SessionFactory:
             caching_enabled=caching_enabled,
             compaction_enabled=compaction_enabled,
             compaction_threshold=compaction_threshold,
+            long_term_memory=long_term_memory,
         )
 
     @staticmethod
@@ -167,9 +268,21 @@ class SessionFactory:
         caching_enabled: bool,
         compaction_enabled: Optional[bool] = None,
         compaction_threshold: Optional[int] = None,
+        long_term_memory: bool = True,
     ) -> Any:
         """
         Create AgentCore Memory session manager with built-in compaction
+
+        ``long_term_memory=False`` keeps the user's long-term memory out of
+        this conversation in both directions. Long-term memory is keyed to the
+        user alone (``/strategies/{id}/actors/{actorId}``), so a conversation
+        with an Agent would otherwise read facts extracted from every other
+        Agent's chats, and write its own knowledge-base-augmented prompts back
+        for the next one to read: one instructor's assistant answered about an
+        assignment its only file never mentioned. With it off, no namespace is
+        retrieved and every event is written with ``extractionMode="SKIP"``
+        (short-term history is unaffected). Preview sessions get the same
+        isolation from ``PreviewSessionManager``.
 
         Args:
             memory_id: AgentCore Memory ID (AWS Bedrock service)
@@ -193,8 +306,15 @@ class SessionFactory:
         logger.info(f"   • Memory ID: {memory_id}")
         logger.info(f"   • Region: {aws_region}")
 
-        # Discover actual strategy IDs from the memory configuration
-        semantic_id, preference_id, summary_id = _discover_strategy_ids(memory_id, aws_region)
+        # Discover actual strategy IDs from the memory configuration. With the
+        # shared session on this is a cache hit: warm-up discovered them at
+        # container start (`warm_strategy_ids`).
+        from apis.shared.feature_flags import agent_build_shared_session_enabled
+
+        shared_clients = agent_build_shared_session_enabled()
+        semantic_id, preference_id, summary_id = _discover_strategy_ids(
+            memory_id, aws_region, shared_session=shared_clients
+        )
 
         # Load retrieval thresholds from environment (configurable per deployment)
         relevance_score = float(os.environ.get(EnvVars.MEMORY_RELEVANCE_SCORE, str(Defaults.MEMORY_RELEVANCE_SCORE)))
@@ -204,7 +324,9 @@ class SessionFactory:
         # AgentCore stores memories in: /strategies/{strategyId}/actors/{actorId}
         retrieval_config: Dict[str, RetrievalConfig] = {}
 
-        if preference_id:
+        if not long_term_memory:
+            logger.info("   • Long-term memory: off for this conversation (Agent chat)")
+        elif preference_id:
             # User preferences (e.g., coding style, response length preferences)
             preference_namespace = f"/strategies/{preference_id}/actors/{{actorId}}"
             retrieval_config[preference_namespace] = RetrievalConfig(
@@ -213,7 +335,7 @@ class SessionFactory:
             )
             logger.info(f"   • Preferences namespace: {preference_namespace}")
 
-        if semantic_id:
+        if semantic_id and long_term_memory:
             # Semantic facts (e.g., user's name, project details, learned information)
             facts_namespace = f"/strategies/{semantic_id}/actors/{{actorId}}"
             retrieval_config[facts_namespace] = RetrievalConfig(
@@ -222,9 +344,20 @@ class SessionFactory:
             )
             logger.info(f"   • Facts namespace: {facts_namespace}")
 
-        if summary_id:
+        if summary_id and long_term_memory and summary_namespace_retrieval_enabled():
             # Session summaries (condensed conversation context for the current session)
-            # Note: Summary namespace includes sessionId since summaries are per-session
+            # Note: Summary namespace includes sessionId since summaries are per-session.
+            #
+            # Off by default. This namespace holds AgentCore's summary of THIS
+            # session, and the SDK retrieves it on every user message and
+            # prepends it to that message — a second copy of a conversation
+            # the model already has in context, paid as input tokens on every
+            # turn, plus one RetrieveMemoryRecords call per message against a
+            # 30/s account quota. The summary is genuinely useful once the
+            # conversation has been compacted, and that path reads it directly
+            # (`_retrieve_session_summaries` at checkpoint advance), so nothing
+            # is lost by not retrieving it per message. See
+            # docs/specs/load-test-assessment-2026-09.md P2-F.
             summary_namespace = f"/strategies/{summary_id}/actors/{{actorId}}/sessions/{{sessionId}}"
             retrieval_config[summary_namespace] = RetrievalConfig(
                 top_k=top_k,
@@ -234,7 +367,7 @@ class SessionFactory:
 
         logger.info(f"   • Retrieval: top_k={top_k}, relevance_score={relevance_score}")
 
-        if not retrieval_config:
+        if not retrieval_config and long_term_memory:
             logger.warning("⚠️ No memory strategies found - long-term memory retrieval disabled")
 
         # Configure AgentCore Memory with dynamically discovered namespaces
@@ -259,23 +392,30 @@ class SessionFactory:
             compaction_config.token_threshold = compaction_threshold
 
         # Create session manager with compaction built-in
-        session_manager = TurnBasedSessionManager(
-            agentcore_memory_config=agentcore_memory_config,
-            region_name=aws_region,
-            compaction_config=compaction_config if compaction_config.enabled else None,
-            user_id=user_id,
-            summarization_strategy_id=summary_id,
-        )
+        token = _use_shared_memory_clients.set(shared_clients)
+        try:
+            session_manager = TurnBasedSessionManager(
+                agentcore_memory_config=agentcore_memory_config,
+                region_name=aws_region,
+                compaction_config=compaction_config if compaction_config.enabled else None,
+                user_id=user_id,
+                summarization_strategy_id=summary_id,
+                boto_session=shared_boto_session() if shared_clients else None,
+                long_term_memory=long_term_memory,
+            )
+        finally:
+            _use_shared_memory_clients.reset(token)
 
         logger.info("✅ AgentCore Memory initialized")
         logger.info("   • Storage: AWS-managed DynamoDB")
-        logger.info("   • Short-term memory: Conversation history (90 days retention)")
+        logger.info("   • Short-term memory: Conversation history (retention: CDK_CONVERSATION_RETENTION_DAYS, default 365 days)")
         logger.info("   • Long-term memory: %s (%d namespaces)", "Enabled" if retrieval_config else "Disabled", len(retrieval_config))
         if compaction_config.enabled:
             logger.info("   • Compaction: Enabled (threshold=%s)", f"{compaction_config.token_threshold:,}")
         else:
             logger.info("   • Compaction: Disabled")
         logger.info("   • Persistence: %s", "Async (off the event loop)" if async_persistence else "Sync (blocking)")
+        logger.info("   • Clients: %s", "Shared (process-wide)" if shared_clients else "Per session manager")
 
         return session_manager
 

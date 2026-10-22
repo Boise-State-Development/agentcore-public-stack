@@ -20,6 +20,7 @@ from strands.types.exceptions import (
 )
 
 from agents.main_agent.integrations.external_mcp_client import (
+    ConsentGatedTool,
     ExternalMCPIntegration,
     _is_auth_failure,
     detect_aws_service_from_url,
@@ -275,19 +276,35 @@ class TestClearToolClients:
 
         assert integration.clients["super-gmail"] is super_gmail
 
+    def test_clears_tool_subset_keys(self):
+        """Scoped and admin-listed clients carry an `|allow:` suffix."""
+        integration = ExternalMCPIntegration()
+        scoped = object()
+        user_scoped = object()
+        integration.clients["gmail|allow:send"] = scoped
+        integration.clients["alice:gmail|allow:search,send"] = user_scoped
+
+        integration.clear_tool_clients("gmail")
+
+        assert integration.clients == {}
+
     def test_no_op_when_tool_not_cached(self):
         integration = ExternalMCPIntegration()
         integration.clear_tool_clients("never-loaded")
         assert integration.clients == {}
 
 
-def _fake_tool(updated_at, tool_id="gmail"):
-    """Minimal tool stand-in for load_external_tools."""
+def _fake_tool(updated_at, tool_id="gmail", server_url=None):
+    """Minimal tool stand-in for load_external_tools.
+
+    The URL is per tool id by default: catalog entries that share one are the
+    same server, and `load_external_tools` loads such a server once (#1527).
+    """
     return SimpleNamespace(
         tool_id=tool_id,
         protocol="mcp_external",
         mcp_config=SimpleNamespace(
-            server_url="https://example.com/mcp",
+            server_url=server_url or f"https://{tool_id}.example.com/mcp",
             approval_required_names=lambda: set(),
         ),
         forward_auth_token=False,
@@ -348,6 +365,65 @@ class TestLoadExternalToolsVersioning:
         assert integration.clients["gmail"] is client_new
         # Old client must be evicted, not left dangling under the same key.
         assert client_old not in integration.clients.values()
+
+
+class TestOwnerStamping:
+    """A client carrying one user's credential is stamped `owner_user_id`
+    BEFORE its preflight `tools/list` (which records MCP Apps catalog
+    entries), so the UI catalog never hands it to another user. Shared
+    clients stay unowned."""
+
+    async def _load(self, tool, **kwargs):
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        seen_owner = {}
+
+        async def _load_tools(*_a, **_k):
+            seen_owner["at_preflight"] = getattr(client, "owner_user_id", None)
+            return []
+
+        client = SimpleNamespace(owner_user_id=None, load_tools=_load_tools)
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ):
+            loaded = await integration.load_external_tools(["gmail"], **kwargs)
+        return loaded, client, seen_owner
+
+    @pytest.mark.asyncio
+    async def test_forwarded_token_client_is_owned_by_the_user(self):
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        tool.forward_auth_token = True
+
+        loaded, client, seen = await self._load(
+            tool, user_id="alice", auth_token="tok"
+        )
+
+        assert loaded == [client]
+        assert client.owner_user_id == "alice"
+        assert seen["at_preflight"] == "alice"
+
+    @pytest.mark.asyncio
+    async def test_shared_client_stays_unowned(self):
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+
+        loaded, client, _ = await self._load(tool, user_id="alice", auth_token="tok")
+
+        assert loaded == [client]
+        assert client.owner_user_id is None
+
+    def test_clear_user_clients_forgets_their_ui_catalog_entries(self):
+        from agents.main_agent.integrations import mcp_apps
+
+        catalog = mcp_apps.UIToolCatalog()
+        meta = SimpleNamespace()
+        catalog.record("w", meta, client=SimpleNamespace(owner_user_id="alice"))
+        with patch.object(mcp_apps, "get_ui_tool_catalog", return_value=catalog):
+            ExternalMCPIntegration().clear_user_clients("alice")
+        assert catalog.get("w", "alice") is None
 
 
 class TestLoadExternalToolsPreflight:
@@ -475,6 +551,144 @@ class TestLoadExternalToolsScoped:
         assert first == [client_a]
         assert second == [client_b]
         assert len(integration.clients) == 2
+
+
+def _listed_tool(updated_at, names, tool_id="zoom", status=None):
+    """A catalog row whose admin "Available Tools" list names ``names``."""
+    tool = _fake_tool(updated_at, tool_id=tool_id)
+    tool.mcp_config.tools = [SimpleNamespace(name=n) for n in names]
+    if status is not None:
+        tool.status = status
+    return tool
+
+
+async def _load(integration, ids, tool):
+    repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+    client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ), patch(
+        "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+        return_value=client,
+    ) as create_mock:
+        result = await integration.load_external_tools(ids)
+    return result, create_mock
+
+
+class TestAdminToolListIsAnAllowlist:
+    """The admin tool form's "Available Tools" list says which of a server's
+    tools reach the model ("Leave empty to discover tools at runtime"). It was
+    only ever read for approval flags, so a server limited to nine tools still
+    registered all of them (dev, 2026-10-17)."""
+
+    @pytest.mark.asyncio
+    async def test_whole_server_is_limited_to_the_listed_tools(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), ["search", "send"])
+
+        _, create_mock = await _load(ExternalMCPIntegration(), ["zoom"], tool)
+
+        assert create_mock.call_args.kwargs["allowed_tool_names"] == {"search", "send"}
+
+    @pytest.mark.asyncio
+    async def test_a_scoped_selection_cannot_reach_past_the_list(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), ["search", "send"])
+
+        _, create_mock = await _load(
+            ExternalMCPIntegration(), ["zoom::send", "zoom::get_file_content"], tool
+        )
+
+        assert create_mock.call_args.kwargs["allowed_tool_names"] == {"send"}
+
+    @pytest.mark.asyncio
+    async def test_a_selection_with_nothing_listed_loads_no_client(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), ["search"])
+
+        result, create_mock = await _load(
+            ExternalMCPIntegration(), ["zoom::get_file_content"], tool
+        )
+
+        assert result == []
+        create_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_empty_list_still_means_discover_everything(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), [])
+
+        _, create_mock = await _load(ExternalMCPIntegration(), ["zoom"], tool)
+
+        assert create_mock.call_args.kwargs["allowed_tool_names"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_listed_server_still_resolves_by_its_bare_id(self):
+        """The allowlist puts an `|allow:` suffix on a whole-server key, which
+        `get_client` (OAuth and approval lookups) must still find."""
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), ["search"])
+        integration = ExternalMCPIntegration()
+
+        result, _ = await _load(integration, ["zoom"], tool)
+
+        assert integration.get_client("zoom") is result[0]
+
+
+class TestDisabledToolsNeverLoad:
+    """Status "disabled" takes a server out of service even for users whose
+    toggle is still on. "deprecated" (being retired) keeps working for them,
+    as docs/specs/mcp-server-retirement.md §7 requires."""
+
+    @pytest.mark.asyncio
+    async def test_a_disabled_server_is_skipped(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), [], status="disabled")
+        timings: list = []
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+        ) as create_mock:
+            result = await integration.load_external_tools(["zoom"], timings=timings)
+
+        assert result == []
+        create_mock.assert_not_called()
+        assert timings[0]["outcome"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_the_enum_value_is_read_the_same_as_the_string(self):
+        from apis.shared.tools.models import ToolStatus
+
+        tool = _listed_tool(
+            datetime(2025, 1, 1, tzinfo=timezone.utc), [], status=ToolStatus.DISABLED
+        )
+
+        result, create_mock = await _load(ExternalMCPIntegration(), ["zoom"], tool)
+
+        assert result == []
+        create_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_cached_client_is_not_served_once_disabled(self):
+        integration = ExternalMCPIntegration()
+        active = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), [])
+        first, _ = await _load(integration, ["zoom"], active)
+        assert len(first) == 1
+
+        disabled = _listed_tool(
+            datetime(2025, 1, 1, tzinfo=timezone.utc), [], status="disabled"
+        )
+        second, _ = await _load(integration, ["zoom"], disabled)
+
+        assert second == []
+
+    @pytest.mark.asyncio
+    async def test_a_deprecated_server_still_loads(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), [], status="deprecated")
+
+        result, _ = await _load(ExternalMCPIntegration(), ["zoom"], tool)
+
+        assert len(result) == 1
 
 
 class TestGetClientResolvesScopedBindings:
@@ -646,7 +860,12 @@ class TestOAuthPreflightRecovery:
             tool_id=tool_id,
             protocol="mcp_external",
             mcp_config=SimpleNamespace(
-                server_url="https://api.githubcopilot.com/mcp/x/issues",
+                # One hosted server, and each catalog entry asks it for a
+                # different toolset in its headers — the dev GitHub connector's
+                # shape. These are two servers to a build, so the URL dedupe
+                # (#1527) must not collapse them.
+                server_url="https://api.githubcopilot.com/mcp/",
+                custom_headers={"X-MCP-Toolsets": tool_id},
                 approval_required_names=lambda: set(),
             ),
             forward_auth_token=False,
@@ -884,6 +1103,134 @@ class TestOAuthPreflightRecovery:
         assert result == []
         resolve_mock.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_retries_with_a_token_a_parallel_preflight_warmed(self):
+        """Prod, 2026-10-16: `github_orgs` and `github_repos` pre-flighted in
+        parallel on a cold cache. Repos asked the vault and warmed the token
+        while orgs was still failing; orgs then saw a cached token, took it
+        for an expired one, and was dropped for a connected user. A token
+        this pre-flight never tried is a reason to retry, not to give up."""
+        from agents.main_agent.integrations import oauth_token_cache
+
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=self._oauth_tool()))
+
+        async def _load_tools():
+            if client.load_tools.await_count == 1:
+                # The sibling's vault answer lands while this one is failing.
+                oauth_token_cache.set("alice", self.PROVIDER, "sibling-token")
+                raise _wrapped_preflight_failure(_http_status_error(401))
+            return []
+
+        client = SimpleNamespace(load_tools=AsyncMock(side_effect=_load_tools))
+        resolve_mock = AsyncMock(return_value={"token": None, "url": "https://x"})
+
+        oauth_token_cache.clear_user_provider("alice", self.PROVIDER)
+        try:
+            with patch(
+                "apis.shared.tools.repository.get_tool_catalog_repository",
+                return_value=repo,
+            ), patch(
+                "agents.main_agent.integrations.external_mcp_client."
+                "create_external_mcp_client",
+                return_value=client,
+            ), patch(
+                "apis.shared.oauth.token_resolution.resolve_token_or_consent_url",
+                resolve_mock,
+            ):
+                result = await integration.load_external_tools(
+                    ["github_issues"], user_id="alice"
+                )
+
+            assert result == [client]
+            assert client.load_tools.await_count == 2
+            resolve_mock.assert_not_awaited()
+            assert integration.take_pending_consents("alice") == {}
+        finally:
+            oauth_token_cache.clear_user_provider("alice", self.PROVIDER)
+
+    @pytest.mark.asyncio
+    async def test_a_consent_drop_is_reported_to_the_build(self):
+        """The build needs to know which servers are missing for consent, so it
+        can tell the model and re-check on a cache hit."""
+        tool = self._oauth_tool()
+        tool.display_name = "Github Issues"
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        client = SimpleNamespace(
+            load_tools=AsyncMock(
+                side_effect=_wrapped_preflight_failure(_http_status_error(401))
+            )
+        )
+        resolved = {"token": None, "url": "https://consent.example/authorize"}
+        gated: list = []
+        timings: list = []
+
+        p1, p2, p3 = self._patches(client, repo, resolved)
+        with p1, p2, p3:
+            await integration.load_external_tools(
+                ["github_issues"], user_id="alice", timings=timings, consent_gated=gated
+            )
+
+        assert gated == [
+            ConsentGatedTool(
+                tool_id="github_issues",
+                display_name="Github Issues",
+                provider_id=self.PROVIDER,
+            )
+        ]
+        assert timings[0]["outcome"] == "consent"
+
+    @pytest.mark.asyncio
+    async def test_other_drops_are_not_reported_as_consent(self):
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=self._oauth_tool()))
+        client = SimpleNamespace(
+            load_tools=AsyncMock(
+                side_effect=_wrapped_preflight_failure(
+                    httpx.ConnectError("All connection attempts failed")
+                )
+            )
+        )
+        gated: list = []
+
+        p1, p2, p3 = self._patches(client, repo, {"token": None, "url": "https://x"})
+        with p1, p2, p3:
+            await integration.load_external_tools(
+                ["github_issues"], user_id="alice", consent_gated=gated
+            )
+
+        assert gated == []
+
+    @pytest.mark.asyncio
+    async def test_consent_drops_are_sorted_whatever_order_they_finish_in(
+        self, monkeypatch
+    ):
+        """Parallel pre-flights finish in any order; the note built from this
+        list is prefix bytes."""
+        monkeypatch.setenv("MCP_PARALLEL_PREFLIGHT_ENABLED", "true")
+        tools = {}
+        for tool_id, name in (("github_repos", "Github Repos"), ("github_issues", "Github Issues")):
+            tool = self._oauth_tool(tool_id=tool_id)
+            tool.display_name = name
+            tools[tool_id] = tool
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(side_effect=lambda tid: tools[tid]))
+        client = SimpleNamespace(
+            load_tools=AsyncMock(
+                side_effect=_wrapped_preflight_failure(_http_status_error(401))
+            )
+        )
+        gated: list = []
+
+        p1, p2, p3 = self._patches(client, repo, {"token": None, "url": "https://x"})
+        with p1, p2, p3:
+            await integration.load_external_tools(
+                ["github_repos", "github_issues"], user_id="alice", consent_gated=gated
+            )
+
+        assert [g.display_name for g in gated] == ["Github Issues", "Github Repos"]
+
     def test_take_pending_consents_drains_and_is_per_user(self):
         """Draining stops a stale prompt re-firing on an agent-cache hit,
         and one user's consent must never leak into another's stream."""
@@ -902,3 +1249,693 @@ class TestOAuthPreflightRecovery:
             self.PROVIDER: "https://consent.example/b"
         }
         assert integration.take_pending_consents("carol") == {}
+
+
+class TestRecheckConsent:
+    """A cache hit runs no pre-flight, so an agent built before the user
+    connected would otherwise serve them without the tools until it was
+    evicted. `recheck_consent` is the question the hit asks instead."""
+
+    PROVIDER = "github"
+
+    @staticmethod
+    def _resolve(answers):
+        return patch(
+            "apis.shared.oauth.token_resolution.resolve_token_or_consent_url",
+            AsyncMock(side_effect=lambda provider, user: answers[provider]),
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_token_warms_the_cache_and_asks_for_a_rebuild(self):
+        from agents.main_agent.integrations import oauth_token_cache
+
+        integration = ExternalMCPIntegration()
+        oauth_token_cache.clear_user_provider("alice", self.PROVIDER)
+        try:
+            with self._resolve({self.PROVIDER: {"token": "now-connected", "url": None}}):
+                assert await integration.recheck_consent("alice", [self.PROVIDER]) is True
+            assert oauth_token_cache.get("alice", self.PROVIDER) == "now-connected"
+            assert integration.take_pending_consents("alice") == {}
+        finally:
+            oauth_token_cache.clear_user_provider("alice", self.PROVIDER)
+
+    @pytest.mark.asyncio
+    async def test_still_unconnected_re_records_the_prompt(self):
+        """So the turn served from the cache emits `oauth_required` again."""
+        integration = ExternalMCPIntegration()
+        with self._resolve({self.PROVIDER: {"token": None, "url": "https://consent.example/a"}}):
+            assert await integration.recheck_consent("alice", [self.PROVIDER]) is False
+        assert integration.take_pending_consents("alice") == {
+            self.PROVIDER: "https://consent.example/a"
+        }
+
+    @pytest.mark.asyncio
+    async def test_couldnt_ask_changes_nothing(self):
+        integration = ExternalMCPIntegration()
+        with self._resolve({self.PROVIDER: None}):
+            assert await integration.recheck_consent("alice", [self.PROVIDER]) is False
+        assert integration.take_pending_consents("alice") == {}
+
+    @pytest.mark.asyncio
+    async def test_asks_once_per_provider(self):
+        """Three GitHub servers share one connection: one round trip."""
+        integration = ExternalMCPIntegration()
+        resolve = AsyncMock(return_value={"token": None, "url": "https://x"})
+        with patch(
+            "apis.shared.oauth.token_resolution.resolve_token_or_consent_url", resolve
+        ):
+            await integration.recheck_consent("alice", [self.PROVIDER] * 3)
+        assert resolve.await_count == 1
+
+
+class TestLoadExternalToolsTimings:
+    """Per-server timings behind `agent_build.tools.mcp` (turn-path P1a): one
+    entry per server so one slow server is distinguishable from many."""
+
+    @pytest.mark.asyncio
+    async def test_one_entry_per_server_with_its_outcome(self):
+        integration = ExternalMCPIntegration()
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        repo = SimpleNamespace(
+            get_tool=AsyncMock(
+                side_effect=[
+                    _fake_tool(when, tool_id="calendar"),
+                    _fake_tool(when, tool_id="gmail"),
+                    None,
+                ]
+            )
+        )
+        bad_client = SimpleNamespace(
+            load_tools=AsyncMock(side_effect=RuntimeError("connection refused"))
+        )
+        good_client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=[bad_client, good_client],
+        ):
+            await integration.load_external_tools(
+                ["calendar", "gmail", "retired"], timings=timings
+            )
+
+        assert [(t["id"], t["outcome"]) for t in timings] == [
+            ("calendar", "dropped"),
+            ("gmail", "loaded"),
+            ("retired", "skipped"),
+        ]
+        for entry in timings[:2]:
+            assert {"catalogMs", "preflightMs", "totalMs"} <= set(entry)
+            assert entry["totalMs"] >= entry["preflightMs"]
+        # Never reached a pre-flight, so it must not claim one.
+        assert "preflightMs" not in timings[2]
+
+    @pytest.mark.asyncio
+    async def test_a_cached_client_reports_no_preflight(self):
+        integration = ExternalMCPIntegration()
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ):
+            await integration.load_external_tools(["gmail"])
+            await integration.load_external_tools(["gmail"], timings=timings)
+
+        assert timings[0]["outcome"] == "cached"
+        assert "preflightMs" not in timings[0]
+
+    @pytest.mark.asyncio
+    async def test_a_catalog_error_is_recorded_not_raised(self):
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(side_effect=RuntimeError("ddb")))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ):
+            result = await integration.load_external_tools(["gmail"], timings=timings)
+
+        assert result == []
+        assert timings[0]["outcome"] == "error"
+        assert "totalMs" in timings[0]
+
+
+class TestLoadExternalToolsConcurrentPreflight:
+    """Several servers pre-flight together (turn-path spec §5 P3).
+
+    Strands' `load_tools` blocks its thread for the whole `initialize`
+    handshake, so the fakes here block synchronously too — an `await
+    asyncio.sleep` fake would overlap under `gather` and prove nothing. On dev
+    two cold Lambda-URL servers cost 9.5s + 12s in series. What must hold:
+    the pre-flights overlap, the client list (and so the tool order in the
+    cacheable `toolConfig`) stays in catalog order, a lone server keeps the
+    inline call, and `MCP_PARALLEL_PREFLIGHT_ENABLED=false` is the old loop.
+    """
+
+    @staticmethod
+    def _repo(*tool_ids):
+        tools = {
+            tid: _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), tool_id=tid)
+            for tid in tool_ids
+        }
+        return SimpleNamespace(get_tool=AsyncMock(side_effect=lambda tid: tools[tid]))
+
+    @staticmethod
+    def _blocking_client(on_load):
+        async def _load_tools():
+            on_load()
+            return []
+
+        return SimpleNamespace(load_tools=_load_tools)
+
+    async def _load(self, integration, tool_ids, clients_by_id, **kwargs):
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(*tool_ids),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=lambda config, tool_definition, **kw: clients_by_id[tool_definition.tool_id],
+        ):
+            return await integration.load_external_tools(tool_ids, **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_preflights_overlap(self, monkeypatch):
+        import threading
+
+        monkeypatch.delenv("MCP_PARALLEL_PREFLIGHT_ENABLED", raising=False)
+        # Each pre-flight blocks until BOTH are in flight: serial loading
+        # would break the barrier instead of passing it.
+        barrier = threading.Barrier(2, timeout=5)
+        clients = {
+            "canvas": self._blocking_client(barrier.wait),
+            "class_search": self._blocking_client(barrier.wait),
+        }
+
+        result = await self._load(ExternalMCPIntegration(), ["canvas", "class_search"], clients)
+
+        assert result == [clients["canvas"], clients["class_search"]]
+
+    @pytest.mark.asyncio
+    async def test_catalog_order_survives_a_slower_first_server(self, monkeypatch):
+        import threading
+        import time as _time
+
+        monkeypatch.delenv("MCP_PARALLEL_PREFLIGHT_ENABLED", raising=False)
+        finished = []
+        lock = threading.Lock()
+
+        def _after(name, delay):
+            def _run():
+                _time.sleep(delay)
+                with lock:
+                    finished.append(name)
+            return _run
+
+        clients = {
+            "slow": self._blocking_client(_after("slow", 0.2)),
+            "fast": self._blocking_client(_after("fast", 0.0)),
+        }
+        timings: list = []
+
+        result = await self._load(
+            ExternalMCPIntegration(), ["slow", "fast"], clients, timings=timings
+        )
+
+        assert finished == ["fast", "slow"]
+        assert result == [clients["slow"], clients["fast"]]
+        assert [t["id"] for t in timings] == ["slow", "fast"]
+        assert all(t["outcome"] == "loaded" for t in timings)
+
+    @pytest.mark.asyncio
+    async def test_a_lone_server_preflights_on_the_calling_thread(self, monkeypatch):
+        import threading
+
+        monkeypatch.delenv("MCP_PARALLEL_PREFLIGHT_ENABLED", raising=False)
+        seen = []
+        clients = {"canvas": self._blocking_client(lambda: seen.append(threading.current_thread()))}
+
+        await self._load(ExternalMCPIntegration(), ["canvas"], clients)
+
+        assert seen == [threading.current_thread()]
+
+    @pytest.mark.asyncio
+    async def test_context_reaches_the_preflight_thread(self, monkeypatch):
+        """`BedrockAgentCoreContext` (workload token, OAuth callback URL) is
+        contextvar-backed; the pre-flight must see what the build set."""
+        import contextvars
+
+        monkeypatch.delenv("MCP_PARALLEL_PREFLIGHT_ENABLED", raising=False)
+        marker = contextvars.ContextVar("marker", default=None)
+        seen = []
+        clients = {
+            "a": self._blocking_client(lambda: seen.append(marker.get())),
+            "b": self._blocking_client(lambda: seen.append(marker.get())),
+        }
+
+        marker.set("from-the-build")
+        await self._load(ExternalMCPIntegration(), ["a", "b"], clients)
+
+        assert seen == ["from-the-build", "from-the-build"]
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_loads_one_at_a_time(self, monkeypatch):
+        import threading
+
+        monkeypatch.setenv("MCP_PARALLEL_PREFLIGHT_ENABLED", "false")
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+
+        def _track():
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            with lock:
+                active -= 1
+
+        seen_threads = []
+        clients = {
+            tid: self._blocking_client(
+                lambda: (_track(), seen_threads.append(threading.current_thread()))
+            )
+            for tid in ("a", "b", "c")
+        }
+
+        result = await self._load(ExternalMCPIntegration(), ["a", "b", "c"], clients)
+
+        assert result == [clients["a"], clients["b"], clients["c"]]
+        assert peak == 1
+        assert set(seen_threads) == {threading.current_thread()}
+
+
+class TestCustomHeaders:
+    """An admin's static `customHeaders` (e.g. GitHub's `X-MCP-Toolsets`)
+    reach the MCP transport, and changing them rebuilds a cached client."""
+
+    def _config(self, headers):
+        from apis.shared.tools.models import MCPServerConfig
+
+        return MCPServerConfig(
+            server_url="https://api.githubcopilot.com/mcp/",
+            auth_type="none",
+            custom_headers=headers,
+        )
+
+    def test_transport_receives_the_headers(self):
+        from agents.main_agent.integrations.external_mcp_client import (
+            create_external_mcp_client,
+        )
+
+        client = create_external_mcp_client(
+            self._config({"X-MCP-Toolsets": "issues,context"}), oauth_token="tok"
+        )
+        with patch(
+            "agents.main_agent.integrations.external_mcp_client.streamablehttp_client"
+        ) as transport:
+            client._transport_callable()
+
+        transport.assert_called_once()
+        args, kwargs = transport.call_args
+        assert args == ("https://api.githubcopilot.com/mcp/",)
+        assert kwargs["headers"] == {"X-MCP-Toolsets": "issues,context"}
+        # The bearer still rides the auth handler, not a static header.
+        assert kwargs["auth"] is not None
+
+    def test_no_headers_sends_none(self):
+        from agents.main_agent.integrations.external_mcp_client import (
+            create_external_mcp_client,
+        )
+
+        client = create_external_mcp_client(self._config({}))
+        with patch(
+            "agents.main_agent.integrations.external_mcp_client.streamablehttp_client"
+        ) as transport:
+            client._transport_callable()
+
+        assert transport.call_args.kwargs["headers"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_header_change_rebuilds_the_cached_client(self):
+        """Same `updated_at`, different headers: the cached client must not be
+        served, because the headers are part of the connection itself."""
+        integration = ExternalMCPIntegration()
+        updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        before = _fake_tool(updated_at, tool_id="github")
+        before.mcp_config.custom_headers = {"X-MCP-Toolsets": "issues"}
+        after = _fake_tool(updated_at, tool_id="github")
+        after.mcp_config.custom_headers = {"X-MCP-Toolsets": "issues,context"}
+
+        repo = SimpleNamespace(get_tool=AsyncMock(side_effect=[before, after, after]))
+        client_before = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        client_after = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=[client_before, client_after],
+        ) as create_mock:
+            first = await integration.load_external_tools(["github"])
+            second = await integration.load_external_tools(["github"])
+            third = await integration.load_external_tools(["github"])
+
+        assert first == [client_before]
+        assert second == [client_after]
+        # Unchanged headers on the next turn reuse the rebuilt client.
+        assert third == [client_after]
+        assert create_mock.call_count == 2
+
+    def test_header_digest_ignores_order_and_name_case(self):
+        from agents.main_agent.integrations.external_mcp_client import _headers_digest
+
+        assert _headers_digest({"X-A": "1", "X-B": "2"}) == _headers_digest(
+            {"x-b": "2", "X-A": "1"}
+        )
+        assert _headers_digest({"X-A": "1"}) != _headers_digest({"X-A": "2"})
+
+
+class TestOneServerIsLoadedOnce:
+    """Several catalog entries can grant one MCP server; it loads once (#1527).
+
+    prod, 2026-10-09: `google_tasks_employee` and `google_tasks_student` are two
+    catalog records for one Google Tasks server. A user holding both roles
+    loaded it twice, every one of its tools was offered twice under its own
+    name, Strands' registry refused the second copy and the agent was never
+    built — five scheduled standup runs failed with "Tool name
+    'list_task_lists' already exists".
+    """
+
+    ONE_URL = "https://tasks.example.com/mcp"
+
+    @staticmethod
+    def _repo(tools):
+        return SimpleNamespace(get_tool=AsyncMock(side_effect=lambda tid: tools.get(tid)))
+
+    @pytest.mark.asyncio
+    async def test_two_catalog_entries_on_one_url_make_one_client(self):
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        tools = {
+            tid: _fake_tool(when, tool_id=tid, server_url=self.ONE_URL)
+            for tid in ("google_tasks_employee", "google_tasks_student")
+        }
+        clients = [
+            SimpleNamespace(load_tools=AsyncMock(return_value=[])),
+            SimpleNamespace(load_tools=AsyncMock(return_value=[])),
+        ]
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(tools),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=clients,
+        ) as create_mock:
+            result = await ExternalMCPIntegration().load_external_tools(
+                ["google_tasks_employee", "google_tasks_student"], timings=timings
+            )
+
+        # One client, built once — not one per catalog record.
+        assert result == [clients[0]]
+        assert create_mock.call_count == 1
+        # The entry that survives is the first in catalog order, decided off
+        # the catalog rows before anything is pre-flighted.
+        assert [(t["id"], t["outcome"]) for t in timings] == [
+            ("google_tasks_employee", "loaded"),
+            ("google_tasks_student", "duplicate"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_trailing_slash_is_the_same_server(self):
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        tools = {
+            "employee": _fake_tool(when, tool_id="employee", server_url=self.ONE_URL),
+            "student": _fake_tool(
+                when,
+                tool_id="student",
+                server_url="https://TASKS.EXAMPLE.COM/mcp/",
+            ),
+        }
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(tools),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ) as create_mock:
+            result = await ExternalMCPIntegration().load_external_tools(
+                ["employee", "student"]
+            )
+
+        # The host's case and a trailing slash reach the same endpoint.
+        assert result == [client]
+        assert create_mock.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_the_survivor_covers_both_entries_selected_tools(self):
+        """Two roles scoping one server to different tools must not cost either
+        of them its tools."""
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        tools = {
+            tid: _fake_tool(when, tool_id=tid, server_url=self.ONE_URL)
+            for tid in ("employee", "student")
+        }
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(tools),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ) as create_mock:
+            await ExternalMCPIntegration().load_external_tools(
+                ["employee::list_task_lists", "student::create_task"]
+            )
+
+        assert create_mock.call_args.kwargs["allowed_tool_names"] == {
+            "list_task_lists",
+            "create_task",
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_disabled_entry_never_wins_over_an_active_one(self):
+        """dev's real shape: three catalog entries on Zoom's hosted server,
+        `race_test_zoom_search_2` and `_3` disabled, `zoom_hosted` active — and
+        the disabled ones sort first. A disabled winner would be dropped for
+        its status straight afterwards, costing the user a server an active
+        record reaches."""
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        zoom_url = "https://mcp.zoom.us/mcp/zoom/streamable"
+        tools = {}
+        for tid, status in (
+            ("race_test_zoom_search_2", "disabled"),
+            ("race_test_zoom_search_3", "disabled"),
+            ("zoom_hosted", "active"),
+        ):
+            tool = _fake_tool(when, tool_id=tid, server_url=zoom_url)
+            tool.status = status
+            tools[tid] = tool
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(tools),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ) as create_mock:
+            result = await ExternalMCPIntegration().load_external_tools(
+                list(tools), timings=timings
+            )
+
+        # The active entry still loads; neither disabled entry claimed the URL.
+        assert result == [client]
+        assert create_mock.call_args.kwargs["tool_definition"].tool_id == "zoom_hosted"
+        assert [(t["id"], t["outcome"]) for t in timings] == [
+            ("race_test_zoom_search_2", "disabled"),
+            ("race_test_zoom_search_3", "disabled"),
+            ("zoom_hosted", "loaded"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_two_active_entries_still_collapse_when_one_is_disabled(self):
+        """The dedupe is not switched off by a disabled sibling: among the
+        active records for one server, the first still wins."""
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        tools = {}
+        for tid, status in (
+            ("a_disabled", "disabled"),
+            ("b_active", "active"),
+            ("c_active", "active"),
+        ):
+            tool = _fake_tool(when, tool_id=tid, server_url=self.ONE_URL)
+            tool.status = status
+            tools[tid] = tool
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(tools),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ) as create_mock:
+            result = await ExternalMCPIntegration().load_external_tools(
+                list(tools), timings=timings
+            )
+
+        assert result == [client]
+        assert create_mock.call_count == 1
+        assert create_mock.call_args.kwargs["tool_definition"].tool_id == "b_active"
+        assert [(t["id"], t["outcome"]) for t in timings] == [
+            ("a_disabled", "disabled"),
+            ("b_active", "loaded"),
+            ("c_active", "duplicate"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_different_headers_on_one_url_stay_two_servers(self):
+        """The dev GitHub connector's shape: one hosted server, and each
+        catalog entry asks it for a different toolset in its headers."""
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        tools = {}
+        for tid in ("github_issues", "github_repos"):
+            tool = _fake_tool(when, tool_id=tid, server_url="https://api.github.test/mcp/")
+            tool.mcp_config.custom_headers = {"X-MCP-Toolsets": tid}
+            tools[tid] = tool
+        clients = {
+            tid: SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+            for tid in tools
+        }
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(tools),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=lambda config, tool_definition, **kw: clients[
+                tool_definition.tool_id
+            ],
+        ):
+            result = await ExternalMCPIntegration().load_external_tools(
+                ["github_issues", "github_repos"]
+            )
+
+        assert result == [clients["github_issues"], clients["github_repos"]]
+
+
+class TestTwoServersSharingAToolName:
+    """prod, 2026-10-09: `canvas_faculty` and `salesforce_oit` both expose
+    `whoami`. The agent must build, and which copy the model gets must be
+    decided by catalog order — never by whichever pre-flight finished first,
+    which would re-order `toolConfig` between turns and re-write the cacheable
+    prefix at the cache-write premium (#1406).
+    """
+
+    @staticmethod
+    def _server_client(names, on_load=lambda: None):
+        """A pre-flightable stand-in for one loaded MCP server.
+
+        A real `ToolProvider` holding real `MCPAgentTool`s, because both are
+        what make a clash fatal: the registry only walks providers, and unlike
+        `@tool` functions MCP tools do not support hot reload, so the registry
+        refuses a second copy of a name instead of replacing it.
+        """
+        from mcp.types import Tool as MCPTool
+        from strands.tools import ToolProvider
+        from strands.tools.mcp import MCPAgentTool
+
+        class _FakeServerClient(ToolProvider):
+            def __init__(self):
+                self._tools = [
+                    MCPAgentTool(MCPTool(name=n, inputSchema={"type": "object"}), self)
+                    for n in names
+                ]
+
+            async def load_tools(self, **kwargs):
+                on_load()
+                return self._tools
+
+            def add_consumer(self, consumer_id, **kwargs) -> None:
+                pass
+
+            def remove_consumer(self, consumer_id, **kwargs) -> None:
+                pass
+
+        return _FakeServerClient()
+
+    @pytest.mark.asyncio
+    async def test_the_agent_builds_and_catalog_order_picks_the_winner(
+        self, monkeypatch
+    ):
+        import threading
+        import time as _time
+
+        from strands.tools.registry import ToolRegistry
+
+        from agents.main_agent.tools.tool_name_conflicts import (
+            SkippedToolName,
+            resolve_tool_name_conflicts,
+        )
+
+        monkeypatch.setenv("MCP_PARALLEL_PREFLIGHT_ENABLED", "true")
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        tools = {
+            tid: _fake_tool(when, tool_id=tid)
+            for tid in ("canvas_faculty", "salesforce_oit")
+        }
+        for tid, tool in tools.items():
+            tool.display_name = tid
+
+        # Canvas comes first in catalog order and finishes its pre-flight last.
+        clients = {
+            "canvas_faculty": self._server_client(
+                ["whoami", "list_courses"], lambda: _time.sleep(0.2)
+            ),
+            "salesforce_oit": self._server_client(["whoami", "find_contact"]),
+        }
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=SimpleNamespace(
+                get_tool=AsyncMock(side_effect=lambda tid: tools[tid])
+            ),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=lambda config, tool_definition, **kw: clients[
+                tool_definition.tool_id
+            ],
+        ):
+            loaded = await ExternalMCPIntegration().load_external_tools(
+                ["canvas_faculty", "salesforce_oit"], user_id="alice"
+            )
+
+        assert loaded == [clients["canvas_faculty"], clients["salesforce_oit"]]
+
+        resolved, skipped = resolve_tool_name_conflicts(list(loaded))
+        registry = ToolRegistry()
+        registry.process_tools(resolved)  # this is what used to raise
+
+        assert sorted(registry.registry) == ["find_contact", "list_courses", "whoami"]
+        assert registry.registry["whoami"].mcp_client is clients["canvas_faculty"]
+        assert skipped == [
+            SkippedToolName("whoami", "salesforce_oit", "canvas_faculty")
+        ]

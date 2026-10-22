@@ -32,6 +32,11 @@ import type {
   Citation,
   ReasoningEvent,
   ToolResultEventData,
+  AgentStatusEvent,
+  ToolGroupSummaryEvent,
+  SourceProvenanceEvent,
+  SourceProvenanceClaim,
+  SourceLocator,
   QuotaWarningEvent,
   QuotaSessionNoticeEvent,
   QuotaExceededEvent,
@@ -39,12 +44,18 @@ import type {
   ConversationalStreamErrorEvent,
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
+  UserQuestionRequiredEvent,
+  BrowserLoginRequiredEvent,
+  UserQuestion,
+  QuestionOption,
   CompactionEvent,
   ArtifactEvent,
   UiResourceEvent,
   ToolInputPartialEvent,
   SessionTitleEvent,
-  ToolProgress,
+  SteeringAppliedEvent,
+  ModelRetryEvent,
+  AgentNoticeEvent,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
 
@@ -72,7 +83,6 @@ export interface StreamParserCallbacks {
   // Tool events
   onToolUse?: (data: ToolUseEvent) => void;
   onToolResult?: (data: ToolResultEventData) => void;
-  onToolProgress?: (progress: ToolProgress) => void;
 
   // Metadata and auxiliary events
   onMetadata?: (data: MetadataEvent) => void;
@@ -89,6 +99,23 @@ export interface StreamParserCallbacks {
 
   // Tool approval required (catalog flagged this MCP tool needs_approval)
   onToolApprovalRequired?: (data: ToolApprovalRequiredEvent) => void;
+
+  // The agent paused to ask the user structured clarifying questions
+  onUserQuestionRequired?: (data: UserQuestionRequiredEvent) => void;
+
+  // The agent paused so the user can sign in to a site it cannot reach
+  onBrowserLoginRequired?: (data: BrowserLoginRequiredEvent) => void;
+
+  // What the agent is doing right now (model/tool boundaries from the
+  // runtime's AgentStatusHook). Drives the live status line and supplies the
+  // event-loop-measured duration for each finished tool row.
+  onAgentStatus?: (data: AgentStatusEvent) => void;
+
+  // A model-generated one-line summary of a finished tool batch. Arrives
+  // mid-turn, out of band with the content stream, and replaces the
+  // deterministic formatter line the rail has been showing.
+  onToolGroupSummary?: (data: ToolGroupSummaryEvent) => void;
+  onSourceProvenance?: (data: SourceProvenanceEvent) => void;
 
   // Compaction (backend rolled older turns into a summary on this turn)
   onCompaction?: (data: CompactionEvent) => void;
@@ -111,6 +138,21 @@ export interface StreamParserCallbacks {
   // Server-generated conversation title, pushed mid-stream on a session's
   // first turn once concurrent generation finishes (see SessionTitleEvent)
   onSessionTitle?: (data: SessionTitleEvent) => void;
+
+  // A follow-up queued mid-stream was injected into the running turn at a
+  // tool boundary and is now in history (see SteeringAppliedEvent). The SPA
+  // drops the matching composer-queue entry and renders it in the thread.
+  onSteeringApplied?: (data: SteeringAppliedEvent) => void;
+
+  // A failed model call is being retried rather than surfaced as an error.
+  // Advisory only — the turn continues; this exists so the resulting silence
+  // reads as "working" instead of "hung".
+  onModelRetry?: (data: ModelRetryEvent) => void;
+
+  // A project's agent is running this turn without some of its tools, skills,
+  // model or memory (the member can't use them). Informational: the turn
+  // continues. Arrives before message_start.
+  onAgentNotice?: (data: AgentNoticeEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -422,6 +464,120 @@ export function validateToolApprovalRequiredEvent(
 }
 
 /**
+ * Validate a list of clarifying questions.
+ *
+ * Extracted so the two paths that receive questions — the live SSE event and
+ * the persisted `PendingInterrupt` breadcrumb replayed on reload — cannot
+ * drift apart. They arrive by different transports (one a parsed SSE frame,
+ * one a JSON string out of DynamoDB) but must agree on what is renderable;
+ * two hand-written copies of this predicate would eventually disagree, and
+ * the failure mode is a prompt that renders on one path and vanishes on the
+ * other.
+ *
+ * Stricter than the sibling event validators because the payload drives a
+ * whole interactive form rather than a fixed two-button prompt: a question
+ * with no options, or an option with no label, renders an unanswerable prompt
+ * and leaves the turn paused with no way forward.
+ */
+export function validateUserQuestions(value: unknown): value is UserQuestion[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return false;
+  }
+
+  return value.every(
+    (question) =>
+      !!question &&
+      typeof question === 'object' &&
+      typeof question.header === 'string' &&
+      question.header.length > 0 &&
+      typeof question.question === 'string' &&
+      question.question.length > 0 &&
+      Array.isArray(question.options) &&
+      question.options.length > 0 &&
+      question.options.every(
+        (option: unknown) =>
+          !!option &&
+          typeof option === 'object' &&
+          typeof (option as QuestionOption).label === 'string' &&
+          (option as QuestionOption).label.length > 0,
+      ),
+  );
+}
+
+/**
+ * Validate UserQuestionRequiredEvent structure. Question-shape checks live in
+ * {@link validateUserQuestions}, shared with the reload path.
+ */
+export function validateUserQuestionRequiredEvent(
+  data: unknown,
+): data is UserQuestionRequiredEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<UserQuestionRequiredEvent>;
+
+  return (
+    event.type === 'user_question_required' &&
+    typeof event.interruptId === 'string' &&
+    event.interruptId.length > 0 &&
+    typeof event.toolUseId === 'string' &&
+    validateUserQuestions(event.questions)
+  );
+}
+
+/**
+ * Validate BrowserLoginRequiredEvent structure.
+ *
+ * `viewport` is required and must be two positive numbers: it becomes DCV's
+ * `remoteWidth`/`remoteHeight`, and a missing or zero value silently produces
+ * a cropped or blank stream rather than an error the user could report.
+ *
+ * Deliberately rejects any event carrying a `url`-ish field. Nothing upstream
+ * should ever put one here (the backend asserts that too), so if one appears
+ * it means a contract regression shipped, and failing loudly beats framing a
+ * URL of unknown provenance.
+ */
+export function validateBrowserLoginRequiredEvent(
+  data: unknown,
+): data is BrowserLoginRequiredEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<BrowserLoginRequiredEvent> & {
+    url?: unknown;
+    liveViewUrl?: unknown;
+  };
+
+  if (event.url !== undefined || event.liveViewUrl !== undefined) {
+    return false;
+  }
+
+  const viewport = event.viewport;
+  const viewportOk =
+    !!viewport &&
+    typeof viewport === 'object' &&
+    typeof viewport.width === 'number' &&
+    typeof viewport.height === 'number' &&
+    viewport.width > 0 &&
+    viewport.height > 0;
+
+  return (
+    event.type === 'browser_login_required' &&
+    typeof event.interruptId === 'string' &&
+    event.interruptId.length > 0 &&
+    typeof event.toolUseId === 'string' &&
+    typeof event.sessionId === 'string' &&
+    typeof event.browserSessionId === 'string' &&
+    event.browserSessionId.length > 0 &&
+    typeof event.browserId === 'string' &&
+    event.browserId.length > 0 &&
+    viewportOk
+  );
+}
+
+/**
  * Validate CompactionEvent structure
  */
 export function validateCompactionEvent(data: unknown): data is CompactionEvent {
@@ -542,6 +698,219 @@ export function validateSessionTitleEvent(data: unknown): data is SessionTitleEv
 }
 
 /**
+ * Validate SteeringAppliedEvent structure.
+ *
+ * `entryId` is the client-minted id of the queued composer entry and is what
+ * the SPA matches on, so an empty one is rejected: acking the wrong entry (or
+ * none) would either leave a duplicate queued or drop text that was never
+ * injected.
+ */
+export function validateSteeringAppliedEvent(
+  data: unknown,
+): data is SteeringAppliedEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<SteeringAppliedEvent>;
+
+  return (
+    event.type === 'steering_applied' &&
+    typeof event.sessionId === 'string' &&
+    event.sessionId.length > 0 &&
+    typeof event.entryId === 'string' &&
+    event.entryId.length > 0 &&
+    typeof event.text === 'string'
+  );
+}
+
+/**
+ * Validate ModelRetryEvent structure. `attempt` is 1-based; `delaySeconds`
+ * may legitimately be 0 (an unparseable delay is reported as 0 rather than
+ * dropped, so the retry still reaches the user).
+ */
+/**
+ * Validate an `agent_status` event.
+ *
+ * `phase` is checked against the closed set rather than merely being a string:
+ * an unrecognized phase would otherwise reach the status line and render as a
+ * blank or a raw token, which looks like a bug to the user. Dropping it leaves
+ * the previous honest status in place.
+ */
+export function validateAgentStatusEvent(data: unknown): data is AgentStatusEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<AgentStatusEvent>;
+
+  if (event.type !== 'agent_status') {
+    return false;
+  }
+
+  // `preparing` precedes the event loop, so it carries no cycle to check. It
+  // is also the only phase emitted by the chat route rather than the status
+  // hook — requiring `cycle` here would have dropped every one of them
+  // silently, which is exactly the failure mode this validator exists to
+  // avoid on the OTHER phases.
+  if (event.phase === 'preparing' || event.phase === 'prepared') {
+    return true;
+  }
+
+  return (
+    (event.phase === 'thinking' ||
+      event.phase === 'tool_start' ||
+      event.phase === 'tool_end') &&
+    typeof event.cycle === 'number'
+  );
+}
+
+/**
+ * Validate a `tool_group_summary` event.
+ *
+ * A summary with no tool-use ids cannot be attached to anything, and an empty
+ * summary would blank a line that currently reads correctly — both are
+ * rejected rather than applied.
+ */
+export function validateToolGroupSummaryEvent(
+  data: unknown,
+): data is ToolGroupSummaryEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<ToolGroupSummaryEvent>;
+
+  return (
+    event.type === 'tool_group_summary' &&
+    typeof event.summary === 'string' &&
+    event.summary.trim().length > 0 &&
+    Array.isArray(event.toolUseIds) &&
+    event.toolUseIds.length > 0
+  );
+}
+
+const PROVENANCE_STATES = new Set([
+  'supported',
+  'quote_unsupported',
+  'unassessed',
+  'unverified',
+]);
+const LOCATOR_KINDS = new Set(['page', 'paragraph', 'line']);
+const LOCATOR_PRECISIONS = new Set(['measured', 'estimated']);
+
+/**
+ * Validate one claim of a `source_provenance` event.
+ *
+ * An unknown `state` is rejected rather than passed through: every renderer
+ * branches on it, and a state nothing recognises would fall through to
+ * whatever the default arm happens to be — which for a citation badge means
+ * showing something reassuring about a value we know nothing about.
+ *
+ * A locator is accepted only whole. A partial one (a page with no `precision`)
+ * is exactly the shape that renders invented precision, so it is dropped to
+ * `null` — losing the page reference, never faking one.
+ */
+function normalizeProvenanceClaim(raw: unknown): SourceProvenanceClaim | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const claim = raw as Partial<SourceProvenanceClaim>;
+  if (typeof claim.state !== 'string' || !PROVENANCE_STATES.has(claim.state)) {
+    return null;
+  }
+  const loc = claim.locator as Partial<SourceLocator> | null | undefined;
+  const locator: SourceLocator | null =
+    loc &&
+    typeof loc === 'object' &&
+    typeof loc.kind === 'string' &&
+    LOCATOR_KINDS.has(loc.kind) &&
+    typeof loc.value === 'number' &&
+    Number.isFinite(loc.value) &&
+    typeof loc.precision === 'string' &&
+    LOCATOR_PRECISIONS.has(loc.precision)
+      ? { kind: loc.kind as SourceLocator['kind'], value: loc.value, precision: loc.precision as SourceLocator['precision'] }
+      : null;
+  return {
+    id: typeof claim.id === 'string' ? claim.id : '',
+    state: claim.state as SourceProvenanceClaim['state'],
+    method: typeof claim.method === 'string' ? claim.method : '',
+    value: typeof claim.value === 'string' ? claim.value : undefined,
+    quote: typeof claim.quote === 'string' ? claim.quote : '',
+    locator,
+    uploadId: typeof claim.uploadId === 'string' ? claim.uploadId : '',
+    filename: typeof claim.filename === 'string' ? claim.filename : '',
+  };
+}
+
+/**
+ * Validate a `source_provenance` event.
+ *
+ * Claims that do not validate are dropped individually rather than failing the
+ * whole event: losing one verdict degrades to "no provenance shown for that
+ * value", while rejecting the batch would also discard a `quote_unsupported`
+ * sitting beside it — the one verdict that must never go missing quietly.
+ */
+export function validateSourceProvenanceEvent(
+  data: unknown,
+): data is SourceProvenanceEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  const event = data as Partial<SourceProvenanceEvent>;
+  if (event.type !== 'source_provenance' || !Array.isArray(event.claims)) {
+    return false;
+  }
+  const claims = event.claims
+    .map(normalizeProvenanceClaim)
+    .filter((c): c is SourceProvenanceClaim => c !== null);
+  if (claims.length === 0) {
+    return false;
+  }
+  event.claims = claims;
+  return typeof event.toolUseId === 'string' && event.toolUseId.length > 0;
+}
+
+/**
+ * Validate an `agent_notice` event. `message` is what the user reads, so an
+ * empty one is rejected rather than rendered as a blank notice.
+ */
+export function validateAgentNoticeEvent(data: unknown): data is AgentNoticeEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<AgentNoticeEvent>;
+
+  return (
+    event.type === 'agent_notice' &&
+    typeof event.sessionId === 'string' &&
+    event.sessionId.length > 0 &&
+    typeof event.agentId === 'string' &&
+    typeof event.message === 'string' &&
+    event.message.trim().length > 0 &&
+    Array.isArray(event.unavailableTools) &&
+    Array.isArray(event.unavailableSkills)
+  );
+}
+
+export function validateModelRetryEvent(data: unknown): data is ModelRetryEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<ModelRetryEvent>;
+
+  return (
+    event.type === 'model_retry' &&
+    typeof event.attempt === 'number' &&
+    event.attempt > 0 &&
+    typeof event.delaySeconds === 'number' &&
+    event.delaySeconds >= 0
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -596,17 +965,6 @@ export function processStreamEvent(
       case 'content_block_start':
         if (validateContentBlockStartEvent(data)) {
           callbacks.onContentBlockStart?.(data);
-
-          // Emit tool progress for tool_use blocks
-          if (data.type === 'tool_use' && data.toolUse) {
-            callbacks.onToolProgress?.({
-              visible: true,
-              toolName: data.toolUse.name,
-              toolUseId: data.toolUse.toolUseId,
-              message: `Running ${data.toolUse.name}...`,
-              startTime: Date.now(),
-            });
-          }
         } else {
           callbacks.onParseError?.('content_block_start: invalid data structure');
         }
@@ -631,11 +989,6 @@ export function processStreamEvent(
       case 'tool_use':
         if (validateToolUseEvent(data)) {
           callbacks.onToolUse?.(data);
-          callbacks.onToolProgress?.({
-            visible: true,
-            toolName: data.tool_use.name,
-            toolUseId: data.tool_use.tool_use_id,
-          });
         } else {
           callbacks.onParseError?.('tool_use: invalid data structure');
         }
@@ -644,7 +997,6 @@ export function processStreamEvent(
       case 'tool_result':
         if (validateToolResultEvent(data)) {
           callbacks.onToolResult?.(data);
-          callbacks.onToolProgress?.({ visible: false });
         } else {
           callbacks.onParseError?.('tool_result: invalid data structure');
         }
@@ -660,7 +1012,6 @@ export function processStreamEvent(
 
       case 'done':
         callbacks.onDone?.();
-        callbacks.onToolProgress?.({ visible: false });
         break;
 
       case 'error':
@@ -728,6 +1079,22 @@ export function processStreamEvent(
         }
         break;
 
+      case 'user_question_required':
+        if (validateUserQuestionRequiredEvent(data)) {
+          callbacks.onUserQuestionRequired?.(data);
+        } else {
+          callbacks.onParseError?.('user_question_required: invalid data structure');
+        }
+        break;
+
+      case 'browser_login_required':
+        if (validateBrowserLoginRequiredEvent(data)) {
+          callbacks.onBrowserLoginRequired?.(data);
+        } else {
+          callbacks.onParseError?.('browser_login_required: invalid data structure');
+        }
+        break;
+
       case 'compaction':
         if (validateCompactionEvent(data)) {
           callbacks.onCompaction?.(data);
@@ -767,6 +1134,54 @@ export function processStreamEvent(
           callbacks.onSessionTitle?.(data);
         } else {
           callbacks.onParseError?.('session_title: invalid data structure');
+        }
+        break;
+
+      case 'steering_applied':
+        if (validateSteeringAppliedEvent(data)) {
+          callbacks.onSteeringApplied?.(data);
+        } else {
+          callbacks.onParseError?.('steering_applied: invalid data structure');
+        }
+        break;
+
+      case 'model_retry':
+        if (validateModelRetryEvent(data)) {
+          callbacks.onModelRetry?.(data);
+        } else {
+          callbacks.onParseError?.('model_retry: invalid data structure');
+        }
+        break;
+
+      case 'agent_notice':
+        if (validateAgentNoticeEvent(data)) {
+          callbacks.onAgentNotice?.(data);
+        } else {
+          callbacks.onParseError?.('agent_notice: invalid data structure');
+        }
+        break;
+
+      case 'agent_status':
+        if (validateAgentStatusEvent(data)) {
+          callbacks.onAgentStatus?.(data);
+        } else {
+          callbacks.onParseError?.('agent_status: invalid data structure');
+        }
+        break;
+
+      case 'source_provenance':
+        if (validateSourceProvenanceEvent(data)) {
+          callbacks.onSourceProvenance?.(data);
+        } else {
+          callbacks.onParseError?.('source_provenance: invalid data structure');
+        }
+        break;
+
+      case 'tool_group_summary':
+        if (validateToolGroupSummaryEvent(data)) {
+          callbacks.onToolGroupSummary?.(data);
+        } else {
+          callbacks.onParseError?.('tool_group_summary: invalid data structure');
         }
         break;
 

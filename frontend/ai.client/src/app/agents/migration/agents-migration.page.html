@@ -45,7 +45,7 @@
         <div class="mt-8 flex flex-wrap items-center gap-3">
           <a
             routerLink="/agents"
-            class="group inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:bg-primary-600 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
+            class="group inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:brightness-95 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
           >
             Go to my agents
             <ng-icon
@@ -56,7 +56,7 @@
           </a>
           <a
             routerLink="/agents/discover"
-            class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm/6 font-semibold text-gray-700 transition hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 dark:focus-visible:ring-offset-gray-800"
+            class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2.5 text-sm/6 font-semibold text-gray-700 transition hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 dark:focus-visible:ring-offset-gray-800"
           >
             <ng-icon name="heroSquares2x2" class="size-4" aria-hidden="true" />
             Browse what others built
@@ -76,7 +76,7 @@
     <section class="reveal mt-14" aria-labelledby="kept-heading">
       <div class="flex items-center gap-3">
         <span
-          class="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
+          class="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-state-success-50 text-state-success-600 dark:bg-state-success-500/10 dark:text-state-success-400"
           aria-hidden="true"
         >
           <ng-icon name="heroShieldCheck" class="size-5" />
@@ -95,7 +95,7 @@
         @for (item of carriedOver; track item.label) {
           <li class="flex gap-4 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
             <span
-              class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300"
+              class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-primary-accessible dark:bg-gray-700 dark:text-primary-50"
               aria-hidden="true"
             >
               <ng-icon [name]="item.icon" class="size-5" />
@@ -203,7 +203,7 @@
         @for (item of opensUp; track item.title) {
           <article class="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-6 transition-all duration-200 hover:border-gray-300 hover:shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600">
             <span
-              class="inline-flex size-10 items-center justify-center rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300"
+              class="inline-flex size-10 items-center justify-center rounded-xl bg-gray-100 text-primary-accessible dark:bg-gray-700 dark:text-primary-50"
               aria-hidden="true"
             >
               <ng-icon [name]="item.icon" class="size-5" />
@@ -227,7 +227,7 @@
     <section class="reveal mt-16" aria-labelledby="store-heading">
       <div class="flex items-center gap-3">
         <span
-          class="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300"
+          class="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-primary-accessible dark:bg-gray-700 dark:text-primary-50"
           aria-hidden="true"
         >
           <ng-icon name="heroSquares2x2" class="size-5" />
@@ -249,7 +249,7 @@
           <li class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
             <div class="flex items-center gap-3">
               <span
-                class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300"
+                class="inline-flex size-10 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-primary-accessible dark:bg-gray-700 dark:text-primary-50"
                 aria-hidden="true"
               >
                 <ng-icon [name]="step.icon" class="size-5" />
@@ -267,7 +267,7 @@
       <div class="mt-6 flex flex-wrap items-center gap-3">
         <a
           routerLink="/agents/discover"
-          class="group inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:bg-primary-600 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
+          class="group inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:brightness-95 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
         >
           <ng-icon name="heroSquares2x2" class="size-4" aria-hidden="true" />
           Browse the marketplace
@@ -279,7 +279,7 @@
         </a>
         <a
           routerLink="/agents"
-          class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm/6 font-semibold text-gray-700 transition hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 dark:focus-visible:ring-offset-gray-800"
+          class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2.5 text-sm/6 font-semibold text-gray-700 transition hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 dark:focus-visible:ring-offset-gray-800"
         >
           Submit one of mine
         </a>
@@ -316,7 +316,7 @@
       <div class="mt-7 flex flex-wrap items-center justify-center gap-3">
         <a
           routerLink="/agents"
-          class="group inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:bg-primary-600 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
+          class="group inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs transition-all duration-200 hover:brightness-95 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 active:scale-[0.98] dark:focus-visible:ring-offset-gray-800"
         >
           Go to my agents
           <ng-icon

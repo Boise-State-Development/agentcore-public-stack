@@ -106,11 +106,52 @@ if not os.environ.get("AWS_EXECUTION_ENV"):  # Not in Lambda
         pass  # dotenv not installed, running in Lambda
 
 
+def _resolve_engine(assistant_id: str) -> str:
+    """Which engine serves this knowledge base: ``managed`` or ``s3vectors``.
+
+    Delegates to ``records.resolve_engine`` rather than reading the attribute
+    here, so "absence means legacy" has exactly one definition in the codebase —
+    the same call the managed ingestion consumer makes for the mirror-image
+    decision.
+
+    **Failures resolve to legacy, deliberately.** The two ways to be wrong are
+    not symmetric:
+
+    * Wrong towards legacy on a promoted knowledge base: the document is indexed
+      twice and the two writers race on status. Wasteful and untidy, but the
+      document still ends up correct, because the managed consumer is also
+      running and it owns the terminal state.
+    * Wrong towards skipping on a legacy knowledge base: nothing indexes the
+      document at all. It sits un-ingested with no error, and the only path back
+      is a re-upload.
+
+    The second is much worse, so an unreadable record runs the legacy pipeline.
+    This is the same convention as ``resolver.load_record``, which treats a
+    failed read and an absent record identically on the grounds that "an absent
+    opinion is the legacy opinion".
+    """
+    from apis.shared.kb_backend.records import ENGINE_LEGACY, get_kb_record, resolve_engine
+
+    try:
+        return resolve_engine(get_kb_record(assistant_id, assistant_id))
+    except Exception as exc:  # noqa: BLE001 — see the docstring: legacy is the safe default
+        logger.warning(
+            f"could not resolve the retrieval engine for assistant {assistant_id}; "
+            f"running the legacy pipeline, which is the safe default: {exc}"
+        )
+        return ENGINE_LEGACY
+
+
 async def async_lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Async implementation of the Lambda handler
     """
     from status import create_status_manager
+
+    # Function-local like every other import in this module: the Lambda image
+    # keeps its cold start down by not importing anything at module scope that a
+    # given invocation might not need.
+    from apis.shared.kb_backend.records import ENGINE_MANAGED
 
     # Initialize status manager
     status_manager = create_status_manager()
@@ -120,6 +161,54 @@ async def async_lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str,
 
         # 1. Parse event and extract metadata
         event_data = _parse_s3_event(event)
+        if event_data is None:
+            # Not a document (an agent icon, say). Success, not failure: raising
+            # or returning an error would record a bogus DOC# row or redeliver
+            # an object that will never be a document.
+            return {"statusCode": 200, "body": json.dumps({"message": "Skipped: not an assistant document key"})}
+
+        # 1a. Routing exclusivity (design §537, Requirement 10.5). A promoted
+        # knowledge base is served by the managed backend, and the managed
+        # ingestion consumer is triggered by the same S3 upload through
+        # EventBridge. So for those documents this pipeline must do NOTHING:
+        # not parse, not embed, and above all not write document status.
+        #
+        # Both halves matter, and the status half is the one that bit us:
+        #
+        #   * Indexing anyway spends Docling time and S3 Vectors storage on
+        #     vectors that retrieval will never read, because `resolve_backend`
+        #     sends a promoted record to the managed adapter with no fallback.
+        #   * Writing status anyway means two writers own one field and the last
+        #     one wins by luck. Measured in dev: a PDF was marked `complete` by
+        #     this pipeline 65 s before the managed KB could answer for it, and
+        #     an image-only PDF that Docling could not parse at all was marked
+        #     `failed` while the managed KB was serving it perfectly. Reverse the
+        #     finishing order and a good document reads `failed` forever.
+        #
+        # Deliberately keyed on the *engine*, not on "has a KB record" or on
+        # `migrationState`: during `shadow` and `verify` the legacy path is still
+        # authoritative and must keep working (Requirements 16.1, 16.6). Only
+        # `promote` writes `retrievalEngine`, so only a promoted knowledge base
+        # is skipped here.
+        engine = _resolve_engine(event_data["assistant_id"])
+        if engine == ENGINE_MANAGED:
+            logger.info(
+                f"skipping document {event_data['document_id']} for assistant "
+                f"{event_data['assistant_id']}: it is served by the {engine!r} "
+                f"engine, so the managed ingestion consumer owns this document "
+                f"and its status"
+            )
+            return {
+                "statusCode": 200,
+                "body": json.dumps(
+                    {
+                        "message": "Skipped: knowledge base is served by the managed engine",
+                        "assistant_id": event_data["assistant_id"],
+                        "document_id": event_data["document_id"],
+                        "engine": engine,
+                    }
+                ),
+            }
 
         # 2. Update status to 'chunking'
         logger.info("Starting document processing")
@@ -155,6 +244,8 @@ async def async_lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str,
         try:
             # Re-parse event data safely to ensure we have IDs for status update
             event_data = _parse_s3_event(event)
+            if event_data is None:
+                raise ValueError("not an assistant document key")
             await status_manager.mark_failed(assistant_id=event_data["assistant_id"], document_id=event_data["document_id"], exception=e)
         except Exception as status_error:
             logger.error(f"Failed to update status to 'failed': {status_error}", exc_info=True)
@@ -170,9 +261,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     return asyncio.run(async_lambda_handler(event, context))
 
 
-def _parse_s3_event(event: Dict[str, Any]) -> Dict[str, str]:
+def _parse_s3_event(event: Dict[str, Any]) -> Optional[Dict[str, str]]:
     """
-    Parse S3 event to extract metadata
+    Parse S3 event to extract metadata.
+
+    Returns ``None`` for an object that is not an assistant document, which the
+    caller skips without writing any status.
     """
     from urllib.parse import unquote_plus
 
@@ -201,22 +295,27 @@ def _parse_s3_event(event: Dict[str, Any]) -> Dict[str, str]:
     if assistant_id and document_id and filename:
         return {"bucket": bucket, "key": key, "s3_key": key, "assistant_id": assistant_id, "document_id": document_id, "filename": filename}
 
-    # Real S3 event format - parse from key path
+    # Real S3 event format - parse from key path. Only one layout is a document:
+    #
+    #     assistants/{assistant_id}/documents/{document_id}/{filename}
+    #
+    # The bucket also holds other objects under `assistants/` — agent icons at
+    # `assistants/{assistant_id}/icons/{digest}.{ext}` — and the S3 notification
+    # cannot exclude them: its filter is prefix/suffix only, and the variable
+    # assistant id comes before `documents/`. Parsing loosely read an icon as
+    # document_id="icons" and left a failed `DOC#icons` row on the agent, so
+    # anything else is skipped rather than guessed at.
     key_parts = key.split("/")
+    if len(key_parts) < 5 or key_parts[0] != "assistants" or key_parts[2] != "documents":
+        logger.info(f"Skipping S3 object that is not an assistant document: {key}")
+        return None
 
-    if key_parts[0] == "assistants" and len(key_parts) >= 5:
-        assistant_id = key_parts[1]
-        document_id = key_parts[3]
-        filename = "/".join(key_parts[4:])
-    elif len(key_parts) >= 4:
-        assistant_id = key_parts[1] if len(key_parts) >= 2 else None
-        document_id = key_parts[2] if len(key_parts) >= 3 else None
-        filename = "/".join(key_parts[3:]) if len(key_parts) >= 4 else None
-    else:
-        raise ValueError(f"Unable to parse S3 key: {key}")
-
+    assistant_id = key_parts[1]
+    document_id = key_parts[3]
+    filename = "/".join(key_parts[4:])
     if not assistant_id or not document_id or not filename:
-        raise ValueError(f"Missing metadata in S3 key: assistant_id={assistant_id}, document_id={document_id}")
+        logger.info(f"Skipping S3 object with an incomplete document key: {key}")
+        return None
 
     return {"bucket": bucket, "key": key, "s3_key": key, "assistant_id": assistant_id, "document_id": document_id, "filename": filename}
 

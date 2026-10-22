@@ -218,7 +218,8 @@ class InferenceRepository:
         """Query the StatusIndex GSI for inference jobs with a given status in a date range.
 
         Args:
-            status_value: Job status (e.g. "Completed", "Stopped").
+            status_value: Stored job status, case-sensitive on the GSI key
+                (e.g. "COMPLETED", "FAILED", "STOPPED").
             start_date: ISO date string (inclusive lower bound on createdAt).
             end_date: ISO date string (inclusive upper bound on createdAt).
 

@@ -292,6 +292,17 @@ class DynamoDBStorage(MetadataStorage):
                 GSI_SK: begins_with C#  (C#<timestamp> — chronological sort)
         """
         from boto3.dynamodb.conditions import Key
+        from apis.shared.observability.content_policy import (
+            CALL_ROW_PROJECTION,
+            build_projection,
+            strip_content,
+        )
+
+        # Content-free at the storage boundary: the anatomy consumes token
+        # splits, cost, cache status and fingerprint hashes. `citations[].text`
+        # (retrieved document excerpts) and `displayText` live on the same
+        # item and must not leave DynamoDB on an admin read.
+        projection, names = build_projection(CALL_ROW_PROJECTION)
 
         try:
             items: List[Dict[str, Any]] = []
@@ -304,6 +315,8 @@ class DynamoDBStorage(MetadataStorage):
                         & Key("GSI_SK").begins_with("C#")
                     ),
                     "ScanIndexForward": True,
+                    "ProjectionExpression": projection,
+                    "ExpressionAttributeNames": names,
                 }
                 if last_evaluated_key:
                     query_kwargs["ExclusiveStartKey"] = last_evaluated_key
@@ -318,11 +331,165 @@ class DynamoDBStorage(MetadataStorage):
                 item_float = self._convert_decimal_to_float(item)
                 for key in ["PK", "SK", "GSI_PK", "GSI_SK", "GSI1PK", "GSI1SK", "ttl"]:
                     item_float.pop(key, None)
-                results.append(item_float)
+                results.append(strip_content(item_float))
             return results
 
         except ClientError as e:
             raise Exception(f"Failed to get session cost records: {e}")
+
+    async def get_session_feedback_rows(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """All ``F#`` message-feedback rows for a session, any user — admin
+        scope, content-free by projection (``FEEDBACK_ROW_PROJECTION``).
+        Each row: ``messageId`` (the assistant message's index, the same key
+        the ``C#`` row carries), ``value`` ±1, optional ``reason`` code,
+        ``updatedAt``. Empty when the session has no thumbs.
+        """
+        from boto3.dynamodb.conditions import Key
+        from apis.shared.observability.content_policy import (
+            FEEDBACK_ROW_PROJECTION,
+            build_projection,
+            strip_content,
+        )
+
+        projection, names = build_projection(FEEDBACK_ROW_PROJECTION)
+        try:
+            items: List[Dict[str, Any]] = []
+            last_evaluated_key = None
+            while True:
+                query_kwargs = {
+                    "IndexName": "SessionLookupIndex",
+                    "KeyConditionExpression": (
+                        Key("GSI_PK").eq(f"SESSION#{session_id}")
+                        & Key("GSI_SK").begins_with("F#")
+                    ),
+                    "ProjectionExpression": projection,
+                    "ExpressionAttributeNames": names,
+                }
+                if last_evaluated_key:
+                    query_kwargs["ExclusiveStartKey"] = last_evaluated_key
+                response = self.sessions_metadata_table.query(**query_kwargs)
+                items.extend(response.get("Items", []))
+                last_evaluated_key = response.get("LastEvaluatedKey")
+                if not last_evaluated_key:
+                    break
+        except ClientError as e:
+            raise Exception(f"Failed to get session feedback rows: {e}")
+
+        return [strip_content(self._convert_decimal_to_float(item)) for item in items]
+
+    async def get_recent_down_thumbs(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Newest-first down-thumb rows across the fleet — the eval sampler's
+        queue as an admin sees it: content-free by projection, no user id."""
+        from boto3.dynamodb.conditions import Key
+        from apis.shared.observability.content_policy import (
+            FEEDBACK_ROW_PROJECTION,
+            build_projection,
+            strip_content,
+        )
+
+        projection, names = build_projection(FEEDBACK_ROW_PROJECTION)
+        try:
+            response = self.sessions_metadata_table.query(
+                IndexName="UserTimestampIndex",
+                KeyConditionExpression=Key("GSI1PK").eq("FEEDBACK#down"),
+                ScanIndexForward=False,
+                Limit=max(1, min(int(limit), 200)),
+                ProjectionExpression=projection,
+                ExpressionAttributeNames=names,
+            )
+        except ClientError as e:
+            raise Exception(f"Failed to list recent down-thumbs: {e}")
+        return [strip_content(self._convert_decimal_to_float(item)) for item in response.get("Items", [])]
+
+    async def get_feedback_in_window(
+        self,
+        start: str,
+        end: str,
+        limit: int = 2000,
+    ) -> List[Dict[str, Any]]:
+        """Every explicit thumb, both polarities, in an ISO time window —
+        content-free by projection (no user id: the fleet view is aggregates
+        only, per response-feedback spec §8 rule 1).
+
+        Returns at most ``limit`` rows per polarity; the caller reports
+        truncation rather than silently under-counting.
+        """
+        from boto3.dynamodb.conditions import Key
+        from apis.shared.observability.content_policy import (
+            FEEDBACK_ROW_PROJECTION,
+            build_projection,
+            strip_content,
+        )
+
+        projection, names = build_projection(FEEDBACK_ROW_PROJECTION)
+        rows: List[Dict[str, Any]] = []
+        for partition in ("FEEDBACK#down", "FEEDBACK#up"):
+            collected: List[Dict[str, Any]] = []
+            last_key = None
+            try:
+                while len(collected) < limit:
+                    kwargs: Dict[str, Any] = {
+                        "IndexName": "UserTimestampIndex",
+                        "KeyConditionExpression": (
+                            Key("GSI1PK").eq(partition) & Key("GSI1SK").between(start, end)
+                        ),
+                        "ScanIndexForward": True,
+                        "Limit": min(500, limit - len(collected)),
+                        "ProjectionExpression": projection,
+                        "ExpressionAttributeNames": names,
+                    }
+                    if last_key:
+                        kwargs["ExclusiveStartKey"] = last_key
+                    response = self.sessions_metadata_table.query(**kwargs)
+                    collected.extend(response.get("Items", []))
+                    last_key = response.get("LastEvaluatedKey")
+                    if not last_key:
+                        break
+            except ClientError as e:
+                raise Exception(f"Failed to query feedback window: {e}")
+            rows.extend(collected[:limit])
+        return [strip_content(self._convert_decimal_to_float(item)) for item in rows]
+
+    async def get_session_diagnostic_row(
+        self,
+        session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """One session's metadata row by session id, content-free — admin scope.
+
+        Resolves the row through ``SessionLookupIndex`` (``GSI_PK=SESSION#<id>``,
+        ``GSI_SK=META``) because an admin holds the session id, not the owner's
+        user id. Applies the same projection and post-processing as
+        :meth:`get_user_session_diagnostics`, so the two can never disagree
+        about what leaves the storage layer. Returns ``None`` when the session
+        has no metadata row.
+        """
+        from boto3.dynamodb.conditions import Key
+        from apis.shared.observability.content_policy import (
+            SESSION_ROW_PROJECTION,
+            build_projection,
+        )
+
+        projection, names = build_projection(SESSION_ROW_PROJECTION)
+        try:
+            response = self.sessions_metadata_table.query(
+                IndexName="SessionLookupIndex",
+                KeyConditionExpression=(
+                    Key("GSI_PK").eq(f"SESSION#{session_id}") & Key("GSI_SK").eq("META")
+                ),
+                ProjectionExpression=projection,
+                ExpressionAttributeNames=names,
+                Limit=1,
+            )
+        except ClientError as e:
+            raise Exception(f"Failed to get session diagnostic row: {e}")
+
+        items = response.get("Items", [])
+        if not items:
+            return None
+        return self._content_free_session_row(self._convert_decimal_to_float(items[0]))
 
     async def get_user_cost_summary(
         self,
@@ -754,6 +921,78 @@ class DynamoDBStorage(MetadataStorage):
         Returns:
             Session dicts with cost/context aggregates, unsorted.
         """
+        # `title` is deliberately part of this projection: the "most expensive
+        # conversations" table shows it by decision. It is the one
+        # content-bearing attribute on the admin cost surface; the per-user
+        # list and the session profile read through
+        # `get_user_session_diagnostics` instead and do not inherit it.
+        return await self._query_user_session_rows(
+            user_id=user_id,
+            active_since=active_since,
+            projection=(
+                "sessionId, userId, title, totalCost, lastMessageAt, "
+                "createdAt, messageCount, lastContextTokens, "
+                "partialMissCount, partialMissUsd, deleted"
+            ),
+            names=None,
+        )
+
+    async def get_user_session_diagnostics(
+        self,
+        user_id: str,
+        active_since: Optional[str] = None,
+        include_deleted: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """One user's session rows, content-free, with everything a diagnostic
+        list needs: cost/cache rollups, context, model, enabled tool ids, agent
+        binding, compaction coordinates and the behavioral counters.
+
+        ``include_deleted=True`` keeps soft-deleted rows (``deleted`` /
+        ``status="deleted"``). A delete is a tombstone, not a refund: the
+        session's ``C#`` rows and its share of the user's period total survive
+        it, so an audit that hides these rows cannot account for the user's
+        spend — one prod user showed a single $3.77 conversation against
+        $20.32 of period cost. The default stays exclusive for callers that
+        list what the user can still open.
+
+        Same bounded base-table query as :meth:`get_user_session_costs`; the
+        difference is the projection (``SESSION_ROW_PROJECTION``) and the
+        post-processing: ``compaction.summary`` is measured into
+        ``compaction.summaryChars`` and dropped, ``preferences`` is reduced to
+        its allowlisted keys, and a final ``strip_content`` guarantees no
+        denylisted path leaves this method even if the projection is widened.
+        """
+        from apis.shared.observability.content_policy import (
+            SESSION_ROW_PROJECTION,
+            build_projection,
+        )
+
+        projection, names = build_projection(SESSION_ROW_PROJECTION)
+        items = await self._query_user_session_rows(
+            user_id=user_id,
+            active_since=active_since,
+            projection=projection,
+            names=names,
+            include_deleted=include_deleted,
+        )
+        return [self._content_free_session_row(item) for item in items]
+
+    async def _query_user_session_rows(
+        self,
+        user_id: str,
+        active_since: Optional[str],
+        projection: str,
+        names: Optional[Dict[str, str]],
+        include_deleted: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Shared body of the two per-user session readers.
+
+        ``PK = USER#<id>``, ``SK begins_with S#`` — matches both the static
+        (``S#<id>``) and legacy (``S#ACTIVE#…``) schemes and no other row
+        family. Paginates, converts Decimals, drops soft-deleted rows unless
+        ``include_deleted``, and applies ``active_since`` client-side
+        (``lastMessageAt`` is not a key).
+        """
         from boto3.dynamodb.conditions import Key
 
         try:
@@ -764,12 +1003,10 @@ class DynamoDBStorage(MetadataStorage):
                     "KeyConditionExpression": (
                         Key("PK").eq(f"USER#{user_id}") & Key("SK").begins_with("S#")
                     ),
-                    "ProjectionExpression": (
-                        "sessionId, userId, title, totalCost, lastMessageAt, "
-                        "createdAt, messageCount, lastContextTokens, "
-                        "partialMissCount, partialMissUsd, deleted"
-                    ),
+                    "ProjectionExpression": projection,
                 }
+                if names:
+                    query_kwargs["ExpressionAttributeNames"] = names
                 if last_evaluated_key:
                     query_kwargs["ExclusiveStartKey"] = last_evaluated_key
                 response = self.sessions_metadata_table.query(**query_kwargs)
@@ -781,7 +1018,7 @@ class DynamoDBStorage(MetadataStorage):
             results = []
             for item in items:
                 item_float = self._convert_decimal_to_float(item)
-                if item_float.get("deleted"):
+                if item_float.get("deleted") and not include_deleted:
                     continue
                 if active_since:
                     last_message_at = item_float.get("lastMessageAt") or ""
@@ -792,6 +1029,25 @@ class DynamoDBStorage(MetadataStorage):
 
         except ClientError as e:
             raise Exception(f"Failed to get session costs for user: {e}")
+
+    @staticmethod
+    def _content_free_session_row(item: Dict[str, Any]) -> Dict[str, Any]:
+        """Post-process one projected session row so nothing content-bearing
+        survives: measure-and-drop the compaction summary, keep only the
+        allowlisted preference keys, then strip defensively."""
+        from apis.shared.observability.content_policy import (
+            SESSION_ROW_PROJECTION,
+            allowlisted_keys,
+            measure_compaction_summary,
+            strip_content,
+        )
+
+        measure_compaction_summary(item)
+        preferences = item.get("preferences")
+        if isinstance(preferences, dict):
+            keep = allowlisted_keys(SESSION_ROW_PROJECTION, "preferences")
+            item["preferences"] = {k: v for k, v in preferences.items() if k in keep}
+        return strip_content(item)
 
     # ============================================================
     # SystemCostRollup Table Methods
@@ -1199,6 +1455,77 @@ class DynamoDBStorage(MetadataStorage):
 
         except ClientError as e:
             raise Exception(f"Failed to get system summary: {e}")
+
+    async def get_platform_cost_summary(
+        self,
+        period: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get the synced AWS platform cost summary for a period (YYYY-MM).
+
+        Written by the platform-cost-sync Lambda
+        (infrastructure/lambda-assets/platform-cost-sync). Returns None when
+        the sync has never run for this period — which is the normal state
+        when the feature is disabled, and must be distinguishable from a
+        genuine zero.
+
+        Args:
+            period: Monthly period (YYYY-MM)
+
+        Returns:
+            Platform cost summary, or None if not synced
+        """
+        try:
+            response = self.system_rollup_table.get_item(
+                Key={"PK": "PLATFORM#MONTHLY", "SK": period}
+            )
+
+            if "Item" not in response:
+                return None
+
+            item = self._convert_decimal_to_float(response["Item"])
+            for key in ["PK", "SK"]:
+                item.pop(key, None)
+            return item
+
+        except ClientError as e:
+            raise Exception(f"Failed to get platform cost summary: {e}")
+
+    async def get_platform_service_costs(
+        self,
+        period: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get the per-service AWS cost breakdown for a period (YYYY-MM).
+
+        One query over the period's own partition — the sync writes each
+        service as its own item under PK=PLATFORM#SERVICE#{period}, so the
+        whole breakdown is a single-partition read regardless of how many
+        services the account bills.
+
+        Args:
+            period: Monthly period (YYYY-MM)
+
+        Returns:
+            Service cost rows, cost-descending
+        """
+        try:
+            response = self.system_rollup_table.query(
+                KeyConditionExpression="PK = :pk",
+                ExpressionAttributeValues={":pk": f"PLATFORM#SERVICE#{period}"}
+            )
+
+            items = [
+                self._convert_decimal_to_float(item)
+                for item in response.get("Items", [])
+            ]
+            # SK is the service name, so DynamoDB returns these alphabetically.
+            # Cost order is what a reader wants.
+            items.sort(key=lambda row: row.get("cost", 0.0), reverse=True)
+            return items
+
+        except ClientError as e:
+            raise Exception(f"Failed to get platform service costs: {e}")
 
     async def get_daily_trends(
         self,

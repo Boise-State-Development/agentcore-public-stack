@@ -13,10 +13,14 @@ OAuth Support:
     gates execution.
 """
 
+import asyncio
+import hashlib
 import logging
 import re
-from typing import Any, Callable, Iterator, Optional, List, Set
-from urllib.parse import urlparse
+import time
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Iterator, Literal, Optional, List, Set, Tuple
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
@@ -26,10 +30,14 @@ from apis.shared.tools.models import (
     MCPAuthType,
     MCPTransport,
     ToolDefinition,
+    is_disabled_status,
 )
 from apis.shared.tools.scoped_ids import base_tool_id, collect_tool_name_filters
 from agents.main_agent.integrations import oauth_token_cache
-from agents.main_agent.integrations.mcp_apps import UICapableMCPClient
+from agents.main_agent.integrations.mcp_apps import (
+    UICapableMCPClient,
+    hidden_from_model,
+)
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
 from agents.main_agent.integrations.token_exchange import (
     TokenExchangeError,
@@ -39,9 +47,41 @@ from agents.main_agent.integrations.oauth_auth import (
     CompositeAuth,
     create_oauth_bearer_auth,
 )
+from apis.shared.feature_flags import mcp_parallel_preflight_enabled
 from apis.shared.timestamps import to_iso
 
 logger = logging.getLogger(__name__)
+
+PreflightRecovery = Literal["recovered", "consent", "dropped"]
+
+
+@dataclass(frozen=True)
+class ConsentGatedTool:
+    """An enabled OAuth-gated server left out of a build because the user has
+    not connected its provider. The agent tells the model about it (so the
+    model does not invent its tools) and re-checks the vault on a cache hit
+    (so connecting brings the tools back)."""
+
+    tool_id: str
+    display_name: str
+    provider_id: str
+
+
+@dataclass
+class _ServerToLoad:
+    """One MCP server a build will load, with its catalog row already read.
+
+    Produced by ``_distinct_servers``: one per server, not per catalog entry,
+    with ``allowed_tool_names`` widened to cover every entry that reaches it.
+    """
+
+    tool_id: str
+    allowed_tool_names: Optional[Set[str]]
+    row: Optional[ToolDefinition]
+    #: False when the row could not be read, so ``_load_server`` reads it
+    #: itself and reports the failure as it always did.
+    row_read: bool
+    catalog_ms: int
 
 
 def _aws_hostname(url: str) -> str:
@@ -139,6 +179,83 @@ _AUTH_TEXT_RE = re.compile(
 )
 
 
+def _headers_digest(headers: dict) -> str:
+    """Order-independent digest of a server's custom headers.
+
+    Values are hashed rather than embedded, so a cache key never carries one.
+    """
+    material = "\n".join(
+        f"{name.lower()}:{value}"
+        for name, value in sorted(headers.items(), key=lambda item: item[0].lower())
+    )
+    return hashlib.sha256(material.encode()).hexdigest()[:12]
+
+
+def _elapsed_ms(started: float) -> int:
+    """Milliseconds since a ``perf_counter`` reading."""
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _normalized_server_url(url: Any) -> Optional[str]:
+    """``url`` with the parts that address the same endpoint folded together.
+
+    Scheme and host are case-insensitive and a trailing slash reaches the same
+    endpoint. The path and the query are otherwise left alone: a query can
+    carry the tenant or account a hosted server is scoped to, which makes it a
+    different server rather than a duplicate.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return None
+    parts = urlsplit(url.strip())
+    if not parts.netloc:
+        return None
+    return urlunsplit(
+        (
+            parts.scheme.lower(),
+            parts.netloc.lower(),
+            parts.path.rstrip("/"),
+            parts.query,
+            "",
+        )
+    )
+
+
+def _same_server_key(tool: Any) -> Optional[str]:
+    """What two catalog records must share to be one MCP connection.
+
+    The URL alone is not enough. Two records can point at one hosted server
+    and ask it for different things in their headers — on dev the GitHub
+    connector's entries share ``https://api.githubcopilot.com/mcp/`` and pick
+    their toolset with ``X-MCP-Toolsets`` — and two records can reach one URL
+    with different credentials. Collapsing either would cost a user tools or
+    quietly swap whose token is sent, so the key carries the custom headers and
+    the auth mode too: only records that would open the very same connection
+    count as one server.
+
+    Whatever this key keeps apart still cannot fail the agent. Two records that
+    reach one server differently offer its tools under the same names, and
+    ``resolve_tool_name_conflicts`` keeps one copy of each.
+
+    ``None`` when there is no usable URL, which only ever costs the dedupe:
+    such a record is never treated as a duplicate of anything.
+    """
+    config = getattr(tool, "mcp_config", None)
+    normalized = _normalized_server_url(getattr(config, "server_url", None))
+    if not normalized:
+        return None
+    headers = getattr(config, "custom_headers", None) or {}
+    return "|".join(
+        (
+            normalized,
+            _headers_digest(headers) if headers else "",
+            str(getattr(config, "auth_type", "") or ""),
+            str(getattr(tool, "requires_oauth_provider", None) or ""),
+            str(bool(getattr(tool, "forward_auth_token", False))),
+            str(getattr(tool, "token_exchange_audience", None) or ""),
+        )
+    )
+
+
 def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
     """Yield `exc` and everything reachable through its cause/context chain
     and any ExceptionGroup members, each exactly once.
@@ -203,8 +320,8 @@ def create_external_mcp_client(
         oauth_token: Optional static token (used for OIDC forwarding)
         token_provider: Optional callable returning the current token
         allowed_tool_names: If provided, only these MCP-server tool names are
-            exposed to the model (per-tool enablement). ``None`` exposes the
-            whole server. Matched against the raw MCP tool name by the SDK's
+            exposed to the model (per-tool enablement, within the admin's
+            "Available Tools" list). ``None`` exposes the whole server. Matched against the raw MCP tool name by the SDK's
             ``ToolFilters`` (no prefix is applied to external clients).
 
     Returns:
@@ -294,18 +411,25 @@ def create_external_mcp_client(
             # the selected tools. The base MCPClient applies this in
             # list_tools_sync (matched against the raw MCP tool name); the UI
             # filter then layers on top. Sorted for a stable client identity.
+            # A tool hidden from the model passes regardless, so the UI filter
+            # can record it for the App that calls it.
             tool_filters = (
-                {"allowed": sorted(allowed_tool_names)}
+                {"allowed": [*sorted(allowed_tool_names), hidden_from_model]}
                 if allowed_tool_names is not None
                 else None
             )
+            # Admin-configured static headers (e.g. GitHub's X-MCP-Toolsets).
+            # Validated on the model, so none can collide with the auth above;
+            # None when empty, so header-less servers connect exactly as before.
+            headers = dict(config.custom_headers) or None
             # UICapableMCPClient advertises the MCP Apps UI extension on
             # initialize and filters app-only tools out of the model's tool
             # list (both inert unless AGENTCORE_MCP_APPS_HOST_ENABLED=true).
             mcp_client = UICapableMCPClient(
-                lambda url=config.server_url, auth=auth: streamablehttp_client(
+                lambda url=config.server_url, auth=auth, headers=headers: streamablehttp_client(
                     url,
-                    auth=auth
+                    headers=headers,
+                    auth=auth,
                 ),
                 tool_filters=tool_filters,
                 # Retained so the MCP Apps header can resolve the server's
@@ -376,12 +500,43 @@ class ExternalMCPIntegration:
         """Pop and return {provider_id: authorization_url} for `user_id`.
 
         Draining on read keeps the singleton from re-emitting a stale prompt
-        on a later turn: if the user still hasn't consented, the next
-        `load_external_tools` fails pre-flight again and re-records it. On an
-        agent-cache hit no loading happens, nothing is recorded, and nothing
-        is emitted — correct, because the prompt already went out once.
+        on a later turn. If the user still hasn't consented, the prompt is
+        re-recorded each turn: by `load_external_tools` when the agent is
+        rebuilt, or by `recheck_consent` when an agent built without the tool
+        is served from the cache.
         """
         return self._pending_consents.pop(user_id, {})
+
+    async def recheck_consent(self, user_id: str, provider_ids: List[str]) -> bool:
+        """Ask the vault again about providers a cached agent was built without.
+
+        An agent whose build dropped a server for missing consent is cached
+        like any other, and a cache hit runs no pre-flight. Without this, a
+        user who connects the provider keeps getting the agent built before
+        they did, without the tools, for as long as it stays cached.
+
+        Returns True when any provider now has a token: it is warmed into
+        `oauth_token_cache`, so the rebuild's pre-flight succeeds first time.
+        A provider still waiting on consent is re-recorded so this turn emits
+        `oauth_required` again. "Couldn't ask" (None) changes nothing.
+        """
+        from apis.shared.oauth.token_resolution import resolve_token_or_consent_url
+
+        providers = sorted(set(provider_ids))
+        answers = await asyncio.gather(
+            *(resolve_token_or_consent_url(p, user_id) for p in providers),
+            return_exceptions=True,
+        )
+        connected = False
+        for provider_id, resolved in zip(providers, answers):
+            if isinstance(resolved, BaseException) or resolved is None:
+                continue
+            if resolved["token"]:
+                oauth_token_cache.set(user_id, provider_id, resolved["token"])
+                connected = True
+            elif resolved["url"]:
+                self._pending_consents.setdefault(user_id, {})[provider_id] = resolved["url"]
+        return connected
 
     async def _recover_oauth_preflight(
         self,
@@ -391,7 +546,9 @@ class ExternalMCPIntegration:
         user_id: Optional[str],
         provider_id: Optional[str],
         exc: Exception,
-    ) -> bool:
+        token_before: Optional[str] = None,
+        off_loop: bool = False,
+    ) -> PreflightRecovery:
         """Second chance for an OAuth-gated tool whose pre-flight failed.
 
         A server that requires auth even for `tools/list` (GitHub's MCP
@@ -416,25 +573,55 @@ class ExternalMCPIntegration:
             not authorized. Record it so the turn can emit `oauth_required`
             rather than dropping the tool with no explanation.
 
-        Returns True when the client is usable and should be registered.
+        Returns ``"recovered"`` when the client is usable and should be
+        registered, ``"consent"`` when it was dropped because the user has not
+        connected the provider, and ``"dropped"`` for any other failure.
+
+        ``token_before`` is the cached token as it stood when this pre-flight
+        started. Servers sharing a provider pre-flight in parallel, so by the
+        time this one fails a sibling may already have warmed the cache from
+        the vault. That token is not one this pre-flight tried, so retry with
+        it rather than mistaking it for an expired one (prod, 2026-10-16:
+        `github_orgs` dropped for a connected user while `github_repos`, in
+        the same build, recovered).
         """
         if not provider_id or not user_id:
             logger.warning(
                 f"Skipping external MCP tool {tool_id}: "
                 f"failed to start client ({exc})"
             )
-            return False
+            return "dropped"
+
+        cached_token = oauth_token_cache.get(user_id, provider_id)
+        if cached_token and cached_token != token_before:
+            try:
+                await self._preflight(client, off_loop=off_loop)
+            except Exception as retry_exc:
+                # The provider is left out of these two lines on purpose:
+                # CodeQL's name heuristic treats `requires_oauth_provider` as a
+                # credential, and `tool_id` already names the server (one
+                # provider per server).
+                logger.warning(
+                    f"Skipping external MCP tool {tool_id}: pre-flight still failed "
+                    f"with the token a parallel pre-flight warmed ({retry_exc})"
+                )
+                return "dropped"
+            logger.info(
+                f"Recovered external MCP tool {tool_id}: retried with the "
+                "token a parallel pre-flight warmed"
+            )
+            return "recovered"
 
         # Only meaningful when the cache was cold. A warm token that still
         # failed is an expiry/refresh case, which `OAuthConsentHook`'s
         # AfterToolCall 401 handler already owns — re-asking the vault with
         # force_authentication=False would just hand back the same token.
-        if oauth_token_cache.get(user_id, provider_id):
+        if cached_token:
             logger.warning(
                 f"Skipping external MCP tool {tool_id}: failed to start client "
                 f"with a cached {provider_id} token ({exc})"
             )
-            return False
+            return "dropped"
 
         # Consent can only fix a refusal to authorize. Anything else — the
         # server is down, the URL is wrong, the host doesn't resolve — keeps
@@ -445,7 +632,7 @@ class ExternalMCPIntegration:
                 f"an auth error, so this is not a {provider_id} consent gap "
                 f"({exc})"
             )
-            return False
+            return "dropped"
 
         from apis.shared.oauth.token_resolution import resolve_token_or_consent_url
 
@@ -458,24 +645,24 @@ class ExternalMCPIntegration:
                 f"Skipping external MCP tool {tool_id}: failed to start client "
                 f"and could not resolve a {provider_id} token ({exc})"
             )
-            return False
+            return "dropped"
 
         if resolved["token"]:
             oauth_token_cache.set(user_id, provider_id, resolved["token"])
             try:
-                await client.load_tools()
+                await self._preflight(client, off_loop=off_loop)
             except Exception as retry_exc:
                 logger.warning(
                     f"Skipping external MCP tool {tool_id}: pre-flight still failed "
                     f"after warming the {provider_id} token from the vault "
                     f"({retry_exc})"
                 )
-                return False
+                return "dropped"
             logger.info(
                 f"Recovered external MCP tool {tool_id}: warmed {provider_id} "
                 "token from the AgentCore vault after a cold-cache pre-flight failure"
             )
-            return True
+            return "recovered"
 
         authorization_url = resolved["url"]
         if not authorization_url:
@@ -483,14 +670,14 @@ class ExternalMCPIntegration:
                 f"Skipping external MCP tool {tool_id}: no {provider_id} token and "
                 f"no authorization URL from AgentCore ({exc})"
             )
-            return False
+            return "dropped"
 
         self._pending_consents.setdefault(user_id, {})[provider_id] = authorization_url
         logger.info(
             f"External MCP tool {tool_id} needs {provider_id} consent; "
             "surfacing oauth_required instead of dropping it silently"
         )
-        return False
+        return "consent"
 
     def _get_cache_key(self, tool_id: str, user_id: Optional[str], requires_oauth: bool) -> str:
         if requires_oauth and user_id:
@@ -505,11 +692,428 @@ class ExternalMCPIntegration:
         """Return the set of tool names on `client` flagged needs_approval."""
         return self._approval_names_for_client_id.get(id(client), set())
 
+    async def _preflight(self, client: MCPClient, *, off_loop: bool = False) -> None:
+        """Start ``client`` and list its tools, off the calling event loop.
+
+        Strands' ``load_tools`` is a coroutine in name only: it calls the
+        synchronous ``start()``, which blocks on the server's ``initialize``
+        handshake, and then a blocking ``tools/list``. Awaited inline it holds
+        the loop for the whole round trip, so concurrent pre-flights would
+        still run one after another. On a worker thread (with its own loop,
+        and the caller's contextvars) they overlap. The client's session lives
+        on its own background thread either way, so where ``start()`` is
+        called from does not matter once it returns.
+
+        ``off_loop`` is set only when several servers load together; a lone
+        server gains nothing from the hop and keeps the inline call.
+        """
+        if not off_loop:
+            await client.load_tools()
+            return
+        await asyncio.to_thread(asyncio.run, client.load_tools())
+
+    async def _load_server(
+        self,
+        tool_id: str,
+        allowed_tool_names: Optional[Set[str]],
+        repository: Any,
+        user_id: Optional[str],
+        auth_token: Optional[str],
+        off_loop: bool = False,
+        consent_gated: Optional[List[ConsentGatedTool]] = None,
+        server: Optional[_ServerToLoad] = None,
+    ) -> Tuple[Optional[MCPClient], dict]:
+        """Build, pre-flight and cache one external MCP server's client.
+
+        Returns the client (None when the server is skipped or dropped) and
+        its ``timings`` entry. Touches only this server's cache key, so
+        several can run at once. A server dropped for missing consent is
+        appended to ``consent_gated`` when given.
+
+        ``server`` carries the catalog row the caller already read
+        (``_distinct_servers`` reads every row to find the servers reached
+        twice) and the read it paid for, so no row is read twice on the turn
+        path. Without it — or when that read failed — the row is read here, as
+        before.
+        """
+        started = time.perf_counter()
+        timing: dict = {"id": tool_id, "outcome": "skipped"}
+        try:
+            if server is not None and server.row_read:
+                tool = server.row
+                timing["catalogMs"] = server.catalog_ms
+            else:
+                tool = await repository.get_tool(tool_id)
+                timing["catalogMs"] = _elapsed_ms(started)
+            if not tool:
+                return None, timing
+
+            if tool.protocol != "mcp_external":
+                return None, timing
+
+            if not tool.mcp_config:
+                logger.warning(f"Tool {tool_id} has protocol=mcp_external but no mcp_config")
+                return None, timing
+
+            # "disabled" takes the server out of service for everyone, whatever
+            # their own toggle says. "deprecated" (being retired) keeps working
+            # for those who already have it (mcp-server-retirement.md §7). Read
+            # off the row just fetched, so it applies on the next build with no
+            # cache to wait out.
+            if is_disabled_status(getattr(tool, "status", None)):
+                logger.info(f"Skipping external MCP tool {tool_id}: status is disabled")
+                timing["outcome"] = "disabled"
+                return None, timing
+
+            # The admin's "Available Tools" list is the most of this server the
+            # model may see; empty means "discover at runtime". A user's or an
+            # Agent's selection narrows within it and never reaches past it.
+            listed = {
+                entry.name
+                for entry in (getattr(tool.mcp_config, "tools", None) or [])
+                if getattr(entry, "name", None)
+            }
+            if listed:
+                allowed_tool_names = (
+                    listed if allowed_tool_names is None else allowed_tool_names & listed
+                )
+                if not allowed_tool_names:
+                    logger.info(
+                        f"Skipping external MCP tool {tool_id}: none of the selected "
+                        "tools is in its admin tool list"
+                    )
+                    return None, timing
+
+            forward_auth = bool(getattr(tool, "forward_auth_token", False))
+            requires_oauth = bool(tool.requires_oauth_provider)
+            exchange_audience = getattr(tool, "token_exchange_audience", None)
+            # An exchanged token is per-user just like the other two modes,
+            # so it must partition the client cache the same way — otherwise
+            # one user's Directory token would be reused for another.
+            requires_user_auth = forward_auth or requires_oauth or bool(exchange_audience)
+
+            cache_key = self._get_cache_key(tool_id, user_id, requires_user_auth)
+            # A different selected-tool subset is a different client, so fold
+            # the filter into the cache key (the integration is shared across
+            # agents — two users may select different subsets of one server).
+            if allowed_tool_names is not None:
+                cache_key += "|allow:" + ",".join(sorted(allowed_tool_names))
+            tool_version = (
+                to_iso(tool.updated_at) if tool.updated_at else ""
+            )
+            # Any admin edit bumps `updated_at`, but the headers are part of
+            # the connection itself, so they are folded in directly: a header
+            # change always rebuilds the client. Omitted when there are none,
+            # so header-less servers keep their existing version string.
+            custom_headers = getattr(tool.mcp_config, "custom_headers", None) or {}
+            if custom_headers:
+                tool_version += "|headers:" + _headers_digest(custom_headers)
+
+            if (
+                cache_key in self.clients
+                and self._client_versions.get(cache_key) == tool_version
+            ):
+                timing["outcome"] = "cached"
+                return self.clients[cache_key], timing
+
+            # Stale entry — admin edited this tool since the client
+            # was built. Drop it so the block below creates a fresh
+            # client with the current config.
+            if cache_key in self.clients:
+                stale = self.clients.pop(cache_key)
+                self._client_versions.pop(cache_key, None)
+                self._provider_for_client_id.pop(id(stale), None)
+                self._approval_names_for_client_id.pop(id(stale), None)
+
+            static_token: Optional[str] = None
+            token_provider: Optional[Callable[[], Optional[str]]] = None
+            provider_id: Optional[str] = None
+
+            if exchange_audience:
+                # RFC 8693: trade the user's Cognito token for one the
+                # downstream API already trusts. Checked before forward_auth
+                # because forwarding the raw Cognito token to such an API
+                # would send a credential it cannot validate — a silent
+                # 401 rather than an obvious misconfiguration.
+                if not auth_token:
+                    logger.warning(
+                        f"Tool {tool_id} needs a token exchange but no auth_token "
+                        "was provided; skipping"
+                    )
+                    return None, timing
+                if not user_id:
+                    logger.warning(
+                        f"Tool {tool_id} needs a token exchange but no user_id "
+                        "was provided; skipping (tokens must be cached per user)"
+                    )
+                    return None, timing
+
+                exchanger = get_token_exchange_client()
+                if not exchanger.configured:
+                    logger.warning(
+                        f"Tool {tool_id} declares token_exchange_audience but the "
+                        "runtime has no exchange configuration; skipping"
+                    )
+                    return None, timing
+
+                # Resolved lazily per request, like the OAuth path: exchanged
+                # tokens are short-lived (600s in dev) and a client may
+                # outlive one, so binding a value here would go stale
+                # mid-conversation. TokenExchangeClient handles caching.
+                async def _exchange(
+                    t=auth_token, a=exchange_audience, u=user_id, tid=tool_id
+                ) -> Optional[str]:
+                    try:
+                        return await exchanger.exchange(
+                            subject_token=t, audience=a, user_id=u
+                        )
+                    except TokenExchangeError as exc:
+                        # Fail closed: no token means the request goes
+                        # unauthenticated and the downstream API refuses it,
+                        # which is the correct outcome and is visible here.
+                        logger.warning(f"Token exchange failed for {tid}: {exc}")
+                        return None
+
+                token_provider = _exchange
+                logger.info(
+                    f"Using RFC 8693 token exchange for tool {tool_id} "
+                    f"(audience={exchange_audience})"
+                )
+
+            elif forward_auth:
+                if not auth_token:
+                    logger.warning(
+                        f"Tool {tool_id} has forward_auth_token=true but no auth_token provided"
+                    )
+                else:
+                    static_token = auth_token
+                    logger.info(f"Using OIDC token forwarding for tool {tool_id}")
+
+            elif requires_oauth:
+                if not user_id:
+                    logger.warning(
+                        f"Tool {tool_id} requires OAuth provider '{tool.requires_oauth_provider}' "
+                        "but no user_id provided"
+                    )
+                    return None, timing
+
+                provider_id = tool.requires_oauth_provider
+                # Bind user_id and provider_id at closure time so the
+                # provider stays valid for the client's lifetime.
+                token_provider = (
+                    lambda u=user_id, p=provider_id: oauth_token_cache.get(u, p)
+                )
+
+            client = create_external_mcp_client(
+                config=tool.mcp_config,
+                tool_definition=tool,
+                oauth_token=static_token,
+                token_provider=token_provider,
+                allowed_tool_names=allowed_tool_names,
+            )
+
+            if client:
+                # A client carrying one user's credential must only ever be
+                # handed back for that user by the MCP Apps UI catalog (which
+                # app-initiated tools/call and resources/read resolve from).
+                # Stamp before the preflight below, which runs tools/list and
+                # records the catalog entries. Mirrors the cache-key
+                # partitioning above: shared clients stay unowned.
+                if requires_user_auth and user_id:
+                    try:
+                        client.owner_user_id = user_id
+                    except Exception:  # noqa: BLE001
+                        pass
+                # What the context breakdown calls this server's tools.
+                # Display-only: never let it cost the server its tools.
+                try:
+                    client.context_label = getattr(tool, "display_name", None) or tool_id
+                except Exception:  # noqa: BLE001
+                    pass
+                # Pre-flight the MCP session so a single unreachable
+                # server (e.g. a connector that isn't running locally)
+                # drops out of the registry instead of failing the
+                # whole turn when Strands later calls load_tools().
+                # On success this also primes the client's tool cache,
+                # so Strands' subsequent load_tools() is a no-op.
+                preflight_started = time.perf_counter()
+                token_before = (
+                    oauth_token_cache.get(user_id, provider_id)
+                    if provider_id and user_id
+                    else None
+                )
+                try:
+                    await self._preflight(client, off_loop=off_loop)
+                    timing["outcome"] = "loaded"
+                except Exception as exc:
+                    recovery = await self._recover_oauth_preflight(
+                        tool_id=tool_id,
+                        client=client,
+                        user_id=user_id,
+                        provider_id=provider_id,
+                        exc=exc,
+                        token_before=token_before,
+                        off_loop=off_loop,
+                    )
+                    timing["outcome"] = recovery
+                    if recovery == "consent" and consent_gated is not None:
+                        consent_gated.append(
+                            ConsentGatedTool(
+                                tool_id=tool_id,
+                                display_name=getattr(tool, "display_name", None) or tool_id,
+                                provider_id=provider_id,
+                            )
+                        )
+                    if recovery != "recovered":
+                        return None, timing
+                finally:
+                    timing["preflightMs"] = _elapsed_ms(preflight_started)
+
+                self.clients[cache_key] = client
+                self._client_versions[cache_key] = tool_version
+                if provider_id:
+                    self._provider_for_client_id[id(client)] = provider_id
+                approval_names = tool.mcp_config.approval_required_names()
+                if approval_names:
+                    self._approval_names_for_client_id[id(client)] = approval_names
+                auth_label = (
+                    " (with OIDC forwarding)" if forward_auth and static_token
+                    else " (OAuth)" if provider_id
+                    else ""
+                )
+                logger.info(f"✅ Loaded external MCP tool: {tool_id}{auth_label}")
+                return client, timing
+            return None, timing
+
+        except Exception as e:
+            timing["outcome"] = "error"
+            logger.error(f"Error loading external MCP tool {tool_id}: {e}")
+            return None, timing
+        finally:
+            timing["totalMs"] = _elapsed_ms(started)
+
+    async def _read_row(
+        self, tool_id: str, repository: Any
+    ) -> Tuple[Optional[ToolDefinition], bool, int]:
+        """One catalog row, whether it was read at all, and the ms it took.
+
+        Never raises. A read that fails reports ``read=False``, which leaves
+        the entry out of the dedupe and has ``_load_server`` read the row
+        itself — where the failure is reported exactly as it was before. A row
+        that is simply absent reports ``read=True`` with ``None``, so a missing
+        tool is not looked up twice.
+        """
+        started = time.perf_counter()
+        try:
+            return await repository.get_tool(tool_id), True, _elapsed_ms(started)
+        except Exception as exc:  # noqa: BLE001 - _load_server reports it
+            logger.warning(
+                "Could not read %s's catalog row while looking for servers "
+                "reached twice: %s",
+                tool_id,
+                exc,
+            )
+            return None, False, _elapsed_ms(started)
+
+    async def _distinct_servers(
+        self,
+        servers: List[Tuple[str, Optional[Set[str]]]],
+        repository: Any,
+    ) -> Tuple[List[_ServerToLoad], List[dict]]:
+        """One entry per distinct MCP server, plus a timing per entry dropped.
+
+        Two catalog records can point at the same server URL. In prod
+        ``google_tasks_employee`` and ``google_tasks_student`` are one Google
+        Tasks server, and a user holding both roles loaded it twice: every one
+        of its tools was offered under its own name twice, which Strands'
+        registry refuses, so the agent was never built and five scheduled runs
+        failed (#1527). Loading it once is also one MCP handshake instead of
+        two on the turn path.
+
+        Which record survives is decided here, off the catalog rows, *before*
+        any client is built or pre-flighted — never by whichever parallel
+        pre-flight finished first. The survivor is the first of them in the
+        order ``load_external_tools`` was given, which is the order
+        ``collect_tool_name_filters`` fixed from ``enabled_tools`` and the
+        order every other part of the build already reads (see
+        ``resolve_always_on_tool_ids``): it decides this server's place in the
+        tool list, and with it the order of the cacheable ``toolConfig`` prefix,
+        so it has to be the same on every turn and in every process (#1406).
+
+        The dropped record's selected tool names are folded into the
+        survivor's filter, so a server held through two roles still reaches
+        every tool either role selected — bounded, as always, by the surviving
+        row's own admin tool list, which ``_load_server`` applies.
+
+        A record whose status is disabled claims nothing, so it can never win
+        over an active record for the same server.
+        """
+        rows = await asyncio.gather(
+            *(self._read_row(tool_id, repository) for tool_id, _ in servers)
+        )
+
+        # Mutable while building: a later duplicate widens the survivor's filter.
+        kept: List[_ServerToLoad] = []
+        winner_of: Dict[str, int] = {}  # server key -> index into `kept`
+        dropped: List[dict] = []
+
+        for (tool_id, names), (row, was_read, catalog_ms) in zip(servers, rows):
+            # A disabled row must never claim a server, or it would win the
+            # dedupe and then be skipped for its status — costing the user a
+            # server an *active* record reaches. Dev has exactly this shape:
+            # three catalog entries on Zoom's hosted server, of which
+            # `race_test_zoom_search_2` and `_3` are disabled and `zoom_hosted`
+            # is active. Left keyless, it keeps its own entry and `_load_server`
+            # reports `disabled` for it exactly as before.
+            key = (
+                _same_server_key(row)
+                if row is not None
+                and not is_disabled_status(getattr(row, "status", None))
+                else None
+            )
+            index = winner_of.get(key) if key else None
+            if index is None:
+                if key:
+                    winner_of[key] = len(kept)
+                kept.append(
+                    _ServerToLoad(tool_id, names, row, was_read, catalog_ms)
+                )
+                continue
+
+            winner = kept[index]
+            logger.warning(
+                "Two tool catalog entries reach the same MCP server (%s): "
+                "keeping '%s' and dropping '%s'. Loading both would offer every "
+                "one of that server's tools twice under one name, which no "
+                "agent can register.",
+                getattr(getattr(row, "mcp_config", None), "server_url", key),
+                winner.tool_id,
+                tool_id,
+            )
+            # None is "the whole server", which absorbs any subset.
+            winner.allowed_tool_names = (
+                None
+                if names is None or winner.allowed_tool_names is None
+                else winner.allowed_tool_names | names
+            )
+            dropped.append(
+                {
+                    "id": tool_id,
+                    "outcome": "duplicate",
+                    "catalogMs": catalog_ms,
+                    "totalMs": catalog_ms,
+                }
+            )
+
+        return kept, dropped
+
     async def load_external_tools(
         self,
         enabled_tool_ids: List[str],
         user_id: Optional[str] = None,
         auth_token: Optional[str] = None,
+        timings: Optional[List[dict]] = None,
+        consent_gated: Optional[List[ConsentGatedTool]] = None,
     ) -> List[MCPClient]:
         """
         Load external MCP clients for enabled tools.
@@ -524,6 +1128,19 @@ class ExternalMCPIntegration:
             enabled_tool_ids: List of enabled tool IDs
             user_id: User ID (required for OAuth-gated and OIDC-forwarded tools)
             auth_token: Raw OIDC token for forwarding
+            timings: When given, one entry per server is appended —
+                ``{id, outcome, catalogMs, preflightMs, totalMs}`` — so the
+                caller can say which server owned the load (turn-path P1a).
+                ``outcome`` is ``cached``, ``loaded``, ``recovered``,
+                ``consent`` (dropped: the user has not connected the
+                provider), ``dropped`` (pre-flight failed otherwise),
+                ``disabled`` (status is disabled), ``duplicate`` (another
+                entry already reaches this server's URL; these come last, so
+                the loaded servers keep their catalog order), ``skipped`` or
+                ``error``.
+            consent_gated: When given, one ``ConsentGatedTool`` is appended
+                per server dropped for missing consent, sorted by display name
+                and tool id so anything rendered from it is deterministic.
 
         Returns:
             List of MCPClient instances to add to the agent's tools
@@ -538,179 +1155,64 @@ class ExternalMCPIntegration:
         # server (filter is None).
         name_filters = collect_tool_name_filters(enabled_tool_ids)
 
-        for tool_id, allowed_tool_names in name_filters.items():
-            try:
-                tool = await repository.get_tool(tool_id)
-                if not tool:
-                    continue
-
-                if tool.protocol != "mcp_external":
-                    continue
-
-                if not tool.mcp_config:
-                    logger.warning(f"Tool {tool_id} has protocol=mcp_external but no mcp_config")
-                    continue
-
-                forward_auth = bool(getattr(tool, "forward_auth_token", False))
-                requires_oauth = bool(tool.requires_oauth_provider)
-                exchange_audience = getattr(tool, "token_exchange_audience", None)
-                # An exchanged token is per-user just like the other two modes,
-                # so it must partition the client cache the same way — otherwise
-                # one user's Directory token would be reused for another.
-                requires_user_auth = forward_auth or requires_oauth or bool(exchange_audience)
-
-                cache_key = self._get_cache_key(tool_id, user_id, requires_user_auth)
-                # A different selected-tool subset is a different client, so fold
-                # the filter into the cache key (the integration is shared across
-                # agents — two users may select different subsets of one server).
-                if allowed_tool_names is not None:
-                    cache_key += "|allow:" + ",".join(sorted(allowed_tool_names))
-                tool_version = (
-                    to_iso(tool.updated_at) if tool.updated_at else ""
+        # One entry per distinct server: several catalog records can front one
+        # URL, and loading it twice fails the whole agent (#1527). Reads every
+        # row, which `_load_server` is then handed so none is read twice.
+        servers, duplicate_timings = await self._distinct_servers(
+            list(name_filters.items()), repository
+        )
+        # Parallel pre-flights append in completion order; sorted below.
+        gated: List[ConsentGatedTool] = []
+        if len(servers) > 1 and mcp_parallel_preflight_enabled():
+            # Each server's pre-flight is a network handshake that blocks its
+            # thread (see `_preflight`), so N servers used to cost the SUM of
+            # their handshakes — 9.5s + 12s on a cold KB agent on dev
+            # (turn-path spec §5 P3). Run them together; `gather` returns in
+            # input order, so the client list — and with it the tool order in
+            # the cacheable `toolConfig` prefix — is the same as the serial loop.
+            results = await asyncio.gather(
+                *(
+                    self._load_server(
+                        server.tool_id,
+                        server.allowed_tool_names,
+                        repository,
+                        user_id,
+                        auth_token,
+                        off_loop=True,
+                        consent_gated=gated,
+                        server=server,
+                    )
+                    for server in servers
                 )
-
-                if (
-                    cache_key in self.clients
-                    and self._client_versions.get(cache_key) == tool_version
-                ):
-                    clients.append(self.clients[cache_key])
-                    continue
-
-                # Stale entry — admin edited this tool since the client
-                # was built. Drop it so the block below creates a fresh
-                # client with the current config.
-                if cache_key in self.clients:
-                    stale = self.clients.pop(cache_key)
-                    self._client_versions.pop(cache_key, None)
-                    self._provider_for_client_id.pop(id(stale), None)
-                    self._approval_names_for_client_id.pop(id(stale), None)
-
-                static_token: Optional[str] = None
-                token_provider: Optional[Callable[[], Optional[str]]] = None
-                provider_id: Optional[str] = None
-
-                if exchange_audience:
-                    # RFC 8693: trade the user's Cognito token for one the
-                    # downstream API already trusts. Checked before forward_auth
-                    # because forwarding the raw Cognito token to such an API
-                    # would send a credential it cannot validate — a silent
-                    # 401 rather than an obvious misconfiguration.
-                    if not auth_token:
-                        logger.warning(
-                            f"Tool {tool_id} needs a token exchange but no auth_token "
-                            "was provided; skipping"
-                        )
-                        continue
-                    if not user_id:
-                        logger.warning(
-                            f"Tool {tool_id} needs a token exchange but no user_id "
-                            "was provided; skipping (tokens must be cached per user)"
-                        )
-                        continue
-
-                    exchanger = get_token_exchange_client()
-                    if not exchanger.configured:
-                        logger.warning(
-                            f"Tool {tool_id} declares token_exchange_audience but the "
-                            "runtime has no exchange configuration; skipping"
-                        )
-                        continue
-
-                    # Resolved lazily per request, like the OAuth path: exchanged
-                    # tokens are short-lived (600s in dev) and a client may
-                    # outlive one, so binding a value here would go stale
-                    # mid-conversation. TokenExchangeClient handles caching.
-                    async def _exchange(
-                        t=auth_token, a=exchange_audience, u=user_id, tid=tool_id
-                    ) -> Optional[str]:
-                        try:
-                            return await exchanger.exchange(
-                                subject_token=t, audience=a, user_id=u
-                            )
-                        except TokenExchangeError as exc:
-                            # Fail closed: no token means the request goes
-                            # unauthenticated and the downstream API refuses it,
-                            # which is the correct outcome and is visible here.
-                            logger.warning(f"Token exchange failed for {tid}: {exc}")
-                            return None
-
-                    token_provider = _exchange
-                    logger.info(
-                        f"Using RFC 8693 token exchange for tool {tool_id} "
-                        f"(audience={exchange_audience})"
-                    )
-
-                elif forward_auth:
-                    if not auth_token:
-                        logger.warning(
-                            f"Tool {tool_id} has forward_auth_token=true but no auth_token provided"
-                        )
-                    else:
-                        static_token = auth_token
-                        logger.info(f"Using OIDC token forwarding for tool {tool_id}")
-
-                elif requires_oauth:
-                    if not user_id:
-                        logger.warning(
-                            f"Tool {tool_id} requires OAuth provider '{tool.requires_oauth_provider}' "
-                            "but no user_id provided"
-                        )
-                        continue
-
-                    provider_id = tool.requires_oauth_provider
-                    # Bind user_id and provider_id at closure time so the
-                    # provider stays valid for the client's lifetime.
-                    token_provider = (
-                        lambda u=user_id, p=provider_id: oauth_token_cache.get(u, p)
-                    )
-
-                client = create_external_mcp_client(
-                    config=tool.mcp_config,
-                    tool_definition=tool,
-                    oauth_token=static_token,
-                    token_provider=token_provider,
-                    allowed_tool_names=allowed_tool_names,
+            )
+        else:
+            results = [
+                await self._load_server(
+                    server.tool_id,
+                    server.allowed_tool_names,
+                    repository,
+                    user_id,
+                    auth_token,
+                    consent_gated=gated,
+                    server=server,
                 )
+                for server in servers
+            ]
 
-                if client:
-                    # Pre-flight the MCP session so a single unreachable
-                    # server (e.g. a connector that isn't running locally)
-                    # drops out of the registry instead of failing the
-                    # whole turn when Strands later calls load_tools().
-                    # On success this also primes the client's tool cache,
-                    # so Strands' subsequent load_tools() is a no-op.
-                    try:
-                        await client.load_tools()
-                    except Exception as exc:
-                        recovered = await self._recover_oauth_preflight(
-                            tool_id=tool_id,
-                            client=client,
-                            user_id=user_id,
-                            provider_id=provider_id,
-                            exc=exc,
-                        )
-                        if not recovered:
-                            continue
+        for client, timing in results:
+            if timings is not None:
+                timings.append(timing)
+            if client is not None:
+                clients.append(client)
 
-                    self.clients[cache_key] = client
-                    self._client_versions[cache_key] = tool_version
-                    if provider_id:
-                        self._provider_for_client_id[id(client)] = provider_id
-                    approval_names = tool.mcp_config.approval_required_names()
-                    if approval_names:
-                        self._approval_names_for_client_id[id(client)] = approval_names
-                    clients.append(client)
-                    auth_label = (
-                        " (with OIDC forwarding)" if forward_auth and static_token
-                        else " (OAuth)" if provider_id
-                        else ""
-                    )
-                    logger.info(f"✅ Loaded external MCP tool: {tool_id}{auth_label}")
+        if timings is not None:
+            # Last, so the servers that were loaded keep their catalog order.
+            timings.extend(duplicate_timings)
 
-            except Exception as e:
-                logger.error(f"Error loading external MCP tool {tool_id}: {e}")
-                continue
-
+        if consent_gated is not None:
+            consent_gated.extend(
+                sorted(gated, key=lambda g: (g.display_name, g.tool_id))
+            )
         return clients
 
     def get_client(self, tool_id: str, user_id: Optional[str] = None) -> Optional[MCPClient]:
@@ -768,6 +1270,14 @@ class ExternalMCPIntegration:
             self._provider_for_client_id.pop(id(client), None)
             self._approval_names_for_client_id.pop(id(client), None)
 
+        # Their UI catalog entries point at the clients just dropped.
+        try:
+            from agents.main_agent.integrations.mcp_apps import get_ui_tool_catalog
+
+            get_ui_tool_catalog().forget_user(user_id)
+        except Exception:  # noqa: BLE001 - cache hygiene must not fail a disconnect
+            logger.debug("Could not clear UI catalog entries for user", exc_info=True)
+
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for user {user_id}")
 
@@ -782,7 +1292,9 @@ class ExternalMCPIntegration:
         """
         keys_to_remove = [
             key for key in self.clients.keys()
-            if key == tool_id or key.endswith(f":{tool_id}")
+            # A subset of the server's tools adds an "|allow:<names>" suffix.
+            if (base := key.split("|allow:", 1)[0]) == tool_id
+            or base.endswith(f":{tool_id}")
         ]
         for key in keys_to_remove:
             client = self.clients.pop(key)

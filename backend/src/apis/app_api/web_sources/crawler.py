@@ -103,7 +103,7 @@ async def _create_pending_document(
     user_id: str,
     filename: str,
 ) -> str:
-    """Create a fresh `uploading` document row for a discovered URL."""
+    """Create a fresh document row for a discovered URL."""
     from apis.app_api.documents.services.document_service import _generate_document_id
 
     document_id = _generate_document_id()
@@ -115,6 +115,7 @@ async def _create_pending_document(
         size_bytes=0,
         s3_key=s3_key,
         document_id=document_id,
+        status=await _new_page_status(assistant_id),
         provenance=DocumentProvenance(
             source_connector_id="web",
             source_adapter_key="http",
@@ -123,6 +124,24 @@ async def _create_pending_document(
         ),
     )
     return document_id
+
+
+async def _new_page_status(assistant_id: str) -> str:
+    """`provisioning` while the knowledge base is still being born managed, else `uploading`.
+
+    A crawl can outlast that window in either direction, so each page asks when it
+    is created. A page that said `uploading` during the window would be skipped by
+    the managed consumer (it defers) and by the provisioning job (which ingests
+    only `provisioning` rows), and sit until the stale sweep failed it.
+    """
+    from apis.shared.kb_backend.records import awaiting_provisioning, get_kb_record
+
+    try:
+        record = await asyncio.to_thread(get_kb_record, assistant_id, assistant_id)
+    except Exception:  # noqa: BLE001 — no record to read means nothing is being provisioned
+        logger.warning("Could not read the knowledge-base record for %s", assistant_id, exc_info=True)
+        return "uploading"
+    return "provisioning" if awaiting_provisioning(record) else "uploading"
 
 
 # ── KB-sync refresh support ──────────────────────────────────────────────────
@@ -152,7 +171,10 @@ class RefreshState:
       "unchanged"  — 304 or identical content hash; nothing re-staged
       "changed"    — existing doc, new bytes; emitted BEFORE staging so the
                      worker can stash the previous chunk count first
-      "created"    — page new to this crawl; emitted after staging
+      "created"    — page new to this crawl; also emitted before staging
+      "stage_failed" — the S3 stage after a "changed"/"created" raised; the
+                     worker rolls back the gate values it wrote, or the next
+                     refresh would hash-match bytes that never reached S3
     `seen_urls` collects every URL that survived the robots gate — the
     worker diffs it against `docs` for miss counting. Fetch failures ARE
     seen (a flaky page is not a missing page); robots-disallowed pages are
@@ -167,6 +189,7 @@ class RefreshState:
     changed: int = 0
     unchanged: int = 0
     created: int = 0
+    stage_failed: int = 0
 
     async def _emit(
         self,
@@ -182,6 +205,8 @@ class RefreshState:
             self.unchanged += 1
         elif outcome == "created":
             self.created += 1
+        elif outcome == "stage_failed":
+            self.stage_failed += 1
         if self.on_result is not None:
             await self.on_result(url, document_id, outcome, etag, content_hash)
 
@@ -496,7 +521,12 @@ async def run_crawl(
             async def enqueue_links(html: str, url: str, depth: int) -> None:
                 if depth >= settings.max_depth:
                     return
-                for normalized, _raw in _extract_links(html, url):
+                # _extract_links runs BeautifulSoup (CPU-bound); offload it to
+                # the default thread pool so parsing a large page can't stall
+                # the shared event loop that serves all other HTTP traffic.
+                loop = asyncio.get_running_loop()
+                links = await loop.run_in_executor(None, _extract_links, html, url)
+                for normalized, _raw in links:
                     if normalized in visited:
                         continue
                     if len(visited) >= settings.max_pages:
@@ -590,7 +620,13 @@ async def run_crawl(
                         # miss counter (not this run) decides their fate.
                         return
 
-                    markdown, title = _extract_markdown(html, url)
+                    # _extract_markdown runs trafilatura.extract() (and a
+                    # BeautifulSoup fallback) — both CPU-bound. Offload to the
+                    # thread pool so extraction never blocks the shared loop.
+                    loop = asyncio.get_running_loop()
+                    markdown, title = await loop.run_in_executor(
+                        None, _extract_markdown, html, url
+                    )
                     if not markdown.strip():
                         if existing is None:
                             await update_document_status(
@@ -637,12 +673,36 @@ async def run_crawl(
                         url,
                         len(markdown.encode("utf-8")),
                     )
-                    s3_key = await _put_markdown(
-                        assistant_id=assistant_id,
-                        document_id=document_id,
-                        markdown=markdown,
-                        filename=filename,
-                    )
+                    try:
+                        s3_key = await _put_markdown(
+                            assistant_id=assistant_id,
+                            document_id=document_id,
+                            markdown=markdown,
+                            filename=filename,
+                        )
+                    except Exception as stage_err:
+                        logger.warning("Staging %s to S3 failed: %s", url, stage_err)
+                        if refresh is not None:
+                            await refresh._emit(url, document_id, "stage_failed", etag, content_hash)
+                        if existing is None:
+                            await update_document_status(
+                                assistant_id=assistant_id,
+                                document_id=document_id,
+                                status="failed",
+                                error_message="The page could not be stored.",
+                                error_details=str(stage_err)[:500],
+                            )
+                        await increment_counters(
+                            assistant_id=assistant_id,
+                            crawl_id=crawl_id,
+                            failed_delta=1,
+                        )
+                        # The fetch itself succeeded, so its links are good.
+                        # Not walking them would leave every page below this
+                        # one unseen, and a refresh counts unseen pages as
+                        # misses toward deletion.
+                        await enqueue_links(html, url, depth)
+                        return
                     await update_document_import_metadata(
                         assistant_id=assistant_id,
                         document_id=document_id,

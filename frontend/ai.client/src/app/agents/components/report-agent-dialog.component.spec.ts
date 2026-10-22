@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 
 import {
   ReportAgentDialogComponent,
@@ -117,6 +118,39 @@ describe('ReportAgentDialogComponent', () => {
       build().onCancel();
 
       expect(closedWith).toEqual([undefined]);
+    });
+  });
+
+  describe('opened through a real CDK dialog', () => {
+    beforeEach(() => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({});
+    });
+
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    function open(data: ReportAgentDialogData) {
+      return openInCdkDialog<ReportAgentDialogComponent, ReportAgentDialogData, ReportAgentDialogResult>(
+        ReportAgentDialogComponent,
+        { data },
+      );
+    }
+
+    it('is named for the report and starts on the first reason', async () => {
+      const { container } = await open({ agentName: 'Policy Lookup' });
+      expectNamedDialog(container, {
+        name: 'Report a problem with “Policy Lookup”',
+        description: /^This goes privately to the people who curate the store/,
+      });
+      const initial = container.querySelector<HTMLInputElement>('[cdkFocusInitial]');
+      expect(initial?.type).toBe('radio');
+      expect(initial?.value).toBe('inaccurate');
+      expect(container.querySelectorAll('[cdkFocusInitial]').length).toBe(1);
+    });
+
+    it('is named for feedback when opened from a conversation', async () => {
+      const { container } = await open({ agentName: 'Policy Lookup', sessionId: 'sess-123' });
+      expectNamedDialog(container, { name: 'Feedback on “Policy Lookup”' });
     });
   });
 });

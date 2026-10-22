@@ -109,3 +109,26 @@ def _hmac(key: bytes, body: bytes) -> bytes:
     import hmac
 
     return hmac.new(key, body, hashlib.sha256).digest()
+
+
+def test_purpose_roundtrips_and_dictation_needs_no_session() -> None:
+    codec = _make_codec()
+    ticket, claims = codec.issue(user_id="user-1", session_id="", purpose="dictation")
+    verified = codec.verify(ticket)
+    assert verified.purpose == "dictation"
+    assert verified.session_id == ""
+    assert verified.jti == claims.jti
+
+
+def test_payload_without_purpose_is_a_voice_ticket() -> None:
+    """Tickets minted before ``pur`` existed must keep opening voice mode."""
+    codec = _make_codec()
+    now = int(time.time())
+    body = base64.urlsafe_b64encode(
+        json.dumps(
+            {"v": 1, "sub": "user-1", "sid": "sess-A", "jti": "j", "iat": now, "exp": now + 60},
+            separators=(",", ":"),
+        ).encode()
+    ).rstrip(b"=").decode()
+    sig = base64.urlsafe_b64encode(codec._sign(body.encode())).rstrip(b"=").decode()
+    assert codec.verify(f"{body}.{sig}").purpose == "voice"

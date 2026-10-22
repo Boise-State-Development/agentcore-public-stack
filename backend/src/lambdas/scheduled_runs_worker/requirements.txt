@@ -1,12 +1,26 @@
 # scheduled-runs Lambda image dependencies (backend/Dockerfile.scheduled-runs).
 # Exact pins per repo policy; versions match backend/uv.lock.
-boto3==1.43.68
+boto3==1.43.103
 pydantic==2.12.5
 httpx==0.28.1
-bedrock-agentcore==1.21.0
+bedrock-agentcore==1.24.2
 # Worker transitive deps: apis.shared.harness -> apis.shared.sessions_bff,
 # whose cookie.py needs cryptography (AESGCM) and cache.py needs cachetools
 # (TTLCache). Kept in sync with the dispatcher requirements.txt, which is the
 # file Dockerfile.scheduled-runs actually installs for the shared image.
-cryptography==48.0.1
+cryptography==50.0.1
 cachetools==6.2.4
+# Worker: delivering a scheduled run to its project (Shared Projects 3.2b) snapshots
+# the run's conversation with apis.shared.sessions.messages.get_messages, the same
+# reader app-api's shares use. It reads AgentCore Memory through
+# bedrock_agentcore.memory.integrations.strands, which imports Strands (the base
+# package; none of its bidi extras are imported). Versions match backend/uv.lock.
+strands-agents==1.61.1
+mcp==1.30.0
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-instrumentation-threading==0.65b0
+jsonschema==4.26.0
+docstring-parser==0.17.0
+pyyaml==6.0.3
+watchdog==6.0.0

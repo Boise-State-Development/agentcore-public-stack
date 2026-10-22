@@ -1,0 +1,558 @@
+# Customize — a browse surface for tools, skills and connectors
+
+**Status:** Step 1 (Customize shell: Tools + Skills) SHIPPED — PR #1072, validated on dev.
+Step 3 (drop model + params from the drawer) SHIPPED — PR #1073, validated on dev.
+Step 4 (agent-lock surfacing) SHIPPED — PR #1075, validated on dev.
+Step 2 (Connectors tab) SHIPPED — PR #1076, validated on dev.
+Step 5 (drawer deleted) SHIPPED — PR #1079, validated on dev.
+**Epic COMPLETE.** Step 6 declined on evidence; step 7 declined by the owner.
+**Supersedes:** the composer settings drawer (`components/model-settings/`) as the home for
+tool and skill enablement.
+**Related:** `docs/specs/skills-as-agent-primitive.md` (D6 opt-in), `docs/specs/agent-marketplace.md` (D1 one noun),
+`docs/specs/per-tool-mcp-enablement.md` equivalent in `tool-search-token-bloat-strategy.md`.
+
+## Problem
+
+Tool and skill enablement is **global, durable, per-user state**:
+
+- `services/skill/skill.service.ts:32` — "preferences persist globally per user"
+- `services/tool/tool.service.ts:414` — `savePreferences()` POSTs to the user preferences endpoint
+
+But it is presented in a drawer hanging off the composer, opened by a settings icon
+inside the chat input. That container reads as *settings for this conversation*. It is not.
+A user who enables a tool to get through one question has changed the `toolConfig` of every
+future turn, in every future session, permanently — and nothing in the UI said so.
+
+That is the defect. The secondary problem is capacity: the drawer is a ~320px column with
+collapsible sections, and the tool catalog has outgrown it. Per-tool MCP enablement means a
+single server (Student MyBoiseState, 17+ tools; canvas_faculty, 44) can exceed the entire
+drawer's comfortable length on its own. Browsing is not a thing the drawer can be made to do.
+
+## What Customize is
+
+A full page at `/customize` that owns the things a user *adds to* their assistant:
+
+| Tab | Contents | Today's home |
+|-----|----------|--------------|
+| **Tools** | The RBAC-granted tool catalog, per-tool and per-server enablement | Drawer § Tools |
+| **Skills** | Accessible skills (catalog-granted ∪ authored), opt-in toggles | Drawer § Skills |
+| **Connectors** | OAuth connection state for external MCP servers | `Settings → Connectors` (folded in, step 2) |
+
+It is deliberately **capabilities only**. See §"What Customize is not".
+
+## Decision summary
+
+| Question | Decision |
+|----------|----------|
+| Does the composer settings drawer survive? | **No.** Deleted in step 5, once its contents have homes |
+| Does the settings icon survive? | **No.** `showSettingsControl` default flips to `false`, then the input is removed |
+| Where does model selection live? | Composer, where it already is (`chat-input.component.html:274`) |
+| Where do inference params live? | **Nowhere user-facing.** Effort subsumes them (step 3) |
+| What happens to Conversation Modes? | **Retired as a migration to Agents** (step 6), gated on prod usage |
+| Does the Agent Marketplace move into Customize? | **No.** See §"What Customize is not" |
+| Does Customize honour the Agent binding lock? | **No — deliberately.** See §"The agent-lock seam" |
+
+## Why the drawer can die entirely
+
+The drawer holds four things. Three of them are already redundant or dead:
+
+**Model selection — redundant.** `<app-model-dropdown />` is already in the composer at
+`session/components/chat-input/chat-input.component.html:274`. The drawer's model section is
+a second copy of a control the user can already see.
+
+**Advanced params — superseded by effort, already lying, and partly duplicated.** Effort
+lives in the model dropdown's submenu with the active level in the trigger
+(`components/model-dropdown/model-dropdown.component.ts:41`). Meanwhile GPT-5.6
+**hard-rejects** `temperature` and `top_p` (measured; see `docs/specs/gpt-5-6-prompt-caching.md`
+and the inference-params findings), so a per-model numeric param form already misrepresents
+part of the catalog. Effort is the portable abstraction; the form is not.
+
+**Measured on dev before cutting** (all 9 enabled models, via the live picker + drawer):
+
+| Model | Advanced rows the drawer offered | Effort in the picker |
+|-------|----------------------------------|----------------------|
+| GPT-5.6 Sol / Luna | Max Output Tokens, **Reasoning Effort** | yes |
+| Claude Sonnet 5, Opus 4.7 | Max Output Tokens, **Effort** | yes |
+| Claude Sonnet 4.6 | Temperature, Top P, Max Output Tokens, **Effort** | yes |
+| Claude Haiku 4.5 | Temperature, Top P, Max Output Tokens | **no** |
+| Gemma 4 31B, GPT-5.4 | *(none — section already hidden)* | no |
+
+Two things that changes:
+
+1. **No enabled model exposes Extended Thinking to users.** The `thinking` param is declared
+   in `curated-models.ts` for Sonnet 4.6 and Haiku 4.5, but the *deployed* records don't
+   enable it, so the row never renders. The feared capability loss does not exist — but note
+   the trap: the curated template is not the catalog, and only the live records answer this.
+   Re-check before removing anything param-shaped in an environment other than dev.
+2. **Effort was rendered twice** — in the picker AND as a row in the drawer's Advanced list.
+   So the Advanced section was not merely superseded; for five of nine models its headline
+   control was a literal duplicate of one three inches away.
+
+What is left once Effort is deduped is Temperature, Top P and Max Output Tokens — sampling
+knobs and a truncation guard.
+
+Removing the form also retires the `max_tokens` ↔ extended-thinking coupling — Anthropic
+requires `thinking budget < max_tokens`, which is the entire reason `model-settings.ts`
+carried `unsatisfiable`, `clampNotices`, `disabledByConflict` and the post-edit re-check in
+`reconcileThinkingAfterMaxTokens`. That machinery and its whole error-state vocabulary go
+with it: ~410 lines of component and ~330 of template.
+
+⚠️ `max_tokens` is a **truncation guard**, not a tuning knob. Removing the user control means
+the admin default applies — which is already what every untouched user gets (the drawer read
+"Defaults" for them). Admin-locked params (`row.locked`, "locked by admin") are unaffected:
+this removes the *user-facing form*, not the governance behind it.
+
+⚠️ **Stale overrides are the real hazard, not the missing form.** Overrides live in
+`sessionStorage` under `inferenceParamOverrides`, so a tab open across the deploy still holds
+whatever the user last typed, and it would keep riding every request with nothing in the UI
+to show or reset it. `ModelService.dropRetiredOverrides` strips non-effort keys once, on load,
+and rewrites storage. Effort is preserved explicitly — `setEffort` writes through this same
+store, so a blanket purge would clear a control the user can still see and is still using.
+
+**Conversation Mode — a strictly weaker Agent.** An admin-authored system prompt attached to
+a conversation, with no tools, no skills, no bindings, no icon and no `@`-mention. That is
+precisely the relationship Assistants had to Agents, which Marketplace D1 ("there is one noun,
+and it is Agent") resolved by migration. Untouched since the PR that introduced it (#411) apart
+from the delegated-admin-scope sweep and a theming pass.
+
+Retiring it is bigger than deleting a drawer section — it has admin CRUD pages and routes, an
+`admin.system_prompts` delegated scope, an admin nav entry, a user-facing `/system-prompts`
+app_api route, a DynamoDB entity, and `system_prompt_id` on the invocation payload
+(`apis/inference_api/chat/models.py:188`). ⚠️ **Gate on prod usage before writing any of it.**
+"Dormant in git" is not "dormant in prod"; if a department is using a Mode, it has users and
+the answer is a migration with redirects, not a deletion.
+
+**Skills and Tools — global state in a conversational container.** The actual problem. They
+move to Customize.
+
+Strip the first three and nothing conversation-scoped remains. The drawer is not slimmed; it
+is emptied, and then removed.
+
+## What Customize is not
+
+**Not the Agent Marketplace.** Customize is *capabilities you add to your assistant*. An Agent
+is not a capability you toggle — it is a thing you talk to. Putting Discover under Customize
+while My Agents stays in the sidenav splits one noun across two surfaces, which is the exact
+failure D1 exists to prevent and the reason the whole `/assistants` deprecation was written.
+
+The marketplace's real problem is narrower than placement: **Discover is already the first tab
+of `/agents`** (`agents/components/agents-tabs.component.ts:22`), but `/agents` resolves to
+*My Agents*, which is empty for nearly every user. The emptiest tab is the landing tab. The fix
+is a routing change — land `/agents` on Discover when the user has no agents — not a
+relocation. It is tracked here as step 7 and is independent of everything else in this spec.
+
+If a future decision does move the marketplace into Customize, it must move **all** of
+`/agents` and drop the sidenav entry. Splitting it is the one outcome to avoid.
+
+## The agent-lock seam
+
+⚠️ This is the sharp edge in PR-1, and it is a pre-existing defect the new surface exposes
+rather than one it creates.
+
+`ToolService` and `SkillService` are `providedIn: 'root'` singletons. When a conversation is
+bound to an Agent, `session.page.ts:806` calls `lockToAgentTools()` / `lockToAgentSkills()`,
+which makes `agentLocked()` true, rewrites what `visibleTools()` returns, and causes
+`toggleTool()` to **early-return without saving** (`tool.service.ts:272`).
+
+`ngOnDestroy` does **not** release these locks. They are cleared only when the session page
+later loads an unbound conversation (`session.page.ts:341,791`). So a user who navigates from
+an agent-bound chat straight to `/customize` arrives at a page where:
+
+1. the list shows the Agent's bound set instead of their own preferences, and
+2. every toggle silently does nothing.
+
+The lock is conversation-scoped state that leaked into a global singleton. Customize is a
+global surface and therefore **must not consult it**:
+
+- Read the user's true state (`tool.isEnabled` / `skill.isEnabled`), never the
+  display-shim (`isToolShownEnabled` / `isSkillShownEnabled`).
+- Write through a lock-agnostic path. `toggleTool` / `toggleSkill` take an optional
+  `{ respectAgentLock }`, defaulting to `true` so drawer behaviour is byte-identical.
+
+Deliberately **not** fixed by clearing locks in `ngOnDestroy`: the `/` ↔ `/s/:id` transition
+recreates the session component on a legitimate navigation (`session.page.ts:498`), so a
+destroy-time clear would drop and re-apply the lock mid-flow.
+
+The proper resolution is step 4 — the lock is a fact about the *conversation*, so it belongs
+on the agent indicator pill
+(`session/components/agent-indicator/agent-indicator.component.ts`), which is already
+in the conversation and already has an actions menu.
+
+**Step 4's shape.** The indicator takes an `AgentGovernance` input (`modelName`, `toolCount`,
+`skillCount`; `null` on a field means "the user's own setting applies"), renders a lock glyph
+on the chip, and lists what is fixed in its menu — ending with the line that closes the loop:
+*"Your own choices in Customize don't apply in this conversation."*
+
+⚠️ It is derived from the **Agent record** (`chat-container`'s `agent()` input), NOT from
+`ToolService.agentLocked()` & friends. Those are the leaking singletons this section is about;
+reading them here would reintroduce the same staleness on the surface whose whole job is to
+tell the truth about the current conversation. Deriving from the record also makes the preview
+surfaces correct for free: the Designer preview and the marketplace test-drive render the
+indicator without passing `[agent]`, so they get `null` and say nothing — right, because a
+draft being previewed is not a conversation anyone's saved settings apply to.
+
+## Cost consequence
+
+⚠️ **A surface designed to make enabling tools easy will raise enabled-tools-per-user, and
+every enabled tool grows `toolConfig` on every turn of every session** — the cacheable prefix
+the cost-effectiveness tenet exists to protect. This is the same pressure that made new
+injected tools ship `enabledByDefault=False` (default-on was a fleet-wide cache bypass), with
+a friendlier face.
+
+Two obligations, in the spec rather than discovered post-ship:
+
+1. **Ordering stays deterministic** regardless of the order the new UI writes preferences in.
+   Prompt-cache stability is exact-prefix-match; a set that reorders because the user toggled
+   from a grid instead of a list rewrites the whole prefix at the cache-write premium.
+2. **Browse should not be cost-blind.** Surfacing per-tool prompt weight (description +
+   schema token count) is the honest version of a store that encourages adding things. Not in
+   PR-1; named here so it is a decision rather than an omission.
+
+## Sequencing
+
+Each step is independently shippable. 3 and 6 do not depend on Customize at all.
+
+| # | Step | Depends on |
+|---|------|-----------|
+| 1 | **Customize shell** — `/customize`, Tools + Skills tabs, nav entry. Drawer stays; both live — **shipped (#1072)** | — |
+| 2 | Fold `Settings → Connectors` in as the Connectors tab — **shipped (#1076)** | 1 |
+| 3 | Drop model + Advanced params from the drawer (pure dedup + param removal) — **shipped (#1073)** | — |
+| 4 | Agent-lock surfacing moves to the assistant indicator — **shipped (#1075)** | — |
+| 5 | Delete the drawer and the settings icon — **shipped (#1079)** | 1, 2, 3, 4 |
+| 6 | Conversation Modes retired as an Agent migration — **DECLINED**, see below | prod-usage check |
+| 7 | `/agents` lands on Discover for users with no agents — **DECLINED** by the owner, not pursued | — |
+
+Step 5 is last for a reason: pull the icon before Customize exists and you have removed the
+only path to skills and tools. The end-state composer already renders today —
+`showSettingsControl` is an existing input, set `false` in the agent preview
+(`agents/agent-form/components/agent-preview.component.ts:121`) and the marketplace review
+test-drive (`admin/marketplace/components/review-test-drive.component.ts:144`). Step 5 flips
+the default and deletes the input.
+
+## Resolved questions
+
+**Does the composer keep a pointer to Customize?** No. The sidenav entry is the path, always
+visible and one click away — the same shape Claude uses. Adding a composer affordance would
+have reintroduced an icon to replace the one step 5 removes.
+
+**What happens to Conversation Mode?** ⚠️ The spec originally had it retired in step 6 as "a
+strictly weaker Agent", on the premise it was dormant. **That premise was wrong.** Prod carries
+one enabled mode — *Guided Learning*, a Socratic tutoring prompt — and its use is accelerating:
+1 session in July, 20 in August, **60 in the first 12 days of September**. Measured against
+`boisestateai-v2-system-prompts` and `sessions-metadata` in the prod account.
+
+So Mode is not dormant, and it is the one genuinely **per-conversation** control the drawer
+held. It could not follow Skills and Tools to Customize without recreating the exact scope lie
+this epic exists to fix, so it went the other way: into the **composer**, beside the model and
+effort controls. Those three are the same question — how should *this* conversation run.
+
+That also reframes step 6: retiring Modes is much harder to justify against growing usage, and
+the migration is not clean — a Mode applies to the conversation you are already in, whereas an
+Agent is a separate thing you start a chat with. Step 6 is now "reconsider", not "execute".
+
+This is the second time the "git history says dormant" heuristic has misled on this epic (the
+first was `thinking` in step 3, declared in `curated-models.ts` and absent from the deployed
+records). **Check the data in the environment that matters.**
+
+### ⚠️ The composer picker is PARKED (2026-09-13)
+
+`ConversationModePickerComponent` has been **removed from the composer and deleted from the
+tree**, on the owner's call: the placement works, but he wants feedback and thinking time before
+committing a permanent composer slot to it. Alternatives under consideration are the conversation
+title menu, folding it into the model dropdown, the new-chat empty state, a `/mode` inline command,
+and generalising the assistant indicator into a conversation-context chip.
+
+Everything behind the control is untouched and still live: `SystemPromptsService`, the
+`/system-prompts/` catalog, `selected_prompt_id` on `SessionPreferences`, the hydration fix in
+step 5 notes, and the admin CRUD at `/admin/system-prompts`. **Only the control is gone**, so
+restoring it is a revert, not a rebuild.
+
+⚠️ **RELEASE GATE — do not ship this to prod alongside the drawer deletion.** `origin/main` still
+carries `components/model-settings/`, so prod users select Guided Learning through the old drawer
+today. `develop` deletes that drawer (step 5) *and* now has no picker. The first release that
+carries both to prod leaves **no way to select a mode at all**, silently killing a feature at
+~60 sessions/month and growing. Before that release: either restore the picker, land a
+replacement placement, or accept the regression deliberately and tell derrickfink@boisestate.edu.
+
+## Step 5 notes
+
+⚠️ **A latent bug surfaced while verifying the new picker, and is fixed here.** The session
+page hydrates the active mode twice on load: once provisionally, before the session's metadata
+arrives, and again with the real value. The provisional call CLAIMED the session id, so the
+clobber guard in `hydrateFromSession` rejected the real hydration that followed.
+
+That was not cosmetic. `chat-request.service` sends `selected_prompt_id` from
+`activePromptId()`, so **after any reload the mode silently stopped being applied to every
+later turn**, while the stored session preference still said it was on. On prod that is every
+Guided Learning user who reloaded mid-conversation. The provisional call now passes
+`claim: false`; a deliberate "None" still claims, so stale metadata cannot undo it.
+
+It is fixed here rather than deferred because step 5 promotes this control to a first-class
+composer affordance, and shipping it more prominently while knowing it silently drops would be
+worse than leaving it where it was.
+
+## PR-1 scope
+
+**In:**
+
+- `/customize` → `/customize/tools`, `/customize/skills`, lazy-loaded, `authGuard`
+- Tabs strip mirroring `AgentsTabsComponent`
+- Browse idiom borrowed from `agents/discover`: search box + category chips + responsive grid
+- Cards read the existing root services — no new endpoints, no new state. Because both
+  surfaces share the same singletons, a toggle in Customize updates the drawer live and
+  vice versa
+- Sidenav entry (which also gave `/my-skills` a reachable home — see the standing
+  `sidenav.html:92` comment saying its navigation was undecided; step 8 removed
+  `/my-skills` entirely, so the entry is now the only path to either half)
+- The lock-agnostic write path described in §"The agent-lock seam"
+
+**Out:** connectors tab (step 2), tool detail pane / per-sub-tool expansion, any drawer
+deletion, prompt-weight display, marketplace changes.
+
+## Step 2 notes
+
+The page moved wholesale (`git mv`, so history follows it); only the shell changed — tabs
+plus an `h1`, and the row/empty/error containers went to `rounded-2xl` so the three tabs read
+as one surface. The Connect/Disconnect buttons and the `vendor-*` icon tokens were left
+exactly as they were: both carry load-bearing contrast reasoning in their comments.
+
+⚠️ `/settings/connectors` stays as a **redirect**, declared BEFORE the `settings` route whose
+`loadChildren` would otherwise swallow it and land the user on the settings shell with no
+matching child. A test asserts that ordering, because the failure is silent.
+
+## Tool detail
+
+`/customize/tools/:toolId` — the drill-in the browse grid's cards link to. It carries what
+a card cannot: the full description (summary, with the docstring's reference material behind
+*Show reference*), an MCP server's tools one by one with their own switches, the prompts and
+resources the server exposes, and the catalog facts (protocol, status, granting roles).
+
+⚠️ **Step 5 deleted the drawer, so this is now the only per-sub-tool surface in the app.**
+Between #1079 and this page there is nowhere to say "3 of Canvas's 48 tools"; the gap is worth
+closing promptly rather than queueing.
+
+It is a **new component, not a port of the drawer's `ToolDetailComponent`**, for the same
+reason the list page is not a port of the drawer's list: the drawer was conversation-scoped
+(`isToolShownEnabled()`, writes through the Agent lock) and this surface is global
+(`tool.isEnabled` / `sub.enabled`, `respectAgentLock: false`). See §"The agent-lock seam".
+
+The drawer's **tab strip did not come with it.** Tabs existed there because the pane was 320px;
+on a page, Tools / Prompts / Resources / About are stacked sections, so find-in-page reaches
+all of them and nothing hides behind a tab the user has to guess at. The real problem tabs
+were solving — a 48-tool server — is solved directly: above eight sub-tools the list grows
+its own filter box.
+
+Prompts and resources stay **read-only**, and stay a read of the stored capability snapshot
+rather than a live probe, for the reasons the drawer recorded: probing opens an MCP session
+per server, a 3LO server cannot be reached without a consent token the browser does not hold,
+and acting on an entry needs `prompts/get` / `resources/read`, which this surface has no
+endpoint for. The snapshot is only fetched for `mcp_external` tools — nothing else has a
+server that could have been asked.
+
+⚠️ The card's name is a link whose `after:absolute inset-0` makes the whole card the
+navigation target; the switch is raised out of it with `z-10` rather than nested inside it.
+A switch inside the link is a control the user cannot reach by keyboard without also
+following the link. A test asserts the switch has no `<a>` ancestor.
+
+⚠️ Colored text uses `text-primary-accessible dark:text-primary-accessible-dark`, never the
+numbered ramp. With the brand primary at `#0033a0`, `dark:text-primary-400` measures **2.59:1**
+against the dark page background (`gray-900`, `#101828`) — a WCAG AA failure at the small text
+sizes involved. The accessible alias is generated to clear 4.5:1 against the resolved dark
+surface and measures 4.52:1. See `src/branding/README.md` §7.
+
+**Known gap, not fixed here:** 16% of catalog sub-tools (19 of 116) have docstrings whose first
+paragraph runs past 400 characters — `canvas_faculty/import_course_package` reaches 2,058 —
+because the prose precedes any `Args:` heading, so `splitToolDescription` returns all of it as
+`summary` and the row renders it unclamped. The *detail* behind "Show details" is by comparison
+modest (median 344 chars). Clamping the summary is the fix; moving the detail behind a modal
+would not touch it.
+
+## Skill detail
+
+`/customize/skills/:skillId` — the sibling drill-in, reached the same way: the card's name is
+a link, the switch stays its sibling. It carries the SKILL.md body the skill actually injects,
+its supporting files, any composed skills, the advisory `allowed-tools` frontmatter, and the
+catalog facts.
+
+⚠️ **Unlike the tool page, this one needed backend work.** `GET /tools/` already returns the
+whole `Tool` including `serverTools`, so `/customize/tools/:toolId` is pure frontend.
+`GET /skills/` returns six thin fields — id, name, description, category, `userEnabled`,
+`isEnabled` — and *everything* worth opening a page for lives on `SkillDefinition` and never
+reaches the SPA. The only per-skill read that existed, `GET /skills/mine/{id}`, is
+**owner-scoped**: a catalog skill granted to you 404s there.
+
+So this adds **`GET /skills/{id}`**, access-checked by `resolve_accessible_skill_ids` — the
+same resolution that builds the picker and that the runtime uses to decide what a turn may
+activate — plus **`GET /skills/{id}/resources/{filename}`**, the access-scoped read
+counterpart of the owner route, so a granted user can open a catalog skill's reference files.
+
+⚠️ **Route registration order is load-bearing.** Both live at the BOTTOM of
+`apis/app_api/skills/routes.py`, below every `/mine` route. Starlette matches in registration
+order and `SKILL_ID_PATTERN` happily matches the literal string `mine` — declare `/{skill_id}`
+first and `GET /skills/mine` becomes a lookup for a skill called "mine", which 404s for every
+user in the product. A test asserts it.
+
+`GET /skills/` was **not** fattened instead. It is a first-load payload covering every granted
+skill; a SKILL.md body per row would be paid on every load to render a list that shows neither
+the body nor the files.
+
+**What the detail response deliberately omits.** `ownerId` — `isOwned` is the only part of
+ownership this surface needs, and a raw owner id would name one user to another. And
+`allowedAppRoles`, which is an admin-display projection of RBAC (see the RBAC §in CLAUDE.md)
+and has no business on a page any granted user can open. A skill the caller cannot reach 404s
+rather than 403s, so the endpoint never confirms the existence of a skill someone else holds;
+a non-ACTIVE catalog skill 404s too, matching the ACTIVE filter `GET /skills/` already applies
+— though an owner still reads their own draft, because ownership is its own grant.
+
+**Instructions render expanded**, not behind a disclosure like the tool page's `Args:` block.
+They are not a secret from a user the skill is granted to: this is the text their own turns
+load on dispatch, so the honest answer to "what does this skill do" is to show it. Rendered
+through `ngx-markdown` **with sanitization on** — do not add `[disableSanitizer]`; a SKILL.md
+body can be authored by a non-admin (Skills v2 PR-3 user tier), and the reasoning recorded on
+`announcement-modal.component.ts` applies unchanged.
+
+**`allowedTools` is rendered with its advisory status stated in the copy**, not as a bare list.
+Skills v2 D4: the platform never grants, mounts or folds a tool because a skill names it. A
+bare list of tool names on a page about a skill you just enabled would read as a grant.
+
+**A skill the user authored links to `/customize/skills/{id}/edit`** rather than growing a
+second editor here. One destination for every card; the read view stays useful for your own
+skill. (This link read `/my-skills/{id}/edit` until step 8 folded that route in.)
+
+**This page closes no functional gap**, and that is the difference from the tool detail page.
+That one had to exist the moment #1079 deleted the drawer, because per-sub-tool enablement had
+nowhere else to live. A skill has no sub-unit — the only control here is the same on/off the
+card already offers — so this page is informational, and was queued rather than rushed.
+
+⚠️ The switch stays **disabled until the picker list lands**. `SkillService.toggleSkill`
+silently returns on a skill it has never loaded, so on a deep link a click before the list
+arrived would look like a broken switch rather than a dead moment. The page warms
+`loadSkills()` in its constructor and gates the control on `initialized()`.
+
+**Cost:** none against the model. Everything here is catalog data read for display; nothing
+reaches the system prompt or `toolConfig`, so the cacheable prefix is untouched. The added
+traffic is one `GET /skills/{id}` per drill-in, cached for the life of the page.
+
+The `settings/connectors/` **services** deliberately did not move. `UserConnectorsService` and
+`ConnectorStatusService` have nine importers across the app (oauth-consent, export-dialog,
+knowledge-base, the drawer's tool-detail, the Customize Tools tab…), so relocating them is a
+wide, purely-mechanical diff that belongs on its own. Their real home is probably
+`services/connectors/` — noted, not done here.
+
+
+## Outcome
+
+Five of seven steps shipped; two were declined on their merits rather than dropped.
+
+| # | Step | Result |
+|---|------|--------|
+| 1 | Customize shell (Tools + Skills) | #1072 |
+| 2 | Connectors folded in | #1076 |
+| 3 | Model + params out of the drawer | #1073 |
+| 4 | Agent governance on the indicator | #1075 |
+| 5 | Mode to the composer, drawer deleted | #1079 |
+| 6 | Retire Conversation Modes | **Declined** |
+| 7 | `/agents` lands on Discover | **Declined** |
+
+The end state:
+
+- **Composer** — per-conversation: model, effort, conversation mode.
+- **Customize** — global: tools, skills, connectors.
+- **Assistant indicator** — says which of those an Agent has fixed, and that Customize
+  choices do not apply here.
+
+The original defect is closed: nothing global is presented as conversational any more.
+
+### Step 6 — declined
+
+The premise ("a Conversation Mode is a strictly weaker Agent, and they're dormant") did not
+survive contact with the data. Prod carries one enabled mode, *Guided Learning*, used in 81
+sessions and accelerating — 1 in July, 20 in August, 60 in the first 12 days of September. And
+the migration was never clean: a Mode applies to the conversation you are **already in**,
+whereas an Agent is a separate thing you start a chat with. Converting one into the other is a
+product change for its users, not a refactor.
+
+Modes now have a better home than the one the retirement was meant to escape, so the
+motivation is gone too.
+
+### What this epic should be remembered for
+
+**Check the data in the environment that matters.** The plan was wrong twice, in opposite
+directions, and both times the code was the misleading source:
+
+- Step 3: `curated-models.ts` declared `thinking` for two models; the deployed records did not
+  enable it. Reading the file would have blocked a safe removal.
+- Step 6: git history said Conversation Modes were untouched since #411; prod said usage was
+  compounding. Reading the history would have deleted a live feature.
+
+**Verify in a browser before merging.** Every step but one had a defect that only the browser
+found — `1 tools`, a menu wrapping "Claude Sonnet 5" across three lines, and a mode that
+silently stopped applying after a reload. None were caught by 2800 passing tests.
+
+## Step 8 — one skills surface
+
+`/my-skills` is gone. It was a top-level route reachable only by a link-out from
+`/customize/skills`, which meant the same noun lived in two places with two different answers
+to "what skills do I have?" — one page listed what you *authored*, the other what you could
+*turn on*, and neither showed the whole set. Both now live under `/customize/skills`, split by
+a `scope` query param rather than by route:
+
+| Scope | Population | Idiom |
+|---|---|---|
+| **Yours** (default) | skills you authored, at any status, **plus** catalog skills you have turned on | dense rows, with edit/delete on the ones you own |
+| **Discover** | catalog skills your roles grant that are still off | browse cards with a switch |
+
+Turning a skill on is this platform's analogue of "installing" one. There is no install step:
+access is RBAC (`resolve_accessible_skill_ids`) and the only state a user owns is the
+enablement preference. That is what makes the two-scope split meaningful here rather than an
+imported metaphor.
+
+**No backend change.** The page reads two endpoints that already existed and merges them
+client-side:
+
+- `GET /skills/` (`SkillService`) — the picker feed: accessible **and ACTIVE**, with the
+  enablement preference.
+- `GET /skills/mine` (`MySkillService`) — the authored tier, at **every** status.
+
+⚠️ The merge is what keeps a DRAFT skill visible to its author. A non-active skill is filtered
+out of `GET /skills/` by status, and widening that endpoint to carry drafts was considered and
+rejected: it feeds the composer picker, so a draft would appear as activatable in chat while
+the runtime's `_apply_enabled_skills_filter` refuses it. Two reads on one page is the cheaper
+mistake.
+
+⚠️ A draft therefore has **no toggle at all** (`toggleable` on `SkillRowComponent`), not a
+disabled one. `SkillService.toggleSkill` returns silently for a skill it never loaded, so the
+button would have been a control that does nothing.
+
+**Routing.** `/customize/skills/new` and `/customize/skills/{id}/edit` now host the authoring
+form (`git mv`, so history follows it). The three old paths stay as **redirects** — they are in
+bookmarks, and the detail page linked to `/my-skills/{id}/edit` for its whole life.
+
+⚠️ `customize/skills/new` MUST stay declared **above** `customize/skills/:skillId`. The router
+matches in declaration order, so the parameterised route would otherwise swallow it and the
+create form would render "skill not found" for a skill named `new`. Same class of trap as the
+`/settings/connectors` ordering in step 2, and as `/{skill_id}` vs `/mine` on the backend
+router.
+
+⚠️ `setScope` calls `router.navigate([], { relativeTo: this.route, ... })`. **`relativeTo` is
+load-bearing** — without it the empty command list resolves against the root, the navigation
+lands on the same URL with the query params dropped, and the scope silently never changes.
+The browser found this; the tests did not, because they drive the `scope` input directly (the
+test router has no matched route to bind a query param back through).
+
+**Add ▾** replaces the old "New skill" button and the link-out, offering *Upload skill*
+(`?import=1`, which re-titles the form and leads with the SKILL.md import block) and *Create a
+skill*. It is gated on `accessible$() === true` — the same 404-from-`/skills/mine` signal that
+used to hide the whole `/my-skills` page, because with `SKILLS_ENABLED` off the form could only
+fail to save. The picker is **not** auto-clicked on `?import=1`: a programmatic `.click()` on a
+file input without a user gesture is blocked or suppressed in several browsers, and a menu item
+that silently does nothing is worse than one extra click.
+
+## Known gaps
+
+- **The assistant indicator does not render until a conversation has messages**
+  (`showChatTopnav` requires `!isEmptyState()`). So the first turn of a new agent-bound
+  conversation happens with no governance cue on screen. Raised during step 4, deliberately
+  not fixed: it predates this epic and the launch card already names the agent.
+- **`settings/connectors/` services** live under a feature folder with no page. Nine importers;
+  their real home is `services/connectors/`. Mechanical, deferred (step 2 notes).

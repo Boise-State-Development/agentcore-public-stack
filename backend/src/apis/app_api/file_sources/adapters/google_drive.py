@@ -23,6 +23,7 @@ from apis.app_api.file_sources.models import (
     FileSourceAuthError,
     FileSourceError,
     FileSourceNotFoundError,
+    FileSourceTooLargeError,
     SourceRoot,
 )
 
@@ -159,21 +160,26 @@ class GoogleDriveAdapter(FileSourceAdapter):
             },
         )
 
-    async def download(self, access_token: str, file_id: str) -> DownloadedFile:
+    async def download(
+        self, access_token: str, file_id: str, max_bytes: Optional[int] = None
+    ) -> DownloadedFile:
         meta = await self._get_json(
             access_token,
             f"/files/{file_id}",
-            params={"fields": "name,mimeType", "supportsAllDrives": "true"},
+            params={"fields": "name,mimeType,size", "supportsAllDrives": "true"},
         )
         name = meta.get("name", file_id)
         mime = meta.get("mimeType", "")
 
         if mime in _EXPORT_MAP:
+            # An export's size is unknown until it streams: Drive reports no
+            # `size` for a native doc, so the cap is applied on the stream.
             export_mime, ext = _EXPORT_MAP[mime]
             content = await self._get_bytes(
                 access_token,
                 f"/files/{file_id}/export",
                 params={"mimeType": export_mime},
+                max_bytes=max_bytes,
             )
             filename = name if name.endswith(ext) else f"{name}{ext}"
             return DownloadedFile(content=content, filename=filename, content_type=export_mime)
@@ -183,10 +189,19 @@ class GoogleDriveAdapter(FileSourceAdapter):
                 f"Google '{mime}' files cannot be exported for indexing"
             )
 
+        # Binary content carries its size, so an oversized file is refused
+        # before a byte of it is fetched.
+        raw_size = meta.get("size")
+        if max_bytes is not None and raw_size is not None and int(raw_size) > max_bytes:
+            raise FileSourceTooLargeError(
+                f"Google Drive file is {raw_size} bytes, over the {max_bytes}-byte cap"
+            )
+
         content = await self._get_bytes(
             access_token,
             f"/files/{file_id}",
             params={"alt": "media", "supportsAllDrives": "true"},
+            max_bytes=max_bytes,
         )
         return DownloadedFile(
             content=content,
@@ -216,6 +231,7 @@ class GoogleDriveAdapter(FileSourceAdapter):
         is_native = mime.startswith(_NATIVE_PREFIX)
         selectable = (not is_native) or (mime in _EXPORT_MAP)
         raw_size = item.get("size")
+        export = _EXPORT_MAP.get(mime)
         return FileEntry(
             id=item["id"],
             name=item.get("name", ""),
@@ -225,6 +241,7 @@ class GoogleDriveAdapter(FileSourceAdapter):
             modified_at=item.get("modifiedTime"),
             etag=item.get("version"),
             selectable=selectable,
+            download_mime_type=export[0] if export else None,
         )
 
     @staticmethod
@@ -262,16 +279,33 @@ class GoogleDriveAdapter(FileSourceAdapter):
         return data
 
     async def _get_bytes(
-        self, access_token: str, path: str, params: Dict[str, Any]
+        self,
+        access_token: str,
+        path: str,
+        params: Dict[str, Any],
+        max_bytes: Optional[int] = None,
     ) -> bytes:
+        """GET a body, streamed so a `max_bytes` cap bounds what is buffered."""
+        chunks: List[bytes] = []
+        received = 0
         async with httpx.AsyncClient(transport=self._transport, timeout=_TIMEOUT) as client:
             try:
-                response = await client.get(
+                async with client.stream(
+                    "GET",
                     f"{DRIVE_API_BASE}{path}",
                     params=params,
                     headers=self._auth_headers(access_token),
-                )
+                ) as response:
+                    if not response.is_success:
+                        await response.aread()
+                        self._raise_for_status(response)
+                    async for chunk in response.aiter_bytes():
+                        received += len(chunk)
+                        if max_bytes is not None and received > max_bytes:
+                            raise FileSourceTooLargeError(
+                                f"Google Drive download exceeded the {max_bytes}-byte cap"
+                            )
+                        chunks.append(chunk)
             except httpx.HTTPError as err:
                 raise FileSourceError(f"Google Drive download error: {err}") from err
-        self._raise_for_status(response)
-        return response.content
+        return b"".join(chunks)

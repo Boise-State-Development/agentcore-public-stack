@@ -1,9 +1,12 @@
 {
   "tables": {
+    "agent-templates": [],
+    "announcements": [],
     "api-keys": [
       "KeyHashIndex"
     ],
     "app-roles": [
+      "EntityTypeIndex",
       "JwtRoleMappingIndex",
       "ModelRoleMappingIndex",
       "SkillOwnerIndex",
@@ -37,6 +40,10 @@
       "ProviderUsersIndex"
     ],
     "oidc-state": [],
+    "projects": [
+      "MemberIndex",
+      "OwnerIndex"
+    ],
     "quota-events": [
       "TierEventIndex"
     ],
@@ -44,12 +51,15 @@
       "AgentDirectoryIndex",
       "AgentReportsIndex",
       "DueSyncIndex",
+      "KbWorkIndex",
       "OwnerStatusIndex",
       "SharedWithIndex",
       "VisibilityStatusIndex"
     ],
     "sessions-metadata": [
       "DueScheduleIndex",
+      "PinnedSessionIndex",
+      "ProjectSessionIndex",
       "SessionLookupIndex",
       "SessionRecencyIndex",
       "UserTimestampIndex"
@@ -61,7 +71,8 @@
     "system-cost-rollup": [],
     "system-prompts": [],
     "user-artifacts": [
-      "SessionIndex"
+      "SessionIndex",
+      "UserArtifactsIndex"
     ],
     "user-cost-summary": [
       "PeriodCostIndex"

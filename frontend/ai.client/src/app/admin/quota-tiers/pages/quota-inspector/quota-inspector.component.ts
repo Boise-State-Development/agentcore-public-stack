@@ -3,10 +3,11 @@ import { FormsModule } from '@angular/forms';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { QuotaHttpService } from '../../services/quota-http.service';
 import { UserQuotaInfo } from '../../models/quota.models';
+import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-quota-inspector',
-  imports: [FormsModule, DatePipe, DecimalPipe],
+  imports: [FormsModule, DatePipe, DecimalPipe, SpinnerComponent],
   templateUrl: './quota-inspector.component.html',
   styleUrl: './quota-inspector.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -81,11 +82,11 @@ export class QuotaInspectorComponent {
     const level = this.warningLevel();
     switch (level) {
       case 'critical':
-        return 'bg-red-500';
+        return 'bg-state-danger-500';
       case 'warning':
-        return 'bg-yellow-500';
+        return 'bg-state-warning-500';
       default:
-        return 'bg-green-500';
+        return 'bg-state-success-500';
     }
   }
 
@@ -96,11 +97,11 @@ export class QuotaInspectorComponent {
     const level = this.warningLevel();
     switch (level) {
       case 'critical':
-        return 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300';
+        return 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/50 dark:text-state-danger-300';
       case 'warning':
-        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300';
+        return 'bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/50 dark:text-state-warning-300';
       default:
-        return 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300';
+        return 'bg-state-success-100 text-state-success-800 dark:bg-state-success-900/50 dark:text-state-success-300';
     }
   }
 

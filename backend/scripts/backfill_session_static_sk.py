@@ -21,9 +21,9 @@ SAFETY
 
 Run against dev first, then prod::
 
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_session_static_sk.py \
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_session_static_sk.py \
         --table dev-boisestateai-v2-sessions-metadata            # dry-run
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_session_static_sk.py \
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_session_static_sk.py \
         --table dev-boisestateai-v2-sessions-metadata --apply --set-marker
 """
 
@@ -33,7 +33,7 @@ import argparse
 import logging
 import os
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import boto3
 from boto3.dynamodb.conditions import Attr

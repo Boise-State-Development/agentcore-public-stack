@@ -17,31 +17,29 @@ identity-based ``resolve_permission`` check inside ``MemorySpaceService``.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
-import zipfile
-from datetime import datetime, timezone
-from tempfile import SpooledTemporaryFile
-from typing import Iterator, Optional
+from typing import Dict, Iterable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.directory import DirectoryPerson, people_by_user_id
 from apis.shared.feature_flags import memory_spaces_enabled
+from apis.shared.files.content_disposition import build_content_disposition
 from apis.shared.memory.models import EntryType
 from apis.shared.memory.service import (
     MemorySpaceConcurrencyError,
     MemorySpaceError,
-    MemorySpaceExport,
     MemorySpaceNotFoundError,
     MemorySpacePermissionError,
     MemorySpaceService,
 )
 from apis.shared.memory.store import MemorySpaceStoreError
 
+from apis.shared.security.log_sanitize import scrub_log
+from apis.app_api.memory_spaces.export_zip import build_export_zip, safe_component, stream_and_close
 from apis.app_api.memory_spaces.models import (
     ConsolidateRequest,
     ConsolidationReportResponse,
@@ -49,12 +47,17 @@ from apis.app_api.memory_spaces.models import (
     EntriesListResponse,
     EntryContentResponse,
     EntryRefResponse,
+    FileHistoryResponse,
+    FileVersionContentResponse,
+    FileVersionResponse,
     IndexContentResponse,
     MemberResponse,
     MembersListResponse,
+    SaveEntryResponse,
     ShareRequest,
     SpaceDetailResponse,
     SpaceSummaryResponse,
+    visible_owner_id,
     SpacesListResponse,
     UpdateIndexRequest,
     UpdateShareRequest,
@@ -102,79 +105,19 @@ def _translate(e: Exception) -> HTTPException:
     raise e
 
 
-# ---- export (§9) -------------------------------------------------------
-
-# Spill the zip to disk beyond this size so a large space never pins app-api
-# memory (the entry count is bounded by the consolidation cap, so this is a
-# ceiling, not the common case).
-_ZIP_SPOOL_MAX_BYTES = 8 * 1024 * 1024
-_UNSAFE_PATH_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _safe_component(value: str, fallback: str) -> str:
-    """Reduce a user string to one safe archive path segment.
-
-    Collapses separators / ``..`` / other unsafe characters so a hostile slug
-    or space name cannot escape its folder in the zip (zip-slip). Empty results
-    fall back to ``fallback``.
-    """
-    cleaned = _UNSAFE_PATH_CHARS.sub("-", (value or "").strip()).strip("-._")
-    return cleaned or fallback
-
-
-def _export_metadata_json(export: MemorySpaceExport) -> str:
-    """Serialize the space-level state the markdown files don't carry (§9)."""
-    space = export.space
-    meta = {
-        "spaceId": space.space_id,
-        "name": space.name,
-        "template": space.template,
-        "createdAt": space.created_at,
-        "updatedAt": space.updated_at,
-        "exportedAt": datetime.now(timezone.utc).isoformat(),
-        "owner": {"userId": space.owner_id, "email": space.owner_email},
-        "members": [
-            {
-                "email": m.email,
-                "permission": m.permission,
-                "createdAt": m.created_at,
-            }
-            for m in export.members
-        ],
-        "entryCount": len(export.files),
-    }
-    return json.dumps(meta, indent=2, ensure_ascii=False)
-
-
-def _build_export_zip(root: str, export: MemorySpaceExport) -> SpooledTemporaryFile:
-    """Write the space's corpus into a spooled zip mirroring the S3 layout."""
-    spool: SpooledTemporaryFile = SpooledTemporaryFile(
-        max_size=_ZIP_SPOOL_MAX_BYTES, mode="w+b"
-    )
-    with zipfile.ZipFile(spool, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(f"{root}/MEMORY.md", export.index_text)
-        for ref, body in export.files:
-            slug = _safe_component(ref.slug, "entry")
-            entry_type = _safe_component(ref.entry_type, "fact")
-            zf.writestr(f"{root}/entries/{entry_type}/{slug}.md", body)
-        zf.writestr(f"{root}/metadata.json", _export_metadata_json(export))
-    spool.seek(0)
-    return spool
-
-
-def _stream_and_close(spool: SpooledTemporaryFile) -> Iterator[bytes]:
-    """Yield the spooled zip in chunks, closing (and unlinking) it when done."""
-    try:
-        while True:
-            chunk = spool.read(65536)
-            if not chunk:
-                break
-            yield chunk
-    finally:
-        spool.close()
-
-
 # ---- spaces ------------------------------------------------------------
+
+
+def _people(user: User, user_ids: Iterable[str]) -> Dict[str, DirectoryPerson]:
+    """Who the user ids a space stores are, so responses can name them by email instead.
+
+    The caller is known from their session even before the directory's next
+    refresh, which matters because they are usually the one who just saved.
+    """
+    people = people_by_user_id(set(user_ids))
+    if user.user_id and user.email and user.user_id not in people:
+        people[user.user_id] = DirectoryPerson(email=user.email.strip().lower())
+    return people
 
 
 @router.get("", response_model=SpacesListResponse)
@@ -198,6 +141,7 @@ def create_space(
             owner_email=user.email,
             name=request.name,
             template=request.template,
+            file_format=request.file_format,
         )
     except MemorySpaceError as e:
         raise _translate(e)
@@ -221,16 +165,20 @@ def get_space(
         entries = svc.list_entries(space_id, user.user_id, user.email)
     except MemorySpaceError as e:
         raise _translate(e)
+    people = _people(user, (r.updated_by for r in entries))
     return SpaceDetailResponse(
         space_id=space.space_id,
         name=space.name,
         template=space.template,
         role=role,
-        owner_id=space.owner_id,
+        owner_id=visible_owner_id(space),
         created_at=space.created_at,
         updated_at=space.updated_at,
+        file_format=space.file_format,
+        scope=space.scope,
+        project_id=space.project_id,
         index=index_text,
-        entries=[EntryRefResponse.from_ref(r) for r in entries],
+        entries=[EntryRefResponse.from_ref(r, people) for r in entries],
     )
 
 
@@ -241,8 +189,9 @@ def export_space(
     """Download the whole space as a `.zip` of its raw markdown (viewer+, §9).
 
     The loss-free "own your data" export: the ``MEMORY.md`` index, every entry
-    with frontmatter intact under ``entries/<type>/``, and a small
-    ``metadata.json``. Any member who can read the space may export it; the
+    with frontmatter intact under ``entries/<type>/``, a small
+    ``metadata.json`` and, for an item-format space, ``provenance.json``
+    (Shared Projects 2.7). Any member who can read the space may export it; the
     owner exports the full space. Streamed from a spooled buffer so a large
     space never pins app-api memory.
     """
@@ -252,18 +201,27 @@ def export_space(
     except MemorySpaceError as e:
         raise _translate(e)
     except MemorySpaceStoreError as e:
-        logger.error("memory-spaces: export failed for space=%s: %s", space_id, e)
+        logger.error("memory-spaces: export failed for space=%s: %s", scrub_log(space_id), scrub_log(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="failed to read memory space contents for export",
         )
 
-    root = _safe_component(export.space.name, export.space.space_id)
-    spool = _build_export_zip(root, export)
+    root = safe_component(export.space.name, export.space.space_id)
+    spool = build_export_zip(root, export)
+    # `root` names the folder *inside* the archive, where `_safe_component`'s
+    # job is zip-slip safety. The download filename is a different problem:
+    # Starlette encodes headers as latin-1, so the header is built from the
+    # real space name by the shared helper, which emits an ASCII `filename`
+    # plus an RFC 5987 `filename*` carrying the name verbatim.
     return StreamingResponse(
-        _stream_and_close(spool),
+        stream_and_close(spool),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{root}.zip"'},
+        headers={
+            "Content-Disposition": build_content_disposition(
+                "attachment", f"{export.space.name or export.space.space_id}.zip"
+            )
+        },
     )
 
 
@@ -292,7 +250,7 @@ def consolidate_space(
     except MemorySpaceError as e:
         raise _translate(e)
     except MemorySpaceStoreError as e:
-        logger.error("memory-spaces: consolidate failed for space=%s: %s", space_id, e)
+        logger.error("memory-spaces: consolidate failed for space=%s: %s", scrub_log(space_id), scrub_log(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="failed to consolidate memory space storage",
@@ -425,7 +383,8 @@ def list_entries(
         )
     except MemorySpaceError as e:
         raise _translate(e)
-    return EntriesListResponse(entries=[EntryRefResponse.from_ref(r) for r in entries])
+    people = _people(user, (r.updated_by for r in entries))
+    return EntriesListResponse(entries=[EntryRefResponse.from_ref(r, people) for r in entries])
 
 
 @router.get("/{space_id}/entries/{slug:path}", response_model=EntryContentResponse)
@@ -439,27 +398,35 @@ def read_entry(
     return EntryContentResponse(slug=slug, content=content)
 
 
-@router.put("/{space_id}/entries/{slug:path}", response_model=EntryRefResponse)
+@router.put("/{space_id}/entries/{slug:path}", response_model=SaveEntryResponse)
 def upsert_entry(
     space_id: str,
     slug: str,
     request: UpsertEntryRequest,
     user: User = Depends(require_memory_spaces_user),
-) -> EntryRefResponse:
+) -> SaveEntryResponse:
+    """Save an entry through the validation pipeline (editor+).
+
+    In a canonical space an omitted ``description`` or ``aliases`` keeps the
+    file's current value; a freeform entry clears an omitted description, as
+    it always has. Validation failures are a 400 whose detail says what to fix.
+    """
     try:
-        ref = _svc().write_entry(
+        result = _svc().save_entry(
             space_id,
             user.user_id,
             user.email,
             slug,
             request.body,
             entry_type=request.entry_type,
-            description=request.description,
+            description=request.description if "description" in request.model_fields_set else None,
             indexed=request.indexed,
+            aliases=request.aliases,
+            reason="edit",
         )
     except MemorySpaceError as e:
         raise _translate(e)
-    return EntryRefResponse.from_ref(ref)
+    return SaveEntryResponse.from_result(result, _people(user, [result.ref.updated_by]))
 
 
 @router.delete("/{space_id}/entries/{slug:path}", status_code=status.HTTP_204_NO_CONTENT)
@@ -470,3 +437,49 @@ def delete_entry(
         _svc().delete_entry(space_id, user.user_id, user.email, slug)
     except MemorySpaceError as e:
         raise _translate(e)
+
+
+# ---- file history (FILEVER) ---------------------------------------------
+#
+# The slug travels as a query parameter: entry slugs may contain "/", so a
+# path segment after ``{slug:path}`` could not be told apart from the slug.
+
+
+@router.get("/{space_id}/history", response_model=FileHistoryResponse)
+def list_file_history(
+    space_id: str,
+    slug: str = Query(..., min_length=1),
+    user: User = Depends(require_memory_spaces_user),
+) -> FileHistoryResponse:
+    """A file's saved versions, newest first (viewer+)."""
+    try:
+        versions = _svc().list_file_versions(space_id, user.user_id, user.email, slug)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    people = _people(user, (v.updated_by for v in versions))
+    return FileHistoryResponse(slug=slug, versions=[FileVersionResponse.from_version(v, people) for v in versions])
+
+
+@router.get("/{space_id}/history/{version}", response_model=FileVersionContentResponse)
+def read_file_version(
+    space_id: str,
+    version: int,
+    slug: str = Query(..., min_length=1),
+    user: User = Depends(require_memory_spaces_user),
+) -> FileVersionContentResponse:
+    """One saved version of a file, with its text (viewer+)."""
+    try:
+        row, content = _svc().read_file_version(space_id, user.user_id, user.email, slug, version)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    except MemorySpaceStoreError as e:
+        logger.error("memory-spaces: history read failed for space=%s: %s", scrub_log(space_id), scrub_log(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="failed to read that version",
+        )
+    return FileVersionContentResponse(
+        **FileVersionResponse.from_version(row, _people(user, [row.updated_by])).model_dump(),
+        slug=slug,
+        content=content,
+    )

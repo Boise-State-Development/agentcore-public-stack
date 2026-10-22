@@ -7,11 +7,12 @@ import {
 } from '@angular/core';
 import { A11yModule } from '@angular/cdk/a11y';
 import { VoiceChatService } from '../../services/voice';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-voice-overlay',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [A11yModule],
+  imports: [A11yModule, SpinnerComponent],
   templateUrl: './voice-overlay.component.html',
   styleUrl: './voice-overlay.component.css',
   host: {

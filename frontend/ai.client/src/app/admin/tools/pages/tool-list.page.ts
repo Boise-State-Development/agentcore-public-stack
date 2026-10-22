@@ -19,6 +19,7 @@ import {
   heroPencilSquare,
   heroTrash,
   heroUserGroup,
+  heroArrowPath,
   heroGlobeAlt,
   heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
@@ -64,7 +65,7 @@ export function gatewayBadgeFor(health: GatewayHealth | undefined): GatewayBadge
   if (health.healthy) {
     return {
       label: 'Ready',
-      cls: `${GATEWAY_BADGE_BASE} bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300`,
+      cls: `${GATEWAY_BADGE_BASE} bg-state-success-100 text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300`,
       title: 'Gateway target is ready',
       failed: false,
     };
@@ -72,14 +73,14 @@ export function gatewayBadgeFor(health: GatewayHealth | undefined): GatewayBadge
   if (TRANSIENT_GATEWAY_STATUSES.includes(health.status.toUpperCase())) {
     return {
       label: 'Syncing',
-      cls: `${GATEWAY_BADGE_BASE} bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300`,
+      cls: `${GATEWAY_BADGE_BASE} bg-state-info-100 text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-300`,
       title: 'The gateway is connecting to the target and listing its tools…',
       failed: false,
     };
   }
   return {
     label: health.status.toUpperCase() === 'MISSING' ? 'Missing' : 'Failed',
-    cls: `${GATEWAY_BADGE_BASE} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`,
+    cls: `${GATEWAY_BADGE_BASE} bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300`,
     title: health.statusReasons.join(' ') || 'Gateway target is not usable',
     failed: true,
   };
@@ -98,13 +99,44 @@ export function isTransientGatewayStatus(status: string): boolean {
   return TRANSIENT_GATEWAY_STATUSES.includes(status.toUpperCase());
 }
 import { AppRolesService } from '../../roles/services/app-roles.service';
+import { ToolCapabilities } from '../../../services/tool-capability/tool-capability.service';
 import { ToolRoleDialogComponent, ToolRoleDialogData, ToolRoleDialogResult } from '../components/tool-role-dialog.component';
 import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult } from '../components/delete-tool-dialog.component';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+
+/** "1 prompt" / "8 prompts" / "no prompts". */
+export function describeCount(count: number, noun: string): string {
+  if (count === 0) {
+    return `no ${noun}s`;
+  }
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * What a finished capability refresh should say.
+ *
+ * A probe that could not reach the server records `error` and leaves the
+ * previous snapshot in place, so that case must read as a failure — reporting
+ * "no prompts" there would claim the server offers none when we never asked it
+ * successfully. The two are genuinely different facts.
+ */
+export function capabilityRefreshSummary(
+  snapshot: ToolCapabilities,
+  displayName: string
+): string {
+  if (snapshot.error) {
+    return `Could not reach ${displayName}: ${snapshot.error}`;
+  }
+  const counts =
+    `${describeCount(snapshot.prompts.length, 'prompt')}, ` +
+    `${describeCount(snapshot.resources.length, 'resource')}`;
+  return snapshot.truncated ? `${counts} (truncated)` : counts;
+}
 
 @Component({
   selector: 'app-tool-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, FormsModule, NgIcon],
+  imports: [RouterLink, FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroPlus,
@@ -113,6 +145,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
       heroPencilSquare,
       heroTrash,
       heroUserGroup,
+      heroArrowPath,
       heroGlobeAlt,
       heroExclamationTriangle,
       heroStarSolid,
@@ -131,7 +164,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
           </div>
           <a
             routerLink="/admin/tools/new"
-            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:brightness-110"
           >
             <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
             Add Tool
@@ -153,7 +186,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
               [ngModel]="searchQuery()"
               (ngModelChange)="searchQuery.set($event)"
               placeholder="Search by name, ID, or description…"
-              class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+              class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
             />
           </div>
 
@@ -162,7 +195,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
             id="status"
             [ngModel]="statusFilter()"
             (ngModelChange)="statusFilter.set($event)"
-            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           >
             <option value="">All statuses</option>
             @for (status of statuses; track status.value) {
@@ -175,7 +208,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
             id="category"
             [ngModel]="categoryFilter()"
             (ngModelChange)="categoryFilter.set($event)"
-            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           >
             <option value="">All categories</option>
             @for (cat of categories; track cat.value) {
@@ -202,9 +235,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
         @if (toolsResource.isLoading() && tools().length === 0) {
           <div class="flex h-64 items-center justify-center">
             <div class="flex flex-col items-center gap-4">
-              <div
-                class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-              ></div>
+              <app-spinner size="xl" label="Loading tools" />
               <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading tools…</p>
             </div>
           </div>
@@ -212,7 +243,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
 
         <!-- Error State -->
         @if (toolsResource.error()) {
-          <div class="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+          <div class="mb-6 rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
             <p class="text-sm/6">Failed to load tools. Please try again.</p>
             <button
               (click)="adminToolService.reload()"
@@ -237,7 +268,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                 </p>
                 <a
                   routerLink="/admin/tools/new"
-                  class="mt-4 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  class="mt-4 inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 dark:hover:brightness-110"
                 >
                   <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
                   Add Tool
@@ -257,7 +288,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                       [attr.aria-expanded]="isExpanded(tool.toolId)"
                       [attr.aria-controls]="'tool-detail-' + tool.toolId"
                       [attr.aria-label]="(isExpanded(tool.toolId) ? 'Hide' : 'Show') + ' details for ' + tool.displayName"
-                      class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                      class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                     >
                       <ng-icon
                         name="heroChevronDown"
@@ -273,10 +304,16 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                         <span class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">
                           {{ tool.displayName }}
                         </span>
-                        @if (tool.enabledByDefault) {
+                        @if (tool.alwaysOn) {
+                          <span
+                            class="shrink-0 rounded-full bg-primary-100 px-1.5 py-0.5 text-[10px]/4 font-medium uppercase tracking-wide text-primary-800 dark:bg-primary-900/40 dark:text-primary-200"
+                          >
+                            Always on
+                          </span>
+                        } @else if (tool.enabledByDefault) {
                           <ng-icon
                             name="heroStarSolid"
-                            class="size-4 shrink-0 text-amber-500 dark:text-amber-400"
+                            class="size-4 shrink-0 text-star-500 dark:text-star-400"
                             aria-label="Enabled by default"
                           />
                         }
@@ -294,7 +331,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                     <!-- Access -->
                     <span class="hidden w-20 shrink-0 justify-end text-right text-xs/5 sm:flex">
                       @if (tool.isPublic) {
-                        <span class="inline-flex items-center gap-1 font-medium text-green-700 dark:text-green-400">
+                        <span class="inline-flex items-center gap-1 font-medium text-state-info-700 dark:text-state-info-400">
                           <ng-icon name="heroGlobeAlt" class="size-4" aria-hidden="true" />
                           Public
                         </span>
@@ -322,12 +359,29 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
 
                     <!-- Actions -->
                     <div class="flex shrink-0 items-center gap-1">
+                      @if (tool.protocol === 'mcp_external') {
+                        <button
+                          type="button"
+                          (click)="refreshCapabilities(tool)"
+                          [disabled]="isRefreshingCapabilities(tool.toolId)"
+                          [attr.aria-label]="'Refresh prompts and resources for ' + tool.displayName"
+                          [title]="capabilityRefreshTitle(tool)"
+                          class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        >
+                          <ng-icon
+                            name="heroArrowPath"
+                            class="size-4"
+                            [class.animate-spin]="isRefreshingCapabilities(tool.toolId)"
+                            aria-hidden="true"
+                          />
+                        </button>
+                      }
                       <button
                         type="button"
                         (click)="openRoleDialog(tool)"
                         [attr.aria-label]="'Manage role access for ' + tool.displayName"
                         [title]="'Manage role access for ' + tool.displayName"
-                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                       >
                         <ng-icon name="heroUserGroup" class="size-4" aria-hidden="true" />
                       </button>
@@ -335,7 +389,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                         [routerLink]="['/admin/tools/edit', tool.toolId]"
                         [attr.aria-label]="'Edit ' + tool.displayName"
                         [title]="'Edit ' + tool.displayName"
-                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                       >
                         <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                       </a>
@@ -344,7 +398,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                         (click)="deleteTool(tool)"
                         [attr.aria-label]="'Delete ' + tool.displayName"
                         [title]="'Delete ' + tool.displayName"
-                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                       >
                         <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                       </button>
@@ -381,7 +435,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                             Default
                           </dt>
                           <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
-                            {{ tool.enabledByDefault ? 'On by default' : 'Off by default' }}
+                            {{ tool.alwaysOn ? 'Always on (users cannot disable)' : tool.enabledByDefault ? 'On by default' : 'Off by default' }}
                           </dd>
                         </div>
 
@@ -410,7 +464,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                               @if (tool.allowedAppRoles.length > 0) {
                                 @for (roleId of tool.allowedAppRoles; track roleId) {
                                   <span
-                                    class="inline-flex items-center rounded-2xl bg-purple-100 px-2 py-0.5 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
+                                    class="inline-flex items-center rounded-2xl bg-category-accent-skills-100 px-2 py-0.5 text-xs/5 text-category-accent-skills-700 dark:bg-category-accent-skills-900/50 dark:text-category-accent-skills-300"
                                     [title]="roleId"
                                   >
                                     {{ getRoleDisplayName(roleId) }}
@@ -476,7 +530,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                                 {{ tool.mcpGatewayConfig.tools.length }} tool{{ tool.mcpGatewayConfig.tools.length !== 1 ? 's' : '' }}
                               </p>
                               @if (gatewayFailureReasons(tool.toolId); as reasons) {
-                                <p class="mt-1 rounded-xl bg-red-50 px-2.5 py-1.5 text-xs/5 text-red-800 dark:bg-red-900/20 dark:text-red-200">
+                                <p class="mt-1 rounded-xl bg-state-danger-50 px-2.5 py-1.5 text-xs/5 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
                                   {{ reasons }}
                                 </p>
                               }
@@ -620,13 +674,13 @@ export class ToolListPage {
       'shrink-0 rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium';
     switch (status) {
       case 'active':
-        return `${base} bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300`;
+        return `${base} bg-state-success-100 text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300`;
       case 'deprecated':
-        return `${base} bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300`;
+        return `${base} bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/30 dark:text-state-warning-300`;
       case 'disabled':
-        return `${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`;
+        return `${base} bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300`;
       case 'coming_soon':
-        return `${base} bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300`;
+        return `${base} bg-state-info-100 text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-300`;
       default:
         return `${base} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;
     }
@@ -673,6 +727,84 @@ export class ToolListPage {
   /** The joined failure reasons for an unhealthy gateway tool, else null. */
   gatewayFailureReasons(toolId: string): string | null {
     return gatewayFailureReasonsFor(this.gatewayStatuses().get(toolId));
+  }
+
+  /**
+   * Tools whose capability probe is in flight, and the outcome of the last one
+   * per tool. Kept per row because refreshing is a live MCP session against
+   * that one server, and a slow server should not freeze the others.
+   */
+  private readonly refreshingCapabilities = signal<ReadonlySet<string>>(new Set());
+  private readonly capabilityRefreshOutcome = signal<ReadonlyMap<string, string>>(new Map());
+
+  isRefreshingCapabilities(toolId: string): boolean {
+    return this.refreshingCapabilities().has(toolId);
+  }
+
+  /** Tooltip: what the button does, or what the last refresh in this session found. */
+  capabilityRefreshTitle(tool: AdminTool): string {
+    if (this.isRefreshingCapabilities(tool.toolId)) {
+      return `Asking ${tool.displayName} what it offers...`;
+    }
+    return (
+      this.capabilityRefreshOutcome().get(tool.toolId) ??
+      `Refresh the prompts and resources listed for ${tool.displayName}`
+    );
+  }
+
+  /**
+   * Re-probe one external MCP server and store what it reports.
+   *
+   * Nothing else writes a capability snapshot and nothing re-runs on a
+   * schedule, so a server that gained a prompt since its last probe shows the
+   * old answer — an empty Prompts tab — until this runs. Deploying a server
+   * does not refresh it.
+   */
+  async refreshCapabilities(tool: AdminTool): Promise<void> {
+    const toolId = tool.toolId;
+    if (this.isRefreshingCapabilities(toolId)) {
+      return;
+    }
+    this.setRefreshingCapabilities(toolId, true);
+    try {
+      const snapshot = await this.adminToolService.refreshToolCapabilities(toolId);
+      if (this.destroyed) {
+        return;
+      }
+      this.setCapabilityOutcome(
+        toolId,
+        capabilityRefreshSummary(snapshot, tool.displayName)
+      );
+    } catch (error: unknown) {
+      console.error('Error refreshing tool capabilities:', error);
+      const message =
+        error instanceof Error ? error.message : 'Failed to refresh capabilities.';
+      alert(message);
+    } finally {
+      if (!this.destroyed) {
+        this.setRefreshingCapabilities(toolId, false);
+      }
+    }
+  }
+
+  private setRefreshingCapabilities(toolId: string, value: boolean): void {
+    this.refreshingCapabilities.update(prev => {
+      const next = new Set(prev);
+      if (value) {
+        next.add(toolId);
+      } else {
+        next.delete(toolId);
+      }
+      return next;
+    });
+  }
+
+  private setCapabilityOutcome(toolId: string, summary: string): void {
+    this.capabilityRefreshOutcome.update(prev => {
+      const next = new Map(prev);
+      next.set(toolId, summary);
+      return next;
+    });
   }
 
   async openRoleDialog(tool: AdminTool): Promise<void> {

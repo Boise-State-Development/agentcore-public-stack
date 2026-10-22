@@ -1,15 +1,32 @@
-<!-- Cost quota warning indicator -->
-<app-quota-warning-banner />
+<!-- Ambient announcement (spec §D1), floated above the composer rather than
+     stacked in flow: dismissing it must not move the composer under the
+     user's cursor. Sits above the quota tabs, which stay attached to the
+     input itself. -->
+@if (showAnnouncements()) {
+  <app-announcement-banner [placement]="announcementPlacement()" />
+}
+
+<!-- What a project's agent is running this turn without (agent_notice). Above
+     the quota tab, which has to stay welded to the composer's top edge. -->
+<app-agent-notice-banner />
+
+<!-- Cost quota warning: a tab welded to the composer's top edge. It stays up
+     here rather than joining the meta line beneath, because it is a warning
+     and the line beneath is quiet metadata. -->
+<div class="flex justify-center">
+  <app-quota-warning-banner class="min-w-0" />
+</div>
 
 <!-- Storage quota warning indicator (only shows when files are attached) -->
 <app-storage-quota-banner [showWhenFilesAttached]="showFileAttachments()" />
 
 <div
-    class="relative rounded-2xl shadow-xl outline -outline-offset-1 transition-all duration-200"
+    #shell
+    class="relative rounded-2xl outline -outline-offset-1 transition-all duration-200"
     [class]="isDraggingOver()
       ? 'bg-primary-50 dark:bg-primary-900/20 outline-2 outline-dashed outline-primary-500 dark:outline-primary-400 ring-2 ring-primary-500/30 dark:ring-primary-400/30'
       : isFocused()
-        ? 'bg-white dark:bg-slate-800 outline-2 outline-primary-500 dark:outline-gray-400 ring-2 ring-primary-500/20 dark:ring-gray-400/30 shadow-lg'
+        ? 'bg-white dark:bg-slate-800 outline-2 outline-primary-500 dark:outline-gray-400 ring-2 ring-primary-500/20 dark:ring-gray-400/30'
         : 'bg-white dark:bg-slate-800 outline-1 outline-gray-300 dark:outline-white/10'"
     (dragenter)="onDragEnter($event)"
     (dragover)="onDragOver($event)"
@@ -28,6 +45,62 @@
       </div>
     }
 
+    <!--
+      Queued follow-ups. The user typed these while a response was still
+      streaming; they send one at a time as each turn finishes. Shown inside the
+      composer shell rather than in the message list because they have not
+      entered the conversation yet and can still be taken back.
+    -->
+    @if (queuedMessages().length > 0) {
+      <div class="border-b border-gray-200 dark:border-gray-700 px-4 py-2">
+        <!--
+          A queue held behind a consent / approval prompt looks stuck without
+          this line: the turn is not streaming, so nothing else on screen
+          explains why Enter did not send.
+        -->
+        @if (queueHeld()) {
+          <p class="mb-1.5 text-xs text-gray-500 dark:text-gray-400">
+            Waiting for your answer above — this goes to the agent when the turn resumes.
+          </p>
+        }
+        <ul class="flex flex-col gap-1.5" aria-live="polite">
+          @for (queued of queuedMessages(); track queued.id) {
+            <li class="flex items-start gap-2 rounded-lg bg-gray-100 px-3 py-2 dark:bg-white/5">
+              <!--
+                An armed entry is one the backend will hand to the agent at its
+                next step; an unarmed one waits for the turn to end. Different
+                promises, so different icons — and the arrow is the same one the
+                delivered message carries in the thread.
+              -->
+              <ng-icon
+                [name]="queued.armed ? 'heroArrowTurnDownRight' : 'heroClock'"
+                class="mt-0.5 size-4 shrink-0 text-gray-500 dark:text-gray-400"
+                aria-hidden="true"
+              />
+              <span class="min-w-0 flex-1 truncate text-sm text-gray-700 dark:text-gray-300">
+                @if (queueHeld()) {
+                  <span class="sr-only">Queued, goes to the agent once you answer the prompt above: </span>
+                } @else if (queued.armed) {
+                  <span class="sr-only">Queued, goes to the agent at its next step: </span>
+                } @else {
+                  <span class="sr-only">Queued, sends when the current response finishes: </span>
+                }
+                {{ queued.content }}
+              </span>
+              <button
+                type="button"
+                (click)="removeQueuedMessage($index)"
+                class="shrink-0 rounded-sm p-0.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                [attr.aria-label]="'Remove queued message: ' + queued.content"
+              >
+                <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+              </button>
+            </li>
+          }
+        </ul>
+      </div>
+    }
+
     <!-- File Attachments Area -->
     @if (showFileAttachments()) {
       <div class="border-b border-gray-200 dark:border-gray-700">
@@ -35,11 +108,45 @@
           class="flex gap-2 overflow-x-auto px-4 py-3"
           style="mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent); -webkit-mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent);"
         >
+          <!--
+            Restored first, matching `attachmentIds` — these came back with the
+            draft, so they were attached before anything uploaded in this
+            sitting. They take the card's `[file]` input (server metadata, no
+            local `File`) rather than `[pendingUpload]`, and offer no retry:
+            there is no upload in flight to retry.
+          -->
+          @for (attachment of restoredAttachments(); track attachment.uploadId) {
+            <app-file-card
+              [file]="attachment"
+              (remove)="onFileRemove($event)"
+            />
+          }
+          <!--
+            Files on their way from a connected file source. app-api fetches
+            them, so the card shows a label rather than a percentage; a
+            finished one moves into `restoredAttachments` above as metadata.
+          -->
+          @for (upload of importingAttachments(); track upload.uploadId) {
+            <app-file-card
+              [pendingUpload]="upload"
+              (remove)="onFileRemove($event)"
+              (retry)="onFileRetry($event)"
+            />
+          }
           @for (upload of pendingUploads(); track upload.uploadId) {
             <app-file-card
               [pendingUpload]="upload"
               (remove)="onFileRemove($event)"
               (retry)="onFileRetry($event)"
+            />
+          }
+          <!-- Drive folders: one card each, whatever their file count (drive-folder spec §4.7) -->
+          @for (folder of attachedFolders(); track folder.localId) {
+            <app-folder-card
+              [folder]="folder"
+              (remove)="onFolderRemove($event)"
+              (retry)="onFolderRetry($event)"
+              (connect)="onFolderConnect($event)"
             />
           }
         </div>
@@ -61,176 +168,525 @@
       />
     }
 
-    <!-- Main Input Area -->
-    <div class="relative">
-      <label for="user-message" class="sr-only">How can I help you today?</label>
-      <textarea
-        #messageInput
-        id="user-message"
-        name="user-message"
-        rows="1"
-        [value]="userInput()"
-        (input)="onTextareaInput($event)"
-        (keydown)="onKeyDown($event)"
-        (keyup)="onTextareaCaretMove($event)"
-        (click)="onTextareaCaretMove($event)"
-        (focus)="onFocus()"
-        (blur)="onBlur()"
-        placeholder="How can I help you today?"
-        role="combobox"
-        aria-autocomplete="list"
-        [attr.aria-expanded]="isMentionMenuOpen()"
-        [attr.aria-controls]="isMentionMenuOpen() ? 'agent-mention-listbox' : null"
-        [attr.aria-activedescendant]="
-          isMentionMenuOpen() ? 'agent-mention-option-' + mentionActiveIndex() : null
-        "
-        class="block w-full resize-none bg-transparent px-6 py-4 text-base text-gray-900 placeholder:text-gray-500 dark:text-gray-100 dark:placeholder:text-gray-400 focus:outline-hidden overflow-y-auto"
-        style="min-height: 60px; max-height: 200px;"
-      ></textarea>
+    <!--
+      `/` skill-command menu. Same anchoring as the `@` menu, and mutually exclusive with
+      it — `isSkillMenuVisible` already subtracts the case where both tokens would match,
+      so the two can never both claim the arrow keys.
+    -->
+    @if (isSkillMenuVisible()) {
+      <app-skill-command-menu
+        [items]="skillResults()"
+        [activeIndex]="skillActiveIndex()"
+        [query]="skillQuery()"
+        (picked)="onSkillPicked($event)"
+        (browseAll)="onSkillBrowseAll()"
+      />
+    }
 
-      <!-- Bottom Controls Bar -->
-      <div class="flex items-center justify-between px-4 pb-3">
-        <!-- Left Controls -->
-        <div class="flex items-center gap-2" role="group" aria-label="Message options">
-          @if (showFileControls()) {
-            <!-- Add Attachment Button -->
-            <div
-              class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--color-primary)]"
-              appTooltip="Attach file"
-              appTooltipPosition="top"
-            >
-              <input
-                type="file"
-                class="sr-only"
-                (change)="onFileSelect($event)"
-                id="chat-input-file-upload"
-                [accept]="acceptedFileTypes"
-                multiple
-                aria-label="Attach a file"
-              />
-              <label for="chat-input-file-upload" class="flex size-full cursor-pointer items-center justify-center">
-                <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
-              </label>
-            </div>
+    <!--
+      Main input. One grid in two shapes (see "Layout" in the component):
+      compact keeps attach, text and the speech controls on one row; stacked —
+      the empty state, or a compact draft that wrapped — puts the text across
+      the top and the controls in a bar beneath it. Grid areas rather than two
+      templates, so the textarea is never re-created and keeps focus, caret and
+      undo history when the layout changes under it.
+    -->
+    <div
+      class="composer-row"
+      [class.composer-row--stacked]="stacked()"
+      [class.composer-row--full]="!compact()"
+    >
+      <div class="composer-field relative min-w-0">
+        <label for="user-message" class="sr-only">How can I help you today?</label>
+
+        <!--
+          Highlight mirror: the draft again, in transparent ink, with the live
+          `@mention` and `/skill` tokens tinted. It sits behind the textarea
+          (whose background is transparent) so the tint shows through under
+          the real text. Must wrap exactly as the textarea does — same padding
+          (`fieldPadding`), type scale and wrapping rules — and is kept on one
+          line of template so no whitespace leaks into its pre-wrap text.
+        -->
+        @if (highlightSegments(); as segments) {
+          <div #highlightMirror aria-hidden="true" class="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-base text-transparent" [class]="fieldPadding()">@for (segment of segments; track $index) {@if (segment.mark) {<mark class="composer-token">{{ segment.text }}</mark>} @else {<span>{{ segment.text }}</span>}}</div>
+        }
+
+        <!-- Screen readers get in words what the tint shows. -->
+        <span class="sr-only" role="status">
+          @if (mentionedAgent(); as agent) {
+            This message goes to {{ agent.name }}.
           }
+          @for (command of invokedSkills(); track command.skillId) {
+            This message runs the {{ command.name }} skill.
+          }
+        </span>
 
-          @if (showSettingsControl()) {
-            <!-- Settings Button -->
+        <textarea
+          #messageInput
+          id="user-message"
+          name="user-message"
+          rows="1"
+          [value]="composerText()"
+          [readOnly]="isDictating()"
+          (input)="onTextareaInput($event)"
+          (keydown)="onKeyDown($event)"
+          (keyup)="onTextareaCaretMove($event)"
+          (click)="onTextareaCaretMove($event)"
+          (scroll)="onTextareaScroll($event)"
+          (focus)="onFocus()"
+          (blur)="onBlur()"
+          [attr.placeholder]="placeholder()"
+          role="combobox"
+          aria-autocomplete="list"
+          [attr.aria-expanded]="isMentionMenuOpen() || isSkillMenuVisible()"
+          [attr.aria-controls]="
+            isMentionMenuOpen()
+              ? 'agent-mention-listbox'
+              : isSkillMenuVisible()
+                ? 'skill-command-listbox'
+                : null
+          "
+          [attr.aria-activedescendant]="
+            isMentionMenuOpen()
+              ? 'agent-mention-option-' + mentionActiveIndex()
+              : isSkillMenuVisible()
+                ? 'skill-command-option-' + skillActiveIndex()
+                : null
+          "
+          class="relative block w-full resize-none bg-transparent text-base focus:outline-hidden overflow-y-auto"
+          [class]="textareaClass()"
+          style="max-height: 200px;"
+        ></textarea>
+
+        <!--
+          Rotating discovery hints (see `composerHints` in the component).
+
+          Decoration, deliberately: `aria-hidden`, painted over a placeholder that
+          stays present and unchanging underneath — only its colour goes
+          transparent — so assistive tech reads one stable string while the pixels
+          cycle. `pointer-events-none` keeps a click on the hint landing in the
+          textarea. Padding and type scale come from the same `fieldPadding` as
+          the textarea's, or the line will not sit where the placeholder did.
+        -->
+        @for (hint of visibleHint(); track hint) {
+          <div
+            aria-hidden="true"
+            animate.enter="composer-hint-enter"
+            animate.leave="composer-hint-leave"
+            class="composer-hint pointer-events-none absolute inset-x-0 top-0 truncate text-base text-gray-500 dark:text-gray-400"
+            [class]="fieldPadding()"
+          >
+            {{ hint }}
+          </div>
+        }
+      </div>
+
+      <!--
+        Leading control: the `+` menu — files from the device or a connected
+        file source, then Skills, Tools and Connectors as submenus
+        (`ComposerAddMenuComponent`). The device picker stays a native input,
+        hidden: the menu's first row clicks it, so the browser's own dialog
+        and its `accept` filter are unchanged. `hidden` rather than `sr-only`
+        because the menu row is the accessible path now; a second, invisible
+        tab stop for the same action would only confuse.
+      -->
+      <div class="composer-lead flex items-center" role="group" aria-label="Message options">
+        @if (showFileControls()) {
+          <input
+            #fileInput
+            type="file"
+            class="hidden"
+            tabindex="-1"
+            (change)="onFileSelect($event)"
+            id="chat-input-file-upload"
+            [accept]="acceptedFileTypes"
+            multiple
+          />
+          <app-composer-add-menu
+            [remainingFiles]="remainingFileSlots()"
+            [showSkills]="showSkillCommands()"
+            [disabled]="isDictating()"
+            (pickFromDevice)="openFilePicker()"
+            (sourceFilesPicked)="onSourceFilesPicked($event)"
+            [remainingFolders]="remainingFolderSlots()"
+            (sourceFolderPicked)="onSourceFolderPicked($event)"
+            (skillPicked)="insertSkillCommand($event)"
+          />
+        }
+      </div>
+
+      <!--
+        Trailing controls. The last slot is voice mode's by default, and is
+        lent to Stop while a response streams and to Send on touch once there
+        is a draft (see `showVoiceSlot`). There is no desktop send button:
+        Enter sends.
+      -->
+      <div class="composer-tools flex items-center gap-1" role="group" [attr.aria-label]="isDictating() ? 'Dictation' : 'Model and speech controls'">
+        @if (isDictating()) {
+          <!--
+            Dictation in progress: the waveform stands in for the speech
+            controls, and Cancel / Done take the trailing slots. The textarea
+            stays focused (read-only), so Enter and Escape do the same as the
+            two buttons.
+          -->
+          <span class="sr-only" role="status">
+            {{ dictationStatus() === 'connecting' ? 'Starting dictation' : 'Dictating. Press Enter to insert, or Escape to cancel.' }}
+          </span>
+          <div class="composer-levels flex h-8 items-center gap-[3px]" aria-hidden="true">
+            @for (level of dictationLevels(); track $index) {
+              <span
+                class="w-[3px] rounded-full bg-gray-500 transition-[height] duration-100 dark:bg-gray-300"
+                [style.height.px]="3 + level * 21"
+              ></span>
+            }
+          </div>
+          <button
+            type="button"
+            (click)="cancelDictation()"
+            class="flex size-10 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+            aria-label="Cancel dictation"
+            appTooltip="Cancel"
+            appTooltipPosition="top"
+          >
+            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            (click)="finishDictation()"
+            [disabled]="dictationStatus() === 'finishing'"
+            class="flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-all hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:cursor-wait disabled:opacity-60"
+            [attr.aria-label]="dictationStatus() === 'finishing' ? 'Finishing dictation' : 'Insert dictated text'"
+            appTooltip="Done"
+            appTooltipPosition="top"
+          >
+            @if (dictationStatus() === 'finishing') {
+              <app-spinner size="sm" variant="on-solid" label="Finishing" />
+            } @else {
+              <ng-icon name="heroCheck" class="size-5" aria-hidden="true" />
+            }
+          </button>
+        } @else {
+          @if (showDictateButton()) {
+            <!-- Dictate: speech-to-text into this composer -->
             <button
               type="button"
-              (click)="toggleSettings()"
-              class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
-              aria-label="Open settings"
-              appTooltip="Settings"
+              (click)="startDictation()"
+              [disabled]="isVoiceActive()"
+              class="flex size-10 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+              aria-label="Dictate"
+              appTooltip="Dictate"
               appTooltipPosition="top"
             >
-              <ng-icon name="heroAdjustmentsHorizontal" class="size-5" aria-hidden="true" />
+              <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
             </button>
           }
 
-          @if (showVoiceControl()) {
-          <!-- Voice Toggle Button -->
-          <button
-            type="button"
-            (click)="toggleVoice()"
-            [class]="voiceButtonClass()"
-            [attr.aria-label]="voiceAriaLabel()"
-            [appTooltip]="voiceTooltip()"
-            appTooltipPosition="top"
-          >
-            @if (voiceStatus() === 'listening') {
-              <!-- Pulsing dot indicator for listening -->
-              <span class="relative flex size-3">
-                <span class="absolute inline-flex size-full animate-ping rounded-full bg-red-400 opacity-75"></span>
-                <span class="relative inline-flex size-3 rounded-full bg-red-500"></span>
-              </span>
-            } @else if (voiceStatus() === 'speaking') {
-              <!-- Wave bars for speaking -->
-              <span class="flex items-center gap-0.5" aria-hidden="true">
-                <span class="h-3 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 0ms;"></span>
-                <span class="h-4 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 150ms;"></span>
-                <span class="h-3 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 300ms;"></span>
-              </span>
-            } @else if (voiceStatus() === 'connecting') {
-              <!-- Spinner for connecting -->
-              <svg class="size-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-              </svg>
-            } @else {
-              <!-- Mic icon for idle -->
-              <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
-            }
-          </button>
-          }
-
-          <!--
-            Mentioned-agent chip (D11). Says who is answering *this* message and gives
-            the only way back: the literal "@Name" in the text is what the user typed,
-            but the binding is this chip, so clearing it here is what un-mentions.
-          -->
-          @if (mentionedAgent(); as agent) {
+          @if (showVoiceSlot()) {
+            <!--
+              Voice mode: a split control. The waveform starts (or ends) a
+              conversation; the chevron beside it opens the options — which
+              voice answers, which microphone listens. The chevron leaves while
+              a session is live, because both options are fixed at connect
+              (the voice at Bedrock's promptStart, the mic at getUserMedia).
+              Hovering anywhere on the control sets the waveform moving, so the
+              icon reads as "sound both ways" before it is pressed.
+            -->
             <div
-              class="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 pl-2.5 pr-1 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-              role="status"
-              [attr.aria-label]="'This message goes to ' + agent.name"
+              class="voice-control flex items-center"
+              [class.voice-control--idle]="!isVoiceActive()"
+              role="group"
+              aria-label="Voice mode"
             >
-              <span class="max-w-32 truncate">{{ agent.name }} answers this one</span>
               <button
                 type="button"
-                (click)="clearMention()"
-                class="flex size-4 shrink-0 items-center justify-center rounded-full text-emerald-500 transition-colors hover:bg-emerald-200 hover:text-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-500 dark:text-emerald-400 dark:hover:bg-emerald-700 dark:hover:text-emerald-200"
-                aria-label="Send this message to the assistant instead"
+                (click)="toggleVoice()"
+                [disabled]="isDictating()"
+                [class]="voiceButtonClass() + ' disabled:cursor-not-allowed disabled:opacity-40'"
+                [attr.aria-label]="voiceAriaLabel()"
+                [appTooltip]="voiceTooltip()"
+                appTooltipPosition="top"
               >
-                <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
+                @if (voiceStatus() === 'listening') {
+                  <!-- Pulsing dot indicator for listening -->
+                  <span class="relative flex size-3">
+                    <span class="absolute inline-flex size-full animate-ping rounded-full bg-state-danger-400 opacity-75"></span>
+                    <span class="relative inline-flex size-3 rounded-full bg-state-danger-500"></span>
+                  </span>
+                } @else if (voiceStatus() === 'speaking') {
+                  <!-- Wave bars for speaking -->
+                  <span class="flex items-center gap-0.5" aria-hidden="true">
+                    <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 0ms;"></span>
+                    <span class="h-4 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 150ms;"></span>
+                    <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 300ms;"></span>
+                  </span>
+                } @else if (voiceStatus() === 'connecting') {
+                  <!-- Spinner for connecting -->
+                  <app-spinner size="md" label="Connecting" />
+                } @else {
+                  <!--
+                    Waveform for idle. Voice mode used to wear the microphone; the mic now
+                    means Dictate (speech into the composer), and a conversation is sound
+                    both ways — hence the waveform. One path per bar so each can move on
+                    its own beat (see `.voice-wave-bar`).
+                  -->
+                  <svg class="voice-wave size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                    <path class="voice-wave-bar" d="M3 10.5v3" />
+                    <path class="voice-wave-bar" d="M7 7.5v9" />
+                    <path class="voice-wave-bar" d="M11 4v16" />
+                    <path class="voice-wave-bar" d="M15 7.5v9" />
+                    <path class="voice-wave-bar" d="M19 10.5v3" />
+                  </svg>
+                }
               </button>
+
+              @if (!isVoiceActive()) {
+                <!--
+                  The open/closed events are the TRIGGER's (`cdkMenuOpened` /
+                  `cdkMenuClosed`); `cdkMenu` itself has only `closed`. The
+                  trigger also owns `aria-haspopup` and `aria-expanded`.
+                -->
+                <button
+                  type="button"
+                  [cdkMenuTriggerFor]="voiceMenu"
+                  [cdkMenuPosition]="voiceMenuPositions"
+                  (cdkMenuOpened)="onVoiceMenuOpened()"
+                  (cdkMenuClosed)="onVoiceMenuClosed()"
+                  [disabled]="isDictating()"
+                  class="voice-menu-trigger flex h-10 w-5 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+                  aria-label="Voice mode options"
+                  appTooltip="Voice options"
+                  appTooltipPosition="top"
+                >
+                  <svg
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                    class="size-3.5 transition-transform"
+                    [class.rotate-180]="voiceMenuOpen()"
+                  >
+                    <path
+                      fill-rule="evenodd"
+                      d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                </button>
+              }
             </div>
+
+            <ng-template #voiceMenu>
+              <div
+                cdkMenu
+                class="voice-menu w-64 rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                role="menu"
+                aria-orientation="vertical"
+                aria-label="Voice mode options"
+              >
+                <p class="px-3 pb-1 pt-1.5 text-[11px]/4 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                  Voice mode
+                </p>
+
+                <!-- Which voice answers -->
+                <button
+                  cdkMenuItem
+                  type="button"
+                  [cdkMenuTriggerFor]="voicePickerMenu"
+                  [cdkMenuPosition]="voiceSubmenuPositions"
+                  class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitem"
+                  data-testid="voice-picker-trigger"
+                >
+                  <span class="flex min-w-0 flex-col text-left">
+                    <span>Voice</span>
+                    <span class="truncate text-xs/4 text-gray-500 dark:text-gray-400">
+                      {{ selectedVoice().name }} · {{ selectedVoice().language }}
+                    </span>
+                  </span>
+                  <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                </button>
+
+                <!-- Which microphone listens -->
+                <button
+                  cdkMenuItem
+                  type="button"
+                  [cdkMenuTriggerFor]="microphoneMenu"
+                  [cdkMenuPosition]="voiceSubmenuPositions"
+                  class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitem"
+                  data-testid="microphone-picker-trigger"
+                >
+                  <span class="flex min-w-0 flex-col text-left">
+                    <span>Microphone</span>
+                    <span class="truncate text-xs/4 text-gray-500 dark:text-gray-400">{{ selectedMicrophoneLabel() }}</span>
+                  </span>
+                  <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                </button>
+
+                <div class="my-1.5 border-t border-gray-200 dark:border-gray-700"></div>
+
+                <button
+                  cdkMenuItem
+                  type="button"
+                  (click)="toggleVoice()"
+                  [disabled]="isDictating()"
+                  class="flex w-full items-center gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 disabled:opacity-40 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitem"
+                  data-testid="voice-menu-start"
+                >
+                  <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                    <path d="M3 10.5v3M7 7.5v9M11 4v16M15 7.5v9M19 10.5v3" />
+                  </svg>
+                  <span>Start voice conversation</span>
+                </button>
+              </div>
+            </ng-template>
+
+            <ng-template #voicePickerMenu>
+              <div
+                cdkMenu
+                class="max-h-96 w-72 overflow-y-auto rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                role="menu"
+                aria-orientation="vertical"
+                aria-label="Voice"
+                data-testid="voice-picker"
+              >
+                <p class="px-3 py-2 text-xs/4 text-gray-500 dark:text-gray-400">
+                  Tiffany and Matthew speak every language; the rest answer in their own.
+                </p>
+                @for (group of voiceGroups; track group.language) {
+                  <p class="px-3 pb-1 pt-2 text-[11px]/4 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                    {{ group.language }}
+                  </p>
+                  @for (voice of group.voices; track voice.id) {
+                    <button
+                      cdkMenuItem
+                      type="button"
+                      (click)="selectVoice(voice.id)"
+                      class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                      role="menuitemradio"
+                      [attr.aria-checked]="voice.id === selectedVoiceId()"
+                      [attr.data-voice-id]="voice.id"
+                    >
+                      <span class="flex min-w-0 flex-col text-left">
+                        <span>{{ voice.name }}</span>
+                        <span class="text-xs/4 text-gray-500 dark:text-gray-400">{{ voiceDescription(voice) }}</span>
+                      </span>
+                      @if (voice.id === selectedVoiceId()) {
+                        <ng-icon name="heroCheck" class="size-4 shrink-0 text-primary-500 dark:text-slate-400" aria-hidden="true" />
+                      }
+                    </button>
+                  }
+                }
+              </div>
+            </ng-template>
+
+            <ng-template #microphoneMenu>
+              <div
+                cdkMenu
+                class="w-72 rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                role="menu"
+                aria-orientation="vertical"
+                aria-label="Microphone"
+                data-testid="microphone-picker"
+              >
+                <button
+                  cdkMenuItem
+                  type="button"
+                  (click)="selectMicrophone(null)"
+                  class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitemradio"
+                  [attr.aria-checked]="!inputDeviceId()"
+                >
+                  <span>System default</span>
+                  @if (!inputDeviceId()) {
+                    <ng-icon name="heroCheck" class="size-4 shrink-0 text-primary-500 dark:text-slate-400" aria-hidden="true" />
+                  }
+                </button>
+                @if (microphones().length === 0) {
+                  <p class="px-3 py-2 text-sm/5 text-gray-500 dark:text-gray-400">No devices found</p>
+                } @else {
+                  @if (!microphoneLabelsKnown()) {
+                    <p class="px-3 py-1.5 text-xs/4 text-gray-500 dark:text-gray-400">
+                      Allow microphone access once to see device names.
+                    </p>
+                  }
+                  @for (mic of microphones(); track mic.deviceId; let i = $index) {
+                    <button
+                      cdkMenuItem
+                      type="button"
+                      (click)="selectMicrophone(mic.deviceId)"
+                      class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                      role="menuitemradio"
+                      [attr.aria-checked]="mic.deviceId === inputDeviceId()"
+                      [attr.data-device-id]="mic.deviceId"
+                    >
+                      <span class="truncate">{{ mic.label || 'Microphone ' + (i + 1) }}</span>
+                      @if (mic.deviceId === inputDeviceId()) {
+                        <ng-icon name="heroCheck" class="size-4 shrink-0 text-primary-500 dark:text-slate-400" aria-hidden="true" />
+                      }
+                    </button>
+                  }
+                }
+              </div>
+            </ng-template>
           }
 
-          <!-- Active Conversation Mode Chip -->
-          @if (systemPromptsService.activePrompt()) {
-            <div
-              class="flex items-center gap-1 rounded-full border border-primary-200 bg-primary-50 pl-2.5 pr-1 py-1 text-xs font-medium text-primary-700 dark:border-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
-              role="status"
-              [attr.aria-label]="'Active mode: ' + systemPromptsService.activePrompt()?.name"
+          @if (showStop()) {
+            <button
+              type="button"
+              (click)="cancelChatRequest()"
+              class="flex size-10 items-center justify-center rounded-full bg-gray-900 text-white shadow-sm transition-colors hover:bg-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
+              aria-label="Stop response"
+              [appTooltip]="isCoarsePointer() ? 'Stop' : 'Stop (Esc)'"
+              appTooltipPosition="top"
             >
-              <span class="max-w-28 truncate">{{ systemPromptsService.activePrompt()?.name }}</span>
-              <button
-                type="button"
-                (click)="dismissActivePrompt()"
-                class="flex size-4 shrink-0 items-center justify-center rounded-full text-primary-500 transition-colors hover:bg-primary-200 hover:text-primary-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-700 dark:hover:text-primary-200"
-                aria-label="Clear conversation mode"
-              >
-                <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
-              </button>
-            </div>
+              <ng-icon name="heroStopSolid" class="size-4" aria-hidden="true" />
+            </button>
           }
-        </div>
 
-        <!-- Right Controls -->
-        <div class="flex items-center gap-3" role="group" aria-label="Model selection and send">
-          <!-- Model Selector -->
-          <app-model-dropdown />
-
-          <!-- Submit/Stop Button -->
-          <button
-            type="button"
-            (click)="onSubmit()"
-            [disabled]="!isLoading() && hasActivePendingUploads()"
-            [class]="isLoading()
-              ? 'flex size-10 items-center justify-center rounded-full bg-red-500 text-white shadow-sm transition-all hover:bg-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500'
-              : 'flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-all hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary-500'"
-            [attr.aria-label]="isLoading() ? 'Stop generation' : (hasActivePendingUploads() ? 'Upload in progress' : 'Submit message')"
-          >
-            @if (isLoading()) {
-              <!-- Stop Icon -->
-              <ng-icon name="heroStopSolid" class="size-5" aria-hidden="true" />
-            } @else {
-              <!-- Send Icon -->
-              <ng-icon name="heroPaperAirplaneSolid" class="size-5" aria-hidden="true" />
-            }
-          </button>
-        </div>
+          @if (showTouchSend()) {
+            <!-- Touch only: return adds a line on a phone keyboard, so sending needs a button. -->
+            <button
+              type="button"
+              (click)="onSubmit()"
+              [disabled]="hasActivePendingUploads()"
+              class="flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-colors hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:cursor-not-allowed disabled:opacity-40"
+              [attr.aria-label]="hasActivePendingUploads() ? 'Upload in progress' : 'Send message'"
+            >
+              <ng-icon name="heroArrowUpSolid" class="size-5" aria-hidden="true" />
+            </button>
+          }
+        }
       </div>
     </div>
   </div>
+
+<!--
+  Meta line beneath the shell, in both layouts, so the empty state and a
+  thread wear the same composer. The left side carries "Project or folder" in
+  a new conversation (`ComposerScopePickerComponent`) and a short status while
+  one applies; the right side holds the model picker and, in a thread, the
+  context meter after it (projected by the container as `composerMeta`), whose
+  panel also reports what the conversation has cost.
+-->
+<div class="flex min-h-8 items-center justify-between gap-3 pt-1.5 pl-3 text-xs text-gray-500 dark:text-gray-400">
+  <div class="flex min-w-0 items-center gap-3">
+    @if (scopePickerOffered()) {
+      <app-composer-scope-picker
+        [remainingFiles]="remainingFileSlots()"
+        [remainingFolders]="remainingFolderSlots()"
+        [attachedFolderKeys]="attachedFolderKeys()"
+        [disabled]="isDictating()"
+        (sourceFolderPicked)="onSourceFolderPicked($event)"
+        (sourceFilesPicked)="onSourceFilesPicked($event)"
+      />
+    }
+    @if (statusHint(); as hint) {
+      <span class="truncate">{{ hint }}</span>
+    }
+  </div>
+  <div class="flex shrink-0 items-center gap-0.5">
+    <app-model-dropdown size="compact" [menuOpens]="compact() ? 'up' : 'down'" class="shrink-0" />
+    <ng-content select="[composerMeta]" />
+  </div>
+</div>

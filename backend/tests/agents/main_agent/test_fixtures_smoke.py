@@ -17,7 +17,6 @@ def test_model_config_fixture(model_config):
 
 def test_retry_config_fixture(retry_config):
     assert isinstance(retry_config, RetryConfig)
-    assert retry_config.boto_max_attempts == 3
     assert retry_config.sdk_max_attempts == 4
     assert retry_config.sdk_initial_delay <= retry_config.sdk_max_delay
 

@@ -1,11 +1,14 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
+import { AlarmFactory } from './alarm-factory';
 
 export interface PromptCacheObservabilityConstructProps {
   config: AppConfig;
+  alarmTopic?: sns.ITopic;
   /**
    * The log group the AgentCore Runtime actually writes to, from
    * `InferenceAgentCoreConstruct.runtimeLogGroupName`.
@@ -40,11 +43,8 @@ export interface PromptCacheObservabilityConstructProps {
  * per-session drill-down counterpart is the cost-anatomy admin endpoint
  * (`GET /admin/costs/sessions/{id}/calls`).
  *
- * Alarms are console-only — no SNS topics exist in the stack yet (same
- * posture as kb-sync and scheduled-runs). They use NOT_BREACHING for
- * missing data because the `PROMPT_CACHE_OBSERVABILITY_ENABLED=false`
- * kill switch (or simply zero traffic) makes the metrics absent
- * entirely.
+ * NOT_BREACHING on missing data: the PROMPT_CACHE_OBSERVABILITY_ENABLED=false
+ * kill switch, or simply no traffic, makes the metrics absent entirely.
  */
 export class PromptCacheObservabilityConstruct extends Construct {
   constructor(
@@ -77,6 +77,39 @@ export class PromptCacheObservabilityConstruct extends Construct {
       namespace,
       metricName: 'AvoidableMiss',
       statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+
+    // The subsets of AvoidableMiss that an explained re-write accounts for: an
+    // `@`-mention handing a turn to another Agent, and a mid-conversation model
+    // switch (each model has its own cache). Disjoint by construction (emf.py),
+    // so subtracting both never double-counts.
+    const agentSwitchMissMetric = new cloudwatch.Metric({
+      namespace,
+      metricName: 'AgentSwitchMiss',
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+    const modelSwitchMissMetric = new cloudwatch.Metric({
+      namespace,
+      metricName: 'ModelSwitchMiss',
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+
+    // What the alarm watches: avoidable misses nobody chose. A model switch now
+    // continues the conversation in place, so explained misses are routine
+    // traffic, and alarming on the raw sum would page on users doing what the
+    // UI offered them. FILL so a quiet period with no switches reads as zero
+    // rather than leaving the whole expression empty.
+    const unexplainedAvoidableMissExpression = new cloudwatch.MathExpression({
+      expression: 'FILL(avoidable, 0) - FILL(agentSwitch, 0) - FILL(modelSwitch, 0)',
+      usingMetrics: {
+        avoidable: avoidableMissMetric,
+        agentSwitch: agentSwitchMissMetric,
+        modelSwitch: modelSwitchMissMetric,
+      },
+      label: 'Unexplained avoidable misses',
       period: cdk.Duration.minutes(5),
     });
 
@@ -115,6 +148,18 @@ export class PromptCacheObservabilityConstruct extends Construct {
       metricName: 'SessionPartialMissUsd',
       statistic: 'Maximum',
       period: cdk.Duration.hours(24),
+    });
+
+    // A model call that used tokens and priced to nothing — no catalog row for
+    // its model id (or the calculator failed). The row is written with no cost,
+    // so it reaches neither the cost rollups nor the user's quota. Any non-zero
+    // sum is a catalog gap: prod ran months of $0 fallback-Haiku and Nova Sonic
+    // voice before anyone read the rollup table.
+    const unmeteredModelCallMetric = new cloudwatch.Metric({
+      namespace,
+      metricName: 'UnmeteredModelCall',
+      statistic: 'Sum',
+      period: cdk.Duration.hours(1),
     });
 
     // Cache efficiency: fraction of cache traffic served from cache.
@@ -224,48 +269,83 @@ export class PromptCacheObservabilityConstruct extends Construct {
       }),
     );
 
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Unmetered model calls (tokens spent, no price, not counted against quota)',
+        left: [unmeteredModelCallMetric],
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.LogQueryWidget({
+        title: 'Unmetered calls by model (which catalog row is missing?)',
+        logGroupNames: [runtimeLogGroupName],
+        queryLines: [
+          'filter ispresent(UnmeteredModelCall)',
+          'stats sum(UnmeteredModelCall) as calls by modelId, surface, unmeteredReason',
+          'sort calls desc',
+          'limit 20',
+        ],
+        width: 12,
+        height: 6,
+      }),
+    );
+
     // ============================================================
-    // Alarms (console-only; no SNS wiring yet)
+    // Alarms
     // ============================================================
+
+    const alarms = new AlarmFactory(this, config, props.alarmTopic);
 
     // AvoidableMiss is the nominated alarm target (see emf.py): a
     // prefix-stability regression flips a large share of calls to
-    // `miss_avoidable`, showing up as a step change in this sum.
-    new cloudwatch.Alarm(this, 'PromptCacheAvoidableMissAlarm', {
-      alarmName: getResourceName(config, 'prompt-cache-avoidable-miss'),
+    // `miss_avoidable`, showing up as a step change in this sum. Watched net of
+    // the explained subsets (Agent and model switches), which are expected.
+    alarms.expressionAlarm('PromptCacheAvoidableMissAlarm', {
+      name: 'prompt-cache-avoidable-miss',
       alarmDescription:
-        'Avoidable prompt-cache misses exceeded threshold — likely a prompt-prefix stability regression',
-      metric: avoidableMissMetric,
-      threshold: config.production ? 10 : 50,
+        'Unexplained avoidable prompt-cache misses (net of agent and model switches) exceeded threshold — likely a prompt-prefix stability regression',
+      expression: unexplainedAvoidableMissExpression,
+      threshold: config.observability.promptCacheAvoidableMissThreshold,
       evaluationPeriods: 3,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    // Session-level accumulation (#833 PR-1). A fleet sum never notices one
-    // conversation spending $0.43 a turn for five days — the incident this
-    // alarm exists for would have tripped it on day 2, at ~10 turns. The
-    // metric is the session's cumulative partial-miss waste and the statistic
-    // is Maximum, so this reads as "a session at or over $5 of partial-miss
-    // waste was active in the last 24h"; it clears once that session stops.
-    new cloudwatch.Alarm(this, 'PromptCacheSessionPartialMissAlarm', {
-      alarmName: getResourceName(config, 'prompt-cache-session-partial-miss'),
+    // Maximum, not Sum: reads as "a session over the threshold was active in
+    // the last 24h". A fleet sum cannot see one conversation doing this (#833).
+    alarms.alarm('PromptCacheSessionPartialMissAlarm', {
+      name: 'prompt-cache-session-partial-miss',
       alarmDescription:
-        'A single session accumulated more than $5 of partial-miss cache waste — one conversation is re-writing its prefix every turn (see the "Sessions by partial-miss waste" dashboard widget for which)',
+        'A single session accumulated more than the configured partial-miss cache waste — one conversation is re-writing its prefix every turn (see the "Sessions by partial-miss waste" dashboard widget for which)',
       metric: sessionPartialMissUsdMetric,
-      threshold: 5,
+      threshold: config.observability.promptCacheSessionWastedUsdThreshold,
       evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    new cloudwatch.Alarm(this, 'PromptCacheWastedUsdAlarm', {
-      alarmName: getResourceName(config, 'prompt-cache-wasted-usd'),
+    alarms.alarm('PromptCacheWastedUsdAlarm', {
+      name: 'prompt-cache-wasted-usd',
       alarmDescription:
         'Dollars wasted on prompt-cache re-writes of already-cached prefix bytes (avoidable + partial misses) exceeded threshold',
       metric: wastedUsdMetric,
-      threshold: config.production ? 1 : 5,
+      threshold: config.observability.promptCacheWastedUsdThreshold,
       evaluationPeriods: 3,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // Threshold 0 is not a tunable: there is no acceptable rate of free usage,
+    // and each distinct model id needs one catalog fix, after which it stops.
+    // The emission is deliberately outside the PROMPT_CACHE_OBSERVABILITY_ENABLED
+    // kill switch (emf.py), so this alarm cannot be silenced by it.
+    alarms.alarm('UnmeteredModelCallAlarm', {
+      name: 'unmetered-model-call',
+      alarmDescription:
+        'A model call spent tokens with no catalog pricing — it was stored at no cost and not counted against quota. Add a catalog row for the model id (see the "Unmetered calls by model" dashboard widget for which)',
+      metric: unmeteredModelCallMetric,
+      threshold: 0,
+      evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });

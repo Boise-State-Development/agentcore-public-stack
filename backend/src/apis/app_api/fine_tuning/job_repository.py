@@ -9,6 +9,8 @@ from typing import Optional, List, Dict, Any
 import boto3
 from botocore.exceptions import ClientError
 
+from . import task_types
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +49,9 @@ class FineTuningJobsRepository:
             "email": item["email"],
             "model_id": item["model_id"],
             "model_name": item["model_name"],
+            # Jobs written before task types existed carry no attribute; they
+            # are all text classifiers.
+            "task_type": item.get("task_type", task_types.DEFAULT_TASK_TYPE),
             "status": item["status"],
             "dataset_s3_key": item["dataset_s3_key"],
             "output_s3_prefix": item.get("output_s3_prefix"),
@@ -62,6 +67,9 @@ class FineTuningJobsRepository:
             "updated_at": item["updatedAt"],
             "error_message": item.get("error_message"),
             "max_runtime_seconds": int(item.get("max_runtime_seconds", 86400)),
+            # Absent on every row written before spot existed, and those all
+            # ran on-demand.
+            "use_spot": bool(item.get("use_spot", False)),
             "training_progress": round(float(item["training_progress"]) * 100, 1) if item.get("training_progress") is not None else None,
         }
         return result
@@ -79,6 +87,8 @@ class FineTuningJobsRepository:
         sagemaker_job_name: str,
         output_s3_prefix: str,
         max_runtime_seconds: int = 86400,
+        use_spot: bool = False,
+        task_type: str = task_types.DEFAULT_TASK_TYPE,
     ) -> dict:
         """Create a new training job record."""
         now = datetime.now(timezone.utc).isoformat()
@@ -91,6 +101,7 @@ class FineTuningJobsRepository:
             "email": email,
             "model_id": model_id,
             "model_name": model_name,
+            "task_type": task_type,
             "status": "PENDING",
             "dataset_s3_key": dataset_s3_key,
             "output_s3_prefix": output_s3_prefix,
@@ -98,6 +109,7 @@ class FineTuningJobsRepository:
             "instance_count": 1,
             "sagemaker_job_name": sagemaker_job_name,
             "max_runtime_seconds": max_runtime_seconds,
+            "use_spot": use_spot,
             "createdAt": now,
             "updatedAt": now,
         }
@@ -257,24 +269,32 @@ class FineTuningJobsRepository:
     ) -> List[dict]:
         """Query the StatusIndex GSI for jobs with a given status in a date range.
 
+        Training and inference records share this table and this GSI, so the
+        query filters on the ``JOB#`` sort-key prefix. Without it an inference
+        record comes back as a training job, and any caller that also queries
+        the inference repository counts its cost twice.
+
         Args:
-            status_value: Job status (e.g. "Completed", "Stopped").
+            status_value: Stored job status, case-sensitive on the GSI key
+                (e.g. "COMPLETED", "FAILED", "STOPPED").
             start_date: ISO date string (inclusive lower bound on createdAt).
             end_date: ISO date string (inclusive upper bound on createdAt).
 
         Returns:
-            List of job dicts.
+            List of training job dicts.
         """
         try:
             items: List[dict] = []
             response = self._table.query(
                 IndexName="StatusIndex",
                 KeyConditionExpression="#s = :status AND createdAt BETWEEN :start AND :end",
+                FilterExpression="begins_with(SK, :sk_prefix)",
                 ExpressionAttributeNames={"#s": "status"},
                 ExpressionAttributeValues={
                     ":status": status_value,
                     ":start": start_date,
                     ":end": end_date,
+                    ":sk_prefix": "JOB#",
                 },
                 ScanIndexForward=False,
             )
@@ -284,11 +304,13 @@ class FineTuningJobsRepository:
                 response = self._table.query(
                     IndexName="StatusIndex",
                     KeyConditionExpression="#s = :status AND createdAt BETWEEN :start AND :end",
+                    FilterExpression="begins_with(SK, :sk_prefix)",
                     ExpressionAttributeNames={"#s": "status"},
                     ExpressionAttributeValues={
                         ":status": status_value,
                         ":start": start_date,
                         ":end": end_date,
+                        ":sk_prefix": "JOB#",
                     },
                     ScanIndexForward=False,
                     ExclusiveStartKey=response["LastEvaluatedKey"],

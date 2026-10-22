@@ -18,7 +18,7 @@ import { TooltipPosition } from './tooltip.directive';
   },
   template: `
     <div
-      class="tooltip-content relative max-w-xs whitespace-nowrap rounded-sm bg-gray-900 px-3 py-2 text-sm text-white shadow-lg dark:bg-gray-700"
+      class="tooltip-content relative max-w-xs whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs/4 font-medium text-white shadow-md dark:bg-gray-700"
       [class]="positionClasses()">
       @if (template()) {
         <ng-container *ngTemplateOutlet="template()" />
@@ -26,7 +26,7 @@ import { TooltipPosition } from './tooltip.directive';
         {{ content() }}
       }
       <div
-        class="absolute size-2 rotate-45 bg-gray-900 dark:bg-gray-700"
+        class="absolute size-1.5 rotate-45 bg-gray-900 dark:bg-gray-700"
         [class]="arrowClasses()">
       </div>
     </div>

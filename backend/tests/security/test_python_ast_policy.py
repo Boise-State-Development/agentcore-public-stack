@@ -10,6 +10,9 @@ positive invariants:
 * Dunder attribute access (``__class__``, ``__bases__``, ...) is rejected
   so the standard "walk the type hierarchy" obfuscation cannot reach
   ``__builtins__``.
+* Attribute chains that resolve through an allowlisted module which itself
+  imports a host module (``pd.io.common.os.popen``) are rejected — the
+  disclosed bypass of the import/name-only checks.
 * Realistic chart and dataframe code is accepted unchanged.
 """
 
@@ -110,6 +113,104 @@ def test_dunder_attribute_access_rejected() -> None:
     src = "().__class__.__bases__[0].__subclasses__()"
     with pytest.raises(PolicyError):
         validate_diagram_code(src)
+
+
+# ---------------------------------------------------------------------------
+# Attribute-chain re-export (regression: allowlisted module re-exports ``os``)
+# ---------------------------------------------------------------------------
+
+
+def test_reported_pandas_io_common_os_popen_chain_rejected() -> None:
+    """The disclosed payload: ``pandas.io.common`` does ``import os``, so the
+    attribute chain re-exposes the full module with no import statement."""
+    src = textwrap.dedent("""
+        import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
+        import pandas as pd
+        util = pd.io.common
+        out = util.os.popen('id; pwd; echo VERIFY-MARK-7Q4').read()
+        plt.figure(); plt.plot([1,2,3]); plt.savefig('verif_chart.png')
+        raise ValueError('LINEAGE-OUTPUT>>> ' + out)
+        """)
+    with pytest.raises(PolicyError):
+        validate_diagram_code(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # Direct chain, no intermediate binding.
+        "import pandas as pd\npd.io.common.os.popen('id')",
+        # Chain split across locals to defeat a single-expression matcher.
+        "import pandas as pd\na = pd.io\nb = a.common\nc = b.os\nc.popen('id')",
+        # Same shape through other allowlisted packages.
+        "import matplotlib as m\nm.cbook.os.getcwd()",
+        "import numpy as np\nnp.lib.npyio.os.getcwd()",
+        # Submodule imported directly, then traversed.
+        "import pandas.io.common as u\nu.os.popen('id')",
+        "from pandas.io import common\ncommon.os.popen('id')",
+        # Re-exported module bound by name at import time.
+        "from pandas.io.common import os\nos.popen('id')",
+        "from pandas.io.common import os as o\no.popen('id')",
+        # Other host modules through the same door.
+        "import pandas as pd\npd.io.common.sys.modules",
+        "import pandas as pd\npd.compat.platform.uname()",
+        # Builtins namespace and object-graph traversal.
+        "import pandas as pd\npd.io.common.builtins.eval('1')",
+        "import numpy as np\nnp.core.gc.get_referrers(np)",
+    ],
+)
+def test_attribute_chain_to_host_module_rejected(src: str) -> None:
+    with pytest.raises(PolicyError):
+        validate_diagram_code(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # Pickle sinks execute constructor code during load, and the payload
+        # can arrive as a bytes literal through an allowlisted buffer — no
+        # forbidden import, no file the attacker had to write.
+        "import pandas as pd\nimport io\npd.read_pickle(io.BytesIO(b'x'))",
+        "import pandas as pd\npd.DataFrame().to_pickle('/tmp/x')",
+        "import pandas as pd\nimport io\npd.read_hdf(io.BytesIO(b'x'))",
+        "import numpy as np\nimport io\nnp.load(io.BytesIO(b'x'), allow_pickle=True)",
+        # Bound at import time instead of reached as an attribute.
+        "from pandas import read_pickle\nread_pickle('/tmp/x')",
+        "from numpy import load\nload('/tmp/x', allow_pickle=True)",
+    ],
+)
+def test_deserialization_sinks_rejected(src: str) -> None:
+    with pytest.raises(PolicyError):
+        validate_diagram_code(src)
+
+
+def test_process_spawn_attribute_rejected_even_on_unknown_object() -> None:
+    """Second net: if a host module is reachable under a name the policy did
+    not enumerate, the spawn call itself is still refused."""
+    with pytest.raises(PolicyError):
+        validate_diagram_code("import pandas as pd\npd.io.parsers.mod.popen('id')")
+
+
+def test_column_named_like_a_denied_name_uses_subscript() -> None:
+    """Documented consequence of the attribute rule: attribute access to a
+    column that collides with a denied name is refused; the subscript form
+    (which the model can always emit) is accepted."""
+    denied = textwrap.dedent("""
+        import pandas as pd
+        df = pd.read_csv('ohlc.csv')
+        df.open.plot()
+        """)
+    with pytest.raises(PolicyError):
+        validate_diagram_code(denied)
+
+    allowed = textwrap.dedent("""
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        df = pd.read_csv('ohlc.csv')
+        df['open'].plot()
+        plt.savefig('ohlc.png')
+        """)
+    validate_diagram_code(allowed)
 
 
 def test_dunder_access_on_user_object_rejected() -> None:
@@ -249,3 +350,23 @@ def test_multiline_with_comments_and_lambdas_passes() -> None:
         plt.savefig('q.png')
         """)
     validate_diagram_code(src)
+
+
+def test_scipy_submodule_via_direct_import_passes() -> None:
+    """A lazily-loaded submodule whose name collides with a denied module
+    (``scipy.signal`` vs. the stdlib ``signal``) is reachable by importing it
+    directly — the attribute form is not, in either direction."""
+    src = textwrap.dedent("""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from scipy.signal import butter, filtfilt
+
+        b, a = butter(3, 0.2)
+        y = filtfilt(b, a, np.linspace(0, 1, 200))
+        plt.plot(y)
+        plt.savefig('filtered.png')
+        """)
+    validate_diagram_code(src)
+
+    with pytest.raises(PolicyError):
+        validate_diagram_code("import scipy as sp\nsp.signal.butter(3, 0.2)")

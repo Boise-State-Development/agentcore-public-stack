@@ -19,10 +19,11 @@ import { StatusBadgeComponent } from '../../components/status-badge.component';
 import { QuotaCardComponent } from '../../components/quota-card.component';
 import type { JobResponse, InferenceJobResponse } from '../../models/fine-tuning.models';
 import { parseIso } from '../../../utils/date';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-fine-tuning-dashboard',
-  imports: [RouterLink, DatePipe, DecimalPipe, NgIcon, TooltipDirective, StatusBadgeComponent, QuotaCardComponent],
+  imports: [RouterLink, DatePipe, DecimalPipe, NgIcon, TooltipDirective, StatusBadgeComponent, QuotaCardComponent, SpinnerComponent],
   providers: [
     provideIcons({
       heroPlus,

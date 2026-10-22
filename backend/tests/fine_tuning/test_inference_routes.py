@@ -45,8 +45,8 @@ SAMPLE_GRANT = {
     "email": "user@example.com",
     "granted_by": "admin@example.com",
     "granted_at": "2026-01-01T00:00:00Z",
-    "monthly_quota_hours": 10.0,
-    "current_month_usage_hours": 2.0,
+    "monthly_quota_usd": 10.0,
+    "current_month_usage_usd": 2.0,
     "quota_period": "2026-03",
 }
 
@@ -212,6 +212,36 @@ class TestCreateInferenceJob:
         assert body["job_type"] == "inference"
         assert body["training_job_id"] == "train-abc123"
 
+    def test_rejects_instance_type_with_no_known_price(self, make_user):
+        """Same blind spot as the training path: unpriced means $0.00 recorded."""
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_jobs = MagicMock()
+        mock_jobs.get_job.return_value = SAMPLE_COMPLETED_TRAINING_JOB
+
+        mock_s3 = MagicMock()
+        mock_s3.check_object_exists.return_value = True
+        mock_s3.bucket_name = "test-bucket"
+
+        mock_sm = MagicMock()
+
+        _setup_deps(app, user, SAMPLE_GRANT, mock_jobs, MagicMock(), mock_s3, mock_sm, MagicMock())
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/inference",
+            json={
+                "training_job_id": "train-abc123",
+                "input_s3_key": "inference-input/user-001/xyz/input.txt",
+                "instance_type": "ml.p4d.24xlarge",
+            },
+        )
+
+        assert resp.status_code == 400
+        assert "is not available for" in resp.json()["detail"]
+        mock_sm.create_transform_job.assert_not_called()
+
     @patch.dict("os.environ", {"PROJECT_PREFIX": "test-prefix"})
     def test_transform_job_name_includes_project_prefix(self, make_user):
         app = _create_app()
@@ -323,7 +353,7 @@ class TestCreateInferenceJob:
         app = _create_app()
         user = make_user(email="user@example.com")
 
-        low_quota = {**SAMPLE_GRANT, "monthly_quota_hours": 10.0, "current_month_usage_hours": 9.8}
+        low_quota = {**SAMPLE_GRANT, "monthly_quota_usd": 10.0, "current_month_usage_usd": 9.8}
 
         mock_jobs = MagicMock()
         mock_jobs.get_job.return_value = SAMPLE_COMPLETED_TRAINING_JOB

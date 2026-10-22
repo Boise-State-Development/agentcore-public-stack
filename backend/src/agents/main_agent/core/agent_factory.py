@@ -5,16 +5,26 @@ import os
 import logging
 from typing import List, Optional, Any
 from strands import Agent
-from strands.models import BedrockModel
+from strands.agent.conversation_manager import SlidingWindowConversationManager
+from strands.models import BedrockModel, OpenAIResponsesModel
 from strands.models.openai import OpenAIModel
 from strands.models.gemini import GeminiModel
 from strands.tools.executors import SequentialToolExecutor
 from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider
-from agents.main_agent.config.constants import EnvVars
+from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
+from agents.main_agent.config.constants import EnvVars, Defaults
+from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 from apis.shared.models.mantle import build_mantle_model
+from apis.shared.models.stream_output import tag_partial_output
+from apis.shared.models.text_only_input import text_only_input
+from apis.shared.models.usage_normalization import usage_normalized
 
 logger = logging.getLogger(__name__)
+
+# Models whose client is an AsyncOpenAI built from ``client_args`` per request,
+# so ``max_retries`` there controls the transport layer.
+_OPENAI_FAMILY_MODELS = (OpenAIModel, OpenAIResponsesModel)
 
 
 class AgentFactory:
@@ -33,7 +43,10 @@ class AgentFactory:
             so native CountTokens works for inference-profile model ids).
         """
         bedrock_config = model_config.to_bedrock_config()
-        return CountTokensBedrockModel(**bedrock_config)
+        # Strands awaits count_tokens before every model call; keep that local.
+        # Native counts are taken off the critical path by the
+        # context-attribution hook (native_count_tokens in a background task).
+        return CountTokensBedrockModel(native_projection=False, **bedrock_config)
 
     @staticmethod
     def _create_openai_model(model_config: ModelConfig) -> OpenAIModel:
@@ -60,7 +73,11 @@ class AgentFactory:
         client_args = {"api_key": api_key}
 
         logger.info(f"Creating OpenAI model with model_id={model_config.model_id}")
-        return OpenAIModel(client_args=client_args, **openai_config)
+        # Wrapped for Bedrock-Converse token-bucket semantics — OpenAI's
+        # `input_tokens` is inclusive of the cache buckets, which our cost and
+        # context-size math treats as disjoint. See
+        # apis/shared/models/usage_normalization.py.
+        return usage_normalized(OpenAIModel)(client_args=client_args, **openai_config)
 
     @staticmethod
     def _create_mantle_model(model_config: ModelConfig):
@@ -108,6 +125,43 @@ class AgentFactory:
         )
 
     @staticmethod
+    def _create_bedrock_responses_model(model_config: ModelConfig):
+        """
+        Create an OpenAI Responses model on the bedrock-runtime endpoint
+
+        The only Bedrock path that serves prompt caching for GPT-5.6. Same
+        OpenAI wire protocol as Mantle, different host and model-id shape
+        (cross-Region inference profiles).
+
+        Args:
+            model_config: Model configuration
+
+        Returns:
+            OpenAIResponsesModel: Configured model targeting bedrock-runtime
+
+        Raises:
+            ValueError: If no AWS region can be resolved for the endpoint
+        """
+        # Same precedence as the Mantle path: model override, then AWS_REGION.
+        # Unlike Mantle, an unresolvable region raises rather than defaulting —
+        # the builder owns that, so both the URL and the token signature stay
+        # on one value.
+        region = model_config.mantle_region or os.getenv(EnvVars.AWS_REGION)
+        responses_config = model_config.to_bedrock_responses_config()
+        logger.info(
+            f"Creating bedrock-runtime Responses model "
+            f"with model_id={model_config.model_id} "
+            f"region={region or '<agent default>'}"
+        )
+        # Shared builder — also used by the API-key /chat/api-converse handler
+        # (apis/app_api) so the transport construction is never forked.
+        return build_bedrock_responses_model(
+            model_id=responses_config["model_id"],
+            region=region,
+            params=responses_config.get("params"),
+        )
+
+    @staticmethod
     def _create_gemini_model(model_config: ModelConfig) -> GeminiModel:
         """
         Create a GeminiModel instance
@@ -142,6 +196,7 @@ class AgentFactory:
         session_manager: Any,
         hooks: Optional[List[Any]] = None,
         plugins: Optional[List[Any]] = None,
+        memory_context: Optional[str] = None,
     ) -> Agent:
         """
         Create a Strands Agent instance with the appropriate model provider
@@ -155,6 +210,9 @@ class AgentFactory:
             plugins: Optional list of Strands plugins (e.g. AgentSkills). A
                 plugin auto-registers its hooks and tools with the agent, so
                 this is how skills disclosure is wired (Skills v2).
+            memory_context: Optional rendered Memory-Space block. Sent after
+                the system prompt, behind a cache point of its own when the
+                model supports cache points (see below).
 
         Returns:
             Agent: Configured Strands Agent instance
@@ -173,58 +231,192 @@ class AgentFactory:
             model = AgentFactory._create_openai_model(model_config)
         elif provider == ModelProvider.MANTLE:
             model = AgentFactory._create_mantle_model(model_config)
+        elif provider == ModelProvider.BEDROCK_RESPONSES:
+            model = AgentFactory._create_bedrock_responses_model(model_config)
         elif provider == ModelProvider.GEMINI:
             model = AgentFactory._create_gemini_model(model_config)
         else:
             raise ValueError(f"Unsupported model provider: {provider}")
 
-        # Build SDK-level retry strategy for Bedrock provider
-        # This is the second retry layer (agent event loop), retries on ModelThrottledException
-        # with exponential backoff. Only applies to Bedrock; other providers handle retries internally.
-        retry_strategy = None
-        if provider == ModelProvider.BEDROCK and model_config.retry_config:
-            from strands import ModelRetryStrategy
-            retry_strategy = ModelRetryStrategy(
-                max_attempts=model_config.retry_config.sdk_max_attempts,
-                initial_delay=model_config.retry_config.sdk_initial_delay,
-                max_delay=model_config.retry_config.sdk_max_delay,
-            )
-            logger.info(
-                f"Configured retry strategy: boto={model_config.retry_config.boto_max_attempts} attempts "
-                f"({model_config.retry_config.boto_retry_mode}), "
-                f"sdk={model_config.retry_config.sdk_max_attempts} attempts "
-                f"({model_config.retry_config.sdk_initial_delay}s-{model_config.retry_config.sdk_max_delay}s backoff)"
-            )
+        # A text-only model rejects the whole request over one image or
+        # document block, and history can carry them from a turn that ran on
+        # a vision model. Projected per call, never in place: the message list
+        # is shared with every other agent serving this session.
+        if model_config.text_only:
+            model = text_only_input(model)
+
+        # Reasoning blocks a model would reject are dropped by Strands itself
+        # since 1.61.1 (#5166), in `BedrockModel._format_bedrock_messages` via
+        # `_rejects_reasoning_block`. We carried the same projection locally
+        # from 29b05de1; upstream's covers more (the Claude -> GPT/Nova/Llama
+        # direction too) and runs for every Bedrock model, so ours was removed.
+
+        retry_strategy = AgentFactory._build_retry_strategy(model_config, model)
 
         # Bedrock prompt caching: give the system prompt its own cachePoint by
         # passing it as a SystemContentBlock list with a trailing cachePoint
-        # (the cache_prompt model-config key is deprecated). Together with
-        # cache_tools (set in to_bedrock_config) this keeps the stable
-        # system+tools prefix readable from cache even when the auto-placed
-        # message-level cache point misses — see the cachePoint budget comment
-        # in ModelConfig.to_bedrock_config. Strands' auto strategy strips only
-        # message-level cachePoints, never system ones. Agent.system_prompt
-        # remains the plain string (split_system_prompt concatenates the text
-        # blocks), so hashing/attribution/voice consumers are unaffected.
+        # (the cache_prompt model-config key is deprecated). Together with the
+        # tools cachePoint (CacheConfig(tools_ttl=...) in to_bedrock_config;
+        # the model-level cache_tools key it replaces is deprecated as of
+        # strands-agents 1.55.0) this keeps the stable system+tools prefix
+        # readable from cache even when the auto-placed message-level cache
+        # point misses — see the cachePoint budget comment in
+        # ModelConfig.to_bedrock_config.
+        #
+        # INVARIANT, as of strands-agents 1.55.0 (the pinned version): this
+        # hand-placed system cachePoint is honored, never doubled. 1.55 does
+        # place a system cachePoint of its own — _should_cache_system(), with
+        # CacheConfig.system_prompt_ttl defaulting to True — but it arms on two
+        # conditions that together can never catch a block list this branch
+        # skipped. (1) It returns early unless _cache_strategy == "anthropic",
+        # i.e. "claude"/"anthropic" in the model id — the same test inside
+        # bedrock_cache_points_supported(), so on any model where upstream
+        # would place one, the list below already carries ours. (2) Its final
+        # guard is `not any("cachePoint" in block for block in system_blocks)`,
+        # which sees that block and stands down. Upstream's own CacheConfig
+        # docstring says the same thing ("A hand-placed system cache point is
+        # honored rather than doubled"). The older claim that auto strategy
+        # "strips only message-level cachePoints, never system ones" was a
+        # 1.51-era fact and is NOT the reason this is safe — do not restore it.
+        #
+        # Measured on the pinned 1.55.0 (2026-09-11) rather than read off the
+        # source: formatting a request with this block present yields exactly
+        # ONE system cachePoint, and with it absent upstream injects exactly one
+        # of its own. The same probe shows the converse, which is why the
+        # bedrock_cache_points_supported() gate below cannot be dropped —
+        # on a NON-Anthropic model this block is passed through untouched and
+        # Bedrock rejects the call with AccessDeniedException.
+        #
+        # PR-5 (thresholds spec §3.6): the point is placed TTL-less on purpose.
+        # With AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL=1h, ModelConfig sets
+        # CacheConfig(system_prompt_ttl="1h", tools_ttl="1h") and upstream's
+        # _apply_system_cache_ttl rewrites THIS point's ttl ("an explicit
+        # system_prompt_ttl string is honored as written"); the tools point
+        # gets its own. Flag unset → no ttl key anywhere → today's bytes.
+        #
+        # RE-VERIFY BEFORE ANY BUMP PAST 1.55.0. This is a statement about
+        # upstream internals and it has already rotted once. Re-check
+        # _should_cache_system's guard, CacheConfig.system_prompt_ttl's
+        # default, and that tools_ttl=True still emits a bare
+        # {"cachePoint": {"type": "default"}} while cache_config.ttl is unset —
+        # the tools point is the tail of the cached prefix, so a stray ttl key
+        # there is a fleet-wide prefix re-write.
+        #
+        # Agent.system_prompt remains the plain string (split_system_prompt
+        # concatenates the text blocks), so hashing/attribution/voice consumers
+        # are unaffected.
+        #
+        # Shared Projects 2.2: a bound Memory-Space block gets the FOURTH and
+        # last cache point (tools, system, memory, auto message = Bedrock's
+        # maximum of 4). The system point stays exactly where it was, so the
+        # static prefix (tools + platform floor + instructions) is still read
+        # from cache when members edit memory; only the memory block and what
+        # follows are rewritten. Turns without memory send today's bytes. With
+        # AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL=1h upstream gives BOTH
+        # TTL-less system points the same 1h, which keeps the non-increasing
+        # TTL order Bedrock requires. Skills XML is appended by the plugin
+        # after the last block, as it always was.
         agent_system_prompt: Any = system_prompt
         if system_prompt and model_config.bedrock_cache_points_supported():
             agent_system_prompt = [
                 {"text": system_prompt},
                 {"cachePoint": {"type": "default"}},
             ]
+            if memory_context:
+                agent_system_prompt += [
+                    {"text": memory_context},
+                    {"cachePoint": {"type": "default"}},
+                ]
+        elif memory_context:
+            agent_system_prompt = f"{system_prompt}\n\n{memory_context}" if system_prompt else memory_context
 
         # Create agent with session manager, hooks, and system prompt
         # Use SequentialToolExecutor to prevent concurrent browser operations
         # This prevents "Failed to start and initialize Playwright" errors with NovaAct
+        #
+        # callback_handler=None is load-bearing. Left unset, Strands installs
+        # PrintingCallbackHandler, which print()s every streamed text delta to
+        # stdout with end="". The runtime ships stdout to CloudWatch, so that
+        # put user conversation content in the logs and glued unterminated text
+        # onto the front of EMF lines. Nothing here consumes callback events:
+        # the stream processor reads agent.stream_async() directly.
         agent = Agent(
             model=model,
             system_prompt=agent_system_prompt,
             tools=tools,
             tool_executor=SequentialToolExecutor(),
             session_manager=session_manager,
+            conversation_manager=AgentFactory.build_conversation_manager(),
             hooks=hooks if hooks else None,
             plugins=plugins if plugins else None,
             retry_strategy=retry_strategy,
+            callback_handler=None,
         )
 
         return agent
+
+    @staticmethod
+    def _build_retry_strategy(
+        model_config: ModelConfig, model: Any
+    ) -> Optional[TransientModelRetryStrategy]:
+        """Return the agent's retry strategy and hold the transport to one attempt.
+
+        A ``None`` return is not "use the default": Strands reads it as
+        retries OFF. Every provider but Bedrock used to get ``None``, and
+        GPT-6's transient faults reached users as "Agent force-stopped" on
+        the first attempt.
+
+        The strategy is the only retry layer. Bedrock's botocore config
+        already carries one attempt (``to_bedrock_config``); the OpenAI client
+        is set to ``max_retries=0`` here; Gemini's client never retries unless
+        configured to. Every model's stream is tagged so a failure after
+        visible output is never retried.
+        """
+        retry_config = model_config.retry_config
+        if not retry_config:
+            return None
+
+        tag_partial_output(model)
+        if isinstance(model, _OPENAI_FAMILY_MODELS):
+            # A fresh dict, not an in-place edit: a builder's client_args must
+            # not leak this setting to its other callers (api-converse).
+            model.client_args = {**model.client_args, "max_retries": 0}
+
+        logger.info(
+            f"Configured retry strategy: transport=1 attempt, sdk={retry_config.sdk_max_attempts} attempts "
+            f"({retry_config.sdk_initial_delay}s-{retry_config.sdk_max_delay}s backoff), "
+            f"strategy=TransientModelRetryStrategy"
+        )
+        return TransientModelRetryStrategy(
+            max_attempts=retry_config.sdk_max_attempts,
+            initial_delay=retry_config.sdk_initial_delay,
+            max_delay=retry_config.sdk_max_delay,
+        )
+
+    @staticmethod
+    def build_conversation_manager() -> SlidingWindowConversationManager:
+        """The Strands conversation manager for the chat agent.
+
+        Left unset, Strands installs ``SlidingWindowConversationManager()`` with
+        a **40-message** window and runs it after every event-loop cycle. Past
+        40 messages that slides the front of ``agent.messages`` every turn,
+        which (a) re-writes the whole cached prefix each turn — the 2026-09-15
+        prod cost audit saw fingerprint ``messageCount`` pinned at 39–41 with
+        every turn reading only tools+system — and (b) moves the list our
+        compaction checkpoint is expressed in (spiral-spec D3, ANCHOR_MISMATCH
+        on 14 of 20 audited sessions). History size is ``TurnBasedSessionManager``'s
+        job (docs/specs/compaction-model-relative-thresholds.md), so the window
+        is set large enough never to trim on its own. The manager is kept
+        (rather than ``NullConversationManager``) because its ``reduce_context``
+        is the only ``ContextWindowOverflowException`` recovery in the stack,
+        and that path does not depend on the window size.
+
+        ``AGENTCORE_CONVERSATION_WINDOW_MESSAGES=40`` restores the SDK default.
+        """
+        raw = os.environ.get(EnvVars.CONVERSATION_WINDOW_MESSAGES, "").strip()
+        try:
+            window = int(raw) if raw else Defaults.CONVERSATION_WINDOW_MESSAGES
+        except ValueError:
+            window = Defaults.CONVERSATION_WINDOW_MESSAGES
+        window = max(2, window)
+        return SlidingWindowConversationManager(window_size=window, should_truncate_results=True)

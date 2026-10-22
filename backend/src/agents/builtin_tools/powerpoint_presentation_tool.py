@@ -368,6 +368,14 @@ def make_create_powerpoint_presentation_tool(session_id: str, user_id: str):
                                                  Inches(8), Inches(2)).table
                     tbl.cell(0, 0).text = 'Quarter'; tbl.cell(0, 1).text = 'Revenue'
 
+                Speaker notes -- add them to every content slide unless
+                the user says otherwise. They are what the presenter
+                actually says, so keep the detail there and the slide
+                itself sparse:
+                    slide.notes_slide.notes_text_frame.text = (
+                        'Revenue grew 15% on enterprise renewals; '
+                        'call out the churn improvement before moving on.')
+
                 A matplotlib chart image:
                     import matplotlib.pyplot as plt
                     plt.figure(figsize=(8, 4.5))
@@ -477,14 +485,14 @@ def make_create_powerpoint_presentation_tool(session_id: str, user_id: str):
             return _error(f"❌ Failed to create '{filename}': {exc}")
 
         try:
-            _id, download_url, size_kb = await _store_document(
+            upload_id, size_kb = await _store_document(
                 user_id, session_id, filename, file_bytes, _PPTX_MIME
             )
         except Exception as exc:  # noqa: BLE001 - storage failure is terminal
             logger.error(f"create_powerpoint_presentation storage error: {exc}")
             return _error(f"❌ Created '{filename}' but failed to save it: {exc}")
 
-        return _download_card(filename, download_url, size_kb, "Created")
+        return _download_card(filename, upload_id, size_kb, "Created")
 
     return create_powerpoint_presentation
 
@@ -578,7 +586,7 @@ def make_modify_powerpoint_presentation_tool(session_id: str, user_id: str):
             return _error(f"❌ Failed to modify '{source.filename}': {exc}")
 
         try:
-            _id, download_url, size_kb = await _store_document(
+            upload_id, size_kb = await _store_document(
                 user_id, session_id, output_filename, file_bytes, _PPTX_MIME
             )
         except Exception as exc:  # noqa: BLE001 - storage failure is terminal
@@ -587,7 +595,7 @@ def make_modify_powerpoint_presentation_tool(session_id: str, user_id: str):
                 f"❌ Modified '{source.filename}' but failed to save it: {exc}"
             )
 
-        return _download_card(output_filename, download_url, size_kb, "Updated")
+        return _download_card(output_filename, upload_id, size_kb, "Updated")
 
     return modify_powerpoint_presentation
 

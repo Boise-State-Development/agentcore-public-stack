@@ -131,8 +131,9 @@ class TestSoftDeleteDocument:
         expected_ttl = int(time.time()) + 7 * 86400
         assert abs(result.ttl - expected_ttl) < 5
 
-        # Verify update_item was called with TTL in expression values
-        call_kwargs = table.update_item.call_args
+        # Verify the soft-delete write carried the TTL. It is the FIRST update_item:
+        # the byte settlement that follows writes to the same (mocked) table.
+        call_kwargs = table.update_item.call_args_list[0]
         expr_values = call_kwargs.kwargs.get("ExpressionAttributeValues", {})
         assert ":ttl_value" in expr_values
 

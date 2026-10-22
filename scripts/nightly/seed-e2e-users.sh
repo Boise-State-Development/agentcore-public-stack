@@ -78,6 +78,65 @@ ensure_user() {
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# RBAC for the regular E2E user.
+#
+# The nightly stack never runs the bootstrap data seeding, so its `default`
+# role grants no tools. The turn-path smoke matrix (turn-smoke.sh) needs
+# `calculator` and `ask_user_question`, so the regular user joins a Cognito
+# group that the `e2e_user` app role maps to. The group name lands in the
+# access token's `cognito:groups`, which the BFF login reads as the user's
+# roles; the role itself is written through the shared repository by
+# backend/scripts/seed_e2e_role.py so every mapping row the resolver reads
+# is created together. Both steps are idempotent.
+# ---------------------------------------------------------------------------
+E2E_USER_GROUP="${E2E_USER_GROUP:-e2e-users}"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+ensure_group_membership() {
+    local user_pool_id="$1"
+    local username="$2"
+    local group="$3"
+
+    if ! aws cognito-idp get-group \
+            --user-pool-id "${user_pool_id}" \
+            --group-name "${group}" \
+            --region "${CDK_AWS_REGION}" \
+            --no-cli-pager > /dev/null 2>&1; then
+        log_info "  Creating Cognito group ${group}..."
+        aws cognito-idp create-group \
+            --user-pool-id "${user_pool_id}" \
+            --group-name "${group}" \
+            --description "Nightly E2E test accounts (maps to the e2e_user app role)" \
+            --region "${CDK_AWS_REGION}" \
+            --no-cli-pager > /dev/null
+    fi
+
+    # admin-add-user-to-group is idempotent: re-adding a member is a no-op.
+    aws cognito-idp admin-add-user-to-group \
+        --user-pool-id "${user_pool_id}" \
+        --username "${username}" \
+        --group-name "${group}" \
+        --region "${CDK_AWS_REGION}" \
+        --no-cli-pager > /dev/null
+    log_success "  ${username} is in group ${group}"
+}
+
+seed_e2e_role() {
+    if ! command -v uv > /dev/null 2>&1; then
+        log_warn "  uv not found; skipping the e2e_user role seed (tool rows of the turn smoke will FAIL)"
+        return 0
+    fi
+    log_info "  Seeding the e2e_user app role (group ${E2E_USER_GROUP})..."
+    (
+        cd "${PROJECT_ROOT}/backend"
+        AWS_REGION="${CDK_AWS_REGION}" uv run python scripts/seed_e2e_role.py \
+            --prefix "${CDK_PROJECT_PREFIX}" \
+            --region "${CDK_AWS_REGION}" \
+            --group "${E2E_USER_GROUP}"
+    )
+}
+
 main() {
     log_info "Seeding E2E test users in Cognito..."
 
@@ -113,6 +172,9 @@ main() {
     # Seed both accounts
     ensure_user "${user_pool_id}" "${USER_USERNAME}" "${USER_PASSWORD}" "regular"
     ensure_user "${user_pool_id}" "${ADMIN_USERNAME}" "${ADMIN_PASSWORD}" "admin"
+
+    ensure_group_membership "${user_pool_id}" "${USER_USERNAME}" "${E2E_USER_GROUP}"
+    seed_e2e_role
 
     log_success "E2E test users seeded successfully"
 }

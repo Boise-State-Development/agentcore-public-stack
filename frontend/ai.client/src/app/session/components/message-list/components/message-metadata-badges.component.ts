@@ -66,7 +66,7 @@ interface MessageMetadata {
 
             <!-- TTFT Badge -->
                 @if (ttft()) {
-                    <div class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-vendor-google-100 px-3 py-1 text-xs font-medium text-vendor-google-700 dark:bg-vendor-google-900/30 dark:text-vendor-google-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
                         </svg>
@@ -76,7 +76,7 @@ interface MessageMetadata {
 
                 <!-- E2E Badge -->
                 @if (e2e()) {
-                    <div class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-300">
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-state-success-100 px-3 py-1 text-xs font-medium text-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                         </svg>
@@ -86,7 +86,7 @@ interface MessageMetadata {
 
                 <!-- Input Tokens Badge -->
                 @if (inputTokens() !== null) {
-                    <div class="inline-flex items-center gap-1.5 rounded-full bg-indigo-100 px-3 py-1 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-filetype-image-100 px-3 py-1 text-xs font-medium text-filetype-image-700 dark:bg-filetype-image-900/30 dark:text-filetype-image-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
                         </svg>
@@ -96,7 +96,7 @@ interface MessageMetadata {
 
                 <!-- Output Tokens Badge -->
                 @if (outputTokens() !== null) {
-                    <div class="inline-flex items-center gap-1.5 rounded-full bg-purple-100 px-3 py-1 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-filetype-markdown-100 px-3 py-1 text-xs font-medium text-filetype-markdown-700 dark:bg-filetype-markdown-900/30 dark:text-filetype-markdown-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
                         </svg>
@@ -109,10 +109,10 @@ interface MessageMetadata {
                     <div
                         class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium"
                         [class]="cacheStats()!.hitRate >= 80
-                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                            ? 'bg-metric-cache-high-100 text-metric-cache-high-700 dark:bg-metric-cache-high-900/30 dark:text-metric-cache-high-300'
                             : cacheStats()!.hitRate >= 50
-                                ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
-                                : 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'"
+                                ? 'bg-metric-cache-mid-100 text-metric-cache-mid-700 dark:bg-metric-cache-mid-900/30 dark:text-metric-cache-mid-300'
+                                : 'bg-metric-cache-low-100 text-metric-cache-low-700 dark:bg-metric-cache-low-900/30 dark:text-metric-cache-low-300'"
                     >
                         <!-- Cache/database icon -->
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -120,14 +120,14 @@ interface MessageMetadata {
                         </svg>
                         <span>Cache: {{ cacheStats()!.hitRate.toFixed(0) }}% hit</span>
                         @if (cacheStats()!.savings > 0) {
-                            <span class="text-emerald-600 dark:text-emerald-400">({{ cacheStats()!.savings.toFixed(0) }}% saved)</span>
+                            <span class="text-metric-cache-high-700 dark:text-metric-cache-high-300">({{ cacheStats()!.savings.toFixed(0) }}% saved)</span>
                         }
                     </div>
                 }
 
                 <!-- Cache Write Badge (show when writing to cache - first request or cache miss) -->
                 @if (cacheWriteTokens() && !cacheReadTokens()) {
-                    <div class="inline-flex items-center gap-1.5 rounded-full bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300">
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-metric-cache-write-100 px-3 py-1 text-xs font-medium text-metric-cache-write-700 dark:bg-metric-cache-write-900/30 dark:text-metric-cache-write-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
                         </svg>
@@ -137,7 +137,7 @@ interface MessageMetadata {
 
                 <!-- Input Cost Badge -->
                 @if (inputCost() !== null) {
-                    <div class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-metric-cost-100 px-3 py-1 text-xs font-medium text-metric-cost-700 dark:bg-metric-cost-900/30 dark:text-metric-cost-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                         </svg>
@@ -147,7 +147,7 @@ interface MessageMetadata {
 
                 <!-- Output Cost Badge -->
                 @if (outputCost() !== null) {
-                    <div class="inline-flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1 text-xs font-medium text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-metric-cost-output-100 px-3 py-1 text-xs font-medium text-metric-cost-output-700 dark:bg-metric-cost-output-900/30 dark:text-metric-cost-output-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                         </svg>
@@ -157,7 +157,7 @@ interface MessageMetadata {
 
                 <!-- Total Cost Badge -->
                 @if (totalCost() !== null) {
-                    <div class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-metric-cost-100 px-3 py-1 text-xs font-medium text-metric-cost-700 dark:bg-metric-cost-900/30 dark:text-metric-cost-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                         </svg>
@@ -167,8 +167,7 @@ interface MessageMetadata {
         }
     `,
     styles: `
-        @import "tailwindcss";
-        @custom-variant dark (&:where(.dark, .dark *));
+        @reference "../../../../../styles/theme.css";
 
         :host {
             display: contents;

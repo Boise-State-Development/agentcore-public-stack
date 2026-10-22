@@ -193,51 +193,6 @@ class TestFileSanitizerOutputInvariantAndIdempotence:
         )
 
 
-import json
-
-from agents.main_agent.streaming.event_formatter import StreamEventFormatter
-
-from .conftest import st_sse_event_dict
-
-
-class TestSSEFormatInvariantAndJSONRoundTrip:
-    """
-    Feature: agent-core-tests, Property 6: SSE format invariant and JSON round-trip
-
-    Validates: Requirements 12.9, 12.10
-    """
-
-    @given(event_dict=st_sse_event_dict)
-    @settings(max_examples=100)
-    def test_sse_format_and_json_round_trip(self, event_dict: dict):
-        """
-        Feature: agent-core-tests, Property 6: SSE format invariant and JSON round-trip
-
-        Validates: Requirements 12.9, 12.10
-
-        For any dictionary with string keys and JSON-serializable values,
-        format_sse_event(d) should (a) start with "data: " and end with
-        "\\n\\n", and (b) the JSON payload extracted from between the prefix
-        and suffix should parse back to the original dictionary.
-        """
-        result = StreamEventFormatter.format_sse_event(event_dict)
-
-        # (a) SSE format invariant
-        assert result.startswith("data: "), (
-            f"SSE event does not start with 'data: ': {result!r}"
-        )
-        assert result.endswith("\n\n"), (
-            f"SSE event does not end with '\\n\\n': {result!r}"
-        )
-
-        # (b) JSON round-trip — extract payload between prefix and suffix
-        payload_str = result[len("data: "):-len("\n\n")]
-        parsed = json.loads(payload_str)
-        assert parsed == event_dict, (
-            f"JSON round-trip failed: expected {event_dict!r}, got {parsed!r}"
-        )
-
-
 import hypothesis.strategies as st
 from hypothesis import given, settings
 

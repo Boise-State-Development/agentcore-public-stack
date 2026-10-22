@@ -18,6 +18,8 @@ the declared API mode and forward the region + already-native params.
 from enum import Enum
 from typing import Any, Dict, Optional
 
+from .usage_normalization import usage_normalized
+
 
 class MantleApiMode(str, Enum):
     """OpenAI-compatible API surface a Bedrock Mantle model speaks.
@@ -121,7 +123,12 @@ def build_mantle_model(
     if region:
         bedrock_mantle_config["region"] = region
 
-    model_cls = (
+    # Wrapped so the model reports Bedrock-Converse token-bucket semantics:
+    # OpenAI's `input_tokens` is inclusive of the cache buckets, and Strands
+    # drops `cache_write_tokens` outright. Applied here — the single OpenAI-
+    # family construction seam both consumers share — so no downstream reader
+    # of the usage dict needs to know which provider produced it.
+    model_cls = usage_normalized(
         OpenAIResponsesModel
         if api_mode == MantleApiMode.RESPONSES
         else OpenAIModel

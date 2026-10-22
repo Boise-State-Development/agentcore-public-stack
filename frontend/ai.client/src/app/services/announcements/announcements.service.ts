@@ -1,0 +1,204 @@
+import { Injectable, computed, inject, resource, signal } from '@angular/core';
+import { HttpClient, HttpContext, HttpErrorResponse } from '@angular/common/http';
+import { firstValueFrom, retry, throwError, timer } from 'rxjs';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
+import { SessionService } from '../../auth/session.service';
+import { ConfigService } from '../config.service';
+import {
+  Announcement,
+  AnnouncementAckAction,
+  AnnouncementAckRequest,
+  AnnouncementFeed,
+  AnnouncementSurface,
+} from './announcement.model';
+
+/** How long to wait before the single ack retry. */
+export const ACK_RETRY_DELAY_MS = 1000;
+
+/**
+ * Failures worth one more attempt: the request never landed (status 0 — a
+ * mobile network blip, a backgrounded tab) or a gateway in front of app-api
+ * gave up. A 4xx is the server's considered answer and retrying won't change
+ * it.
+ */
+function isTransient(error: unknown): boolean {
+  return (
+    error instanceof HttpErrorResponse &&
+    (error.status === 0 || error.status === 502 || error.status === 503 || error.status === 504)
+  );
+}
+
+const EMPTY_FEED: AnnouncementFeed = {
+  panel: [],
+  banner: null,
+  modal: null,
+  unread_count: 0,
+};
+
+/**
+ * Feature announcements — the read side and the acknowledgement side.
+ *
+ * **The server decides what is visible; this service renders what it is
+ * handed** (§D5). There is deliberately no targeting, date, or ack filtering
+ * here: those rules exist once, in `apis/shared/announcements/visibility.py`.
+ *
+ * Two pieces of local state exist on top of the server's answer, and both are
+ * conveniences rather than truth:
+ *
+ * - `locallyHidden` implements the **fail-open dismissal** from §D7. If the
+ *   ack POST fails, the item is hidden for this tab anyway. A user trapped
+ *   under a banner they cannot dismiss because of a transient 500 is a worse
+ *   outcome than an announcement that comes back tomorrow.
+ * - `locallyRead` clears the unread dot the moment the panel opens, without
+ *   waiting for the round trip. The server is still told, and the next fetch
+ *   agrees.
+ *
+ * Neither is ever the source of truth — that is the whole point of §D3.
+ */
+@Injectable({ providedIn: 'root' })
+export class AnnouncementsService {
+  private readonly http = inject(HttpClient);
+  private readonly config = inject(ConfigService);
+  private readonly session = inject(SessionService);
+
+  private readonly baseUrl = computed(
+    () => `${this.config.appApiUrl()}/announcements`,
+  );
+
+  /**
+   * Every request here fails open and swallows its own error, so the global
+   * error toast must not fire either — otherwise a dropped ack (status 0 on a
+   * flaky mobile connection, a transient 5xx) still puts "An error occurred"
+   * in front of the user for something they cannot act on.
+   */
+  private readonly options = {
+    context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true),
+  };
+
+  /**
+   * Idle until the session bootstrap has a user. A `resource` loads the moment
+   * it is constructed, not on first read, and `AnnouncementModalService`
+   * constructs this one from an app initializer — so without the gate the feed
+   * was requested on every page load, `/auth/login` included, in parallel with
+   * `/auth/session` and before anyone knew whether there was a session. Gating
+   * also means the server evaluates targeting with the user's roles known.
+   */
+  readonly feedResource = resource({
+    params: () => (this.session.isAuthenticated() ? {} : undefined),
+    loader: async () => this.fetchFeed(),
+  });
+
+  /** Dismissed in this tab, whether or not the server agreed. */
+  private readonly locallyHidden = signal<ReadonlySet<string>>(new Set());
+  /** Read in this tab, so the dot clears before the round trip lands. */
+  private readonly locallyRead = signal<ReadonlySet<string>>(new Set());
+
+  private readonly feed = computed<AnnouncementFeed>(
+    () => this.feedResource.value() ?? EMPTY_FEED,
+  );
+
+  /** Every announcement this user may browse, newest first. Uncapped. */
+  readonly panelItems = computed<Announcement[]>(() => this.feed().panel);
+
+  /** At most one, chosen by the server. Rendered by `AnnouncementBannerComponent`. */
+  readonly bannerItem = computed<Announcement | null>(() =>
+    this.visibleOrNull(this.feed().banner),
+  );
+
+  /** At most one, chosen by the server. Rendered by `AnnouncementModalComponent`. */
+  readonly modalItem = computed<Announcement | null>(() =>
+    this.visibleOrNull(this.feed().modal),
+  );
+
+  readonly unreadCount = computed<number>(() => {
+    const read = this.locallyRead();
+    return this.panelItems().filter(a => a.is_unread && !read.has(a.announcement_id))
+      .length;
+  });
+
+  readonly hasUnread = computed<boolean>(() => this.unreadCount() > 0);
+
+  /** Whether an item should render with a "New" / "Updated" pill. */
+  isUnread(announcement: Announcement): boolean {
+    return announcement.is_unread && !this.locallyRead().has(announcement.announcement_id);
+  }
+
+  /**
+   * Record an acknowledgement.
+   *
+   * Fails open (§D7): a rejected POST still hides the item locally and
+   * resolves rather than throwing, so no caller has to remember to catch.
+   * Returns whether the server accepted it.
+   *
+   * A transient failure is retried once. The endpoint is idempotent and
+   * monotonic (§D2), so a duplicate that did land server-side is a no-op —
+   * and without the retry, a dropped `acknowledged` resurfaces the modal on
+   * the next load.
+   */
+  async ack(
+    announcementId: string,
+    action: AnnouncementAckAction,
+    surface: AnnouncementSurface,
+  ): Promise<boolean> {
+    if (action !== 'seen') {
+      this.locallyHidden.update(prev => new Set(prev).add(announcementId));
+    }
+    this.locallyRead.update(prev => new Set(prev).add(announcementId));
+
+    const body: AnnouncementAckRequest = { action, surface };
+    try {
+      await firstValueFrom(
+        this.http.post<void>(
+          `${this.baseUrl()}/${announcementId}/ack`,
+          body,
+          this.options,
+        ).pipe(
+          retry({
+            count: 1,
+            delay: error =>
+              isTransient(error) ? timer(ACK_RETRY_DELAY_MS) : throwError(() => error),
+          }),
+        ),
+      );
+      return true;
+    } catch {
+      // Deliberately swallowed. The local hide already happened, and the next
+      // fetch re-derives the truth from the server.
+      return false;
+    }
+  }
+
+  /**
+   * Mark every unread panel item `seen` — what opening the What's-New panel
+   * means. Fire-and-forget per item, since each `ack` already fails open.
+   */
+  async markPanelSeen(): Promise<void> {
+    const unread = this.panelItems().filter(a => this.isUnread(a));
+    if (unread.length === 0) return;
+    await Promise.all(
+      unread.map(a => this.ack(a.announcement_id, 'seen', 'panel')),
+    );
+  }
+
+  /** Re-read the server's answer. */
+  reload(): void {
+    this.feedResource.reload();
+  }
+
+  private visibleOrNull(item: Announcement | null): Announcement | null {
+    if (!item) return null;
+    return this.locallyHidden().has(item.announcement_id) ? null : item;
+  }
+
+  private async fetchFeed(): Promise<AnnouncementFeed> {
+    try {
+      return await firstValueFrom(
+        this.http.get<AnnouncementFeed>(`${this.baseUrl()}/`, this.options),
+      );
+    } catch {
+      // The surface is kill-switched off (404) or the backend is unhappy.
+      // Announcements are ambient; none of this is worth an error to the user.
+      return EMPTY_FEED;
+    }
+  }
+}

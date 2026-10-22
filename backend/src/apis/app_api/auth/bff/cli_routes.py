@@ -58,12 +58,18 @@ from apis.shared.auth.state_store import OIDCStateData
 from apis.shared.rate_limit import RateLimiter
 
 from .config import BFFAuthConfig
+from .cookies import set_oauth_state_cookie
 from .pages import device_problem_page
 from .routes import (
     _AUTHORIZE_SCOPES,
+    _BROWSER_BINDING_BYTES,
+    _CODE_VERIFIER_BYTES,
+    _NONCE_BYTES,
     _STATE_TTL_SECONDS,
+    _browser_binding_digest,
     _get_device_grant_service,
     _get_state_store,
+    _pkce_code_challenge,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,12 +254,24 @@ async def cli_verify(request: Request, user_code: Optional[str] = None) -> Respo
             "Device codes are valid for a few minutes. Start a new sign-in " "from your terminal and try again.",
         )
 
+    # Same shape of authorize request as `/auth/login` — PKCE, nonce and the
+    # browser-binding cookie — because the callback is the web app's and it
+    # rejects any state that lacks them. The CLI adapts to that contract; it
+    # must not loosen it. Binding *this* browser also stops an attacker from
+    # relaying a verify URL for someone else to finish.
     state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(_CODE_VERIFIER_BYTES)
+    nonce = secrets.token_urlsafe(_NONCE_BYTES)
+    binding_secret = secrets.token_urlsafe(_BROWSER_BINDING_BYTES)
+
     _get_state_store().store_state(
         state,
         OIDCStateData(
             redirect_uri=config.callback_url,
             provider_id="cognito-bff",
+            code_verifier=code_verifier,
+            nonce=nonce,
+            browser_binding_hash=_browser_binding_digest(binding_secret),
             device_user_code=normalised,
         ),
         ttl_seconds=_STATE_TTL_SECONDS,
@@ -266,12 +284,21 @@ async def cli_verify(request: Request, user_code: Optional[str] = None) -> Respo
             "scope": _AUTHORIZE_SCOPES,
             "redirect_uri": config.callback_url,
             "state": state,
+            "code_challenge": _pkce_code_challenge(code_verifier),
+            "code_challenge_method": "S256",
+            "nonce": nonce,
         }
     )
-    return RedirectResponse(
+    response = RedirectResponse(
         url=f"{config.cognito_domain_url}/oauth2/authorize?{params}",
         status_code=status.HTTP_302_FOUND,
     )
+    set_oauth_state_cookie(
+        response,
+        binding_secret=binding_secret,
+        max_age_seconds=_STATE_TTL_SECONDS,
+    )
+    return response
 
 
 # ─── POST /auth/cli/token ──────────────────────────────────────────────

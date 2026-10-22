@@ -20,9 +20,25 @@ NOTE: importing MCP-client construction from ``agents`` mirrors the existing
 
 import asyncio
 import logging
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
-from apis.shared.tools.models import DiscoveredMCPTool, ToolDefinition
+from apis.shared.tools.models import (
+    MAX_CAPABILITY_ENTRIES,
+    MAX_CAPABILITY_PAGES,
+    MAX_RESOLVED_PROMPT_CHARS,
+    MAX_RESOLVED_PROMPT_MESSAGES,
+    DiscoveredMCPTool,
+    MCPPromptArgument,
+    MCPPromptEntry,
+    MCPResourceEntry,
+    ResolvedPrompt,
+    ResolvedPromptMessage,
+    ToolCapabilitySnapshot,
+    ToolDefinition,
+    _clip,
+)
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -100,3 +116,294 @@ async def discover_tools_for_saved_tool(
             DiscoveredMCPTool(name=name, description=getattr(spec, "description", None))
         )
     return discovered
+
+
+# =============================================================================
+# Capability discovery (prompts + resources)
+# =============================================================================
+
+
+def _paginate(list_page, extract) -> tuple[list, bool]:
+    """Walk an MCP listing's cursor, capped by entries and by pages.
+
+    Returns ``(entries, truncated)``. Two caps, because they fail differently:
+    a server with thousands of resources would blow the DynamoDB item, and a
+    server with a broken cursor would loop forever.
+    """
+    entries: list = []
+    cursor = None
+    truncated = False
+    for _ in range(MAX_CAPABILITY_PAGES):
+        result = list_page(cursor)
+        entries.extend(extract(result))
+        if len(entries) >= MAX_CAPABILITY_ENTRIES:
+            entries = entries[:MAX_CAPABILITY_ENTRIES]
+            truncated = True
+            break
+        cursor = getattr(result, "nextCursor", None)
+        if not cursor:
+            break
+    else:
+        truncated = True
+    return entries, truncated
+
+
+def _prompt_entries(result) -> List[MCPPromptEntry]:
+    out: List[MCPPromptEntry] = []
+    for prompt in getattr(result, "prompts", None) or []:
+        name = getattr(prompt, "name", None)
+        if not name:
+            continue
+        out.append(
+            MCPPromptEntry(
+                name=name,
+                title=_clip(getattr(prompt, "title", None)),
+                description=_clip(getattr(prompt, "description", None)),
+                arguments=[
+                    MCPPromptArgument(
+                        name=getattr(arg, "name", ""),
+                        description=_clip(getattr(arg, "description", None)),
+                        required=bool(getattr(arg, "required", False)),
+                    )
+                    for arg in (getattr(prompt, "arguments", None) or [])
+                    if getattr(arg, "name", None)
+                ],
+            )
+        )
+    return out
+
+
+def _resource_entries(result, *, templates: bool) -> List[MCPResourceEntry]:
+    out: List[MCPResourceEntry] = []
+    source = (
+        getattr(result, "resourceTemplates", None)
+        if templates
+        else getattr(result, "resources", None)
+    ) or []
+    for resource in source:
+        # A template carries `uriTemplate`; a concrete resource carries `uri`.
+        uri = getattr(resource, "uriTemplate", None) if templates else None
+        uri = uri or getattr(resource, "uri", None)
+        if not uri:
+            continue
+        out.append(
+            MCPResourceEntry(
+                uri=str(uri),
+                name=_clip(getattr(resource, "name", None)),
+                description=_clip(getattr(resource, "description", None)),
+                mime_type=getattr(resource, "mimeType", None),
+                uri_template=templates,
+            )
+        )
+    return out
+
+
+async def discover_capabilities_for_saved_tool(
+    tool: ToolDefinition,
+    oauth_token: Optional[str] = None,
+    discovered_by: Optional[str] = None,
+) -> ToolCapabilitySnapshot:
+    """Ask a saved MCP tool what prompts and resources it exposes.
+
+    Each listing is attempted independently and its failure is swallowed into
+    ``supports_*=False``. A server that implements tools but not prompts answers
+    ``prompts/list`` with a JSON-RPC "method not found", which is normal and must
+    not cost us the resources listing — or the whole snapshot.
+
+    A transport-level failure (server unreachable, auth rejected) is different:
+    nothing was learned, so the snapshot records ``error`` and the caller can
+    keep showing the previous one rather than replacing it with emptiness.
+
+    Gateway (``mcp``) tools are not probed. The AgentCore Gateway enumerates a
+    target's *tools* at registration and exposes no prompt or resource surface,
+    so there is nothing on the other end to ask.
+    """
+    snapshot = ToolCapabilitySnapshot(
+        tool_id=tool.tool_id,
+        discovered_at=datetime.now(timezone.utc).isoformat(),
+        discovered_by=discovered_by,
+    )
+
+    if tool.protocol != "mcp_external" or not tool.mcp_config:
+        snapshot.error = "This tool is not an external MCP server."
+        return snapshot
+
+    from agents.main_agent.integrations.external_mcp_client import (
+        create_external_mcp_client,
+    )
+
+    forward = bool(getattr(tool, "forward_auth_token", False))
+    client = create_external_mcp_client(
+        config=tool.mcp_config,
+        tool_definition=tool,
+        oauth_token=oauth_token if (forward or tool.requires_oauth_provider) else None,
+    )
+    if client is None:
+        snapshot.error = "Could not build a client for this server."
+        return snapshot
+
+    def _probe() -> ToolCapabilitySnapshot:
+        # One session for both listings — a second connect would double the
+        # handshake cost and, for a 3LO server, the token round-trip with it.
+        with client:
+            try:
+                prompts, prompts_truncated = _paginate(
+                    lambda cursor: client.list_prompts_sync(pagination_token=cursor),
+                    _prompt_entries,
+                )
+                snapshot.prompts = prompts
+                snapshot.supports_prompts = True
+                snapshot.truncated = snapshot.truncated or prompts_truncated
+            except Exception as exc:  # noqa: BLE001 - unsupported is the common case
+                logger.debug("prompts/list unavailable for %s: %s", tool.tool_id, exc)
+
+            resources: List[MCPResourceEntry] = []
+            supports_resources = False
+            try:
+                listed, listed_truncated = _paginate(
+                    lambda cursor: client.list_resources_sync(pagination_token=cursor),
+                    lambda result: _resource_entries(result, templates=False),
+                )
+                resources.extend(listed)
+                supports_resources = True
+                snapshot.truncated = snapshot.truncated or listed_truncated
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("resources/list unavailable for %s: %s", tool.tool_id, exc)
+
+            try:
+                templated, templated_truncated = _paginate(
+                    lambda cursor: client.list_resource_templates_sync(
+                        pagination_token=cursor
+                    ),
+                    lambda result: _resource_entries(result, templates=True),
+                )
+                resources.extend(templated)
+                supports_resources = True
+                snapshot.truncated = snapshot.truncated or templated_truncated
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "resources/templates/list unavailable for %s: %s",
+                    tool.tool_id,
+                    exc,
+                )
+
+            snapshot.resources = resources[:MAX_CAPABILITY_ENTRIES]
+            snapshot.supports_resources = supports_resources
+            return snapshot
+
+    try:
+        return await asyncio.to_thread(_probe)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the caller as `error`
+        logger.warning("Capability discovery failed for %s: %s", tool.tool_id, exc)
+        snapshot.error = f"Could not reach the MCP server: {exc}"
+        return snapshot
+
+
+# =============================================================================
+# Prompt resolution (prompts/get)
+# =============================================================================
+
+
+def _message_text(content) -> tuple[str, str]:
+    """Flatten one ``PromptMessage`` content block to ``(kind, text)``.
+
+    An MCP prompt message can carry text, an image, audio, a resource link or an
+    embedded resource. Only text survives into something a person can read and
+    edit, so everything else is reported by kind and its payload is dropped
+    rather than base64'd into the response — a preview is not the place to move
+    megabytes, and the caller renders the kind so nothing goes missing silently.
+    """
+    kind = getattr(content, "type", None) or "text"
+    if kind == "text":
+        return "text", getattr(content, "text", "") or ""
+    if kind == "resource_link":
+        return kind, str(getattr(content, "uri", "") or "")
+    if kind == "resource":
+        resource = getattr(content, "resource", None)
+        # An embedded *text* resource is still readable; binary blobs are not.
+        text = getattr(resource, "text", None)
+        if text:
+            return "text", text
+        return kind, str(getattr(resource, "uri", "") or "")
+    return kind, ""
+
+
+async def resolve_prompt_for_saved_tool(
+    tool: ToolDefinition,
+    prompt_name: str,
+    arguments: Dict[str, str],
+    oauth_token: Optional[str] = None,
+) -> ResolvedPrompt:
+    """Ask a saved MCP server to compose one of its prompts (``prompts/get``).
+
+    Unlike the listings, this is deliberately a *live* call and not a stored
+    snapshot: the result depends on the arguments the user just typed, and for a
+    3LO server on the token only they hold.
+
+    Raises:
+        RuntimeError: the server could not be reached or refused the prompt.
+            The route translates this into a 502.
+    """
+    if tool.protocol != "mcp_external" or not tool.mcp_config:
+        raise RuntimeError("This tool is not an external MCP server.")
+
+    from agents.main_agent.integrations.external_mcp_client import (
+        create_external_mcp_client,
+    )
+
+    forward = bool(getattr(tool, "forward_auth_token", False))
+    client = create_external_mcp_client(
+        config=tool.mcp_config,
+        tool_definition=tool,
+        oauth_token=oauth_token if (forward or tool.requires_oauth_provider) else None,
+    )
+    if client is None:
+        raise RuntimeError("Could not build a client for this server.")
+
+    def _get() -> ResolvedPrompt:
+        with client:
+            return _to_resolved(client.get_prompt_sync(prompt_name, arguments))
+
+    try:
+        return await asyncio.to_thread(_get)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a 502 by the route
+        logger.warning(
+            "prompts/get failed for %s/%s: %s",
+            scrub_log(tool.tool_id),
+            scrub_log(prompt_name),
+            scrub_log(exc),
+        )
+        raise RuntimeError(f"The server could not compose that prompt: {exc}") from exc
+
+
+def _to_resolved(result) -> ResolvedPrompt:
+    """Cap and flatten a ``GetPromptResult`` into the wire model."""
+    messages: List[ResolvedPromptMessage] = []
+    budget = MAX_RESOLVED_PROMPT_CHARS
+    truncated = False
+
+    for message in (getattr(result, "messages", None) or [])[:MAX_RESOLVED_PROMPT_MESSAGES]:
+        kind, text = _message_text(getattr(message, "content", None))
+        if len(text) > budget:
+            text = text[:budget]
+            truncated = True
+        budget -= len(text)
+        messages.append(
+            ResolvedPromptMessage(
+                role=getattr(message, "role", "user") or "user",
+                kind=kind,
+                text=text,
+            )
+        )
+        if budget <= 0:
+            truncated = True
+            break
+
+    if len(getattr(result, "messages", None) or []) > MAX_RESOLVED_PROMPT_MESSAGES:
+        truncated = True
+
+    return ResolvedPrompt(
+        description=_clip(getattr(result, "description", None)),
+        messages=messages,
+        truncated=truncated,
+    )

@@ -26,7 +26,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import boto3
 from botocore.config import Config
@@ -404,27 +404,19 @@ async def write_workspace_file(
     await repo.create_file(metadata)
     await repo.increment_quota(user_id, len(data))
 
-    download_url = await asyncio.to_thread(
-        _s3().generate_presigned_url,
-        "get_object",
-        Params={
-            "Bucket": bucket,
-            "Key": s3_key,
-            "ResponseContentType": mime_type,
-            "ResponseContentDisposition": f'attachment; filename="{final_name}"',
-        },
-        ExpiresIn=_DOWNLOAD_URL_TTL,
-    )
-
     logger.info(
         f"[workspace_write] {len(data)} bytes → {final_name} "
         f"(upload_id={upload_id}, source={source})"
     )
+    # No presigned URL here: the caller's tool result is the model's context as
+    # well as the UI payload, and a signed URL in it is both ~1,400 tokens of
+    # permanent prefix and something the model re-emits in prose with the query
+    # string truncated. The SPA resolves `upload_id` through
+    # `GET /api/files/{uploadId}/download`, which mints a fresh URL per click.
     return {
         "upload_id": upload_id,
         "filename": final_name,
         "mime_type": mime_type,
         "size_bytes": len(data),
         "size_kb": f"{len(data) / 1024:.1f} KB",
-        "download_url": download_url,
     }

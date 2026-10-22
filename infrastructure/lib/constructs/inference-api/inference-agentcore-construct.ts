@@ -4,15 +4,22 @@ import * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cr from 'aws-cdk-lib/custom-resources';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as xray from 'aws-cdk-lib/aws-xray';
 import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
+import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
+  RUNTIME_MEMORY_ACTIONS,
   createRuntimeExecutionRole,
 } from './inference-api-iam-roles';
+import { RuntimeLogRetentionSweepConstruct } from './runtime-log-retention-sweep-construct';
+import { RuntimeEnvironmentPayloadGuard } from './runtime-environment-payload-guard';
 
 export interface InferenceAgentCoreConstructProps {
   config: AppConfig;
@@ -47,6 +54,11 @@ export interface InferenceAgentCoreConstructProps {
   browserArn: string;
   /** AgentCore Browser ID — same provenance as browserArn. */
   browserId: string;
+  /** S3 bucket holding the Chromium MANAGED policy (spec D6). */
+  browserPolicyBucketName: string;
+  /** Object key of that policy file. */
+  browserPolicyKey: string;
+  alarmTopic?: sns.ITopic;
 }
 
 /**
@@ -59,6 +71,22 @@ export interface InferenceAgentCoreConstructProps {
  *
  * IAM roles are created via inference-api-iam-roles.ts (extracted).
  */
+/** Where the Runtime reads the deployment's sensitive patterns (apis/shared/memory/lint.py `PATTERNS_SSM_SUFFIX`). */
+export const MEMORY_SENSITIVE_PATTERNS_SSM_SUFFIX = 'memory/sensitive-patterns';
+
+/**
+ * The Runtime's packed content-lint setting (Shared Projects 2.7): the mode, and when the
+ * deployment has sensitive patterns, `ssm:` plus a hash of them. The patterns themselves are in
+ * SSM, because this environment is near both of its caps (50 variables; 2,560 bytes on V2). The
+ * hash makes a pattern change a change to the Runtime, so its containers pick the new ones up.
+ */
+export function memoryLintRuntimeValue(config: AppConfig): string {
+  const { mode, sensitivePatterns } = config.memoryLint;
+  if (!sensitivePatterns) return JSON.stringify({ mode });
+  const hash = createHash('sha256').update(sensitivePatterns).digest('hex').slice(0, 12);
+  return JSON.stringify({ mode, patterns: `ssm:${hash}` });
+}
+
 export class InferenceAgentCoreConstruct extends Construct {
   public readonly runtime: bedrock.CfnRuntime;
   /**
@@ -77,6 +105,9 @@ export class InferenceAgentCoreConstruct extends Construct {
    * stack query the group that has data in it.
    */
   public readonly runtimeLogGroupName: string;
+  /** The `Name` dimension on every runtime metric: `{runtimeName}::DEFAULT`.
+   *  Shared with the dashboard so both bind identically. */
+  public readonly runtimeMetricName: string;
 
   constructor(scope: Construct, id: string, props: InferenceAgentCoreConstructProps) {
     super(scope, id);
@@ -149,8 +180,6 @@ export class InferenceAgentCoreConstruct extends Construct {
 
     // ── Additional SSM reads needed by the runtime container env ──
     const authProviderSecretsArn = props.refs.authProviderSecretsSecret.secretArn;
-    const oauthTokenEncryptionKeyArn = props.refs.oauthTokenEncryptionKey.keyArn;
-    const oauthClientSecretsArn = props.refs.oauthClientSecretsSecret.secretArn;
 
     // Memory + Code Interpreter + Browser are owned by PlatformStack
     // IDs flow in via typed props (`props.memoryArn`, etc.). We grant
@@ -160,26 +189,13 @@ export class InferenceAgentCoreConstruct extends Construct {
     // AgentCore Runtime
     // ============================================================
 
-    // Grant Runtime permission to access Memory.
-    // Action list mirrors the AgentCore Data Plane API surface — see
-    // https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_Operations.html
-    // GetMemory and GetMemoryStrategies are control-plane shapes that do
-    // not exist as separate IAM actions; the same data-plane policy
-    // covers them. RetrieveMemory / ListMemorySessions / GetMemorySession
-    // were also speculative and removed.
+    // Grant Runtime permission to access Memory, scoped to this deployment's
+    // memory. Same action list as the role's account-wide statement
+    // (RUNTIME_MEMORY_ACTIONS), so the two cannot disagree.
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
       sid: 'MemoryAccess',
       effect: iam.Effect.ALLOW,
-      actions: [
-        'bedrock-agentcore:CreateEvent',
-        'bedrock-agentcore:GetEvent',
-        'bedrock-agentcore:ListEvents',
-        'bedrock-agentcore:ListActors',
-        'bedrock-agentcore:ListSessions',
-        'bedrock-agentcore:RetrieveMemoryRecords',
-        'bedrock-agentcore:GetMemoryRecord',
-        'bedrock-agentcore:ListMemoryRecords',
-      ],
+      actions: [...RUNTIME_MEMORY_ACTIONS],
       resources: [props.memoryArn],
     }));
 
@@ -224,6 +240,27 @@ export class InferenceAgentCoreConstruct extends Construct {
       resources: [props.browserArn],
     }));
 
+    // The Chromium URL policy is passed on every StartBrowserSession, and the
+    // service reads the S3 object as **the caller** — this role — not as the
+    // browser's execution role. Granting only the browser role (which the
+    // service's own prerequisites document) produced:
+    //
+    //   ValidationException ... Access denied to S3 object - bucket: ...,
+    //   key: policies/managed-policies.json. Verify that the caller has
+    //   permission to access this bucket and is the bucket owner.
+    //
+    // and that failure takes down EVERY browser session, not just the policy.
+    // Scoped to the one object rather than the prefix: this role only ever
+    // needs to read the policy it is passing.
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BrowserPolicyObjectRead',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
+      resources: [
+        `arn:aws:s3:::${props.browserPolicyBucketName}/${props.browserPolicyKey}`,
+      ],
+    }));
+
     // ============================================================
     // Import Cognito SSM Parameters for JWT Authorizer
     // ============================================================
@@ -239,31 +276,13 @@ export class InferenceAgentCoreConstruct extends Construct {
     const cognitoDiscoveryUrl = `https://cognito-idp.${config.awsRegion}.amazonaws.com/${cognitoUserPoolId}/.well-known/openid-configuration`;
 
     // ============================================================
-    // Import SSM Parameters for Runtime Environment Variables
+    // Runtime environment
     // ============================================================
-
-    // DynamoDB table names (the ARNs are already imported above for IAM)
-    const usersTableName = props.refs.usersTable.tableName;
-    const appRolesTableName = props.refs.appRolesTable.tableName;
-    const oidcStateTableName = props.refs.oidcStateTable.tableName;
-    const apiKeysTableName = props.refs.apiKeysTable.tableName;
-    const oauthProvidersTableName = props.refs.oauthProvidersTable.tableName;
-    const oauthUserTokensTableName = props.refs.oauthUserTokensTable.tableName;
-    const assistantsTableName = props.refs.ragAssistantsTable.tableName;
-    const userQuotasTableName = props.refs.userQuotasTable.tableName;
-    const quotaEventsTableName = props.refs.quotaEventsTable.tableName;
-    const sessionsMetadataTableName = props.refs.sessionsMetadataTable.tableName;
-    const userCostSummaryTableName = props.refs.userCostSummaryTable.tableName;
-    const systemCostRollupTableName = props.refs.systemCostRollupTable.tableName;
-    const managedModelsTableName = props.refs.managedModelsTable.tableName;
-    const userSettingsTableName = props.refs.userSettingsTable.tableName;
-    const authProvidersTableName = props.refs.authProvidersTable.tableName;
-    const userFilesTableName = props.refs.fileUploadTable.tableName;
-    const systemPromptsTableName = props.refs.systemPromptsTable.tableName;
-
-    // S3 / RAG
-    const vectorBucketName = props.refs.ragVectorBucketName;
-    const vectorIndexName = props.refs.ragVectorIndexName;
+    // Table, bucket, vector-index and workload-identity names are NOT sent:
+    // the inference-api derives them from PROJECT_PREFIX (+ AWS_ACCOUNT_ID)
+    // at startup, from backend/src/apis/shared/config/derived_environment.json.
+    // test/runtime-derived-environment-manifest.test.ts holds that manifest to
+    // the names CDK gives the resources here.
 
     // Frontend CORS origins — single source: buildCorsOrigins (from CDK_DOMAIN_NAME)
     const corsOrigins = buildCorsOrigins(config, config.inferenceApi.additionalCorsOrigins).join(',');
@@ -272,8 +291,12 @@ export class InferenceAgentCoreConstruct extends Construct {
     // Single CDK-Managed AgentCore Runtime with Cognito JWT Authorizer
     // ============================================================
 
+    // Also the basis of the CloudWatch `Name` dimension on every runtime
+    // metric, so both derive from one expression.
+    const agentRuntimeName = getResourceName(config, 'agentcore_runtime').replace(/-/g, '_');
+
     this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
-      agentRuntimeName: getResourceName(config, 'agentcore_runtime').replace(/-/g, '_'),
+      agentRuntimeName,
       agentRuntimeArtifact: {
         containerConfiguration: {
           containerUri: inferenceApiImageUri,
@@ -295,50 +318,45 @@ export class InferenceAgentCoreConstruct extends Construct {
         requestHeaderAllowlist: ['Authorization'],
       },
       environmentVariables: {
-        // Basic configuration
+        // ⚠️ THIS IS A BYTE BUDGET, not just a count. The V2 AgentCore Runtime
+        // rejects an environment over 2,560 bytes, and CloudFormation only
+        // finds out at UpdateAgentRuntime; its rollback then fails the same way
+        // and leaves the stack UPDATE_ROLLBACK_FAILED (dev, 2026-10-09).
+        // RuntimeEnvironmentPayloadGuard fails synth for V2 over the limit, and
+        // test/runtime-environment-payload-guard.test.ts fails CI for the
+        // worst-case config over the 2,000-byte budget. Separately, CloudFormation
+        // caps the count at 50 (test/runtime-env-var-limit.test.ts).
+        //
+        // Before adding a variable here:
+        //   - a `{prefix}-{suffix}` resource name belongs in
+        //     backend/src/apis/shared/config/derived_environment.json, not here;
+        //   - a flag that defaults ON in code needs no entry at all;
+        //   - otherwise, spend the bytes deliberately.
+        // Spec: docs/specs/agentcore-runtime-v2.md §7.
+
+        // Basic configuration. PROJECT_PREFIX and AWS_ACCOUNT_ID are what the
+        // derived names are built from; without them the Runtime has no tables.
         LOG_LEVEL: 'INFO',
         PROJECT_PREFIX: config.projectPrefix,
         AWS_DEFAULT_REGION: config.awsRegion,
+        AWS_ACCOUNT_ID: config.awsAccount,
 
-        // DynamoDB tables
-        DYNAMODB_USERS_TABLE_NAME: usersTableName,
-        DYNAMODB_APP_ROLES_TABLE_NAME: appRolesTableName,
-        DYNAMODB_OIDC_STATE_TABLE_NAME: oidcStateTableName,
-        DYNAMODB_API_KEYS_TABLE_NAME: apiKeysTableName,
-        DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: oauthProvidersTableName,
-        DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME: oauthUserTokensTableName,
-        DYNAMODB_ASSISTANTS_TABLE_NAME: assistantsTableName,
-
-        // Quota & cost tracking tables
-        DYNAMODB_QUOTA_TABLE: userQuotasTableName,
-        DYNAMODB_QUOTA_EVENTS_TABLE: quotaEventsTableName,
-        DYNAMODB_SESSIONS_METADATA_TABLE_NAME: sessionsMetadataTableName,
-        DYNAMODB_COST_SUMMARY_TABLE_NAME: userCostSummaryTableName,
-        DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME: systemCostRollupTableName,
-        DYNAMODB_MANAGED_MODELS_TABLE_NAME: managedModelsTableName,
-        DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
-        DYNAMODB_USER_FILES_TABLE_NAME: userFilesTableName,
-        // Bucket the runtime writes generated Word docs to (create/modify
-        // word-document tools). Without this the tool falls back to the
-        // literal "user-files" default and PutObject is AccessDenied. The
-        // runtime role's UserFilesBucketAccess statement already grants
-        // Get/Put/Delete/List on this bucket.
-        S3_USER_FILES_BUCKET_NAME: props.refs.fileUploadBucket.bucketName,
-        DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: systemPromptsTableName,
-
-        // Auth providers
-        DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
+        // Auth providers. An ARN, not derivable as a bare name without
+        // checking the IAM statement and GetSecretValue call (spec §7.1).
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
 
-        // OAuth configuration
-        OAUTH_TOKEN_ENCRYPTION_KEY_ARN: oauthTokenEncryptionKeyArn,
-        OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
-
-        // AgentCore resources
+        // AgentCore resources: physical ids with a service-generated suffix,
+        // so they cannot be derived. MEMORY_ARN was retired in Shared Projects
+        // 2.7 (only a startup log read it).
         AGENTCORE_MEMORY_ID: props.memoryId,
-        MEMORY_ARN: props.memoryArn,
         AGENTCORE_CODE_INTERPRETER_ID: props.codeInterpreterId,
         BROWSER_ID: props.browserId,
+        // The Chromium MANAGED policy passed on every StartBrowserSession.
+        // This is the control that stops a human in a takeover navigating to
+        // the LMS — no check in our code can, because it only ever sees the
+        // page the takeover started on. Spec D6. One variable, not a
+        // bucket/key pair, to save bytes.
+        BROWSER_POLICY_S3: `s3://${props.browserPolicyBucketName}/${props.browserPolicyKey}`,
 
         // Gateway inbound auth mode. Sourced from the SAME config value that
         // builds the Gateway's authorizer, so the agent's data-plane auth and
@@ -360,64 +378,77 @@ export class InferenceAgentCoreConstruct extends Construct {
             }
           : {}),
 
-        // S3 storage
-        S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME: vectorBucketName,
-        S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME: vectorIndexName,
-        // Assistants KB documents bucket — needed by the agent's spreadsheet
-        // analysis tool to download files from S3 before pushing them into
-        // the Code Interpreter sandbox. Imported from RagIngestionStack via
-        // SSM (same parameter app-api uses). Without this the agent fails
-        // with "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME not configured".
-        S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: props.refs.ragDocumentsBucket.bucketName,
-
-        // Skill reference-file bucket (admin-managed Skills). Provisioned now
-        // (read grant below) so the PR-6 runtime can read a skill's reference
-        // files at dispatch time; no code consumes it yet.
-        S3_SKILL_RESOURCES_BUCKET_NAME: props.refs.skillResourcesBucket.bucketName,
-
-        // Memory Spaces storage. The runtime writes memory in a later PR
-        // (readwrite grant below); read by apis/shared/memory/*.
-        S3_MEMORY_SPACES_BUCKET_NAME: props.refs.memorySpacesBucket.bucketName,
-        DYNAMODB_MEMORY_SPACES_TABLE_NAME: props.refs.memorySpacesTable.tableName,
+        // Feature switches the runtime reads. Each mirrors the app-api flag.
         MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
-
-        // Skills v2 (default ON with a kill switch, mirroring the app-api flag).
-        // Gates skill resolution on the invocation path — the AgentSkills plugin's
-        // <available_skills> block, the `skills` activation tool, and
-        // `read_skill_file`. Must stay in step with app-api: design-time refuses to
-        // bind a skill while the flag is off there, so a mismatch would let an Agent
-        // be built with skills the runtime then blocks.
+        PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+        // Project-memory content lint (2.7) for memory_save / memory_propose. One
+        // small packed value, not app-api's MEMORY_LINT_MODE + MEMORY_SENSITIVE_PATTERNS.
+        // The patterns live in SSM; their hash here rolls the Runtime when they change.
+        MEMORY_LINT: memoryLintRuntimeValue(config),
+        // Conversation index write path (in development, default off): gates
+        // the fire-and-forget archive put after `done`. The archive bucket name
+        // is resolved from SSM under PROJECT_PREFIX, as the artifacts tools do.
+        CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
+        // Skills v2 (default ON with a kill switch). Must stay in step with
+        // app-api: design-time refuses to bind a skill while the flag is off
+        // there, so a mismatch would let an Agent be built with skills the
+        // runtime then blocks.
         SKILLS_ENABLED: config.skills.enabled ? 'true' : 'false',
-
-        // Agent Designer harness resolution (Phase 3): the runtime resolves an
-        // Agent's bindings + modelConfig at invocation. Gates that resolution;
-        // default off, mirrors the app-api flag. Without it the harness ignores
-        // bindings entirely (today's behavior).
+        // Skill authoring tools (default on; skill-creator spec D12). Spread in
+        // only while OFF: the code reads unset as on, so an environment on the
+        // default spends no bytes on it.
+        ...(config.skillAuthoring.enabled ? {} : { SKILL_AUTHORING_ENABLED: 'false' }),
+        // Word tracked changes (default on). Spread in only while off, like
+        // skill authoring; must match app-api's copy.
+        ...(config.wordTrackedChanges.enabled ? {} : { WORD_TRACKED_CHANGES_ENABLED: 'false' }),
+        // Assistant KB full-context mode (in development, default off). Spread in
+        // only while on: the code reads unset as off. Runtime only.
+        ...(config.assistantKbFullContext.enabled ? { ASSISTANT_KB_FULL_CONTEXT_ENABLED: 'true' } : {}),
+        // Folder attachments (default on): a turn's folder_attachment_ids are
+        // resolved and rendered as manifests. Spread in only while off, like
+        // skill authoring; app-api carries its own copy.
+        ...(config.folderAttachments.enabled ? {} : { FOLDER_ATTACHMENTS_ENABLED: 'false' }),
+        // Attachments KB (in development, default off; large-document spec §4F).
+        // Adds document_read's `query` argument: a tool-spec change once per
+        // deployment, never per session. Spread in only while on, like
+        // full-context mode; must match app-api's and the prepare Lambda's copies.
+        ...(config.attachmentKb.enabled ? { ATTACHMENT_KB_ENABLED: 'true' } : {}),
+        // Source provenance verification: the Runtime builds `verify_sources`,
+        // runs the check and emits `source_provenance`. Written only while ON,
+        // so the default costs nothing against the V2 payload budget.
+        ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Typed structured extraction: the Runtime mounts `document_extract`,
+        // makes the constrained side-channel call, verifies each value through
+        // source_provenance and emits `document_extraction`. Written only while
+        // ON, so the default costs nothing against the V2 payload budget. The
+        // model id rides along only while on for the same reason — it is read
+        // on the extraction path and nowhere else.
+        ...(config.documentExtract.enabled
+          ? {
+              DOCUMENT_EXTRACT_ENABLED: 'true',
+              DOCUMENT_EXTRACT_MODEL_ID: config.documentExtract.modelId,
+              // Only when a deployment overrode it; the backend's default (4)
+              // applies otherwise and costs the V2 payload budget nothing.
+              ...(config.documentExtract.concurrency
+                ? {
+                    DOCUMENT_EXTRACT_CONCURRENCY: String(
+                      config.documentExtract.concurrency,
+                    ),
+                  }
+                : {}),
+            }
+          : {}),
+        // Agent Designer harness resolution: the runtime resolves an Agent's
+        // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
+        // Platform self-service (opt-in per env; default off). Read ONLY on the
+        // invocation path — with it off, _build_account_tools returns [] so no
+        // account tool schema or system text reaches the model.
+        PLATFORM_SELF_SERVICE_ENABLED: config.platformSelfService.enabled ? 'true' : 'false',
 
-        // Authentication
-        ENABLE_QUOTA_ENFORCEMENT: 'true',
-
-        // ⚠️ NO ROOM FOR NEW VARIABLES HERE — see the assertion in
-        // test/inference-agentcore-construct.test.ts. `AWS::BedrockAgentCore::Runtime`
-        // caps EnvironmentVariables at 50 and this construct is AT the cap.
-        // Adding one more fails CloudFormation's *changeset validation* — after
-        // synth, after tsc, after jest, after CI is green. It broke the dev
-        // Platform Stack deploy on 2026-08-05 (`maximum size: [50], found: [51]`,
-        // adding QUOTA_RUNWAY_ENABLED for #833 PR-5).
-        //
-        // To add a flag you must first free a slot: retire a dead variable, or
-        // fold several booleans into one delimited FEATURE_FLAGS value. A
-        // code-level flag that reads `os.environ` and defaults ON needs no entry
-        // here at all — that is why QUOTA_RUNWAY_ENABLED is absent and the quota
-        // runway is still on. Setting such a flag to a non-default value in a
-        // deployed environment requires an out-of-band Runtime update until a
-        // slot is freed.
-
-        // Directories
-        UPLOAD_DIR: '/tmp/uploads',
-        OUTPUT_DIR: '/tmp/output',
-        GENERATED_IMAGES_DIR: '/tmp/generated_images',
+        // ENABLE_QUOTA_ENFORCEMENT and QUOTA_RUNWAY_ENABLED are deliberately not
+        // set: both default on in code, so an entry would only restate the
+        // default. Setting such a flag off in one environment needs an entry here.
 
         // URLs
         FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
@@ -433,23 +464,28 @@ export class InferenceAgentCoreConstruct extends Construct {
           ? `https://${config.domainName}/oauth-complete`
           : 'http://localhost:4200/oauth-complete',
 
-        // Shared platform workload identity (created in InfrastructureStack).
-        // Both inference-api and app-api mint user-scoped workload tokens
-        // against this identity so they share a single OAuth token vault.
-        // The runtime auto-creates its own service-linked identity, but it
-        // cannot be shared cross-service — see PlatformStack and
-        // `_resolve_workload_token` in apis/shared/oauth/agentcore_identity.py.
-        AGENTCORE_RUNTIME_WORKLOAD_NAME: props.refs.platformWorkloadIdentity.name,
-
-        // MCP Apps sandbox-proxy origin (PR #7 of
-        // docs/kaizen/scoping/mcp-apps-host-renderer.md). The agent emits
-        // it on the `ui_resource` SSE event as `sandboxOrigin` — the
-        // cross-origin shell the SPA frames a hosted App in. The
-        // mcp-sandbox stack is always provisioned, so the value is always
-        // available via the platform refs.
+        // MCP Apps sandbox-proxy origin. The agent emits it on the
+        // `ui_resource` SSE event as `sandboxOrigin` — the cross-origin shell
+        // the SPA frames a hosted App in. Domain rules live in CDK, so it is
+        // never derived.
         AGENTCORE_MCP_APPS_SANDBOX_ORIGIN: props.refs.mcpSandboxProxyOrigin,
       },
     });
+
+    // Set on every synth, V1 included. Leaving it off for V1 would make a
+    // V2 -> V1 rollback a property removal, and whether removing it reverts
+    // the Runtime is the service's call; an explicit V1 is an in-place update
+    // that keeps the runtime id. aws-cdk-lib 2.265.0 has no typed
+    // `platformVersion` (2.272.0 adds one), hence the override.
+    this.runtime.addPropertyOverride('PlatformVersion', config.inferenceApi.runtimePlatformVersion);
+
+    // V2 caps the environment payload at 2,560 bytes and CloudFormation only
+    // finds out from UpdateAgentRuntime, after which its rollback fails the
+    // same way (spec §3 B4). The aspect turns that into a synth-time error
+    // when V2 is selected, and a warning on V1 once the payload would block
+    // a later switch. It runs at synth, so it adds nothing to the Runtime.
+    cdk.Aspects.of(this).add(new RuntimeEnvironmentPayloadGuard(config.inferenceApi.runtimePlatformVersion));
+
     this.runtime.node.addDependency(runtimeExecutionRole);
 
     // ============================================================
@@ -467,12 +503,80 @@ export class InferenceAgentCoreConstruct extends Construct {
     // "no errors" / "no traffic" rather than as a broken query. Removing it also
     // drops a retention policy that never applied to anything.
     //
-    // ⚠️ Retention on the real group is therefore unmanaged (service-created
-    // groups can't take a CDK retention setting), which is a live cost item —
+    // ⚠️ Retention on the real group cannot be set with a CDK `LogGroup`
+    // construct, because the group is created by the AgentCore service rather
+    // than by CloudFormation — declaring one here would either collide on
+    // create or manage a second, empty group. Left unmanaged, it grows forever:
     // dev alone carries several such groups in the hundreds of MB. Tracked as a
-    // W5 follow-up in docs/one-pagers/cost-effectiveness-roadmap.md.
+    // W5 follow-up in docs/one-pagers/cost-effectiveness-roadmap.md, closed by
+    // the custom resource below.
     this.runtimeLogGroupName =
       `/aws/bedrock-agentcore/runtimes/${this.runtime.attrAgentRuntimeId}-DEFAULT`;
+    this.runtimeMetricName = `${agentRuntimeName}::DEFAULT`;
+
+    // PutRetentionPolicy is idempotent but does NOT create the group: on a
+    // missing group it returns ResourceNotFoundException and creates nothing
+    // (checked in dev). The Runtime's own execution role creates the group on
+    // its first container start, which in practice lands well before this
+    // call. If that start ever loses the race, a thrown error would fail the
+    // custom resource and roll back the whole stack update, so a missing
+    // group is tolerated instead and the daily RuntimeLogRetentionSweep below
+    // sets retention within a day. An environment that has turned the sweep
+    // off (`runtimeLogRetentionSweepEnabled`) has no such backstop: there the
+    // group keeps no retention until CloudFormation re-runs this call, which
+    // only happens when the retention value or the Runtime id changes, so an
+    // operator must set it by hand.
+    //
+    // Deliberately no CreateLogGroup first: it would race the Runtime's own
+    // create the other way round. No onDelete: dropping the policy on
+    // teardown would revert the group to "keep forever".
+    const runtimeLogRetention = new cr.AwsCustomResource(this, 'RuntimeLogRetention', {
+      onCreate: {
+        service: 'CloudWatchLogs',
+        action: 'putRetentionPolicy',
+        parameters: {
+          logGroupName: this.runtimeLogGroupName,
+          retentionInDays: config.observability.logRetentionDays,
+        },
+        // Embeds the value so CFN re-invokes when it changes.
+        physicalResourceId: cr.PhysicalResourceId.of(
+          `${this.runtimeLogGroupName}-retention-${config.observability.logRetentionDays}`,
+        ),
+        ignoreErrorCodesMatching: 'ResourceNotFoundException',
+      },
+      onUpdate: {
+        service: 'CloudWatchLogs',
+        action: 'putRetentionPolicy',
+        parameters: {
+          logGroupName: this.runtimeLogGroupName,
+          retentionInDays: config.observability.logRetentionDays,
+        },
+        physicalResourceId: cr.PhysicalResourceId.of(
+          `${this.runtimeLogGroupName}-retention-${config.observability.logRetentionDays}`,
+        ),
+        ignoreErrorCodesMatching: 'ResourceNotFoundException',
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['logs:PutRetentionPolicy'],
+          resources: [
+            `arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:${this.runtimeLogGroupName}:*`,
+          ],
+        }),
+      ]),
+      installLatestAwsSdk: false,
+    });
+    runtimeLogRetention.node.addDependency(this.runtime);
+
+    // The custom resource above covers the live group once per deploy. The
+    // sweep covers the groups it cannot: those left behind by a replaced
+    // Runtime, and any whose retention something else changed afterwards.
+    if (config.observability.runtimeLogRetentionSweepEnabled) {
+      new RuntimeLogRetentionSweepConstruct(this, 'RuntimeLogRetentionSweep', {
+        config,
+        agentRuntimeName,
+      });
+    }
 
     // NOTE: X-Ray TransactionSearchConfig is an account-level singleton.
     // It cannot be created via CloudFormation if it already exists.
@@ -501,8 +605,12 @@ export class InferenceAgentCoreConstruct extends Construct {
       samplingRule: {
         ruleName: getTruncatedResourceName(config, 32, 'ac-sampling'),
         priority: 100,
-        fixedRate: config.production ? 0.05 : 1.0,
-        reservoirSize: config.production ? 5 : 50,
+        // Single configured values, not a production ternary. The old
+        // non-production branch was fixedRate 1.0 / reservoir 50 — a recorded
+        // trace for EVERY agent invocation, at $5 per million traces, inherited
+        // by any fork that never set `production`. Defaults are now 0.01 / 1.
+        fixedRate: config.observability.xraySamplingRate,
+        reservoirSize: config.observability.xraySamplingReservoir,
         serviceName: '*',
         serviceType: '*',
         host: '*',
@@ -522,7 +630,7 @@ export class InferenceAgentCoreConstruct extends Construct {
       filterExpression: 'annotation.gen_ai_system = "strands-agents" OR service(id(name: "bedrock-agentcore", type: "AWS::BedrockAgentCore"))',
       insightsConfiguration: {
         insightsEnabled: true,
-        notificationsEnabled: config.production,
+        notificationsEnabled: config.observability.xrayInsightsNotifications,
       },
     });
 
@@ -535,75 +643,72 @@ export class InferenceAgentCoreConstruct extends Construct {
       defaultInterval: cdk.Duration.hours(3),
     });
 
-    const agentCoreNamespace = 'bedrock-agentcore';
+    // Namespace and metric names verified with `aws cloudwatch list-metrics`.
+    // The lowercase `bedrock-agentcore` namespace exists but holds only the
+    // OpenTelemetry/Strands application metrics, and the names this used before
+    // (InvocationCount / InvocationErrors / InvocationLatency) exist nowhere —
+    // so both alarms had sat in INSUFFICIENT_DATA since creation. Pinned by test.
+    //
+    // Every stream here is dimensioned; an undimensioned metric matches nothing.
+    const agentCoreNamespace = 'AWS/Bedrock-AgentCore';
 
-    const invocationCountMetric = new cloudwatch.Metric({
+    // A four-dimension variant adding ComputeType=MicroVM also exists; not used,
+    // since that is an implementation detail an alarm should not depend on.
+    const runtimeDimensions = {
+      Resource: this.runtime.attrAgentRuntimeArn,
+      Operation: 'InvokeAgentRuntime',
+      Name: this.runtimeMetricName,
+    };
+
+    // No `label`: it forces CDK to render the alarm as a Metrics[] array rather
+    // than flat Namespace/MetricName properties.
+    const runtimeMetric = (
+      metricName: string,
+      statistic: string,
+    ) => new cloudwatch.Metric({
       namespace: agentCoreNamespace,
-      metricName: 'InvocationCount',
-      statistic: 'Sum',
+      metricName,
+      dimensionsMap: runtimeDimensions,
+      statistic,
       period: cdk.Duration.minutes(5),
     });
 
-    const invocationErrorMetric = new cloudwatch.Metric({
-      namespace: agentCoreNamespace,
-      metricName: 'InvocationErrors',
-      statistic: 'Sum',
-      period: cdk.Duration.minutes(5),
-    });
+    const invocationsMetric = runtimeMetric('Invocations', 'Sum');
+    const systemErrorsMetric = runtimeMetric('SystemErrors', 'Sum');
+    const userErrorsMetric = runtimeMetric('UserErrors', 'Sum');
+    const throttlesMetric = runtimeMetric('Throttles', 'Sum');
+    const sessionsMetric = runtimeMetric('Sessions', 'Sum');
+    const latencyP50Metric = runtimeMetric('Latency', 'p50');
+    const latencyP90Metric = runtimeMetric('Latency', 'p90');
+    const latencyP99Metric = runtimeMetric('Latency', 'p99');
 
-    const latencyP50Metric = new cloudwatch.Metric({
+    // `Sessions` is a cumulative creation counter; this is the live gauge.
+    const activeSessionsMetric = new cloudwatch.Metric({
       namespace: agentCoreNamespace,
-      metricName: 'InvocationLatency',
-      statistic: 'p50',
-      period: cdk.Duration.minutes(5),
-    });
-
-    const latencyP90Metric = new cloudwatch.Metric({
-      namespace: agentCoreNamespace,
-      metricName: 'InvocationLatency',
-      statistic: 'p90',
-      period: cdk.Duration.minutes(5),
-    });
-
-    const latencyP99Metric = new cloudwatch.Metric({
-      namespace: agentCoreNamespace,
-      metricName: 'InvocationLatency',
-      statistic: 'p99',
-      period: cdk.Duration.minutes(5),
-    });
-
-    const inputTokensMetric = new cloudwatch.Metric({
-      namespace: agentCoreNamespace,
-      metricName: 'InputTokens',
-      statistic: 'Sum',
-      period: cdk.Duration.minutes(5),
-    });
-
-    const outputTokensMetric = new cloudwatch.Metric({
-      namespace: agentCoreNamespace,
-      metricName: 'OutputTokens',
-      statistic: 'Sum',
+      metricName: 'ActiveSessionCount',
+      dimensionsMap: { Service: 'AgentCore.Runtime' },
+      statistic: 'Maximum',
       period: cdk.Duration.minutes(5),
     });
 
     dashboard.addWidgets(
       new cloudwatch.TextWidget({
-        markdown: `# AgentCore Runtime Observability\n**Project:** ${config.projectPrefix} | **Region:** ${config.awsRegion}`,
+        markdown: `# AgentCore Runtime Observability\n**Project:** ${config.projectPrefix} | **Region:** ${config.awsRegion} | **Namespace:** \`${agentCoreNamespace}\`\n\nLLM token usage and prompt-cache efficiency live on the **${getResourceName(config, 'prompt-cache-observability')}** dashboard — the token metrics in this namespace are Memory-strategy counters, not model tokens.`,
         width: 24,
-        height: 1,
+        height: 2,
       }),
     );
 
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
-        title: 'Invocation Count & Errors',
-        left: [invocationCountMetric],
-        right: [invocationErrorMetric],
+        title: 'Invocations & Errors',
+        left: [invocationsMetric],
+        right: [systemErrorsMetric, userErrorsMetric, throttlesMetric],
         width: 12,
         height: 6,
       }),
       new cloudwatch.GraphWidget({
-        title: 'Invocation Latency (p50 / p90 / p99)',
+        title: 'Invocation Latency (p50 / p90 / p99) — SSE, so seconds are normal',
         left: [latencyP50Metric, latencyP90Metric, latencyP99Metric],
         width: 12,
         height: 6,
@@ -612,8 +717,9 @@ export class InferenceAgentCoreConstruct extends Construct {
 
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
-        title: 'Token Usage (Input / Output)',
-        left: [inputTokensMetric, outputTokensMetric],
+        title: 'Sessions created vs currently active',
+        left: [sessionsMetric],
+        right: [activeSessionsMetric],
         width: 12,
         height: 6,
       }),
@@ -635,21 +741,99 @@ export class InferenceAgentCoreConstruct extends Construct {
     // Observability: CloudWatch Alarms
     // ============================================================
 
-    new cloudwatch.Alarm(this, 'AgentCoreHighErrorRateAlarm', {
-      alarmName: getResourceName(config, 'agentcore-high-error-rate'),
-      alarmDescription: 'AgentCore Runtime invocation error rate exceeded threshold',
-      metric: invocationErrorMetric,
-      threshold: config.production ? 10 : 50,
+    const alarms = new AlarmFactory(this, config, props.alarmTopic);
+
+    // Split by blame: SystemErrors means escalate to AWS, UserErrors means our
+    // request was wrong.
+    alarms.alarm('AgentCoreSystemErrorAlarm', {
+      name: 'agentcore-system-errors',
+      alarmDescription:
+        'AgentCore Runtime returned server-side errors — AWS-side fault, not application code',
+      metric: systemErrorsMetric,
+      threshold: config.observability.agentCoreErrorThreshold,
       evaluationPeriods: 3,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
-    new cloudwatch.Alarm(this, 'AgentCoreHighLatencyAlarm', {
-      alarmName: getResourceName(config, 'agentcore-high-latency'),
+    // Original logical id and name retained so CFN updates in place.
+    alarms.alarm('AgentCoreHighErrorRateAlarm', {
+      name: 'agentcore-high-error-rate',
+      alarmDescription:
+        'AgentCore Runtime returned client-side (user) errors above threshold — malformed requests, missing permissions, or rejected payloads',
+      metric: userErrorsMetric,
+      threshold: config.observability.agentCoreErrorThreshold,
+      evaluationPeriods: 3,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // Threshold 0: a throttle is unambiguous and does not self-correct.
+    alarms.alarm('AgentCoreThrottleAlarm', {
+      name: 'agentcore-throttles',
+      alarmDescription:
+        'AgentCore Runtime is throttling invocations — the account is at its TPS or session quota, which needs a quota increase rather than a retry',
+      metric: throttlesMetric,
+      threshold: 0,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // Cost, not capacity. Runtime bills memory for a session's whole lifetime
+    // rather than for compute time, and AWS still exposes no API to list or
+    // force-terminate an active runtime session
+    // (aws/bedrock-agentcore-starter-toolkit#498 reports one runaway session
+    // burning $72.67 in 58 minutes) — the DynamoDB lease plus
+    // `cancelRequestedFor` are the only kill switch there is. So the thing worth
+    // watching is sessions *accumulating*, which is precisely what the #338
+    // `/ping` reaper bug did, undetected, for three months at 73% of the
+    // platform bill. This is the leading indicator that was missing then.
+    //
+    // Deliberately NOT thresholded as a fraction of the account quota (5,000
+    // concurrent sessions in us-west-2): quota exhaustion already has a signal
+    // in `agentcore-throttles`, and #1016 is the standing lesson about an
+    // account-wide roll-up compared against a number that does not denominate it.
+    //
+    // Account-level gauge — only a `Service` dimension, so no `Resource` here,
+    // matching `agentcore-code-interpreter-active-sessions`.
+    alarms.alarm('AgentCoreActiveSessionAlarm', {
+      name: 'agentcore-runtime-active-sessions',
+      alarmDescription:
+        'Concurrent AgentCore Runtime sessions have stayed high for a full hour. Runtime '
+        + 'bills memory for the full session lifetime, so this is a cost signal before it '
+        + 'is a capacity one, and there is no AWS API to terminate a session — check that '
+        + 'idle reaping is still working (mean microVM life should be 20-50 min, not hours) '
+        + 'before assuming it is real traffic. A load test is the most likely benign cause, '
+        + 'but the one-hour window means a burst alone should not have reached you.',
+      metric: activeSessionsMetric,
+      threshold: config.observability.agentCoreActiveSessionThreshold,
+      // Twelve 5-minute periods = one hour SUSTAINED above threshold, and that
+      // window is the whole point: it is what separates this alarm's target from
+      // a load test. Measured on 7 days of real prod ActiveSessionCount, a week
+      // containing three nightly load tests that peaked at 241, 608 and 1404 —
+      // the shipped 200/15-min config fired on all three, and no threshold fixes
+      // that (still fires at 500; only quiet near 1500, which is above the ~99
+      // regime of #338 this exists to catch). The longest continuous run above
+      // 75 was 45 min, so an hour clears every observed burst with margin, while
+      // the #338 regression — sustained for three months — trips it in one hour.
+      //
+      // All 12 datapoints must breach (no datapointsToAlarm), so a single
+      // dip below threshold resets the count. That is deliberate: accumulation
+      // that reaps itself is not the failure mode being watched.
+      evaluationPeriods: 12,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    alarms.alarm('AgentCoreHighLatencyAlarm', {
+      name: 'agentcore-high-latency',
       alarmDescription: 'AgentCore Runtime p99 latency exceeded threshold',
       metric: latencyP99Metric,
-      threshold: 30000, // 30 seconds
+      // Milliseconds here, unlike the ALB's TargetResponseTime which is seconds.
+      // Measured turns average 3-4.5s and peak near 25s, so the previous 30s
+      // threshold sat just above normal.
+      threshold: config.observability.agentCoreLatencyMs,
       evaluationPeriods: 3,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
@@ -668,6 +852,18 @@ export class InferenceAgentCoreConstruct extends Construct {
       description: 'AgentCore Runtime ID',
       tier: ssm.ParameterTier.STANDARD,
     });
+
+    // The deployment's project-memory sensitive patterns (Shared Projects 2.7),
+    // for the Runtime to read once per process (its role reads `/{prefix}/*`).
+    // Only when there are some, so a deployment without patterns adds no resource.
+    if (config.memoryLint.sensitivePatterns) {
+      new ssm.StringParameter(this, 'MemorySensitivePatternsParameter', {
+        parameterName: `/${config.projectPrefix}/${MEMORY_SENSITIVE_PATTERNS_SSM_SUFFIX}`,
+        stringValue: config.memoryLint.sensitivePatterns,
+        description: 'Project-memory content lint: the deployment sensitive patterns',
+        tier: ssm.ParameterTier.STANDARD,
+      });
+    }
 
     // The runtime auto-creates its own service-linked workload identity, but
     // we don't surface it: it's only mintable from inside the runtime

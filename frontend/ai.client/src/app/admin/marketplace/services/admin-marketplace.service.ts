@@ -1,7 +1,8 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import {
   AgentVersionDiff,
   AgentVersionsResponse,
@@ -16,6 +17,7 @@ import {
   AdminStoreFrontResponse,
   AgentCategory,
   AdminListingsResponse,
+  AdminSubmissionReview,
   ListingPatchRequest,
   ListingState,
   PublisherProfile,
@@ -47,6 +49,24 @@ export class AdminMarketplaceService {
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/agents`);
 
+  /**
+   * Opts a request out of the global error toast.
+   *
+   * Applied to the **review flow** only, where every failure already renders inline next
+   * to the control that caused it. Without this an admin whose Approve is refused gets the
+   * backend's message twice — once in the page's own error region, where they are looking,
+   * and once in a toast in the corner — and the toast is the worse copy of the two: it is
+   * further from the button they pressed and it disappears on its own.
+   *
+   * ⚠️ Deliberately **not** applied service-wide. The toast is the only error surface some
+   * of these calls have, and silencing one whose caller renders nothing would turn a
+   * visible failure into a silent one. Add it per call, only after checking that the caller
+   * actually shows the error.
+   */
+  private inlineErrors(): { context: HttpContext } {
+    return { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) };
+  }
+
   private _loading = signal(false);
   private _error = signal<string | null>(null);
   private _pendingCount = signal(0);
@@ -75,7 +95,23 @@ export class AdminMarketplaceService {
    */
   async loadDiff(agentId: string): Promise<AgentVersionDiff> {
     return firstValueFrom(
-      this.http.get<AgentVersionDiff>(`${this.baseUrl()}/${agentId}/diff`),
+      this.http.get<AgentVersionDiff>(`${this.baseUrl()}/${agentId}/diff`, this.inlineErrors()),
+    );
+  }
+
+  /**
+   * The reviewer's full read of one submission — instructions, capabilities, model.
+   *
+   * Its own endpoint rather than `GET /agents/{id}`: that route gates `instructions` to
+   * owner/editor and 403s a non-owner outright on a PRIVATE agent, and it would serve the
+   * author's *draft* rather than the snapshot approval promotes.
+   */
+  async loadSubmission(agentId: string): Promise<AdminSubmissionReview> {
+    return firstValueFrom(
+      this.http.get<AdminSubmissionReview>(
+        `${this.baseUrl()}/${encodeURIComponent(agentId)}/submission`,
+        this.inlineErrors(),
+      ),
     );
   }
 
@@ -100,9 +136,11 @@ export class AdminMarketplaceService {
     }
   }
 
-  /** Approve a submission, or return it to the author with a reason. */
+  /** Approve a submission, return it with a reason, or decline it for the store. */
   async review(agentId: string, request: ReviewListingRequest): Promise<void> {
-    await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/review`, request));
+    await firstValueFrom(
+      this.http.post(`${this.baseUrl()}/${agentId}/review`, request, this.inlineErrors()),
+    );
   }
 
   /**
@@ -114,7 +152,9 @@ export class AdminMarketplaceService {
    * author while actually re-publishing over their request.
    */
   async decideWithdrawal(agentId: string, request: WithdrawalDecisionRequest): Promise<void> {
-    await firstValueFrom(this.http.post(`${this.baseUrl()}/${agentId}/withdrawal`, request));
+    await firstValueFrom(
+      this.http.post(`${this.baseUrl()}/${agentId}/withdrawal`, request, this.inlineErrors()),
+    );
   }
 
   /** Every snapshot this agent has, newest first — the rollback picker's source (§8). */

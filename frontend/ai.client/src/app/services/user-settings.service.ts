@@ -4,9 +4,39 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from './config.service';
 import { SUPPRESS_ERROR_TOAST } from '../auth/error.interceptor';
 
+/**
+ * One sidebar navigation entry's place and visibility. The entries themselves
+ * are defined in `components/sidenav/sidebar-items.ts`; mirrors
+ * `SidebarItemPreference` in `apis/shared/user_settings/models.py`.
+ */
+export interface SidebarItemPreference {
+  id: string;
+  visible: boolean;
+}
+
 export interface UserSettings {
   defaultModelId: string | null;
+  /**
+   * Standing preferences added to the system prompt of every conversation
+   * (not agent previews). Agent and project instructions win a conflict.
+   * Blank clears; the backend caps it at {@link MAX_PERSONAL_INSTRUCTIONS}.
+   */
+  personalInstructions?: string | null;
+  /**
+   * The Nova 2 Sonic voice heard in voice mode — an id from
+   * `session/services/voice/voice-catalog.ts`. Null means the platform
+   * default; blank clears. The backend refuses an id not in the catalog.
+   */
+  voiceId?: string | null;
+  /**
+   * The user's order and visibility for the sidebar's navigation entries.
+   * Null (or an empty list) means the default layout.
+   */
+  sidebarItems?: SidebarItemPreference[] | null;
 }
+
+/** `MAX_PERSONAL_INSTRUCTIONS_CHARS` in `apis/shared/user_settings/models.py`. */
+export const MAX_PERSONAL_INSTRUCTIONS = 4000;
 
 @Injectable({
   providedIn: 'root'
@@ -17,11 +47,38 @@ export class UserSettingsService {
 
   private readonly baseUrl = () => `${this.config.appApiUrl()}/users/me/settings`;
 
+  /**
+   * In-flight/settled read shared by every caller. See `getSettings`.
+   * Null means "nothing fetched yet" — the next read issues the request.
+   */
+  private settingsPromise: Promise<UserSettings> | null = null;
+
   readonly settingsResource = resource({
-    loader: async () => this.fetchSettings(),
+    loader: async () => this.getSettings(),
   });
 
-  async fetchSettings(): Promise<UserSettings> {
+  /**
+   * Read the user's settings, reusing the first fetch.
+   *
+   * WHY: two independent callers want this on first load — `settingsResource`
+   * eagerly, the moment this service is injected, and `ModelService` later,
+   * once `/models` has landed and it can resolve `defaultModelId` against the
+   * catalog. Those land ~280ms apart, so they are sequential rather than
+   * concurrent and a single-flight guard would not have caught the second one.
+   * Memoizing the promise does, and it collapses any future caller too.
+   *
+   * A rejected read is not cached: the promise is cleared in the catch so the
+   * next caller retries rather than inheriting a failure it cannot see.
+   */
+  getSettings(): Promise<UserSettings> {
+    this.settingsPromise ??= this.fetchSettings().catch((err) => {
+      this.settingsPromise = null;
+      throw err;
+    });
+    return this.settingsPromise;
+  }
+
+  private async fetchSettings(): Promise<UserSettings> {
     return firstValueFrom(
       this.http.get<UserSettings>(this.baseUrl())
     );
@@ -43,6 +100,9 @@ export class UserSettingsService {
     const result = await firstValueFrom(
       this.http.put<UserSettings>(this.baseUrl(), settings, { context })
     );
+    // Drop the memo BEFORE reloading, or the resource's loader would be
+    // handed back the pre-write value it is reloading to get rid of.
+    this.settingsPromise = null;
     this.settingsResource.reload();
     return result;
   }

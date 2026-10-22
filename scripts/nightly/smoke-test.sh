@@ -25,27 +25,42 @@ log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
-# Get ALB URL from CDK outputs
+# Resolve the ALB URL of the deployed stack.
+#
+# Order: the custom HTTPS subdomain when configured (avoids the HTTP 301), then
+# the SSM parameter the ALB DNS construct writes, then the PlatformStack's
+# `AlbUrl` output. There is one stack now; the old `-InfrastructureStack`
+# lookup predates the single-stack architecture and always failed.
 get_alb_url() {
-    # Prefer the custom HTTPS subdomain when configured (avoids HTTP 301 redirect)
     if [ -n "${CDK_ALB_SUBDOMAIN:-}" ] && [ -n "${CDK_HOSTED_ZONE_DOMAIN:-}" ]; then
         echo "https://${CDK_ALB_SUBDOMAIN}.${CDK_HOSTED_ZONE_DOMAIN}"
         return 0
     fi
 
-    local stack_name="${CDK_PROJECT_PREFIX}-InfrastructureStack"
-    local alb_dns=$(aws cloudformation describe-stacks \
-        --stack-name "${stack_name}" \
-        --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue" \
+    local alb_url
+    alb_url=$(aws ssm get-parameter \
+        --name "/${CDK_PROJECT_PREFIX}/network/alb-url" \
+        --query "Parameter.Value" \
         --output text \
-        --region "${CDK_AWS_REGION}")
-    
-    if [ -z "${alb_dns}" ]; then
-        log_error "Could not retrieve ALB DNS name from stack ${stack_name}"
-        return 1
+        --region "${CDK_AWS_REGION}" 2>/dev/null || true)
+    if [ -n "${alb_url}" ] && [ "${alb_url}" != "None" ]; then
+        echo "${alb_url}"
+        return 0
     fi
-    
-    echo "https://${alb_dns}"
+
+    local stack_name="${CDK_PROJECT_PREFIX}-PlatformStack"
+    alb_url=$(aws cloudformation describe-stacks \
+        --stack-name "${stack_name}" \
+        --query "Stacks[0].Outputs[?OutputKey=='AlbUrl'].OutputValue" \
+        --output text \
+        --region "${CDK_AWS_REGION}" 2>/dev/null || true)
+    if [ -n "${alb_url}" ] && [ "${alb_url}" != "None" ]; then
+        echo "${alb_url}"
+        return 0
+    fi
+
+    log_error "Could not resolve the ALB URL from SSM (/${CDK_PROJECT_PREFIX}/network/alb-url) or ${stack_name} outputs"
+    return 1
 }
 
 # Test health endpoint with retries

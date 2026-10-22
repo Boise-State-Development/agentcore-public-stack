@@ -138,3 +138,35 @@ class ManagedModelsListResponse(BaseModel):
 
     models: List[ManagedModel]
     total_count: int = Field(..., alias="totalCount")
+
+
+class ManagedModelOrderRequest(BaseModel):
+    """The full catalog, in the order it should be shown.
+
+    Every managed model's record id, exactly once. A partial list is rejected
+    rather than merged: it means the admin reordered a stale copy of the catalog
+    (a model was added or deleted elsewhere since they loaded it), and guessing
+    where the missing model belongs would silently reorder something they never
+    saw.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_ids: List[str] = Field(..., alias="modelIds", min_length=1)
+
+
+class ManagedModelIconResponse(BaseModel):
+    """The result of uploading or clearing a managed model's icon.
+
+    Both fields are ``None`` after a remove, which is the signal the SPA needs to
+    fall back to the model's ``iconSlug`` (or its provider-name match) without
+    re-reading the whole catalog.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_id: str = Field(..., alias="id", description="Managed model record id")
+    icon_key: Optional[str] = Field(
+        None, alias="iconKey", description="S3 object key now on the record; None after a remove"
+    )
+    icon_url: Optional[str] = Field(
+        None, alias="iconUrl", description="Where to render it from; None → the iconSlug fallback"
+    )

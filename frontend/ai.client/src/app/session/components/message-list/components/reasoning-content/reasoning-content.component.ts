@@ -43,7 +43,7 @@ import { ContentBlock, ReasoningContentData } from '../../../../services/models/
 
           <!-- Label and inline preview -->
           <span class="flex flex-1 items-center gap-2 min-w-0">
-            <span class="shrink-0 text-sm/5 font-medium text-gray-600 dark:text-gray-400">Thinking</span>
+            <span class="shrink-0 text-sm/5 font-medium text-gray-600 dark:text-gray-400">{{ headerLabel() }}</span>
             @if (!isExpanded() && hasReasoningText()) {
               <span class="truncate text-xs text-gray-500 dark:text-gray-500 italic min-w-0">{{ previewText() }}</span>
             }
@@ -51,7 +51,7 @@ import { ContentBlock, ReasoningContentData } from '../../../../services/models/
 
           <!-- Redacted indicator -->
           @if (hasRedactedContent()) {
-            <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 dark:bg-amber-500/20 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-700 dark:text-amber-300">
+            <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-state-warning-500/15 dark:bg-state-warning-500/20 px-1.5 py-0.5 text-[0.625rem] font-medium text-state-warning-700 dark:text-state-warning-300">
               <ng-icon name="heroLockClosed" class="size-3" aria-hidden="true" />
               Redacted
             </span>
@@ -74,10 +74,10 @@ import { ContentBlock, ReasoningContentData } from '../../../../services/models/
               }
 
               @if (hasRedactedContent() && !hasReasoningText()) {
-                <div class="flex items-center gap-1.5 rounded-xs border border-amber-300/50 dark:border-amber-700/30 bg-amber-100/50 dark:bg-amber-900/20 p-2 text-xs text-amber-800 dark:text-amber-200">
+                <div class="flex items-center gap-1.5 rounded-xs border border-state-warning-300/50 dark:border-state-warning-700/30 bg-state-warning-100/50 dark:bg-state-warning-900/20 p-2 text-xs text-state-warning-800 dark:text-state-warning-200">
                   <ng-icon
                     name="heroExclamationTriangle"
-                    class="size-4 text-amber-500"
+                    class="size-4 text-state-warning-500"
                     aria-hidden="true"
                   />
                   <span>Some reasoning content was redacted for safety purposes.</span>
@@ -123,6 +123,37 @@ export class ReasoningContentComponent {
   hasRedactedContent = computed(() => {
     const data = this.reasoningData();
     return !!data?.redactedContent;
+  });
+
+  /**
+   * The header: "Thinking" while the model is still at it, "Thought for 17s"
+   * once it has stopped.
+   *
+   * The duration is live-only — the stream parser measures it, `GET /messages`
+   * never carries it — so a reloaded conversation reads "Thinking" in the past
+   * tense sense of a collapsed section title. That is the same trade the tool
+   * rail makes with its durations: no number beats a number nobody measured.
+   * See docs/specs/agent-state-feedback.md PR-1.
+   */
+  protected readonly headerLabel = computed(() => {
+    const elapsed = this.durationLabel();
+    return elapsed ? `Thought for ${elapsed}` : 'Thinking';
+  });
+
+  /**
+   * The duration formatted for the header, or null when there isn't one.
+   *
+   * Sub-second blocks read "<1s" rather than rounding up to "1s": the whole
+   * point of the readout is that it is measured, and 400ms is not a second.
+   */
+  protected readonly durationLabel = computed<string | null>(() => {
+    const ms = this.contentBlock().reasoningDurationMs;
+    if (typeof ms !== 'number' || ms < 0) return null;
+    if (ms < 1000) return '<1s';
+
+    const seconds = Math.round(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   });
 
   /** Get a preview of the reasoning text (first 80 chars) */

@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 import {
@@ -33,7 +34,10 @@ export interface MemorySpacesConstructProps {
  *
  * The bucket/table are threaded to the compute roles via
  * `PlatformComputeRefs.memorySpacesBucket` / `.memorySpacesTable` (typed
- * refs, not SSM) — see the CLAUDE.md File Creation Rules.
+ * refs, not SSM) — see the CLAUDE.md File Creation Rules. The bucket name
+ * is ALSO published to SSM, but only for the backup/restore tooling
+ * (`scripts/backup-data`, `scripts/restore-data`), which discovers buckets
+ * that way; no compute construct reads it.
  */
 export class MemorySpacesConstruct extends Construct {
   public readonly bucket: s3.Bucket;
@@ -71,6 +75,9 @@ export class MemorySpacesConstruct extends Construct {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: getRemovalPolicy(config),
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      // Only ARCHIVE# rows carry it (Shared Projects 2.5a-2): an archived memory
+      // item stays restorable for MEMORY_ARCHIVE_RETENTION_DAYS, then expires.
+      timeToLiveAttribute: 'ttl',
     });
 
     // OwnerIndex — reverse lookup of memory spaces by owner.
@@ -87,6 +94,13 @@ export class MemorySpacesConstruct extends Construct {
       partitionKey: { name: 'GSI2PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'GSI2SK', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    new ssm.StringParameter(this, 'MemorySpacesBucketNameParameter', {
+      parameterName: `/${config.projectPrefix}/memory-spaces/bucket-name`,
+      stringValue: this.bucket.bucketName,
+      description: 'Memory Spaces content bucket name (backup/restore discovery)',
+      tier: ssm.ParameterTier.STANDARD,
     });
   }
 }

@@ -244,3 +244,85 @@ class TestRepairWrapper:
         agent = _FakeAgent(healthy)
         _make_manager()._repair_restored_history(agent)
         assert agent.messages is healthy  # identity preserved, no rebuild
+
+
+class TestSteeringInjectionSurvivesRepair:
+    """A mid-turn steering block rides the tool-result message (see
+    docs/specs/mid-turn-steering.md), so a repair pass now sees a user turn
+    with mixed ``toolResult`` + ``text`` content.
+
+    Both helpers key on tool pairing, so neither treats the mixed message as a
+    violation — but the rebuild path synthesizes result turns from the id map
+    rather than copying them, which would drop the user's words along with
+    everything else that isn't a toolResult. These are the tests that keep
+    that from regressing: losing the text deletes something the user said and
+    the model already read.
+    """
+
+    @staticmethod
+    def _steered_res(*ids, text="actually, check the other file"):
+        msg = _res(*ids)
+        msg["content"].append({"text": text})
+        return msg
+
+    def test_healthy_history_with_an_injection_is_untouched(self):
+        healthy = [_txt("user"), _use("a"), self._steered_res("a"), _txt("assistant")]
+        repaired, violations = T._repair_tool_pairing(healthy)
+        assert violations == 0
+        assert repaired is healthy  # identity: no rebuild, nothing to strip
+
+    def test_injection_survives_a_rebuild(self):
+        # The observed corruption shape: a duplicate result turn (parallel
+        # tool calls interrupted by a Stop) forces the rebuild path over a
+        # turn whose result message carries an injection.
+        msgs = [
+            _txt("user"),
+            _use("a"),
+            self._steered_res("a"),
+            _res("a"),
+            _txt("assistant"),
+        ]
+        repaired, violations = T._repair_tool_pairing(msgs)
+
+        assert violations > 0
+        ok, why = _is_valid(repaired)
+        assert ok, why
+        texts = [
+            block["text"]
+            for msg in repaired
+            for block in msg["content"]
+            if "text" in block
+        ]
+        # Present, and exactly once: a re-emitted residual would show the user
+        # saying the same thing twice.
+        assert texts.count("actually, check the other file") == 1
+
+    def test_injection_is_ordered_after_the_tool_results(self):
+        """Bedrock wants toolResults leading their user turn; the injection
+        follows them, which is exactly where the hook appends it live."""
+        msgs = [
+            _txt("user"),
+            _use("a", "b"),
+            self._steered_res("a", "b"),
+            _res("a", "b"),
+            _txt("assistant"),
+        ]
+        repaired, _ = T._repair_tool_pairing(msgs)
+
+        result_turn = next(
+            m
+            for m in repaired
+            if m["role"] == "user"
+            and any("toolResult" in b for b in m["content"])
+        )
+        keys = ["toolResult" if "toolResult" in b else "text" for b in result_turn["content"]]
+        assert keys == ["toolResult", "toolResult", "text"]
+
+    def test_ordinary_result_turns_gain_nothing(self):
+        """The carry-across must not invent content on unsteered turns."""
+        msgs = [_txt("user"), _use("a"), _res("a"), _res("a"), _txt("assistant")]
+        repaired, _ = T._repair_tool_pairing(msgs)
+
+        for msg in repaired:
+            for block in msg["content"]:
+                assert "text" not in block or msg["role"] != "user" or "hi" in block.get("text", "")

@@ -7,6 +7,7 @@ import { StreamParserService } from '../chat/stream-parser.service';
 import { SessionService } from './session.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { ChatStateService } from '../chat/chat-state.service';
 import { signal } from '@angular/core';
 
 describe('MessageMapService', () => {
@@ -52,6 +53,43 @@ describe('MessageMapService', () => {
     expect(service).toBeTruthy();
   });
 
+  describe('a message with a Drive folder', () => {
+    it('puts the folder chip after the files and before the text', () => {
+      const folder = { folderAttachId: 'fa-1', name: 'Course', source: 'Drive', status: 'ready', fileCount: 1, files: ['a.pdf'], moreCount: 0 };
+      const file = { uploadId: 'u1', filename: 'n.pdf', mimeType: 'application/pdf', sizeBytes: 1 };
+      const message = service.addUserMessage('s1', 'what is due?', [file], [folder]);
+      expect(message.content.map((b) => b.type)).toEqual(['fileAttachment', 'folderAttachment', 'text']);
+      expect(message.content[1].folderAttachment).toEqual(folder);
+    });
+  });
+
+  describe('a message that was not sent', () => {
+    it('marks it with the reason, as a new object so OnPush bubbles re-render', () => {
+      const sent = service.addUserMessage('s1', 'first');
+      const failed = service.addUserMessage('s1', 'second');
+
+      service.markSendFailed('s1', failed.id, 'A response was still finishing.');
+
+      const [first, second] = service.getMessagesForSession('s1')();
+      expect(first).toBe(sent);
+      expect(second).not.toBe(failed);
+      expect(second.sendFailure).toEqual({ reason: 'A response was still finishing.' });
+    });
+
+    it('removes it ahead of a resend only while it is the last message', () => {
+      const failed = service.addUserMessage('s1', 'first');
+      service.addUserMessage('s1', 'second');
+
+      // Removing from the middle would shift every later msg-{session}-{index} id.
+      expect(service.removeTrailingMessage('s1', failed.id)).toBe(false);
+      expect(service.getMessagesForSession('s1')()).toHaveLength(2);
+
+      const last = service.getMessagesForSession('s1')()[1];
+      expect(service.removeTrailingMessage('s1', last.id)).toBe(true);
+      expect(service.getMessagesForSession('s1')().map(m => m.id)).toEqual([failed.id]);
+    });
+  });
+
   it('should get messages for session', () => {
     const messagesSignal = service.getMessagesForSession('session-1');
     expect(messagesSignal).toBeTruthy();
@@ -82,6 +120,39 @@ describe('MessageMapService', () => {
     expect(message.content).toHaveLength(2);
     expect(message.content[0]).toEqual({ type: 'fileAttachment', fileAttachment: fileAttachments[0] });
     expect(message.content[1]).toEqual({ type: 'text', text: 'Check this file' });
+  });
+
+  describe('context breakdown hydration', () => {
+    const breakdown = {
+      total: 1200,
+      partitions: [
+        { key: 'system', label: 'System instructions', tokens: 400 },
+        { key: 'messages', label: 'Messages', tokens: 800 },
+      ],
+    };
+
+    it('seeds the meter from the last assistant message', async () => {
+      mockSessionService.getMessages.mockResolvedValue({
+        messages: [
+          { id: 'm0', role: 'user', content: [{ type: 'text', text: 'hi' }] },
+          { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'yo' }], metadata: { contextBreakdown: breakdown } },
+        ],
+      });
+      await service.loadMessagesForSession('cb-1');
+      expect(TestBed.inject(ChatStateService).contextBreakdownFor('cb-1')).toEqual(breakdown);
+    });
+
+    it('ignores an older turn when the last one has no breakdown', async () => {
+      mockSessionService.getMessages.mockResolvedValue({
+        messages: [
+          { id: 'm1', role: 'assistant', content: [], metadata: { contextBreakdown: breakdown } },
+          { id: 'm2', role: 'user', content: [{ type: 'text', text: 'again' }] },
+          { id: 'm3', role: 'assistant', content: [], metadata: {} },
+        ],
+      });
+      await service.loadMessagesForSession('cb-2');
+      expect(TestBed.inject(ChatStateService).contextBreakdownFor('cb-2')).toBeNull();
+    });
   });
 
   it('should load messages for session', async () => {
@@ -237,6 +308,66 @@ describe('MessageMapService', () => {
     expect(bMessages[1].content).toEqual([{ type: 'text', text: 'answer B' }]);
   });
 
+  it('renders a mid-turn steer exactly once across many sync ticks', () => {
+    // Regression, caught live in dev: a steer rendered ~36 times.
+    //
+    // `syncStreamingMessages` truncates the map back to the last user message
+    // and appends the stream's messages. A mid-turn steer IS a user message,
+    // so once it lands in the map it became the truncation point — moving that
+    // point forward past itself, so the stream's copy (which the parser keeps
+    // emitting every tick) was appended again on every subsequent tick.
+    //
+    // Each parse below drives one sync tick, which is what makes this able to
+    // fail: with one event it looked fine.
+    const parser = TestBed.inject(StreamParserService);
+
+    // Each event is followed by TestBed.tick(), which runs the parser->map sync
+    // effect. That is what makes this test able to fail at all: the duplication
+    // is one extra copy per SYNC, so a version that only syncs once at
+    // endStreaming looks perfectly healthy.
+    const send = (event: string, data: unknown) => {
+      parser.parseEventSourceMessage('steer-1', event, data);
+      TestBed.tick();
+    };
+
+    service.addUserMessage('steer-1', 'do a long thing');
+    service.startStreaming('steer-1');
+
+    send('message_start', { role: 'assistant' });
+    send('content_block_delta', { contentBlockIndex: 0, text: 'working' });
+    // The tool-calling message stays active on a tool_use stop reason, which is
+    // the state a steer actually lands in.
+    send('message_stop', { stopReason: 'tool_use' });
+    send('steering_applied', {
+      type: 'steering_applied',
+      sessionId: 'steer-1',
+      entryId: 'entry-1',
+      text: 'actually stop after two',
+    });
+
+    // Keep the stream going: every one of these is another chance to duplicate.
+    send('message_start', { role: 'assistant' });
+    for (const text of [' more', ' and', ' more', ' still']) {
+      send('content_block_delta', { contentBlockIndex: 0, text });
+    }
+    send('message_stop', { stopReason: 'end_turn' });
+    service.endStreaming('steer-1');
+
+    const messages = service.getMessagesForSession('steer-1')();
+    const steers = messages.filter(m => m.steering);
+    expect(steers).toHaveLength(1);
+    expect(steers[0].content).toEqual([{ type: 'text', text: 'actually stop after two' }]);
+
+    // And it stays in place: after the assistant turn it interrupted, before
+    // the one that follows.
+    expect(messages.map(m => (m.steering ? 'steer' : m.role))).toEqual([
+      'user',
+      'assistant',
+      'steer',
+      'assistant',
+    ]);
+  });
+
   it('endStreaming for one session leaves another session streaming', () => {
     service.startStreaming('conc-c');
     service.startStreaming('conc-d');
@@ -249,6 +380,44 @@ describe('MessageMapService', () => {
 
   it('endStreaming is a no-op for a session without an active stream', () => {
     expect(() => service.endStreaming('never-streamed')).not.toThrow();
+  });
+
+  describe('archive-served sessions', () => {
+    const archivedMessages = [
+      { id: 'msg-old-0', role: 'user', content: [{ type: 'text', text: 'From last year' }] },
+    ];
+
+    it('marks a session archive-served when the messages came from the archive', async () => {
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages, fromArchive: true });
+
+      await service.loadMessagesForSession('old');
+
+      expect(service.isArchiveServed('old')).toBe(true);
+      expect(service.isArchiveServed('other')).toBe(false);
+      expect(service.isArchiveServed(null)).toBe(false);
+    });
+
+    it('treats a response without the flag (an older server) as live', async () => {
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages });
+
+      await service.loadMessagesForSession('live');
+
+      expect(service.isArchiveServed('live')).toBe(false);
+    });
+
+    it('drops the mark when a re-fetch comes back from Memory, and on clearSession', async () => {
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages, fromArchive: true });
+      await service.loadMessagesForSession('old');
+
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages, fromArchive: false });
+      await service.reloadMessagesForSession('old');
+      expect(service.isArchiveServed('old')).toBe(false);
+
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages, fromArchive: true });
+      await service.reloadMessagesForSession('old');
+      service.clearSession('old');
+      expect(service.isArchiveServed('old')).toBe(false);
+    });
   });
 
   it('should clear session', () => {

@@ -134,3 +134,71 @@ def test_invocation_request_accepts_none_system_prompt() -> None:
 
     req = InvocationRequest(session_id="s-1", message="hi")
     assert req.system_prompt is None
+
+
+# ---------------------------------------------------------------------------
+# An agent's instructions survive composition (the 2026-09-24 truncation)
+# ---------------------------------------------------------------------------
+
+
+def _numbered_rules(chars: int) -> str:
+    lines, i = [], 0
+    while sum(len(line) + 1 for line in lines) < chars:
+        lines.append(f"Rule {i}: always do thing number {i}.")
+        i += 1
+    return "\n".join(lines)
+
+
+def test_an_agents_full_instructions_reach_the_model() -> None:
+    """The default prompt shares this block, so a cap sized for instructions alone cut them.
+
+    33K characters is prod's longest agent on 2026-09-24 (32,887); before the fix only
+    the first ~1,400 characters of any agent's instructions survived.
+    """
+    from apis.inference_api.chat.routes import compose_agent_system_prompt
+
+    instructions = _numbered_rules(33_000)
+    base = SystemPromptBuilder().build(include_date=True)
+    composed = compose_agent_system_prompt(base, instructions, project_harness=False)
+    built = SystemPromptBuilder.from_user_prompt(composed).build(include_date=False)
+
+    assert instructions.splitlines()[-1] in built
+    assert built.endswith("</user_instructions>")
+
+
+def test_the_platform_text_fits_in_its_headroom() -> None:
+    """Fails when the default prompt grows toward the room reserved for it.
+
+    Everything besides the author's instructions shares PLATFORM_PROMPT_HEADROOM: the
+    default prompt and date, the user's personal instructions, and slack for headings and a
+    prompt template. A bound memory block no longer does (Shared Projects 2.2 sends it after
+    the wrapper). Outgrowing it would silently truncate the end of the block again, so raise
+    the headroom rather than weakening this.
+    """
+    from agents.main_agent.core.system_prompt_builder import PLATFORM_PROMPT_HEADROOM
+    from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS
+
+    platform = len(SystemPromptBuilder().build(include_date=True))
+    reserved = MAX_PERSONAL_INSTRUCTIONS_CHARS + 16 * 1024
+    assert platform + reserved <= PLATFORM_PROMPT_HEADROOM
+
+
+def test_saved_and_previewed_instructions_share_one_cap() -> None:
+    from apis.inference_api.chat.models import MAX_USER_SYSTEM_PROMPT_CHARS, InvocationRequest
+    from apis.shared.assistants.models import (
+        MAX_AGENT_INSTRUCTIONS_CHARS,
+        CreateAssistantRequest,
+        UpdateAssistantRequest,
+    )
+
+    assert MAX_USER_SYSTEM_PROMPT_CHARS == MAX_AGENT_INSTRUCTIONS_CHARS
+    assert MAX_USER_PROMPT_LENGTH > MAX_AGENT_INSTRUCTIONS_CHARS
+
+    # A long agent previews and saves; one past the cap is refused, not truncated later.
+    long_instructions = "x" * 33_000
+    InvocationRequest(session_id="s-1", message="hi", system_prompt=long_instructions)
+    UpdateAssistantRequest(instructions=long_instructions)
+    with pytest.raises(ValueError):
+        UpdateAssistantRequest(instructions="x" * (MAX_AGENT_INSTRUCTIONS_CHARS + 1))
+    with pytest.raises(ValueError):
+        CreateAssistantRequest(name="a", description="", instructions="x" * (MAX_AGENT_INSTRUCTIONS_CHARS + 1))

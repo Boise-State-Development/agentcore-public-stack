@@ -68,6 +68,53 @@ definition of "full fidelity" from this probe, and the offload spec's
 
 ## 2. Answer quality
 
+> ⛔ **WAIVED 2026-09-21 — the §2 veto did not run, and the epic is in
+> production at its shipping defaults.** This spec is still `Status: Draft`
+> and no harness was ever built. Recording the waiver because the veto is
+> written in the strongest terms available — *"no cost result, however good,
+> ships a confirmed quality regression"* — and a reader who finds it unrun
+> will reasonably assume it passed.
+>
+> **What shipped anyway.** #1137–#1143, #1145 and #1147 reached prod in
+> **1.23.0, 2026-09-20**, with `DOCUMENT_OFFLOAD_ROLLOUT_PERCENT` at its
+> default of 100 — which is this section's own §4.2 **"Ship"** state, entered
+> without the evidence §4.2 requires for it. The cost side is measured and
+> strong (prefix 109.1K → ~15K on the dev canary; attachments were 31% of prod
+> spend). The quality side has no measurement of any kind.
+>
+> **Why it was waived rather than run.** The fallback was measured on
+> 2026-09-21 and does not exist. The cheap substitute — the §2 comparison read
+> off the `F#` rows #1142 shipped, across the turn classes §6.1 defines — is
+> **already implemented**: `GET /admin/feedback/fleet` emits `arms.turnClass`
+> bucketed full > retrieved > digestOnly, exactly as specified. It returns
+> nothing usable. Every `F#` row in prod since 1.23.0 is **13 rows: 1 explicit
+> thumb and 12 implicit `copy` signals, 0 `continue`**; dev has **1 thumb in
+> 30 days**. Against `DEFAULT_MINIMUM_N = 20` per arm and **three** document
+> arms to populate, ~0.7 thumbs/day fleet-wide puts the `digestOnly` and
+> `retrieved` arms months out. Implicit rows do not substitute — §10's rule
+> that the two are never summed is enforced in `fleet.py:168`, correctly.
+>
+> **The asymmetry this waiver records**, because it is the structural finding
+> and not an accident of this epic: every cost claim here was measured, and no
+> quality claim was. `CLAUDE.md`'s tenet says quality wins when the two
+> conflict — which cannot be exercised while only one of them is instrumented.
+>
+> **What reopens it** — any one deletes this waiver rather than amending it:
+> 1. The §2 harness gets built. It is now the **only** path that does not wait
+>    on user volume, and §2's own amendment note already scopes what to adopt
+>    from AgentCore Evaluations versus build.
+> 2. The `digestOnly` or `retrieved` arm clears `minimumN` in
+>    `GET /admin/feedback/fleet`. ⚠️ Score **A→B and B→C separately** when it
+>    does: per §5, PRs 1–3 are a *correctness* fix where quality should go
+>    **up**, and only PR-4 is the cost trade — pooling them lets a strip-fix
+>    win mask an offload regression.
+> 3. A user-reported answer-quality failure on an attachment session.
+>
+> ⚠️ Do **not** reopen this by lowering `FEEDBACK_ARM_MINIMUM_N` — that
+> manufactures a rate from single-digit n and produces precisely the quality
+> *score* response-feedback spec §9 forbids, in place of the comparison
+> between arms this section asks for.
+
 > **Amended 2026-08-12 — what to build vs. what to adopt.** This section is the
 > base design for the harness shared with #833 §4.3 and #835 §8. A spike
 > (`agentcore-evaluations-spike-findings.md`) verified against dev-ai that the
@@ -281,6 +328,13 @@ quantity. Two consequences:
   read).
 
 ### 4.2 Stopping rule
+
+> ⛔ **Not applied as written — see the waiver at the head of §2.** The epic
+> reached prod in 1.23.0 (2026-09-20) at `ROLLOUT_PERCENT = 100`, which is this
+> rule's own **"Ship"** state, without the quality leg the rule conjoins. The
+> cost and mechanism legs remain live and worth reading out (`document_offload`
+> event count answers the mechanism check); the quality leg is waived until one
+> of the three triggers in §2 fires.
 
 Evaluate at 150 sessions/arm or 8 weeks, whichever first. Primary endpoint:
 attachment-session cost per session (log scale), arm C vs arm B. Secondary:

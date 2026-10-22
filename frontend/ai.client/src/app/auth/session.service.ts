@@ -4,6 +4,8 @@ import { firstValueFrom } from 'rxjs';
 
 import { ConfigService } from '../services/config.service';
 import { BffLogoutResponse, BffSessionResponse, BffSessionUser } from './bff-session.model';
+import { ComposerDraftStorageService } from '../session/services/session/composer-draft-storage.service';
+import { QuotaWarningService } from '../services/quota/quota-warning.service';
 
 /**
  * SessionService — backs the BFF Token-Handler cookie session.
@@ -30,6 +32,15 @@ import { BffLogoutResponse, BffSessionResponse, BffSessionUser } from './bff-ses
 export class SessionService {
   private readonly http = inject(HttpClient);
   private readonly config = inject(ConfigService);
+  /**
+   * Composer drafts are the one thing in `localStorage` that is the user's
+   * own words rather than a device preference, so their lifetime is tied to
+   * the session here: claimed on bootstrap, cleared on logout.
+   */
+  private readonly composerDrafts = inject(ComposerDraftStorageService);
+
+  /** Holds a persisted quota-warning dismissal, which is also this user's. */
+  private readonly quotaWarnings = inject(QuotaWarningService);
 
   private readonly _user = signal<BffSessionUser | null>(null);
   private readonly _csrfToken = signal<string | null>(null);
@@ -91,6 +102,9 @@ export class SessionService {
       const { csrf_token, ...user } = response;
       this._user.set(user);
       this._csrfToken.set(csrf_token);
+      // Picks up drafts the previous person left behind by closing the
+      // browser instead of signing out — see `adopt`.
+      this.composerDrafts.adopt(user.user_id);
     } catch (error) {
       this._user.set(null);
       this._csrfToken.set(null);
@@ -156,6 +170,9 @@ export class SessionService {
       const { csrf_token, ...user } = response;
       this._user.set(user);
       this._csrfToken.set(csrf_token);
+      // Picks up drafts the previous person left behind by closing the
+      // browser instead of signing out — see `adopt`.
+      this.composerDrafts.adopt(user.user_id);
     } catch (error) {
       if (error instanceof HttpErrorResponse && error.status === 401) {
         this.handleUnauthorized();
@@ -242,6 +259,8 @@ export class SessionService {
     } finally {
       this._user.set(null);
       this._csrfToken.set(null);
+      this.composerDrafts.clear();
+      this.quotaWarnings.resetForSignOut();
     }
     if (postLogoutUrl) {
       window.location.href = postLogoutUrl;

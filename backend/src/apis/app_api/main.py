@@ -17,9 +17,9 @@ env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 
 # Set up logging
@@ -81,23 +81,29 @@ async def lifespan(app: FastAPI):
     # Startup
     _validate_skip_auth_or_raise()
     logger.info("=== AgentCore Public Stack API Starting ===")
+    # app-api keeps its explicit resource-name variables (ECS has no payload
+    # limit). This only compares them with what PROJECT_PREFIX derives and
+    # warns on a difference, so the Runtime's derivation (spec §7) is checked
+    # against every real deployment before the Runtime stops receiving them.
+    from apis.shared.config import audit_derived_environment, log_environment_report
+
+    log_environment_report(audit_derived_environment(), logger, service="app-api")
     logger.info("Agent execution engine initialized")
 
-    # Create output directories if they don't exist
-    base_dir = Path(__file__).parent.parent
-    output_dir = os.path.join(base_dir, "output")
-    uploads_dir = os.path.join(base_dir, "uploads")
-    generated_images_dir = os.path.join(base_dir, "generated_images")
+    # A PlatformStack deploy can drop admin-added identity providers from the
+    # Cognito App Client; this puts them back (see the module docstring).
+    from apis.shared.auth_providers.app_client_reconciler import run_reconcile_loop
 
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(uploads_dir, exist_ok=True)
-    os.makedirs(generated_images_dir, exist_ok=True)
-    logger.info("Output directories ready")
+    reconcile_task = asyncio.create_task(run_reconcile_loop())
 
     yield  # Application is running
 
     # Shutdown
     logger.info("=== Agent Core Service Shutting Down ===")
+    reconcile_task.cancel()
+    # return_exceptions swallows the task's CancelledError, so shutdown waits
+    # for the loop to finish without re-raising it.
+    await asyncio.gather(reconcile_task, return_exceptions=True)
     # TODO: Cleanup agent pool, MCP clients, etc.
 
 # Create FastAPI app with lifespan
@@ -160,8 +166,10 @@ logger.info("Added AgentCore context middleware")
 # Starlette `add_middleware` prepends, so the LAST-added middleware is
 # outermost. Request-side order is therefore the reverse of the call order
 # below:
-#   request:  SessionRefresh → CSRF → AgentCoreContext → CORS → router
-#   response: router → CORS → AgentCoreContext → CSRF → SessionRefresh
+#   request:  ProxiedRedirect → GZip → SessionRefresh → CSRF →
+#             AgentCoreContext → CORS → router
+#   response: router → CORS → AgentCoreContext → CSRF → SessionRefresh →
+#             GZip → ProxiedRedirect
 # This is the order we need: SessionRefresh has to populate
 # `state.bff_session` before CSRF reads it.
 from apis.shared.middleware.csrf import CSRFMiddleware
@@ -171,6 +179,40 @@ app.add_middleware(CSRFMiddleware)
 app.add_middleware(SessionRefreshMiddleware)
 logger.info("Added BFF session-refresh + CSRF middlewares (dormant until cookie present)")
 
+# gzip the JSON surface. Nothing compressed app-api responses before this:
+# CloudFront's `/api/*` behaviour is deliberately `compress: false` so the
+# edge never buffers a `text/event-stream`, which leaves compression to the
+# origin — the only layer that knows a response's content type rather than
+# guessing from its path. Measured on this repo's own payload shapes at
+# `compresslevel=6`: ~3.0x on a conversation-history response, ~3.9x on a
+# 5,000-row spreadsheet-shaped one. Level 9 (Starlette's default) buys 3%
+# more for 4x the CPU on the large case, so 6 — zlib's own default — it is.
+#
+# `StreamSafeGZipMiddleware` passes `text/event-stream` and already-encoded
+# bodies through untouched *and un-buffered*; see its module docstring for
+# why the second half of that matters on the chat path.
+#
+# Sits one layer inside ProxiedRedirect so it compresses everything the app
+# emits — including the error bodies CSRF and SessionRefresh return — while
+# leaving ProxiedRedirect genuinely outermost. The two never collide:
+# ProxiedRedirect reads and rewrites only `Location`, on responses (3xx)
+# whose bodies are empty or below the compression threshold anyway.
+from apis.shared.middleware.compression import StreamSafeGZipMiddleware
+
+app.add_middleware(StreamSafeGZipMiddleware, minimum_size=500, compresslevel=6)
+logger.info("Added gzip compression middleware (SSE and pre-encoded bodies excluded)")
+
+# Outermost middleware: repair `Location` headers on redirects this app
+# generates for itself (Starlette's `redirect_slashes`, chiefly). Behind
+# CloudFront those come out as `http://api.<domain>/<path>` — the internal
+# ALB host, over plain HTTP, without the stripped `/api` prefix — which a
+# browser blocks as mixed content. Added last so it wraps every other
+# middleware and sees the final response headers.
+from apis.shared.middleware.proxied_redirect import ProxiedRedirectMiddleware
+
+app.add_middleware(ProxiedRedirectMiddleware)
+logger.info("Added proxied-redirect middleware")
+
 
 # Import routers
 from apis.app_api.health import router as health_router
@@ -179,20 +221,33 @@ from apis.app_api.auth.bff import cli_router as bff_cli_auth_router
 from apis.app_api.auth.bff import router as bff_auth_router
 from apis.app_api.auth.api_keys.routes import router as api_keys_router
 from apis.app_api.sessions.routes import router as sessions_router
+from apis.app_api.sessions.search_routes import router as session_search_router
 from apis.app_api.admin.routes import router as admin_router
 from apis.app_api.models.routes import router as models_router
 from apis.app_api.costs.routes import router as costs_router
 from apis.app_api.chat.routes import router as chat_router
 from apis.app_api.chat.converse_routes import router as converse_router
 from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
+from apis.app_api.telemetry.routes import router as telemetry_router
 from apis.app_api.mcp_apps.routes import router as mcp_apps_router
 from apis.app_api.memory.routes import router as memory_router
 from apis.app_api.memory_spaces.routes import router as memory_spaces_router
+from apis.app_api.notifications.routes import router as notifications_router
+from apis.app_api.projects.knowledge_routes import router as project_knowledge_router
+from apis.app_api.projects.maintenance_routes import router as project_memory_maintenance_router
+from apis.app_api.projects.memory_routes import files_router as project_memory_files_router
+from apis.app_api.projects.memory_routes import router as project_memory_router
+from apis.app_api.projects.output_routes import router as project_outputs_router
+from apis.app_api.projects.schedule_routes import router as project_schedules_router
+from apis.app_api.projects.routes import router as projects_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
+from apis.app_api.files.folders.routes import recent_router as recent_folders_router
+from apis.app_api.files.folders.routes import router as folder_attachments_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.agent_designer.routes import router as agents_router
 from apis.app_api.documents.routes import router as documents_router
+from apis.app_api.kb_upgrade.routes import router as kb_upgrade_router
 from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
 from apis.app_api.connectors.routes import router as connectors_router
@@ -203,8 +258,11 @@ from apis.app_api.sync_policies.routes import router as sync_policies_router
 from apis.app_api.system.routes import router as system_router
 from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
 from apis.app_api.voice import router as voice_router
+from apis.app_api.dictation import router as dictation_router
 from apis.app_api.user_menu_links.routes import router as user_menu_links_router
+from apis.app_api.announcements.routes import router as announcements_router
 from apis.app_api.system_prompts.routes import router as system_prompts_router
+from apis.app_api.agent_templates.routes import router as agent_templates_router
 from apis.app_api.runs.routes import router as runs_router
 from apis.app_api.schedules.routes import router as schedules_router
 
@@ -214,11 +272,15 @@ app.include_router(auth_router)
 app.include_router(bff_auth_router)  # BFF Token Handler auth routes (Phase 3, dormant until SPA cutover)
 app.include_router(bff_cli_auth_router)  # CLI device-authorization flow (/auth/cli/*)
 app.include_router(api_keys_router)
+app.include_router(session_search_router)  # GET /sessions/search; 404s while CONVERSATION_SEARCH_ENABLED is off
 app.include_router(sessions_router)
+app.include_router(folder_attachments_router)  # /sessions/{id}/folders (drive-folder PR-A); 404s while FOLDER_ATTACHMENTS_ENABLED is off
+app.include_router(recent_folders_router)  # /folders/recent (composer picker PR-2); 404s while FOLDER_ATTACHMENTS_ENABLED is off
 app.include_router(admin_router)
 app.include_router(assistants_router)
 app.include_router(agents_router)  # Agent Designer /agents surface; 404s while AGENTS_API_ENABLED off
 app.include_router(documents_router)
+app.include_router(kb_upgrade_router)  # Owner-facing KB upgrade card; phase "none" (renders nothing) while MANAGED_KB_MIGRATION_ENABLED is off
 app.include_router(users_router)
 app.include_router(user_settings_router)
 app.include_router(models_router)
@@ -226,8 +288,17 @@ app.include_router(costs_router)
 app.include_router(chat_router)  # Application-specific chat endpoints
 app.include_router(converse_router)  # API-key authenticated /chat/api-converse (Bedrock Converse)
 app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Phase 4, dormant until SPA cutover)
+app.include_router(telemetry_router)  # POST /telemetry/turn-timing; 404s while CLIENT_TURN_TIMING_ENABLED is off
 app.include_router(mcp_apps_router)  # MCP Apps app-initiated tools/call proxy (PR #5; inert until host flag on)
 app.include_router(memory_spaces_router)  # Memory Spaces user surface (A2); 404s while flag off
+app.include_router(projects_router)  # Shared Projects (PR-1.2); 404s while PROJECTS_ENABLED=false
+app.include_router(project_knowledge_router)  # A project's files (PR-1.5b), over its harness's documents
+app.include_router(project_memory_router)  # Proposals to a project's shared memory (2.5a)
+app.include_router(project_memory_files_router)  # Memory items: pins, provenance, archive (2.5a-2)
+app.include_router(project_memory_maintenance_router)  # Maintenance runs that propose compaction (2.6)
+app.include_router(project_outputs_router)  # Artifacts shared with a project (3.3)
+app.include_router(project_schedules_router)  # /projects/{id}/schedules (3.2); 404 unless PROJECTS_ENABLED and SCHEDULED_RUNS_ENABLED
+app.include_router(notifications_router)  # In-app inbox (PR-1.7); first producer is Shared Projects
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs
@@ -241,8 +312,11 @@ app.include_router(conversations_share_router)  # Share conversations endpoints
 app.include_router(shares_router)  # Share management (update, revoke, export)
 app.include_router(shared_view_router)  # Shared conversation read-only view
 app.include_router(voice_router)  # Cookie-authenticated WS proxy for Nova Sonic voice mode (#211)
+app.include_router(dictation_router)  # Composer dictation: ticketed WS proxy to Transcribe Streaming; 404s while DICTATION_ENABLED off
 app.include_router(user_menu_links_router)  # Public read of admin-managed user-menu links
+app.include_router(announcements_router)  # Feature announcements feed + ack; 404s while ANNOUNCEMENTS_ENABLED off
 app.include_router(system_prompts_router)   # Public read of admin-managed system prompts
+app.include_router(agent_templates_router)  # Public read of admin-managed agent templates (create-agent picker)
 app.include_router(runs_router)  # Headless "Run now" + grant lifecycle (scheduled-runs PR-1; SCHEDULED_RUNS_ENABLED + RBAC gated at runtime)
 app.include_router(schedules_router)  # Schedule CRUD (scheduled-runs B1; inert — SCHEDULED_RUNS_ENABLED + RBAC gated, nothing fires yet)
 
@@ -264,28 +338,17 @@ if skills_enabled():
 # environment, so its presence is the enablement signal.
 if os.environ.get("ARTIFACTS_RENDER_TOKEN_SECRET_ARN"):
     from apis.app_api.artifacts.routes import router as artifacts_router
+    from apis.app_api.artifacts.shares import (
+        artifact_shares_router,
+        shared_artifacts_router,
+    )
     app.include_router(artifacts_router)
-    logger.info("Artifact render-token routes enabled")
-
-# Mount static file directories for serving generated content
-# These are created by tools (visualization, code interpreter, etc.)
-# Use parent directory (src/) as base
-base_dir = Path(__file__).parent.parent
-output_dir = os.path.join(base_dir, "output")
-uploads_dir = os.path.join(base_dir, "uploads")
-generated_images_dir = os.path.join(base_dir, "generated_images")
-
-if os.path.exists(output_dir):
-    app.mount("/output", StaticFiles(directory=output_dir), name="output")
-    logger.info(f"Mounted static files: /output -> {output_dir}")
-
-if os.path.exists(uploads_dir):
-    app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
-    logger.info(f"Mounted static files: /uploads -> {uploads_dir}")
-
-if os.path.exists(generated_images_dir):
-    app.mount("/generated_images", StaticFiles(directory=generated_images_dir), name="generated_images")
-    logger.info(f"Mounted static files: /generated_images -> {generated_images_dir}")
+    # Artifact sharing rides the same enablement signal: a share is only
+    # ever consumed by minting a render token, so it cannot be useful
+    # without the artifacts feature being on.
+    app.include_router(artifact_shares_router)
+    app.include_router(shared_artifacts_router)
+    logger.info("Artifact render-token and sharing routes enabled")
 
 if __name__ == "__main__":
     import uvicorn

@@ -11,11 +11,60 @@ import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';
+import { grantManagedKbRetrieval } from '../managed-kb/managed-kb-role-construct';
 
 /**
  * Create the AgentCore Runtime execution role with all required
  * policy statements.
  */
+/**
+ * AgentCore Memory actions the Runtime role needs. Both memory statements on
+ * that role (`AgentCoreMemoryAccess` here, account-wide `memory/*`, and
+ * `MemoryAccess` in the Runtime construct, scoped to this deployment's memory)
+ * use this one list, so they cannot drift apart again. They did: the scoped
+ * statement once omitted GetMemory on the belief that it was not a real IAM
+ * action, and retrieval worked only because the wildcard statement carried it.
+ *
+ * Names mirror the AgentCore Data Plane API. GetMemory is required for
+ * long-term memory RETRIEVAL. At session creation the agent calls
+ * _discover_strategy_ids() -> MemoryClient.get_memory_strategies(), which
+ * invokes GetMemory to resolve the SEMANTIC / USER_PREFERENCE / SUMMARIZATION
+ * strategy ids used to build the retrieval namespaces. Without it that call
+ * AccessDenies, the retrieval config is left empty, and the agent silently runs
+ * with "long-term memory retrieval disabled": it keeps writing events
+ * (CreateEvent) but never recalls stored memories. Verified against the AWS
+ * Service Authorization Reference: GetMemory is a Read action on the `memory`
+ * resource type.
+ */
+export const RUNTIME_MEMORY_ACTIONS: readonly string[] = [
+  'bedrock-agentcore:GetMemory',
+  'bedrock-agentcore:CreateEvent',
+  'bedrock-agentcore:GetEvent',
+  'bedrock-agentcore:ListEvents',
+  'bedrock-agentcore:DeleteEvent',
+  'bedrock-agentcore:ListActors',
+  'bedrock-agentcore:ListSessions',
+  'bedrock-agentcore:RetrieveMemoryRecords',
+  'bedrock-agentcore:GetMemoryRecord',
+  'bedrock-agentcore:ListMemoryRecords',
+  'bedrock-agentcore:BatchCreateMemoryRecords',
+  'bedrock-agentcore:BatchUpdateMemoryRecords',
+  'bedrock-agentcore:BatchDeleteMemoryRecords',
+  'bedrock-agentcore:DeleteMemoryRecord',
+];
+
+/**
+ * The attributes a `STATS#{slug}` update may touch (Shared Projects 2.6b): the
+ * key, plus what `MemorySpaceRepository.record_retrieval` sets.
+ */
+export const MEMORY_STATS_ATTRIBUTES: readonly string[] = [
+  'PK',
+  'SK',
+  'slug',
+  'retrievalCount',
+  'lastRetrievedAt',
+];
+
 export function createRuntimeExecutionRole(
   scope: Construct,
   config: AppConfig,
@@ -78,6 +127,16 @@ export function createRuntimeExecutionRole(
   // resource, already covered below. Without this action a flipped native
   // flag AccessDenies and caches the model into the no-count skip list for
   // the process lifetime.
+  //
+  // ⚠️ The account-scoped resource below is LOAD-BEARING for two things
+  // beyond the inference profile, so do not narrow it to
+  // `inference-profile/*` without re-checking:
+  //   - OpenAI models on the `bedrock-runtime` OpenAI-compatible endpoint
+  //     (provider="bedrock-responses") additionally require
+  //     `bedrock:InvokeModel` on the account's DEFAULT PROJECT,
+  //     `arn:aws:bedrock:<region>:<account>:project/default`, which the
+  //     `:*` suffix already matches. There is no separate statement for it.
+  //   - CountTokens on the inference-profile ARN.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'BedrockModelInvocation',
     effect: iam.Effect.ALLOW,
@@ -110,6 +169,26 @@ export function createRuntimeExecutionRole(
     resources: ['*'],
   }));
 
+  // ── bedrock-runtime OpenAI bearer token ──
+  // The OpenAI-compatible endpoint on `bedrock-runtime`
+  // (provider="bedrock-responses") authenticates with the SAME short-term
+  // bearer token construction as Mantle, but authorizes it under a DIFFERENT
+  // IAM service namespace: `bedrock:CallWithBearerToken`, not
+  // `bedrock-mantle:CallWithBearerToken`. Granting only the Mantle one gets:
+  //
+  //   401 ... is not authorized to perform: bedrock:CallWithBearerToken
+  //   on resource: * because no identity-based policy allows the action
+  //
+  // Caught end-to-end in dev on 2026-09-05 — it does not show up in unit
+  // tests, and it does not show up when a developer drives the transport with
+  // their own SSO credentials, only under the runtime/task role.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'BedrockRuntimeCallWithBearerToken',
+    effect: iam.Effect.ALLOW,
+    actions: ['bedrock:CallWithBearerToken'],
+    resources: ['*'],
+  }));
+
   // ── AWS Marketplace (model subscription validation) ──
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'MarketplaceModelAccess',
@@ -119,11 +198,19 @@ export function createRuntimeExecutionRole(
   }));
 
   // ── External MCP Lambda Function URL invocation ──
+  // Both naming conventions: MCP servers deployed from their own repos are
+  // named `mcp-<server>-<env>` (no project prefix), so a prefix-only scope
+  // silently 403s every one of them the moment a tool is configured as a
+  // direct external MCP server rather than a Gateway target. Mirrors the
+  // resource scope app-api uses for the same fleet.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'ExternalMCPLambdaAccess',
     effect: iam.Effect.ALLOW,
     actions: ['lambda:InvokeFunctionUrl', 'lambda:InvokeFunction'],
-    resources: [`arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`],
+    resources: [
+      `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:mcp-*`,
+      `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`,
+    ],
   }));
 
   // ── AgentCore Gateway ──
@@ -198,22 +285,26 @@ export function createRuntimeExecutionRole(
     resources: tableResources,
   }));
 
-  // ── User settings table (read-only) ──
+  // ── User settings table (read + write) ──
   // inference_api/chat/routes.py resolves the user's saved defaultModelId via
   // UserSettingsRepository.get_settings — a GetItem on PK=USER#<id>, SK=SETTINGS.
-  // The runtime never writes settings (app-api owns that), and the table has no
-  // GSIs, so this stays a bare-ARN GetItem rather than joining the read/write
-  // bulk grant above.
+  // As of the platform self-service pilot the runtime ALSO writes this table:
+  // the confirmation-gated `set_default_model` account tool calls
+  // UserSettingsRepository.update_settings, which does a PutItem (read-modify-
+  // write of the SETTINGS item) plus an UpdateItem when clearing a field. So
+  // this grant covers GetItem + PutItem + UpdateItem, scoped to the one table
+  // ARN (no GSIs), kept out of the broad DynamoDBTableAccess bulk grant above
+  // so the runtime's settings access stays explicit and least-privilege.
   //
   // inference-agentcore-construct.ts injects DYNAMODB_USER_SETTINGS_TABLE_NAME,
-  // which makes the repository report itself enabled — so without this grant the
-  // GetItem AccessDenied'd and get_settings swallowed it into DEFAULT_SETTINGS.
-  // The user's chosen default model was silently ignored with no user-visible
-  // error; only a stray ERROR line in the runtime log revealed it.
+  // which makes the repository report itself enabled — so without the read grant
+  // the GetItem AccessDenied'd and get_settings swallowed it into
+  // DEFAULT_SETTINGS; without the write grants update_settings' PutItem
+  // AccessDenied'd and set_default_model surfaced only a generic error.
   role.addToPolicy(new iam.PolicyStatement({
-    sid: 'UserSettingsTableReadAccess',
+    sid: 'UserSettingsTableReadWriteAccess',
     effect: iam.Effect.ALLOW,
-    actions: ['dynamodb:GetItem'],
+    actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
     resources: [refs.userSettingsTable.tableArn],
   }));
 
@@ -274,15 +365,42 @@ export function createRuntimeExecutionRole(
   }));
 
   // ── Skill reference files (S3, read-only) ──
-  // The runtime is a READER of a skill's reference files (PR-6 progressive
-  // disclosure); app-api owns writes. Provisioned now so PR-6 needs no infra
-  // change. No code consumes it yet.
+  // The runtime reads a skill's reference files (`read_skill_file`, progressive
+  // disclosure) and, since the skill authoring tools (docs/specs/skill-creator.md
+  // D12), writes the invoking user's OWN skill bundles: `my_skill_create` /
+  // `_update` project SKILL.md, `my_skill_write_file` puts a file and
+  // `my_skill_delete_file` garbage-collects the orphaned object. Ownership is
+  // enforced by UserSkillService, not here. Put and delete are scoped to the
+  // live bundle layout under `skills/` (files and SKILL.md). A pinned version's
+  // frozen copies live under `skill-versions/`, outside that grant, so nothing
+  // the runtime does can alter what a pin runs. Whole-skill delete stays
+  // app-api's: no runtime tool exposes it.
   const skillResourcesBucketArn = refs.skillResourcesBucket.bucketArn;
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'SkillResourcesBucketRead',
     effect: iam.Effect.ALLOW,
     actions: ['s3:GetObject', 's3:ListBucket'],
     resources: [skillResourcesBucketArn, `${skillResourcesBucketArn}/*`],
+  }));
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SkillResourcesBucketWrite',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:PutObject', 's3:DeleteObject'],
+    resources: [`${skillResourcesBucketArn}/skills/*`],
+  }));
+
+  // ── Conversation archive (put, plus the read that guards a re-archive) ──
+  // The after-`done` put of each turn's transcript (conversation search). A
+  // resumed turn re-archives its paused copy, and reads that object first so
+  // it never replaces a different turn's (`put_turn_guarded`). No ListBucket:
+  // a missing key then reads as 403, which the guard treats as "write
+  // create-only". Listing and deleting stay app-api's.
+  const conversationArchiveBucketArn = refs.conversationArchiveBucket.bucketArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ConversationArchivePut',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:PutObject', 's3:GetObject'],
+    resources: [`${conversationArchiveBucketArn}/conversations/*`],
   }));
 
   // ── Memory Spaces (S3 + DynamoDB, readwrite) ──
@@ -303,6 +421,94 @@ export function createRuntimeExecutionRole(
               'dynamodb:Query', 'dynamodb:BatchWriteItem'],
     resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
   }));
+  // A project harness's `memory_read` counts each file it returns in the
+  // file's `STATS#{slug}` row (Shared Projects 2.6b): one UpdateItem that adds
+  // to a counter, so no read-modify-write. `dynamodb:Attributes` pins it to
+  // the stats row's own attributes (with the key), so it can't rewrite a
+  // manifest or a file version; keep the list in step with
+  // `MemorySpaceRepository.record_retrieval`. Its own managed policy rather than
+  // another statement on the role: the role's statements already spill into
+  // CDK overflow policies, packed by a size CDK estimates before ARNs resolve,
+  // and on dev OverflowPolicy1 resolves to 5,473 of IAM's 6,144 characters.
+  // The same packing rolled back the first 2.6a deploy on app-api's role.
+  //
+  // `analyze_spreadsheet` downloads an assistant's knowledge-base spreadsheet
+  // from its original upload in rag-documents (`assistants/{id}/documents/...`),
+  // so the Runtime reads that prefix too; so does full-context mode
+  // (`kb_full_context`), which sends a small knowledge base's uploads whole.
+  // Read-only, no ListBucket: the key
+  // comes from the assistant's DOC# row. It rides this policy for the same
+  // overflow reason, and to add no resource to a stack near 500. Its
+  // description stays as it is: changing it replaces the policy.
+  new iam.ManagedPolicy(scope, 'RuntimeMemoryStatsPolicy', {
+    roles: [role],
+    description: 'AgentCore Runtime: count memory file reads in STATS# rows (Shared Projects 2.6b)',
+    statements: [
+      new iam.PolicyStatement({
+        sid: 'AssistantDocumentsRead',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:GetObject'],
+        resources: [`${refs.ragDocumentsBucket.bucketArn}/assistants/*`],
+      }),
+      new iam.PolicyStatement({
+        sid: 'MemorySpacesStatsUpdate',
+        effect: iam.Effect.ALLOW,
+        actions: ['dynamodb:UpdateItem'],
+        resources: [memorySpacesTableArn],
+        conditions: {
+          'ForAllValues:StringEquals': {
+            'dynamodb:Attributes': [...MEMORY_STATS_ATTRIBUTES],
+          },
+          StringEqualsIfExists: { 'dynamodb:ReturnValues': 'NONE' },
+        },
+      }),
+    ],
+  });
+
+  // ── Shared Projects (DynamoDB) ──
+  // The invocation path resolves membership (META + MEMBER#), back-fills a
+  // member's userId on first resolve, and bumps the COST# monthly rollup. It
+  // never creates or deletes project rows — that is app-api's CRUD surface.
+  const projectsTableArn = refs.projectsTable.tableArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ProjectsTableReadUpdate',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem', 'dynamodb:BatchGetItem', 'dynamodb:Query',
+              'dynamodb:UpdateItem'],
+    resources: [projectsTableArn, `${projectsTableArn}/index/*`],
+  }));
+  // A member's `memory_propose` tells the project's editors (Shared Projects
+  // 2.5a). Notifications are `INBOX#{email}` rows on this table, so the
+  // Runtime may put rows under that key prefix and no other.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ProjectsInboxWrite',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:PutItem', 'dynamodb:BatchWriteItem'],
+    resources: [projectsTableArn],
+    conditions: {
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['INBOX#*'] },
+    },
+  }));
+
+  // ── Shared tasks, read-only (Shared Projects 2.5c) ──
+  // A project harness's `shared_task_read` tool reads one project share by id:
+  // a GetItem on its row and a GetObject on its snapshot body. The Runtime
+  // never lists, writes or deletes shares; app-api owns that surface. Names are
+  // derived from PROJECT_PREFIX in the container (apis/shared/shares/snapshots.py)
+  // because the Runtime's environment has no room for two more variables.
+  const sharedConversationsTableArn = refs.sharedConversationsTable.tableArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SharedConversationsTableRead',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem'],
+    resources: [sharedConversationsTableArn],
+  }));
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SharedConversationsBodyRead',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:GetObject'],
+    resources: [`${refs.sharedConversationsBucket.bucketArn}/shares/*`],
+  }));
 
   // ── S3 Vectors (RAG query) ──
   const vectorBucketName = refs.ragVectorBucketName;
@@ -317,6 +523,11 @@ export function createRuntimeExecutionRole(
       `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${vectorBucketName}/index/${vectorIndexName}`,
     ],
   }));
+
+  // ── Managed knowledge bases (Bedrock Retrieve) ──
+  // Query-only: the agent loop may retrieve from a Managed_KB but never
+  // create or delete one (Requirement 20.6).
+  grantManagedKbRetrieval(config, role);
 
   // ── AgentCore WorkloadIdentity + OAuth token minting ──
   // The agent loop's tool gating in shared/oauth/agentcore_identity.py
@@ -343,36 +554,9 @@ export function createRuntimeExecutionRole(
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'AgentCoreMemoryAccess',
     effect: iam.Effect.ALLOW,
-    // See app-api-iam-grants.ts for the rationale — these action names
-    // mirror the AgentCore Data Plane API. The previous list used
-    // speculative names (CreateMemoryEvent, ListMemoryEvents,
-    // RetrieveMemory) that don't exist as IAM actions.
-    actions: [
-      // GetMemory is required for long-term memory RETRIEVAL. At session
-      // creation the agent calls _discover_strategy_ids() ->
-      // MemoryClient.get_memory_strategies(), which invokes GetMemory to
-      // resolve the SEMANTIC / USER_PREFERENCE / SUMMARIZATION strategy IDs
-      // used to build the retrieval namespaces. Without it that call
-      // AccessDenies, the retrieval config is left empty, and the agent
-      // silently runs with "long-term memory retrieval disabled" — it keeps
-      // writing events (CreateEvent) but never recalls stored memories.
-      // Verified against the AWS Service Authorization Reference: GetMemory
-      // is a Read action on the `memory` resource type.
-      'bedrock-agentcore:GetMemory',
-      'bedrock-agentcore:CreateEvent',
-      'bedrock-agentcore:GetEvent',
-      'bedrock-agentcore:ListEvents',
-      'bedrock-agentcore:DeleteEvent',
-      'bedrock-agentcore:ListActors',
-      'bedrock-agentcore:ListSessions',
-      'bedrock-agentcore:RetrieveMemoryRecords',
-      'bedrock-agentcore:GetMemoryRecord',
-      'bedrock-agentcore:ListMemoryRecords',
-      'bedrock-agentcore:BatchCreateMemoryRecords',
-      'bedrock-agentcore:BatchUpdateMemoryRecords',
-      'bedrock-agentcore:BatchDeleteMemoryRecords',
-      'bedrock-agentcore:DeleteMemoryRecord',
-    ],
+    // See RUNTIME_MEMORY_ACTIONS. The Runtime construct grants the same list
+    // again, scoped to this deployment's memory (`MemoryAccess`).
+    actions: [...RUNTIME_MEMORY_ACTIONS],
     resources: [`arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:memory/*`],
   }));
 

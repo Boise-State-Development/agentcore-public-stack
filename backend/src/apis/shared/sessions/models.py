@@ -6,9 +6,12 @@ This module contains all session-related data models including:
 - Session preferences and configuration
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 
 class VisualDisplayState(BaseModel):
@@ -25,7 +28,7 @@ class PendingInterrupt(BaseModel):
     reload — without it, a browser refresh leaves the prompt stuck and the
     tool call orphaned in ``pending`` forever.
 
-    Two variants share this shape (discriminated by ``kind``):
+    Four variants share this shape (discriminated by ``kind``):
 
     - ``oauth`` — written by ``OAuthConsentHook``. Carries ``provider_id``;
       the frontend re-fetches a fresh consent URL via ``initiate-consent``
@@ -36,6 +39,19 @@ class PendingInterrupt(BaseModel):
       ``tool_input`` is stored as a JSON-encoded string to avoid DynamoDB's
       Decimal/float coercion when the agent's tool input contains nested
       objects with floats.
+    - ``user_question`` — written for the ``ask_user_question`` tool's own
+      interrupt. Carries ``questions`` (JSON-encoded, same reasoning as
+      ``tool_input``) so the picker rehydrates with the questions the user was
+      already looking at. Unlike the other two this interrupt is raised by the
+      tool itself via ``ToolContext``, not by a hook — the persisted shape and
+      the resume path are identical either way.
+    - ``browser_login`` — written for ``request_user_login``. Carries
+      ``browser_session`` (JSON-encoded :class:`BrowserSessionRef`) so the live
+      view can be re-offered after a refresh. Deliberately holds **no URL**:
+      live-view URLs are SigV4 query-signed and expire within 300 seconds, so
+      a stored one is always stale by the time it is read — app-api mints a
+      fresh one per request instead (``docs/specs/authenticated-web-
+      assessment.md`` D2).
 
     Default ``kind`` is ``oauth`` for backward compatibility with rows
     written before per-tool approval shipped.
@@ -43,7 +59,7 @@ class PendingInterrupt(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     interrupt_id: str = Field(..., alias="interruptId", description="Strands interrupt id used to resume the paused turn")
-    kind: Literal["oauth", "tool_approval"] = Field(
+    kind: Literal["oauth", "tool_approval", "user_question", "browser_login"] = Field(
         default="oauth",
         description="Discriminator: which variant this interrupt represents",
     )
@@ -80,6 +96,26 @@ class PendingInterrupt(BaseModel):
     message: Optional[str] = Field(
         default=None,
         description="(tool_approval) Admin-supplied or default approval message",
+    )
+
+    # user_question-only fields
+    questions: Optional[str] = Field(
+        default=None,
+        description="(user_question) JSON-encoded list of questions to re-render",
+    )
+
+    # browser_login-only fields
+    browser_session: Optional[str] = Field(
+        default=None,
+        alias="browserSession",
+        description=(
+            "(browser_login) JSON-encoded BrowserSessionRef — identifiers and "
+            "viewport only, never a live-view URL"
+        ),
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="(browser_login) The agent's one-line explanation of what needs signing into",
     )
 
 
@@ -141,6 +177,39 @@ class PausedTurnSnapshot(BaseModel):
                     "Mantle turn targets the same region. None for non-Mantle turns and "
                     "snapshots written before the field existed.",
     )
+    assistant_id: Optional[str] = Field(
+        default=None,
+        alias="assistantId",
+        description="Assistant (RAG corpus) the paused turn ran against. It is an "
+                    "agent-cache key element because the spreadsheet-analysis tools "
+                    "close over it, so resume replays it verbatim to land on the "
+                    "paused agent's slot. None for assistant-less turns and snapshots "
+                    "written before the field existed (those miss and rebuild).",
+    )
+    memory_binding: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="memoryBinding",
+        description="What the paused turn's memory tools closed over: an Agent's "
+                    "resolved Memory-Space binding ({spaceId, spaceName, access}) or, for a "
+                    "project harness, its scopes ({projectId, sharedSpaceId, "
+                    "personalSpaceId}; Shared Projects 2.4b). A cache-key element: resume "
+                    "replays it or the paused agent is orphaned. None when the turn had no "
+                    "memory tools and on snapshots written before the field existed.",
+    )
+    memory_context: Optional[str] = Field(
+        default=None,
+        alias="memoryContext",
+        description="The rendered Memory-Space block the paused turn was built with. "
+                    "Hashed with the system prompt in the agent cache key, so resume "
+                    "replays it or the paused agent is orphaned.",
+    )
+    text_only_model: Optional[bool] = Field(
+        default=None,
+        alias="textOnlyModel",
+        description="The paused turn's model reads TEXT only, so a rebuilt agent "
+                    "keeps media blocks in history away from it. None on snapshots "
+                    "written before the field existed (treated as False).",
+    )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 
@@ -154,6 +223,7 @@ class SessionPreferences(BaseModel):
     selected_prompt_id: Optional[str] = Field(default=None, alias="selectedPromptId", description="ID of selected prompt template")
     custom_prompt_text: Optional[str] = Field(default=None, alias="customPromptText", description="Custom prompt text if used")
     assistant_id: Optional[str] = Field(default=None, alias="assistantId", description="Assistant ID attached to this session")
+    project_id: Optional[str] = Field(default=None, alias="projectId", description="Shared Project whose harness this session runs, when assistantId is a project's agent")
     agent_type: Optional[str] = Field(default=None, alias="agentType", description="Agent mode this conversation runs in ('skill' or 'chat'); reopening the session restores it")
 
     # System prompt hash for tracking exact prompt version sent to the model
@@ -263,6 +333,36 @@ class SessionMetadata(BaseModel):
         alias="lastTurnInterruptedAt",
         description="ISO 8601 timestamp when the interruption was detected",
     )
+    pending_attachment_upload_ids: Optional[List[str]] = Field(
+        default=None,
+        alias="pendingAttachmentUploadIds",
+        description=(
+            "Upload IDs sent inline on the turn currently in flight, recorded before the "
+            "model call. Inline document bytes are stripped from restored history, so a turn "
+            "that dies before the model reads them consumes them for good — these let the "
+            "next turn re-send them. Cleared as soon as a turn produces assistant content"
+        ),
+    )
+    pending_attachments_at: Optional[str] = Field(
+        default=None,
+        alias="pendingAttachmentsAt",
+        description="ISO 8601 timestamp the pending-attachment marker was written; recovery is TTL-bounded against it",
+    )
+    browser_session: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="browserSession",
+        description=(
+            "Identity of the AgentCore browser session this conversation is "
+            "driving, projected here so app-api can mint a live-view URL for a "
+            "takeover (docs/specs/authenticated-web-assessment.md D4). The "
+            "agent-side source of truth stays on `agent.state`; this is the "
+            "copy app-api can read, and per the 'one session, more than one "
+            "agent' rule it is re-read per turn rather than cached on an agent "
+            "instance. Identifiers, viewport and control state only — never a "
+            "live-view URL, which is SigV4 query-signed and dead within 300 "
+            "seconds of being minted"
+        ),
+    )
 
     # Denormalized cost + context aggregates for the session-cost badge.
     # Maintained by _bump_session_aggregates after each turn (write-time
@@ -359,6 +459,133 @@ class SessionInterruptRequest(BaseModel):
     )
 
 
+class SessionSteerRequest(BaseModel):
+    """Request body for a mid-turn steer (POST /sessions/{id}/steer).
+
+    A follow-up the user typed while a response was still streaming. The
+    client mints `entry_id` so the whole round trip is idempotent: it is the
+    id the SPA holds on the queued composer entry, the id the runtime clears
+    once the injection is committed to history, and the id the
+    `steering_applied` SSE event names back. See docs/specs/mid-turn-steering.md.
+
+    `text` is the user's words verbatim — the same string that would have been
+    sent as a normal turn had the queue flushed at end of turn instead.
+    """
+
+    text: str = Field(
+        min_length=1,
+        max_length=STEER_QUEUE_MAX_CHARS,
+        description="The follow-up to inject at the running turn's next tool boundary",
+    )
+    entry_id: str = Field(
+        min_length=1,
+        max_length=128,
+        alias="entryId",
+        description="Client-minted id for this queue entry; echoed back on steering_applied",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SessionSteerResponse(BaseModel):
+    """Result of arming a mid-turn steer.
+
+    `queued=False` is not an error: it means the turn ended between the user
+    typing and this request landing, and the SPA should send the text as a
+    normal turn instead (which is exactly what its end-of-turn flush already
+    does). The endpoint answers 200 either way so the SPA never has to
+    distinguish a lost race from a failure.
+    """
+
+    queued: bool = Field(description="Whether the entry was armed against a live turn")
+    entry_id: str = Field(alias="entryId", description="The client-minted entry id")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BrowserLiveViewResponse(BaseModel):
+    """A short-lived Live View URL for the conversation's browser session.
+
+    The URL is SigV4 *query*-signed and lives at most 300 seconds, so this is
+    minted per request rather than stored or streamed
+    (``docs/specs/authenticated-web-assessment.md`` D2). The viewer re-requests
+    against ``expiresAt``, which is why a twenty-minute sign-in works.
+
+    ``viewport`` rides the response because DCV's ``remoteWidth``/
+    ``remoteHeight`` must match the browser session's real viewport or the
+    stream crops — the viewer must not carry its own copy of 1280x800.
+
+    ⚠️ This is the one place a presigned browser URL is allowed to travel, and
+    only because it goes to an authenticated browser over the SPA's own
+    session. It must never reach a tool result, an SSE event, a persisted row
+    or a log line.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    url: str = Field(..., description="Presigned Live View URL, valid until expiresAt")
+    expires_at: str = Field(
+        ...,
+        alias="expiresAt",
+        description="ISO 8601 instant the signature expires; the viewer refreshes before this",
+    )
+    viewport: Dict[str, int] = Field(
+        ...,
+        description="The browser session's real viewport, for DCV remoteWidth/remoteHeight",
+    )
+    control_state: str = Field(
+        default="agent",
+        alias="controlState",
+        description=(
+            "'user' while the automation stream is DISABLED and the human can "
+            "drive; 'agent' when the view is read-only because the agent holds it"
+        ),
+    )
+
+
+AwaitingInputKind = Literal["oauth", "tool_approval", "user_question", "browser_login"]
+
+# When a turn paused on more than one prompt, the session list names one. A
+# fixed order keeps a row from flipping between kinds across refetches: the
+# sign-in handover first (it holds a live browser against a deadline), then the
+# prompts answered in place, then OAuth consent.
+_AWAITING_INPUT_ORDER: tuple[AwaitingInputKind, ...] = (
+    "browser_login",
+    "tool_approval",
+    "user_question",
+    "oauth",
+)
+
+
+def derive_awaiting_input(
+    interrupt_kinds: Iterable[Optional[str]],
+    paused_turn_expires_at: Optional[str],
+    now: Optional[datetime] = None,
+) -> Optional[AwaitingInputKind]:
+    """Which prompt a session's paused turn is waiting on, or None.
+
+    Only a pause that can still be answered counts: a breadcrumb is there AND
+    the ``pausedTurn`` snapshot is there AND it has not expired. The resume
+    route refuses an expired snapshot, so a "needs your input" marker for one
+    would lead the user to a prompt that can no longer do anything.
+
+    A breadcrumb with no ``kind`` predates the discriminator and is OAuth,
+    matching :class:`PendingInterrupt`'s default.
+    """
+    kinds = {kind or "oauth" for kind in interrupt_kinds}
+    if not kinds or not paused_turn_expires_at:
+        return None
+    try:
+        expires_at = datetime.fromisoformat(paused_turn_expires_at.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= (now or datetime.now(timezone.utc)):
+        return None
+    return next((kind for kind in _AWAITING_INPUT_ORDER if kind in kinds), None)
+
+
 class SessionMetadataResponse(BaseModel):
     """Response containing session metadata"""
 
@@ -423,6 +650,38 @@ class SessionMetadataResponse(BaseModel):
         False,
         description="True when an unattended (scheduled) run left a response the user hasn't opened yet; drives the blue unread dot in the session list",
     )
+    pinned_at: Optional[str] = Field(
+        default=None,
+        alias="pinnedAt",
+        description="ISO 8601 timestamp the user pinned this conversation; set only on entries of SessionsListResponse.pinned",
+    )
+    awaiting_input: Optional[AwaitingInputKind] = Field(
+        default=None,
+        alias="awaitingInput",
+        description="Which prompt this conversation's paused turn is waiting on (OAuth consent, tool approval, a clarifying question, a browser sign-in), only while the pause can still be answered; drives the amber 'needs your input' dot in the session list. Derived from pendingInterrupts + pausedTurn, which are never returned here",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_awaiting_input(cls, data: Any) -> Any:
+        """Fill ``awaitingInput`` from the full row every caller builds this from.
+
+        Every route builds the response with
+        ``model_validate(session.model_dump(by_alias=True))``, so the dict
+        carries ``pendingInterrupts`` and ``pausedTurn`` even though this model
+        declares neither. Deriving here gives the list, pinned, project and
+        single-session surfaces the same answer from data already loaded, and
+        the breadcrumbs and snapshot themselves are still dropped as extras.
+        """
+        if not isinstance(data, dict) or "awaitingInput" in data or "awaiting_input" in data:
+            return data
+        interrupts = data.get("pendingInterrupts") or []
+        paused_turn = data.get("pausedTurn") or {}
+        kind = derive_awaiting_input(
+            (item.get("kind") for item in interrupts if isinstance(item, dict)),
+            paused_turn.get("expiresAt") if isinstance(paused_turn, dict) else None,
+        )
+        return {**data, "awaitingInput": kind}
 
 
 class SessionsListResponse(BaseModel):
@@ -431,6 +690,10 @@ class SessionsListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     sessions: List[SessionMetadataResponse] = Field(..., description="List of sessions for the user")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for retrieving the next page of results")
+    pinned: Optional[List[SessionMetadataResponse]] = Field(
+        None,
+        description="The user's pinned conversations, most recently pinned first. Returned on the first page only (no next_token); they may also appear in `sessions`",
+    )
 
 
 class BulkDeleteSessionsRequest(BaseModel):
@@ -574,6 +837,64 @@ class Citation(BaseModel):
     text: str = Field(..., description="Relevant text excerpt from the document")
 
 
+#: Reason codes a down-thumb may carry — the six buckets of
+#: ``docs/specs/response-feedback.md`` §6, each of which routes to an
+#: evaluator or an ops signal. A closed enum, never free text: the row is
+#: content-free by construction so it can sit beside the ``C#`` cost row and
+#: be read by the admin profile without reading the conversation. The spec's
+#: "something else → free text" is deliberately not here; that hand-off is
+#: the existing Agent report dialog (spec §3), which already has moderation.
+FEEDBACK_REASONS = ("wrong", "instructions", "length", "tool_failed", "outdated", "other")
+FeedbackReason = Literal["wrong", "instructions", "length", "tool_failed", "outdated", "other"]
+
+
+#: Implicit signals (response-feedback spec §10): denser than thumbs, no UI
+#: cost, written to the same ``F#`` family under ``signal: "implicit"`` and
+#: never summed with them. ``copy`` = the response was copied out;
+#: ``continue`` = a truncated / interrupted response was resumed. Edit-and-
+#: resend has no affordance in the SPA yet; abandonment is deferred (its
+#: base rate is indistinguishable from a satisfied user going quiet).
+IMPLICIT_SIGNAL_KINDS = ("copy", "continue")
+ImplicitSignalKind = Literal["copy", "continue"]
+
+
+class ImplicitSignalRequest(BaseModel):
+    """Body of ``POST /sessions/{id}/messages/{messageId}/signals``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: ImplicitSignalKind = Field(..., description="Which implicit signal fired (closed enum)")
+
+
+class MessageFeedback(BaseModel):
+    """One user's thumb on one assistant message (``F#`` row, see
+    ``apis.shared.sessions.metadata``). ``value`` is +1 (up) or -1 (down);
+    ``reason`` is an optional code from ``FEEDBACK_REASONS``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    value: Literal[1, -1] = Field(..., description="+1 for thumbs up, -1 for thumbs down")
+    reason: Optional[FeedbackReason] = Field(None, description="Optional reason code (never free text)")
+    retry_message_id: Optional[int] = Field(
+        None, alias="retryMessageId", ge=0,
+        description="Index of the user message sent as a retry-with-correction after this thumb (content-free link)",
+    )
+    updated_at: str = Field(..., alias="updatedAt", description="ISO timestamp of the latest thumb")
+
+
+class MessageFeedbackRequest(BaseModel):
+    """Body of ``PUT /sessions/{id}/messages/{messageId}/feedback``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    value: Literal[1, -1] = Field(..., description="+1 for thumbs up, -1 for thumbs down")
+    reason: Optional[FeedbackReason] = Field(None, description="Optional reason code (never free text)")
+    retry_message_id: Optional[int] = Field(
+        None, alias="retryMessageId", ge=0,
+        description="Set when the user sent a retry-with-correction: that user message's index",
+    )
+
+
 class MessageMetadata(BaseModel):
     """Metadata associated with a single message"""
 
@@ -586,8 +907,23 @@ class MessageMetadata(BaseModel):
     cost: Optional[Union[float, Dict[str, float]]] = Field(None, description="Cost for this message — either a total float (legacy) or a breakdown dict with total, inputCost, outputCost, cacheReadCost, cacheWriteCost")
     citations: Optional[List[Dict[str, str]]] = Field(None, description="RAG citations for this message (stored as dicts for flexible JSON storage)")
     display_text: Optional[str] = Field(None, alias="displayText", description="Original user message text before RAG augmentation (for clean UI display)")
-    # Note: Feedback will be added in future implementation
-    # feedback: Optional[Feedback] = None
+    # One user's thumb on this message, merged from the ``F#`` row on read
+    # (see ``apis.shared.sessions.metadata``). Content-free: a ±1, a timestamp
+    # and an optional reason code.
+    feedback: Optional[MessageFeedback] = Field(None, description="User thumbs up/down on this assistant message")
+    # Set on the LAST assistant message of a turn only — it describes the turn,
+    # not the message. See `turn_duration_ms` on the write path.
+    turn_duration_ms: Optional[int] = Field(
+        None,
+        alias="turnDurationMs",
+        description=(
+            "How long the whole turn took, in ms, measured server-side from "
+            "the invocation arriving to the stream ending. Deliberately NOT "
+            "derivable from `latency.endToEndLatency`, which prefers the "
+            "provider's own API-call time and so excludes tool execution and "
+            "the pre-stream agent build."
+        ),
+    )
 
 
 class Message(BaseModel):
@@ -630,4 +966,24 @@ class MessagesListResponse(BaseModel):
         default_factory=list,
         alias="uiResources",
         description="Persisted MCP App UI resources (SEP-1865) for this session, each shaped like the inline `ui_resource` SSE event ({type, toolUseId, resourceUri, html, mimeType, csp, permissions, sandboxOrigin}). Replayed on load to re-seed McpAppStateService and re-instantiate the mcp-app-frame iframe. Returned only on the first page.",
+    )
+    tool_summaries: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="toolSummaries",
+        description="Persisted model-generated tool-batch summaries for this session, each shaped like the live `tool_group_summary` SSE event ({batchId, toolUseIds, summary}). Replayed on load so a reloaded conversation keeps the prose line the user saw live instead of downgrading to the client-side deterministic formatter. Returned only on the first page.",
+    )
+    source_provenance: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="sourceProvenance",
+        description="Persisted source-provenance verdicts for this session, each shaped like the live `source_provenance` SSE event ({toolUseId, claims}), where every claim carries {id, state, method, quote, locator, uploadId, filename} and `state` is one of supported / quote_unsupported / unassessed / unverified. Replayed on load because the event never re-streams: without it a reloaded conversation shows cited values with no provenance, and a `quote_unsupported` that vanishes on refresh reads as a clean answer. Returned only on the first page.",
+    )
+    extractions: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="extractions",
+        description="Persisted structured-extraction runs for this session, each shaped like the live `document_extraction` SSE event ({toolUseId, fieldSet, fieldSetVersion, uploadId, filename, modelId, schemaEnforced, artifactId, downloadUploadId, fields}), where every field carries {name, title, type, value, state, method, quote, locator}. `state` is the source-provenance verdict for that value, so a reloaded table keeps its per-cell status rather than showing bare values — a `quote_unsupported` that vanishes on refresh reads as a clean answer. `schemaEnforced: false` means the typed schema could not be applied to that run and the types were requested rather than guaranteed. `quotesOmitted` is set when the stored row had to drop its quotes to fit DynamoDB's item limit; the artifact holds the full table regardless. Returned only on the first page.",
+    )
+    from_archive: bool = Field(
+        False,
+        alias="fromArchive",
+        description="True when Memory's events for this session have expired and these messages are the conversation archive's text-only copy. The agent cannot restore from the archive, and a new turn would be numbered from 0 and overwrite the archived first turn, so the SPA offers such a session read-only. Set on every page of an archive-served session.",
     )

@@ -1,0 +1,177 @@
+"""Shared Projects domain models (docs/specs/shared-projects.md §3.1).
+
+A Project is a composition: its harness (instructions, model, tools, knowledge)
+is a hidden Agent record in ``rag-assistants`` with ``kind="project"``, and its
+memory is a Memory Space (Phase 2). These models cover only what the
+``{prefix}-projects`` table itself holds: the project's META row and its
+email-keyed ``MEMBER#`` rows.
+
+Ownership lives on META (``owner_id``), never as a member row — the same shape
+as agents and memory spaces — so ``ProjectRole`` has three values while a
+stored member can only be an editor or a viewer.
+"""
+
+from __future__ import annotations
+
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+ProjectRole = Literal["owner", "editor", "viewer"]
+MemberRole = Literal["editor", "viewer"]
+ProjectStatus = Literal["active", "archived"]
+ProjectVisibility = Literal["private", "org"]
+
+ROLE_RANK: dict[str, int] = {"viewer": 1, "editor": 2, "owner": 3}
+
+
+def normalize_email(email: str) -> str:
+    """The one spelling of an email this package stores or compares."""
+    return email.strip().lower()
+
+
+class ProjectSettings(BaseModel):
+    """Per-project switches. Stored as a map on META."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    editors_manage_members: bool = Field(True, alias="editorsManageMembers")
+
+
+class Project(BaseModel):
+    """The ``PROJECT#{id}`` / ``META`` row."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    name: str
+    description: str = ""
+    owner_id: str = Field(..., alias="ownerId")
+    owner_email: str = Field(..., alias="ownerEmail")
+    harness_agent_id: str = Field(..., alias="harnessAgentId")
+    # Created by Phase 2.4, when space permissions become project-aware.
+    shared_space_id: Optional[str] = Field(None, alias="sharedSpaceId")
+    visibility: ProjectVisibility = "private"
+    status: ProjectStatus = "active"
+    settings: ProjectSettings = Field(default_factory=ProjectSettings)
+    member_count: int = Field(0, alias="memberCount")
+    created_at: str = Field(..., alias="createdAt")
+    updated_at: str = Field(..., alias="updatedAt")
+    # Bumped by every META mutation, including the member transactions that
+    # maintain ``member_count``, so a stale read can never overwrite either.
+    version: int = 1
+
+
+class ProjectMember(BaseModel):
+    """A ``PROJECT#{id}`` / ``MEMBER#{email}`` row."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    email: str
+    role: MemberRole
+    # The account the email signs in as. Unknown until the invitee first resolves
+    # a permission on the project (membership is email-keyed, so people who have
+    # never signed in can be added), and back-filled then, or bound from the
+    # directory when ownership is transferred to them. Required for transfer.
+    user_id: Optional[str] = Field(None, alias="userId")
+    invited_by: str = Field(..., alias="invitedBy")
+    created_at: str = Field(..., alias="createdAt")
+    updated_at: str = Field(..., alias="updatedAt")
+
+
+class ProjectOutput(BaseModel):
+    """A ``PROJECT#{id}`` / ``OUTPUT#{artifactId}`` pointer (Shared Projects 3.3).
+
+    Written when a member shares an artifact with "Project members"
+    (``access_level: "project"`` on an artifact share). One per artifact: sharing
+    another version moves the pointer, newest wins. The artifact share row is
+    the grant, checked against membership at read time; this row only lists it.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    artifact_id: str = Field(..., alias="artifactId")
+    share_id: str = Field(..., alias="shareId")
+    version: int
+    title: str = ""
+    content_type: str = Field("", alias="contentType")
+    owner_id: str = Field(..., alias="ownerId")
+    owner_email: str = Field(..., alias="ownerEmail")
+    shared_at: str = Field(..., alias="sharedAt")
+    # Set when a project schedule published it (3.2d): the schedule replaces its
+    # previous run's outputs, and the SPA tags them.
+    schedule_id: Optional[str] = Field(None, alias="scheduleId")
+    # The card's excerpt (``apis/app_api/artifacts/preview.py``), computed on
+    # the first listing that finds none: absent until then, "" when the
+    # artifact has nothing to show. A rebuilt pointer starts without one.
+    preview: Optional[str] = None
+
+
+class SharedTask(BaseModel):
+    """A ``PROJECT#{id}`` / ``SHARED_TASK#{sessionId}`` pointer.
+
+    Written when a member shares one of their tasks to the project
+    (``access_level: "project"``). One per task: sharing it again moves the
+    pointer to the newer snapshot. The share row itself, in
+    ``shared-conversations``, is the grant; this row only makes it listable.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    session_id: str = Field(..., alias="sessionId")
+    share_id: str = Field(..., alias="shareId")
+    owner_id: str = Field(..., alias="ownerId")
+    owner_email: str = Field(..., alias="ownerEmail")
+    title: str = ""
+    shared_at: str = Field(..., alias="sharedAt")
+    # The sharer's hand-off line (2.5b). Re-sharing replaces it with the pointer.
+    note: Optional[str] = None
+    # Set when a project schedule delivered this task (3.2b): the schedule keeps only
+    # its newest few runs shared, and the SPA says which schedule ran it.
+    schedule_id: Optional[str] = Field(None, alias="scheduleId")
+
+
+class ProjectSchedulePointer(BaseModel):
+    """A ``PROJECT#{id}`` / ``SCHEDULE#{scheduleId}`` pointer (Shared Projects 3.2).
+
+    The schedule itself stays in its creator's partition of the sessions table
+    (``USER#{ownerId}`` / ``SCHEDPROMPT#{scheduleId}``) and runs as them; this row
+    only lets the project list it. Its live state is read from the schedule, never
+    copied here, so the two can't disagree.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    schedule_id: str = Field(..., alias="scheduleId")
+    owner_id: str = Field(..., alias="ownerId")
+    owner_email: str = Field(..., alias="ownerEmail")
+    created_at: str = Field(..., alias="createdAt")
+
+
+ScheduleRunStatus = Literal["completed", "error", "timeout", "paused"]
+
+
+class ProjectScheduleRun(BaseModel):
+    """One run of a project schedule, as members see it (Shared Projects 3.2).
+
+    ``PROJECT#{id}`` / ``SCHEDULE_RUN#{scheduleId}#{finishedAt}#{runId}``, written
+    by the worker after each run and kept for :data:`SCHEDULE_RUN_RETENTION_DAYS`.
+    It never carries the session id: the task is the creator's own until they
+    share it, as with any task. ``reason`` is a short code, never an error string,
+    which can hold a consent URL meant for the creator alone.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    schedule_id: str = Field(..., alias="scheduleId")
+    run_id: str = Field(..., alias="runId")
+    status: ScheduleRunStatus
+    finished_at: str = Field(..., alias="finishedAt")
+    reason: Optional[str] = None
+    # The project share a delivered run became (3.2b), which every member may open.
+    share_id: Optional[str] = Field(None, alias="shareId")

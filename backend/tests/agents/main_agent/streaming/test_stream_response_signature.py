@@ -109,8 +109,27 @@ async def test_every_kwarg_chat_agent_forwards_is_accepted():
         citations=[{"source": "doc-1"}],
         original_message="a message",
         turn_agent_id="ast-canvas",
+        turn_lease=object(),
+        turn_clock=object(),
     ):
         pass
 
+    assert "turn_clock" in coordinator.captured
     accepted = set(inspect.signature(StreamCoordinator.stream_response).parameters)
     assert set(coordinator.captured) <= accepted
+
+
+@pytest.mark.asyncio
+async def test_stream_async_forwards_invocation_state_the_coordinator_accepts():
+    """The sign-in panel height's seam (spec D3a), bound against the real signature."""
+    coordinator = _SignatureFaithfulCoordinator()
+    agent = _bare_chat_agent(coordinator)
+
+    async for _ in agent.stream_async(
+        "hello", invocation_state={"browser_takeover_frame_height": 778}
+    ):
+        pass
+
+    assert coordinator.captured.get("invocation_state") == {
+        "browser_takeover_frame_height": 778
+    }

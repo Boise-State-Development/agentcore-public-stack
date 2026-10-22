@@ -1,5 +1,5 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
-import { SidenavService } from '../../../services/sidenav/sidenav.service';
+import { DockedPaneService } from '../docked-pane/docked-pane.service';
 import type { ArtifactEvent } from '../../../shared/utils/stream-parser';
 import type { Artifact, OpenArtifactRef } from './artifact.model';
 
@@ -15,29 +15,19 @@ import type { Artifact, OpenArtifactRef } from './artifact.model';
  * same (id, version) arrives from both a live event and reload
  * hydration, the live entry wins: it carries `producedByMessageId`, the
  * precise per-turn anchor the index-only hydration row lacks.
+ *
+ * The docked pane itself (its width, the side-nav choreography, and
+ * which feature currently holds it) belongs to `DockedPaneService` —
+ * the .docx preview shares the same rail. This service owns only
+ * *which artifact* is showing, and gates that behind the rail's current
+ * owner so being evicted needs no callback.
  */
 @Injectable({ providedIn: 'root' })
 export class ArtifactStateService {
-  private readonly sidenav = inject(SidenavService);
+  private readonly dockedPane = inject(DockedPaneService);
 
   private readonly byKey = signal<Map<string, Artifact>>(new Map());
   private readonly openRef = signal<OpenArtifactRef | null>(null);
-
-  /** Sidenav collapsed state captured the moment the panel opened, so a
-   *  user who had the nav open isn't left with it collapsed after they
-   *  close the artifact (and one who had it collapsed keeps it that way). */
-  private navWasCollapsed = false;
-
-  /** User-controlled docked pane width in px. Shared with the layout
-   *  (content padding + fixed footer/topnav offset) via a CSS var so the
-   *  chat never ends up under the pane. Survives open/close within a
-   *  session (it's a root singleton); resets on full reload. */
-  private static readonly MIN_PANE_WIDTH = 360;
-  private static readonly MAX_PANE_WIDTH = 1200;
-  private static readonly DEFAULT_PANE_WIDTH = 672; // 42rem, prior fixed size
-  private readonly paneWidthSignal = signal(
-    ArtifactStateService.DEFAULT_PANE_WIDTH,
-  );
 
   /** Every artifact version for the current session, newest first.
    *  Tie-broken by version so versions of one artifact stay ordered
@@ -51,30 +41,16 @@ export class ArtifactStateService {
 
   readonly hasArtifacts = computed(() => this.byKey().size > 0);
 
-  /** The artifact the side panel is showing, or null when closed. */
-  readonly openArtifact = this.openRef.asReadonly();
-
-  /** Current docked pane width in px (clamped). */
-  readonly paneWidth = this.paneWidthSignal.asReadonly();
-
-  get paneWidthMin(): number {
-    return ArtifactStateService.MIN_PANE_WIDTH;
-  }
-
-  get paneWidthMax(): number {
-    return ArtifactStateService.MAX_PANE_WIDTH;
-  }
-
-  /** Set the docked pane width, clamped to the allowed range. The caller
-   *  is responsible for any viewport-relative ceiling (the service only
-   *  knows absolute bounds, not the window size). */
-  setPaneWidth(px: number): void {
-    const clamped = Math.min(
-      ArtifactStateService.MAX_PANE_WIDTH,
-      Math.max(ArtifactStateService.MIN_PANE_WIDTH, Math.round(px)),
-    );
-    this.paneWidthSignal.set(clamped);
-  }
+  /** The artifact the side panel is showing, or null when closed.
+   *
+   *  Gated on the rail's owner rather than mirroring `openRef` directly:
+   *  when the .docx preview claims the rail, the artifact pane must read
+   *  as closed immediately, with no eviction callback to miss. `openRef`
+   *  is left as-is behind the gate — it is re-set from the registry on
+   *  the next open, so a stale ref can never surface. */
+  readonly openArtifact = computed<OpenArtifactRef | null>(() =>
+    this.dockedPane.owner() === 'artifact' ? this.openRef() : null,
+  );
 
   /** Highest known version of an artifact, if any. */
   get(artifactId: string): Artifact | undefined {
@@ -136,37 +112,69 @@ export class ArtifactStateService {
     for (const a of list) this.upsert(a);
   }
 
-  openArtifactPanel(ref: OpenArtifactRef): void {
-    // Collapse the side nav to make room for the docked pane. Only capture
-    // the prior state on a genuine closed -> open transition: switching
-    // between artifacts while the panel is already open must not overwrite
-    // it (the nav is collapsed by us at that point).
-    if (this.openRef() === null) {
-      this.navWasCollapsed = this.sidenav.isCollapsed();
-      this.sidenav.collapse();
+  /**
+   * Drop every version of an artifact from the registry.
+   *
+   * The conversation's inline cards and the docked panel both read this
+   * registry, so one call clears both — a deleted artifact must not
+   * leave a card behind that 404s when clicked. Closes the panel too if
+   * it happens to be showing the artifact that just went.
+   *
+   * Local bookkeeping only: the caller owns the HTTP delete and must
+   * have seen it succeed first. Removing optimistically would put the
+   * card back on the next session load if the request failed.
+   */
+  remove(artifactId: string): void {
+    this.byKey.update((m) => {
+      const next = new Map(m);
+      for (const key of m.keys()) {
+        if (next.get(key)?.artifactId === artifactId) next.delete(key);
+      }
+      return next;
+    });
+    if (this.openRef()?.artifactId === artifactId) {
+      this.closeArtifactPanel();
     }
+  }
+
+  /**
+   * Apply a new title to every known version of an artifact.
+   *
+   * Every version, not just the open one, because the backend renames
+   * every version row — leaving older cards on the old title would
+   * invent a disagreement that does not exist on the server. The open
+   * panel ref carries its own copy of the title, so it is updated too.
+   */
+  rename(artifactId: string, title: string): void {
+    this.byKey.update((m) => {
+      const next = new Map(m);
+      for (const [key, artifact] of m) {
+        if (artifact.artifactId === artifactId) {
+          next.set(key, { ...artifact, title });
+        }
+      }
+      return next;
+    });
+    const open = this.openRef();
+    if (open?.artifactId === artifactId) {
+      this.openRef.set({ ...open, title });
+    }
+  }
+
+  openArtifactPanel(ref: OpenArtifactRef): void {
     this.openRef.set(ref);
+    this.dockedPane.claim('artifact');
   }
 
   closeArtifactPanel(): void {
-    if (this.openRef() === null) return;
     this.openRef.set(null);
-    this.restoreNav();
+    this.dockedPane.release('artifact');
   }
 
   /** Clear all state — called on session change. */
   reset(): void {
     this.byKey.set(new Map());
-    if (this.openRef() !== null) {
-      this.openRef.set(null);
-      this.restoreNav();
-    }
-  }
-
-  /** Return the side nav to whatever state it was in before the panel
-   *  opened. If the user had it collapsed already, leave it collapsed. */
-  private restoreNav(): void {
-    if (!this.navWasCollapsed) this.sidenav.expand();
+    this.closeArtifactPanel();
   }
 
   private upsert(a: Artifact): void {

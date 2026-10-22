@@ -154,6 +154,35 @@ export class AuthTablesConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // EntityTypeIndex — "list every X" without scanning the table
+    // (GSI5PK=ENTITY#{type}, GSI5SK=the item's own PK).
+    //
+    // WHY: this table is shared. Tools, skills, roles, role grants, JWT
+    // mappings AND one tool-preferences row PER USER all live in it, so
+    // `list_tools`'s Scan reads the whole table and filters down to the tool
+    // rows. Scan cost tracks table size, not result size, so that read's cost
+    // grows with ENROLLMENT, not with the number of tools: measured on dev,
+    // 95 items read to return 24 tools, of which 17 were per-user rows.
+    //
+    // Deliberately generic rather than a TOOL-only index. `list_roles` and the
+    // skills catalog scan this same table for the same reason, and DynamoDB
+    // permits only ONE GSI creation per UpdateTable — so a second entity type
+    // wanting its own index later would need its own release, and two
+    // accumulating into one release rolls the whole stack back (see
+    // docs/kaizen and PR #814). One partition per entity type costs nothing
+    // extra now and leaves that door open.
+    //
+    // Sparse by construction: only items that carry GSI5PK are indexed, so
+    // adding it changes nothing until rows are stamped. Populated for tools by
+    // `ToolDefinition.to_dynamo_item` plus
+    // `backend/scripts/backfill_tool_catalog_index.py`.
+    this.appRolesTable.addGlobalSecondaryIndex({
+      indexName: 'EntityTypeIndex',
+      partitionKey: { name: 'GSI5PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI5SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     new ssm.StringParameter(this, 'AppRolesTableNameParameter', {
       parameterName: `/${config.projectPrefix}/rbac/app-roles-table-name`,
       stringValue: this.appRolesTable.tableName,

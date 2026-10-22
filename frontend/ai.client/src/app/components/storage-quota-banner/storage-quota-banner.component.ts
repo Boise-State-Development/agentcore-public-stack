@@ -28,14 +28,14 @@ import { FileUploadService, formatBytes } from '../../services/file-upload';
       <div class="flex justify-center mb-2">
         <div
           class="inline-flex items-center gap-1.5 px-3 py-1 text-xs rounded-lg border animate-fade-in bg-white dark:bg-slate-800"
-          [class.border-amber-400]="severity() === 'warning'"
-          [class.text-amber-700]="severity() === 'warning'"
-          [class.dark:border-amber-500]="severity() === 'warning'"
-          [class.dark:text-amber-300]="severity() === 'warning'"
-          [class.border-red-400]="severity() === 'critical'"
-          [class.text-red-700]="severity() === 'critical'"
-          [class.dark:border-red-500]="severity() === 'critical'"
-          [class.dark:text-red-300]="severity() === 'critical'"
+          [class.border-state-warning-400]="severity() === 'warning'"
+          [class.text-state-warning-700]="severity() === 'warning'"
+          [class.dark:border-state-warning-500]="severity() === 'warning'"
+          [class.dark:text-state-warning-300]="severity() === 'warning'"
+          [class.border-state-danger-400]="severity() === 'critical'"
+          [class.text-state-danger-700]="severity() === 'critical'"
+          [class.dark:border-state-danger-500]="severity() === 'critical'"
+          [class.dark:text-state-danger-300]="severity() === 'critical'"
           role="status"
           aria-live="polite"
         >

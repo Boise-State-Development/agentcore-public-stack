@@ -18,6 +18,7 @@ UI-bearing tools, mirroring the mock-the-boundary style already used in
 
 import base64
 import json
+from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -41,7 +42,11 @@ from agents.main_agent.integrations.mcp_apps import (
     record_and_filter_ui_tools,
 )
 from agents.main_agent.integrations.gateway_mcp_client import FilteredMCPClient
-from apis.shared.tools.models import DEFAULT_TOOL_VISIBILITY, ToolUIMetadata
+from apis.shared.tools.models import (
+    DEFAULT_TOOL_VISIBILITY,
+    MCPServerConfig,
+    ToolUIMetadata,
+)
 
 _ENV_FLAG = "AGENTCORE_MCP_APPS_HOST_ENABLED"
 _ENV_SANDBOX_ORIGIN = "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN"
@@ -305,6 +310,91 @@ class TestUICapableMCPClientListTools:
         assert (
             get_ui_tool_catalog().get("app_only").resource_uri == "ui://srv/app"
         )
+
+
+# ── external client: an allowlist never hides an app-only tool from its App ───
+
+
+def _serve_tools_list(client, *tools):
+    """Answer the client's `tools/list` with `tools`, so Strands' own
+    `list_tools_sync` (and the `tool_filters` it applies) runs for real."""
+
+    def invoke(coro):
+        coro.close()
+        done = Future()
+        done.set_result(mcp_types.ListToolsResult(tools=list(tools)))
+        return done
+
+    client._is_session_active = lambda: True
+    client._is_tasks_enabled = lambda: False
+    client._invoke_on_background_thread = invoke
+
+
+def _wire_tool(name, visibility=None):
+    meta = (
+        {"ui": {"resourceUri": "ui://tasks/board", "visibility": visibility}}
+        if visibility is not None
+        else None
+    )
+    return mcp_types.Tool(
+        name=name, inputSchema={"type": "object"}, **{"_meta": meta}
+    )
+
+
+class TestAllowlistKeepsAppOnlyTools:
+    """Google Tasks' board App refreshes by calling `board_snapshot`, an
+    app-only tool no admin list names. The admin "Available Tools" cap (and a
+    per-tool selection) decides what the model sees, so it must not stop the
+    App's tool from being recorded for `app_tool_dispatch`."""
+
+    def _client(self, allowed):
+        from agents.main_agent.integrations.external_mcp_client import (
+            create_external_mcp_client,
+        )
+
+        client = create_external_mcp_client(
+            MCPServerConfig(server_url="https://tasks.example/mcp", auth_type="none"),
+            allowed_tool_names=allowed,
+        )
+        _serve_tools_list(
+            client,
+            _wire_tool("show_task_board", visibility=["model", "app"]),
+            _wire_tool("board_snapshot", visibility=["app"]),
+            _wire_tool("list_tasks"),
+        )
+        return client
+
+    def test_app_only_tool_outside_the_allowlist_is_still_recorded(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        client = self._client({"show_task_board"})
+
+        result = client.list_tools_sync()
+
+        assert [t.tool_name for t in result] == ["show_task_board"]
+        assert get_ui_tool_catalog().get_client("board_snapshot") is client
+
+    def test_allowlist_still_caps_model_visible_tools(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        client = self._client({"show_task_board"})
+
+        names = [t.tool_name for t in client.list_tools_sync()]
+
+        assert "list_tasks" not in names
+
+    def test_allowlist_applies_to_app_only_tools_when_host_is_off(
+        self, mcp_apps_clean
+    ):
+        # Nothing is filtered by visibility with the host off, so an unlisted
+        # app-only tool would otherwise reach the model.
+        client = self._client({"show_task_board"})
+
+        result = client.list_tools_sync()
+
+        assert [t.tool_name for t in result] == ["show_task_board"]
 
 
 # ── gateway client: FilteredMCPClient applies the same filter ─────────────────
@@ -831,3 +921,110 @@ class TestStartRetry:
             with pytest.raises(MCPClientInitializationError):
                 client.start()
         assert calls["n"] == mcp_apps._MCP_START_MAX_ATTEMPTS
+
+
+# ── Per-user catalog partitioning ─────────────────────────────────────────────
+#
+# The catalog is process-global. A client carrying one user's credential is
+# stamped `owner_user_id` and its entries must never be handed back for any
+# other user — otherwise an app-initiated tools/call (or resources/read) for
+# user A runs on user B's client, with B's token.
+
+
+def _owned_client(owner, label):
+    client = _FakeMCPClient(result=_html_resource(text=f"<p>{label}</p>"))
+    client.owner_user_id = owner
+    client.label = label
+    return client
+
+
+class TestPerUserCatalog:
+    def _record(self, monkeypatch, client, name="widget"):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        record_and_filter_ui_tools(
+            [_fake_tool(name, ui={"resourceUri": "ui://srv/widget"})],
+            client=client,
+        )
+
+    def test_two_users_same_tool_name_never_cross(self, mcp_apps_clean, monkeypatch):
+        alice = _owned_client("alice", "alice")
+        bob = _owned_client("bob", "bob")
+        self._record(monkeypatch, alice)
+        # Bob's build runs later and would have overwritten Alice's entry.
+        self._record(monkeypatch, bob)
+
+        catalog = get_ui_tool_catalog()
+        assert catalog.get_client("widget", "alice") is alice
+        assert catalog.get_client("widget", "bob") is bob
+
+    def test_owned_entry_invisible_to_other_users_and_anonymous(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        self._record(monkeypatch, _owned_client("alice", "alice"))
+
+        catalog = get_ui_tool_catalog()
+        assert catalog.get("widget", "bob") is None
+        assert catalog.get_client("widget", "bob") is None
+        assert catalog.get("widget") is None
+        assert catalog.get_client("widget") is None
+
+    def test_shared_client_visible_to_everyone(self, mcp_apps_clean, monkeypatch):
+        shared = _FakeMCPClient(result=_html_resource())
+        self._record(monkeypatch, shared)
+
+        catalog = get_ui_tool_catalog()
+        assert catalog.get_client("widget", "alice") is shared
+        assert catalog.get_client("widget", "bob") is shared
+        assert catalog.get_client("widget") is shared
+
+    def test_own_entry_preferred_over_shared(self, mcp_apps_clean, monkeypatch):
+        shared = _FakeMCPClient(result=_html_resource())
+        alice = _owned_client("alice", "alice")
+        self._record(monkeypatch, shared)
+        self._record(monkeypatch, alice)
+
+        catalog = get_ui_tool_catalog()
+        assert catalog.get_client("widget", "alice") is alice
+        assert catalog.get_client("widget", "bob") is shared
+
+    def test_fetch_ui_resource_reads_from_the_callers_client(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        alice = _owned_client("alice", "alice")
+        bob = _owned_client("bob", "bob")
+        self._record(monkeypatch, alice)
+        self._record(monkeypatch, bob)
+
+        payload = fetch_ui_resource("widget", "tu-1", "alice")
+
+        assert payload is not None and "alice" in payload["html"]
+        assert alice.read_calls == ["ui://srv/widget"]
+        assert bob.read_calls == []
+        # And no fetch at all for a user with no client of their own.
+        assert fetch_ui_resource("widget", "tu-2", "carol") is None
+
+    def test_build_ui_app_header_scoped_to_user(self, mcp_apps_clean, monkeypatch):
+        self._record(monkeypatch, _owned_client("alice", "alice"))
+
+        assert build_ui_app_header("widget", "tu-1", "alice") is not None
+        assert build_ui_app_header("widget", "tu-1", "bob") is None
+
+    def test_forget_user_drops_only_that_users_entries(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        shared = _FakeMCPClient(result=_html_resource())
+        self._record(monkeypatch, shared, name="shared_widget")
+        self._record(monkeypatch, _owned_client("alice", "alice"))
+        bob = _owned_client("bob", "bob")
+        self._record(monkeypatch, bob)
+
+        catalog = get_ui_tool_catalog()
+        catalog.forget_user("alice")
+
+        assert catalog.get("widget", "alice") is None
+        assert catalog.get_client("widget", "bob") is bob
+        assert catalog.get_client("shared_widget", "alice") is shared
+
+    def test_ui_capable_client_starts_unowned(self, mcp_apps_clean):
+        client = UICapableMCPClient(lambda: None, server_url="https://x.test/mcp")
+        assert client.owner_user_id is None

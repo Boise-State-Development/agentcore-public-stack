@@ -2,7 +2,7 @@ import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { signal } from '@angular/core';
 import { AgentPreviewComponent } from './agent-preview.component';
-import { PreviewChatService } from '../../../assistants/assistant-form/services/preview-chat.service';
+import { PreviewSessionService } from '../../../shared/preview/preview-session.service';
 import { ModelService } from '../../../session/services/model/model.service';
 
 /**
@@ -16,10 +16,9 @@ import { ModelService } from '../../../session/services/model/model.service';
 describe('AgentPreviewComponent', () => {
   let component: AgentPreviewComponent;
   let fixture: ComponentFixture<AgentPreviewComponent>;
-  let mockPreviewChatService: {
-    sendMessage: ReturnType<typeof vi.fn>;
-    cancelRequest: ReturnType<typeof vi.fn>;
-    clearMessages: ReturnType<typeof vi.fn>;
+  let mockPreview: {
+    send: ReturnType<typeof vi.fn>;
+    cancel: ReturnType<typeof vi.fn>;
     reset: ReturnType<typeof vi.fn>;
     messages: ReturnType<typeof signal<never[]>>;
     isLoading: ReturnType<typeof signal<boolean>>;
@@ -37,10 +36,9 @@ describe('AgentPreviewComponent', () => {
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
-    mockPreviewChatService = {
-      sendMessage: vi.fn().mockResolvedValue(undefined),
-      cancelRequest: vi.fn(),
-      clearMessages: vi.fn(),
+    mockPreview = {
+      send: vi.fn().mockResolvedValue(undefined),
+      cancel: vi.fn(),
       reset: vi.fn(),
       messages: signal([]),
       isLoading: signal(false),
@@ -67,7 +65,7 @@ describe('AgentPreviewComponent', () => {
         set: {
           // Swap the component-level provider so the mock is what gets injected, and
           // strip the template so this does not drag in the whole chat container.
-          providers: [{ provide: PreviewChatService, useValue: mockPreviewChatService }],
+          providers: [{ provide: PreviewSessionService, useValue: mockPreview }],
           template: '<div></div>',
         },
       })
@@ -96,34 +94,26 @@ describe('AgentPreviewComponent', () => {
    * reintroduce the 422 — hence this test.
    */
   describe('server-side resolution (not live instructions)', () => {
-    it('sends no live instructions and opts out of the client-side prompt and tools', () => {
+    it('sends only the agent id and the message — no prompt, model or tool selection', () => {
       fixture.componentRef.setInput('agentId', 'ast-001');
       fixture.detectChanges();
 
       component.onMessageSubmitted({ content: 'hello', timestamp: new Date() });
 
-      expect(mockPreviewChatService.sendMessage).toHaveBeenCalledWith(
-        'hello',
-        'ast-001',
-        undefined,
-        undefined,
-        { includeSystemPrompt: false, includeEnabledTools: false },
-      );
+      expect(mockPreview.send).toHaveBeenCalledWith('ast-001', 'hello', {
+        fileUploadIds: undefined,
+      });
     });
 
-    it('applies the same opts to a starter', () => {
+    it('sends a starter the same way', () => {
       fixture.componentRef.setInput('agentId', 'ast-001');
       fixture.detectChanges();
 
       component.onStarterSelected('What is the deadline?');
 
-      expect(mockPreviewChatService.sendMessage).toHaveBeenCalledWith(
-        'What is the deadline?',
-        'ast-001',
-        undefined,
-        undefined,
-        { includeSystemPrompt: false, includeEnabledTools: false },
-      );
+      expect(mockPreview.send).toHaveBeenCalledWith('ast-001', 'What is the deadline?', {
+        fileUploadIds: undefined,
+      });
     });
 
     it('forwards file uploads', () => {
@@ -136,13 +126,9 @@ describe('AgentPreviewComponent', () => {
         fileUploadIds: ['up-1'],
       });
 
-      expect(mockPreviewChatService.sendMessage).toHaveBeenCalledWith(
-        'see attached',
-        'ast-001',
-        undefined,
-        ['up-1'],
-        { includeSystemPrompt: false, includeEnabledTools: false },
-      );
+      expect(mockPreview.send).toHaveBeenCalledWith('ast-001', 'see attached', {
+        fileUploadIds: ['up-1'],
+      });
     });
   });
 
@@ -154,7 +140,7 @@ describe('AgentPreviewComponent', () => {
       component.onMessageSubmitted({ content: 'hello', timestamp: new Date() });
       component.onStarterSelected('hello');
 
-      expect(mockPreviewChatService.sendMessage).not.toHaveBeenCalled();
+      expect(mockPreview.send).not.toHaveBeenCalled();
     });
 
     it('does not send whitespace-only content', () => {
@@ -164,7 +150,18 @@ describe('AgentPreviewComponent', () => {
       component.onMessageSubmitted({ content: '   ', timestamp: new Date() });
       component.onStarterSelected('   ');
 
-      expect(mockPreviewChatService.sendMessage).not.toHaveBeenCalled();
+      expect(mockPreview.send).not.toHaveBeenCalled();
+    });
+
+    it('does not let a failed send escape as an unhandled rejection', async () => {
+      mockPreview.send.mockRejectedValueOnce(new Error('stream failed'));
+      fixture.componentRef.setInput('agentId', 'ast-001');
+      fixture.detectChanges();
+
+      expect(() =>
+        component.onMessageSubmitted({ content: 'hello', timestamp: new Date() }),
+      ).not.toThrow();
+      await Promise.resolve();
     });
   });
 
@@ -204,14 +201,20 @@ describe('AgentPreviewComponent', () => {
   });
 
   describe('delegation', () => {
-    it('delegates clearing to the service', () => {
+    /**
+     * Clear starts a whole new preview session rather than only emptying the
+     * transcript. Aborting the SSE does not stop the agent server-side, so reusing
+     * the id let the next message collide with the abandoned run — which surfaced
+     * as "Agent is already processing a request."
+     */
+    it('clears by resetting the preview session', () => {
       component.clearChat();
-      expect(mockPreviewChatService.clearMessages).toHaveBeenCalled();
+      expect(mockPreview.reset).toHaveBeenCalled();
     });
 
     it('delegates cancellation to the service', () => {
       component.onMessageCancelled();
-      expect(mockPreviewChatService.cancelRequest).toHaveBeenCalled();
+      expect(mockPreview.cancel).toHaveBeenCalled();
     });
   });
 });

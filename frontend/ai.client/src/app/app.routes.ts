@@ -1,19 +1,29 @@
+import { inject } from '@angular/core';
 import { Routes } from '@angular/router';
 import { authGuard } from './auth/auth.guard';
 import { adminGuard } from './auth/admin.guard';
 import { firstBootGuard } from './auth/first-boot.guard';
 import { legacyMigrationHostGuard } from './shared/utils/legacy-migration-host';
+import { FEATURES } from './services/features';
+
+/** Matches only in a build with Shared Projects on (compile-time; see environments/feature-flags.ts). */
+const projectsEnabled = () => inject(FEATURES).projects;
 
 export const routes: Routes = [
     {
         path: '',
         loadComponent: () => import('./session/session.page').then(m => m.ConversationPage),
         canActivate: [authGuard],
+        // The conversation page positions the scroll container itself (remembered
+        // offset per conversation, latest turn, stick-to-bottom while streaming),
+        // so navigation scroll handling (RouteScrollService) leaves it alone.
+        data: { scroll: 'self' },
     },
     {
         path: 's/:sessionId',
         loadComponent: () => import('./session/session.page').then(m => m.ConversationPage),
         canActivate: [authGuard],
+        data: { scroll: 'self' },
     },
     {
         path: 'auth/first-boot',
@@ -25,6 +35,22 @@ export const routes: Routes = [
         loadComponent: () => import('./shared/shared-view.page').then(m => m.SharedViewPage),
         canActivate: [authGuard],
     },
+    // Recipient view for a shared artifact. Behind authGuard like every
+    // other share surface: "public" means any authenticated tenant user,
+    // never anonymous. The share's own ACL is enforced server-side on
+    // top of this.
+    {
+        path: 'shared-artifact/:shareId',
+        loadComponent: () =>
+            import('./shared/artifact/shared-artifact-view.page').then(
+                m => m.SharedArtifactViewPage,
+            ),
+        canActivate: [authGuard],
+        // A recipient opened a link to view one thing. Drop the sidenav
+        // and the centred content box so the artifact fills the shell —
+        // the app reads this in `app.html`.
+        data: { chrome: 'minimal' },
+    },
     {
         path: 'auth/login',
         loadComponent: () => import('./auth/login/login.page').then(m => m.LoginPage),
@@ -34,6 +60,12 @@ export const routes: Routes = [
         loadComponent: () => import('./admin/admin.layout').then(m => m.AdminLayout),
         canActivate: [adminGuard],
         loadChildren: () => import('./admin/admin.routes').then(m => m.adminRoutes),
+        // Declared once on the parent, and read by `resolveRouteChrome`'s
+        // deepest-declared-wins walk, so every child inherits it without
+        // repeating the flag 30 times. The shell answers it two ways: the
+        // sidenav swaps its body for the admin nav, and the content box drops
+        // its `max-w-7xl` cap so the console's tables get the full width.
+        data: { chrome: 'admin' },
     },
     // ── Assistant deprecation (Designer Phase 5) ────────────────────────────────────
     // There is one noun, and it is Agent (Marketplace D1). The Designer reached parity
@@ -115,6 +147,21 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        // One project and its settings pages (projects/projects.routes.ts).
+        // `projectsEnabled` keeps every /projects URL unmatched (→ not found) in a
+        // build that has Projects off (src/environments/feature-flags.ts).
+        path: 'projects/:id',
+        loadChildren: () => import('./projects/projects.routes').then(m => m.PROJECT_ROUTES),
+        canMatch: [projectsEnabled],
+        canActivate: [authGuard],
+    },
+    {
+        path: 'projects',
+        loadComponent: () => import('./projects/projects.page').then(m => m.ProjectsPage),
+        canMatch: [projectsEnabled],
+        canActivate: [authGuard],
+    },
+    {
         path: 'schedules/new',
         loadComponent: () => import('./schedules/schedule-form/schedule-form.page').then(m => m.ScheduleFormPage),
         canActivate: [authGuard],
@@ -129,20 +176,100 @@ export const routes: Routes = [
         loadComponent: () => import('./schedules/schedules.page').then(m => m.SchedulesPage),
         canActivate: [authGuard],
     },
+    // `/my-skills` was absorbed into `/customize/skills` — one noun, one place.
+    // Redirects rather than deletions: the paths are in bookmarks, and the skill
+    // detail page linked out to `/my-skills/:id/edit` for its whole life.
     {
         path: 'my-skills/new',
-        loadComponent: () => import('./my-skills/my-skill-form.page').then(m => m.MySkillFormPage),
-        canActivate: [authGuard],
+        redirectTo: 'customize/skills/new',
+        pathMatch: 'full',
     },
     {
         path: 'my-skills/:skillId/edit',
-        loadComponent: () => import('./my-skills/my-skill-form.page').then(m => m.MySkillFormPage),
-        canActivate: [authGuard],
+        redirectTo: 'customize/skills/:skillId/edit',
+        pathMatch: 'full',
     },
     {
         path: 'my-skills',
-        loadComponent: () => import('./my-skills/my-skills.page').then(m => m.MySkillsPage),
+        redirectTo: 'customize/skills',
+        pathMatch: 'full',
+    },
+    // ── Customize ───────────────────────────────────────────────────────────────
+    // The capabilities hub: what the user adds to their assistant. Tools and
+    // Skills in PR-1; Connectors folds in from `Settings → Connectors` in step 2.
+    // Deliberately NOT the Agent Marketplace — an Agent is something you talk to,
+    // not a capability you toggle, and splitting that noun across two surfaces is
+    // the failure Marketplace D1 exists to prevent.
+    // See `docs/specs/customize-surface.md`.
+    {
+        path: 'customize/tools',
+        loadComponent: () =>
+            import('./customize/tools/customize-tools.page').then(m => m.CustomizeToolsPage),
         canActivate: [authGuard],
+    },
+    // One tool: its sub-tools, prompts, resources and catalog facts. The id is
+    // bound straight to the page's `toolId` input by `withComponentInputBinding()`.
+    {
+        path: 'customize/tools/:toolId',
+        loadComponent: () =>
+            import('./customize/tools/customize-tool-detail.page').then(
+                m => m.CustomizeToolDetailPage,
+            ),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'customize/skills',
+        loadComponent: () =>
+            import('./customize/skills/customize-skills.page').then(m => m.CustomizeSkillsPage),
+        canActivate: [authGuard],
+    },
+    // ⚠️ ORDER: `new` must stay ABOVE `:skillId`. The router matches in
+    // declaration order, so a `:skillId` route declared first swallows this one
+    // and the create form renders as "skill not found" for an id of "new".
+    {
+        path: 'customize/skills/new',
+        loadComponent: () =>
+            import('./customize/skills/skill-form.page').then(m => m.SkillFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'customize/skills/:skillId/edit',
+        loadComponent: () =>
+            import('./customize/skills/skill-form.page').then(m => m.SkillFormPage),
+        canActivate: [authGuard],
+    },
+    // One skill: its SKILL.md body, supporting files and catalog facts. The id
+    // is bound straight to the page's `skillId` input by
+    // `withComponentInputBinding()`.
+    {
+        path: 'customize/skills/:skillId',
+        loadComponent: () =>
+            import('./customize/skills/customize-skill-detail.page').then(
+                m => m.CustomizeSkillDetailPage,
+            ),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'customize/connectors',
+        loadComponent: () =>
+            import('./customize/connectors/customize-connectors.page').then(
+                m => m.CustomizeConnectorsPage,
+            ),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'customize',
+        redirectTo: 'customize/tools',
+        pathMatch: 'full',
+    },
+    // Connectors moved out of Settings and into Customize (spec step 2):
+    // connecting an account and enabling the tools that need it are one intent.
+    // The old deep link stays as a redirect rather than a deletion — it is in
+    // bookmarks, and `schedules` linked users straight to it for years.
+    {
+        path: 'settings/connectors',
+        redirectTo: 'customize/connectors',
+        pathMatch: 'full',
     },
     {
         path: 'memories',
@@ -167,6 +294,26 @@ export const routes: Routes = [
     {
         path: 'files',
         loadComponent: () => import('./files/file-browser.page').then(m => m.FileBrowserPage),
+        canActivate: [authGuard],
+    },
+    {
+        // Declared before the list route so the viewer owns the two-segment
+        // path; Angular matches in order.
+        path: 'artifacts/:artifactId',
+        loadComponent: () => import('./artifacts/artifact-view.page').then(m => m.ArtifactViewPage),
+        canActivate: [authGuard],
+        // Minimal chrome, same as the shared-artifact viewer. Not cosmetic:
+        // the padded content box has no definite height, so a viewer laid
+        // out with `h-full` inside it collapses — measured at 150px of
+        // iframe in a 720px viewport. The minimal branch is `h-full` of the
+        // scroll container, which is `flex-1` of an `h-dvh` main, so the
+        // artifact finally gets the whole shell. It costs the sidenav,
+        // which is why the header carries a labelled way back.
+        data: { chrome: 'minimal' },
+    },
+    {
+        path: 'artifacts',
+        loadComponent: () => import('./artifacts/artifact-library.page').then(m => m.ArtifactLibraryPage),
         canActivate: [authGuard],
     },
     {

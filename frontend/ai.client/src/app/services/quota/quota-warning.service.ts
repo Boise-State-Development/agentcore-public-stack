@@ -49,6 +49,34 @@ export interface QuotaExceeded {
 }
 
 /**
+ * What the user dismissed, remembered across conversations and reloads.
+ *
+ * The rung (`warningLevel`) is the unit of acknowledgement: dismissing "50%"
+ * silences every later 50% warning — the backend re-sends it on every turn,
+ * with a new `currentUsage` each time — until a higher rung fires.
+ *
+ * `quotaLimit` and `currentUsage` are here only to notice that the record has
+ * gone stale. A warning with lower usage than the dismissal saw means the
+ * period rolled over (or someone else signed in on this browser); a different
+ * limit means the tier changed. Either way the old acknowledgement no longer
+ * describes what the user is being warned about.
+ */
+interface DismissedQuotaWarning {
+  warningLevel: string;
+  quotaLimit: number;
+  currentUsage: number;
+}
+
+/** `localStorage` key for {@link DismissedQuotaWarning}. */
+export const DISMISSED_QUOTA_WARNING_KEY = 'quota-warning-dismissed';
+
+/** "50%" → 50. Anything unparseable sorts below every real rung. */
+function rungOf(warningLevel: string): number {
+  const value = parseFloat(warningLevel);
+  return Number.isFinite(value) ? value : -1;
+}
+
+/**
  * Service for managing quota warning and quota exceeded state
  *
  * Handles quota warnings and quota exceeded events received from the SSE stream
@@ -72,6 +100,9 @@ export class QuotaWarningService {
 
   /** Whether the user has dismissed the current warning */
   private isDismissedSignal = signal<boolean>(false);
+
+  /** The rung the user last dismissed; persisted, see {@link DismissedQuotaWarning} */
+  private dismissedWarning: DismissedQuotaWarning | null = this.readDismissed();
 
   /** Whether the user has dismissed the current session notice */
   private isSessionNoticeDismissedSignal = signal<boolean>(false);
@@ -169,25 +200,100 @@ export class QuotaWarningService {
   /**
    * Set a new quota warning from the SSE stream
    *
+   * The backend sends a warning on every turn while the user is over a rung,
+   * so this runs once per turn in every conversation. Whether it shows is
+   * decided by the rung, not by the usage figure: a rung the user already
+   * dismissed stays dismissed — in this conversation, the next one, and after
+   * a reload — until a higher rung arrives.
+   *
    * @param warning - The quota warning event data
    */
   setWarning(warning: QuotaWarning): void {
-    // Only update if this is a new/different warning
     const current = this.activeWarningSignal();
-    if (current?.warningLevel !== warning.warningLevel ||
-        current?.currentUsage !== warning.currentUsage) {
-      this.activeWarningSignal.set(warning);
-      this.warningTimestampSignal.set(new Date());
-      this.isDismissedSignal.set(false);
+    if (current?.warningLevel === warning.warningLevel &&
+        current?.currentUsage === warning.currentUsage) {
+      return;
     }
+
+    this.activeWarningSignal.set(warning);
+    this.warningTimestampSignal.set(new Date());
+    this.isDismissedSignal.set(this.isAcknowledged(warning));
   }
 
   /**
-   * Dismiss the current warning
-   * The warning will reappear on the next request if still over threshold
+   * Dismiss the current warning.
+   *
+   * Acknowledges the warning's rung: later warnings at the same or a lower
+   * rung stay hidden until a higher rung fires or the period rolls over.
    */
   dismissWarning(): void {
     this.isDismissedSignal.set(true);
+
+    const warning = this.activeWarningSignal();
+    if (!warning) return;
+
+    this.dismissedWarning = {
+      warningLevel: warning.warningLevel,
+      quotaLimit: warning.quotaLimit,
+      currentUsage: warning.currentUsage,
+    };
+    this.writeDismissed(this.dismissedWarning);
+  }
+
+  /** Has the user already dismissed this warning's rung (or a higher one)? */
+  private isAcknowledged(warning: QuotaWarning): boolean {
+    const dismissed = this.dismissedWarning;
+    if (!dismissed) return false;
+
+    const stale =
+      dismissed.quotaLimit !== warning.quotaLimit ||
+      warning.currentUsage < dismissed.currentUsage;
+    if (stale) {
+      this.forgetDismissed();
+      return false;
+    }
+
+    return rungOf(warning.warningLevel) <= rungOf(dismissed.warningLevel);
+  }
+
+  private forgetDismissed(): void {
+    this.dismissedWarning = null;
+    this.writeDismissed(null);
+  }
+
+  // Storage is best-effort: a blocked or full localStorage (private window,
+  // storage-disabled browser) degrades to a dismissal that lasts until reload.
+
+  private readDismissed(): DismissedQuotaWarning | null {
+    try {
+      const raw = localStorage.getItem(DISMISSED_QUOTA_WARNING_KEY);
+      if (!raw) return null;
+      const parsed: unknown = JSON.parse(raw);
+      if (
+        parsed && typeof parsed === 'object' &&
+        typeof (parsed as DismissedQuotaWarning).warningLevel === 'string' &&
+        typeof (parsed as DismissedQuotaWarning).quotaLimit === 'number' &&
+        typeof (parsed as DismissedQuotaWarning).currentUsage === 'number'
+      ) {
+        const { warningLevel, quotaLimit, currentUsage } = parsed as DismissedQuotaWarning;
+        return { warningLevel, quotaLimit, currentUsage };
+      }
+    } catch {
+      // Unreadable storage or a corrupt entry: treat as nothing dismissed.
+    }
+    return null;
+  }
+
+  private writeDismissed(value: DismissedQuotaWarning | null): void {
+    try {
+      if (value) {
+        localStorage.setItem(DISMISSED_QUOTA_WARNING_KEY, JSON.stringify(value));
+      } else {
+        localStorage.removeItem(DISMISSED_QUOTA_WARNING_KEY);
+      }
+    } catch {
+      // Best-effort; see above.
+    }
   }
 
   /**
@@ -258,9 +364,19 @@ export class QuotaWarningService {
   }
 
   /**
-   * Reset dismissed state to show warning again on next occurrence
+   * Show the current warning again and forget the acknowledged rung
    */
   resetDismissed(): void {
     this.isDismissedSignal.set(false);
+    this.forgetDismissed();
+  }
+
+  /**
+   * Forget everything, including the persisted dismissal (on sign-out, so the
+   * next person on this browser is warned from scratch)
+   */
+  resetForSignOut(): void {
+    this.clearAll();
+    this.forgetDismissed();
   }
 }

@@ -22,7 +22,7 @@ import { ErrorService } from '../../services/error/error.service';
               <div class="flex items-start">
                 <!-- Error Icon -->
                 <div class="shrink-0">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" data-slot="icon" aria-hidden="true" class="size-6 text-red-400">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" data-slot="icon" aria-hidden="true" class="size-6 text-state-danger-400">
                     <path d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" stroke-linecap="round" stroke-linejoin="round" />
                   </svg>
                 </div>
@@ -51,7 +51,7 @@ import { ErrorService } from '../../services/error/error.service';
                     <button
                       type="button"
                       (click)="error.actionCallback()"
-                      class="mt-2 text-sm font-medium text-gray-900 dark:text-white hover:text-gray-700 dark:hover:text-gray-300 focus:outline-2 focus:outline-offset-2 focus:outline-red-600 dark:focus:outline-red-500"
+                      class="mt-2 text-sm font-medium text-gray-900 dark:text-white hover:text-gray-700 dark:hover:text-gray-300 focus:outline-2 focus:outline-offset-2 focus:outline-state-danger-600 dark:focus:outline-state-danger-500"
                     >
                       {{ error.actionLabel }}
                     </button>
@@ -64,7 +64,7 @@ import { ErrorService } from '../../services/error/error.service';
                     <button
                       type="button"
                       (click)="dismissError(error.id)"
-                      class="inline-flex rounded-md text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-red-600 dark:hover:text-white dark:focus:outline-red-500"
+                      class="inline-flex rounded-md text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-state-danger-600 dark:hover:text-white dark:focus:outline-state-danger-500"
                       [attr.aria-label]="'Dismiss error'"
                     >
                       <span class="sr-only">Close</span>

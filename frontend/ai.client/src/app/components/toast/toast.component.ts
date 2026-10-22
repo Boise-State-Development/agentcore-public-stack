@@ -76,6 +76,17 @@ import { ToastService, ToastType } from '../../services/toast/toast.service';
                     {{ toast.message }}
                   </p>
                 }
+                @if (toast.action; as action) {
+                  <div class="mt-3 flex">
+                    <button
+                      type="button"
+                      (click)="runAction(toast.id, action.handler)"
+                      class="rounded-md text-sm font-semibold text-primary-accessible hover:underline focus:outline-2 focus:outline-offset-2 focus:outline-primary-accessible dark:text-primary-50 dark:focus:outline-primary-50"
+                    >
+                      {{ action.label }}
+                    </button>
+                  </div>
+                }
               </div>
 
               <!-- Dismiss button -->
@@ -99,9 +110,8 @@ import { ToastService, ToastType } from '../../services/toast/toast.service';
     </div>
   `,
   styles: `
-    @import "tailwindcss";
+    @reference "../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     /* Toast enter animation */
     [role="alert"] {
@@ -128,6 +138,14 @@ export class ToastComponent {
    */
   protected dismiss(id: string): void {
     this.toastService.dismiss(id);
+  }
+
+  /**
+   * Run a toast's action, then dismiss it
+   */
+  protected runAction(id: string, handler: () => void): void {
+    this.toastService.dismiss(id);
+    handler();
   }
 
   /**
@@ -161,10 +179,10 @@ export class ToastComponent {
    */
   protected getIconClass(type: ToastType): string {
     const classes: Record<ToastType, string> = {
-      success: 'text-green-500 dark:text-green-400',
-      error: 'text-red-500 dark:text-red-400',
-      warning: 'text-yellow-500 dark:text-yellow-400',
-      info: 'text-blue-500 dark:text-blue-400'
+      success: 'text-state-success-500 dark:text-state-success-400',
+      error: 'text-state-danger-500 dark:text-state-danger-400',
+      warning: 'text-state-warning-500 dark:text-state-warning-400',
+      info: 'text-state-info-500 dark:text-state-info-400'
     };
     return classes[type];
   }
@@ -189,10 +207,10 @@ export class ToastComponent {
   protected getDismissButtonClass(type: ToastType): string {
     const baseClass = 'text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-gray-400';
     const focusClasses: Record<ToastType, string> = {
-      success: 'focus:outline-green-500',
-      error: 'focus:outline-red-500',
-      warning: 'focus:outline-yellow-500',
-      info: 'focus:outline-blue-500'
+      success: 'focus:outline-state-success-500',
+      error: 'focus:outline-state-danger-500',
+      warning: 'focus:outline-state-warning-500',
+      info: 'focus:outline-state-info-500'
     };
     return `${baseClass} ${focusClasses[type]}`;
   }

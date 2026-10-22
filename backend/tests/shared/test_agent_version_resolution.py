@@ -22,6 +22,7 @@ from apis.shared.assistants.version_repository import create_version
 from apis.shared.assistants.version_resolution import (
     AgentVersionUnavailableError,
     resolve_invocation_agent,
+    resolve_review_agent,
     runs_own_draft,
 )
 from apis.shared.assistants.versions import snapshot_of
@@ -275,3 +276,133 @@ def test_the_owner_is_unaffected_by_a_missing_snapshot(table):
     resolved, version = asyncio.run(resolve_invocation_agent(live, OWNER))
     assert resolved.instructions == DRAFT_INSTRUCTIONS
     assert version is None
+
+
+# ── the reviewer's configuration (D2) ────────────────────────────────────────────────
+#
+# A third caller of the same question, and the one whose answer differs most: a reviewer
+# reads and test-drives the artifact their decision is *about*, which is neither the
+# published snapshot nor the author's draft. Getting this wrong is quiet in the same way
+# the rest of this file is — nothing raises, an admin just approves something they never
+# saw.
+SUBMITTED_INSTRUCTIONS = "Answer from the policy manual, and refuse anything else."
+
+
+def test_a_reviewer_runs_the_submitted_snapshot_not_the_draft(table):
+    """The whole point. Approval promotes ``submittedVersion``, so that is what a reviewer
+    must be reading and test-driving — the author can keep editing the draft underneath
+    them while the row sits in the queue."""
+    pending = publish(SUBMITTED_INSTRUCTIONS)
+    live = make_agent(
+        instructions=DRAFT_INSTRUCTIONS,
+        listing=listing(state="in_review", submittedVersion=pending),
+    )
+
+    resolved, version = asyncio.run(resolve_review_agent(live))
+
+    assert resolved.instructions == SUBMITTED_INSTRUCTIONS
+    assert version == pending
+
+
+def test_a_reviewer_reads_the_submitted_snapshot_not_the_published_one(table):
+    """An update to a live listing: the store keeps serving the approved version, but the
+    decision is about the new one."""
+    approved = publish(APPROVED_INSTRUCTIONS)
+    pending = publish(SUBMITTED_INSTRUCTIONS)
+    live = make_agent(
+        instructions=DRAFT_INSTRUCTIONS,
+        listing=listing(
+            state="in_review", publishedVersion=approved, submittedVersion=pending
+        ),
+    )
+
+    resolved, version = asyncio.run(resolve_review_agent(live))
+
+    assert resolved.instructions == SUBMITTED_INSTRUCTIONS
+    assert version == pending
+
+
+def test_a_withdrawal_request_reads_what_the_store_serves(table):
+    """``submittedVersion`` is a high-water mark that deliberately survives a decision, so
+    on a withdrawal request it names a snapshot the store never served. The question there
+    is whether to pull what is *live*."""
+    approved = publish(APPROVED_INSTRUCTIONS)
+    never_approved = publish(SUBMITTED_INSTRUCTIONS)
+    live = make_agent(
+        instructions=DRAFT_INSTRUCTIONS,
+        listing=listing(
+            state="withdrawal_requested",
+            publishedVersion=approved,
+            submittedVersion=never_approved,
+        ),
+    )
+
+    resolved, version = asyncio.run(resolve_review_agent(live))
+
+    assert resolved.instructions == APPROVED_INSTRUCTIONS
+    assert version == approved
+
+
+def test_review_resolution_reads_bindings_and_model_from_the_snapshot(table):
+    """A tool the author bound after submitting must not be attributed to the version
+    under review — the capability list on the review page is built from these."""
+    pending = publish(
+        SUBMITTED_INSTRUCTIONS,
+        bindings=[AgentBinding(kind="tool", ref="tool-approved")],
+    )
+    live = make_agent(
+        bindings=[AgentBinding(kind="tool", ref="tool-added-after-submitting")],
+        listing=listing(state="in_review", submittedVersion=pending),
+    )
+
+    resolved, _ = asyncio.run(resolve_review_agent(live))
+
+    assert [b.ref for b in resolved.bindings] == ["tool-approved"]
+
+
+def test_a_pre_snapshot_submission_falls_back_to_the_live_record(table):
+    """Unlike invocation, this does not raise: there is nothing unsafe about a reviewer
+    reading the live record as long as they are told that is what they are reading, and
+    refusing would leave them with a queue row they cannot open."""
+    live = make_agent(
+        instructions=DRAFT_INSTRUCTIONS, listing=listing(state="in_review")
+    )
+
+    resolved, version = asyncio.run(resolve_review_agent(live))
+
+    assert resolved.instructions == DRAFT_INSTRUCTIONS
+    assert version is None
+
+
+def test_a_pointer_to_a_missing_snapshot_falls_back_rather_than_raising(table):
+    """Read the version back rather than trusting the pointer, and report "not frozen"
+    rather than a version number whose content nobody has."""
+    live = make_agent(listing=listing(state="in_review", submittedVersion=99))
+
+    resolved, version = asyncio.run(resolve_review_agent(live))
+
+    assert version is None
+    assert resolved.instructions == APPROVED_INSTRUCTIONS
+
+
+def test_an_agent_that_was_never_submitted_reads_its_live_record(table):
+    live = make_agent(listing=None)
+
+    resolved, version = asyncio.run(resolve_review_agent(live))
+
+    assert resolved is live
+    assert version is None
+
+
+def test_review_resolution_never_touches_visibility_or_ownership(table):
+    """The same rule the other two follow: this chooses a configuration, never an access
+    level. Whether the caller may review at all is the ``admin.marketplace`` scope."""
+    pending = publish(SUBMITTED_INSTRUCTIONS)
+    live = make_agent(
+        visibility="PRIVATE", listing=listing(state="in_review", submittedVersion=pending)
+    )
+
+    resolved, _ = asyncio.run(resolve_review_agent(live))
+
+    assert resolved.visibility == "PRIVATE"
+    assert resolved.owner_id == OWNER

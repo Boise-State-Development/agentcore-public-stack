@@ -1,0 +1,59 @@
+/* The panel fades and lifts in; the Recent → results swap is a crossfade.
+   All of it is off under prefers-reduced-motion (§6a, "Motion"). */
+.search-backdrop {
+  animation: search-dialog-fade 150ms ease-out;
+}
+
+.search-panel {
+  animation: search-dialog-lift 150ms ease-out;
+}
+
+.search-body-swap {
+  animation: search-dialog-fade 150ms ease-out;
+}
+
+@keyframes search-dialog-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes search-dialog-lift {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-backdrop,
+  .search-panel,
+  .search-body-swap {
+    animation: none;
+  }
+}
+
+/* A query term in a title or snippet: weight and an underline rather than a
+   fill, so the text keeps the row's own contrast in both themes. */
+.search-mark {
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--color-secondary-500);
+}
+
+.search-kbd {
+  display: inline-flex;
+  min-width: 1.25rem;
+  justify-content: center;
+  margin-right: 0.125rem;
+  border-radius: 0.375rem;
+  /* Follows the text colour, so it reads in both themes without a dark rule. */
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  padding: 0 0.25rem;
+  font-family: inherit;
+  font-size: 0.6875rem;
+}

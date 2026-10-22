@@ -11,3 +11,11 @@ node_modules
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+
+# Amazon DCV Web Client SDK — fetched at build time by
+# scripts/build/fetch-dcv-sdk.sh, never committed. It is a EULA-licensed AWS
+# download and this repository is PUBLIC, so vendoring it would be
+# redistribution. Must live here rather than the root .gitignore: the
+# `!assets/**` negation above is in a deeper file and wins.
+# See docs/specs/authenticated-web-assessment.md D3.
+assets/mcp-sandbox/dcvjs/

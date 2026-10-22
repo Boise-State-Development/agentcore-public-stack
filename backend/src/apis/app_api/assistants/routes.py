@@ -3,30 +3,22 @@
 Provides endpoints for managing AI assistants (CRUD operations).
 """
 
-import asyncio
-import json
 import logging
-import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
 
 from apis.app_api.agent_designer.services.binding_validation import (
     BindingValidationError,
     validate_agent_write,
 )
-from apis.app_api.documents.services.document_service import list_assistant_documents
-from apis.inference_api.chat.routes import stream_conversational_message
-from apis.inference_api.chat.service import get_agent
+from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.errors import ErrorCode, build_conversational_error_event
 from apis.shared.assistants.models import (
     AssistantResponse,
     AssistantSharesResponse,
     AssistantsListResponse,
-    AssistantTestChatRequest,
     CreateAssistantDraftRequest,
     CreateAssistantRequest,
     ShareAssistantRequest,
@@ -36,13 +28,13 @@ from apis.shared.assistants.models import (
     UpdateSharePermissionRequest,
 )
 from apis.shared.assistants.service import (
+    PROJECT_HARNESS_EDIT_MESSAGE,
     assistant_exists,
     create_assistant,
     create_assistant_draft,
     AssistantListedError,
-    assert_deletable,
-    delete_assistant,
     get_assistant_with_access_check,
+    is_project_harness,
     list_assistant_shares,
     list_shared_with_user,
     list_user_assistants,
@@ -52,7 +44,6 @@ from apis.shared.assistants.service import (
     update_assistant,
     update_share_permission,
 )
-from apis.shared.assistants.rag_service import augment_prompt_with_context, search_assistant_knowledgebase_with_formatting
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +142,13 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
             emoji=request.emoji,
             bindings=request.bindings,
             model_settings=request.model_settings,
+            show_citations=request.show_citations,
+            allow_document_download=request.allow_document_download,
         )
 
         # Convert to response model (excludes owner_id for privacy)
         assistant_dict = assistant.model_dump(by_alias=True, exclude={"ownerId"})
+
         return AssistantResponse.model_validate(assistant_dict)
 
     except Exception as e:
@@ -289,7 +283,8 @@ async def get_assistant_endpoint(assistant_id: str, current_user: User = Depends
 
         # Assistant exists, now check access
         assistant, permission = await get_assistant_with_access_check(
-            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email
+            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email,
+            resolve_public_share=True,
         )
 
         if not assistant:
@@ -360,11 +355,18 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
                 status_code=400,
                 detail="Only the owner can change assistant visibility",
             )
+        # A project's harness is edited only through the project, which versions every save.
+        if is_project_harness(assistant):
+            raise HTTPException(status_code=409, detail=PROJECT_HARNESS_EDIT_MESSAGE)
 
         # Design-time binding/model validation (D4/D5), after the auth gate above.
         try:
             await validate_agent_write(
-                current_user, bindings=request.bindings, model_settings=request.model_settings
+                current_user,
+                bindings=request.bindings,
+                model_settings=request.model_settings,
+                existing_bindings=assistant.bindings,
+                existing_model_settings=assistant.model_settings,
             )
         except BindingValidationError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -384,6 +386,8 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
             image_url=request.image_url,
             bindings=request.bindings,
             model_settings=request.model_settings,
+            show_citations=request.show_citations,
+            allow_document_download=request.allow_document_download,
         )
 
         if not updated_assistant:
@@ -404,50 +408,12 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
 
 @router.delete("/{assistant_id}", status_code=204)
 async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depends(get_current_user_from_session)):
-    """Delete an assistant and all associated documents using soft-delete + background cleanup."""
-    user_id = current_user.user_id
+    """Delete an assistant and everything it owns (``agent_deletion.delete_owned_agent``)."""
     logger.info("DELETE /assistants/{assistant_id}")
 
     try:
-        # 0. Refuse a listed Agent BEFORE touching anything (§5.2).
-        #
-        # ⚠️ Order is load-bearing. Steps 2 and 3 below are destructive — documents
-        # soft-deleted, sync policies removed — and they run before the record delete. If
-        # the listing check fired down there instead, a refused delete would leave the Agent
-        # gutted but still in the store: exactly the failure the refusal exists to prevent,
-        # with a live listing pointing at a broken Agent.
-        await assert_deletable(assistant_id, user_id)
-
-        # 1. List all documents for the assistant
-        docs, _ = await list_assistant_documents(
-            assistant_id=assistant_id,
-            owner_id=user_id,
-            limit=1000,
-        )
-
-        # 2. Batch soft-delete all documents with TTL
-        if docs:
-            from apis.app_api.documents.services.document_service import batch_soft_delete_documents
-            await batch_soft_delete_documents(
-                assistant_id=assistant_id,
-                document_ids=[doc.document_id for doc in docs],
-            )
-
-        # 3. Delete sync policies eagerly so no schedule outlives the assistant
-        #    (the dispatcher's liveness check is the backstop, not the mechanism)
-        from apis.shared.sync_policies.service import delete_sync_policies_for_assistant
-        await delete_sync_policies_for_assistant(assistant_id)
-
-        # 4. Hard-delete assistant record
-        success = await delete_assistant(assistant_id=assistant_id, owner_id=user_id)
-        if not success:
+        if not await delete_owned_agent(assistant_id, current_user.user_id):
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
-
-        # 5. Fire-and-forget background cleanup for all documents
-        if docs:
-            from apis.app_api.documents.services.cleanup_service import cleanup_assistant_documents
-            asyncio.ensure_future(cleanup_assistant_documents(assistant_id, docs))
-
         return None
 
     except HTTPException:
@@ -459,148 +425,6 @@ async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depe
     except Exception as e:
         logger.error(f"Error deleting assistant: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete assistant: {str(e)}")
-
-
-@router.post("/{assistant_id}/test-chat")
-async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatRequest, current_user: User = Depends(get_current_user_from_session)):
-    """
-    Test chat endpoint for assistants with RAG functionality.
-
-    This endpoint allows users to test their assistant's RAG capabilities
-    by querying the vector store and getting responses augmented with
-    retrieved context. Messages are ephemeral and not persisted.
-
-    Requires:
-    - Assistant must exist and be owned by the user
-    - Assistant must have at least one processed document (status='complete')
-
-    Args:
-        assistant_id: Assistant identifier from URL path
-        request: AssistantTestChatRequest with message and optional session_id
-        current_user: Authenticated user from JWT token (injected by dependency)
-
-    Returns:
-        StreamingResponse with SSE events (same format as main chat)
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 404 if assistant not found or not owned by user
-            - 400 if assistant has no processed documents
-            - 500 if server error
-    """
-    user_id = current_user.user_id
-
-    logger.info("POST /assistants/{assistant_id}/test-chat")
-
-    try:
-        # 1. Resolve permission — owner or editor may test-chat (editors need to preview their edits)
-        assistant, permission = await resolve_assistant_permission(
-            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email
-        )
-
-        if not assistant:
-            raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
-        if permission not in ("owner", "editor"):
-            raise HTTPException(
-                status_code=403, detail="You do not have permission to test-chat this assistant"
-            )
-
-        # 2. Check if assistant has processed documents (use the real owner_id)
-        documents, _ = await list_assistant_documents(
-            assistant_id=assistant_id,
-            owner_id=assistant.owner_id,
-            limit=100,  # Check up to 100 documents
-        )
-
-        processed_documents = [doc for doc in documents if doc.status == "complete"]
-        if not processed_documents:
-            raise HTTPException(status_code=400, detail="Assistant has no processed documents. Please upload and process documents before testing.")
-
-        # 3. Generate session_id if not provided (for ephemeral chat)
-        session_id = request.session_id or f"test-{uuid.uuid4().hex[:12]}"
-
-        # 4. Search vector store for relevant context
-        context_chunks = await search_assistant_knowledgebase_with_formatting(assistant_id=assistant_id, query=request.message, top_k=5)
-
-        # 5. Augment user message with retrieved context
-        augmented_message = augment_prompt_with_context(user_message=request.message, context_chunks=context_chunks)
-
-        # 6. Create agent with assistant's instructions as system prompt
-        agent = await get_agent(
-            session_id=session_id,
-            user_id=user_id,
-            enabled_tools=None,  # No tools for test chat
-            system_prompt=assistant.instructions,  # Use assistant's custom instructions
-            caching_enabled=False,  # Disable caching for test chat
-        )
-
-        # 7. Stream response using existing infrastructure
-        async def stream_response():
-            # Send debug event with RAG context information
-            debug_data = {
-                "type": "rag_debug",
-                "chunk_count": len(context_chunks),
-                "chunks": [
-                    {
-                        "index": i + 1,
-                        "text": chunk.get("text", "")[:500] + ("..." if len(chunk.get("text", "")) > 500 else ""),  # Truncate to 500 chars
-                        "distance": chunk.get("distance"),
-                        "key": chunk.get("key", ""),
-                        "source": chunk.get("metadata", {}).get("source", "unknown"),
-                    }
-                    for i, chunk in enumerate(context_chunks)
-                ],
-            }
-            yield f"event: debug\ndata: {json.dumps(debug_data)}\n\n"
-
-            try:
-                stream_iterator = agent.stream_async(augmented_message, session_id=session_id, files=None)
-
-                # Add timeout to prevent hanging streams
-                async with asyncio.timeout(600):  # 10 minutes
-                    async for event in stream_iterator:
-                        yield event
-
-            except asyncio.TimeoutError:
-                logger.error(f"⏱️ Stream timeout for test chat session {session_id}")
-                error_event = build_conversational_error_event(
-                    code=ErrorCode.TIMEOUT, error=Exception("Stream processing time exceeded 600 seconds"), session_id=session_id, recoverable=True
-                )
-                async for event in stream_conversational_message(
-                    message=error_event.message,
-                    stop_reason="error",
-                    metadata_event=error_event,
-                    session_id=session_id,
-                    user_id=user_id,
-                    user_input=request.message,
-                ):
-                    yield event
-
-            except Exception as e:
-                logger.error(f"Error during test chat streaming: {e}", exc_info=True)
-                error_event = build_conversational_error_event(code=ErrorCode.STREAM_ERROR, error=e, session_id=session_id, recoverable=True)
-                async for event in stream_conversational_message(
-                    message=error_event.message,
-                    stop_reason="error",
-                    metadata_event=error_event,
-                    session_id=session_id,
-                    user_id=user_id,
-                    user_input=request.message,
-                ):
-                    yield event
-
-        return StreamingResponse(
-            stream_response(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": session_id},
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in test_chat_endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to process test chat: {str(e)}")
 
 
 @router.post("/{assistant_id}/shares", response_model=AssistantSharesResponse)

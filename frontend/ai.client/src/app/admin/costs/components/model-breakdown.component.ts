@@ -1,117 +1,170 @@
 import {
   Component,
   ChangeDetectionStrategy,
+  DestroyRef,
   input,
   computed,
   effect,
+  inject,
   viewChild,
   ElementRef,
   signal,
 } from '@angular/core';
 import { Chart, ChartConfiguration, ChartData } from 'chart.js/auto';
 import { ModelUsageSummary } from '../models';
+import {
+  getChromeColorsForMode,
+  getCategoricalColor,
+} from '../../../shared/constants/chart-colors.constants';
 
 type ChartView = 'pie' | 'bar';
 
 /**
  * Model breakdown chart component.
- * Displays cost distribution across different AI models.
+ *
+ * Displays cost distribution across models. Pie is the default view: the
+ * question the panel exists to answer is what share of the period's spend
+ * each model took, and a part-of-whole reads off a donut at a glance in a way
+ * it does not off ranked bars.
+ *
+ * The card owns the console's full content width, and the two views want that
+ * width differently — a donut is constrained by the shorter side, so making
+ * it wider past a point only adds empty canvas, whereas the horizontal bars
+ * carry long `us.anthropic.*` labels and earn every pixel. Hence the column
+ * split flips with the view rather than being fixed: donut 2/5 with a roomy
+ * legend beside it, bars 3/5.
  */
 @Component({
   selector: 'app-model-breakdown',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div
-      class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-6"
+      class="rounded-2xl border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-gray-800"
     >
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-          Model Usage Breakdown
-        </h3>
-        <!-- View toggle -->
+      <div
+        class="flex flex-col gap-3 border-b border-gray-200 px-6 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-gray-700"
+      >
+        <div>
+          <h3 class="text-lg/7 font-semibold text-gray-900 dark:text-white">
+            Model Usage Breakdown
+          </h3>
+          <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+            Share of the period's spend by model.
+          </p>
+        </div>
+
+        <!-- View toggle. One setting with two values, so a radiogroup
+             rather than two independent buttons, and the shell/child radius
+             pair is the sanctioned segment idiom. -->
         <div
-          class="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 p-1"
+          role="radiogroup"
+          aria-label="Chart view"
+          class="inline-flex shrink-0 self-start items-center gap-1 rounded-xl border border-gray-200 bg-gray-50 p-1 sm:self-center dark:border-gray-700 dark:bg-gray-900"
         >
-          <button
-            type="button"
-            (click)="setChartView('pie')"
-            class="px-3 py-1 text-sm font-medium rounded-md transition-colors"
-            [class.bg-blue-100]="chartView() === 'pie'"
-            [class.text-blue-700]="chartView() === 'pie'"
-            [class.dark:bg-blue-900/30]="chartView() === 'pie'"
-            [class.dark:text-blue-400]="chartView() === 'pie'"
-            [class.text-gray-600]="chartView() !== 'pie'"
-            [class.dark:text-gray-400]="chartView() !== 'pie'"
-            [class.hover:text-gray-900]="chartView() !== 'pie'"
-            [class.dark:hover:text-white]="chartView() !== 'pie'"
-          >
-            Pie
-          </button>
-          <button
-            type="button"
-            (click)="setChartView('bar')"
-            class="px-3 py-1 text-sm font-medium rounded-md transition-colors"
-            [class.bg-blue-100]="chartView() === 'bar'"
-            [class.text-blue-700]="chartView() === 'bar'"
-            [class.dark:bg-blue-900/30]="chartView() === 'bar'"
-            [class.dark:text-blue-400]="chartView() === 'bar'"
-            [class.text-gray-600]="chartView() !== 'bar'"
-            [class.dark:text-gray-400]="chartView() !== 'bar'"
-            [class.hover:text-gray-900]="chartView() !== 'bar'"
-            [class.dark:hover:text-white]="chartView() !== 'bar'"
-          >
-            Bar
-          </button>
+          @for (option of viewOptions; track option.value) {
+            <button
+              type="button"
+              role="radio"
+              [attr.aria-checked]="chartView() === option.value"
+              (click)="setChartView(option.value)"
+              class="rounded-lg px-3.5 py-1 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              [class]="
+                chartView() === option.value
+                  ? 'bg-white text-gray-900 shadow-xs dark:bg-gray-800 dark:text-white'
+                  : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'
+              "
+            >
+              {{ option.label }}
+            </button>
+          }
         </div>
       </div>
 
       @if (data().length === 0) {
-        <div
-          class="h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-900/50 rounded-lg border-2 border-dashed border-gray-200 dark:border-gray-700"
-        >
-          <p class="text-sm text-gray-500 dark:text-gray-400">
-            No model usage data available for this period
-          </p>
+        <div class="p-6">
+          <div
+            class="flex h-64 items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50"
+          >
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+              No model usage data available for this period
+            </p>
+          </div>
         </div>
       } @else {
-        <div class="h-64">
-          <canvas #chartCanvas></canvas>
-        </div>
+        <div class="grid grid-cols-1 gap-8 p-6 lg:grid-cols-5">
+          <div [class]="chartView() === 'pie' ? 'lg:col-span-2' : 'lg:col-span-3'">
+            <div class="h-72 sm:h-80 lg:h-[26rem]">
+              <canvas #chartCanvas></canvas>
+            </div>
+          </div>
 
-        <!-- Legend/Details table -->
-        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <div class="space-y-2">
-            @for (model of sortedData(); track model.modelId; let i = $index) {
-              <div
-                class="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-              >
-                <div class="flex items-center gap-3">
-                  <span
-                    class="size-3 rounded-full shrink-0"
-                    [style.background-color]="getColor(i)"
-                  ></span>
-                  <div class="min-w-0">
-                    <p
-                      class="text-sm font-medium text-gray-900 dark:text-white truncate"
-                    >
-                      {{ model.modelName }}
-                    </p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400">
-                      {{ formatNumber(model.totalRequests) }} requests •
-                      {{ formatNumber(model.uniqueUsers) }} users
-                    </p>
+          <!-- Legend / details. Full-height beside the chart on wide screens
+               instead of stacked underneath, so the whole fleet is visible
+               without scrolling past the chart to reach the tail. -->
+          <div
+            class="lg:min-w-0"
+            [class]="chartView() === 'pie' ? 'lg:col-span-3' : 'lg:col-span-2'"
+          >
+            <ul
+              role="list"
+              class="divide-y divide-gray-100 dark:divide-gray-700/60"
+            >
+              @for (model of sortedData(); track model.modelId; let i = $index) {
+                <li
+                  class="flex items-center justify-between gap-4 rounded-lg px-3 py-2.5 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                >
+                  <div class="flex min-w-0 items-center gap-3">
+                    <span
+                      class="size-3 shrink-0 rounded-full"
+                      [style.background-color]="getColor(i)"
+                    ></span>
+                    <div class="min-w-0">
+                      <p
+                        class="truncate text-sm/6 font-medium text-gray-900 dark:text-white"
+                      >
+                        {{ model.modelName }}
+                      </p>
+                      <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                        {{ formatNumber(model.totalRequests) }} requests •
+                        {{ formatNumber(model.uniqueUsers) }}
+                        {{ model.uniqueUsers === 1 ? 'user' : 'users' }}
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <div class="text-right shrink-0">
-                  <p class="text-sm font-medium text-gray-900 dark:text-white">
-                    {{ formatCurrency(model.totalCost) }}
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ getPercentage(model.totalCost) }}%
-                  </p>
-                </div>
-              </div>
-            }
+
+                  <div class="flex shrink-0 items-center gap-4">
+                    <!-- Share bar, pie view only: the donut encodes share by
+                         arc, which is hard to compare between two small
+                         slices, so a shared baseline makes the ranking
+                         readable. In bar view the chart already IS that
+                         baseline, and the column it costs is what truncates
+                         the model ids beside it. -->
+                    @if (chartView() === 'pie') {
+                      <div
+                        class="hidden h-1.5 w-24 overflow-hidden rounded-full bg-gray-100 xl:block dark:bg-gray-700"
+                        aria-hidden="true"
+                      >
+                        <div
+                          class="h-full rounded-full"
+                          [style.width.%]="getPercentage(model.totalCost)"
+                          [style.background-color]="getColor(i)"
+                        ></div>
+                      </div>
+                    }
+                    <div class="w-24 text-right">
+                      <p
+                        class="text-sm/6 font-semibold text-gray-900 tabular-nums dark:text-white"
+                      >
+                        {{ formatCurrency(model.totalCost) }}
+                      </p>
+                      <p class="text-xs/5 text-gray-500 tabular-nums dark:text-gray-400">
+                        {{ getPercentage(model.totalCost) }}%
+                      </p>
+                    </div>
+                  </div>
+                </li>
+              }
+            </ul>
           </div>
         </div>
       }
@@ -123,22 +176,16 @@ export class ModelBreakdownComponent {
 
   chartView = signal<ChartView>('pie');
 
+  protected readonly viewOptions: ReadonlyArray<{
+    value: ChartView;
+    label: string;
+  }> = [
+    { value: 'pie', label: 'Pie' },
+    { value: 'bar', label: 'Bar' },
+  ];
+
   private chartCanvas = viewChild<ElementRef<HTMLCanvasElement>>('chartCanvas');
   private chart: Chart | null = null;
-
-  // Color palette for charts
-  private readonly colors = [
-    '#3b82f6', // blue
-    '#10b981', // emerald
-    '#f59e0b', // amber
-    '#ef4444', // red
-    '#8b5cf6', // violet
-    '#ec4899', // pink
-    '#06b6d4', // cyan
-    '#84cc16', // lime
-    '#f97316', // orange
-    '#6366f1', // indigo
-  ];
 
   // Sort data by cost descending
   sortedData = computed(() => {
@@ -151,6 +198,14 @@ export class ModelBreakdownComponent {
   });
 
   constructor() {
+    // The card is a tab panel now, so it is destroyed and rebuilt on every
+    // switch away and back. Chart.js keeps its instances in a module-level
+    // registry keyed by canvas, so without this each visit leaks one.
+    inject(DestroyRef).onDestroy(() => {
+      this.chart?.destroy();
+      this.chart = null;
+    });
+
     effect(() => {
       const canvas = this.chartCanvas();
       const models = this.sortedData();
@@ -167,7 +222,7 @@ export class ModelBreakdownComponent {
   }
 
   getColor(index: number): string {
-    return this.colors[index % this.colors.length];
+    return getCategoricalColor(index);
   }
 
   getPercentage(cost: number): string {
@@ -191,13 +246,12 @@ export class ModelBreakdownComponent {
     const backgroundColors = models.map((_, i) => this.getColor(i));
 
     const isDarkMode = document.documentElement.classList.contains('dark');
-    const textColor = isDarkMode ? '#9ca3af' : '#6b7280';
-    const gridColor = isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+    const chromeColors = getChromeColorsForMode(isDarkMode);
 
     if (view === 'pie') {
-      this.renderPieChart(canvas, labels, costData, backgroundColors, isDarkMode);
+      this.renderPieChart(canvas, labels, costData, backgroundColors, isDarkMode, chromeColors);
     } else {
-      this.renderBarChart(canvas, labels, costData, backgroundColors, textColor, gridColor, isDarkMode);
+      this.renderBarChart(canvas, labels, costData, backgroundColors, chromeColors, isDarkMode);
     }
   }
 
@@ -206,7 +260,8 @@ export class ModelBreakdownComponent {
     labels: string[],
     data: number[],
     colors: string[],
-    isDarkMode: boolean
+    isDarkMode: boolean,
+    chromeColors: ReturnType<typeof getChromeColorsForMode>
   ): void {
     const chartData: ChartData<'doughnut'> = {
       labels,
@@ -214,7 +269,7 @@ export class ModelBreakdownComponent {
         {
           data,
           backgroundColor: colors,
-          borderColor: isDarkMode ? '#1f2937' : '#ffffff',
+          borderColor: isDarkMode ? chromeColors.background : '#ffffff',
           borderWidth: 2,
           hoverOffset: 4,
         },
@@ -233,10 +288,10 @@ export class ModelBreakdownComponent {
             display: false,
           },
           tooltip: {
-            backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-            titleColor: isDarkMode ? '#ffffff' : '#111827',
-            bodyColor: isDarkMode ? '#d1d5db' : '#4b5563',
-            borderColor: isDarkMode ? '#374151' : '#e5e7eb',
+            backgroundColor: chromeColors.background,
+            titleColor: chromeColors.titleText,
+            bodyColor: chromeColors.bodyText,
+            borderColor: chromeColors.border,
             borderWidth: 1,
             padding: 12,
             callbacks: {
@@ -260,8 +315,7 @@ export class ModelBreakdownComponent {
     labels: string[],
     data: number[],
     colors: string[],
-    textColor: string,
-    gridColor: string,
+    chromeColors: ReturnType<typeof getChromeColorsForMode>,
     isDarkMode: boolean
   ): void {
     const chartData: ChartData<'bar'> = {
@@ -288,10 +342,10 @@ export class ModelBreakdownComponent {
             display: false,
           },
           tooltip: {
-            backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-            titleColor: isDarkMode ? '#ffffff' : '#111827',
-            bodyColor: isDarkMode ? '#d1d5db' : '#4b5563',
-            borderColor: isDarkMode ? '#374151' : '#e5e7eb',
+            backgroundColor: chromeColors.background,
+            titleColor: chromeColors.titleText,
+            bodyColor: chromeColors.bodyText,
+            borderColor: chromeColors.border,
             borderWidth: 1,
             padding: 12,
             callbacks: {
@@ -304,11 +358,12 @@ export class ModelBreakdownComponent {
         scales: {
           x: {
             grid: {
-              color: gridColor,
+              color: chromeColors.gridLine,
             },
             ticks: {
-              color: textColor,
-              callback: value => this.formatCurrencyShort(Number(value)),
+              color: chromeColors.axisText,
+              callback: (value, _index, ticks) =>
+                this.formatAxisCurrency(Number(value), ticks),
             },
           },
           y: {
@@ -316,7 +371,7 @@ export class ModelBreakdownComponent {
               display: false,
             },
             ticks: {
-              color: textColor,
+              color: chromeColors.axisText,
             },
           },
         },
@@ -335,11 +390,21 @@ export class ModelBreakdownComponent {
     }).format(value);
   }
 
-  private formatCurrencyShort(value: number): string {
-    if (value >= 1000) {
+  /**
+   * Axis tick label, with the precision decided by the whole tick set — see
+   * the same helper on `CostTrendsChartComponent`. Rounding each label on its
+   * own prints "$4 $4 $3 $2 $2" whenever the axis steps by under a dollar,
+   * which is every period where no single model cleared $10.
+   */
+  private formatAxisCurrency(
+    value: number,
+    ticks: readonly { value: number }[]
+  ): string {
+    if (Math.abs(value) >= 1000) {
       return `$${(value / 1000).toFixed(1)}k`;
     }
-    return `$${value.toFixed(0)}`;
+    const fractional = ticks.some(t => !Number.isInteger(t.value));
+    return `$${value.toFixed(fractional ? 2 : 0)}`;
   }
 
   formatNumber(value: number): string {

@@ -20,7 +20,7 @@ For text on backgrounds, ensure sufficient contrast:
 <!-- ✅ High contrast patterns -->
 <p class="bg-white text-gray-900">Dark on light</p>
 <p class="bg-gray-900 text-white">Light on dark</p>
-<p class="bg-primary-500 text-white">White on primary (verify contrast)</p>
+<p class="bg-primary-accessible text-white">White on brand (contrast guaranteed by the token)</p>
 
 <!-- ⚠️ Test these combinations -->
 <p class="bg-gray-100 text-gray-600">May fail contrast</p>
@@ -50,7 +50,7 @@ Every interactive element must have a visible focus indicator.
 
 ```html
 <!-- ✅ Standard focus ring -->
-<button class="focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2">
+<button class="focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible focus-visible:ring-offset-2">
   Click me
 </button>
 
@@ -66,10 +66,10 @@ Use `focus-visible:` for keyboard-only focus states (hides ring on mouse click):
 
 ```html
 <!-- ✅ Keyboard-only focus ring -->
-<a href="#" class="focus-visible:ring-2 focus-visible:ring-primary-500">Link</a>
+<a href="#" class="focus-visible:ring-2 focus-visible:ring-primary-accessible">Link</a>
 
 <!-- Use focus: when you want ring on all focus (including mouse) -->
-<input class="focus:ring-2 focus:ring-primary-500" />
+<input class="focus:ring-2 focus:ring-primary-accessible" />
 ```
 
 ### Focus Within
@@ -77,7 +77,7 @@ Use `focus-visible:` for keyboard-only focus states (hides ring on mouse click):
 Style parent when child is focused:
 
 ```html
-<div class="focus-within:ring-2 focus-within:ring-primary-500">
+<div class="focus-within:ring-2 focus-within:ring-primary-accessible">
   <input type="text" class="border-0 focus:ring-0" />
 </div>
 ```
@@ -91,7 +91,7 @@ Ensure 3:1 contrast for focus indicators:
 <button class="
   focus-visible:outline-2 
   focus-visible:outline-offset-2 
-  focus-visible:outline-primary-500
+  focus-visible:outline-primary-accessible
 ">
   Accessible button
 </button>
@@ -174,9 +174,9 @@ Announce errors to screen readers:
   type="email" 
   aria-invalid="true"
   aria-describedby="email-error"
-  class="border-red-500 focus:ring-red-500"
+  class="border-state-danger-500 focus:ring-state-danger-500"
 />
-<p id="email-error" class="text-sm text-red-600" role="alert">
+<p id="email-error" class="text-sm text-state-danger-600 dark:text-state-danger-400" role="alert">
   Please enter a valid email address
 </p>
 ```

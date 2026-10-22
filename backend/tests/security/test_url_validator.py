@@ -15,6 +15,7 @@ import pytest
 
 from apis.shared.security.url_validator import (
     UrlValidationError,
+    is_forbidden_ip_literal,
     validate_external_url,
 )
 
@@ -220,3 +221,46 @@ def test_custom_allowed_schemes() -> None:
         assert validate_external_url("https://example.com/", allow_schemes={"https"}) == "https://example.com/"
         with pytest.raises(UrlValidationError):
             validate_external_url("http://example.com/", allow_schemes={"https"})
+
+
+# ---- IPv4-mapped IPv6 -----------------------------------------------------
+
+
+@pytest.mark.parametrize("url", ["http://[::ffff:169.254.169.254]/", "http://[::ffff:10.0.0.1]/", "http://[::ffff:127.0.0.1]/"])
+def test_ipv4_mapped_ipv6_literal_rejected(url: str) -> None:
+    with pytest.raises(UrlValidationError):
+        validate_external_url(url)
+
+
+def test_dns_resolving_to_ipv4_mapped_metadata_rejected() -> None:
+    fake = _fake_getaddrinfo({"mapped.example.com": ["::ffff:169.254.169.254"]})
+    with patch("apis.shared.security.url_validator.socket.getaddrinfo", fake):
+        with pytest.raises(UrlValidationError):
+            validate_external_url("https://mapped.example.com/")
+
+
+# ---- IP literals without DNS (browser sandbox) ----------------------------
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "169.254.169.254",
+        "2852039166",
+        "0xa9fea9fe",
+        "0251.0376.0251.0376",
+        "169.254.43518",
+        "[::ffff:169.254.169.254]",
+        "fd00:ec2::254",
+        "127.1",
+        "10.0.0.1",
+        "::1",
+    ],
+)
+def test_forbidden_ip_literal_in_every_spelling(host: str) -> None:
+    assert is_forbidden_ip_literal(host) is True
+
+
+@pytest.mark.parametrize("host", ["93.184.216.34", "example.com", "1password.com", "metadata.example.com", ""])
+def test_public_or_non_literal_host_is_not_flagged(host: str) -> None:
+    assert is_forbidden_ip_literal(host) is False

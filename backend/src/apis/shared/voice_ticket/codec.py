@@ -1,6 +1,10 @@
 """Ticket codec — base64url(payload) "." base64url(HMAC-SHA256(payload, key)).
 
-Payload is a compact JSON object: ``{"v":1,"sub":...,"sid":...,"jti":...,"iat":...,"exp":...}``.
+Payload is a compact JSON object: ``{"v":1,"sub":...,"sid":...,"pur":...,"jti":...,"iat":...,"exp":...}``.
+
+``pur`` names the WebSocket the ticket opens (``voice`` or ``dictation``) so a
+ticket minted for one upgrade cannot be spent on the other. A payload without
+it is a ``voice`` ticket — the only kind that existed before the field did.
 Both halves are base64url without padding so the ticket survives a query
 string or ``Sec-WebSocket-Protocol`` value without escaping.
 
@@ -22,6 +26,9 @@ from typing import Optional
 
 _TICKET_VERSION = 1
 
+PURPOSE_VOICE = "voice"
+PURPOSE_DICTATION = "dictation"
+
 
 class VoiceTicketError(Exception):
     """Raised when a ticket fails to decode, verify, or has expired.
@@ -37,7 +44,9 @@ class VoiceTicketClaims:
     """Verified ticket payload.
 
     ``jti`` is the random per-ticket id used by the replay store to enforce
-    single-use. ``exp`` is epoch seconds.
+    single-use. ``exp`` is epoch seconds. ``session_id`` is empty for a
+    dictation ticket, which is bound to the user alone — dictating into a
+    brand-new conversation happens before any session exists.
     """
 
     user_id: str
@@ -45,6 +54,7 @@ class VoiceTicketClaims:
     jti: str
     iat: int
     exp: int
+    purpose: str = PURPOSE_VOICE
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -80,9 +90,12 @@ class VoiceTicketCodec:
         session_id: str,
         ttl_seconds: int = 60,
         now: Optional[int] = None,
+        purpose: str = PURPOSE_VOICE,
     ) -> tuple[str, VoiceTicketClaims]:
-        if not user_id or not session_id:
-            raise ValueError("user_id and session_id are required")
+        if not user_id:
+            raise ValueError("user_id is required")
+        if purpose == PURPOSE_VOICE and not session_id:
+            raise ValueError("session_id is required for a voice ticket")
         issued_at = int(now if now is not None else time.time())
         claims = VoiceTicketClaims(
             user_id=user_id,
@@ -90,11 +103,13 @@ class VoiceTicketCodec:
             jti=secrets.token_urlsafe(16),
             iat=issued_at,
             exp=issued_at + ttl_seconds,
+            purpose=purpose,
         )
         payload = {
             "v": _TICKET_VERSION,
             "sub": claims.user_id,
             "sid": claims.session_id,
+            "pur": claims.purpose,
             "jti": claims.jti,
             "iat": claims.iat,
             "exp": claims.exp,
@@ -125,6 +140,7 @@ class VoiceTicketCodec:
             jti = str(payload["jti"])
             iat = int(payload["iat"])
             exp = int(payload["exp"])
+            purpose = str(payload.get("pur") or PURPOSE_VOICE)
         except (KeyError, TypeError, ValueError) as exc:
             raise VoiceTicketError("invalid payload") from exc
 
@@ -138,6 +154,7 @@ class VoiceTicketCodec:
             jti=jti,
             iat=iat,
             exp=exp,
+            purpose=purpose,
         )
 
     def _sign(self, body: bytes) -> bytes:

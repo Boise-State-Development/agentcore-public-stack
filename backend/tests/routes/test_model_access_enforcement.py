@@ -2,7 +2,9 @@
 
 Verifies that the inline ``AppRoleService.can_access_model()`` check in
 ``POST /invocations`` and ``POST /chat/api-converse`` correctly:
-- Returns 403 for unauthorized model access
+- Refuses unauthorized model access: a conversational SSE turn on
+  ``/invocations`` (errors stream as assistant messages), a JSON 403 on the
+  API-key ``/chat/api-converse``
 - Allows authorized requests to proceed
 - Skips the check for null/empty model_id (invocations only)
 - Respects wildcard ``"*"`` access
@@ -90,12 +92,15 @@ def _make_rate_limiter(allowed: bool = True):
 # ===================================================================
 
 class TestInvocationsAccessDenied:
-    """POST /invocations returns 403 when can_access_model is False.
+    """POST /invocations streams a conversational refusal when can_access_model is False.
+
+    Not a bare 403: the AgentCore data plane wraps any non-2xx from the
+    container as a 424, which the SPA can only show as a generic error.
 
     Requirements: 1.1, 2.1
     """
 
-    def test_returns_403_for_unauthorized_model(self):
+    def test_streams_refusal_for_unauthorized_model(self):
         from apis.inference_api.chat.routes import router
 
         app = FastAPI()
@@ -121,9 +126,38 @@ class TestInvocationsAccessDenied:
                 },
             )
 
-        assert resp.status_code == 403
-        body = resp.json()
-        assert body["detail"] == "Access denied to model: restricted-model"
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        assert "event: stream_error" in resp.text
+        assert '"code": "forbidden"' in resp.text
+        assert '"stopReason": "error"' in resp.text
+        assert "**restricted-model** isn't available to your account" in resp.text
+
+    def test_refusal_is_not_persisted(self):
+        """The refused turn never ran, so neither turn is written to history."""
+        from apis.inference_api.chat.routes import router
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user_trusted] = _make_user
+
+        with patch(
+            "apis.inference_api.chat.routes.get_app_role_service",
+            return_value=_make_app_role_service(can_access=False),
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes.SessionFactory.create_session_manager",
+        ) as create_manager:
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/invocations",
+                json={"session_id": "test-session", "message": "hi", "model_id": "restricted-model"},
+            )
+
+        assert resp.status_code == 200
+        assert '"code": "forbidden"' in resp.text
+        create_manager.assert_not_called()
 
 
 class TestInvocationsAccessAllowed:
@@ -210,7 +244,7 @@ class TestInvocationsNullEmptyModelId:
                 },
             )
 
-        assert resp.status_code != 403
+        assert resp.status_code == 200 and '"code": "forbidden"' not in resp.text
         mock_svc.can_access_model.assert_not_called()
 
     def test_empty_model_id_skips_access_check(self):
@@ -247,7 +281,7 @@ class TestInvocationsNullEmptyModelId:
                 },
             )
 
-        assert resp.status_code != 403
+        assert resp.status_code == 200 and '"code": "forbidden"' not in resp.text
         mock_svc.can_access_model.assert_not_called()
 
 
@@ -292,7 +326,7 @@ class TestInvocationsWildcardAccess:
                 },
             )
 
-        assert resp.status_code != 403
+        assert resp.status_code == 200 and '"code": "forbidden"' not in resp.text
         mock_svc.can_access_model.assert_called_once()
 
 

@@ -15,6 +15,9 @@ export interface McpAppCard {
   producedByMessageIndex?: number | null;
 }
 
+/** Stable empty result so `cardsFor` misses don't churn change detection. */
+const EMPTY_CARDS: readonly McpAppCard[] = Object.freeze([]);
+
 /**
  * Reload hydration for app-initiated tool-call cards (MCP Apps PR #6).
  *
@@ -32,6 +35,14 @@ export interface McpAppCard {
  * calls on conversation change. There is deliberately no `recordLive`:
  * live app-initiated calls already render through the normal tool path
  * (PR #5), so a live card would double-render.
+ *
+ * A card's `toolUseId` is the *originating* tool call — the one that
+ * produced the App's `ui_resource` — not a per-call id (see
+ * `McpAppProxyService.proxyToolCall`). So `byToolUse` groups every action
+ * an App ran back onto the frame that ran them, which is where they
+ * surface: behind the App frame's header, successes collapsed to a single
+ * summary line. Cards whose frame can't render fall back to a standalone
+ * box in the message list.
  */
 @Injectable({ providedIn: 'root' })
 export class McpAppCardStateService {
@@ -45,6 +56,28 @@ export class McpAppCardStateService {
   );
 
   readonly hasCards = computed(() => this.byId().size > 0);
+
+  /**
+   * Cards grouped by the originating tool-use id (the App frame that ran
+   * them), each group oldest-first. Computed once per card change rather
+   * than filtered per frame, so a conversation with many App frames does
+   * one pass instead of one-per-frame.
+   */
+  readonly byToolUse = computed<ReadonlyMap<string, McpAppCard[]>>(() => {
+    const grouped = new Map<string, McpAppCard[]>();
+    for (const card of this.cards()) {
+      const group = grouped.get(card.toolUseId);
+      if (group) group.push(card);
+      else grouped.set(card.toolUseId, [card]);
+    }
+    return grouped;
+  });
+
+  /** Cards run by the App frame with this tool-use id, oldest-first. */
+  cardsFor(toolUseId: string | undefined): readonly McpAppCard[] {
+    if (!toolUseId) return EMPTY_CARDS;
+    return this.byToolUse().get(toolUseId) ?? EMPTY_CARDS;
+  }
 
   /**
    * Seed cards fetched from the app-api list endpoint on conversation

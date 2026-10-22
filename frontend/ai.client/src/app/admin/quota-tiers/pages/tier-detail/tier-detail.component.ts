@@ -3,6 +3,7 @@ import { Router, ActivatedRoute } from '@angular/router';
 import { FormBuilder, FormGroup, FormControl, Validators, ReactiveFormsModule } from '@angular/forms';
 import { QuotaStateService } from '../../services/quota-state.service';
 import { QuotaTierCreate, ActionOnLimit, PeriodType } from '../../models/quota.models';
+import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 interface TierFormGroup {
   tierId: FormControl<string>;
@@ -19,7 +20,7 @@ interface TierFormGroup {
 
 @Component({
   selector: 'app-tier-detail',
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, SpinnerComponent],
   templateUrl: './tier-detail.component.html',
   styleUrl: './tier-detail.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,

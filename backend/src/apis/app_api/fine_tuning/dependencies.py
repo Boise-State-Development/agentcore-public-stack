@@ -5,14 +5,25 @@ import logging
 from fastapi import Depends, HTTPException, status
 from apis.shared.auth import User
 from apis.shared.auth.dependencies import get_current_user_from_session
-from .repository import FineTuningAccessRepository, get_fine_tuning_access_repository
+from .repository import (
+    LEGACY_HOURS_TO_USD,
+    FineTuningAccessRepository,
+    get_fine_tuning_access_repository,
+)
 
 logger = logging.getLogger(__name__)
 
-# Default monthly GPU-hour quota for users without an explicit grant.
+# Default monthly dollar quota for users without an explicit grant.
 # Set to 0 to revert to whitelist-only mode (original behaviour).
-DEFAULT_MONTHLY_QUOTA_HOURS = float(
-    os.environ.get("FINE_TUNING_DEFAULT_QUOTA_HOURS", "0")
+#
+# FINE_TUNING_DEFAULT_QUOTA_HOURS is still read as a fallback so an
+# environment configured before the quota moved to dollars keeps working; its
+# value is converted at the ml.g5.xlarge rate those hours were spent at.
+DEFAULT_MONTHLY_QUOTA_USD = float(
+    os.environ.get("FINE_TUNING_DEFAULT_QUOTA_USD", "0")
+) or (
+    float(os.environ.get("FINE_TUNING_DEFAULT_QUOTA_HOURS", "0"))
+    * LEGACY_HOURS_TO_USD
 )
 
 
@@ -22,7 +33,7 @@ async def require_fine_tuning_access(
 ) -> dict:
     """FastAPI dependency that enforces fine-tuning access.
 
-    Behaviour depends on ``FINE_TUNING_DEFAULT_QUOTA_HOURS``:
+    Behaviour depends on ``FINE_TUNING_DEFAULT_QUOTA_USD``:
 
     * **0 (default / whitelist mode):** Only users with an explicit grant
       in the ``fine-tuning-access`` table are allowed.  Anyone else
@@ -41,17 +52,17 @@ async def require_fine_tuning_access(
         return grant
 
     # No explicit grant exists for this user.
-    if DEFAULT_MONTHLY_QUOTA_HOURS > 0:
+    if DEFAULT_MONTHLY_QUOTA_USD > 0:
         # Open-access mode: auto-provision a grant with the default quota.
         logger.info(
             f"Auto-provisioning fine-tuning access for {user.email} "
-            f"with {DEFAULT_MONTHLY_QUOTA_HOURS}h default quota"
+            f"with ${DEFAULT_MONTHLY_QUOTA_USD:.2f} default quota"
         )
         try:
             new_grant = repo.grant_access(
                 email=user.email,
                 granted_by="system-default",
-                monthly_quota_hours=DEFAULT_MONTHLY_QUOTA_HOURS,
+                monthly_quota_usd=DEFAULT_MONTHLY_QUOTA_USD,
             )
             return new_grant
         except ValueError:

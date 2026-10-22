@@ -21,7 +21,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
       <a
         routerLink="/agents/discover"
         routerLinkActive="bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white"
-        class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+        class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:text-white"
       >
         Discover
       </a>
@@ -29,14 +29,14 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
         routerLink="/agents"
         [routerLinkActiveOptions]="{ exact: true }"
         routerLinkActive="bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white"
-        class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+        class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:text-white"
       >
         My Agents
       </a>
       <a
         routerLink="/agents/pinned"
         routerLinkActive="bg-white text-gray-900 shadow-xs dark:bg-gray-900 dark:text-white"
-        class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+        class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:text-white"
       >
         Pinned
       </a>

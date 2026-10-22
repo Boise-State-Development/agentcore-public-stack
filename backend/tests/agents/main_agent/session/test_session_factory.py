@@ -79,6 +79,7 @@ class TestCloudSessionCreation:
             caching_enabled=True,
             compaction_enabled=None,
             compaction_threshold=None,
+            long_term_memory=True,
         )
 
     @patch("agents.main_agent.session.session_factory.AGENTCORE_MEMORY_AVAILABLE", True)
@@ -110,6 +111,7 @@ class TestCloudSessionCreation:
             caching_enabled=False,
             compaction_enabled=True,
             compaction_threshold=50000,
+            long_term_memory=True,
         )
 
 
@@ -191,7 +193,7 @@ class TestRetrievalThresholdEnvVars:
     def test_uses_default_thresholds(
         self, mock_tbsm, mock_retrieval, mock_mem_config, mock_discover, monkeypatch
     ):
-        """Default relevance_score=0.7 and top_k=10 when env vars not set."""
+        """Default relevance_score=0.4 and top_k=10 when env vars not set."""
         from agents.main_agent.session.session_factory import SessionFactory
 
         monkeypatch.delenv("AGENTCORE_MEMORY_RELEVANCE_SCORE", raising=False)
@@ -204,9 +206,11 @@ class TestRetrievalThresholdEnvVars:
             aws_region="us-west-2", caching_enabled=True,
         )
 
-        assert mock_retrieval.call_count == 3
+        # preferences + facts; the session's own summary namespace is not
+        # retrieved per message unless explicitly re-enabled.
+        assert mock_retrieval.call_count == 2
         for c in mock_retrieval.call_args_list:
-            assert c == call(top_k=10, relevance_score=0.7)
+            assert c == call(top_k=10, relevance_score=0.4)
 
     @patch("agents.main_agent.session.session_factory.AGENTCORE_MEMORY_AVAILABLE", True)
     @patch("agents.main_agent.session.session_factory._discover_strategy_ids")
@@ -229,6 +233,46 @@ class TestRetrievalThresholdEnvVars:
             aws_region="us-west-2", caching_enabled=True,
         )
 
-        assert mock_retrieval.call_count == 3
+        assert mock_retrieval.call_count == 2
         for c in mock_retrieval.call_args_list:
             assert c == call(top_k=20, relevance_score=0.85)
+
+    @patch("agents.main_agent.session.session_factory.AGENTCORE_MEMORY_AVAILABLE", True)
+    @patch("agents.main_agent.session.session_factory._discover_strategy_ids")
+    @patch("agents.main_agent.session.session_factory.AgentCoreMemoryConfig")
+    @patch("agents.main_agent.session.session_factory.RetrievalConfig")
+    @patch("agents.main_agent.session.turn_based_session_manager.TurnBasedSessionManager", create=True)
+    def test_summary_namespace_is_off_by_default_and_opt_in(
+        self, mock_tbsm, mock_retrieval, mock_mem_config, mock_discover, monkeypatch
+    ):
+        """The current session's summary is a second copy of the conversation
+        the model already holds, at a RetrieveMemoryRecords call per message
+        against a 30/s quota — off unless explicitly re-enabled."""
+        from agents.main_agent.session.session_factory import (
+            MEMORY_SUMMARY_RETRIEVAL_ENV,
+            SessionFactory,
+        )
+
+        mock_discover.return_value = ("semantic-1", "pref-1", "sum-1")
+        mock_tbsm.return_value = MagicMock()
+
+        def namespaces():
+            return list(mock_mem_config.call_args.kwargs["retrieval_config"].keys())
+
+        monkeypatch.delenv(MEMORY_SUMMARY_RETRIEVAL_ENV, raising=False)
+        SessionFactory._create_cloud_session_manager(
+            memory_id="mem-1", session_id="s-1", user_id="u-1",
+            aws_region="us-west-2", caching_enabled=True,
+        )
+        assert namespaces() == [
+            "/strategies/pref-1/actors/{actorId}",
+            "/strategies/semantic-1/actors/{actorId}",
+        ]
+
+        monkeypatch.setenv(MEMORY_SUMMARY_RETRIEVAL_ENV, "true")
+        SessionFactory._create_cloud_session_manager(
+            memory_id="mem-1", session_id="s-1", user_id="u-1",
+            aws_region="us-west-2", caching_enabled=True,
+        )
+        assert namespaces()[-1] == "/strategies/sum-1/actors/{actorId}/sessions/{sessionId}"
+        assert len(namespaces()) == 3

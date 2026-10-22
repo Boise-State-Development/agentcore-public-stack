@@ -67,6 +67,31 @@ def require_app_roles(*required_app_roles: str) -> Callable:
     return checker
 
 
+async def has_admin_scope(user: User, scope: str) -> bool:
+    """Whether ``user`` holds ``scope`` — the predicate behind ``require_admin_scope``.
+
+    Exists because one caller needs the *answer* rather than a route guard: the invocation
+    path's reviewer preview (``inference_api.chat.routes``) is a field on an existing
+    request, not a route, so it cannot take a FastAPI dependency. Sharing the predicate is
+    what keeps "who is a marketplace admin" from being answered twice, differently.
+
+    Fails closed, exactly as the dependency does: a permission lookup that raises is a
+    denial, never a default-allow.
+    """
+    from apis.shared.rbac.service import get_app_role_service
+
+    try:
+        permissions = await get_app_role_service().resolve_user_permissions(user)
+    except Exception:
+        logger.exception(
+            f"Failed to resolve admin scope {scope} for {user.name}, denying access"
+        )
+        return False
+    # ``system_admin`` satisfies every scope implicitly — the superuser rule the dependency
+    # applies, restated here rather than reimplemented differently.
+    return "system_admin" in permissions.app_roles or scope in permissions.admin_scopes
+
+
 def require_admin_scope(scope: str) -> Callable:
     """
     Create a dependency guarding one delegated admin surface.
@@ -92,24 +117,9 @@ def require_admin_scope(scope: str) -> Callable:
         HTTPException: 403 if the user holds neither system_admin nor the scope.
     """
     async def checker(user: User = Depends(get_current_user_from_session)) -> User:
-        from apis.shared.rbac.service import get_app_role_service
-
-        try:
-            service = get_app_role_service()
-            permissions = await service.resolve_user_permissions(user)
-
-            if "system_admin" in permissions.app_roles:
-                return user
-
-            if scope in permissions.admin_scopes:
-                logger.debug(
-                    f"User {user.name} authorized for admin scope {scope}"
-                )
-                return user
-        except Exception:
-            logger.exception(
-                f"Failed to resolve admin scope {scope} for {user.name}, denying access"
-            )
+        if await has_admin_scope(user, scope):
+            logger.debug(f"User {user.name} authorized for admin scope {scope}")
+            return user
 
         logger.warning(
             f"User {user.name} (jwt_roles: {user.roles}) denied access — "

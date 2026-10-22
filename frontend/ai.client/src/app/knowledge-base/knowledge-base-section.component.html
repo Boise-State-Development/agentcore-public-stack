@@ -1,15 +1,237 @@
 <!-- Knowledge (card surface — matches the Skills / Memory spaces sections) -->
 <section class="space-y-4 rounded-2xl border border-gray-200/80 bg-white p-5 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80 sm:p-6">
   <div class="flex items-center gap-2">
-    <ng-icon name="heroBookOpen" class="size-5 text-amber-500" aria-hidden="true" />
+    <!-- intentional: decorative section icon (book/knowledge), not a status; no sibling accent in this header to stay distinct from -->
+    <ng-icon name="heroBookOpen" class="size-5 text-state-warning-500" aria-hidden="true" />
     <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Knowledge base</h2>
     @if (webCrawlActive()) {
-      <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2 py-0.5 text-xs/4 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-        <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+      <span class="inline-flex items-center gap-1.5 rounded-full bg-state-info-50 px-2 py-0.5 text-xs/4 font-medium text-state-info-700 dark:bg-state-info-500/10 dark:text-state-info-300">
+        <span class="size-1.5 animate-pulse rounded-full bg-state-info-500"></span>
         Crawling…
       </span>
     }
   </div>
+
+  <!-- ── Knowledge base upgrade (managed-kb-migration, Reqs 21 & 23) ──────
+       Renders nothing at all unless the server says there is something to
+       say. A knowledge base that works needs no UI, so `phase: 'none'` — the
+       default, and what an unreadable status degrades to — produces no badge,
+       banner or prompt (Req 23.1). -->
+
+  @if (showUpgradeOffer()) {
+    <!-- Opt-in offer (Req 23.2). Inline, never modal: it must not interrupt
+         what the user came here to do. -->
+    <div
+      class="rounded-xl border border-primary-200/80 bg-primary-50/60 p-4 dark:border-primary-400/30 dark:bg-primary-950/30"
+    >
+      <div class="flex items-start gap-3">
+        <ng-icon
+          name="heroSparkles"
+          class="mt-0.5 size-5 shrink-0 text-primary-accessible dark:text-primary-accessible-dark"
+          aria-hidden="true"
+        />
+        <div class="min-w-0 flex-1">
+          <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
+            A faster knowledge base is available
+          </h3>
+          <!-- Only benefits the §13 benchmark actually measured. No speculative
+               claims, and the continuity promise stated plainly because it is
+               the thing users hesitate over. -->
+          <p class="mt-1 text-sm/6 text-gray-700 dark:text-gray-300">
+            Upgrading moves your documents to newer storage that returns more accurate
+            answers and handles large files better. Your knowledge base keeps working
+            normally while the upgrade runs, and you can leave this page at any time.
+          </p>
+          <button
+            type="button"
+            class="mt-3 inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm/5 font-medium text-white shadow-xs transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60"
+            [disabled]="upgradeBusy()"
+            (click)="startUpgrade()"
+          >
+            @if (upgradeBusy()) {
+              <ng-icon name="heroArrowPath" class="size-4 animate-spin" aria-hidden="true" />
+              Starting…
+            } @else {
+              Upgrade knowledge base
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (showUpgradeProgress()) {
+    <!-- Non-blocking progress (Req 23.3). `aria-live="polite"` so a screen
+         reader is told of progress without having focus yanked mid-task. -->
+    <div
+      class="rounded-xl border border-state-info-200/80 bg-state-info-50/60 p-4 dark:border-state-info-400/30 dark:bg-state-info-950/30"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="flex items-start gap-3">
+        <ng-icon
+          name="heroArrowPath"
+          class="mt-0.5 size-5 shrink-0 animate-spin text-state-info-600 dark:text-state-info-400"
+          aria-hidden="true"
+        />
+        <div class="min-w-0 flex-1">
+          <p class="text-sm/6 font-medium text-gray-900 dark:text-white">
+            {{ upgradeProgressLabel() }}
+          </p>
+          <p class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+            Your knowledge base is still answering questions. You can safely leave this
+            page — the upgrade continues on its own.
+          </p>
+          <!-- Bar is decorative; the text above carries the same information,
+               so it is hidden from assistive tech rather than duplicated. -->
+          <div
+            class="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-state-info-200/70 dark:bg-state-info-900/60"
+            aria-hidden="true"
+          >
+            <div
+              class="h-full rounded-full bg-state-info-600 transition-[width] duration-500 dark:bg-state-info-400"
+              [style.width.%]="upgradeProgressPercent()"
+            ></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (showUpgradeNotice()) {
+    <!-- One-time dismissible notice (Req 23.4). Explicitly NOT a permanent
+         badge: once dismissed it never returns. -->
+    <div
+      class="flex items-start gap-3 rounded-xl border border-state-success-200/80 bg-state-success-50/60 p-4 dark:border-state-success-400/30 dark:bg-state-success-950/30"
+      role="status"
+    >
+      <ng-icon
+        name="heroCheckCircle"
+        class="mt-0.5 size-5 shrink-0 text-state-success-600 dark:text-state-success-400"
+        aria-hidden="true"
+      />
+      <p class="min-w-0 flex-1 text-sm/6 text-gray-800 dark:text-gray-200">
+        <span class="font-semibold text-gray-900 dark:text-white">Upgrade complete.</span>
+        Your knowledge base is now on the faster storage. Nothing else changes — your
+        documents and answers are where you left them.
+      </p>
+      <button
+        type="button"
+        class="-m-1 shrink-0 rounded-md p-1 text-gray-500 hover:bg-state-success-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-success-600 dark:text-gray-400 dark:hover:bg-state-success-900/40 dark:hover:text-gray-200"
+        (click)="dismissUpgradeNotice()"
+        aria-label="Dismiss upgrade confirmation"
+      >
+        <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+      </button>
+    </div>
+  }
+
+  @if (showUpgradeFailure()) {
+    <!-- Failure (Req 23.5): plain-language reason, a retry, and an explicit
+         statement that the knowledge base still works. Never a dead end. -->
+    <div
+      class="rounded-xl border border-state-warning-200/80 bg-state-warning-50/60 p-4 dark:border-state-warning-400/30 dark:bg-state-warning-950/30"
+      role="alert"
+    >
+      <div class="flex items-start gap-3">
+        <ng-icon
+          name="heroExclamationTriangle"
+          class="mt-0.5 size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400"
+          aria-hidden="true"
+        />
+        <div class="min-w-0 flex-1">
+          <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
+            The upgrade did not finish
+          </h3>
+          <p class="mt-1 text-sm/6 text-gray-700 dark:text-gray-300">
+            {{ upgradeStatus()?.reason }}
+          </p>
+          <p class="mt-1 text-sm/6 text-gray-700 dark:text-gray-300">
+            Your knowledge base was not changed and is working normally.
+          </p>
+          @if (upgradeStatus()?.canUpgrade) {
+            <button
+              type="button"
+              class="mt-3 inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/5 font-medium text-gray-800 shadow-xs hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-warning-600 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+              [disabled]="upgradeBusy()"
+              (click)="retryUpgrade()"
+            >
+              @if (upgradeBusy()) {
+                <ng-icon name="heroArrowPath" class="size-4 animate-spin" aria-hidden="true" />
+                Restarting…
+              } @else {
+                <ng-icon name="heroArrowPath" class="size-4" aria-hidden="true" />
+                Try the upgrade again
+              }
+            </button>
+          }
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (showStrandedDocuments()) {
+    <!-- Documents that will not be carried across (Req 21.1–21.4).
+         Shown BEFORE the user commits, because the choice to fix them or
+         accept the loss is theirs. 95 of these in production are failures
+         whose owners believe the upload worked. -->
+    <div
+      class="rounded-xl border border-gray-200/80 bg-gray-50/80 p-4 dark:border-gray-700/60 dark:bg-gray-900/40"
+    >
+      <button
+        type="button"
+        class="flex w-full items-start gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+        (click)="toggleStrandedDocuments()"
+        [attr.aria-expanded]="strandedExpanded()"
+        aria-controls="stranded-documents"
+      >
+        <ng-icon
+          name="heroExclamationTriangle"
+          class="mt-0.5 size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400"
+          aria-hidden="true"
+        />
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm/6 font-semibold text-gray-900 dark:text-white">
+            {{ strandedDocuments().length }}
+            {{ strandedDocuments().length === 1 ? 'document' : 'documents' }} will not be
+            carried across
+          </span>
+          <span class="mt-0.5 block text-sm/6 text-gray-600 dark:text-gray-400">
+            These never finished processing, so they are not currently searchable either.
+            {{ strandedExpanded() ? 'Hide details' : 'Show details' }}
+          </span>
+        </span>
+      </button>
+
+      @if (strandedExpanded()) {
+        <ul id="stranded-documents" class="mt-3 space-y-2.5 border-t border-gray-200 pt-3 dark:border-gray-700">
+          @for (doc of strandedDocuments(); track doc.documentId) {
+            <li class="text-sm/6">
+              <p class="flex flex-wrap items-baseline gap-x-2">
+                <span class="font-medium break-all text-gray-900 dark:text-white">
+                  {{ doc.filename }}
+                </span>
+                <span class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  {{ strandedHeading(doc.kind) }}
+                </span>
+              </p>
+              <!-- Server-authored copy: the unsupported-format vs
+                   processing-failure distinction (Req 21.4) is decided
+                   server-side against the ingestion pipeline's own format
+                   list, so the two can never disagree. -->
+              <p class="mt-0.5 text-gray-600 dark:text-gray-400">{{ doc.message }}</p>
+              @if (doc.retryable) {
+                <p class="mt-0.5 text-gray-600 dark:text-gray-400">
+                  To fix it, upload the file again using
+                  <span class="font-medium">Add files</span> above.
+                </p>
+              }
+            </li>
+          }
+        </ul>
+      }
+    </div>
+  }
 
   <!-- Single hidden file input shared by both the inline "Add files"
        button and the empty-state drop zone label. Two labels can
@@ -22,6 +244,16 @@
     class="sr-only"
     (change)="onFileSelected($event)"
     accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
+  />
+  <!-- Picker for "Replace with a newer version". Its accept list is set to
+       the original's extension each time it opens (see startReplace). -->
+  <input
+    #replaceInput
+    type="file"
+    class="sr-only"
+    tabindex="-1"
+    aria-hidden="true"
+    (change)="onReplaceFilePicked($event)"
   />
 
   <!-- File Upload -->
@@ -41,7 +273,7 @@
       <!-- Device upload sits first — the most-common action. -->
       <label
         for="file-upload"
-        class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
       >
         <ng-icon name="heroPlus" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
         Add files
@@ -50,7 +282,7 @@
       <button
         type="button"
         (click)="openWebSourceDialog()"
-        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
       >
         <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
         Add web content
@@ -82,10 +314,10 @@
             type="button"
             (click)="openOrConnect(source)"
             [disabled]="busy"
-            class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             @if (busy && connectPhase() === 'initiating') {
-              <div class="size-4 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+              <app-spinner size="sm" label="Starting" />
               Starting…
             } @else if (busy && connectPhase() === 'awaiting') {
               <ng-icon name="heroArrowPath" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
@@ -98,7 +330,7 @@
               }
               @if (source.connected) {
                 {{ source.displayName }}
-                <span class="size-1.5 shrink-0 rounded-full bg-emerald-500" title="Connected"></span>
+                <span class="size-1.5 shrink-0 rounded-full bg-state-success-500" title="Connected"></span>
               } @else {
                 Connect to {{ source.displayName }}
               }
@@ -140,23 +372,23 @@
             <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ upload.progress }}%</span>
           }
           @if (upload.status === 'complete') {
-            <span class="text-xs/5 text-green-600 dark:text-green-400">Complete</span>
+            <span class="text-xs/5 text-state-success-700 dark:text-state-success-400">Complete</span>
           }
           @if (upload.status === 'error') {
-            <span class="text-xs/5 text-red-600 dark:text-red-400">Error</span>
+            <span class="text-xs/5 text-state-danger-600 dark:text-state-danger-400">Error</span>
           }
         </div>
       </div>
       @if (upload.status === 'uploading') {
         <div class="h-2 w-full rounded-full bg-gray-200 dark:bg-gray-700">
           <div
-            class="h-2 rounded-full bg-blue-600 transition-all duration-300 dark:bg-blue-500"
+            class="h-2 rounded-full bg-primary-500 transition-all duration-300"
             [style.width.%]="upload.progress"
           ></div>
         </div>
       }
       @if (upload.status === 'error' && upload.error) {
-        <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">{{ upload.error }}</p>
+        <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ upload.error }}</p>
       }
     </div>
   }
@@ -198,13 +430,13 @@
                 <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ crawl.fetchedCount }} page{{ crawl.fetchedCount === 1 ? '' : 's' }}</span>
                 @if (crawl.status === 'running') {
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
-                  <span class="inline-flex items-center gap-1.5 text-xs/5 font-medium text-blue-600 dark:text-blue-400">
-                    <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+                  <span class="inline-flex items-center gap-1.5 text-xs/5 font-medium text-state-info-600 dark:text-state-info-400">
+                    <span class="size-1.5 animate-pulse rounded-full bg-state-info-500"></span>
                     Crawling…
                   </span>
                 } @else if (crawl.status === 'failed') {
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
-                  <span class="text-xs/5 font-medium text-red-600 dark:text-red-400">Crawl failed</span>
+                  <span class="text-xs/5 font-medium text-state-danger-600 dark:text-state-danger-400">Crawl failed</span>
                 }
                 @if (isCrawlSyncable(crawl)) {
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
@@ -234,7 +466,7 @@
               (click)="removeWebSource(crawl)"
               title="Remove web source"
               [attr.aria-label]="'Remove ' + crawl.rootUrl"
-              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
             >
               <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
             </button>
@@ -247,21 +479,78 @@
   <!-- Uploaded Documents List -->
   @if (uploadedDocuments().length > 0) {
     <div>
-      <h3 class="mb-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Uploaded Documents</h3>
+      <div class="mb-2 flex items-center gap-2">
+        <h3 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Uploaded Documents</h3>
+        @if (showEngineBadge()) {
+          <!-- Engine visibility (task 16.4, HANDOFF §6): names which backend
+               serves this knowledge base. This feature's whole risk profile is
+               silent regressions, so "Managed" vs "Classic" is surfaced rather
+               than left readable only in the KB record. -->
+          <span
+            class="inline-flex items-center rounded-full px-2 py-0.5 text-xs/4 font-medium"
+            [class.bg-gray-100]="isManagedEngine()"
+            [class.text-primary-accessible]="isManagedEngine()"
+            [class.dark:bg-gray-700]="isManagedEngine()"
+            [class.dark:text-primary-50]="isManagedEngine()"
+            [class.bg-gray-100]="!isManagedEngine()"
+            [class.text-gray-600]="!isManagedEngine()"
+            [class.dark:bg-gray-700]="!isManagedEngine()"
+            [class.dark:text-gray-300]="!isManagedEngine()"
+            [title]="
+              isManagedEngine()
+                ? 'This knowledge base is served by the managed engine.'
+                : 'This knowledge base is served by the classic engine.'
+            "
+          >
+            {{ engineBadgeLabel() }}
+          </span>
+        }
+      </div>
+      @if (showUsageBar()) {
+        <!-- KB storage usage (byte-cap visibility, Requirement 12.11). Managed
+             KBs are byte-capped, so the bar shows usage against the binding cap
+             and moves green→yellow→red as it fills. A legacy KB is uncapped, so
+             it shows only what is stored and stays green. Both arrive on the
+             documents-list response (kbUsage), so there is no extra request. -->
+        <div class="mb-3">
+          <div class="mb-1 flex items-center justify-between text-xs/5 text-gray-600 dark:text-gray-400">
+            <span>{{ kbUsageLabel() }}</span>
+            @if (kbHasCap()) {
+              <span class="tabular-nums">{{ kbUsagePercentLabel() }}</span>
+            }
+          </div>
+          <div
+            class="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700"
+            role="progressbar"
+            [attr.aria-valuenow]="kbHasCap() ? kbUsedBytes() : null"
+            [attr.aria-valuemin]="0"
+            [attr.aria-valuemax]="kbUsage()?.cap ?? null"
+            [attr.aria-label]="kbUsageLabel()"
+          >
+            <div
+              class="h-full rounded-full transition-all"
+              [class.bg-state-success-500]="kbUsageLevel() === 'green'"
+              [class.bg-state-warning-500]="kbUsageLevel() === 'yellow'"
+              [class.bg-state-danger-500]="kbUsageLevel() === 'red'"
+              [style.width]="kbUsageBarWidth()"
+            ></div>
+          </div>
+        </div>
+      }
       <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
-        @for (doc of uploadedDocuments(); track doc.documentId) {
+        @for (doc of displayedDocuments(); track doc.documentId) {
           <li class="flex items-start gap-3 px-3 py-2.5 sm:px-4">
             <div class="flex min-w-0 flex-1 items-start gap-3">
               @if (doc.status === 'complete') {
-                <svg class="mt-0.5 size-5 shrink-0 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <svg class="mt-0.5 size-5 shrink-0 text-state-success-600 dark:text-state-success-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                 </svg>
               } @else if (doc.status === 'failed') {
-                <svg class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <svg class="mt-0.5 size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                 </svg>
               } @else if (pollingDocuments().has(doc.documentId)) {
-                <div class="mt-0.5 size-5 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+                <app-spinner size="md" label="Processing" />
               } @else {
                 <svg class="mt-0.5 size-5 shrink-0 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
@@ -273,21 +562,29 @@
                   <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ formatBytes(doc.sizeBytes) }}</span>
                   <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
                   <span
-                    class="text-xs/5 font-medium capitalize"
-                    [class.text-blue-600]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
-                    [class.dark:text-blue-400]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
-                    [class.text-green-600]="doc.status === 'complete'"
-                    [class.dark:text-green-400]="doc.status === 'complete'"
-                    [class.text-red-600]="doc.status === 'failed'"
-                    [class.dark:text-red-400]="doc.status === 'failed'"
+                    class="text-xs/5 font-medium"
+                    [class.text-state-info-600]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
+                    [class.dark:text-state-info-400]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
+                    [class.text-state-success-700]="doc.status === 'complete'"
+                    [class.dark:text-state-success-400]="doc.status === 'complete'"
+                    [class.text-state-danger-600]="doc.status === 'failed'"
+                    [class.dark:text-state-danger-400]="doc.status === 'failed'"
                     [class.text-gray-500]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
                     [class.dark:text-gray-400]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
                   >
-                    {{ doc.status }}
+                    {{ statusLabel(doc.status) }}
                   </span>
                   @if (doc.chunkCount) {
                     <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
                     <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ doc.chunkCount }} chunks</span>
+                  }
+                  @if (replace.activeOldId() === doc.documentId) {
+                    <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
+                    <span role="status" class="text-xs/5 font-medium text-state-info-600 dark:text-state-info-400">Replacing…</span>
+                  }
+                  @if (replace.replacementFor(doc.documentId)) {
+                    <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
+                    <span class="text-xs/5 text-gray-500 dark:text-gray-400">New version of the file above</span>
                   }
                   @if (canManageSync() && isDriveSyncable(doc) && reconnectLabelForDocument(doc); as provider) {
                     <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
@@ -295,7 +592,7 @@
                   }
                 </div>
                 @if (doc.status === 'failed' && doc.errorMessage) {
-                  <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ doc.errorMessage }}</p>
+                  <p class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ doc.errorMessage }}</p>
                 }
                 <!-- "Keep in sync" — only for documents imported from
                      an external connector (device uploads have no
@@ -320,20 +617,42 @@
             @if (doc.status === 'complete') {
               <button
                 type="button"
+                (click)="viewExtractedContent(doc)"
+                title="View extracted content"
+                [attr.aria-label]="'View the content extracted from ' + doc.filename"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-primary-50"
+              >
+                <ng-icon name="heroMagnifyingGlass" class="size-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
                 (click)="downloadDocument(doc.documentId)"
                 title="Download document"
                 [attr.aria-label]="'Download ' + doc.filename"
-                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-primary-50"
               >
                 <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
+              </button>
+            }
+            @if (canReplace(doc)) {
+              <button
+                type="button"
+                (click)="startReplace(doc)"
+                [disabled]="replaceDisabled()"
+                title="Replace with a newer version"
+                [attr.aria-label]="'Replace ' + doc.filename"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-primary-50"
+              >
+                <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
               </button>
             }
             <button
               type="button"
               (click)="deleteDocument(doc.documentId)"
+              [disabled]="replace.isBusy(doc.documentId)"
               title="Delete document"
               [attr.aria-label]="'Delete ' + doc.filename"
-              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
             >
               <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
             </button>

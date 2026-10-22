@@ -74,6 +74,12 @@ Two consequences worth writing down:
 1. **Don't "fix" content capture.** It isn't broken. Setting
    `OTEL_SEMCONV_STABILITY_OPT_IN` tokens to chase span events would change the
    emission shape out from under a path that already works.
+   *Superseded 2026-09-25:* the inference-api image now sets
+   `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_unredacted_attributes=`, so these log
+   records carry `[REDACTED]` instead of messages. The shape is unchanged, so
+   the collector still finds them, but the judge has nothing to read. An
+   environment that turns on eval sampling must override the variable on the
+   Runtime (see `feedback_eval_sampling_enabled`).
 2. The runtime log group name is the AWS-suffixed one
    (`…_agentcore_runtime-Z6D3HsHKs6-DEFAULT`), not the prefix-derived name.
    Querying the wrong one returns zero rows rather than an error — the same

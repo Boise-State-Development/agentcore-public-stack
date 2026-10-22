@@ -6,7 +6,15 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 # Type alias for document processing status
-DocumentStatus = Literal["uploading", "chunking", "embedding", "complete", "failed", "deleting"]
+#
+# 'provisioning' is the leading status a born-managed first upload carries while
+# its Bedrock knowledge base is being created (MANAGED_KB_NEW_DEFAULT). It is
+# non-terminal and non-retrievable — the retrieval facade serves only 'complete' —
+# so it can never answer a question from a knowledge base that does not exist yet.
+# 'chunking'/'embedding' are written only by the legacy S3-Vectors pipeline.
+DocumentStatus = Literal[
+    "provisioning", "uploading", "chunking", "embedding", "complete", "failed", "deleting"
+]
 
 
 @dataclass(frozen=True)
@@ -61,11 +69,20 @@ class Document(BaseModel):
     source_file_id: Optional[str] = Field(None, alias="sourceFileId", description="Provider-side opaque file identifier")
     source_etag: Optional[str] = Field(None, alias="sourceEtag", description="Provider-side version stamp at import time")
     imported_by_user_id: Optional[str] = Field(None, alias="importedByUserId", description="User whose credentials imported the file")
+    # Who put the document here, on every create path (shared-projects §9.5): the
+    # uploader, the importer, or whoever started the crawl or sync that fetched it.
+    # Null on documents created before it was recorded.
+    added_by_user_id: Optional[str] = Field(None, alias="addedByUserId", description="User who added the document")
     # Sync bookkeeping — populated only when the document is covered by a
     # SyncPolicy (scheduled re-index from source).
     content_hash: Optional[str] = Field(None, alias="contentHash", description="SHA-256 of the last-ingested raw bytes (change-detection second gate)")
     last_synced_at: Optional[str] = Field(None, alias="lastSyncedAt", description="ISO 8601 timestamp of last successful sync run")
     sync_policy_id: Optional[str] = Field(None, alias="syncPolicyId", description="Back-pointer to the covering SyncPolicy (UI badges)")
+    removed_from_source: Optional[bool] = Field(
+        None,
+        alias="removedFromSource",
+        description="Set by a drive_folder sync when the file left its folder; the document is kept",
+    )
 
 
 class CreateDocumentRequest(BaseModel):
@@ -112,6 +129,36 @@ class DocumentResponse(BaseModel):
     source_file_id: Optional[str] = Field(None, alias="sourceFileId", description="Provider-side opaque file identifier")
     sync_policy_id: Optional[str] = Field(None, alias="syncPolicyId", description="Back-pointer to the covering SyncPolicy")
     last_synced_at: Optional[str] = Field(None, alias="lastSyncedAt", description="ISO 8601 timestamp of last successful sync run")
+    removed_from_source: Optional[bool] = Field(
+        None, alias="removedFromSource", description="A folder sync found the file no longer in its folder"
+    )
+
+
+class KbUsage(BaseModel):
+    """Storage usage for the assistant's knowledge base, for the UI usage bar.
+
+    Only managed knowledge bases are byte-capped (Requirement 12.11). A managed
+    KB reports its committed and in-flight reserved bytes and the binding cap —
+    ``effective_cap``, the smaller of the owner tier and the per-KB ceiling. A
+    legacy (S3-Vectors) KB is uncapped and tracks no bytes, so it reports
+    ``cap=None`` with zeroed counters and the UI renders an uncapped indicator.
+
+    ``elevated`` is READ from the KB record's ``elevatedByteCap`` flag; granting
+    the elevated tier is a separate feature and nothing writes it here.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    engine: str = Field(..., description="Engine serving this KB: 'managed' or 's3vectors'")
+    stored_bytes: int = Field(0, alias="storedBytes", description="Bytes committed to the KB")
+    reserved_bytes: int = Field(
+        0, alias="reservedBytes", description="Bytes reserved by in-flight uploads"
+    )
+    cap: Optional[int] = Field(
+        None,
+        description="Binding byte cap (min of owner tier and per-KB ceiling); null for uncapped legacy KBs",
+    )
+    elevated: bool = Field(False, description="Whether the elevated owner tier applies")
 
 
 class DocumentsListResponse(BaseModel):
@@ -121,6 +168,11 @@ class DocumentsListResponse(BaseModel):
 
     documents: List[DocumentResponse] = Field(..., description="List of documents for the assistant")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
+    kb_usage: Optional[KbUsage] = Field(
+        None,
+        alias="kbUsage",
+        description="Storage usage + cap for the assistant's knowledge base; null when not resolved",
+    )
 
 
 class DownloadUrlResponse(BaseModel):
@@ -177,3 +229,46 @@ class ImportDocumentsResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     documents: List[DocumentResponse] = Field(..., description="Created document records, each in 'uploading' state")
+
+
+class ExtractedChunkResponse(BaseModel):
+    """One passage as the knowledge base actually holds it.
+
+    ``text`` is the FULL extracted text, deliberately not truncated. The existing
+    per-answer citation trace caps excerpts at 500 characters, which is exactly why it
+    cannot serve this purpose: a flattened table's damage is usually past the cut, so a
+    truncated excerpt of a mangled table reads like a fine excerpt of a fine table.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: str = Field(..., description="Full extracted text of this chunk, untruncated")
+    order: int = Field(..., description="Position in the returned set — NOT the document's own order")
+    score: Optional[float] = Field(None, description="Relevance as the backend reported it; higher is better")
+    page: Optional[int] = Field(None, description="Page number when the backend supplied one; never inferred")
+
+
+class ExtractedChunksResponse(BaseModel):
+    """What the knowledge base extracted from one document.
+
+    ``available`` is false, with a ``reason``, for a document the inspector cannot
+    show — a classic knowledge base cannot scope a retrieval to a single document. The
+    shape is identical either way so the client never branches on the engine.
+
+    ``capReached`` is honesty rather than a paging hint. Bedrock exposes no
+    chunk-enumeration API, so a complete set is never guaranteed and the UI must say
+    "up to N" instead of implying the document has exactly N chunks.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    documentId: str = Field(..., description="Document identifier", alias="documentId")
+    fileName: str = Field(..., description="Original filename", alias="fileName")
+    engine: str = Field(..., description="Engine serving this knowledge base: 'managed' or 's3vectors'")
+    available: bool = Field(..., description="False when this engine cannot show a single document's chunks")
+    reason: Optional[str] = Field(None, description="Owner-facing explanation when available is false")
+    chunks: List[ExtractedChunkResponse] = Field(default_factory=list, description="The chunks returned, unordered")
+    returned: int = Field(0, description="How many chunks are in this response")
+    capReached: bool = Field(
+        False, description="True when the per-call ceiling was hit, so more chunks may exist", alias="capReached"
+    )

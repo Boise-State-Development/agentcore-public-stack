@@ -1,15 +1,28 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { ConfigService } from '../../../../../../services/config.service';
+import {
+  downloadUrlFor,
+  uploadIdFromHref,
+} from '../../../../../../shared/utils/file-download-url';
+import { FilePreviewStateService } from '../../../../../services/file-preview/file-preview-state.service';
+import { isPreviewableFilename } from '../../../../../services/file-preview/file-preview.model';
 
 /**
  * Payload for the file_download inline visual, produced by the office document
- * tools (create_word_document, create_excel_spreadsheet, ...). download_url is
- * a short-lived presigned S3 GET URL whose response forces
- * Content-Disposition: attachment, so a plain click downloads the file (no new
- * tab / navigation needed).
+ * tools (create_word_document, create_excel_spreadsheet, ...) and by
+ * workspace_write.
+ *
+ * `upload_id` is the current contract; the card resolves it to the durable
+ * `/files/{uploadId}/download` route, which mints a presigned URL per click.
+ * `download_url` is the legacy field — a presigned S3 URL that expired an hour
+ * after the message was written — and is kept only so cards already persisted
+ * in old conversations still work: the upload id is recovered from the S3 key
+ * and routed the same way.
  */
 interface FileDownloadPayload {
   filename: string;
-  download_url: string;
+  upload_id?: string;
+  download_url?: string;
   size_kb?: string;
 }
 
@@ -30,15 +43,15 @@ const PRESENTATION_ICON =
 
 const WORD_STYLE: FileKindStyle = {
   iconPath: DOCUMENT_ICON,
-  badgeClass: 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400',
+  badgeClass: 'bg-filetype-doc-50 text-filetype-doc-700 dark:bg-filetype-doc-900/30 dark:text-filetype-doc-400',
 };
 const EXCEL_STYLE: FileKindStyle = {
   iconPath: SPREADSHEET_ICON,
-  badgeClass: 'bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400',
+  badgeClass: 'bg-filetype-sheet-50 text-filetype-sheet-700 dark:bg-filetype-sheet-900/30 dark:text-filetype-sheet-400',
 };
 const POWERPOINT_STYLE: FileKindStyle = {
   iconPath: PRESENTATION_ICON,
-  badgeClass: 'bg-orange-50 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400',
+  badgeClass: 'bg-filetype-presentation-50 text-filetype-presentation-700 dark:bg-filetype-presentation-900/30 dark:text-filetype-presentation-400',
 };
 const GENERIC_STYLE: FileKindStyle = {
   iconPath: DOCUMENT_ICON,
@@ -105,13 +118,44 @@ function styleForFilename(filename: string): FileKindStyle {
           }
         </div>
 
+        <!-- Preview: only for formats the docked pane can render, and
+             only when an upload id resolved (a malformed legacy card
+             still gets its download link). -->
+        @if (f.previewable && f.uploadId; as uploadId) {
+          <button
+            type="button"
+            class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-300 px-3.5 py-1.5
+                   text-sm/5 font-semibold text-gray-700 transition-colors
+                   hover:bg-gray-50
+                   focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
+                   dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+            (click)="preview(uploadId, f.filename)"
+          >
+            <svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+              />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+              />
+            </svg>
+            <span>Preview</span>
+          </button>
+        }
+
         <!-- Download button -->
         <a
-          class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary-500 px-3.5 py-1.5
+          class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-1.5
                  text-sm/5 font-semibold text-white! no-underline! transition-colors
-                 hover:bg-primary-700
+                 hover:brightness-95
                  focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-          [href]="f.download_url"
+          [href]="f.href"
           [attr.download]="f.filename"
           rel="noopener noreferrer"
         >
@@ -133,17 +177,40 @@ export class FileDownloadRendererComponent {
   /** The payload data from the backend tool result. */
   payload = input.required<unknown>();
 
+  private readonly config = inject(ConfigService);
+  private readonly filePreview = inject(FilePreviewStateService);
+
   /** Narrowed, validated payload with resolved icon styling (null when malformed). */
-  file = computed<(FileDownloadPayload & FileKindStyle) | null>(() => {
+  file = computed<
+    | (FileDownloadPayload &
+        FileKindStyle & { href: string; uploadId: string | null; previewable: boolean })
+    | null
+  >(() => {
     const raw = this.payload();
     if (!raw || typeof raw !== 'object') return null;
     const p = raw as Partial<FileDownloadPayload>;
-    if (!p.filename || !p.download_url) return null;
+    if (!p.filename) return null;
+
+    const appApiUrl = this.config.appApiUrl();
+    // Legacy cards carry only an expired presigned S3 URL; the upload id
+    // is still recoverable from its key, and preview needs the id rather
+    // than the link, so resolve it once and derive both from it.
+    const uploadId = p.upload_id ?? (p.download_url ? uploadIdFromHref(p.download_url) : null);
+    const href = uploadId ? downloadUrlFor(appApiUrl, uploadId) : null;
+    if (!href) return null;
+
     return {
       filename: p.filename,
-      download_url: p.download_url,
+      href,
+      uploadId,
+      previewable: isPreviewableFilename(p.filename),
       size_kb: p.size_kb,
       ...styleForFilename(p.filename),
     };
   });
+
+  /** Open the docked preview pane on this file. */
+  protected preview(uploadId: string, filename: string): void {
+    this.filePreview.open({ uploadId, filename });
+  }
 }

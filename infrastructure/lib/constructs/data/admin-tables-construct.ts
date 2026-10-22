@@ -16,6 +16,13 @@ export interface AdminTablesConstructProps {
  *   - UserMenuLinksTable   — admin-managed links rendered in the SPA
  *                            user menu (fixed PK `USER_MENU_LINKS`,
  *                            SK `LINK#<uuid>`)
+ *   - AnnouncementsTable   — admin-authored feature announcements
+ *                            (fixed PK `ANNOUNCEMENTS`, SK
+ *                            `ANNOUNCEMENT#<uuid>`) *and* the per-user
+ *                            acknowledgement rows (PK `USER#<id>`, SK
+ *                            `ACK#<announcementId>#R<revision>`). The acks
+ *                            are why this table — alone among its siblings —
+ *                            has a TTL attribute.
  *   - SystemPromptsTable   — admin-managed catalog of custom system
  *                            prompts ("Conversation Modes"). PK
  *                            `PROMPT#<uuid>`, SK `METADATA`. Users
@@ -25,7 +32,9 @@ export interface AdminTablesConstructProps {
 export class AdminTablesConstruct extends Construct {
   public readonly userSettingsTable: dynamodb.Table;
   public readonly userMenuLinksTable: dynamodb.Table;
+  public readonly announcementsTable: dynamodb.Table;
   public readonly systemPromptsTable: dynamodb.Table;
+  public readonly agentTemplatesTable: dynamodb.Table;
 
   constructor(
     scope: Construct,
@@ -58,8 +67,36 @@ export class AdminTablesConstruct extends Construct {
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
+    this.announcementsTable = new dynamodb.Table(this, 'AnnouncementsTable', {
+      tableName: getResourceName(config, 'announcements'),
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      // Acknowledgement rows carry a `ttl` so the per-user partition stays
+      // bounded forever without a sweeper. Announcement rows never set it,
+      // and a compliance-bearing ack deliberately clears it.
+      timeToLiveAttribute: 'ttl',
+    });
+
     this.systemPromptsTable = new dynamodb.Table(this, 'SystemPromptsTable', {
       tableName: getResourceName(config, 'system-prompts'),
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // Agent templates: admin-managed catalog of curated starting points for new
+    // agents. PK `TEMPLATE#<template_id>`, SK `METADATA`. Read by the public
+    // `/templates` endpoint (create-agent picker) and admin CRUD. No GSI — the
+    // catalog is small, so listing is a Scan (mirrors SystemPromptsTable).
+    this.agentTemplatesTable = new dynamodb.Table(this, 'AgentTemplatesTable', {
+      tableName: getResourceName(config, 'agent-templates'),
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -83,6 +120,13 @@ export class AdminTablesConstruct extends Construct {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    new ssm.StringParameter(this, 'AnnouncementsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/admin/announcements-table-name`,
+      stringValue: this.announcementsTable.tableName,
+      description: 'Announcements table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
     // System prompts: name + arn published. The arn parameter is consumed
     // by restore tooling and ad-hoc IAM scoping; runtime services use
     // typed construct refs through PlatformComputeRefs and don't read
@@ -98,6 +142,21 @@ export class AdminTablesConstruct extends Construct {
       parameterName: `/${config.projectPrefix}/admin/system-prompts-table-arn`,
       stringValue: this.systemPromptsTable.tableArn,
       description: 'System prompts DynamoDB table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Agent templates: name + arn published, mirroring system prompts.
+    new ssm.StringParameter(this, 'AgentTemplatesTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/admin/agent-templates-table-name`,
+      stringValue: this.agentTemplatesTable.tableName,
+      description: 'Agent templates DynamoDB table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'AgentTemplatesTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/admin/agent-templates-table-arn`,
+      stringValue: this.agentTemplatesTable.tableArn,
+      description: 'Agent templates DynamoDB table ARN',
       tier: ssm.ParameterTier.STANDARD,
     });
 

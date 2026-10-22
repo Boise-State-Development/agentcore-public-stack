@@ -10,9 +10,8 @@ Gating: the router is mounted unconditionally but every route depends on
 behaves as if unmounted while the feature ships incrementally. Auth is the standard SPA
 cookie dependency per the CLAUDE.md app-api rule.
 
-Deliberately excluded in Phase 1: ``test-chat`` (the only reason the assistants router is
-on the architecture import-boundary allow-list — aliasing it would force a second
-exception) and document sub-routes. Those stay on ``/assistants/*``. ``GET /agents`` lists
+Deliberately excluded in Phase 1: the document sub-routes, which stay on
+``/assistants/*``. ``GET /agents`` lists
 the caller's own + shared-with-them agents; ``include_public``/pagination parity is a
 Phase-4 concern when the Designer consumes it.
 """
@@ -32,6 +31,7 @@ from fastapi import (
     status,
 )
 
+from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
 from apis.app_api.agent_designer.services.bindable_catalog import (
     BINDABLE_KINDS,
     list_bindable,
@@ -39,6 +39,7 @@ from apis.app_api.agent_designer.services.bindable_catalog import (
 from apis.app_api.agent_designer.services.agent_detail import (
     resolve_capabilities,
     resolve_listing_display,
+    resolve_model_retirement,
     resolve_runnability,
 )
 from apis.app_api.agent_designer.services.binding_validation import (
@@ -56,6 +57,7 @@ from apis.shared.assistants.models import (
     CreateAssistantRequest,
     ShareAssistantRequest,
     ShareEntry,
+    ShareSkillExposureResponse,
     UnshareAssistantRequest,
     UpdateAssistantRequest,
     UpdateSharePermissionRequest,
@@ -65,12 +67,13 @@ from apis.shared.assistants.version_resolution import (
     resolve_display_agent,
 )
 from apis.shared.assistants.service import (
+    PROJECT_HARNESS_EDIT_MESSAGE,
     assistant_exists,
     create_assistant,
     create_assistant_draft,
     AssistantListedError,
-    delete_assistant,
     get_assistant_with_access_check,
+    is_project_harness,
     list_assistant_shares,
     list_shared_with_user,
     list_user_assistants,
@@ -99,6 +102,7 @@ from apis.app_api.agent_designer.services.pin_service import (
     unpin_agent,
 )
 from apis.app_api.agent_designer.services.report_service import ReportError, file_report
+from apis.app_api.agent_designer.services.share_disclosure import skills_exposed_by_sharing
 from apis.app_api.agent_designer.services.store_service import (
     browse_all,
     browse_category,
@@ -236,6 +240,8 @@ async def create_agent_endpoint(
             emoji=request.emoji,
             bindings=request.bindings,
             model_settings=request.model_settings,
+            show_citations=request.show_citations,
+            allow_document_download=request.allow_document_download,
         )
         return _agent_response(assistant, permission="owner")
     except Exception as e:
@@ -340,8 +346,8 @@ async def list_bindable_endpoint(
 ):
     """RBAC-filtered catalog of bindable primitives of ``kind`` for the caller (D4).
 
-    The Designer palette: each picker fetches ``?kind=model|tool|skill|knowledge_base|
-    memory_space`` and shows only what the user's role enables. Composes the existing
+    The Designer palette: each picker fetches ``?kind=model|tool|skill|knowledge_base``
+    and shows only what the user's role enables. Composes the existing
     per-primitive access services (see ``bindable_catalog``).
     """
     if kind not in BINDABLE_KINDS:
@@ -355,7 +361,7 @@ async def list_bindable_endpoint(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error listing bindable '{kind}': {e}", exc_info=True)
+        logger.error(f"Error listing bindable '{scrub_log(kind)}': {scrub_log(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list bindable '{kind}': {str(e)}")
 
 
@@ -381,7 +387,8 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
         if not await assistant_exists(agent_id):
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
         assistant, permission = await get_assistant_with_access_check(
-            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email,
+            resolve_public_share=True,
         )
         if not assistant:
             raise HTTPException(status_code=403, detail="Access denied: you do not have permission to access this agent")
@@ -409,6 +416,10 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
             capabilities, model_label = await resolve_capabilities(assistant, current_user)
             response.capabilities = capabilities
             response.model_label = model_label
+            if assistant.model_settings is not None:
+                response.model_retirement = await resolve_model_retirement(
+                    assistant.model_settings.model_id
+                )
             response.publisher, response.category_label = await resolve_listing_display(assistant)
         except Exception:
             logger.warning(f"Failed to resolve capabilities for agent {scrub_log(agent_id)}", exc_info=True)
@@ -465,10 +476,17 @@ async def update_agent_endpoint(
             raise HTTPException(status_code=403, detail="You do not have permission to edit this agent")
         if permission == "editor" and request.visibility is not None and request.visibility != assistant.visibility:
             raise HTTPException(status_code=400, detail="Only the owner can change agent visibility")
+        # A project's harness is edited only through the project, which versions every save.
+        if is_project_harness(assistant):
+            raise HTTPException(status_code=409, detail=PROJECT_HARNESS_EDIT_MESSAGE)
 
         try:
             await validate_agent_write(
-                current_user, bindings=request.bindings, model_settings=request.model_settings
+                current_user,
+                bindings=request.bindings,
+                model_settings=request.model_settings,
+                existing_bindings=assistant.bindings,
+                existing_model_settings=assistant.model_settings,
             )
         except BindingValidationError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -487,6 +505,8 @@ async def update_agent_endpoint(
             image_url=request.image_url,
             bindings=request.bindings,
             model_settings=request.model_settings,
+            show_citations=request.show_citations,
+            allow_document_download=request.allow_document_download,
         )
         if not updated:
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
@@ -500,9 +520,11 @@ async def update_agent_endpoint(
 
 @router.delete("/{agent_id}", status_code=204)
 async def delete_agent_endpoint(agent_id: str, current_user: User = Depends(require_agents_enabled)):
-    """Delete an Agent (owner only)."""
+    """Delete an Agent (owner only) and everything it owns: documents, sync policies and its
+    managed knowledge base (``agent_deletion.delete_owned_agent``). This route used to
+    delete only the record, and it is the one the Agents page calls."""
     try:
-        deleted = await delete_assistant(agent_id, current_user.user_id)
+        deleted = await delete_owned_agent(agent_id, current_user.user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
     except HTTPException:
@@ -589,6 +611,37 @@ async def get_agent_shares_endpoint(agent_id: str, current_user: User = Depends(
         raise HTTPException(status_code=500, detail=f"Failed to get agent shares: {str(e)}")
 
 
+@router.get("/{agent_id}/shares/exposed-skills", response_model=ShareSkillExposureResponse)
+async def get_agent_share_exposure_endpoint(
+    agent_id: str, current_user: User = Depends(require_agents_enabled)
+):
+    """The skills the owner wrote that sharing this Agent hands over (§6/D7, owner only).
+
+    The share dialog's disclosure: invoke-through lets anyone with access use — and read —
+    the owner's own bound skills. Owner-only like the share mutations it accompanies; an
+    editor cannot widen who has the Agent, so there is nothing for them to be warned about.
+    Gated on the Agent surface alone, not the marketplace flag: sharing works without it.
+    """
+    try:
+        assistant, permission = await resolve_assistant_permission(
+            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+        )
+        if not assistant:
+            raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+        if permission != "owner":
+            raise HTTPException(
+                status_code=403, detail="Only the owner can see what sharing this agent exposes"
+            )
+        return ShareSkillExposureResponse(
+            agent_id=agent_id, exposed_skills=await skills_exposed_by_sharing(assistant)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving agent share exposure: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to resolve share exposure: {str(e)}")
+
+
 # ------------------------------------------------------------------- marketplace (D2)
 # The author's half of the listing lifecycle. The reviewer's half lives under
 # /admin/agents/* behind require_admin.
@@ -599,7 +652,7 @@ async def agent_listing_preflight_endpoint(
     """What the submit dialog needs before the author commits (D7, owner only).
 
     A read-only rehearsal of the submit checks: the skills publication would expose, the
-    memory-space block if there is one, and whether the author still has to consent to
+    project-harness block if there is one, and whether the author still has to consent to
     going public. Declared before ``/listing/submit`` only for reading order — the paths
     are literal and do not collide.
     """
@@ -629,8 +682,7 @@ async def submit_agent_listing_endpoint(
 ):
     """Submit an Agent for marketplace review (owner only).
 
-    Runs the D7 checks first: a ``memory_space`` binding rejects the submission with 400,
-    and the response enumerates the author's own skills that publication would make
+    Runs the D7 checks first; the response enumerates the author's own skills that publication would make
     readable to anyone who runs the Agent.
     """
     try:

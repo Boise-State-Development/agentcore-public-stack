@@ -7,6 +7,7 @@ import {
   TopUserCost,
   SystemCostSummary,
   ModelUsageSummary,
+  PlatformCostSummary,
   TierUsageSummary,
   CostTrend,
   DashboardRequestOptions,
@@ -15,6 +16,9 @@ import {
   TopSessionsResponse,
   TrendsRequestOptions,
   SessionCostAnatomy,
+  SessionProfile,
+  UserSessionsRequestOptions,
+  UserSessionsResponse,
 } from '../models';
 
 /**
@@ -131,6 +135,24 @@ export class AdminCostHttpService {
   }
 
   /**
+   * Get all-in platform cost: our inference ledger plus the AWS
+   * infrastructure bill, with a per-service breakdown.
+   *
+   * Reads pre-synced rows only — the backend never calls Cost Explorer on
+   * this path (CE bills $0.01 per request), so this is as cheap as any other
+   * dashboard call and safe to refetch on every period change.
+   */
+  getPlatformCosts(period?: string): Observable<PlatformCostSummary> {
+    let params = new HttpParams();
+
+    if (period) {
+      params = params.set('period', period);
+    }
+
+    return this.http.get<PlatformCostSummary>(`${this.baseUrl()}/platform`, { params });
+  }
+
+  /**
    * Get cost breakdown by quota tier.
    * Returns usage statistics per tier, including users at limit.
    */
@@ -164,6 +186,49 @@ export class AdminCostHttpService {
   getSessionCostAnatomy(sessionId: string): Observable<SessionCostAnatomy> {
     return this.http.get<SessionCostAnatomy>(
       `${this.baseUrl()}/sessions/${encodeURIComponent(sessionId)}/calls`
+    );
+  }
+
+  /**
+   * One user's conversations, content-free, for the admin user page.
+   *
+   * `period` scopes which sessions are listed and supplies the share
+   * denominator; each row's cost is the conversation's lifetime cost.
+   * `allTime` lists everything (period is then ignored server-side).
+   */
+  getUserSessions(
+    userId: string,
+    options: UserSessionsRequestOptions = {},
+  ): Observable<UserSessionsResponse> {
+    let params = new HttpParams();
+
+    if (options.period) {
+      params = params.set('period', options.period);
+    }
+    if (options.allTime !== undefined) {
+      params = params.set('allTime', options.allTime);
+    }
+    if (options.sort) {
+      params = params.set('sort', options.sort);
+    }
+    if (options.limit !== undefined) {
+      params = params.set('limit', options.limit);
+    }
+
+    return this.http.get<UserSessionsResponse>(
+      `${this.baseUrl()}/users/${encodeURIComponent(userId)}/sessions`,
+      { params },
+    );
+  }
+
+  /**
+   * The content-free diagnostic profile of one session — attachments,
+   * context trajectory, model mix, fingerprint churn, tool census and the
+   * diagnoses that fired. 404 when the session has no metadata row.
+   */
+  getSessionProfile(sessionId: string): Observable<SessionProfile> {
+    return this.http.get<SessionProfile>(
+      `${this.baseUrl()}/sessions/${encodeURIComponent(sessionId)}/profile`,
     );
   }
 

@@ -3,17 +3,18 @@
 from pydantic import BaseModel, Field
 from typing import List
 from apis.app_api.fine_tuning.models import FineTuningAccessGrant
+from apis.app_api.fine_tuning.repository import DEFAULT_QUOTA_USD
 
 
 class GrantAccessRequest(BaseModel):
     """Request body for granting fine-tuning access."""
     email: str
-    monthly_quota_hours: float = Field(default=10.0, gt=0)
+    monthly_quota_usd: float = Field(default=DEFAULT_QUOTA_USD, gt=0)
 
 
 class UpdateQuotaRequest(BaseModel):
-    """Request body for updating a user's GPU-hour quota."""
-    monthly_quota_hours: float = Field(gt=0)
+    """Request body for updating a user's monthly dollar quota."""
+    monthly_quota_usd: float = Field(gt=0)
 
 
 class AccessListResponse(BaseModel):

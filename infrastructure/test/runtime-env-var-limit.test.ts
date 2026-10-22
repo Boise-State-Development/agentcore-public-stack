@@ -41,16 +41,20 @@ describe('AgentCore Runtime environment variable ceiling', () => {
     // minimal config under-counts and the guard would report headroom that no
     // real environment has. `tokenExchange` alone adds three
     // (TOKEN_EXCHANGE_URL / _CLIENT_ID / _SECRET_ID) — without it this test
-    // counts 47 while prod and dev deploy 50. Any future conditional block
+    // counts 44 while prod and dev deploy 47. Any future conditional block
     // must be enabled here too, or this guard quietly stops guarding.
     const config = createMockConfig({
       domainName: 'example.com',
       infrastructureHostedZoneDomain: 'example.com',
       certificateArn: cert,
       frontend: { cloudFrontPriceClass: 'PriceClass_100', certificateArn: cert },
-      artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
+      artifacts: {
+        shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
       mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
-      fineTuning: {},
+      fineTuning: {
+        enabled: true,
+        defaultQuotaHours: 0,
+      },
       tokenExchange: {
         url: 'https://tokens.example.com/v2/oauth/token',
         clientId: 'test-client',

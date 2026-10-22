@@ -18,6 +18,10 @@ describe('ToolService', () => {
   const mockResponse: ToolsResponse = { tools: mockTools, categories: ['search', 'code'], appRolesApplied: ['user'] };
 
   async function setup() {
+    await setupWith(mockResponse);
+  }
+
+  async function setupWith(response: ToolsResponse) {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
@@ -32,7 +36,7 @@ describe('ToolService', () => {
 
     // Flush microtasks so constructor's async loadTools() makes the HTTP call
     await vi.waitFor(() => {
-      httpMock.expectOne('http://localhost:8000/tools/').flush(mockResponse);
+      httpMock.expectOne('http://localhost:8000/tools/').flush(response);
     });
   }
 
@@ -59,10 +63,23 @@ describe('ToolService', () => {
       expect(service.error()).toBeTruthy();
     });
 
-    it('should not load if already loading', async () => {
-      service['_loading'].set(true);
-      await service.loadTools();
+    it('dedupes a concurrent load to one request, and joins it rather than returning early', async () => {
+      // Was: "should not load if already loading" — a second caller returned
+      // immediately, with `tools()` still empty. Concurrency is still deduped
+      // to one request, but the second caller now waits for the answer.
+      const first = service.loadTools();
+      let listWasEmptyOnResolve: boolean | null = null;
+      const second = service.loadTools().then(() => {
+        listWasEmptyOnResolve = service.tools().length === 0;
+      });
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/tools/').flush(mockResponse);
+      });
+      await Promise.all([first, second]);
+
       httpMock.expectNone('http://localhost:8000/tools/');
+      expect(listWasEmptyOnResolve).toBe(false);
     });
   });
 
@@ -117,6 +134,36 @@ describe('ToolService', () => {
       service.lockToAgentTools([]);
       expect(service.agentLocked()).toBe(true);
       expect(service.enabledToolIds()).toEqual([]);
+    });
+  });
+
+  describe('a project that binds no tools', () => {
+    // search-web is admin-pinned here; code-interp is only the member's own pick.
+    beforeEach(() =>
+      setupWith({
+        ...mockResponse,
+        tools: mockTools.map(t => (t.toolId === 'search-web' ? { ...t, alwaysOn: true } : t)),
+      }),
+    );
+
+    it("keeps the admin's always-on tools and drops the member's picks", () => {
+      service.lockToAgentTools([], { keepAlwaysOn: true });
+      expect(service.agentLocked()).toBe(true);
+      expect(service.enabledToolIds()).toEqual(['search-web']);
+      expect(service.visibleTools().map(t => t.toolId)).toEqual(['search-web']);
+      expect(service.isToolShownEnabled(service.getTool('code-interp')!)).toBe(false);
+    });
+
+    it('an ordinary empty lock still leaves the pinned tools out', () => {
+      service.lockToAgentTools([]);
+      expect(service.enabledToolIds()).toEqual([]);
+    });
+
+    it('a later lock without the option forgets it', () => {
+      service.lockToAgentTools([], { keepAlwaysOn: true });
+      service.clearAgentLock();
+      service.lockToAgentTools(['code-interp']);
+      expect(service.enabledToolIds()).toEqual(['code-interp']);
     });
   });
 
@@ -264,6 +311,77 @@ describe('ToolService', () => {
       });
       await promise;
       expect(service.getTool('gmail')?.isEnabled).toBe(false);
+      expect(service.enabledToolIds()).toEqual([]);
+    });
+  });
+
+  // The first-turn race (#1160): a chat turn sent while the constructor's
+  // `/tools/` fetch is still in flight used to be assembled from an empty list,
+  // so turn 1 and turn 2 carried different `enabled_tools` — a rewritten
+  // `toolConfig` prefix, paid at the cache-write premium.
+  describe('load gating', () => {
+    function configureOnly() {
+      TestBed.configureTestingModule({
+        providers: [
+          provideHttpClient(),
+          provideHttpClientTesting(),
+          ToolService,
+          { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
+        ],
+      });
+      service = TestBed.inject(ToolService);
+      httpMock = TestBed.inject(HttpTestingController);
+    }
+
+    it('ensureLoaded joins the constructor load instead of resolving early', async () => {
+      configureOnly();
+
+      let listWasEmptyOnResolve: boolean | null = null;
+      const gate = service.ensureLoaded().then(() => {
+        listWasEmptyOnResolve = service.tools().length === 0;
+      });
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/tools/').flush(mockResponse);
+      });
+      await gate;
+
+      expect(listWasEmptyOnResolve).toBe(false);
+      expect(service.enabledToolIds()).toEqual(['search-web', 'code-interp']);
+    });
+
+    it('does not issue a second request while the constructor load is in flight', async () => {
+      configureOnly();
+
+      const both = Promise.all([service.ensureLoaded(), service.loadTools()]);
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/tools/').flush(mockResponse);
+      });
+      await both;
+
+      httpMock.verify();
+    });
+
+    it('ensureLoaded is a no-op once loaded', async () => {
+      await setup();
+
+      await service.ensureLoaded();
+
+      httpMock.verify();
+      expect(service.enabledToolIds()).toEqual(['search-web', 'code-interp']);
+    });
+
+    it('ensureLoaded resolves rather than rejecting when the load fails', async () => {
+      configureOnly();
+
+      const gate = service.ensureLoaded();
+      await vi.waitFor(() => {
+        httpMock
+          .expectOne('http://localhost:8000/tools/')
+          .error(new ProgressEvent('error'));
+      });
+
+      await expect(gate).resolves.toBeUndefined();
       expect(service.enabledToolIds()).toEqual([]);
     });
   });

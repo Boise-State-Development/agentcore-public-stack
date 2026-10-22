@@ -538,6 +538,7 @@ class TestToDict:
             "inference_params",
             "mantle_api_mode",
             "mantle_region",
+            "text_only",
         }
 
 
@@ -582,9 +583,6 @@ class TestFromParams:
 class TestRetryConfigDefaults:
     """Validates: Requirement 2.1"""
 
-    def test_default_boto_max_attempts(self, retry_config: RetryConfig):
-        assert retry_config.boto_max_attempts == 3
-
     def test_default_sdk_max_attempts(self, retry_config: RetryConfig):
         assert retry_config.sdk_max_attempts == 4
 
@@ -593,9 +591,6 @@ class TestRetryConfigDefaults:
 
     def test_default_sdk_max_delay(self, retry_config: RetryConfig):
         assert retry_config.sdk_max_delay == 16.0
-
-    def test_default_boto_retry_mode(self, retry_config: RetryConfig):
-        assert retry_config.boto_retry_mode == "standard"
 
     def test_default_connect_timeout(self, retry_config: RetryConfig):
         assert retry_config.connect_timeout == 5
@@ -609,11 +604,6 @@ class TestRetryConfigDefaults:
 # ---------------------------------------------------------------------------
 class TestRetryConfigFromEnvWithVars:
     """Validates: Requirement 2.2"""
-
-    def test_from_env_reads_boto_max_attempts(self, monkeypatch):
-        monkeypatch.setenv("RETRY_BOTO_MAX_ATTEMPTS", "10")
-        cfg = RetryConfig.from_env()
-        assert cfg.boto_max_attempts == 10
 
     def test_from_env_reads_sdk_max_attempts(self, monkeypatch):
         monkeypatch.setenv("RETRY_SDK_MAX_ATTEMPTS", "7")
@@ -630,11 +620,6 @@ class TestRetryConfigFromEnvWithVars:
         cfg = RetryConfig.from_env()
         assert cfg.sdk_max_delay == 30.0
 
-    def test_from_env_reads_boto_mode(self, monkeypatch):
-        monkeypatch.setenv("RETRY_BOTO_MODE", "adaptive")
-        cfg = RetryConfig.from_env()
-        assert cfg.boto_retry_mode == "adaptive"
-
     def test_from_env_reads_connect_timeout(self, monkeypatch):
         monkeypatch.setenv("RETRY_CONNECT_TIMEOUT", "15")
         cfg = RetryConfig.from_env()
@@ -647,8 +632,6 @@ class TestRetryConfigFromEnvWithVars:
 
     def test_from_env_reads_all_vars(self, monkeypatch):
         """Set all env vars at once and verify the full config."""
-        monkeypatch.setenv("RETRY_BOTO_MAX_ATTEMPTS", "5")
-        monkeypatch.setenv("RETRY_BOTO_MODE", "legacy")
         monkeypatch.setenv("RETRY_CONNECT_TIMEOUT", "10")
         monkeypatch.setenv("RETRY_READ_TIMEOUT", "60")
         monkeypatch.setenv("RETRY_SDK_MAX_ATTEMPTS", "6")
@@ -657,8 +640,6 @@ class TestRetryConfigFromEnvWithVars:
 
         cfg = RetryConfig.from_env()
 
-        assert cfg.boto_max_attempts == 5
-        assert cfg.boto_retry_mode == "legacy"
         assert cfg.connect_timeout == 10
         assert cfg.read_timeout == 60
         assert cfg.sdk_max_attempts == 6
@@ -676,8 +657,6 @@ class TestRetryConfigFromEnvDefaults:
         """When no RETRY_* env vars are set, from_env returns default values."""
         # Ensure none of the retry env vars are present
         for var in (
-            "RETRY_BOTO_MAX_ATTEMPTS",
-            "RETRY_BOTO_MODE",
             "RETRY_CONNECT_TIMEOUT",
             "RETRY_READ_TIMEOUT",
             "RETRY_SDK_MAX_ATTEMPTS",
@@ -689,8 +668,6 @@ class TestRetryConfigFromEnvDefaults:
         cfg = RetryConfig.from_env()
         default = RetryConfig()
 
-        assert cfg.boto_max_attempts == default.boto_max_attempts
-        assert cfg.boto_retry_mode == default.boto_retry_mode
         assert cfg.connect_timeout == default.connect_timeout
         assert cfg.read_timeout == default.read_timeout
         assert cfg.sdk_max_attempts == default.sdk_max_attempts

@@ -1,0 +1,17 @@
+{
+  "name": "echarts-stub",
+  "version": "5.6.0",
+  "description": "Build-time stand-in for echarts, substituted into pptx-preview. Version tracks the range pptx-preview asks for (^5.5.1) so npm ls does not report the tree as invalid; it carries no echarts code. See README.md.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  }
+}

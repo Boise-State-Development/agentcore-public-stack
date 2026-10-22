@@ -12,6 +12,7 @@ const mockJob: JobResponse = {
   email: 'test@example.com',
   model_id: 'model-1',
   model_name: 'Test Model',
+  task_type: 'text-classification',
   status: 'TRAINING',
   dataset_s3_key: 's3://bucket/data.jsonl',
   output_s3_prefix: null,
@@ -28,6 +29,7 @@ const mockJob: JobResponse = {
   error_message: null,
   max_runtime_seconds: 86400,
   training_progress: 45,
+  use_spot: false,
 };
 
 function createMockState() {

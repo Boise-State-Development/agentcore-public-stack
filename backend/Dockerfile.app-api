@@ -1,12 +1,24 @@
 # Multi-stage build for App API
-# Pin base image to digest for reproducible builds
-FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d AS builder
+# Pin base image to digest for reproducible builds. Pulled from ECR Public's
+# mirror of the Docker Official Image (same digest): Docker Hub's anonymous
+# pull limit 429s GitHub-hosted runners and blocked the deploy.
+FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d AS builder
 
 # Install uv (pinned to specific version for reproducibility)
 COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /uvx /bin/
 
 # Set working directory
 WORKDIR /app
+
+# Compile every installed package to bytecode at build time. uv skips this by
+# default, so the venv shipped with no .pyc files and every task that started
+# from this image parsed the whole dependency tree (fastapi, boto3, strands,
+# ...) on its first request. Unlike inference-api this is a long-lived ECS
+# service, so the cost is paid per task start — deploys, scale-out, and Fargate
+# task replacement — not per session. The final stage ships /app/.venv and
+# /app/src root-owned, so the runtime user cannot write .pyc at all: baking them
+# in at build time is the only place the bytecode can live.
+ENV UV_COMPILE_BYTECODE=1
 
 # Install system dependencies needed for any native builds
 RUN apt-get update && apt-get install -y \
@@ -33,7 +45,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra agentcore --no-dev --no-editable
 
 # Production stage
-FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
+FROM public.ecr.aws/docker/library/python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 WORKDIR /app
 
@@ -42,18 +54,31 @@ RUN apt-get update && apt-get install -y \
     curl=8.14.1-2+deb13u* \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the virtual environment from builder
-COPY --from=builder /app/.venv /app/.venv
+# Create the non-root user up front so the writable directory below can be
+# handed to it without a recursive chown. A trailing `chown -R appuser /app`
+# rewrites every file it touches into a fresh layer, so /app used to ship TWICE
+# — 313MB of duplicate before this image carried bytecode, 454MB after.
+RUN useradd -m -u 1000 -s /bin/bash appuser
 
-# Copy application code
+# Code and dependencies ship ROOT-OWNED. appuser can read and execute them and
+# cannot modify them, so a process that is compromised at runtime cannot
+# rewrite its own source or drop a backdoor into site-packages.
+#
+# This is only possible because nothing writes into the source tree any more.
+# It used to: main.py resolved base_dir from __file__ (landing in /app/src/apis)
+# and os.makedirs() there on every startup to back a set of StaticFiles mounts.
+# That whole local-output mechanism was dead and has been deleted — generated
+# output goes to S3. backend/tests/architecture/test_source_tree_not_written.py
+# is the regression guard; if it fails, this image stops booting.
+COPY --from=builder /app/.venv /app/.venv
 COPY backend/src /app/src
 
-# Create necessary directories
-RUN mkdir -p /app/output /app/uploads /app/generated_images
-
-# Create non-root user for security
-RUN useradd -m -u 1000 -s /bin/bash appuser && \
-    chown -R appuser:appuser /app
+# Precompile our own source the same way the venv was (see UV_COMPILE_BYTECODE
+# above). `-q` keeps the layer log quiet; a syntax error still fails the build,
+# which is the right time to learn about it. Runs as root, before USER, because
+# /app/src is no longer writable by appuser — which is the point: the .pyc are
+# baked now and can never be rewritten at runtime.
+RUN python -m compileall -q /app/src
 
 # Switch to non-root user
 USER appuser

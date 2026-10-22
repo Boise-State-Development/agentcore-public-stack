@@ -17,6 +17,9 @@ import {
   LogsResponse,
   DownloadResponse,
   HuggingFaceModelResult,
+  DEFAULT_TASK_TYPE,
+  FineTuningTaskType,
+  TaskTypeResponse,
 } from '../models/fine-tuning.models';
 
 /**
@@ -40,18 +43,34 @@ export class FineTuningHttpService {
 
   // ── Model Catalog ───────────────────────────────────────────────────
 
-  /** List available base models for fine-tuning. */
-  listModels(): Observable<AvailableModel[]> {
-    return this.http.get<AvailableModel[]>(`${this.baseUrl()}/models`);
+  /** List available base models, optionally narrowed to one task type. */
+  listModels(taskType?: FineTuningTaskType): Observable<AvailableModel[]> {
+    const params = taskType ? { params: { task_type: taskType } } : {};
+    return this.http.get<AvailableModel[]>(`${this.baseUrl()}/models`, params);
+  }
+
+  /** List the fine-tuning task types the platform supports. */
+  listTaskTypes(): Observable<TaskTypeResponse[]> {
+    return this.http.get<TaskTypeResponse[]>(`${this.baseUrl()}/task-types`);
   }
 
   // ── HuggingFace Model Search ────────────────────────────────────────
 
   /** Search HuggingFace Hub models via backend proxy. */
-  searchHuggingFaceModels(query: string, compatibleOnly: boolean = true): Observable<HuggingFaceModelResult[]> {
+  searchHuggingFaceModels(
+    query: string,
+    compatibleOnly: boolean = true,
+    taskType: FineTuningTaskType = DEFAULT_TASK_TYPE,
+  ): Observable<HuggingFaceModelResult[]> {
     return this.http.get<HuggingFaceModelResult[]>(
       `${this.baseUrl()}/huggingface-models`,
-      { params: { search: query, compatible_only: compatibleOnly.toString() } },
+      {
+        params: {
+          search: query,
+          compatible_only: compatibleOnly.toString(),
+          task_type: taskType,
+        },
+      },
     );
   }
 

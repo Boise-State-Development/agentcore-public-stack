@@ -161,25 +161,6 @@ class CognitoService:
         )
         logger.info(f"Added user {username} to Cognito group: {group_name}")
 
-    def disable_self_signup(self) -> None:
-        """
-        Disable self-signup on the User Pool by setting
-        AllowAdminCreateUserOnly=true.
-
-        Only updates AdminCreateUserConfig; the existing password policy
-        (configured by CDK) is preserved.
-        """
-        if not self._enabled:
-            raise RuntimeError("Cognito service is not enabled")
-
-        self._client.update_user_pool(
-            UserPoolId=self._user_pool_id,
-            AdminCreateUserConfig={
-                "AllowAdminCreateUserOnly": True,
-            },
-        )
-        logger.info("Disabled self-signup on Cognito User Pool")
-
 
 # Singleton instance
 _cognito_service: Optional[CognitoService] = None

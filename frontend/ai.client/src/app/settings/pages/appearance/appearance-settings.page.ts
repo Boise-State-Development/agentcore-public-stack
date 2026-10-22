@@ -42,7 +42,7 @@ import { ThemeService, ThemePreference } from '../../../components/topnav/compon
                 type="button"
                 (click)="setTheme(option.value)"
                 [class]="themeService.preference() === option.value
-                  ? 'ring-2 ring-blue-600 dark:ring-blue-500'
+                  ? 'ring-2 ring-primary-600 dark:ring-primary-500'
                   : 'ring-1 ring-gray-200 dark:ring-white/10 hover:ring-gray-300 dark:hover:ring-white/20'"
                 class="relative flex flex-col items-center gap-3 rounded-lg p-4 transition-all"
               >
@@ -64,7 +64,7 @@ import { ThemeService, ThemePreference } from '../../../components/topnav/compon
                 </div>
 
                 @if (themeService.preference() === option.value) {
-                  <div class="absolute right-2 top-2 flex size-5 items-center justify-center rounded-full bg-blue-600 dark:bg-blue-500">
+                  <div class="absolute right-2 top-2 flex size-5 items-center justify-center rounded-full bg-primary-accessible">
                     <ng-icon name="heroCheck" class="size-3 text-white" />
                   </div>
                 }

@@ -7,6 +7,8 @@ enforcement, and consistent error handling. Importable from ``app_api``,
 
 from apis.shared.security.url_validator import (
     UrlValidationError,
+    is_forbidden_address,
+    is_forbidden_ip_literal,
     validate_external_url,
 )
 from apis.shared.security.ownership import (
@@ -30,6 +32,8 @@ from apis.shared.security.log_sanitize import scrub_log
 
 __all__ = [
     "UrlValidationError",
+    "is_forbidden_address",
+    "is_forbidden_ip_literal",
     "validate_external_url",
     "OwnershipError",
     "require_session_owner",

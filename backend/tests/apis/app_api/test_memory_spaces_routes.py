@@ -424,7 +424,10 @@ class TestExport:
     def _open_zip(self, resp) -> zipfile.ZipFile:
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/zip"
-        assert 'filename="My-Brain.zip"' in resp.headers["content-disposition"]
+        # The ASCII `filename` is derived from the real space name (spaces are
+        # legal in a quoted-string); the archive's internal folder keeps the
+        # stricter `_safe_component` slug.
+        assert 'filename="My Brain.zip"' in resp.headers["content-disposition"]
         return zipfile.ZipFile(io.BytesIO(resp.content))
 
     def test_owner_export_layout_and_contents(self, service, monkeypatch):
@@ -481,6 +484,46 @@ class TestExport:
         monkeypatch.setenv("MEMORY_SPACES_ENABLED", "false")
         assert client.get(f"/memory/spaces/{sid}/export").status_code == 404
 
+    @pytest.mark.parametrize(
+        "name,expected_star,expected_ascii",
+        [
+            # Emoji — outside latin-1 entirely.
+            ("Research \U0001f9e0 Notes", "Research%20%F0%9F%A7%A0%20Notes.zip", "Research _ Notes.zip"),
+            # CJK — the ASCII fallback has nothing left to keep.
+            ("研究ノート", "%E7%A0%94%E7%A9%B6%E3%83%8E%E3%83%BC%E3%83%88.zip", "download.zip"),
+            # U+202F narrow no-break space (what macOS puts in screenshot
+            # names) and a curly quote — both latin-1 unencodable, both easy
+            # to paste into a space name without noticing.
+            ("Phil’s Space", "Phil%E2%80%99s%E2%80%AFSpace.zip", "Phil_s_Space.zip"),
+        ],
+    )
+    def test_export_non_latin1_name_downloads_with_real_name(
+        self, service, monkeypatch, name, expected_star, expected_ascii
+    ):
+        """A name Starlette cannot latin-1 encode must not 500 the download.
+
+        Before the shared helper the header was an f-string over the space
+        name, so writing the response raised `UnicodeEncodeError` and the user
+        got a 500 instead of their zip. The real name now rides `filename*`.
+        """
+        client = _client(service, monkeypatch, user=OWNER)
+        sid = client.post("/memory/spaces", json={"name": name}).json()["spaceId"]
+
+        resp = client.get(f"/memory/spaces/{sid}/export")
+
+        assert resp.status_code == 200
+        cd = resp.headers["content-disposition"]
+        # The wire bytes are latin-1 by the time we read them back, which is
+        # the regression this pins.
+        cd.encode("latin-1")
+        assert f"filename*=UTF-8''{expected_star}" in cd
+        assert f'filename="{expected_ascii}"' in cd
+        # And the payload is a real, readable archive.
+        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        assert any(n.endswith("/metadata.json") for n in zf.namelist())
+        meta = json.loads(zf.read(next(n for n in zf.namelist() if n.endswith("metadata.json"))))
+        assert meta["name"] == name
+
     def test_export_sanitizes_hostile_slug(self, service, monkeypatch):
         client = _client(service, monkeypatch, user=OWNER)
         sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
@@ -495,3 +538,129 @@ class TestExport:
         zf = zipfile.ZipFile(io.BytesIO(resp.content))
         assert all(not n.startswith("..") and "/../" not in n for n in zf.namelist())
         assert "X/entries/fact/evil.md" in zf.namelist()
+
+
+class TestSavePipelineAndHistory:
+    """Shared Projects 2.3: validation, token accounting and FILEVER history."""
+
+    def test_freeform_save_reports_version_tokens_and_warnings(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        first = client.put(f"/memory/spaces/{sid}/entries/a", json={"body": "see [[nowhere]]"})
+        assert first.status_code == 200
+        body = first.json()
+        assert (body["version"], body["tokensMethod"]) == (1, "estimate")
+        assert body["tokens"] > 0
+        assert any("nowhere" in w for w in body["warnings"])
+        client.put(f"/memory/spaces/{sid}/entries/a", json={"body": "v2"})
+
+        history = client.get(f"/memory/spaces/{sid}/history", params={"slug": "a"})
+        assert history.status_code == 200
+        assert [v["version"] for v in history.json()["versions"]] == [2, 1]
+        old = client.get(f"/memory/spaces/{sid}/history/1", params={"slug": "a"})
+        assert old.status_code == 200
+        assert (old.json()["content"], old.json()["reason"]) == ("see [[nowhere]]", "edit")
+        assert client.get(f"/memory/spaces/{sid}/history/7", params={"slug": "a"}).status_code == 404
+        assert client.get(f"/memory/spaces/{sid}/history", params={"slug": "ghost"}).status_code == 404
+
+    def test_the_index_slug_is_reserved(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        resp = client.put(f"/memory/spaces/{sid}/entries/MEMORY.md", json={"body": "x"})
+        assert resp.status_code == 400
+        assert "space index" in resp.json()["detail"]
+
+    def test_canonical_space_round_trip(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        created = client.post("/memory/spaces", json={"name": "P", "fileFormat": "canonical"})
+        assert created.status_code == 201 and created.json()["fileFormat"] == "canonical"
+        sid = created.json()["spaceId"]
+        assert client.get(f"/memory/spaces/{sid}").json()["fileFormat"] == "canonical"
+
+        saved = client.put(
+            f"/memory/spaces/{sid}/entries/canvas",
+            json={"body": "- one\n- two\n", "description": "Canvas notes", "aliases": ["lms"]},
+        )
+        assert saved.status_code == 200
+        body = saved.json()
+        assert (body["itemCount"], body["aliases"], body["description"]) == (2, ["lms"], "Canvas notes")
+        assert len(body["mintedAnchors"]) == 2
+
+        # Omitting description and aliases keeps them.
+        text = client.get(f"/memory/spaces/{sid}/entries/canvas").json()["content"]
+        again = client.put(f"/memory/spaces/{sid}/entries/canvas", json={"body": text + "- three\n"})
+        assert again.status_code == 200
+        assert (again.json()["description"], again.json()["aliases"], again.json()["version"]) == (
+            "Canvas notes",
+            ["lms"],
+            2,
+        )
+
+    def test_canonical_rejections_are_400_with_a_reason(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        sid = client.post("/memory/spaces", json={"name": "P", "fileFormat": "canonical"}).json()["spaceId"]
+        prose = client.put(f"/memory/spaces/{sid}/entries/n", json={"body": "Just prose."})
+        assert prose.status_code == 400
+        assert "list item" in prose.json()["detail"]
+        dead = client.put(f"/memory/spaces/{sid}/index", json={"content": "[[nowhere]]"})
+        assert dead.status_code == 400
+        assert client.get(f"/memory/spaces/{sid}/entries").json()["entries"] == []
+
+    def test_create_rejects_unknown_format(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        assert client.post("/memory/spaces", json={"name": "X", "fileFormat": "yaml"}).status_code == 422
+
+    def test_stranger_cannot_read_history(self, service, monkeypatch):
+        owner = _client(service, monkeypatch)
+        sid = owner.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        owner.put(f"/memory/spaces/{sid}/entries/a", json={"body": "v1"})
+        stranger = _client(service, monkeypatch, user=STRANGER)
+        assert stranger.get(f"/memory/spaces/{sid}/history", params={"slug": "a"}).status_code == 403
+        assert stranger.get(f"/memory/spaces/{sid}/history/1", params={"slug": "a"}).status_code == 403
+
+
+class TestWhoChangedIt:
+    """G12: who saved a file is answered by email and name, never by internal user id."""
+
+    def test_updated_by_is_an_email_and_a_name(self, service, monkeypatch):
+        from apis.shared.directory import DirectoryPerson, adapter
+
+        class Directory:
+            def find_by_user_ids(self, user_ids):
+                known = {OWNER.user_id: DirectoryPerson(email=OWNER.email, name="Olive Owner", user_id=OWNER.user_id)}
+                return {u: known[u] for u in user_ids if u in known}
+
+        monkeypatch.setattr(adapter, "_directory", Directory())
+        owner = _client(service, monkeypatch, user=OWNER)
+        sid = owner.post("/memory/spaces", json={"name": "Shared"}).json()["spaceId"]
+        owner.post(f"/memory/spaces/{sid}/shares", json={"email": STRANGER.email, "permission": "editor"})
+        owner.put(f"/memory/spaces/{sid}/entries/a", json={"body": "v1"})
+
+        # A teammate the directory doesn't know yet is named from their own session.
+        member = _client(service, monkeypatch, user=STRANGER)
+        saved = member.put(f"/memory/spaces/{sid}/entries/b", json={"body": "hi"}).json()
+        assert (saved["updatedBy"], saved["updatedByName"]) == (STRANGER.email, None)
+
+        # Reading back as the owner: the owner is named by the directory; the
+        # teammate is neither the caller nor in the directory, so is unknown.
+        entries = {e["slug"]: e for e in owner.get(f"/memory/spaces/{sid}/entries").json()["entries"]}
+        assert (entries["a"]["updatedBy"], entries["a"]["updatedByName"]) == (OWNER.email, "Olive Owner")
+        assert (entries["b"]["updatedBy"], entries["b"]["updatedByName"]) == ("", None)
+        detail = owner.get(f"/memory/spaces/{sid}").json()
+        assert {e["slug"]: e["updatedBy"] for e in detail["entries"]} == {"a": OWNER.email, "b": ""}
+
+        versions = owner.get(f"/memory/spaces/{sid}/history", params={"slug": "a"}).json()["versions"]
+        assert [(v["updatedBy"], v["updatedByName"]) for v in versions] == [(OWNER.email, "Olive Owner")]
+        one = owner.get(f"/memory/spaces/{sid}/history/1", params={"slug": "a"}).json()
+        assert one["updatedBy"] == OWNER.email
+
+        for body in (saved, entries, detail["entries"], versions, one):
+            assert OWNER.user_id not in json.dumps(body) and STRANGER.user_id not in json.dumps(body)
+
+    def test_a_project_space_hides_its_owner_id(self, service):
+        from apis.app_api.memory_spaces.models import visible_owner_id
+
+        personal = service.create_space(owner_id=OWNER.user_id, owner_email=OWNER.email, name="Mine")
+        assert visible_owner_id(personal) == OWNER.user_id
+        project = personal.model_copy(update={"project_id": "prj_x", "scope": "shared"})
+        assert visible_owner_id(project) is None

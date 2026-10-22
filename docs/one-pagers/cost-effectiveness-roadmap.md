@@ -7,7 +7,7 @@ workstream's authority lives in its own spec, and if this page disagrees with
 a spec, the spec wins and this page gets fixed.
 
 *Companion specs:* `compaction-over-threshold-cache-spiral.md` (#833) ·
-`agent-cache-extra-tools-bypass.md` (#834) · `compaction-v2-versioned-prefix.md`
+`agent-cache-extra-tools-bypass.md` (#834) · `compaction-model-relative-thresholds.md` (2026-09-15) · `compaction-v2-versioned-prefix.md`
 (#835) · `document-context-offload.md` + validation + evaluation (#836) ·
 `quota-cooldown-windows.md` · `tool-search-token-bloat-strategy.md` ·
 `session-workspace-tools.md` · `share-large-conversations-s3-offload.md` ·
@@ -99,7 +99,7 @@ how the backlog below is ranked:
 | # | workstream | what it protects | authority | state |
 |---|---|---|---|---|
 | W1 | **Measurement** | every other row of this table | #833 PR-1 (`partial_miss`), cohort scan §4.1, fleet anatomy scan, dashboards #699/#700 | **PR-1 merged (#838) and live in dev**; prod awaits a release, and that is when the G0 clock starts. §4.1 cohort scan **run 2026-08-05**; fleet anatomy **run 2026-08-05** (`scan_fleet_prefix_spend.py`, reproducible) |
-| W2 | **Prefix stability** | don't rewrite what didn't change — 55.2% of spend | #833 PR-2/3/4 → #835 v2 (gated) | #833 PR-2/3/4 unbuilt. ⚠️ **PR-4 re-ranked 2026-08-05**: the system prompt mutates mid-session in 12.3% of multi-turn conversations, making it the most *general* item here, not a footnote to D2/D3. ⚠️ **#834 has left this row** — G1 disproved its prefix-cost thesis; it is a latency fix and now lives in W6 |
+| W2 | **Prefix stability** | don't rewrite what didn't change — 55.2% of spend | #833 PR-2/3/4 → `compaction-model-relative-thresholds.md` (PR-1 in progress 2026-09-15: per-model ceiling/floor/hard ceiling, floor-seeking cut, hysteresis; PR-3 = paid-when-free scheduling) → #835 v2 (gated) | #833 PR-2/3/4 unbuilt. ⚠️ **PR-4 re-ranked 2026-08-05**: the system prompt mutates mid-session in 12.3% of multi-turn conversations, making it the most *general* item here, not a footnote to D2/D3. ⚠️ **#834 has left this row** — G1 disproved its prefix-cost thesis; it is a latency fix and now lives in W6 |
 | W2b | **Short-conversation cache economics** (new 2026-08-05) | the 43% of spend in sessions of ≤15 calls, which no item in this arc touches | **un-specced — gap** | 700 sessions wrote cache and read none back ($33.92, 7.3% of all write spend). Single-call sessions are 29% of all sessions and spend 67% of their money on writes they can never use. Needs a cachePoint-policy spec for first/short turns |
 | W6 | **Turn latency** | time-to-answer, not tokens | #834 (bypass narrowing + family promotion) · #841 (runtime session affinity) | **#841 merged and verified in dev** — steady-state turns ~7.6s → ~3.9s. Split: warm container ~7.6→4.8s (all sessions), reused Agent ~4.8→3.9s (cacheable only). #839's treatment arm now equals the ceiling |
 | W3 | **Payload boundedness** | nothing unbounded enters the prefix | #836 offload · tool-search strategy · workspace tools (PR-1 built) · S3 share-offload | offload PRs unbuilt; citations baseline probe required first |

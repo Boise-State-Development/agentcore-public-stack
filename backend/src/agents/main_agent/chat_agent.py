@@ -6,13 +6,36 @@ This is the default agent type for standard chat interactions.
 """
 
 import logging
-from typing import Any, AsyncGenerator, Dict, List, Optional
+import os
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
 from agents.main_agent.skills.strands_mapping import build_skills_runtime
+from agents.main_agent.tools.tool_name_conflicts import skipped_tools_note
+
+from apis.shared.observability.build_stages import mark_stage
 
 logger = logging.getLogger(__name__)
+
+
+def unconnected_tools_note(gated: List[Any]) -> str:
+    """The system-prompt note for servers left out for missing consent.
+
+    ``gated`` arrives sorted (``load_external_tools``), and names are
+    de-duplicated in order, so one set of servers always renders the same
+    bytes.
+    """
+    names = list(dict.fromkeys(g.display_name for g in gated))
+    return (
+        "## Tools waiting on a connection\n"
+        "These tools are set up for this conversation but are not available "
+        "because the user has not connected the account they need: "
+        f"{', '.join(names)}. They are not in your tool list. Do not call, "
+        "guess or invent tools for them. If the request needs one, say so and "
+        "ask the user to connect the account with the Connect button in this "
+        "conversation, or under Customize → Connectors, and then ask again."
+    )
 
 
 class ChatAgent(BaseAgent):
@@ -50,15 +73,19 @@ class ChatAgent(BaseAgent):
     def _create_agent(self) -> None:
         """Create Strands Agent with filtered tools, hooks, and skills plugin."""
         try:
+            # Closes its own `tools.*` sub-stages, external MCP pre-flight
+            # included; `groups` sums them into `agent_build.tools`.
             tools = self._build_filtered_tools()
             hooks = self._create_hooks()
+            mark_stage("hooks")
 
             # Skills disclosure: the AgentSkills plugin injects the catalog +
             # activation tool; read_skill_file is the S3 adapter for reference
             # files (added after tool filtering — it is infrastructure, not an
             # RBAC-gated tool, and is implicitly scoped to the turn's skills).
-            plugin, read_skill_file = build_skills_runtime(self._accessible_skill_ids)
-            plugins = [plugin] if plugin else None
+            skills_runtime = build_skills_runtime(self._accessible_skill_ids)
+            plugin, read_skill_file = skills_runtime.plugin, skills_runtime.read_skill_file
+            plugins = [plugin] if plugin else []
             if plugin:
                 tools = list(tools) + [read_skill_file]
                 logger.info(
@@ -66,18 +93,175 @@ class ChatAgent(BaseAgent):
                     len(self._accessible_skill_ids or []),
                 )
 
+            # Structured extraction (docs/specs/structured-extraction.md §5.2,
+            # D10). Built here rather than in `_build_document_tools` because
+            # it needs the turn's skill records, which that gate cannot see:
+            # a field set lives in a skill's reference bundle. Like
+            # read_skill_file above it is infrastructure, not an RBAC-gated
+            # tool, and is implicitly scoped to the turn's skills.
+            #
+            # Mounted on a FIELD SET, not on a document (D9) — the one
+            # deliberate divergence from verify_sources' gate. A session with a
+            # document and no field set has nothing to extract, and a tool that
+            # cannot work costs cacheable prefix for nothing. The check reads
+            # the resource manifest already loaded with the catalog rows, so it
+            # does no I/O and adds nothing measurable to the preamble.
+            #
+            # No new agent-cache key element: the turn's skills are already in
+            # the key and the flag is a deployment constant.
+            tools = self._with_document_extract(tools, skills_runtime.records)
+
+            # Tool-result offload at intake (compaction PR-4): oversized tool
+            # results become a bounded preview + retrieval references before
+            # they enter the cacheable prefix. Fail-open: None when off or
+            # unconfigured. The plugin registers retrieve_offloaded_content
+            # itself — one stable spec in toolConfig, not an RBAC-gated tool,
+            # like read_skill_file above.
+            from agents.main_agent.core.tool_result_offload import build_tool_result_offloader
+
+            offload_session = getattr(self, "session_id", None)
+            offload_user = getattr(self, "user_id", None)
+            offloader = (
+                build_tool_result_offloader(
+                    session_id=offload_session,
+                    user_id=offload_user,
+                    region=os.environ.get("AWS_REGION"),
+                )
+                if offload_session and offload_user
+                else None
+            )
+            if offloader is not None:
+                plugins.append(offloader)
+            plugins = plugins or None
+
+            mark_stage("plugins")
             self.agent = AgentFactory.create_agent(
                 model_config=self.model_config,
-                system_prompt=self.system_prompt,
+                system_prompt=self._system_prompt_for(tools),
                 tools=tools,
                 session_manager=self.session_manager,
                 hooks=hooks,
                 plugins=plugins,
+                memory_context=getattr(self, "memory_context", None),
             )
 
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
             raise
+
+    def _with_document_extract(
+        self, tools: List[Any], skill_records: List[Any]
+    ) -> List[Any]:
+        """Append ``document_extract`` when this turn can actually run one.
+
+        Three conditions, in the order that costs least to check: the flag, a
+        field set among the turn's skills, and an identity to bind the tool to.
+        The field-set check is a comprehension over resource manifests already
+        in memory (``apis.shared.extraction.resolver.turn_has_field_set``) — no
+        S3 GET, no extra query, no network — which is what keeps this off the
+        TTFT budget.
+
+        Fail-open: any error here leaves the tool list untouched, because a
+        turn without extraction is a working turn and a raised exception in
+        agent construction is not.
+        """
+        try:
+            from apis.shared.feature_flags import document_extract_enabled
+
+            if not document_extract_enabled():
+                return tools
+
+            from apis.shared.extraction.resolver import turn_has_field_set
+
+            if not turn_has_field_set(skill_records):
+                return tools
+
+            session_id = getattr(self, "session_id", None)
+            user_id = getattr(self, "user_id", None)
+            if not session_id or not user_id:
+                return tools
+
+            from agents.builtin_tools.document_extract_tool import (
+                make_document_extract_tool,
+            )
+
+            logger.info(
+                "ChatAgent: document_extract mounted (%d skill record(s) carry a field set)",
+                len(skill_records or []),
+            )
+            return list(tools) + [
+                make_document_extract_tool(session_id, user_id, list(skill_records))
+            ]
+        except Exception:  # noqa: BLE001 - never fail agent construction over it
+            logger.warning("ChatAgent: document_extract not mounted", exc_info=True)
+            return tools
+
+    def _system_prompt_for(self, tools: List[Any]) -> str:
+        """The system prompt this turn actually sends.
+
+        Adds ``ask_user_question``'s guidance when that tool is in the turn's
+        effective tool list. Without it the model overwhelmingly answers an
+        ambiguous request in prose instead of asking (measured 4/24 vs 24/24);
+        see ``SYSTEM_PROMPT_GUIDANCE`` for why the text is load-bearing.
+
+        Three deliberate choices:
+
+        * **Gated on the tool, not shipped to everyone.** A user without the
+          tool would otherwise carry an instruction to call something they do
+          not have.
+        * **Keyed on the POST-FILTER list**, not the request's
+          ``enabled_tools``. The two diverge — a tool id the catalog knows but
+          the registry does not is dropped by ``ToolFilter`` with a log line
+          (``canvas_faculty`` does this today) — and keying on the request
+          would advertise a tool absent from ``toolConfig``. It also picks up
+          the ``ASK_USER_QUESTION_ENABLED`` kill switch for free: while off the
+          tool is never registered, so it cannot appear here.
+        * **Applied to the prompt handed to the agent, not to
+          ``self.system_prompt``.** That field is snapshotted for resume and
+          hashed into the agent cache key; this text is derived from
+          ``enabled_tools``, which the cache key already covers via
+          ``tools_hash``, so mutating it would change resume's cache slot for
+          no benefit. ``PrefixFingerprintHook`` reads the prompt off the built
+          agent, so ``systemPromptHash`` still reflects what was really sent.
+
+        Cost: ~70 tokens, constant per configuration, inside the cacheable
+        prefix — it is written once per session, never re-written per turn.
+
+        Also adds a note naming any enabled server this build left out because
+        the user has not connected its provider (``consent_gated_tools``).
+        Without it the model sees no trace of a tool the user asked for and
+        invents one (prod, 2026-10-16: ``search_issues`` → "Unknown tool").
+        The note changes only when the set of unconnected servers does, and
+        that set changing means ``toolConfig`` changed too, which already
+        re-writes the cached prefix; so it adds no cache writes of its own.
+
+        Likewise a note naming tools left out because another source already
+        holds their name (``skipped_tool_names``), on the same cache terms.
+
+        Last, an assistant's whole knowledge base in full-context mode
+        (``knowledge_context``). Inside the system segment, so it is read from
+        the system cache point; it changes only when a document does. Not part
+        of ``self.system_prompt`` for the same snapshot reason as the notes, and
+        because it can be ~200 KB.
+        """
+        from agents.builtin_tools.ask_user_question import SYSTEM_PROMPT_GUIDANCE
+
+        prompt = self.system_prompt
+        for tool in tools:
+            spec = getattr(tool, "tool_spec", None)
+            if isinstance(spec, dict) and spec.get("name") == "ask_user_question":
+                prompt = f"{prompt}\n\n{SYSTEM_PROMPT_GUIDANCE}"
+                break
+        gated = getattr(self, "consent_gated_tools", None)
+        if gated:
+            prompt = f"{prompt}\n\n{unconnected_tools_note(gated)}"
+        skipped = getattr(self, "skipped_tool_names", None)
+        if skipped:
+            prompt = f"{prompt}\n\n{skipped_tools_note(skipped)}"
+        knowledge = getattr(self, "knowledge_context", None)
+        if knowledge:
+            prompt = f"{prompt}\n\n{knowledge}"
+        return prompt
 
     async def stream_async(
         self,
@@ -90,6 +274,12 @@ class ChatAgent(BaseAgent):
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
         continue_truncated: bool = False,
         turn_agent_id: Optional[str] = None,
+        turn_project_id: Optional[str] = None,
+        turn_lease: Any = None,
+        turn_started_at: Optional[float] = None,
+        poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
+        turn_clock: Any = None,
+        invocation_state: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -116,6 +306,24 @@ class ChatAgent(BaseAgent):
                 event loop re-runs against restored history whose tail is the
                 truncated assistant message — the model continues it
                 (assistant-prefill) instead of answering a new instruction.
+            turn_project_id: The Shared Project whose harness ran this turn, if
+                any; recorded on each cost row and in the project's monthly rollup.
+                Per turn for the same reason as `turn_agent_id`.
+            turn_lease: This turn's single-flight `SessionLease`, which doubles
+                as the mid-turn steering inbox. Passed per turn rather than read
+                off the agent for the same reason as `turn_agent_id`: the agent
+                instance is cached across turns, so per-turn state must never
+                live on it (#741/#751).
+            poll_side_frame: Non-blocking check for a frame produced outside the
+                agent stream (the first turn's `session_title`), polled by the
+                coordinator's live status merge. Per turn, like `turn_lease`.
+            turn_clock: The turn's latency clock, continued by the coordinator
+                to the first model output (`turn_first_token`). Per turn, like
+                `turn_lease`; None disables it.
+            invocation_state: Per-request client data for tools, handed to
+                Strands as its `invocation_state` (tools read it from
+                `ToolContext`; the model never sees it). Per turn, like
+                `turn_lease`. None passes nothing.
 
         Yields:
             str: SSE formatted events
@@ -149,5 +357,11 @@ class ChatAgent(BaseAgent):
             citations=citations,
             original_message=original_message,
             turn_agent_id=turn_agent_id,
+            turn_project_id=turn_project_id,
+            turn_lease=turn_lease,
+            turn_started_at=turn_started_at,
+            poll_side_frame=poll_side_frame,
+            turn_clock=turn_clock,
+            invocation_state=invocation_state,
         ):
             yield event

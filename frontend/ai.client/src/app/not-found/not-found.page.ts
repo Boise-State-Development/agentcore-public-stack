@@ -44,7 +44,7 @@ import { SidenavService } from '../services/sidenav/sidenav.service';
           <div class="mt-8 flex flex-wrap justify-center gap-3">
             <a
               routerLink="/"
-              class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-primary-400 dark:hover:bg-primary-500"
+              class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
             >
               <ng-icon name="heroHome" class="size-5" />
               <span>Return Home</span>
@@ -52,7 +52,7 @@ import { SidenavService } from '../services/sidenav/sidenav.service';
             <button
               type="button"
               (click)="goBack()"
-              class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white/60 px-5 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-white/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-white/5 dark:text-gray-200 dark:hover:bg-white/10"
+              class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white/60 px-5 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-white/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-white/5 dark:text-gray-200 dark:hover:bg-white/10"
             >
               <ng-icon name="heroArrowLeft" class="size-5" />
               <span>Go Back</span>

@@ -7,11 +7,18 @@ import { CreateTrainingJobPage } from './create-training-job.page';
 import { FineTuningStateService } from '../../services/fine-tuning-state.service';
 import { FineTuningHttpService } from '../../services/fine-tuning-http.service';
 import { FineTuningUploadService } from '../../services/fine-tuning-upload.service';
-import type { AvailableModel, JobResponse, PresignResponse } from '../../models/fine-tuning.models';
+import type {
+  AvailableModel,
+  FineTuningTaskType,
+  JobResponse,
+  PresignResponse,
+  TaskTypeResponse,
+} from '../../models/fine-tuning.models';
 
 const mockModel: AvailableModel = {
   model_id: 'model-1',
   model_name: 'Test Model',
+  task_type: 'text-classification',
   huggingface_model_id: 'test/model',
   description: 'A test model',
   default_instance_type: 'ml.g5.xlarge',
@@ -38,6 +45,7 @@ const mockJobResponse: JobResponse = {
   email: 'test@example.com',
   model_id: 'model-1',
   model_name: 'Test Model',
+  task_type: 'text-classification',
   status: 'PENDING',
   dataset_s3_key: 'uploads/data.jsonl',
   output_s3_prefix: null,
@@ -54,6 +62,7 @@ const mockJobResponse: JobResponse = {
   error_message: null,
   max_runtime_seconds: 86400,
   training_progress: null,
+  use_spot: false,
 };
 
 function createMockState() {
@@ -67,10 +76,47 @@ function createMockState() {
   };
 }
 
+const mockTaskTypes: TaskTypeResponse[] = [
+  {
+    task_type: 'text-classification',
+    display_name: 'Text classification',
+    description: 'Assign a label to a piece of text.',
+    required_columns: ['text', 'label'],
+    upload_extensions: ['.csv', '.jsonl', '.json'],
+    requires_archive: false,
+    inference_upload_extensions: ['.txt', '.csv', '.jsonl', '.json'],
+    default_instance_type: 'ml.g5.xlarge',
+    is_generative: false,
+  },
+  {
+    task_type: 'image-classification',
+    display_name: 'Image classification',
+    description: 'Assign a label to an image.',
+    required_columns: ['image', 'label'],
+    upload_extensions: ['.zip'],
+    requires_archive: true,
+    inference_upload_extensions: ['.zip'],
+    default_instance_type: 'ml.g6.xlarge',
+    is_generative: false,
+  },
+  {
+    task_type: 'image-text-to-text',
+    display_name: 'Image + text to text',
+    description: 'Teach a vision-language model to answer about an image.',
+    required_columns: ['image', 'prompt', 'response'],
+    upload_extensions: ['.zip'],
+    requires_archive: true,
+    inference_upload_extensions: ['.zip'],
+    default_instance_type: 'ml.g6e.xlarge',
+    is_generative: true,
+  },
+];
+
 function createMockHttp() {
   return {
     presignDatasetUpload: vi.fn().mockReturnValue(of(mockPresignResponse)),
     searchHuggingFaceModels: vi.fn().mockReturnValue(of([])),
+    listTaskTypes: vi.fn().mockReturnValue(of(mockTaskTypes)),
   };
 }
 
@@ -155,6 +201,9 @@ describe('CreateTrainingJobPage', () => {
     expect(mockHttp.presignDatasetUpload).toHaveBeenCalledWith({
       filename: 'data.jsonl',
       content_type: 'application/jsonl',
+      // The presign is task-scoped: the backend validates the upload format
+      // against the task before minting a URL.
+      task_type: 'text-classification',
     });
     expect(mockUpload.uploadFile).toHaveBeenCalled();
     expect(component.uploadState()?.status).toBe('complete');
@@ -173,6 +222,7 @@ describe('CreateTrainingJobPage', () => {
     expect(mockHttp.presignDatasetUpload).toHaveBeenCalledWith({
       filename: 'data.jsonl',
       content_type: 'application/octet-stream',
+      task_type: 'text-classification',
     });
   });
 
@@ -295,6 +345,138 @@ describe('CreateTrainingJobPage', () => {
     );
   });
 
+  describe('generative (image-text-to-text) tasks', () => {
+    const vlmModel: AvailableModel = {
+      model_id: 'llava-1.5-7b',
+      model_name: 'LLaVA 1.5 7B',
+      huggingface_model_id: 'llava-hf/llava-1.5-7b-hf',
+      description: 'Vision-language model',
+      task_type: 'image-text-to-text',
+      default_instance_type: 'ml.g6e.xlarge',
+      default_hyperparameters: {
+        epochs: '3',
+        learning_rate: '1e-4',
+        per_device_train_batch_size: '1',
+        context_length: '1024',
+        lora_r: '8',
+        lora_alpha: '16',
+        load_in_4bit: 'false',
+        split_ratio: '0.8',
+      },
+    };
+
+    /** The task list is fetched on a microtask, so the spec has to let
+     * loadTaskTypes() settle before a task can be selected by name. */
+    async function selectTask(taskType: FineTuningTaskType) {
+      const component = createComponent();
+      await Promise.resolve();
+      component.selectTaskType(taskType);
+      return component;
+    }
+
+    const selectVlmTask = () => selectTask('image-text-to-text');
+
+    it('reports the task as generative from the backend spec', async () => {
+      const component = await selectVlmTask();
+      expect(component.isGenerative()).toBe(true);
+    });
+
+    it('hides the image-size knob the generative trainer ignores', async () => {
+      const component = await selectVlmTask();
+      // Archive-based, so the classification gate alone would show it.
+      expect(component.requiresArchive()).toBe(true);
+      expect(component.showImageSize()).toBe(false);
+    });
+
+    it('still shows image size for an image classifier', async () => {
+      const component = await selectTask('image-classification');
+      expect(component.showImageSize()).toBe(true);
+    });
+
+    it('seeds the adapter controls from the model defaults', async () => {
+      const component = await selectVlmTask();
+      component.selectModel(vlmModel);
+      const values = component.form.getRawValue();
+      expect(values.loraR).toBe('8');
+      expect(values.loraAlpha).toBe('16');
+      expect(values.loadIn4bit).toBe('false');
+    });
+
+    it('submits the adapter settings for a generative task', async () => {
+      const component = await selectVlmTask();
+      const router = TestBed.inject(Router);
+      vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+      component.selectModel(vlmModel);
+      component.uploadState.set({
+        file: new File([''], 'data.zip'),
+        progress: 100,
+        status: 'complete',
+        s3Key: 'uploads/data.zip',
+      });
+
+      await component.submitJob();
+
+      const call = mockState.createTrainingJob.mock.calls[0][0];
+      expect(call.hyperparameters).toEqual(
+        expect.objectContaining({ lora_r: '8', lora_alpha: '16', load_in_4bit: 'false' }),
+      );
+    });
+
+    it('omits the adapter settings for a classification task', async () => {
+      const component = createComponent();
+      const router = TestBed.inject(Router);
+      vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+      component.selectModel(mockModel);
+      component.uploadState.set({
+        file: new File([''], 'test.jsonl'),
+        progress: 100,
+        status: 'complete',
+        s3Key: 'uploads/test.jsonl',
+      });
+
+      await component.submitJob();
+
+      const call = mockState.createTrainingJob.mock.calls[0][0];
+      expect(call.hyperparameters).not.toHaveProperty('lora_r');
+      expect(call.hyperparameters).not.toHaveProperty('load_in_4bit');
+    });
+  });
+
+  describe('managed spot', () => {
+    async function submitWith(component: CreateTrainingJobPage) {
+      const router = TestBed.inject(Router);
+      vi.spyOn(router, 'navigate').mockResolvedValue(true);
+      component.selectModel(mockModel);
+      component.uploadState.set({
+        file: new File([''], 'test.jsonl'),
+        progress: 100,
+        status: 'complete',
+        s3Key: 'uploads/test.jsonl',
+      });
+      await component.submitJob();
+      return mockState.createTrainingJob.mock.calls[0][0];
+    }
+
+    it('defaults to off', () => {
+      const component = createComponent();
+      expect(component.form.getRawValue().useSpot).toBe(false);
+    });
+
+    it('sends use_spot false unless the user opts in', async () => {
+      const call = await submitWith(createComponent());
+      expect(call.use_spot).toBe(false);
+    });
+
+    it('sends use_spot true when enabled', async () => {
+      const component = createComponent();
+      component.form.patchValue({ useSpot: true });
+      const call = await submitWith(component);
+      expect(call.use_spot).toBe(true);
+    });
+  });
+
   it('should convert max runtime hours to seconds', async () => {
     const component = createComponent();
     const router = TestBed.inject(Router);
@@ -404,6 +586,10 @@ describe('CreateTrainingJobPage', () => {
     const call = mockState.createTrainingJob.mock.calls[0][0];
     expect(call.model_id).toBe('custom');
     expect(call.custom_huggingface_model_id).toBe('bert-base-multilingual-cased');
-    expect(call.instance_type).toBe('ml.g5.xlarge');
+    // A custom model has no catalog entry to take an instance type from, so
+    // the field is omitted and the backend resolves it from the task
+    // registry rather than the SPA guessing.
+    expect(call.instance_type).toBeUndefined();
+    expect(call.task_type).toBe('text-classification');
   });
 });

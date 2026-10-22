@@ -188,11 +188,10 @@ def test_s3_restore_path_handles_root_prefix_with_trailing_slash():
 # should not attempt to write into a table that no longer exists.       #
 # --------------------------------------------------------------------- #
 def test_assistants_table_removed_from_convention_map():
-    """The decommissioned `assistants` table was the only entry in
-    TABLE_CONVENTION_MAP. The map should now be empty so an old
-    backup's assistants component skips cleanly."""
+    """The decommissioned `assistants` table must stay out of
+    TABLE_CONVENTION_MAP so an old backup's assistants component skips
+    cleanly. Other convention-named tables may live there."""
     assert "assistants" not in restore.TABLE_CONVENTION_MAP
-    assert restore.TABLE_CONVENTION_MAP == {}
 
 
 def test_decommissioned_assistants_component_skips_with_clear_reason():

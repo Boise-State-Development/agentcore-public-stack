@@ -30,6 +30,17 @@ class OIDCStateData:
     # grant, and set NO cookies. Server-side only and one-time-use, like the
     # rest of the state row.
     device_user_code: Optional[str] = None
+    # SHA-256 (hex) of the browser-binding secret handed to the client in a
+    # short-lived, HttpOnly cookie when this state was minted. The callback
+    # recomputes the digest from the cookie it receives and refuses the
+    # exchange unless it matches. This is what makes `state` useless to a
+    # browser other than the one that started the flow — without it, anyone
+    # who can read a `state` value out of a 302 Location can have a victim's
+    # browser complete *their* login (OAuth login CSRF / session fixation).
+    #
+    # Only the digest is persisted: a read-only compromise of the state table
+    # then yields nothing that can be replayed as the cookie.
+    browser_binding_hash: Optional[str] = None
 
 
 class StateStore(ABC):
@@ -180,6 +191,8 @@ class DynamoDBStateStore(StateStore):
                     item['return_to'] = data.return_to
                 if data.device_user_code:
                     item['device_user_code'] = data.device_user_code
+                if data.browser_binding_hash:
+                    item['browser_binding_hash'] = data.browser_binding_hash
 
             # Use expiresAt as TTL attribute (DynamoDB will auto-delete)
             self.table.put_item(Item=item)
@@ -252,6 +265,7 @@ class DynamoDBStateStore(StateStore):
                 provider_id=item.get('provider_id'),
                 return_to=item.get('return_to'),
                 device_user_code=item.get('device_user_code'),
+                browser_binding_hash=item.get('browser_binding_hash'),
             )
             return True, data
             

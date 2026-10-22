@@ -1,7 +1,9 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { provideMarkdown, MarkdownService } from 'ngx-markdown';
+import { By } from '@angular/platform-browser';
+import { provideMarkdown, MarkdownComponent, MarkdownService } from 'ngx-markdown';
 import { StreamingTextComponent } from './streaming-text.component';
+import { KATEX_OPTIONS } from '../../../../shared/utils/katex-delimiters';
 
 describe('StreamingTextComponent', () => {
   let fixture: ComponentFixture<StreamingTextComponent>;
@@ -67,5 +69,17 @@ describe('StreamingTextComponent', () => {
     fixture.detectChanges();
 
     expect(component.displayedText()).toBe('Partial answer, now complete.');
+  });
+
+  it('hands the markdown component explicit KaTeX delimiters', () => {
+    // Left unbound, ngx-markdown falls back to its own DEFAULT_KATEX_OPTIONS,
+    // which pair bare `$…$` and swallow the prose between two currency
+    // amounts. The binding is the whole fix — assert it actually arrives.
+    fixture.componentRef.setInput('text', 'Q1 ($100K), Q2 ($115K)');
+    fixture.componentRef.setInput('isStreaming', false);
+    fixture.detectChanges();
+
+    const markdown = fixture.debugElement.query(By.directive(MarkdownComponent));
+    expect(markdown.componentInstance.katexOptions).toBe(KATEX_OPTIONS);
   });
 });

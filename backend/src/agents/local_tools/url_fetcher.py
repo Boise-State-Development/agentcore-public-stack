@@ -3,9 +3,12 @@ Simple URL Fetcher Tool - Strands Native
 Fetches and extracts text content from web pages
 """
 
+import ipaddress
 import logging
+import urllib.request
+from typing import Any, Optional
 
-from apis.shared.security import UrlValidationError, validate_external_url
+from apis.shared.security import UrlValidationError, is_forbidden_address, validate_external_url
 from strands import tool
 
 logger = logging.getLogger(__name__)
@@ -15,6 +18,64 @@ logger = logging.getLogger(__name__)
 # is generous for legitimate sites (canonical-host shuffles, http→https
 # upgrades, www → bare-domain) and tight enough to avoid loops.
 _MAX_REDIRECTS = 3
+
+
+def _connected_peer(response: Any) -> Optional[str]:
+    """Return the IP the client actually connected to, or None if unknown."""
+    stream = (getattr(response, "extensions", None) or {}).get("network_stream")
+    if stream is None:
+        return None
+    try:
+        server_addr = stream.get_extra_info("server_addr")
+    except Exception:  # noqa: BLE001 - peer lookup is best-effort
+        return None
+    if not server_addr:
+        return None
+    return str(server_addr[0])
+
+
+def _peer_is_forbidden(response: Any, url: str) -> bool:
+    """Check the connected address against the same policy as the URL.
+
+    ``validate_external_url`` resolves the host before the request, and the
+    client resolves it again when it connects. A short-TTL record can return
+    a public address to the first lookup and the metadata endpoint to the
+    second. Checking the live connection closes that gap before the body
+    reaches the model.
+
+    When a forward proxy is configured, the peer is the proxy rather than
+    the target, so the proxy is the egress boundary and the check is skipped.
+    """
+    scheme = url.split(":", 1)[0].lower()
+    if scheme in urllib.request.getproxies():
+        return False
+    peer = _connected_peer(response)
+    if peer is None:
+        return False
+    try:
+        addr = ipaddress.ip_address(peer.split("%", 1)[0])
+    except ValueError:
+        return False
+    if is_forbidden_address(addr):
+        logger.warning("URL fetch: %s connected to forbidden address=%s; discarding response", url, addr)
+        return True
+    return False
+
+
+async def _get_checked(client: Any, url: str, headers: dict[str, str]) -> Optional[Any]:
+    """GET *url*, returning None if the connection landed on a forbidden address.
+
+    The response is streamed so the peer can be checked while the
+    connection is still open, then read in full.
+    """
+    response = await client.send(client.build_request("GET", url, headers=headers), stream=True)
+    try:
+        if _peer_is_forbidden(response, url):
+            return None
+        await response.aread()
+    finally:
+        await response.aclose()
+    return response
 
 
 def extract_text_from_html(html: str, max_length: int = 50000) -> str:
@@ -114,7 +175,20 @@ async def fetch_url_content(url: str, include_html: bool = False, max_length: in
             current_url = url
             redirects_followed = 0
             while True:
-                response = await client.get(current_url, headers=headers)
+                response = await _get_checked(client, current_url, headers)
+                if response is None:
+                    return {
+                        "content": [
+                            {
+                                "json": {
+                                    "success": False,
+                                    "error": "URL is not permitted.",
+                                    "url": url,
+                                }
+                            }
+                        ],
+                        "status": "error",
+                    }
 
                 # Manual redirect chase. httpx exposes 3xx responses
                 # directly when follow_redirects=False, so check the

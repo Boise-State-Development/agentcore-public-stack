@@ -23,10 +23,16 @@ _EMF_NAMESPACE = os.environ.get("EMF_NAMESPACE", "AgentCoreStack/PromptCache")
 
 # Dedicated raw-JSON stdout logger. propagate=False keeps the app-level
 # formatter (and its non-JSON prefixes) away from these lines.
+#
+# The leading newline starts every record on a fresh line. stdout is shared
+# with anything in the process that writes to it, and an unterminated write
+# (e.g. print(..., end="")) would otherwise become a prefix of the JSON, which
+# CloudWatch then silently declines to extract. In the normal case this costs
+# one blank line per record.
 _emf_logger = logging.getLogger("apis.shared.observability.emf.raw")
 if not _emf_logger.handlers:
     _handler = logging.StreamHandler(sys.stdout)
-    _handler.setFormatter(logging.Formatter("%(message)s"))
+    _handler.setFormatter(logging.Formatter("\n%(message)s"))
     _emf_logger.addHandler(_handler)
     _emf_logger.setLevel(logging.INFO)
     _emf_logger.propagate = False
@@ -44,6 +50,7 @@ def emit_prompt_cache_metrics(
     cache_status: Optional[str] = None,
     agent_switched: bool = False,
     partial_miss: bool = False,
+    model_switched: bool = False,
 ) -> None:
     """Emit one EMF record for a completed model call.
 
@@ -72,6 +79,13 @@ def emit_prompt_cache_metrics(
       number that should never step-change. `turnAgentId` rides along as a
       property, not a dimension, so per-Agent detail is queryable without
       multiplying metric streams.
+    - ``ModelSwitchMiss``: the subset of ``AvoidableMiss`` explained by the call
+      running on a different model than the one before it (a mid-conversation
+      model switch, confirmed by the user against a cost estimate), and *not*
+      already counted as ``AgentSwitchMiss``. Disjoint from it on purpose, so
+      ``AvoidableMiss - AgentSwitchMiss - ModelSwitchMiss`` is unexplained waste
+      without double-subtracting an ``@``-mention to an Agent that pins its own
+      model.
 
     Best-effort: never raises.
     """
@@ -89,6 +103,7 @@ def emit_prompt_cache_metrics(
                             {"Name": "AvoidableMiss", "Unit": "Count"},
                             {"Name": "PartialMiss", "Unit": "Count"},
                             {"Name": "AgentSwitchMiss", "Unit": "Count"},
+                            {"Name": "ModelSwitchMiss", "Unit": "Count"},
                             {"Name": "WastedUsd", "Unit": "None"},
                             {"Name": "PartialMissUsd", "Unit": "None"},
                         ],
@@ -100,6 +115,7 @@ def emit_prompt_cache_metrics(
             "AvoidableMiss": 1 if avoidable_miss else 0,
             "PartialMiss": 1 if partial_miss else 0,
             "AgentSwitchMiss": 1 if (avoidable_miss and agent_switched) else 0,
+            "ModelSwitchMiss": 1 if (avoidable_miss and model_switched and not agent_switched) else 0,
             "WastedUsd": round(float(wasted_usd or 0.0), 6),
             "PartialMissUsd": round(float(wasted_usd or 0.0), 6) if partial_miss else 0.0,
         }
@@ -112,6 +128,93 @@ def emit_prompt_cache_metrics(
         _emf_logger.info(json.dumps(record, separators=(",", ":")))
     except Exception as e:  # noqa: BLE001 - metrics must never break a request
         logger.debug("EMF emission skipped: %s", e)
+
+
+def emit_emf_metrics(
+    namespace: str,
+    metrics: dict,
+    properties: Optional[dict] = None,
+    units: Optional[dict] = None,
+) -> None:
+    """Emit one EMF record into ``namespace``. Never raises.
+
+    The generic form of the two functions above, for callers whose namespace is not
+    the prompt-cache one. It lives here rather than being re-implemented per feature
+    because the parts that are easy to get wrong are not the JSON — they are the
+    dedicated non-propagating logger and the message-only formatter above. A record
+    written through the app's normal logger acquires an ``[INFO] name:`` prefix,
+    CloudWatch Logs silently declines to extract it, and the metric simply never
+    appears. Nothing errors; there is just no data, which is indistinguishable from
+    "the thing being measured never happened".
+
+    ``metrics`` maps metric name to numeric value; ``units`` optionally maps the
+    same names to a CloudWatch unit, defaulting to ``None`` (a bare number).
+    ``properties`` ride along as queryable log fields and are **not** dimensions —
+    dimensions multiply metric streams, and every caller here so far wants
+    fleet-wide aggregates with the detail available in Logs Insights.
+    """
+    try:
+        units = units or {}
+        record = {
+            "_aws": {
+                "Timestamp": int(time.time() * 1000),
+                "CloudWatchMetrics": [
+                    {
+                        "Namespace": namespace,
+                        "Dimensions": [[]],
+                        "Metrics": [
+                            {"Name": name, "Unit": units.get(name, "None")}
+                            for name in metrics
+                        ],
+                    }
+                ],
+            },
+        }
+        record.update({name: value for name, value in metrics.items()})
+        for key, value in (properties or {}).items():
+            if value is not None:
+                record[key] = value
+        _emf_logger.info(json.dumps(record, separators=(",", ":")))
+    except Exception as e:  # noqa: BLE001 - metrics must never break a caller
+        logger.debug("EMF emission skipped: %s", e)
+
+
+def emit_unmetered_model_call(
+    model_id: Optional[str],
+    reason: str,
+    surface: str,
+    session_id: Optional[str] = None,
+) -> None:
+    """Emit one ``UnmeteredModelCall`` record for a model call that used tokens but priced to nothing.
+
+    A call whose cost comes back ``None`` is written with no cost, so it never
+    reaches the cost rollups or the user's quota: the usage is free and, until
+    this metric, invisible — prod ran months of $0 Haiku and Nova Sonic rows
+    before anyone read the rollup table (model-retirement spec §2). Any
+    non-zero ``Sum`` is a catalog gap to fix, so the alarm threshold is zero.
+
+    ``reason`` is ``no_pricing`` (no catalog row for the id) or
+    ``calculation_failed`` (a row, but the calculator raised). ``surface`` names
+    the caller (``chat``, ``voice``). Both, with the model id, ride as log
+    properties so Logs Insights answers "which model" without a dimension.
+
+    Not behind ``PROMPT_CACHE_OBSERVABILITY_ENABLED``: that switch sheds a
+    per-call cost, and this fires only on the calls that are already wrong —
+    turning it off would hide under-billing, not save anything.
+
+    Best-effort: never raises.
+    """
+    emit_emf_metrics(
+        _EMF_NAMESPACE,
+        metrics={"UnmeteredModelCall": 1},
+        properties={
+            "modelId": model_id,
+            "unmeteredReason": reason,
+            "surface": surface,
+            "sessionId": session_id,
+        },
+        units={"UnmeteredModelCall": "Count"},
+    )
 
 
 def emit_session_cache_rollup(

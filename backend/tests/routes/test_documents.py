@@ -8,7 +8,7 @@ Requirements: 14.1, 14.2
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -124,6 +124,93 @@ class TestListDocumentsAuthenticated:
         assert resp.status_code == 200
         body = resp.json()
         assert body["documents"] == []
+
+
+# ---------------------------------------------------------------------------
+# Requirement 12.11 visibility: kbUsage folded into the documents-list response
+# ---------------------------------------------------------------------------
+
+RECORDS_MODULE = "apis.shared.kb_backend.records"
+BYTE_CAP_MODULE = "apis.shared.kb_backend.byte_cap"
+
+
+class TestListDocumentsKbUsage:
+    """GET /assistants/{id}/documents returns kbUsage for the storage bar."""
+
+    def _list(self, app, kb_record=None, get_record_side_effect=None, cap=100 * 1024 * 1024):
+        _override_user_id(app)
+        # get_kb_record is a SYNC boto3 call run via asyncio.to_thread, so it is
+        # mocked with a plain MagicMock (an AsyncMock would leave an un-awaited
+        # coroutine for to_thread to return).
+        get_record = MagicMock(return_value=kb_record)
+        if get_record_side_effect is not None:
+            get_record = MagicMock(side_effect=get_record_side_effect)
+
+        with patch(
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_owner_resolve(),
+        ), patch(
+            f"{ROUTES_MODULE}.list_assistant_documents",
+            new_callable=AsyncMock,
+            return_value=([_make_document()], None),
+        ), patch(
+            f"{RECORDS_MODULE}.get_kb_record", get_record
+        ), patch(
+            f"{BYTE_CAP_MODULE}.effective_cap", return_value=cap
+        ):
+            client = TestClient(app)
+            resp = client.get(f"/assistants/{ASSISTANT_ID}/documents")
+        return resp
+
+    def test_managed_kb_reports_usage_and_cap(self, app):
+        """A managed KB returns engine=managed, its bytes, and the binding cap."""
+        from decimal import Decimal
+
+        record = {
+            "retrievalEngine": "managed",
+            "storedBytes": Decimal(30 * 1024 * 1024),
+            "reservedBytes": Decimal(5 * 1024 * 1024),
+            "elevatedByteCap": False,
+        }
+        resp = self._list(app, kb_record=record, cap=100 * 1024 * 1024)
+
+        assert resp.status_code == 200
+        usage = resp.json()["kbUsage"]
+        assert usage["engine"] == "managed"
+        assert usage["storedBytes"] == 30 * 1024 * 1024
+        assert usage["reservedBytes"] == 5 * 1024 * 1024
+        assert usage["cap"] == 100 * 1024 * 1024
+        assert usage["elevated"] is False
+
+    def test_elevated_flag_is_read_from_record(self, app):
+        """elevatedByteCap on the record surfaces as elevated=true."""
+        record = {"retrievalEngine": "managed", "elevatedByteCap": True}
+        resp = self._list(app, kb_record=record, cap=1024 * 1024 * 1024)
+
+        usage = resp.json()["kbUsage"]
+        assert usage["elevated"] is True
+        assert usage["cap"] == 1024 * 1024 * 1024
+
+    def test_legacy_kb_is_uncapped(self, app):
+        """A legacy KB (no record) returns cap=null and zeroed counters."""
+        resp = self._list(app, kb_record=None)
+
+        assert resp.status_code == 200
+        usage = resp.json()["kbUsage"]
+        assert usage["engine"] == "s3vectors"
+        assert usage["cap"] is None
+        assert usage["storedBytes"] == 0
+        assert usage["reservedBytes"] == 0
+
+    def test_usage_read_failure_does_not_break_the_list(self, app):
+        """A KB-record read error yields kbUsage=null but still returns the docs."""
+        resp = self._list(app, get_record_side_effect=RuntimeError("dynamo down"))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["kbUsage"] is None
+        assert len(body["documents"]) == 1
 
 
 # ---------------------------------------------------------------------------

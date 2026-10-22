@@ -24,6 +24,12 @@ def _user() -> User:
 
 
 class TestResolveAccessibleSkillIds:
+    """Every case here also enters ``_owned()``: ``resolve_accessible_skill_ids``
+    calls ``resolve_owned_skill_ids`` after the RBAC lookup, and that builds a
+    real skill-catalog repository. Its ``except`` swallowed the resulting AWS
+    failure, so these assertions passed while the call went out to real
+    DynamoDB — see the off-box socket guard in ``tests/conftest.py``."""
+
     async def test_plain_grants_pass_through(self):
         role_service = MagicMock()
         role_service.get_accessible_skills = AsyncMock(
@@ -32,7 +38,7 @@ class TestResolveAccessibleSkillIds:
         with patch(
             "apis.shared.rbac.service.get_app_role_service",
             return_value=role_service,
-        ):
+        ), _owned():
             result = await resolve_accessible_skill_ids(_user())
         assert result == ["web_research", "pdf_workflows"]
 
@@ -45,7 +51,7 @@ class TestResolveAccessibleSkillIds:
         ), patch(
             "apis.shared.skills.freshness.get_all_skill_ids",
             AsyncMock(return_value=frozenset({"zeta", "alpha"})),
-        ):
+        ), _owned():
             result = await resolve_accessible_skill_ids(_user())
         assert result == ["alpha", "zeta"]
 
@@ -53,7 +59,7 @@ class TestResolveAccessibleSkillIds:
         with patch(
             "apis.shared.rbac.service.get_app_role_service",
             side_effect=RuntimeError("rbac unavailable"),
-        ):
+        ), _owned():
             result = await resolve_accessible_skill_ids(_user())
         assert result == []
 

@@ -3,13 +3,26 @@ import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { provideLocationMocks } from '@angular/common/testing';
 import { Router, provideRouter } from '@angular/router';
 import { Component, input, output, signal } from '@angular/core';
+import { Subject } from 'rxjs';
+import { ADMIN_CHROME } from '../../shared/utils/route-chrome';
 import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
-import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
 import { AgentService } from '../../agents/services/agent.service';
-import { LEGACY_MIGRATION_HOST } from '../../shared/utils/legacy-migration-host';
+import { FEATURES } from '../../services/features';
+import { UserSettingsService } from '../../services/user-settings.service';
+import { Dialog } from '@angular/cdk/dialog';
+import { of } from 'rxjs';
+import { SidebarLayoutService } from './sidebar-layout.service';
+
+/** The sidebar layout's account read, answered with no saved layout. */
+function userSettingsStub() {
+  return {
+    getSettings: vi.fn().mockResolvedValue({ defaultModelId: null, sidebarItems: null }),
+    updateSettings: vi.fn().mockResolvedValue({}),
+  };
+}
 
 describe('Sidenav', () => {
   let mockRouter: any;
@@ -17,12 +30,22 @@ describe('Sidenav', () => {
   let mockBffSession: any;
   let mockSidenavService: any;
   let mockUserService: any;
-  let mockMemorySpaceService: any;
-  let mockAgentService: any;
+  let routerEvents!: Subject<unknown>;
+  let routerRoot: any;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
-    mockRouter = { navigate: vi.fn() };
+    // `events` and `routerState` are not optional extras on this double:
+    // the sidenav derives which navigation to show (chat vs the admin
+    // console) from the active route's `chrome` flag, re-read on every
+    // NavigationEnd. A bare `{ navigate }` stub throws on construction.
+    routerEvents = new Subject<unknown>();
+    routerRoot = { data: {}, firstChild: null } as any;
+    mockRouter = {
+      navigate: vi.fn(),
+      events: routerEvents.asObservable(),
+      routerState: { snapshot: { get root() { return routerRoot; } } },
+    };
     mockSessionService = {
       currentSession: signal({ sessionId: 'test-session', userId: 'u1', title: 'Test Session', status: 'active' as const, createdAt: '', lastMessageAt: '', messageCount: 0 }),
       hasCurrentSession: signal(true),
@@ -40,15 +63,6 @@ describe('Sidenav', () => {
       isAdmin: signal(false),
       canAccessAdmin: signal(false),
     };
-    mockMemorySpaceService = {
-      accessible$: signal<boolean | null>(null),
-      loadSpaces: vi.fn().mockResolvedValue(undefined),
-    };
-    mockAgentService = {
-      accessible$: signal<boolean | null>(null),
-      loadAgents: vi.fn().mockResolvedValue(undefined),
-    };
-
     TestBed.configureTestingModule({
       providers: [
         { provide: Router, useValue: mockRouter },
@@ -56,8 +70,7 @@ describe('Sidenav', () => {
         { provide: BffSessionService, useValue: mockBffSession },
         { provide: SidenavService, useValue: mockSidenavService },
         { provide: UserService, useValue: mockUserService },
-        { provide: MemorySpaceService, useValue: mockMemorySpaceService },
-        { provide: AgentService, useValue: mockAgentService },
+        { provide: UserSettingsService, useValue: userSettingsStub() },
       ],
     });
   });
@@ -69,7 +82,6 @@ describe('Sidenav', () => {
   async function createComponent() {
     const { Sidenav } = await import('./sidenav');
     const component = TestBed.runInInjectionContext(() => new Sidenav());
-    TestBed.tick(); // flush the constructor effect that probes feature accessibility
     return component;
   }
 
@@ -101,69 +113,24 @@ describe('Sidenav', () => {
     expect(mockRouter.navigate).toHaveBeenCalledWith(['/auth/login']);
   });
 
-  it('probes memory-space accessibility once a user is authenticated', async () => {
-    mockUserService.currentUser.set({ user_id: 'u1', email: 'u1@example.com' });
-    await createComponent();
-    expect(mockMemorySpaceService.loadSpaces).toHaveBeenCalled();
-  });
-
-  it('does not probe memory-space accessibility while unauthenticated', async () => {
-    mockUserService.currentUser.set(null);
-    await createComponent();
-    expect(mockMemorySpaceService.loadSpaces).not.toHaveBeenCalled();
-  });
-
-  it('hides the Memory Spaces nav entry until accessibility resolves true', async () => {
-    const component = await createComponent();
-
-    mockMemorySpaceService.accessible$.set(null);
-    expect(component.showMemorySpaces()).toBe(false);
-
-    mockMemorySpaceService.accessible$.set(false);
-    expect(component.showMemorySpaces()).toBe(false);
-
-    mockMemorySpaceService.accessible$.set(true);
-    expect(component.showMemorySpaces()).toBe(true);
-  });
-
-  it('probes agent accessibility once a user is authenticated', async () => {
-    mockUserService.currentUser.set({ user_id: 'u1', email: 'u1@example.com' });
-    await createComponent();
-    expect(mockAgentService.loadAgents).toHaveBeenCalled();
-  });
-
-  it('does not probe agent accessibility while unauthenticated', async () => {
-    mockUserService.currentUser.set(null);
-    await createComponent();
-    expect(mockAgentService.loadAgents).not.toHaveBeenCalled();
-  });
-
-  it('hides the Agents nav entry until accessibility resolves true', async () => {
-    const component = await createComponent();
-
-    mockAgentService.accessible$.set(null);
-    expect(component.showAgents()).toBe(false);
-
-    mockAgentService.accessible$.set(false);
-    expect(component.showAgents()).toBe(false);
-
-    mockAgentService.accessible$.set(true);
-    expect(component.showAgents()).toBe(true);
-  });
 });
 
 /**
- * Template-level gating (marketplace D14).
+ * The nav entries, rendered from the real template.
  *
- * These render the real template rather than reading the computed, because the bug they
- * guard against lives *only* in the template: `showAgents()` was already true for every
- * user while `@if (showAgents() && isAdmin())` hid the entry anyway. A spec that asserts
- * the computed passes against both the gated and the GA'd code, so it proves nothing.
+ * Both Agents and Artifacts are **unconditional**: nothing about them waits on a feature
+ * probe, a role, or a network round-trip. That is what these assert, and it is a
+ * regression guard in two directions — an entry that reappears behind an `@if`, and the
+ * boot-time list fetch that `@if` used to ride.
  *
- * The child components are stubbed — this is a spec about one `@if`, and pulling
- * `SessionList` / `UserDropdownComponent` in would drag their dependency graphs with them.
+ * They render the real template rather than reading a computed, because the bugs they
+ * guard against live *only* there: `showAgents()` was already true for every user while
+ * `@if (showAgents() && isAdmin())` hid the entry anyway.
+ *
+ * The child components are stubbed — pulling `SessionList` / `UserDropdownComponent` in
+ * would drag their dependency graphs with them.
  */
-describe('Sidenav — Agents nav entry gating (D14)', () => {
+describe('Sidenav — nav entries', () => {
   @Component({ selector: 'app-session-list', template: '' })
   class SessionListStub {}
 
@@ -174,19 +141,24 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
     readonly logout = output<void>();
   }
 
+  /** Stand-in for the admin console's nav: this spec is about *which* body
+   *  the sidenav renders, not what the console puts in it. The real one
+   *  pulls the marketplace service (and its badge fetch) in with it. */
+  @Component({ selector: 'app-admin-nav', template: '<p>admin nav</p>' })
+  class AdminNavStub {}
+
+  @Component({ selector: 'app-notification-bell', template: '<button>bell</button>' })
+  class NotificationBellStub {}
+
   let mockUserService: any;
   let mockAgentService: any;
-  /**
-   * ⚠️ TEMPORARY, with the Assistants signpost it gates. Defaults to `true` — the interesting
-   * assertions below are about the signpost's *content* and its coupling to `showAgents()`,
-   * and every one of them would pass vacuously on a host where the entry is absent outright.
-   * The host gate itself gets its own test rather than silently suppressing the others.
-   */
-  let onLegacyMigrationHost: boolean;
-
+  let mockUserSettings: ReturnType<typeof userSettingsStub>;
   beforeEach(() => {
     TestBed.resetTestingModule();
-    onLegacyMigrationHost = true;
+    localStorage.removeItem('sidebar-layout');
+    mockUserSettings = userSettingsStub();
+    // The overrides live on the TestBed that was just reset.
+    stubsApplied = false;
     mockUserService = {
       hasAnyRole: vi.fn().mockReturnValue(false),
       currentUser: signal({ user_id: 'u1', email: 'u1@example.com' }),
@@ -217,14 +189,10 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
           useValue: { isCollapsed: signal(false), close: vi.fn(), toggleCollapsed: vi.fn() },
         },
         { provide: UserService, useValue: mockUserService },
-        {
-          provide: MemorySpaceService,
-          useValue: { accessible$: signal<boolean | null>(false), loadSpaces: vi.fn().mockResolvedValue(undefined) },
-        },
+        // Still provided, though the component no longer injects it: that is what
+        // makes the "fetches nothing at boot" assertion below a real guard.
         { provide: AgentService, useValue: mockAgentService },
-        // `useFactory`, not `useValue`: resolution happens at render time, so a test can
-        // flip the flag after `configureTestingModule` and before `renderSidenav()`.
-        { provide: LEGACY_MIGRATION_HOST, useFactory: () => onLegacyMigrationHost },
+        { provide: UserSettingsService, useValue: mockUserSettings },
       ],
     });
   });
@@ -233,15 +201,33 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
     TestBed.resetTestingModule();
   });
 
-  async function renderSidenav() {
+  /**
+   * Swap the sidenav's real children for stubs.
+   *
+   * Idempotent, and separate from `renderSidenav`, because `overrideComponent`
+   * throws once the test module has been instantiated — and a test that drives
+   * the router has to `TestBed.inject(Router)` before it renders anything.
+   */
+  let stubsApplied = false;
+  async function applyStubs() {
+    if (stubsApplied) return (await import('./sidenav')).Sidenav;
+
     const { Sidenav } = await import('./sidenav');
     const { SessionList } = await import('./components/session-list/session-list');
     const { UserDropdownComponent } = await import('../topnav/components/user-dropdown.component');
+    const { AdminNav } = await import('../../admin/admin-nav');
+    const { NotificationBellComponent } = await import('../notification-bell/notification-bell.component');
 
     TestBed.overrideComponent(Sidenav, {
-      remove: { imports: [SessionList, UserDropdownComponent] },
-      add: { imports: [SessionListStub, UserDropdownStub] },
+      remove: { imports: [SessionList, UserDropdownComponent, AdminNav, NotificationBellComponent] },
+      add: { imports: [SessionListStub, UserDropdownStub, AdminNavStub, NotificationBellStub] },
     });
+    stubsApplied = true;
+    return Sidenav;
+  }
+
+  async function renderSidenav() {
+    const Sidenav = await applyStubs();
 
     const fixture = TestBed.createComponent(Sidenav);
     fixture.detectChanges();
@@ -253,7 +239,61 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
     return anchors.length ? (anchors[0] as HTMLAnchorElement) : undefined;
   }
 
-  it('renders the Agents nav entry for a NON-admin once the surface is reachable', async () => {
+  /**
+   * Projects follow this build's compile-time switch (environments/feature-flags.ts),
+   * never a request: present from first paint when on, absent when off.
+   */
+  it('shows Projects and the notification bell in a build with Projects on', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: true } });
+    const fixture = await renderSidenav();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('a[href="/projects"]')?.textContent).toContain('Projects');
+    expect(el.querySelector('app-notification-bell')).not.toBeNull();
+  });
+
+  it('has no Projects entry and no bell in a build with Projects off', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+    const fixture = await renderSidenav();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('a[href="/projects"]')).toBeNull();
+    expect(el.querySelector('app-notification-bell')).toBeNull();
+  });
+
+  it('offers the search button in the header, beside the collapse control, in a build with search on', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
+    const { SearchDialogService } = await import('../search/search-dialog.service');
+    const open = vi.fn().mockResolvedValue(undefined);
+    TestBed.overrideProvider(SearchDialogService, { useValue: { open } });
+    const fixture = await renderSidenav();
+    const el = fixture.nativeElement as HTMLElement;
+    const button = el.querySelector('button[aria-label="Search"]') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    expect(button.getAttribute('aria-keyshortcuts')).toMatch(/^(Meta|Control)\+K$/);
+    // In the header row with the collapse button, and unlike it not desktop-only,
+    // so touch and narrow screens keep it.
+    const collapse = el.querySelector('button[aria-label="Collapse sidebar"]') as HTMLButtonElement;
+    expect(button.parentElement).toBe(collapse.parentElement);
+    expect(button.classList.contains('hidden')).toBe(false);
+    button.click();
+    expect(open).toHaveBeenCalledWith();
+  });
+
+  it('keeps New Session a single full-width button in its own row', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
+    const fixture = await renderSidenav();
+    const el = fixture.nativeElement as HTMLElement;
+    const newSession = Array.from(el.querySelectorAll('button')).find(b => b.textContent?.includes('New Session'))!;
+    expect(newSession.classList.contains('w-full')).toBe(true);
+    expect(newSession.parentElement?.querySelectorAll('button')).toHaveLength(1);
+  });
+
+  it('has no search button in a build with conversation search off', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: false } });
+    const fixture = await renderSidenav();
+    expect((fixture.nativeElement as HTMLElement).querySelector('button[aria-label="Search"]')).toBeNull();
+  });
+
+  it('renders the Agents nav entry for a NON-admin', async () => {
     mockUserService.isAdmin.set(false);
     mockUserService.canAccessAdmin.set(false);
     const fixture = await renderSidenav();
@@ -270,62 +310,224 @@ describe('Sidenav — Agents nav entry gating (D14)', () => {
     expect(agentsNavLink(fixture)).toBeDefined();
   });
 
-  it('still hides the Agents nav entry when the surface 404s, regardless of role', async () => {
-    mockAgentService.accessible$.set(false);
+  it('renders Agents on first paint, without waiting on the agent list', async () => {
+    // The entry used to hang on `showAgents()` — "the /agents list call did not 404" —
+    // so it could only appear a round-trip after the nav around it, popping into a
+    // sidebar the user was already reading. `accessible$` unresolved is exactly that
+    // pre-response state, and the entry must already be there.
+    mockAgentService.accessible$.set(null);
     const fixture = await renderSidenav();
-    expect(agentsNavLink(fixture)).toBeUndefined();
-  });
-
-  // ── Assistant deprecation (Designer Phase 5, #746) ────────────────────────────────
-  //
-  // The Assistants entry is back, but as a **signpost onto the migration explainer**, not
-  // as a second authoring surface. The distinction is the whole point, so it is what these
-  // assert: the link exists, and it does NOT go anywhere an assistant can be built.
-  function assistantsNavLink(fixture: ComponentFixture<unknown>): HTMLAnchorElement | null {
-    return fixture.nativeElement.querySelector('a[href="/assistants"]');
-  }
-
-  it('keeps an Assistants signpost so the old name is still findable', async () => {
-    const fixture = await renderSidenav();
-
-    expect(assistantsNavLink(fixture)).not.toBeNull();
-    expect(assistantsNavLink(fixture)!.textContent).toContain('Assistants');
-  });
-
-  it('still ships one authoring noun — no /assistants/new or editor entry', async () => {
-    const fixture = await renderSidenav();
-    const html = fixture.nativeElement as HTMLElement;
-
-    expect(html.querySelector('a[href="/assistants/new"]')).toBeNull();
-    expect(html.querySelector('a[href^="/assistants/"]')).toBeNull();
-  });
-
-  it('hides the Assistants signpost when the agent surface 404s', async () => {
-    // Every route out of the explainer lands on /agents. With the surface off, the
-    // signpost points at a page of dead links, so it must go with it.
-    mockAgentService.accessible$.set(false);
-    const fixture = await renderSidenav();
-    expect(assistantsNavLink(fixture)).toBeNull();
-  });
-
-  it('hides the Assistants signpost off the production apex', async () => {
-    // ⚠️ TEMPORARY, with the signpost. The explainer now also answers "where did the
-    // assistants I built on the *previous site* go?", which is a question only production
-    // has — on dev or beta the entry would point at an explanation of a site that reader is
-    // not on. (`localhost` is allowed, but as a bench, not an audience.) Paired with
-    // `legacyMigrationHostGuard` on the route, so the URL cannot be reached by hand where
-    // the nav entry is hidden.
-    onLegacyMigrationHost = false;
-    const fixture = await renderSidenav();
-
-    expect(assistantsNavLink(fixture)).toBeNull();
-    // The Agents entry is untouched by the host gate — it is a different feature.
     expect(agentsNavLink(fixture)).toBeDefined();
   });
 
-  it('badges Agents as New, not as Preview — unfamiliar is not unstable', async () => {
+  it('renders Agents even when the agent surface 404s', async () => {
+    // The trade made when the gate came off: with `AGENTS_API_ENABLED` off the entry
+    // leads to an empty agents page (which swallows the error itself) rather than
+    // being absent. Asserted so the layout shift is not quietly reintroduced.
+    mockAgentService.accessible$.set(false);
     const fixture = await renderSidenav();
-    expect(agentsNavLink(fixture)!.textContent).toContain('New');
+    expect(agentsNavLink(fixture)).toBeDefined();
+  });
+
+  it('fetches nothing at boot — the nav no longer probes feature accessibility', async () => {
+    // Every real consumer of the agent list (the agents page, the composer `@`-menu,
+    // the schedule form) loads it itself. The sidenav's copy existed only to feed the
+    // gate above, so rendering the nav must cost no HTTP at all.
+    await renderSidenav();
+    expect(mockAgentService.loadAgents).not.toHaveBeenCalled();
+  });
+
+  // ── Assistant deprecation, finished ───────────────────────────────────────────────
+  //
+  // The Assistants signpost is gone: the rename has landed with users, so the old noun no
+  // longer needs a door in the nav. `/assistants` still resolves to the migration
+  // explainer for anyone holding a link — this only asserts the nav does not offer it,
+  // and in particular that nothing here leads to a second authoring surface.
+  it('no longer signposts Assistants anywhere in the nav', async () => {
+    const fixture = await renderSidenav();
+    const html = fixture.nativeElement as HTMLElement;
+
+    expect(html.querySelector('a[href="/assistants"]')).toBeNull();
+    expect(html.querySelector('a[href^="/assistants/"]')).toBeNull();
+    expect(html.textContent).not.toContain('Assistants');
+  });
+
+  it('drops the "New" badge on Agents — the rename has stopped being news', async () => {
+    const fixture = await renderSidenav();
+    expect(agentsNavLink(fixture)!.textContent).not.toContain('New');
     expect(agentsNavLink(fixture)!.textContent).not.toContain('Preview');
+  });
+
+  // ── Artifacts ─────────────────────────────────────────────────────────────────────
+  //
+  // `/artifacts` carries only `authGuard`, so there is no kill switch for the entry to
+  // ride even in principle: it is there for every signed-in user.
+  function artifactsNavLink(fixture: ComponentFixture<unknown>): HTMLAnchorElement | null {
+    return fixture.nativeElement.querySelector('a[href="/artifacts"]');
+  }
+
+  it('offers the Artifacts library', async () => {
+    const fixture = await renderSidenav();
+
+    expect(artifactsNavLink(fixture)).not.toBeNull();
+    expect(artifactsNavLink(fixture)!.textContent).toContain('Artifacts');
+  });
+
+  it('renders Artifacts on first paint too', async () => {
+    mockAgentService.accessible$.set(null);
+    const fixture = await renderSidenav();
+    expect(artifactsNavLink(fixture)).not.toBeNull();
+  });
+  // ── Edit sidebar ──────────────────────────────────────────────────────────────────
+  //
+  // The entries render in the order and with the visibility the user chose; a hidden
+  // one waits under More, which is always there so Edit sidebar can never be hidden.
+  function navLabels(fixture: ComponentFixture<unknown>): string[] {
+    const body = (fixture.nativeElement as HTMLElement).querySelector('.sidenav-body-enter.pb-2')!;
+    return Array.from(body.querySelectorAll(':scope > a, :scope > button')).map(el => el.textContent!.trim());
+  }
+
+  function moreButton(fixture: ComponentFixture<unknown>): HTMLButtonElement {
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button')).find(
+      b => b.textContent?.trim() === 'More',
+    )!;
+  }
+
+  it('renders the default entries, then More', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: true } });
+    const fixture = await renderSidenav();
+    expect(navLabels(fixture)).toEqual(['Agents', 'Projects', 'Artifacts', 'Customize', 'Schedules', 'More']);
+    expect((fixture.nativeElement as HTMLElement).querySelector('a[href="/schedules"]')).not.toBeNull();
+  });
+
+  it("renders the user's order and leaves hidden entries out", async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+    await applyStubs();
+    const layout = TestBed.inject(SidebarLayoutService);
+    layout.move(2, 0); // Customize to the top
+    layout.setVisible('agents', false);
+
+    const fixture = await renderSidenav();
+    expect(navLabels(fixture)).toEqual(['Customize', 'Artifacts', 'Schedules', 'More']);
+    expect(agentsNavLink(fixture)).toBeUndefined();
+  });
+
+  it('offers only Edit sidebar under More while nothing is hidden', async () => {
+    const fixture = await renderSidenav();
+    moreButton(fixture).click();
+    fixture.detectChanges();
+
+    const menu = document.querySelector('[role="menu"]') as HTMLElement;
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(el => el.textContent!.trim());
+    expect(items).toEqual(['Edit sidebar…']);
+    expect(menu.querySelector('[role="separator"]')).toBeNull();
+  });
+
+  it('lists the hidden entries under More, then Edit sidebar', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+    await applyStubs();
+    const layout = TestBed.inject(SidebarLayoutService);
+    layout.setVisible('schedules', false);
+    layout.setVisible('agents', false);
+    const fixture = await renderSidenav();
+    moreButton(fixture).click();
+    fixture.detectChanges();
+
+    const menu = document.querySelector('[role="menu"]') as HTMLElement;
+    expect(menu).not.toBeNull();
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(el => el.textContent!.trim());
+    expect(items).toEqual(['Agents', 'Schedules', 'Edit sidebar…']);
+    expect(menu.querySelector('a[href="/schedules"]')).not.toBeNull();
+    expect(menu.querySelector('[role="separator"]')).not.toBeNull();
+  });
+
+  it('opens Edit sidebar from More and saves the layout when it closes', async () => {
+    const open = vi.fn(() => ({ closed: of(undefined) }));
+    TestBed.overrideProvider(Dialog, { useValue: { open } });
+    await applyStubs();
+    const layout = TestBed.inject(SidebarLayoutService);
+    const save = vi.spyOn(layout, 'save').mockResolvedValue(undefined);
+
+    const fixture = await renderSidenav();
+    moreButton(fixture).click();
+    fixture.detectChanges();
+    const edit = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
+      el => el.textContent?.trim() === 'Edit sidebar…',
+    )!;
+    edit.click();
+
+    const { EditSidebarDialogComponent } = await import('./components/edit-sidebar-dialog.component');
+    expect(open).toHaveBeenCalledWith(EditSidebarDialogComponent);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Admin console ─────────────────────────────────────────────────────────────────
+  //
+  // The console's nav used to be a second column inside the admin page, which left
+  // every admin surface squeezed between two navigations — this one, listing
+  // conversations that cannot be opened from `/admin`, and that one. It now replaces
+  // this one's body, while the frame (logo, collapse control, user menu) stays put so
+  // the swap reads as the same sidebar rather than a different screen.
+  //
+  // Driven through the real router on purpose: the flag is declared once on the parent
+  // `/admin` route and every child declares none, so a stubbed snapshot would prove the
+  // walk works on a tree Angular never builds. See `route-chrome.spec.ts`.
+  describe('admin console takes over the body', () => {
+    @Component({ selector: 'app-blank', template: '' })
+    class BlankPage {}
+
+    async function navigateTo(url: string) {
+      // Before the first inject: see the note on `applyStubs`.
+      await applyStubs();
+      const router = TestBed.inject(Router);
+      router.resetConfig([
+        { path: '', component: BlankPage },
+        {
+          path: 'admin',
+          data: { chrome: ADMIN_CHROME },
+          children: [{ path: 'costs', component: BlankPage }],
+        },
+      ]);
+      await router.navigate([url]);
+    }
+
+    it('shows the chat nav on a chat route', async () => {
+      await navigateTo('/');
+      const html = (await renderSidenav()).nativeElement as HTMLElement;
+
+      expect(html.querySelector('app-session-list')).not.toBeNull();
+      expect(html.querySelector('app-admin-nav')).toBeNull();
+    });
+
+    it('swaps the body for the admin nav on an admin route', async () => {
+      await navigateTo('/admin/costs');
+      const html = (await renderSidenav()).nativeElement as HTMLElement;
+
+      expect(html.querySelector('app-admin-nav')).not.toBeNull();
+      // The conversation list is the point: it cannot be opened from inside the
+      // console, so holding 18rem for it there was the cost.
+      expect(html.querySelector('app-session-list')).toBeNull();
+      expect(html.querySelector('a[href="/agents"]')).toBeNull();
+    });
+
+    it('follows navigation rather than freezing at construction', async () => {
+      await navigateTo('/');
+      const fixture = await renderSidenav();
+      expect(fixture.nativeElement.querySelector('app-admin-nav')).toBeNull();
+
+      await TestBed.inject(Router).navigate(['/admin/costs']);
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('app-admin-nav')).not.toBeNull();
+      expect(fixture.nativeElement.querySelector('app-session-list')).toBeNull();
+    });
+
+    it('keeps the frame across the swap', async () => {
+      await navigateTo('/admin/costs');
+      const html = (await renderSidenav()).nativeElement as HTMLElement;
+
+      expect(html.querySelector('button[aria-label="Collapse sidebar"]')).not.toBeNull();
+      expect(html.querySelector('app-user-dropdown')).not.toBeNull();
+    });
   });
 });

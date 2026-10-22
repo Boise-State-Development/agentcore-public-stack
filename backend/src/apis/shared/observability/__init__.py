@@ -2,6 +2,9 @@
 
 from apis.shared.observability.prompt_cache import (
     CACHE_TTL_SECONDS,
+    DEFAULT_CACHE_TTL_SECONDS,
+    OPENAI_RESPONSES_CACHE_TTL_SECONDS,
+    cache_ttl_seconds_for,
     PARTIAL_MISS_WRITE_READ_RATIO,
     PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV,
     prompt_cache_observability_enabled,
@@ -18,6 +21,9 @@ from apis.shared.observability.emf import (
 
 __all__ = [
     "CACHE_TTL_SECONDS",
+    "DEFAULT_CACHE_TTL_SECONDS",
+    "OPENAI_RESPONSES_CACHE_TTL_SECONDS",
+    "cache_ttl_seconds_for",
     "PARTIAL_MISS_WRITE_READ_RATIO",
     "PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV",
     "prompt_cache_observability_enabled",

@@ -1,0 +1,1504 @@
+"""Ingestion consumer for managed knowledge bases.
+
+Triggered by an EventBridge ``ObjectCreated`` event on the RAG documents bucket. Its
+whole job is to decide whether a newly uploaded document belongs to a managed
+knowledge base and, if so, ingest it directly.
+
+Routing exclusivity is the point (Requirements 10.3-10.5)
+---------------------------------------------------------
+The legacy pipeline is triggered by its **own**, pre-existing S3 notification on the
+same bucket. That notification was deliberately left in place, so for a legacy
+document this function's correct behaviour is to **do nothing at all** — the other
+Lambda has already got it. Acting here as well would index the same bytes twice: two
+sets of vectors, doubled ingestion cost, and duplicate chunks competing in one
+result list.
+
+So the routing table is asymmetric, and that asymmetry is intentional:
+
+===============  =========================================================
+Engine           This function
+===============  =========================================================
+legacy (absent)  returns immediately, ingesting nothing
+managed          ingests directly and drives ``DOC#`` to a terminal state
+===============  =========================================================
+
+The one exception is a deliberate migration or dual-read pilot, which the
+Migration_Worker drives and which never routes through an upload event.
+
+Indexed is not retrievable
+--------------------------
+Bedrock reports a document ``INDEXED`` up to a second before it can actually be
+retrieved — measured at 0.75-1.03 s. Marking a document ``complete`` on ``INDEXED``
+alone produces the worst kind of bug report: the UI says the upload worked, the user
+asks a question straight away, and the answer does not mention their document. So
+this polls until a retrieval really returns the document, and records ``indexedAt``
+and ``retrievableAt`` separately so the gap stays measurable instead of becoming
+folklore.
+
+A changed source is not a redelivery
+------------------------------------
+A KB sync (Drive file or web re-crawl) that finds its source changed overwrites the
+document's S3 object in place, so its ``ObjectCreated`` event arrives for a document
+that is already ``complete`` with its bytes settled — exactly what a redelivery looks
+like. The sync marks the difference: it writes ``stagedContentHash`` before the
+overwrite, and :func:`staged_version_to_reingest` compares that with the
+``ingestedContentHash`` the last re-ingest recorded. A version still owed is
+re-ingested and its size difference settled against the byte cap
+(:func:`_reingest_changed_document`); anything else keeps the settled early exit.
+
+Import boundary
+---------------
+Raw DynamoDB table access rather than importing ``apis.shared.assistants``, whose
+``__init__`` pulls in the embeddings stack at module scope. Keeping this Lambda's
+image small is a deliberate constraint — the same reason
+``apis/app_api/kb_sync/records.py`` is written this way. Module-level imports are
+stdlib only; everything heavy is function-local.
+
+No in-process orchestration
+---------------------------
+No ``asyncio.ensure_future`` fan-out (Requirement 10.8). One invocation drives its
+documents to terminal or fails and lets the event source redeliver. A background
+task in a Lambda is killed when the handler returns, which turns a reported success
+into a silently half-finished ingestion.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote_plus
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+#: Terminal document states, taken from ``apis/app_api/documents/models.py``'s
+#: ``DocumentStatus`` rather than invented: the facade's status filter serves only
+#: ``complete``, so any drift here would silently make documents unretrievable.
+STATUS_COMPLETE = "complete"
+STATUS_FAILED = "failed"
+
+#: A soft-deleted document (``document_service.soft_delete_document``): its row
+#: stays, with a TTL, until cleanup has removed the vectors, the managed copy and
+#: the S3 source, and only then is hard-deleted. Nothing here may move a row out
+#: of this status or ingest a document in it — the retrieval filter joins on the
+#: row, so reviving it to ``complete`` would serve a document its owner deleted.
+STATUS_DELETING = "deleting"
+
+#: The leading status of a born-managed first upload (``MANAGED_KB_NEW_DEFAULT``):
+#: the document is uploaded and its knowledge base is still being created, so the
+#: managed lifecycle is ``provisioning → uploading → complete``.
+#:
+#: Defined HERE, in the module that owns the managed document lifecycle, rather
+#: than beside the API-side trigger, because the migration Lambda image carries
+#: only ``apis/shared/kb_backend`` and ``apis/app_api/kb_migration`` — importing
+#: the trigger's package from the provisioning job would fail on a cold start.
+#: ``kb_upgrade.born_managed`` re-exports this name for the API side, so the two
+#: halves cannot drift apart.
+#:
+#: Non-terminal and non-retrievable: the retrieval facade serves only
+#: ``complete``, so a document in this status can never answer a question out of a
+#: knowledge base that does not exist yet.
+STATUS_PROVISIONING = "provisioning"
+
+#: How long to wait for a document to become genuinely retrievable after Bedrock
+#: reports it INDEXED. The observed gap is 0.75-1.03 s; the margin is wide because
+#: the cost of waiting is a few seconds of Lambda time and the cost of not waiting
+#: is telling a user their upload worked when it is not yet usable.
+RETRIEVABLE_POLL_TIMEOUT_SECONDS = 30.0
+RETRIEVABLE_POLL_INTERVAL_SECONDS = 0.5
+
+#: How long ONE invocation waits for Bedrock to finish indexing.
+#:
+#: This has to cover the whole indexing time, because redelivery cannot. Lambda's
+#: asynchronous retry is capped at **2** attempts — a hard service limit, not a
+#: setting we chose — so an event gets 1 + 2 tries spread over a few minutes and
+#: then dead-letters. Raising a retry policy on the EventBridge target does not
+#: change that: for a Lambda target EventBridge hands the event off and the
+#: function's own async retry config takes over.
+#:
+#: So the budget is sized from measurement, not convenience. The §5.1 benchmark
+#: measured PDF ingestion at 37–264 s, and a 1.5 MB PDF in dev reached INDEXED
+#: 5 m 30 s after upload — image-heavy files run longer because the vision model
+#: runs per page. 10 minutes covers that with headroom and still leaves 5 minutes
+#: under the Lambda's 15-minute timeout, so a slow-but-succeeding document is never
+#: killed mid-wait.
+#:
+#: The cost of waiting is real but small: this Lambda is 1024 MB and handles one
+#: user upload at a time, so a 6-minute wait is a fraction of a cent. The cost of
+#: NOT waiting was a permanently stuck document with a fully retrievable copy in
+#: the knowledge base and no writer left to reconcile it.
+#:
+#: ⚠️ Keep the sum of this and RETRIEVABLE_POLL_TIMEOUT_SECONDS below the Lambda's
+#: timeout. `tests/supply_chain/test_kb_migration_env_contract.py` asserts it
+#: against the value in the CDK construct.
+INDEXED_POLL_TIMEOUT_SECONDS = 600.0
+
+#: 5 s rather than sub-second: over a 10-minute budget this is ~120 control-plane
+#: calls instead of ~1,200, and indexing progress is measured in tens of seconds,
+#: so a finer interval buys nothing.
+INDEXED_POLL_INTERVAL_SECONDS = 5.0
+
+#: How long a presigned upload URL stays valid (``POST /upload-url``, which reads
+#: this constant). Until it expires the browser's ``PUT`` can still land, so a
+#: document whose object is missing inside this window is waited on, not failed.
+UPLOAD_URL_TTL_SECONDS = 3600
+
+#: Extra status probes after the consumer's own submit, while Bedrock still reports
+#: ``NOT_FOUND``. The ingest call returns once the request is accepted, and a probe
+#: issued right behind it can miss the document; without this, that read ends the
+#: wait at once and spends one of the two redeliveries Lambda allows. 3 probes at
+#: :data:`INDEXED_POLL_INTERVAL_SECONDS` is 15 s, paid only by a document that is
+#: still unknown to Bedrock after it was submitted.
+NOT_FOUND_GRACE_POLLS = 3
+
+#: Written to a document whose upload never reached S3, for the person who
+#: uploaded it rather than an operator.
+UPLOAD_MISSING_MESSAGE = (
+    "The upload of this file never completed, so it was not added to the "
+    "knowledge base. Please upload the file again."
+)
+
+#: Bounded retries on the record update. The event source already redelivers, so
+#: this only covers a transient DynamoDB failure inside one invocation; unbounded
+#: retries would burn the Lambda timeout and lose the DLQ signal.
+MAX_RECORD_UPDATE_ATTEMPTS = 3
+
+
+class IngestionRoutingError(Exception):
+    """The event could not be routed, or the document could not be finished."""
+
+
+def _table():
+    import boto3
+
+    return boto3.resource("dynamodb").Table(os.environ["DYNAMODB_ASSISTANTS_TABLE_NAME"])
+
+
+def _now_iso() -> str:
+    from apis.shared.timestamps import utc_now_iso
+
+    return utc_now_iso()
+
+
+def parse_object_key(key: str) -> Tuple[str, str, str]:
+    """Split ``assistants/{assistant_id}/documents/{document_id}/{filename}``.
+
+    The layout is the existing one and this feature does not change it: migration is
+    a re-ingest of bytes already in place, never a re-upload. Parsing the key rather
+    than trusting an event field keeps routing independent of which producer
+    delivered the notification.
+    """
+    parts = unquote_plus(key).split("/")
+    if (
+        len(parts) < 5
+        or parts[0] != "assistants"
+        or parts[2] != "documents"
+        or not parts[1]
+        or not parts[3]
+        or not "/".join(parts[4:])
+    ):
+        raise IngestionRoutingError(
+            f"object key {key!r} is not an assistant document path; expected "
+            f"assistants/{{assistant_id}}/documents/{{document_id}}/{{filename}}"
+        )
+    return parts[1], parts[3], "/".join(parts[4:])
+
+
+def is_document_key(key: str) -> bool:
+    """Whether ``key`` has the document layout ``parse_object_key`` accepts.
+
+    The documents bucket holds other objects under ``assistants/`` too — agent
+    icons at ``assistants/{assistant_id}/icons/{digest}.{ext}`` — and the S3
+    event reaches this function for them. They are not documents and never will
+    be, so the caller skips them instead of raising: a raise here is retried and
+    then dead-lettered for an object that was never ours.
+    """
+    try:
+        parse_object_key(key)
+    except IngestionRoutingError:
+        return False
+    return True
+
+
+def extract_records(event: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Normalize EventBridge and raw-S3 notification shapes into one list.
+
+    Both are accepted because the bucket carries both producers — EventBridge feeds
+    this function, a direct notification feeds the legacy pipeline — so a wiring
+    change cannot silently stop ingestion.
+    """
+    detail = event.get("detail")
+    if isinstance(detail, dict) and detail.get("object"):
+        return [
+            {
+                "bucket": (detail.get("bucket") or {}).get("name", ""),
+                "key": (detail.get("object") or {}).get("key", ""),
+            }
+        ]
+
+    out: List[Dict[str, str]] = []
+    for record in event.get("Records") or []:
+        s3 = record.get("s3", {})
+        out.append(
+            {
+                "bucket": (s3.get("bucket") or {}).get("name", ""),
+                "key": (s3.get("object") or {}).get("key", ""),
+            }
+        )
+    return out
+
+
+def resolve_engine_for(assistant_id: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """The engine serving this assistant's knowledge base, plus its record.
+
+    Delegates to ``records.resolve_engine`` so "absence means legacy" has exactly one
+    implementation. A missing record is the overwhelmingly common case today and
+    resolves to legacy, which is why this cannot treat it as an error.
+    """
+    from apis.shared.kb_backend.records import get_kb_record, resolve_engine
+
+    record = get_kb_record(assistant_id, assistant_id)
+    return resolve_engine(record), record
+
+
+def set_document_terminal(
+    assistant_id: str,
+    document_id: str,
+    status: str,
+    indexed_at: Optional[str] = None,
+    retrievable_at: Optional[str] = None,
+    error: Optional[str] = None,
+) -> bool:
+    """Drive the ``DOC#`` record to a terminal state, with bounded retries.
+
+    ``indexedAt`` and ``retrievableAt`` are stored separately on purpose: collapsing
+    them would erase the only evidence of the INDEXED-to-retrievable gap, which is
+    what makes "my upload finished but the assistant cannot see it" diagnosable
+    rather than mysterious.
+
+    Returns ``False`` when the document has been deleted, which is a logged skip
+    and not a failure: no retry, no raise, no DLQ. The event that drives this can
+    outlive the document, so the write is guarded twice:
+
+    * **The row must exist.** ``UpdateItem`` is an upsert. Deleting a document or
+      its whole agent removes the ``DOC#`` row, and a late or redelivered event
+      would otherwise recreate it as a ghost row carrying only a status and
+      timestamps — the orphaned ``DOC#`` rows
+      ``scripts/cleanup_orphaned_agent_rows.py`` exists to remove.
+    * **The row must not be ``deleting``.** A soft-deleted row lives on until its
+      cleanup finishes, or for its whole TTL if cleanup fails. Writing
+      ``complete`` over it would make the document the owner just deleted
+      retrievable again, because the retrieval filter joins on this row.
+
+    Retrying cannot undo a delete, so a rejected guard is not treated as the
+    transient failure the retries are for.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
+
+    sets = ["#status = :status", "updatedAt = :now"]
+    values: Dict[str, Any] = {
+        ":status": status,
+        ":now": _now_iso(),
+        ":deleting": STATUS_DELETING,
+    }
+
+    if indexed_at:
+        sets.append("indexedAt = :indexed")
+        values[":indexed"] = indexed_at
+    if retrievable_at:
+        sets.append("retrievableAt = :retrievable")
+        values[":retrievable"] = retrievable_at
+    if error:
+        sets.append("ingestionError = :err")
+        values[":err"] = error
+
+    expression = f"SET {', '.join(sets)}"
+    last: Optional[Exception] = None
+
+    for attempt in range(1, MAX_RECORD_UPDATE_ATTEMPTS + 1):
+        try:
+            _table().update_item(
+                Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+                UpdateExpression=expression,
+                ConditionExpression=f"{RECORD_EXISTS} AND #status <> :deleting",
+                # `status` is a DynamoDB reserved keyword.
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues=values,
+                # Tells "row gone" from "row being deleted" without a second read.
+                ReturnValuesOnConditionCheckFailure="ALL_OLD",
+            )
+            return True
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                why = (
+                    "is being deleted" if exc.response.get("Item")
+                    else "is gone (document or agent deleted)"
+                )
+                logger.info(
+                    f"DOC# row {assistant_id}/{document_id} {why}; not marking it "
+                    f"{status}"
+                )
+                return False
+            last = exc
+            logger.warning(
+                f"attempt {attempt}/{MAX_RECORD_UPDATE_ATTEMPTS} to mark "
+                f"{document_id} {status} failed: {exc}"
+            )
+            if attempt < MAX_RECORD_UPDATE_ATTEMPTS:
+                time.sleep(0.2 * attempt)
+
+    # Raised rather than swallowed: the record is the durable retry anchor
+    # (Requirement 10.7), so a document left non-terminal must surface as a failed
+    # invocation and reach the DLQ instead of looking like a success.
+    raise IngestionRoutingError(
+        f"could not mark document {document_id} as {status} after "
+        f"{MAX_RECORD_UPDATE_ATTEMPTS} attempts: {last}"
+    )
+
+
+#: Bedrock's own view of a document, from the packaged service model's
+#: ``DocumentStatus`` enum rather than guessed. Read at call time from
+#: ``GetKnowledgeBaseDocuments``, which is the only way to know whether indexing
+#: has finished — the ``IngestKnowledgeBaseDocuments`` call returns as soon as the
+#: request is accepted and says nothing about progress.
+DOC_STATUS_INDEXED = "INDEXED"
+DOC_STATUS_NOT_FOUND = "NOT_FOUND"
+
+#: Bedrock is still working. Re-ingesting a document in one of these states is
+#: pointless at best: the work is already queued, and re-submitting it discards
+#: whatever progress has been made and starts the clock again. That is what turned
+#: a slow success into a permanent failure in dev — three redeliveries each
+#: re-ingested, and the document only reached INDEXED 54 s after the last attempt
+#: had already been dead-lettered.
+#:
+#: ⚠️ ``TEXT_INDEXED`` is **not in the packaged service model's DocumentStatus
+#: enum** — the live service returns statuses the SDK does not declare. Observed in
+#: dev on a document with image extraction enabled: it reported ``TEXT_INDEXED``
+#: (text searchable, media still processing) and later became ``INDEXED``. It is
+#: treated as in-flight rather than as done, because marking a document complete at
+#: that point would tell the user an image-only page is ready while the vision
+#: model has not finished — precisely the "upload worked but the assistant cannot
+#: see it" report this module exists to prevent. Do not derive this set from the
+#: SDK enum; it is deliberately wider.
+DOC_STATUSES_IN_FLIGHT = frozenset(
+    {"STARTING", "PENDING", "IN_PROGRESS", "TEXT_INDEXED"}
+)
+
+#: Terminal and unusable. Worth failing the document rather than retrying forever.
+DOC_STATUSES_FAILED = frozenset({"FAILED", "METADATA_UPDATE_FAILED"})
+
+#: Indexed, but not everything made it. Treated as usable — the document IS
+#: retrievable — because the alternative is failing a document the user can see
+#: content from. Logged so the partiality is not silent.
+DOC_STATUSES_PARTIAL = frozenset({"PARTIALLY_INDEXED", "METADATA_PARTIALLY_INDEXED"})
+
+
+def document_status(backend: Any, kb_ref: str, document_id: str) -> Tuple[str, Optional[str]]:
+    """Ask Bedrock for a document's ingestion status and its own timestamp.
+
+    Returns ``(status, updated_at_iso)``. ``NOT_FOUND`` covers both "Bedrock has
+    never heard of it" and "the call failed", because both mean the same thing to
+    the caller: there is no evidence the document is already being worked on, so
+    ingesting is the right next move. A probe failure must not be mistaken for a
+    document failure.
+
+    This exists because the ingest call is fire-and-forget. Without it the consumer
+    cannot distinguish "not indexed yet" from "never submitted", so every
+    redelivery re-submits — see :data:`DOC_STATUSES_IN_FLIGHT`.
+    """
+    try:
+        # Imported here, not at module scope: this module's module-level imports are
+        # stdlib only so the shared Lambda image stays small
+        # (tests/architecture/test_kb_backend_boundary.py). Reused rather than
+        # redefined so the connector type has one definition.
+        from apis.shared.kb_backend.managed_backend import CONTENT_DATA_SOURCE_TYPE
+
+        client = backend._agent()  # noqa: SLF001 - same package, deliberate reuse
+        aws_kb_id, data_source_id = backend._locate(kb_ref)  # noqa: SLF001
+        response = client.get_knowledge_base_documents(
+            knowledgeBaseId=aws_kb_id,
+            dataSourceId=data_source_id,
+            documentIdentifiers=[
+                {"dataSourceType": CONTENT_DATA_SOURCE_TYPE, "custom": {"id": document_id}}
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 - a probe failure is not a document failure
+        logger.warning(f"document status probe for {document_id} failed: {exc}")
+        return DOC_STATUS_NOT_FOUND, None
+
+    for detail in response.get("documentDetails") or []:
+        status = str(detail.get("status") or DOC_STATUS_NOT_FOUND)
+        updated = detail.get("updatedAt")
+        return status, (updated.isoformat() if hasattr(updated, "isoformat") else updated)
+    return DOC_STATUS_NOT_FOUND, None
+
+
+def wait_until_indexed(
+    backend: Any,
+    kb_ref: str,
+    document_id: str,
+    timeout_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
+    sleep: Any = time.sleep,
+    not_before: Optional[str] = None,
+    not_found_grace_polls: int = 0,
+) -> Tuple[str, Optional[str]]:
+    """Poll Bedrock's document status until it settles, or give up.
+
+    Returns the last ``(status, updated_at)`` seen. Giving up is an ordinary
+    outcome, not an error: the caller leaves the document non-terminal and lets
+    redelivery come back to it, by which time indexing has usually finished.
+
+    ``not_before`` is for a document Bedrock already holds a version of: a status
+    last updated at or before it describes that previous version, not the one just
+    submitted, and is waited out like an in-flight one (:func:`_is_stale`).
+
+    ``not_found_grace_polls`` is for a document the caller has just submitted: up
+    to that many further probes are spent while Bedrock still reports
+    ``NOT_FOUND`` (:data:`NOT_FOUND_GRACE_POLLS`), instead of returning at once.
+
+    Why a *bounded* in-invocation wait rather than pure redelivery: most documents
+    index in a few seconds, and making every one of them wait for an EventBridge
+    retry would add a minute of latency to the common case for the sake of the rare
+    slow one. Why bounded at all: PDF ingestion was measured at 37–264 s and
+    image-heavy files run longer, so waiting for the worst case in-invocation would
+    hold a concurrency slot for minutes and bill for it.
+
+    Same call-time constant resolution as :func:`wait_until_retrievable`, and for
+    the same reason — a default argument is bound once at import and cannot be
+    patched by a test.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = INDEXED_POLL_TIMEOUT_SECONDS
+    if interval_seconds is None:
+        interval_seconds = INDEXED_POLL_INTERVAL_SECONDS
+
+    deadline = time.monotonic() + timeout_seconds
+    grace = not_found_grace_polls
+    status, updated_at = document_status(backend, kb_ref, document_id)
+    while time.monotonic() < deadline:
+        if _still_working(status, document_id) or _is_stale(updated_at, not_before):
+            pass
+        elif status == DOC_STATUS_NOT_FOUND and grace > 0:
+            grace -= 1
+        else:
+            break
+        sleep(interval_seconds)
+        status, updated_at = document_status(backend, kb_ref, document_id)
+    return status, updated_at
+
+
+def _is_stale(updated_at: Optional[str], not_before: Optional[str]) -> bool:
+    """Whether a Bedrock status predates ``not_before`` and so is not about it.
+
+    A status with no timestamp cannot be placed and is taken at face value — the
+    same answer the consumer gave before this check existed.
+    """
+    if not updated_at or not not_before:
+        return False
+    from apis.shared.timestamps import from_iso
+
+    try:
+        return from_iso(updated_at) <= from_iso(not_before)
+    except (TypeError, ValueError):
+        return False
+
+
+def _still_working(status: str, document_id: str) -> bool:
+    """Whether to keep waiting on ``status``.
+
+    Anything not recognised counts as still working, deliberately. The live service
+    already returns at least one status the packaged model does not declare
+    (``TEXT_INDEXED``), so treating unknown values as terminal would dead-letter
+    documents the day AWS adds another. Waiting is bounded by the caller's deadline,
+    so the cost of guessing wrong here is one poll budget rather than a lost
+    document — and the log line names the value so it can be classified properly.
+    """
+    if status in DOC_STATUSES_IN_FLIGHT:
+        return True
+    if status in (DOC_STATUS_INDEXED, DOC_STATUS_NOT_FOUND, *DOC_STATUSES_PARTIAL):
+        return False
+    if status in DOC_STATUSES_FAILED:
+        return False
+    logger.warning(
+        f"document {document_id} reported unrecognised status {status!r}; treating "
+        f"it as still indexing. If this is terminal, add it to the appropriate set "
+        f"in ingestion_consumer.py"
+    )
+    return True
+
+
+def wait_until_retrievable(
+    backend: Any,
+    kb_ref: str,
+    document_id: str,
+    timeout_seconds: Optional[float] = None,
+    interval_seconds: Optional[float] = None,
+    sleep: Any = time.sleep,
+) -> Optional[str]:
+    """Confirm a retrieval really returns ``document_id``, filtered to that document.
+
+    Returns the timestamp at which it was first confirmed, or ``None`` on timeout.
+    A probe that itself errors is treated as "not yet", not as a document failure:
+    the document is usually fine and merely slow, and failing it would fail uploads
+    that are about to work.
+
+    THE FILTER IS THE WHOLE POINT
+    An earlier version searched for the document *id as the query text* and checked
+    whether that document appeared in the top 5 results. A document id carries no
+    meaning to an embedding model, so the search returned whatever the reranker
+    liked best — measured in dev with two documents in the knowledge base, querying
+    ``DOC-40e985680a63`` returned five chunks and every one of them belonged to a
+    *different* document. The probe reported "not retrievable" for a document that
+    was perfectly retrievable.
+
+    That failure scales the wrong way: the more documents a knowledge base holds,
+    the less likely the target appears in an unfiltered top-5, so every upload to a
+    mature knowledge base would burn its full poll budget and then dead-letter. It
+    only ever worked when the knowledge base held a single document, where anything
+    returned was necessarily the right thing.
+
+    An ``equals`` filter on ``document_id`` makes the question exact: chunks come
+    back only for this document, so a non-empty result *is* proof of retrievability
+    and an empty one is a true negative. Verified against dev: each document
+    returned 5 of its own chunks, and a fabricated id returned none. ``equals`` is
+    in ``ISOLATION_SAFE_FILTER_OPERATORS``, so it passes the adapter's filter
+    validation.
+
+    The timeouts default to ``None`` and are resolved from the module constants *at
+    call time*, rather than being bound as default arguments. Default arguments are
+    evaluated once at import, which makes them unpatchable — the first version of
+    this function bound them directly and a test that shortened the window had no
+    effect at all, silently waiting the full production timeout instead.
+    """
+    import asyncio
+
+    if timeout_seconds is None:
+        timeout_seconds = RETRIEVABLE_POLL_TIMEOUT_SECONDS
+    if interval_seconds is None:
+        interval_seconds = RETRIEVABLE_POLL_INTERVAL_SECONDS
+
+    # Exact-match only. A prefix or substring operator would let `DOC-1` match
+    # `DOC-10` and confirm the wrong document as retrievable.
+    document_filter = {"equals": {"key": "document_id", "value": document_id}}
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            chunks = asyncio.run(
+                backend.search(kb_ref, document_id, 5, retrieval_filter=document_filter)
+            )
+        except Exception as exc:  # noqa: BLE001 - a probe failure is not a document failure
+            logger.warning(f"retrievability probe for {document_id} failed: {exc}")
+            chunks = []
+
+        # The filter already restricts the result set to this document, so anything
+        # coming back is the answer. The per-chunk check stays as a belt-and-braces
+        # guard against a filter that is silently ignored by a future API change.
+        for chunk in chunks or []:
+            metadata = getattr(chunk, "metadata", None) or {}
+            if metadata.get("document_id") == document_id:
+                return _now_iso()
+
+        sleep(interval_seconds)
+
+    logger.warning(
+        f"document {document_id} was not retrievable within {timeout_seconds}s; "
+        f"leaving it short of complete rather than claiming success"
+    )
+    return None
+
+
+def _get_doc_row(assistant_id: str, document_id: str) -> Optional[Dict[str, Any]]:
+    """The ``DOC#`` row, or ``None``. Read once per invocation.
+
+    Carries the declared ``sizeBytes`` reconciled against the true S3 size, and the
+    ``byteCapSettled`` marker that makes settlement idempotent across redeliveries.
+
+    Strongly consistent because ``None`` now means "do not ingest": every producer
+    writes this row before the S3 object exists, and an eventually consistent read
+    that missed a just-written row would drop a real upload.
+    """
+    response = _table().get_item(
+        Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+        ConsistentRead=True,
+    )
+    return response.get("Item")
+
+
+def _deleted_reason(doc_row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why a document must not be ingested because it was deleted, or ``None``.
+
+    Every producer — a presigned upload, a file-source import, a crawl, a sync —
+    writes the ``DOC#`` row before the S3 object exists, so a missing row means
+    the document was deleted, never that it has not been recorded yet.
+    """
+    if doc_row is None:
+        return "is gone (document or agent deleted)"
+    if doc_row.get("status") == STATUS_DELETING:
+        return "is being deleted"
+    return None
+
+
+def _declared_bytes(doc_row: Optional[Dict[str, Any]]) -> int:
+    """The bytes this document reserved at request time, or 0 if it reserved none.
+
+    0 for anything but an interactive upload (``byte_cap.reserved_at_request``):
+    an imported, crawled or synced document carries a real ``sizeBytes`` by the
+    time it lands, but reserved nothing, so the reconcile reserves the whole real
+    size and a failure has nothing to release.
+    """
+    if not doc_row:
+        return 0
+    from apis.shared.kb_backend import byte_cap
+
+    return byte_cap.reserved_at_request(doc_row.get("sizeBytes"), doc_row.get("sourceAdapterKey"))
+
+
+def _delete_s3_object(bucket: str, key: str) -> None:
+    """Best-effort delete of an orphaned source object that overshot the cap.
+
+    A failure to delete must not turn a cap rejection into an unhandled error: the
+    document is already being failed, and a stranded object is a smaller problem
+    than a stuck ingestion. boto3 is imported here to keep this module's
+    module-level imports stdlib-only (image-size discipline).
+    """
+    try:
+        import boto3
+
+        boto3.client("s3").delete_object(Bucket=bucket, Key=key)
+    except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
+        logger.warning(f"failed to delete orphaned object s3://{bucket}/{key}: {exc}")
+
+
+def _source_object_exists(bucket: str, key: str) -> Optional[bool]:
+    """Whether the document's S3 object exists: ``True``, ``False``, or ``None``.
+
+    ``None`` means the probe could not tell (throttled, refused, network). The
+    caller then ingests as before: a probe failure is not evidence the upload is
+    missing, and failing a document on one would fail uploads that worked.
+
+    S3 answers a HEAD on a missing key with 404 only when the caller may list the
+    bucket; without ``s3:ListBucket`` it is a 403 and lands in ``None``. The
+    consumer's role has it (``documentsBucket.grantRead``).
+    """
+    import boto3
+    from botocore.exceptions import ClientError
+
+    try:
+        boto3.client("s3").head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code") or "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        logger.warning(f"could not check s3://{bucket}/{key} exists ({code}): {exc}")
+        return None
+    except Exception as exc:  # noqa: BLE001 - a probe failure is not a missing upload
+        logger.warning(f"could not check s3://{bucket}/{key} exists: {exc}")
+        return None
+
+
+def _upload_window_open(doc_row: Optional[Dict[str, Any]]) -> bool:
+    """Whether the browser's ``PUT`` for this row could still land.
+
+    Measured from the row's ``createdAt``, which ``POST /upload-url`` writes just
+    before signing a URL valid for :data:`UPLOAD_URL_TTL_SECONDS`. A row with no
+    readable ``createdAt`` cannot be placed and is treated as closed.
+    """
+    created = (doc_row or {}).get("createdAt")
+    if not created:
+        return False
+    from datetime import datetime, timezone
+
+    from apis.shared.timestamps import from_iso
+
+    try:
+        age = (datetime.now(timezone.utc) - from_iso(str(created))).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return age < UPLOAD_URL_TTL_SECONDS
+
+
+def _missing_upload_result(
+    assistant_id: str,
+    document_id: str,
+    doc_row: Optional[Dict[str, Any]],
+    declared: int,
+) -> Dict[str, Any]:
+    """Settle a managed document whose S3 object does not exist. Never raises.
+
+    Reached when the born-managed provisioning job hands over a row whose browser
+    ``PUT`` never happened: the row is written before the upload, and the job
+    hands over every waiting row. Ingesting would submit a URI with nothing behind
+    it, Bedrock would report ``NOT_FOUND``, and the event would dead-letter with
+    the row stuck at ``uploading``.
+
+    * **Window still open** — the ``PUT`` may be in flight. Write nothing: the
+      object's own ``ObjectCreated`` event routes it once it lands, and the
+      document list's stale sweep fails it if it never does. Failing it here
+      instead would settle its bytes, and that event would then be skipped as
+      already settled, losing an upload that worked.
+    * **Window closed** — the ``PUT`` can no longer happen. Fail the row with a
+      message that says to upload again, and return its reservation.
+    """
+    summary: Dict[str, Any] = {"routed": "managed", "ingested": False, "document_id": document_id}
+    if _upload_window_open(doc_row):
+        logger.info(
+            f"document {document_id}'s object is not in S3 yet and its upload URL is "
+            f"still valid; leaving it for the object's own event"
+        )
+        return {**summary, "note": "awaiting-upload"}
+
+    logger.warning(
+        f"document {document_id}'s object is not in S3 and its upload URL has "
+        f"expired; marking it failed"
+    )
+    set_document_terminal(
+        assistant_id, document_id, STATUS_FAILED, error=UPLOAD_MISSING_MESSAGE
+    )
+    _release_reservation(assistant_id, document_id, declared)
+    return {**summary, "status": STATUS_FAILED, "note": "upload-missing"}
+
+
+def _release_reservation(assistant_id: str, document_id: str, declared: int) -> None:
+    """Return the request-time reservation on a terminal ingestion FAILURE.
+
+    Exactly-once via ``byte_cap.settle_once`` (Requirement 12.6). Called only from
+    genuinely terminal failure paths — never from the "leave it non-terminal for
+    redelivery" paths, where the bytes must stay reserved for the delivery that
+    eventually completes the document.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    if declared <= 0:
+        return
+    if not byte_cap.settle_once(assistant_id, document_id):
+        return
+    byte_cap.release(assistant_id, assistant_id, declared)
+
+
+def _reconcile_bytes_on_complete(
+    assistant_id: str,
+    document_id: str,
+    bucket: str,
+    key: str,
+    record: Optional[Dict[str, Any]],
+    declared: int,
+) -> None:
+    """Settle the byte reservation against the AUTHORITATIVE S3 size (Req 12.3/12.4).
+
+    The request-time reservation used the client-declared size, which is an input,
+    not a measurement. Here — the document is indexed and its bytes are really in
+    S3 — the true size is taken from an S3 HEAD and the reservation is reconciled:
+
+    * ``real == declared`` — commit the reservation as-is.
+    * ``real < declared`` — the client over-reported; commit the real size and
+      release the difference so the owner is not charged for bytes never stored.
+    * ``real > declared`` — the client UNDER-reported, which is the case that could
+      defeat the cap. Reserve the shortfall against the binding cap. If that
+      breaches it, the document overshoots: raise :class:`ByteCapExceeded` so the
+      caller fails it — but first return the original reservation and delete the
+      orphaned S3 object, leaving no bytes charged and no stranded source.
+
+    Exactly-once via ``byte_cap.settle_once``: a redelivery that re-examines an
+    already-settled document does nothing, which is what stops a second commit
+    driving ``reservedBytes`` negative.
+
+    Every commit goes through :func:`_commit_settled`, which stamps the amount on
+    the ``DOC#`` row first so a later delete can refund exactly that.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    if not byte_cap.settle_once(assistant_id, document_id):
+        # A prior delivery already settled this document's bytes.
+        return
+
+    real = byte_cap.object_size_bytes(bucket, key)
+
+    if real <= declared:
+        _commit_settled(assistant_id, document_id, real, reserved=declared)
+        return
+
+    # real > declared: reserve the shortfall the client did not declare.
+    elevated = bool((record or {}).get("elevatedByteCap"))
+    cap = byte_cap.effective_cap(elevated)
+    try:
+        byte_cap.reserve(assistant_id, assistant_id, real - declared, cap)
+    except byte_cap.ByteCapExceeded:
+        # Overshoots the cap. Undo everything this document reserved and remove the
+        # source object, then let the caller mark it failed.
+        if declared > 0:
+            byte_cap.release(assistant_id, assistant_id, declared)
+        _delete_s3_object(bucket, key)
+        raise
+    _commit_settled(assistant_id, document_id, real, reserved=real)
+
+
+def _commit_settled(assistant_id: str, document_id: str, real: int, reserved: int) -> None:
+    """Commit ``real`` bytes out of the ``reserved`` this document holds.
+
+    The amount is stamped on the ``DOC#`` row (``byte_cap.record_commit``) BEFORE
+    the ``KB#`` commit; that stamp is what a delete refunds. If the stamp is
+    refused the document was deleted while it was being ingested, and the delete
+    has already run its refund — finding nothing to refund — so committing now
+    would store bytes nothing ever gives back. The whole reservation is returned
+    instead. Anything reserved beyond ``real`` (the client over-declared) is
+    returned either way.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    if not byte_cap.record_commit(assistant_id, document_id, real):
+        byte_cap.release(assistant_id, assistant_id, reserved)
+        return
+    byte_cap.commit(assistant_id, assistant_id, real)
+    if reserved > real:
+        byte_cap.release(assistant_id, assistant_id, reserved - real)
+
+
+def staged_version_to_reingest(doc_row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The source version a KB sync staged over this document and it has yet to
+    ingest, or ``None``.
+
+    A KB sync that finds its source changed writes ``stagedContentHash`` BEFORE it
+    overwrites the S3 object (``kb_sync.records.update_document_sync_fields``),
+    and a completed re-ingest stamps the same hash as ``ingestedContentHash``. A
+    difference between the two is therefore a version still owed to the
+    knowledge base, and an event that finds them equal is a redelivery. Nothing
+    else writes the staged hash, so a document never synced has none and keeps the
+    settled early exit exactly as before.
+
+    Only a terminal document qualifies. One still being ingested for the first
+    time is handled by the ordinary path, which reads the object as it is now.
+    ``failed`` qualifies too: new bytes deserve a fresh attempt, and a document
+    that failed on the byte cap or in Bedrock is otherwise stuck for good.
+    """
+    if not doc_row or doc_row.get("status") not in (STATUS_COMPLETE, STATUS_FAILED):
+        return None
+    staged = doc_row.get("stagedContentHash")
+    if not staged or staged == doc_row.get("ingestedContentHash"):
+        return None
+    return str(staged)
+
+
+def _reingest_changed_document(
+    bucket: str,
+    key: str,
+    assistant_id: str,
+    document_id: str,
+    filename: str,
+    doc_row: Dict[str, Any],
+    record: Optional[Dict[str, Any]],
+    staged: str,
+) -> Dict[str, Any]:
+    """Re-ingest a settled document whose source a KB sync replaced in place.
+
+    The first ingestion's path cannot do this. Its byte accounting is claimed once
+    per document (``settle_once``), which is what makes a redelivery harmless, and
+    Bedrock already reports the document ``INDEXED`` — so that path would neither
+    submit the new bytes nor count them. Here each staged version is handled once
+    instead, keyed on its hash (``byte_cap.claim_reingest``):
+
+    1. **Reserve the growth, then claim.** The S3 size is measured now and only
+       the difference from ``committedBytes`` is reserved, against the cap, before
+       anything is submitted. A file that grew past the cap is refused while the
+       previous version is still indexed and still served
+       (:func:`_record_reingest_over_cap`), rather than replacing it and then
+       failing the document. A redelivery finds the claim and reserves nothing.
+    2. **Submit once.** ``reingestSubmittedAt`` records the submission, so a
+       redelivery waits on the ingestion already running instead of restarting it.
+    3. **Wait for the NEW version.** Bedrock already holds a document under this
+       id, so a status it last updated before the submission is the old version's
+       and is waited out (``not_before``).
+    4. **Complete.** One conditional write re-stamps ``committedBytes``, records
+       the version as ingested and drops the claim; the ledger then moves by the
+       difference (``byte_cap.settle_reingest``).
+
+    The status stays ``complete`` throughout, so the document keeps answering from
+    its previous version until the new one has replaced it.
+    """
+    import asyncio
+
+    from apis.shared.kb_backend import byte_cap
+    from apis.shared.kb_backend.managed_backend import (
+        ManagedKbBackend,
+        ManagedKbDocumentRejected,
+    )
+    from apis.shared.kb_backend.protocol import DocumentSource
+
+    summary: Dict[str, Any] = {"routed": "managed", "document_id": document_id}
+
+    if doc_row.get("reingestHash") != staged:
+        try:
+            _claim_reingest(assistant_id, document_id, bucket, key, doc_row, record, staged)
+        except byte_cap.ByteCapExceeded:
+            _record_reingest_over_cap(assistant_id, document_id, staged)
+            return {**summary, "ingested": False, "note": "byte-cap-exceeded"}
+        # Re-read: the claim may have been won by a concurrent delivery of this
+        # version, or lost to a delete or a newer version.
+        doc_row = _get_doc_row(assistant_id, document_id) or {}
+        if doc_row.get("reingestHash") != staged or doc_row.get("status") == STATUS_DELETING:
+            logger.info(
+                f"document {document_id} was deleted or re-staged before its changed "
+                f"source could be re-ingested; leaving it to that change"
+            )
+            return {**summary, "ingested": False, "note": "reingest-superseded"}
+
+    backend = ManagedKbBackend(bucket=bucket)
+    submitted_at = doc_row.get("reingestSubmittedAt")
+    if submitted_at:
+        logger.info(
+            f"document {document_id}'s changed source was already submitted at "
+            f"{submitted_at}; waiting on that ingestion rather than restarting it"
+        )
+    else:
+        submitted_at = _now_iso()
+        source = DocumentSource(document_id=document_id, filename=filename, s3_key=key)
+        # A submit that raises leaves the claim and its reservation in place for
+        # redelivery. The document is not failed: its previous version is intact.
+        # A refusal is the exception: the same bytes would be refused again, so it
+        # settles like an ingestion Bedrock reports FAILED.
+        try:
+            asyncio.run(backend.ingest(assistant_id, source))
+        except ManagedKbDocumentRejected as exc:
+            logger.error(f"re-ingestion of document {document_id} was refused: {exc}")
+            released = byte_cap.release_reingest_once(assistant_id, document_id, staged)
+            if released:
+                byte_cap.release(assistant_id, assistant_id, released)
+            set_document_terminal(
+                assistant_id, document_id, STATUS_FAILED,
+                error=f"the knowledge base refused this document: {_rejection_reason(exc)}",
+            )
+            return {**summary, "ingested": False, "status": STATUS_FAILED,
+                    "note": "ingest-rejected"}
+        _mark_reingest_submitted(assistant_id, document_id, staged, submitted_at)
+
+    status, bedrock_updated_at = wait_until_indexed(
+        backend, assistant_id, document_id, not_before=submitted_at
+    )
+    stale = _is_stale(bedrock_updated_at, submitted_at)
+
+    if status in DOC_STATUSES_FAILED and not stale:
+        logger.error(f"re-ingestion of document {document_id} became {status}")
+        released = byte_cap.release_reingest_once(assistant_id, document_id, staged)
+        if released:
+            byte_cap.release(assistant_id, assistant_id, released)
+        set_document_terminal(
+            assistant_id, document_id, STATUS_FAILED,
+            error=f"the knowledge base reports this document as {status}",
+        )
+        return {**summary, "ingested": True, "status": status}
+
+    if stale or status not in (DOC_STATUS_INDEXED, *DOC_STATUSES_PARTIAL):
+        raise IngestionRoutingError(
+            f"document {document_id}'s changed source is {status} after waiting; "
+            f"leaving it for redelivery to confirm indexing"
+        )
+
+    indexed_at = bedrock_updated_at or _now_iso()
+    retrievable_at = wait_until_retrievable(backend, assistant_id, document_id)
+    if retrievable_at is None:
+        raise IngestionRoutingError(
+            f"document {document_id}'s changed source is INDEXED but was not "
+            f"retrievable within the poll window; leaving it for redelivery"
+        )
+
+    if not _complete_reingest(
+        assistant_id, document_id, staged, doc_row, indexed_at, retrievable_at
+    ):
+        return {**summary, "ingested": True, "note": "reingest-superseded"}
+    return {
+        **summary,
+        "ingested": True,
+        "note": "reingested",
+        "indexedAt": indexed_at,
+        "retrievableAt": retrievable_at,
+    }
+
+
+def _rejection_reason(exc: Any) -> str:
+    """Bedrock's reason for refusing a document, for its ``ingestionError``."""
+    for status, reason in (getattr(exc, "rejections", None) or {}).values():
+        return f"{status}: {reason}" if reason else str(status)
+    return str(exc)
+
+
+def _claim_reingest(
+    assistant_id: str,
+    document_id: str,
+    bucket: str,
+    key: str,
+    doc_row: Dict[str, Any],
+    record: Optional[Dict[str, Any]],
+    staged: str,
+) -> None:
+    """Reserve a staged version's growth and claim its re-ingest (step 1).
+
+    Raises ``ByteCapExceeded`` with nothing reserved or claimed. Reserve comes
+    before the claim so a crash between the two leaks a reservation — the safe
+    direction — rather than leaving a claim that commits bytes nobody reserved.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    # A claim for an older version never completed; this change supersedes it.
+    # Return its reservation first, so it cannot count against this one's cap.
+    stale_claim = doc_row.get("reingestHash")
+    if stale_claim:
+        stale = byte_cap.release_reingest_once(assistant_id, document_id, str(stale_claim))
+        if stale:
+            byte_cap.release(assistant_id, assistant_id, stale)
+
+    real = byte_cap.object_size_bytes(bucket, key)
+    growth = max(real - int(doc_row.get("committedBytes") or 0), 0)
+    if growth:
+        elevated = bool((record or {}).get("elevatedByteCap"))
+        byte_cap.reserve(assistant_id, assistant_id, growth, byte_cap.effective_cap(elevated))
+
+    claimed, superseded = byte_cap.claim_reingest(assistant_id, document_id, staged, real, growth)
+    if not claimed:
+        # A concurrent delivery of this version claimed it first, or the row left
+        # a re-ingestable state. Either way this reservation is not needed.
+        if growth:
+            byte_cap.release(assistant_id, assistant_id, growth)
+        return
+    if superseded:
+        byte_cap.release(assistant_id, assistant_id, superseded)
+
+
+def _mark_reingest_submitted(
+    assistant_id: str, document_id: str, staged: str, submitted_at: str
+) -> None:
+    """Record that this version was submitted (step 2). Best-effort: without it a
+    redelivery submits again, which restarts indexing but loses nothing."""
+    from botocore.exceptions import ClientError
+
+    try:
+        _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression="SET reingestSubmittedAt = :t",
+            ConditionExpression="reingestHash = :h",
+            ExpressionAttributeValues={":t": submitted_at, ":h": staged},
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+
+
+def _complete_reingest(
+    assistant_id: str,
+    document_id: str,
+    staged: str,
+    doc_row: Dict[str, Any],
+    indexed_at: str,
+    retrievable_at: str,
+) -> bool:
+    """Record the re-ingested version and move the ledger by its size (step 4).
+
+    The ``DOC#`` write comes first and carries everything — the new
+    ``committedBytes``, the ingested hash, the status, and the claim's removal —
+    conditioned on the claim still being this version's and the row not being
+    deleted. That is the re-ingest's :func:`byte_cap.record_commit`: refused means
+    a delete or a newer version owns the claim's reservation now, and this path
+    must not touch the ledger. ``byteCapSettled`` is set too, for a ``failed`` row
+    that never settled, so a later delete refunds rather than releases.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend import byte_cap
+    from apis.shared.kb_backend.records import RECORD_EXISTS
+
+    new_bytes = int(doc_row.get("reingestBytes") or 0)
+    reserved = int(doc_row.get("reingestReservedBytes") or 0)
+    try:
+        response = _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression=(
+                "SET #status = :complete, updatedAt = :now, indexedAt = :indexed, "
+                "retrievableAt = :retrievable, committedBytes = :bytes, "
+                "byteCapSettled = :true, ingestedContentHash = :h "
+                f"REMOVE {', '.join(byte_cap.REINGEST_CLAIM_ATTRIBUTES)}, ingestionError"
+            ),
+            ConditionExpression=(
+                f"{RECORD_EXISTS} AND #status <> :deleting "
+                f"AND reingestHash = :h AND attribute_not_exists(byteCapRefunded)"
+            ),
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":complete": STATUS_COMPLETE,
+                ":deleting": STATUS_DELETING,
+                ":now": _now_iso(),
+                ":indexed": indexed_at,
+                ":retrievable": retrievable_at,
+                ":bytes": new_bytes,
+                ":true": True,
+                ":h": staged,
+            },
+            ReturnValues="ALL_OLD",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            logger.info(
+                f"document {document_id} was deleted or re-staged while its changed "
+                f"source was indexing; not recording the re-ingest"
+            )
+            return False
+        raise
+
+    previous = int((response.get("Attributes") or {}).get("committedBytes") or 0)
+    byte_cap.settle_reingest(assistant_id, assistant_id, previous, new_bytes, reserved)
+    logger.info(
+        f"document {document_id} re-ingested from its changed source: "
+        f"{previous} -> {new_bytes} bytes"
+    )
+    return True
+
+
+def _record_reingest_over_cap(assistant_id: str, document_id: str, staged: str) -> None:
+    """Refuse a changed source that would take the owner over the byte cap.
+
+    Nothing was submitted, so the knowledge base keeps serving the previous
+    version and the document stays as it was. The sync's change-detection gates
+    (``sourceEtag``, ``contentHash``) are cleared so the next sync run stages the
+    source again — the only thing that would retry it once the owner has freed
+    space. Conditioned on the version, so a newer change is left alone.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
+
+    logger.warning(
+        f"document {document_id}'s changed source would exceed the byte cap; keeping "
+        f"its previous version and retrying on the next sync"
+    )
+    try:
+        _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression=(
+                "SET ingestionError = :err, updatedAt = :now REMOVE sourceEtag, contentHash"
+            ),
+            ConditionExpression=(
+                f"{RECORD_EXISTS} AND #status <> :deleting AND stagedContentHash = :h"
+            ),
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":err": (
+                    "the updated source exceeds the knowledge base's storage limit; "
+                    "delete unused documents or request an elevated storage tier"
+                ),
+                ":now": _now_iso(),
+                ":deleting": STATUS_DELETING,
+                ":h": staged,
+            },
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+
+
+def handle_object(bucket: str, key: str) -> Dict[str, Any]:
+    """Route one uploaded object. Returns a summary for logging and tests."""
+    from apis.shared.kb_backend.records import BORN_MANAGED, ENGINE_MANAGED
+
+    if not is_document_key(key):
+        logger.info(f"skipping object {key!r}: not an assistant document key")
+        return {"routed": "skipped", "ingested": False, "key": key}
+
+    assistant_id, document_id, filename = parse_object_key(key)
+    engine, record = resolve_engine_for(assistant_id)
+
+    if engine != ENGINE_MANAGED:
+        # The legacy pipeline's own S3 notification already owns this document.
+        # Anything done here would index the same bytes a second time.
+        logger.info(
+            f"document {document_id} belongs to a legacy knowledge base; "
+            f"leaving it to the existing pipeline"
+        )
+        return {"routed": "legacy", "ingested": False, "document_id": document_id}
+
+    aws_kb_id = (record or {}).get("awsKbId")
+    data_source_id = (record or {}).get("awsDataSourceId")
+    if not aws_kb_id or not data_source_id:
+        # Managed engine but no identifiers. Two very different situations share
+        # this shape, and telling them apart is the difference between a working
+        # born-managed first upload and a dead-lettered one.
+        if (record or {}).get("migrationState") == BORN_MANAGED:
+            # Born-managed (MANAGED_KB_NEW_DEFAULT): the knowledge base is being
+            # created right now and this is the document that triggered it. The S3
+            # event fires within seconds; provisioning takes minutes. Lambda's
+            # asynchronous retry is capped at 2 attempts — a hard service limit —
+            # so waiting here or raising for redelivery both end in the DLQ well
+            # before the knowledge base exists.
+            #
+            # So this defers instead: a benign no-op that ingests nothing, writes
+            # nothing, and does NOT fail. The provisioning job owns the handoff:
+            # once the knowledge base is ACTIVE it invokes this function again for
+            # every waiting document (kb_migration/provisioner.py), which is why
+            # correctness here does not depend on the redelivery window at all. The
+            # DOC# row is left in `provisioning`, which is what the user sees.
+            logger.info(
+                f"document {document_id} belongs to a knowledge base still being "
+                f"provisioned (born-managed); deferring to the provisioning job, "
+                f"which owns its ingestion"
+            )
+            return {
+                "routed": "managed",
+                "ingested": False,
+                "document_id": document_id,
+                "note": "deferred-provisioning",
+            }
+
+        # Not born-managed: managed intent with no provisioner behind it. Failing
+        # loudly is correct — silently falling back to legacy would create exactly
+        # the dual-index this function exists to prevent.
+        raise IngestionRoutingError(
+            f"assistant {assistant_id} resolves to the managed engine but its "
+            f"knowledge base is not provisioned (awsKbId={aws_kb_id!r}, "
+            f"awsDataSourceId={data_source_id!r})"
+        )
+
+    import asyncio
+
+    from apis.shared.kb_backend.managed_backend import (
+        ManagedKbBackend,
+        ManagedKbDocumentRejected,
+    )
+    from apis.shared.kb_backend.protocol import DocumentSource
+
+    # The DOC# row carries what was reserved at request time (`_declared_bytes`)
+    # and the byteCapSettled marker. Read it once. If a PRIOR delivery
+    # already drove this document terminal AND settled its bytes, this is a
+    # redelivery and re-running the byte accounting would double-count — a second
+    # commit drives reservedBytes negative, a second release over-credits the cap.
+    # Return without touching anything (Requirement 12.4/12.5).
+    doc_row = _get_doc_row(assistant_id, document_id)
+    staged = staged_version_to_reingest(doc_row)
+    if staged:
+        # ...unless a KB sync has since overwritten the object with a changed
+        # source. Then this event is the new version's, not a redelivery, and the
+        # settled early exit below would leave the knowledge base serving the old
+        # content for good.
+        return _reingest_changed_document(
+            bucket, key, assistant_id, document_id, filename, doc_row, record, staged
+        )
+    if (
+        doc_row
+        and doc_row.get("byteCapSettled")
+        and doc_row.get("status") in (STATUS_COMPLETE, STATUS_FAILED)
+    ):
+        logger.info(
+            f"document {document_id} is already {doc_row.get('status')} and its "
+            f"bytes are settled; skipping to avoid double-counting"
+        )
+        return {
+            "routed": "managed",
+            "ingested": False,
+            "document_id": document_id,
+            "status": doc_row.get("status"),
+            "note": "already-settled",
+        }
+    deleted = _deleted_reason(doc_row)
+    if deleted:
+        # The owner deleted this document (or its agent) before its event got
+        # here. Ingesting anyway would put content back into the knowledge base
+        # after cleanup has removed it — an orphan that no row points at, billed
+        # per GB-month and taking a slot in every top_k before the status filter
+        # drops it. Its reservation is the delete's to return
+        # (`release_reservation_if_managed`), not this path's.
+        logger.info(
+            f"document {document_id} {deleted} before its ingestion event arrived; "
+            f"not ingesting it"
+        )
+        return {
+            "routed": "managed",
+            "ingested": False,
+            "document_id": document_id,
+            "note": "document-deleted",
+        }
+    declared = _declared_bytes(doc_row)
+    # The backend takes the App_KB_Id and resolves the AWS identifiers itself on
+    # every operation. Threading them in from here would defeat that: a
+    # dormancy/rehydration cycle replaces them, and a caller holding a stale pair
+    # would keep addressing a knowledge base that no longer exists. The check above
+    # is still worth doing - it fails fast with a precise reason - but it is a
+    # precondition, not a value to pass along.
+    backend = ManagedKbBackend(bucket=bucket)
+    source = DocumentSource(document_id=document_id, filename=filename, s3_key=key)
+
+    # Ask Bedrock what it already knows BEFORE ingesting. The ingest call is
+    # fire-and-forget — it returns as soon as the request is accepted — so without
+    # this the consumer cannot tell "not indexed yet" from "never submitted", and
+    # every redelivery re-submits a document that is already being worked on.
+    #
+    # That is not merely wasteful. In dev a 1.5 MB PDF was re-ingested on each of
+    # three redeliveries and reached INDEXED only 54 s after the final attempt had
+    # been dead-lettered, leaving a perfectly retrievable document parked at
+    # `uploading` with nothing left to reconcile it.
+    status, bedrock_updated_at = document_status(backend, assistant_id, document_id)
+
+    if status in DOC_STATUSES_FAILED:
+        # Terminal on Bedrock's side. Retrying cannot help.
+        logger.error(f"document {document_id} is {status} in the knowledge base")
+        set_document_terminal(
+            assistant_id, document_id, STATUS_FAILED,
+            error=f"the knowledge base reports this document as {status}",
+        )
+        _release_reservation(assistant_id, document_id, declared)
+        return {"routed": "managed", "ingested": False, "document_id": document_id,
+                "status": status}
+
+    if status == DOC_STATUS_NOT_FOUND:
+        # Bedrock has never heard of it, so this is the first delivery. Submit —
+        # but only bytes that exist. Bedrock accepts an ingest for a missing S3
+        # object and then never indexes it.
+        if _source_object_exists(bucket, key) is False:
+            return _missing_upload_result(assistant_id, document_id, doc_row, declared)
+        try:
+            asyncio.run(backend.ingest(assistant_id, source))
+        except ManagedKbDocumentRejected as exc:
+            # Refused in the ingest response itself. The same bytes would be
+            # refused again, so this is terminal, not a redelivery.
+            logger.error(f"direct ingestion of {document_id} was refused: {exc}")
+            set_document_terminal(
+                assistant_id, document_id, STATUS_FAILED,
+                error=f"the knowledge base refused this document: {_rejection_reason(exc)}",
+            )
+            _release_reservation(assistant_id, document_id, declared)
+            return {"routed": "managed", "ingested": False, "document_id": document_id,
+                    "status": STATUS_FAILED, "note": "ingest-rejected"}
+        except Exception as exc:
+            logger.error(f"direct ingestion of {document_id} failed: {exc}", exc_info=True)
+            set_document_terminal(assistant_id, document_id, STATUS_FAILED, error=str(exc))
+            _release_reservation(assistant_id, document_id, declared)
+            raise
+    else:
+        # Already submitted — a redelivery, or a document still being worked on.
+        # Do NOT ingest again: re-submitting discards the progress this invocation
+        # is about to wait for, which is what turned a slow success into a
+        # permanent failure in dev.
+        logger.info(
+            f"document {document_id} is already {status} in the knowledge base; "
+            f"not re-ingesting"
+        )
+
+    # One wait, whichever way we arrived. Both "just submitted" and "found it
+    # mid-flight" need the same thing: give Bedrock time, bounded by a budget that
+    # fits inside this Lambda, because redelivery is capped at 2 retries.
+    if _still_working(status, document_id) or status == DOC_STATUS_NOT_FOUND:
+        status, bedrock_updated_at = wait_until_indexed(
+            backend, assistant_id, document_id,
+            not_found_grace_polls=(
+                NOT_FOUND_GRACE_POLLS if status == DOC_STATUS_NOT_FOUND else 0
+            ),
+        )
+
+    if status in DOC_STATUSES_FAILED:
+        logger.error(f"document {document_id} became {status} during indexing")
+        set_document_terminal(
+            assistant_id, document_id, STATUS_FAILED,
+            error=f"the knowledge base reports this document as {status}",
+        )
+        _release_reservation(assistant_id, document_id, declared)
+        return {"routed": "managed", "ingested": True, "document_id": document_id,
+                "status": status}
+
+    if status in DOC_STATUSES_PARTIAL:
+        logger.warning(
+            f"document {document_id} is {status}: it is retrievable but some of its "
+            f"content or metadata did not index"
+        )
+
+    if status not in (DOC_STATUS_INDEXED, *DOC_STATUSES_PARTIAL):
+        # Still not done inside our budget. Deliberately NOT marked terminal, and
+        # deliberately not given an invented timestamp — a later delivery will find
+        # it INDEXED and record Bedrock's own.
+        raise IngestionRoutingError(
+            f"document {document_id} is {status} after waiting; leaving it for "
+            f"redelivery to confirm indexing"
+        )
+
+    # INDEXED. `indexedAt` is Bedrock's OWN timestamp, not this process's clock —
+    # an earlier version recorded `_now_iso()` immediately after the ingest call
+    # returned, which measured when the request was accepted and was reported as
+    # the moment indexing completed. The two can be minutes apart.
+    indexed_at = bedrock_updated_at or _now_iso()
+    retrievable_at = wait_until_retrievable(backend, assistant_id, document_id)
+
+    if retrievable_at is None:
+        # INDEXED but not yet queryable. This is the one short, real gap the poll
+        # window was always sized for (measured at 0.75–1.03 s); a timeout here is
+        # unusual rather than routine, so leave it for redelivery.
+        raise IngestionRoutingError(
+            f"document {document_id} is INDEXED but was not retrievable within the "
+            f"poll window; leaving it for redelivery"
+        )
+
+    # INDEXED and retrievable. Settle the byte reservation against the AUTHORITATIVE
+    # S3 size before declaring success (Requirement 12.3): the request-time reserve
+    # used the client's declared size, which is not trustworthy. This commits the
+    # true bytes, or — if the client under-reported and the real size overshoots the
+    # cap — fails the document and removes the orphaned object.
+    from apis.shared.kb_backend.byte_cap import ByteCapExceeded
+
+    try:
+        _reconcile_bytes_on_complete(
+            assistant_id, document_id, bucket, key, record, declared
+        )
+    except ByteCapExceeded:
+        # The reservation has been returned and the source object deleted inside the
+        # reconcile. Fail the document with an actionable message (Requirement
+        # 12.12) rather than reporting a success that breaches the cap.
+        logger.warning(
+            f"document {document_id} indexed but its true size overshoots the byte "
+            f"cap; marking failed and removing the orphaned object"
+        )
+        set_document_terminal(
+            assistant_id, document_id, STATUS_FAILED,
+            error=(
+                "this document exceeds the knowledge base's storage limit; delete "
+                "unused documents or request an elevated storage tier"
+            ),
+        )
+        return {
+            "routed": "managed",
+            "ingested": True,
+            "document_id": document_id,
+            "status": STATUS_FAILED,
+            "note": "byte-cap-exceeded",
+        }
+
+    set_document_terminal(
+        assistant_id,
+        document_id,
+        STATUS_COMPLETE,
+        indexed_at=indexed_at,
+        retrievable_at=retrievable_at,
+    )
+    return {
+        "routed": "managed",
+        "ingested": True,
+        "document_id": document_id,
+        "indexedAt": indexed_at,
+        "retrievableAt": retrievable_at,
+    }
+
+
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """Entry point. One invocation drives its documents to terminal, or fails."""
+    records = extract_records(event)
+    if not records:
+        logger.info("no S3 records in event; nothing to do")
+        return {"statusCode": 200, "processed": 0, "results": []}
+
+    results = []
+    for record in records:
+        bucket, key = record.get("bucket", ""), record.get("key", "")
+        if not bucket or not key:
+            logger.warning(f"skipping record with missing bucket or key: {record}")
+            continue
+        results.append(handle_object(bucket, key))
+
+    return {"statusCode": 200, "processed": len(results), "results": results}

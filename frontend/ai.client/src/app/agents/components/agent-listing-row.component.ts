@@ -38,7 +38,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
     >
       <a
         [routerLink]="['/agents', listing().agentId]"
-        class="flex min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+        class="flex min-w-0 flex-1 items-center gap-3 rounded-2xl px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
       >
         <app-agent-icon
           [agentId]="listing().agentId"
@@ -54,7 +54,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
             @if (listing().publisher?.verified) {
               <ng-icon
                 name="heroCheckBadge"
-                class="size-4 shrink-0 text-blue-600 dark:text-blue-400"
+                class="size-4 shrink-0 text-state-info-600 dark:text-state-info-400"
                 [appTooltip]="verifiedTooltip()"
                 appTooltipPosition="top"
               />
@@ -87,12 +87,12 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
         [appTooltip]="pinTooltip()"
         appTooltipPosition="top"
         [attr.aria-pressed]="isPinned()"
-        class="grid size-8 shrink-0 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-white"
+        class="grid size-8 shrink-0 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-white"
         [class]="
           isPinned()
-            ? 'text-emerald-600 dark:text-emerald-400'
+            ? 'text-state-success-600 dark:text-state-success-400'
             : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
-        "
+       "
       >
         <ng-icon [name]="isPinned() ? 'heroCheck' : 'heroPlus'" class="size-5" />
         <span class="sr-only">{{ pinTooltip() }}</span>

@@ -21,6 +21,7 @@ import {
   MAX_FEATURED,
 } from '../models/marketplace.model';
 import { AgentTileComponent } from '../components/agent-tile.component';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 /**
  * Store front — the Featured row, as an explicitly ordered list (D10).
@@ -45,7 +46,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
 @Component({
   selector: 'app-marketplace-store-front',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentTileComponent, TooltipDirective],
+  imports: [NgIcon, AgentTileComponent, TooltipDirective, SpinnerComponent],
   providers: [provideIcons({ heroArrowDown, heroArrowUp, heroStar, heroXMark })],
   template: `
     <div class="min-h-dvh">
@@ -62,7 +63,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -71,7 +72,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
         @if (unavailable().length) {
           <div
             role="status"
-            class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+            class="mb-4 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-900 dark:border-state-warning-900 dark:bg-state-warning-900/20 dark:text-state-warning-200"
           >
             {{ unavailable().length }}
             {{ unavailable().length === 1 ? 'featured agent is' : 'featured agents are' }}
@@ -84,10 +85,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading the store front</span>
+            <app-spinner size="lg" label="Loading the store front" />
           </div>
         } @else {
           <!-- The row -->
@@ -102,7 +100,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
                     type="button"
                     (click)="reload()"
                     [disabled]="busy()"
-                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                   >
                     Discard
                   </button>
@@ -111,7 +109,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
                   type="button"
                   (click)="save()"
                   [disabled]="!dirty() || busy()"
-                  class="rounded-2xl bg-blue-600 px-4 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  class="rounded-2xl bg-primary-accessible px-4 py-1.5 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {{ dirty() ? 'Save order' : 'Saved' }}
                 </button>
@@ -167,7 +165,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
                         [disabled]="i === 0 || busy()"
                         [appTooltip]="'Move up'"
                         appTooltipPosition="top"
-                        class="rounded-2xl p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                        class="rounded-2xl p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
                       >
                         <ng-icon name="heroArrowUp" class="size-5" aria-hidden="true" />
                         <span class="sr-only">Move {{ row.name }} up</span>
@@ -178,7 +176,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
                         [disabled]="i === featured().length - 1 || busy()"
                         [appTooltip]="'Move down'"
                         appTooltipPosition="top"
-                        class="rounded-2xl p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                        class="rounded-2xl p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
                       >
                         <ng-icon name="heroArrowDown" class="size-5" aria-hidden="true" />
                         <span class="sr-only">Move {{ row.name }} down</span>
@@ -189,7 +187,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
                         [disabled]="busy()"
                         [appTooltip]="'Remove from the featured row'"
                         appTooltipPosition="top"
-                        class="rounded-2xl p-2 text-gray-500 hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-rose-900/20 dark:hover:text-rose-400"
+                        class="rounded-2xl p-2 text-gray-500 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                       >
                         <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
                         <span class="sr-only">Remove {{ row.name }}</span>
@@ -245,7 +243,7 @@ import { AgentTileComponent } from '../components/agent-tile.component';
                           : 'Add to the featured row'
                       "
                       appTooltipPosition="top"
-                      class="shrink-0 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                      class="shrink-0 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     >
                       Feature
                     </button>

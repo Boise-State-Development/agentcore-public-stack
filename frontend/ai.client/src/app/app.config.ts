@@ -1,5 +1,5 @@
 import { ApplicationConfig, inject, provideAppInitializer, provideBrowserGlobalErrorListeners } from '@angular/core';
-import { provideRouter, withComponentInputBinding } from '@angular/router';
+import { provideRouter, withComponentInputBinding, withNavigationErrorHandler } from '@angular/router';
 
 import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
@@ -10,13 +10,32 @@ import { MARKED_OPTIONS, MarkedOptions, MarkedRenderer, provideMarkdown } from '
 import { SessionService } from './auth/session.service';
 import { ThemeService } from './components/topnav/components/theme-toggle/theme.service';
 import { provideBuiltInToolRenderers } from './session/components/message-list/components/tool-use/built-in-renderers';
+import { AnnouncementModalService } from './services/announcements/announcement-modal.service';
+import {
+  provideStaleBuildRecovery,
+  recoverFromStaleChunkNavigation,
+} from './services/app-update/app-update.providers';
+import { ConfigService } from './services/config.service';
+import { RouteScrollService } from './services/route-scroll/route-scroll.service';
+import { durableDownloadUrlFromHref } from './shared/utils/file-download-url';
+import { installLazyMermaid } from './shared/utils/lazy-mermaid';
+import { installKatexMathExtensions } from './shared/utils/katex-math-markdown';
 
-function markedOptionsFactory(): MarkedOptions {
+function markedOptionsFactory(config: ConfigService): MarkedOptions {
   const renderer = new MarkedRenderer();
   const renderLink = renderer.link;
 
   renderer.link = function (link) {
-    const html = renderLink.call(this, link);
+    // A raw user-files S3 URL in assistant prose is always broken. The model
+    // reads the same tool-result JSON the download card does, and when that
+    // JSON carried a presigned URL it would compose its own "[Download](...)"
+    // link from it — truncated at the `?`, so the signature was gone and S3
+    // answered AccessDenied while the card's own button worked. The backend no
+    // longer puts signed URLs in tool results; this rewrite heals the links
+    // already persisted in conversations, routing them to the durable
+    // `/files/{uploadId}/download` endpoint.
+    const durable = durableDownloadUrlFromHref(config.appApiUrl(), link.href);
+    const html = renderLink.call(this, durable ? { ...link, href: durable } : link);
     return html.replace(/^<a /, '<a target="_blank" rel="noopener noreferrer" ');
   };
 
@@ -37,9 +56,18 @@ export const appConfig: ApplicationConfig = {
       markedOptions: {
         provide: MARKED_OPTIONS,
         useFactory: markedOptionsFactory,
+        deps: [ConfigService],
       },
     }),
-    provideRouter(routes, withComponentInputBinding()),
+    provideRouter(
+      routes,
+      withComponentInputBinding(),
+      // A tab opened before a deploy asks for lazy chunks the deploy deleted.
+      // The navigation becomes a full load of its destination (or a Refresh
+      // prompt when a stream/upload would be cut off, or it already tried).
+      withNavigationErrorHandler(recoverFromStaleChunkNavigation),
+    ),
+    provideStaleBuildRecovery(),
 
     // Bootstrap the BFF cookie session before the first component renders.
     // GET ${appApiUrl}/auth/session — on 401, SessionService sends the browser
@@ -62,5 +90,28 @@ export const appConfig: ApplicationConfig = {
     // plus the migrated proof-point renderers) into the renderer registry
     // before the first message renders.
     provideBuiltInToolRenderers(),
+
+    // AnnouncementModalService owns the §D8 turn-safety gate and opens the
+    // announcement modal itself. It is started here rather than mounted in
+    // app.html because a CDK overlay is not a layout element — and because
+    // nothing else would ever inject it. Same pattern as ThemeService above.
+    provideAppInitializer(() => { inject(AnnouncementModalService); }),
+
+    // The shell scrolls a container, not the window, so the router's own
+    // scroll restoration never applies. This service starts each newly opened
+    // page at the top and restores a page the user returns to. Started here so
+    // it is listening before the first navigation; nothing else injects it.
+    provideAppInitializer(() => { inject(RouteScrollService); }),
+
+    // ngx-markdown's `mermaid` plugin reads the library off the global scope
+    // and throws if it isn't there. Publishing a stand-in before the first
+    // markdown renders lets the real 3.57 MB library stay in a lazy chunk that
+    // is only fetched when a message actually contains a diagram.
+    provideAppInitializer(() => { installLazyMermaid(); }),
+
+    // marked reads `\(` as an escaped paren and drops the backslash, so
+    // LaTeX's inline-math delimiters never reached KaTeX. These tokenizers
+    // claim the span first and pass the delimiters through verbatim.
+    provideAppInitializer(() => { installKatexMathExtensions(); }),
   ]
 };

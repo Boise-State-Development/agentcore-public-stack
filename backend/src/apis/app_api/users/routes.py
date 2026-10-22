@@ -172,14 +172,17 @@ async def search_users(
         # For name matching, we'll need to scan/query and filter (less efficient but acceptable for small orgs)
 
         results = []
-        seen_user_ids = set()
+        # Keyed by email, not user id: legacy logins left some emails with
+        # more than one PROFILE row, and a sharing picker must offer one
+        # person once. The live row is the one to keep — get_user_by_email
+        # picks it, and the scan below runs most-recent-login first.
+        seen_emails = set()
 
         # Try exact email match first (most common case)
         user_by_email = await user_repo.get_user_by_email(query_lower)
         if user_by_email and user_by_email.status == UserStatus.ACTIVE:
-            if user_by_email.user_id not in seen_user_ids:
-                results.append(UserSearchResult(user_id=user_by_email.user_id, email=user_by_email.email, name=user_by_email.name))
-                seen_user_ids.add(user_by_email.user_id)
+            results.append(UserSearchResult(user_id=user_by_email.user_id, email=user_by_email.email, name=user_by_email.name))
+            seen_emails.add(user_by_email.email.lower())
 
         # If we already have enough results from exact match, return early
         if len(results) >= limit:
@@ -197,20 +200,15 @@ async def search_users(
             status=UserStatus.ACTIVE.value, limit=100, last_evaluated_key=None  # Scan up to 100 active users
         )
 
-        # Filter by name contains (case-insensitive)
+        # Filter by name or email contains (case-insensitive)
         for user in active_users:
-            if user.user_id in seen_user_ids:
+            email_key = user.email.lower()
+            if email_key in seen_emails:
                 continue
 
-            # Check if name contains query (case-insensitive)
-            if query_lower in user.name.lower():
+            if query_lower in user.name.lower() or query_lower in email_key:
                 results.append(UserSearchResult(user_id=user.user_id, email=user.email, name=user.name))
-                seen_user_ids.add(user.user_id)
-
-            # Also check if email contains query (for partial email matches)
-            elif query_lower in user.email.lower():
-                results.append(UserSearchResult(user_id=user.user_id, email=user.email, name=user.name))
-                seen_user_ids.add(user.user_id)
+                seen_emails.add(email_key)
 
             # Stop if we have enough results
             if len(results) >= limit:

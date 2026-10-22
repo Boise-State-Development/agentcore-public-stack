@@ -7,11 +7,17 @@ import {
   ElementRef,
   viewChild,
   AfterViewInit,
+  OnDestroy,
   inject,
 } from '@angular/core';
-import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { heroArrowPath, heroArrowTurnDownRight, heroExclamationCircle } from '@ng-icons/heroicons/outline';
+import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
+import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
+import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
+import { FailedSendService } from '../../../services/chat/failed-send.service';
 import { parseIso } from '../../../../utils/date';
 
 function isImageMimeType(mimeType: string): boolean {
@@ -23,9 +29,10 @@ const MAX_HEIGHT_PX = 200;
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent],
+  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath })],
   template: `
-    @if (hasTextContent() || hasFileAttachments()) {
+    @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
       <div class="group relative flex w-full flex-col items-end gap-2">
         <!-- Hover-revealed sent-at subtitle (positioned above the topmost slot) -->
         @if (formattedSentAt()) {
@@ -37,10 +44,30 @@ const MAX_HEIGHT_PX = 200;
           </span>
         }
 
+        <!--
+          Mid-turn steer: the user sent this INTO a response that was still
+          streaming, and the agent picked it up at its next step. Labelled
+          because the bubble alone reads as the start of a new turn, which is
+          exactly what it isn't — the reply above and below it is one response.
+        -->
+        @if (message().steering) {
+          <span class="flex items-center gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
+            <ng-icon name="heroArrowTurnDownRight" class="size-3.5" aria-hidden="true" />
+            Sent while responding
+          </span>
+        }
+
         <!-- Text content (message bubble) -->
         @if (hasTextContent()) {
+          <!--
+            A mid-turn steer uses the SAME bubble as any other user message.
+            It IS an ordinary thing the user said; only its timing is unusual,
+            and the "Sent while responding" caption above already carries that.
+            A second visual treatment made it read as a different kind of
+            object, which it isn't.
+          -->
           <div
-            class="max-w-[80%] rounded-2xl bg-primary-500 px-4 py-3 text-base/6 text-white/90"
+            class="max-w-[80%] rounded-2xl bg-primary-accessible px-4 py-3 text-base/6 text-white/90"
           >
             <div class="relative">
               <div
@@ -48,12 +75,12 @@ const MAX_HEIGHT_PX = 200;
                 class="overflow-hidden transition-[max-height] duration-300 ease-in-out"
                 [style.max-height]="expanded() ? 'none' : maxHeightPx + 'px'"
               >
-                @if (displayText()) {
-                  <p class="whitespace-pre-wrap">{{ displayText() }}</p>
+                @if (displayText(); as text) {
+                  <p class="whitespace-pre-wrap"><app-mention-text [text]="text" /></p>
                 } @else {
                   @for (block of message().content; track $index) {
                     @if (block.type === 'text' && block.text) {
-                      <p class="whitespace-pre-wrap">{{ block.text }}</p>
+                      <p class="whitespace-pre-wrap"><app-mention-text [text]="block.text" /></p>
                     }
                   }
                 }
@@ -91,6 +118,42 @@ const MAX_HEIGHT_PX = 200;
             }
           </div>
         }
+
+        <!-- Drive folders (drive-folder spec §4.7): one chip each, expanding to its files -->
+        @if (folderAttachments().length > 0) {
+          <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
+            @for (folder of folderAttachments(); track $index) {
+              <app-folder-attachment-chip [folder]="folder" />
+            }
+          </div>
+        }
+
+        <!--
+          The request was refused before any reply streamed, so the agent never
+          saw this. Said on the message itself: a toast is gone in seconds and
+          leaves a bubble that looks delivered with nothing under it.
+        -->
+        @if (message().sendFailure; as failure) {
+          <div
+            role="alert"
+            class="flex max-w-[80%] flex-wrap items-center justify-end gap-x-2 gap-y-1 pr-1 text-xs text-state-danger-600 dark:text-state-danger-400"
+          >
+            <span class="flex items-center gap-1">
+              <ng-icon name="heroExclamationCircle" class="size-4" aria-hidden="true" />
+              <span><span class="font-medium">Not sent.</span> {{ failure.reason }}</span>
+            </span>
+            @if (canRetry()) {
+              <button
+                type="button"
+                (click)="retry()"
+                class="flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-gray-700 ring-1 ring-gray-300 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-800"
+              >
+                <ng-icon name="heroArrowPath" class="size-3.5" aria-hidden="true" />
+                Retry
+              </button>
+            }
+          </div>
+        }
       </div>
     }
   `,
@@ -100,7 +163,7 @@ const MAX_HEIGHT_PX = 200;
     }
   `,
 })
-export class UserMessageComponent implements AfterViewInit {
+export class UserMessageComponent implements AfterViewInit, OnDestroy {
   message = input.required<Message>();
 
   contentWrapper = viewChild<ElementRef<HTMLDivElement>>('contentWrapper');
@@ -109,6 +172,14 @@ export class UserMessageComponent implements AfterViewInit {
   isOverflowing = signal(false);
 
   private localSettings = inject(LocalSettingsService);
+  private failedSends = inject(FailedSendService);
+
+  /** Offered only while a resend could start a turn — see FailedSendService. */
+  canRetry = computed(() => this.failedSends.canRetry(this.message().id));
+
+  retry(): void {
+    this.failedSends.retry(this.message().id);
+  }
 
   readonly maxHeightPx = MAX_HEIGHT_PX;
 
@@ -179,6 +250,12 @@ export class UserMessageComponent implements AfterViewInit {
       .map((block: ContentBlock) => block.fileAttachment as FileAttachmentData);
   });
 
+  folderAttachments = computed((): FolderAttachmentData[] =>
+    this.message()
+      .content.filter((block: ContentBlock) => block.type === 'folderAttachment' && block.folderAttachment)
+      .map((block: ContentBlock) => block.folderAttachment as FolderAttachmentData),
+  );
+
   imageAttachments = computed((): FileAttachmentData[] =>
     this.fileAttachments().filter((a) => isImageMimeType(a.mimeType)),
   );
@@ -187,8 +264,35 @@ export class UserMessageComponent implements AfterViewInit {
     this.fileAttachments().filter((a) => !isImageMimeType(a.mimeType)),
   );
 
+  /** Re-measures whenever the bubble's box settles. See {@link ngAfterViewInit}. */
+  private resizeObserver?: ResizeObserver;
+
   ngAfterViewInit(): void {
+    const wrapper = this.contentWrapper()?.nativeElement;
+    if (!wrapper) {
+      return;
+    }
+
+    // Measure whenever the box settles, not once and for all.
+    //
+    // A single `ngAfterViewInit` reading can land before layout has settled,
+    // and it latched: a one-line mid-turn steer measured its 40 characters as
+    // dozens of wrapped lines in a not-yet-widened container, set
+    // `isOverflowing`, and rendered a "Show more" plus a fade dimming its own
+    // single line — permanently, because nothing ever measured again.
+    // Observed live on dev.
+    //
+    // The observed element is the inner wrapper, whose box is pinned by
+    // `max-height` and unaffected by the fade (absolutely positioned) and the
+    // button (a sibling outside it), so reacting here cannot feed back into a
+    // resize loop.
+    this.resizeObserver = new ResizeObserver(() => this.checkOverflow());
+    this.resizeObserver.observe(wrapper);
     this.checkOverflow();
+  }
+
+  ngOnDestroy(): void {
+    this.resizeObserver?.disconnect();
   }
 
   toggleExpanded(): void {

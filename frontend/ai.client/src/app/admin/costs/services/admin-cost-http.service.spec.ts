@@ -86,6 +86,40 @@ describe('AdminCostHttpService', () => {
     req.flush(mockAnatomy);
   });
 
+  it('should get a user’s sessions with scope and sort params', () => {
+    const mock = { userId: 'u1', sessions: [], total: 0, unknownCostCount: 0 };
+
+    service.getUserSessions('u1', { allTime: true, sort: 'recent', limit: 50 }).subscribe(resp => {
+      expect(resp).toEqual(mock);
+    });
+
+    const req = httpMock.expectOne(
+      'http://localhost:8000/admin/costs/users/u1/sessions?allTime=true&sort=recent&limit=50'
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush(mock);
+  });
+
+  it('should URL-encode the user id and send period when scoped', () => {
+    service.getUserSessions('a/b', { period: '2026-09' }).subscribe();
+
+    const req = httpMock.expectOne('http://localhost:8000/admin/costs/users/a%2Fb/sessions?period=2026-09');
+    expect(req.request.method).toBe('GET');
+    req.flush({ userId: 'a/b', sessions: [], total: 0, unknownCostCount: 0 });
+  });
+
+  it('should get a session profile', () => {
+    const mock = { sessionId: 'sess-1', diagnoses: [] };
+
+    service.getSessionProfile('sess-1').subscribe(profile => {
+      expect(profile).toEqual(mock);
+    });
+
+    const req = httpMock.expectOne('http://localhost:8000/admin/costs/sessions/sess-1/profile');
+    expect(req.request.method).toBe('GET');
+    req.flush(mock);
+  });
+
   it('should URL-encode the session id in the anatomy request', () => {
     service.getSessionCostAnatomy('a/b c').subscribe();
 

@@ -124,7 +124,6 @@ class TestWorkspaceWrite:
                 "mime_type": "text/markdown",
                 "size_bytes": 4,
                 "size_kb": "0.0 KB",
-                "download_url": "https://signed.example/f",
             }
         )
         monkeypatch.setattr(f"{MODULE}.write_workspace_file", svc)
@@ -137,9 +136,13 @@ class TestWorkspaceWrite:
         assert card["ui_display"] == "inline"
         assert card["payload"] == {
             "filename": "report.md",
-            "download_url": "https://signed.example/f",
+            "upload_id": "up1",
             "size_kb": "0.0 KB",
         }
+        # The model reads this same JSON; a signed URL in it gets re-emitted in
+        # prose with the query string truncated (S3 AccessDenied).
+        assert "download_url" not in card["payload"]
+        assert "do not write a download link" in card["summary"]
         svc.assert_awaited_once_with(
             "u1", "s1", "report.md", "# Hi", mime_type="text/markdown"
         )

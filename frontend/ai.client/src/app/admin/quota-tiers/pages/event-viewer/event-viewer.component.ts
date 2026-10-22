@@ -4,10 +4,11 @@ import { DatePipe, DecimalPipe, JsonPipe } from '@angular/common';
 import { QuotaHttpService } from '../../services/quota-http.service';
 import { QuotaStateService } from '../../services/quota-state.service';
 import { QuotaEvent, QuotaEventType } from '../../models/quota.models';
+import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-event-viewer',
-  imports: [FormsModule, DatePipe, DecimalPipe, JsonPipe],
+  imports: [FormsModule, DatePipe, DecimalPipe, JsonPipe, SpinnerComponent],
   templateUrl: './event-viewer.component.html',
   styleUrl: './event-viewer.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -94,13 +95,13 @@ export class EventViewerComponent implements OnInit {
   getEventTypeBadgeClasses(eventType: QuotaEventType): string {
     switch (eventType) {
       case QuotaEventType.WARNING:
-        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300';
+        return 'bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/50 dark:text-state-warning-300';
       case QuotaEventType.BLOCK:
-        return 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300';
+        return 'bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/50 dark:text-state-danger-300';
       case QuotaEventType.RESET:
-        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300';
+        return 'bg-state-info-100 text-state-info-800 dark:bg-state-info-900/50 dark:text-state-info-300';
       case QuotaEventType.OVERRIDE_APPLIED:
-        return 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300';
+        return 'bg-category-accent-override-100 text-category-accent-override-800 dark:bg-category-accent-override-900/50 dark:text-category-accent-override-300';
       default:
         return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
     }

@@ -17,6 +17,7 @@ const mockTrainedModel: TrainedModelResponse = {
   training_job_id: 'tj-1',
   model_id: 'model-1',
   model_name: 'Test Model',
+  task_type: 'text-classification',
   model_s3_path: 's3://bucket/model',
   instance_type: 'ml.g5.xlarge',
   completed_at: '2026-02-28T00:00:00Z',
@@ -129,6 +130,9 @@ describe('CreateInferenceJobPage', () => {
     await component.onFileSelected(input);
 
     expect(mockHttp.presignInferenceUpload).toHaveBeenCalledWith({
+      // The accepted input format follows the task the chosen model was
+      // fine-tuned for, not anything the user picks.
+      task_type: 'text-classification',
       filename: 'input.txt',
       content_type: 'text/plain',
     });

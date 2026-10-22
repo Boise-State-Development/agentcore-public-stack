@@ -5,12 +5,13 @@
       <div>
         <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Manage Models</h1>
         <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-          Enable, configure, and remove the models available to users.
+          Enable, configure, and remove the models available to users. Their order here
+          is the order they appear in the chat model picker.
         </p>
       </div>
       <a
         routerLink="/admin/manage-models/catalog"
-        class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+        class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:brightness-110"
       >
         <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
         Add Model
@@ -32,7 +33,7 @@
           [ngModel]="searchQuery()"
           (ngModelChange)="searchQuery.set($event)"
           placeholder="Search by name, ID, or provider…"
-          class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+          class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
         />
       </div>
 
@@ -41,7 +42,7 @@
         id="provider"
         [ngModel]="providerFilter()"
         (ngModelChange)="providerFilter.set($event)"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All providers</option>
         @for (provider of availableProviders(); track provider) {
@@ -54,7 +55,7 @@
         id="enabled"
         [ngModel]="enabledFilter()"
         (ngModelChange)="enabledFilter.set($event)"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All statuses</option>
         <option value="enabled">Enabled</option>
@@ -75,12 +76,19 @@
     <div class="mb-3 flex flex-col gap-1 text-xs/5 sm:flex-row sm:items-center sm:justify-between">
       <p class="text-gray-500 dark:text-gray-400">
         {{ filteredModels().length }} model{{ filteredModels().length !== 1 ? 's' : '' }}
+        @if (savingOrder()) {
+          <span class="text-gray-400 dark:text-gray-500">· Saving order…</span>
+        } @else if (canReorder()) {
+          <span class="text-gray-400 dark:text-gray-500">· Drag to reorder</span>
+        } @else if (hasActiveFilters() && filteredModels().length > 1) {
+          <span class="text-gray-400 dark:text-gray-500">· Clear filters to reorder</span>
+        }
       </p>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span class="text-gray-400 dark:text-gray-500">Add from catalog:</span>
-        <a routerLink="/admin/bedrock/models" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Bedrock</a>
-        <a routerLink="/admin/gemini/models" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Gemini</a>
-        <a routerLink="/admin/openai/models" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">OpenAI</a>
+        <a routerLink="/admin/bedrock/models" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Bedrock</a>
+        <a routerLink="/admin/gemini/models" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Gemini</a>
+        <a routerLink="/admin/openai/models" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">OpenAI</a>
       </div>
     </div>
 
@@ -88,24 +96,20 @@
     @if (isInitialLoad()) {
       <div class="flex h-64 items-center justify-center rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
         <div class="flex flex-col items-center gap-4">
-          <div
-            class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            role="status"
-            aria-label="Loading models"
-          ></div>
+          <app-spinner size="xl" label="Loading models" />
           <p class="text-sm/6 text-gray-500 dark:text-gray-400">
             Loading models…
           </p>
         </div>
       </div>
     } @else if (modelsResource.error()) {
-      <div class="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+      <div class="rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
         <p class="font-medium">Failed to load models</p>
         <p class="mt-1 text-sm/6">Please check your connection and try again.</p>
         <button
           type="button"
           (click)="modelsResource.reload()"
-          class="mt-3 text-sm/6 font-medium underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500"
+          class="mt-3 text-sm/6 font-medium underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500"
         >
           Retry
         </button>
@@ -117,151 +121,117 @@
         </p>
       </div>
     } @else {
-      <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
-        @for (model of filteredModels(); track model.id) {
-          <li>
+      <!-- Announces keyboard and pointer moves; the list itself doesn't. -->
+      <p class="sr-only" aria-live="polite">{{ reorderAnnouncement() }}</p>
+
+      <ul
+        cdkDropList
+        cdkDropListLockAxis="y"
+        [cdkDropListData]="filteredModels()"
+        [cdkDropListDisabled]="!canReorder()"
+        (cdkDropListDropped)="onDrop($event)"
+        class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800"
+      >
+        @for (model of filteredModels(); track model.id; let i = $index) {
+          <li
+            cdkDrag
+            [cdkDragData]="model"
+            cdkDragPreviewClass="manage-models-drag-preview"
+            class="bg-white dark:bg-gray-800"
+          >
             <!-- Row -->
             <div class="flex items-center gap-3 px-3 py-2.5 sm:px-4">
-              <!-- Expand toggle -->
-              <button
-                type="button"
-                (click)="toggleExpand(model.id)"
-                [attr.aria-expanded]="isExpanded(model.id)"
-                [attr.aria-controls]="'model-detail-' + model.id"
-                [attr.aria-label]="(isExpanded(model.id) ? 'Hide' : 'Show') + ' details for ' + model.modelName"
-                class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-              >
-                <ng-icon
-                  name="heroChevronDown"
-                  class="size-4 transition-transform duration-150"
-                  [class.rotate-180]="isExpanded(model.id)"
-                  aria-hidden="true"
-                />
-              </button>
+              <!-- Drag handle. Absent while filtered: see canReorder(). -->
+              @if (canReorder()) {
+                <button
+                  type="button"
+                  cdkDragHandle
+                  [id]="'reorder-handle-' + model.id"
+                  (keydown)="onHandleKeydown($event, i)"
+                  [attr.aria-label]="'Reorder ' + model.modelName + ', position ' + (i + 1) + ' of ' + filteredModels().length + '. Use the arrow keys to move.'"
+                  [appTooltip]="'Drag to reorder'"
+                  appTooltipPosition="top"
+                  class="-mx-1 flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 active:cursor-grabbing dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                >
+                  <ng-icon name="heroBars2" class="size-4" aria-hidden="true" />
+                </button>
+              }
+
+              <!-- Decorative: the row names the model right beside it. Shown here
+                   so an admin can confirm the icon they configured is the one
+                   users will see, without opening the chat picker. -->
+              <app-model-icon [model]="model" [size]="28" [class.opacity-50]="!model.enabled" />
 
               <!-- Name + model id -->
-              <div class="min-w-0 flex-1">
+              <div class="min-w-0 flex-1" [class.opacity-60]="!model.enabled">
                 <div class="flex items-center gap-1.5">
-                  <span class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+                  <span
+                    class="truncate text-sm/6 font-medium text-gray-900 dark:text-white"
+                    [title]="model.modelName"
+                  >
                     {{ model.modelName }}
                   </span>
                   @if (model.isDefault) {
                     <ng-icon
                       name="heroStarSolid"
-                      class="size-4 shrink-0 text-amber-500 dark:text-amber-400"
+                      class="size-4 shrink-0 text-star-500 dark:text-star-400"
                       aria-label="Default model"
                     />
                   }
+                  @if (model.status && model.status !== 'active') {
+                    <span
+                      class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300"
+                      >{{ model.status }}</span
+                    >
+                  }
                 </div>
-                <p class="truncate font-mono text-xs/5 text-gray-500 dark:text-gray-400">
+                <p
+                  class="truncate font-mono text-xs/5 text-gray-500 dark:text-gray-400"
+                  [title]="model.modelId"
+                >
                   {{ model.modelId }}
                 </p>
               </div>
 
-              <!-- Provider -->
-              <span class="hidden shrink-0 rounded-2xl bg-gray-100 px-2.5 py-0.5 text-xs/5 font-medium text-gray-600 sm:inline-block dark:bg-gray-700 dark:text-gray-300">
-                {{ model.providerName }}
+              <!-- Price per 1M tokens, input / output. The one detail admins
+                   compare across rows, so it lives on the row. -->
+              <span
+                class="hidden shrink-0 text-right font-mono text-xs/5 tabular-nums text-gray-500 sm:inline-block dark:text-gray-400"
+                [title]="'Per 1M tokens: $' + model.inputPricePerMillionTokens.toFixed(2) + ' input, $' + model.outputPricePerMillionTokens.toFixed(2) + ' output'"
+              >
+                ${{ model.inputPricePerMillionTokens.toFixed(2) }} / ${{ model.outputPricePerMillionTokens.toFixed(2) }}
               </span>
 
-              <!-- Enable toggle -->
-              <div class="flex shrink-0 items-center gap-2">
-                <span
-                  class="hidden w-14 text-right text-xs/5 font-medium sm:inline-block"
-                  [class]="model.enabled ? 'text-green-700 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'"
-                >
-                  {{ model.enabled ? 'Enabled' : 'Disabled' }}
-                </span>
-                <button
-                  type="button"
-                  role="switch"
-                  [attr.aria-checked]="model.enabled"
-                  [attr.aria-label]="(model.enabled ? 'Disable' : 'Enable') + ' ' + model.modelName"
-                  [disabled]="isToggling(model.id)"
-                  (click)="toggleEnabled(model)"
-                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  [class]="model.enabled ? 'bg-green-600 dark:bg-green-500' : 'bg-gray-300 dark:bg-gray-600'"
-                >
-                  <span
-                    class="inline-block size-5 transform rounded-full bg-white shadow transition-transform duration-150"
-                    [class]="model.enabled ? 'translate-x-5' : 'translate-x-0.5'"
-                  ></span>
-                </button>
-              </div>
+              <!-- Edit -->
+              <a
+                [routerLink]="['/admin/manage-models/edit', model.id]"
+                [attr.aria-label]="'Edit ' + model.modelName"
+                [title]="'Edit ' + model.modelName"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              >
+                <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+              </a>
 
-              <!-- Actions -->
-              <div class="flex shrink-0 items-center gap-1">
-                <a
-                  [routerLink]="['/admin/manage-models/edit', model.id]"
-                  [attr.aria-label]="'Edit ' + model.modelName"
-                  [title]="'Edit ' + model.modelName"
-                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-                >
-                  <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
-                </a>
-                <button
-                  type="button"
-                  (click)="deleteModel(model)"
-                  [disabled]="isDeleting(model.id)"
-                  [attr.aria-label]="'Delete ' + model.modelName"
-                  [title]="'Delete ' + model.modelName"
-                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-                >
-                  <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
-                </button>
-              </div>
+              <!-- Enable toggle. Far right so every row's state reads down one
+                   column; the switch itself carries the state, so no label. -->
+              <button
+                type="button"
+                role="switch"
+                [attr.aria-checked]="model.enabled"
+                [attr.aria-label]="(model.enabled ? 'Disable' : 'Enable') + ' ' + model.modelName"
+                [title]="model.enabled ? 'Enabled' : 'Disabled'"
+                [disabled]="isToggling(model.id)"
+                (click)="toggleEnabled(model)"
+                class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+                [class]="model.enabled ? 'bg-state-success-600 dark:bg-state-success-500' : 'bg-gray-300 dark:bg-gray-600'"
+              >
+                <span
+                  class="inline-block size-5 transform rounded-full bg-white shadow transition-transform duration-150"
+                  [class]="model.enabled ? 'translate-x-5' : 'translate-x-0.5'"
+                ></span>
+              </button>
             </div>
 
-            <!-- Expanded detail -->
-            @if (isExpanded(model.id)) {
-              <div
-                [id]="'model-detail-' + model.id"
-                class="border-t border-gray-100 bg-gray-50 px-4 py-3 sm:pl-14 dark:border-gray-700/60 dark:bg-gray-900/40"
-              >
-                <dl class="grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-3">
-                  <div>
-                    <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      Pricing / 1M tokens
-                    </dt>
-                    <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
-                      <span class="font-semibold text-gray-900 dark:text-white">${{ model.inputPricePerMillionTokens.toFixed(2) }}</span> in
-                      ·
-                      <span class="font-semibold text-gray-900 dark:text-white">${{ model.outputPricePerMillionTokens.toFixed(2) }}</span> out
-                    </dd>
-                  </div>
-
-                  <div>
-                    <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      Modalities
-                    </dt>
-                    <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
-                      {{ model.inputModalities.join(', ') }}
-                      <span class="text-gray-400 dark:text-gray-500">→</span>
-                      {{ model.outputModalities.join(', ') }}
-                    </dd>
-                  </div>
-
-                  <div>
-                    <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      Allowed roles
-                    </dt>
-                    <dd class="mt-1 flex flex-wrap gap-1.5">
-                      @if (model.allowedAppRoles && model.allowedAppRoles.length > 0) {
-                        @for (roleId of model.allowedAppRoles; track roleId) {
-                          <span
-                            class="inline-flex items-center rounded-2xl bg-purple-100 px-2 py-0.5 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
-                            [title]="roleId"
-                          >
-                            {{ getRoleDisplayName(roleId) }}
-                          </span>
-                        }
-                      } @else {
-                        <span class="text-xs/5 italic text-gray-500 dark:text-gray-400">No roles assigned</span>
-                      }
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            }
           </li>
         }
       </ul>

@@ -6,6 +6,7 @@ import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { ReviewQueuePage } from './review-queue.page';
 import { AdminListingRow } from '../models/marketplace.model';
 import { of } from 'rxjs';
+import { provideRouter } from '@angular/router';
 import { ListingReachability } from '../../../agents/models/reachability';
 
 /**
@@ -46,6 +47,9 @@ describe('ReviewQueuePage — reachability warning', () => {
       providers: [
         { provide: AdminMarketplaceService, useValue: mockService },
         { provide: Dialog, useValue: { open: vi.fn() } },
+        // The agent name is a RouterLink into the submission review page, so the row
+        // cannot render without an ActivatedRoute.
+        provideRouter([]),
       ],
     });
   });
@@ -140,6 +144,7 @@ describe('ReviewQueuePage — withdrawal requests', () => {
       providers: [
         { provide: AdminMarketplaceService, useValue: mockService },
         { provide: Dialog, useValue: mockDialog },
+        provideRouter([]),
       ],
     });
   });
@@ -216,5 +221,105 @@ describe('ReviewQueuePage — withdrawal requests', () => {
     // declining restores nothing and granting is what actually takes it down.
     const fixture = await render();
     expect((fixture.nativeElement as HTMLElement).textContent).toMatch(/still live in the store/i);
+  });
+});
+
+/**
+ * Declining from the queue (the third review decision).
+ *
+ * Before it, an admin who judged a submission not a fit had to approve it or say "fix
+ * this" — promising a review they did not intend to give, and seeing the same submission
+ * again every round. These assert it reaches `review` (not the withdrawal endpoint, which
+ * answers the opposite question) and that it never appears on a withdrawal row.
+ */
+describe('ReviewQueuePage — declining a submission', () => {
+  let mockService: any;
+  let mockDialog: { open: ReturnType<typeof vi.fn> };
+
+  function submissionRow(overrides: Partial<AdminListingRow> = {}): AdminListingRow {
+    return {
+      agentId: 'ast-003',
+      name: 'Policy Lookup',
+      ownerName: 'Ada Author',
+      category: 'Administration',
+      state: 'in_review',
+      usageCount: 0,
+      submittedAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-22T00:00:00Z',
+      reachability: 'everyone',
+      adminEdits: [],
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    mockService = {
+      error: signal<string | null>(null),
+      loadSubmissions: vi.fn().mockResolvedValue([submissionRow()]),
+      review: vi.fn().mockResolvedValue(undefined),
+      decideWithdrawal: vi.fn().mockResolvedValue(undefined),
+    };
+    mockDialog = { open: vi.fn().mockReturnValue({ closed: of('Duplicates the Registrar agent.') }) };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: AdminMarketplaceService, useValue: mockService },
+        { provide: Dialog, useValue: mockDialog },
+        provideRouter([]),
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(): Promise<ComponentFixture<ReviewQueuePage>> {
+    const fixture = TestBed.createComponent(ReviewQueuePage);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  function button(fixture: ComponentFixture<unknown>, label: string): HTMLButtonElement {
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button')).find(
+      (b) => b.textContent?.includes(label),
+    ) as HTMLButtonElement;
+  }
+
+  it('offers Decline alongside the other two decisions', async () => {
+    const fixture = await render();
+    expect(button(fixture, 'Decline')).toBeTruthy();
+    expect(button(fixture, 'Request changes')).toBeTruthy();
+    expect(button(fixture, 'Approve')).toBeTruthy();
+  });
+
+  it('declines through review with the reason attached', async () => {
+    const fixture = await render();
+    button(fixture, 'Decline').click();
+    await fixture.whenStable();
+
+    expect(mockService.review).toHaveBeenCalledWith('ast-003', {
+      decision: 'reject',
+      note: 'Duplicates the Registrar agent.',
+    });
+    // Never the withdrawal endpoint: that one answers "may this come out?", and routing a
+    // decline through it would take down a listing that was never up.
+    expect(mockService.decideWithdrawal).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when the reason dialog is dismissed', async () => {
+    mockDialog.open.mockReturnValue({ closed: of(undefined) });
+    const fixture = await render();
+    button(fixture, 'Decline').click();
+    await fixture.whenStable();
+
+    expect(mockService.review).not.toHaveBeenCalled();
+  });
+
+  it('links the agent name to its full review', async () => {
+    const fixture = await render();
+    const link = (fixture.nativeElement as HTMLElement).querySelector('a[href*="ast-003"]');
+    expect(link).toBeTruthy();
+    expect(link?.getAttribute('href')).toContain('/admin/marketplace/review/ast-003');
   });
 });

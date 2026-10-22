@@ -18,6 +18,7 @@ import {
   AgentListingBlock,
   ListingPreflight,
   ListingSubmissionResponse,
+  ShareSkillExposure,
   SubmitListingRequest,
   SubmitReportRequest,
   SubmitReportResponse,
@@ -99,6 +100,11 @@ export class AgentApiService {
 
   getAgentShares(id: string): Observable<AgentSharesResponse> {
     return this.http.get<AgentSharesResponse>(`${this.baseUrl()}/${id}/shares`);
+  }
+
+  /** The owner's own skills that come along with sharing this agent (§6/D7). Owner only. */
+  getShareSkillExposure(id: string): Observable<ShareSkillExposure> {
+    return this.http.get<ShareSkillExposure>(`${this.baseUrl()}/${id}/shares/exposed-skills`);
   }
 
   // ── marketplace, the author's half (D2/D7) ─────────────────────────────────────

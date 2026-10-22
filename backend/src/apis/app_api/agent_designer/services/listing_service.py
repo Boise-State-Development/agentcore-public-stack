@@ -10,9 +10,7 @@ Three rules are enforced here and nowhere else:
 * **Submission is the disclosure point (D7).** Publishing an Agent effectively publishes
   the contents of every skill its author wrote and bound, because Skills v2 resolves a
   ``skill`` binding on ``skill.owner_id == agent.owner_id``. The author is shown that list
-  before a reviewer's time is spent, and a ``memory_space`` binding blocks submission
-  outright — a memory space is personal data that re-resolution will deny to every other
-  viewer, so a published agent bound to one is a guaranteed failure for everyone.
+  before a reviewer's time is spent.
 * **Approval is the only door into the store (D2).** ``in_review → published`` is the sole
   edge that writes a directory key, and only ``require_admin`` routes reach it.
 * **Admins own presentation, authors own behavior (D13).** The patch path can reach
@@ -47,6 +45,8 @@ from apis.shared.assistants.version_diff import (
     behavior_changed,
     changed_fields,
     instructions_diff,
+    wire_field_name,
+    wire_value,
 )
 from apis.shared.assistants.version_repository import (
     create_version,
@@ -54,11 +54,13 @@ from apis.shared.assistants.version_repository import (
     list_versions,
     set_version_index,
 )
+from apis.shared.assistants.version_resolution import resolve_review_agent
 from apis.shared.assistants.versions import snapshot_of
 from apis.shared.assistants.models import (
     AdminEdit,
     AdminListingPatchRequest,
     AdminListingRow,
+    AdminSubmissionReview,
     AgentListing,
     AgentVersionDiffResponse,
     AgentVersionSummary,
@@ -76,11 +78,12 @@ from apis.shared.assistants.publishers import (
 )
 from apis.shared.assistants.service import (
     _get_assistant_cloud_without_ownership_check,
+    is_project_harness,
     resolve_assistant_permission,
 )
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import skills_enabled
-from apis.shared.memory.service import MemorySpaceService
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.timestamps import utc_now_iso
 
@@ -181,43 +184,10 @@ async def _load_any(agent_id: str) -> Assistant:
 
 
 # ── D7 disclosure ────────────────────────────────────────────────────────────────────
-async def _memory_space_block_reason(assistant: Assistant, user: User) -> Optional[str]:
-    """The D7.2 blocking message for a ``memory_space`` binding, or ``None`` if clear.
-
-    Split from the raising path so ``preflight_listing`` can *show* the block without
-    attempting the transition. One function decides, two callers present it — a second
-    copy of this rule in the SPA would be the thing that eventually disagrees.
-    """
-    bound = [b for b in effective_bindings(assistant) if b.kind == "memory_space"]
-    if not bound:
-        return None
-
-    # Resolve a human name for the message. The id alone tells the author nothing.
-    label = bound[0].ref
-    try:
-        spaces = MemorySpaceService().list_spaces_for_user(user.user_id, user.email)
-        by_id = {space.space_id: space.name for space, _role in spaces}
-        label = by_id.get(bound[0].ref, bound[0].ref)
-    except Exception:
-        logger.warning("Could not resolve memory space name for submission block", exc_info=True)
-
-    return (
-        f"This agent can't be published while it's bound to the memory space “{label}”. "
-        "A memory space is personal data — it won't resolve for anyone else, so the agent "
-        "would fail for every person who ran it. Remove the binding and submit again."
-    )
-
-
-async def _memory_space_block(assistant: Assistant, user: User) -> None:
-    """Block submission on any ``memory_space`` binding, naming the space (D7.2).
-
-    Not a warning. A memory space is personal data; Designer D5's run-time re-resolve
-    already denies it to anyone who lacks access, so publishing an agent bound to one
-    ships a listing that cannot work for a single other person.
-    """
-    reason = await _memory_space_block_reason(assistant, user)
-    if reason:
-        raise ListingError(reason, status_code=400)
+PROJECT_HARNESS_LISTING_MESSAGE = (
+    "This agent belongs to a project and can't be published. "
+    "To share it beyond the project, create a separate agent."
+)
 
 
 def _visibility_block_reason(assistant: Assistant) -> Optional[str]:
@@ -229,8 +199,7 @@ def _visibility_block_reason(assistant: Assistant) -> Optional[str]:
     published SHARED or PRIVATE Agent is not a "team listing"; it is a tile shown to
     everyone that nobody but the author can open, and every pin against it 404s.
 
-    Split from the raising path for the same reason as ``_memory_space_block_reason``:
-    ``preflight_listing`` shows it, ``submit_listing`` enforces it, and one function
+    Split from the raising path so that ``preflight_listing`` shows it, ``submit_listing`` enforces it, and one function
     decides so the dialog and the transition cannot drift apart.
     """
     if assistant.visibility == "PUBLIC":
@@ -269,13 +238,17 @@ def _visibility_block(assistant: Assistant, *, consented: bool) -> None:
         raise ListingError(reason, status_code=400)
 
 
-async def _exposed_skills(assistant: Assistant) -> List[SkillExposure]:
-    """Skills the author wrote that publication makes readable (D7.1).
+async def exposed_skills(assistant: Assistant) -> List[SkillExposure]:
+    """Skills the author wrote that reaching this Agent makes readable (D7.1).
 
     Matches the invoke-through rule exactly: a ``skill`` binding resolves when
     ``skill.owner_id == agent.owner_id``, so those — and only those — are the skills whose
-    contents publication exposes. Skills the author merely has access to belong to someone
-    else and are not the author's to disclose.
+    contents anyone who can run the Agent can read. Skills the author merely has access to
+    belong to someone else and are not the author's to disclose.
+
+    Two disclosures read this, and both must: the marketplace submit dialog (publication)
+    and the share dialog (``share_disclosure``). They are one rule asked at two widths, so a
+    second copy would be a second answer to "what does widening this Agent give away?".
     """
     refs = [b.ref for b in effective_bindings(assistant) if b.kind == "skill"]
     if not refs or not skills_enabled():
@@ -356,12 +329,14 @@ async def preflight_listing(
     assistant = await _load_for_author(agent_id, user)
     reachability = _reachability(assistant)
     requires_public = _visibility_block_reason(assistant) is not None
-    block_reason = await _memory_space_block_reason(assistant, user)
+    # A project's harness is never publishable (shared-projects §3.2): its access is the
+    # project's membership, and a listing would hand it to everyone.
+    block_reason = PROJECT_HARNESS_LISTING_MESSAGE if is_project_harness(assistant) else None
     # An agent that cannot be published at all is not first walked through a
     # skill-exposure confirmation.
     if block_reason:
         return [], block_reason, reachability, requires_public
-    return await _exposed_skills(assistant), None, reachability, requires_public
+    return await exposed_skills(assistant), None, reachability, requires_public
 
 
 async def submit_listing(
@@ -379,6 +354,8 @@ async def submit_listing(
     for the whole review; only approval swaps it.
     """
     assistant = await _load_for_author(agent_id, user)
+    if is_project_harness(assistant):
+        raise ListingError(PROJECT_HARNESS_LISTING_MESSAGE, status_code=400)
     await _validate_category(request.category)
 
     try:
@@ -388,9 +365,8 @@ async def submit_listing(
 
     # Order matters: block before disclosing. An author whose agent cannot be published
     # at all should not first be walked through a skill-exposure confirmation.
-    await _memory_space_block(assistant, user)
     _visibility_block(assistant, consented=request.make_public)
-    exposed = await _exposed_skills(assistant)
+    exposed = await exposed_skills(assistant)
     publisher_id = await _resolve_proposed_publisher(
         user,
         request.publisher_id,
@@ -764,20 +740,36 @@ async def review_listing(
     category: Optional[str] = None,
     publisher_id: Optional[str] = None,
 ) -> AgentListing:
-    """Approve a submission, or return it with a reason (D2).
+    """Approve a submission, return it with a reason, or decline it (D2).
 
     Approval is where an attribution becomes authoritative, so the reviewer may adjust
     category and publisher in the same act (D12) without a second round trip.
+
+    ``reject`` is the third decision and it is not a synonym for ``request_changes``: it
+    answers a submission that should not be in the store at all, rather than one that needs
+    work. Both carry a required reason for the same reason — a decision the author cannot
+    read is one they cannot act on — and the state machine's note on ``rejected`` records
+    why both let the author come back.
     """
     assistant = await _load_any(agent_id)
     if not assistant.listing:
         raise ListingError("This agent has no marketplace listing to review.", status_code=404)
 
-    target = "published" if decision == "approve" else "changes_requested"
-    if decision == "request_changes" and not (note or "").strip():
+    # Mapped rather than branched, so adding a fourth decision cannot silently fall through
+    # to ``changes_requested`` the way an ``if/else`` on ``approve`` did.
+    targets = {
+        "approve": "published",
+        "request_changes": "changes_requested",
+        "reject": "rejected",
+    }
+    target = targets.get(decision)
+    if target is None:
+        raise ListingError(f"Unknown review decision '{decision}'.", status_code=400)
+    if target != "published" and not (note or "").strip():
+        verb = "Declining a submission" if decision == "reject" else "Requesting changes"
         raise ListingError(
-            "Requesting changes needs a reason — it renders on the author's card so they "
-            "never have to ask what happened.",
+            f"{verb} needs a reason — it renders on the author's card so they never have "
+            "to ask what happened.",
             status_code=400,
         )
 
@@ -1082,21 +1074,6 @@ async def patch_listing_presentation(
 # ── admin reads ──────────────────────────────────────────────────────────────────────
 # camelCase for the wire, so the SPA reads the same field names it already knows from
 # ``AgentResponse``. Snake_case would leak the storage attribute names into the UI.
-_DIFF_FIELD_ALIASES = {
-    "model_settings": "modelConfig",
-    "icon_key": "iconKey",
-    "publisher_id": "publisherId",
-}
-
-
-def _wire_value(value):
-    """Serialize a snapshot value for the diff payload, keeping ``None`` distinct from ``[]``."""
-    if isinstance(value, list):
-        return [_wire_value(item) for item in value]
-    dump = getattr(value, "model_dump", None)
-    return dump(by_alias=True) if dump else value
-
-
 async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
     """What the pending submission changes against what is published (§6.1).
 
@@ -1149,9 +1126,9 @@ async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
 
     changes = [
         VersionFieldChange(
-            field=_DIFF_FIELD_ALIASES.get(field, field),
-            before=_wire_value(before),
-            after=_wire_value(after),
+            field=wire_field_name(field),
+            before=wire_value(before),
+            after=wire_value(after),
             behavior=field in ("instructions", "bindings", "model_settings"),
         )
         for field, before, after in changed_fields(published, pending)
@@ -1167,6 +1144,100 @@ async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
         instructions_diff=instructions_diff(published, pending),
     )
 
+
+
+async def read_submission_for_review(agent_id: str, admin: User) -> AdminSubmissionReview:
+    """The reviewer's full read of a listing — instructions, bindings, model and all (D2).
+
+    **Which version this reads is the entire correctness question**, and it is answered the
+    same way ``review_listing`` answers "which version does approval promote?": the snapshot
+    named by the listing, never "the latest" and never the live draft.
+
+    * ``in_review`` → ``submitted_version``. That is the artifact approval promotes, so it
+      is the artifact the reviewer must read. The live record is the author's draft and they
+      can edit it while the row sits in the queue; reading it would show one configuration
+      and publish another.
+    * anything else → ``published_version``. ``submitted_version`` is a high-water mark that
+      deliberately survives a decision, so on a ``withdrawal_requested`` row — where nothing
+      is pending and the question is whether to pull what is *live* — it would name a stale
+      snapshot the store never served.
+
+    Falls back to the live record, flagged, when neither pointer resolves. See
+    ``AdminSubmissionReview.snapshot_unavailable`` for why that is reported rather than
+    refused.
+
+    ``admin`` is threaded through to resolve capability labels. It is not an access
+    decision — the route's ``admin.marketplace`` scope already made that one — and nothing
+    here filters by what this particular admin can reach.
+    """
+    # Imported here rather than at module scope: ``agent_detail`` pulls in the whole
+    # bindable catalog (five per-primitive services), and every other caller of this module
+    # — the author paths, the submit dialog's preflight — needs none of it.
+    from apis.app_api.agent_designer.services.agent_detail import (
+        resolve_capabilities,
+        resolve_listing_display,
+    )
+
+    assistant = await _load_any(agent_id)
+    listing = assistant.listing
+    if not listing:
+        raise ListingError("This agent has no marketplace listing to review.", status_code=404)
+
+    # ⚠️ The which-version rule lives in ``version_resolution``, not here, and that is
+    # load-bearing: the reviewer's *test drive* (``inference_api.chat.routes``) has to
+    # resolve the same snapshot this page shows, and inference-api cannot import from
+    # app_api. A second copy of the rule is a page and a preview that disagree about what
+    # is under review — which is exactly the failure snapshots exist to prevent, one level
+    # up.
+    reviewed, review_version = await resolve_review_agent(assistant)
+
+    publisher = await get_publisher(listing.publisher_id)
+    try:
+        capabilities, model_label = await resolve_capabilities(reviewed, admin)
+    except Exception:
+        # Presentation, exactly as on the user-facing detail read: a catalog hiccup must not
+        # turn a reviewable submission into a 500 and strand the queue.
+        logger.warning(
+            f"Failed to resolve capabilities for review of {scrub_log(agent_id)}", exc_info=True
+        )
+        capabilities, model_label = [], None
+    try:
+        _, category_label = await resolve_listing_display(reviewed)
+    except Exception:
+        logger.warning(f"Failed to resolve category label for {scrub_log(agent_id)}", exc_info=True)
+        category_label = None
+
+    return AdminSubmissionReview(
+        agent_id=agent_id,
+        name=reviewed.name,
+        description=reviewed.description,
+        tagline=reviewed.tagline,
+        instructions=reviewed.instructions,
+        starters=list(reviewed.starters or []),
+        emoji=reviewed.emoji,
+        icon_url=icon_url(agent_id, reviewed.icon_key),
+        owner_name=assistant.owner_name,
+        publisher=publisher,
+        category=listing.category,
+        category_label=category_label,
+        state=listing.state,
+        capabilities=capabilities,
+        model_label=model_label,
+        review_version=review_version,
+        published_version=listing.published_version,
+        snapshot_unavailable=review_version is None,
+        submitted_at=listing.submitted_at,
+        withdrawal_requested_at=(
+            listing.withdrawal_requested_at if listing.state == "withdrawal_requested" else None
+        ),
+        reviewed_at=listing.reviewed_at,
+        review_note=listing.review_note,
+        # ⚠️ Derived from the **live** record, never the snapshot. ``visibility`` is
+        # deliberately absent from ``AgentVersion`` (fusing it with listing state is the
+        # trap that class docstring names), and the question here is "can people reach this
+        # right now?" — a fact about now, which a frozen artifact cannot answer.
+        reachability=_reachability(assistant),
+    )
 
 
 async def list_admin_listings(state: Optional[str] = None) -> Tuple[List[AdminListingRow], int]:

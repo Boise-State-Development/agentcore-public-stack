@@ -24,6 +24,28 @@ from apis.shared.rbac.models import UserEffectivePermissions
 from apis.shared.rbac.service import AppRoleService
 
 
+@pytest.fixture(autouse=True)
+def _no_live_tool_catalog():
+    """Stub the tool-catalog snapshot the RBAC path consults.
+
+    ``can_access_tool`` / ``filter_requested_tools`` fall through to
+    ``tools.freshness._get_snapshot`` -> ``get_tool_catalog_repository().list_tools()``,
+    which builds a real DynamoDB client. ``freshness`` memoizes on a module-level
+    TTL, so whether this fires depends on which test warmed it first — these pass
+    alone and reached AWS only in full-suite order. Fail-open, so the failure was
+    swallowed. See the off-box socket guard in ``tests/conftest.py``.
+    """
+    from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock, patch as _patch
+
+    repo = _MagicMock()
+    repo.list_tools = _AsyncMock(return_value=[])
+    with _patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        yield
+
+
 @pytest.fixture
 def user():
     """A test user with two JWT roles."""

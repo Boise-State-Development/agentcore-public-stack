@@ -1,0 +1,601 @@
+"""Pre-stream turn timing (docs/specs/agent-state-feedback.md).
+
+This exists to answer one question — which stage owns the 3.75s before the
+first SSE byte — so what is worth pinning is that it cannot lie about that
+(stages in order, deltas not cumulative totals) and cannot break the turn it
+measures.
+"""
+
+import json
+import logging
+
+from apis.inference_api.chat.turn_timing import TurnPrelude, _metric_name
+
+
+class TestMarks:
+    def test_stages_are_recorded_in_order(self):
+        prelude = TurnPrelude()
+        for stage in ("preamble", "rag", "tools", "agent_build"):
+            prelude.mark(stage)
+
+        payload = _emitted(prelude)
+
+        assert list(payload["stages"].keys()) == [
+            "preamble",
+            "rag",
+            "tools",
+            "agent_build",
+        ]
+
+    def test_each_stage_is_a_delta_not_a_running_total(self, monkeypatch):
+        """The slowest stage is the answer, so a cumulative number would point
+        at the last stage every time."""
+        clock = iter([0.0, 1.0, 1.5, 4.5, 4.6])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()  # consumes 0.0
+        prelude.mark("preamble")  # 1.0 -> 1000ms
+        prelude.mark("rag")  # 1.5 -> 500ms
+        prelude.mark("agent_build")  # 4.5 -> 3000ms
+
+        payload = _emitted(prelude)  # total_ms consumes 4.6
+
+        assert payload["stages"] == {
+            "preamble": 1000,
+            "rag": 500,
+            "agent_build": 3000,
+        }
+        assert payload["totalMs"] == 4600
+
+    def test_total_covers_the_whole_prelude(self, monkeypatch):
+        clock = iter([0.0, 2.0, 7.0])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("preamble")
+
+        assert _emitted(prelude)["totalMs"] == 7000
+
+
+class TestStartedAt:
+    """The value handed to the stream coordinator for the turn recap."""
+
+    def test_is_wall_clock_not_perf_counter(self):
+        """Mixing clock domains yields a meaningless number, not a close one.
+
+        The coordinator subtracts this from a `time.time()` reading. A
+        `perf_counter` value — seconds since an arbitrary origin — would make
+        the recap read as decades, or negative.
+        """
+        import time
+
+        before = time.time()
+        prelude = TurnPrelude()
+        after = time.time()
+
+        assert before <= prelude.started_at <= after
+
+    def test_marks_are_immune_to_the_wall_clock_moving(self, monkeypatch):
+        """The stage deltas must not inherit the wall clock.
+
+        NTP can step `time.time()` backwards mid-turn, which would produce a
+        negative stage. The marks use `perf_counter`, so a wall clock that
+        jumps a decade must change nothing.
+        """
+        prelude = TurnPrelude()
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.time", lambda: 0.0
+        )
+        prelude.mark("preamble")
+
+        payload = _emitted(prelude)
+
+        assert payload["stages"]["preamble"] >= 0
+        assert payload["totalMs"] >= 0
+
+
+class TestPayload:
+    def test_carries_the_session_and_the_caller_s_extras(self):
+        prelude = TurnPrelude()
+        prelude.mark("preamble")
+
+        payload = _emitted(
+            prelude, session_id="sess-1", extra={"isResume": False}
+        )
+
+        assert payload["sessionId"] == "sess-1"
+        assert payload["streamKind"] == "agent"
+        assert payload["isResume"] is False
+
+    def test_carries_no_message_content(self):
+        """A latency record is held to the same content-free rule as the cost
+        rows — there is no field here for a prompt, and none should be added."""
+        prelude = TurnPrelude()
+        prelude.mark("preamble")
+
+        payload = _emitted(prelude)
+
+        assert set(payload) == {"sessionId", "streamKind", "totalMs", "stages"}
+
+    def test_a_flat_prelude_carries_no_groups_key(self):
+        """A group of one is noise — the number is already in `stages`."""
+        prelude = TurnPrelude()
+        prelude.mark("rag")
+
+        assert "groups" not in _emitted(prelude)
+
+
+class TestFailSoft:
+    def test_a_mark_that_cannot_be_taken_never_raises(self, monkeypatch):
+        prelude = TurnPrelude()
+
+        def _boom():
+            raise RuntimeError("clock exploded")
+
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter", _boom
+        )
+        prelude.mark("preamble")  # must not raise
+
+    def test_an_unserializable_extra_never_raises(self, caplog):
+        prelude = TurnPrelude()
+        prelude.mark("preamble")
+
+        class _Hostile:
+            def __repr__(self):
+                raise RuntimeError("no")
+
+        # `default=str` calls repr on the way out; the emit must swallow it
+        # rather than take the turn down with it.
+        prelude.emit(
+            session_id="s", stream_kind="agent", extra={"bad": _Hostile()}
+        )
+
+    def test_emit_writes_exactly_one_line(self, caplog):
+        prelude = TurnPrelude()
+        prelude.mark("preamble")
+
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            prelude.emit(session_id="s", stream_kind="agent")
+
+        lines = [r for r in caplog.records if r.getMessage().startswith("turn_prelude ")]
+        assert len(lines) == 1
+
+
+class TestGroups:
+    """Sub-stages sum back into the stage they decompose.
+
+    docs/specs/turn-latency-preamble.md splits `preamble` into five. The only
+    measurement anyone has of the pre-stream window is stated in terms of the
+    single coarse number, so the split has to keep reproducing it or it
+    discards its own baseline.
+    """
+
+    def test_dotted_substages_sum_into_their_prefix(self, monkeypatch):
+        clock = iter([0.0, 0.1, 0.4, 1.0, 1.1])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()  # consumes 0.0
+        prelude.mark("preamble.ownership")  # 100ms
+        prelude.mark("preamble.quota")  # 300ms
+        prelude.mark("rag")  # 600ms
+
+        payload = _emitted(prelude)  # total_ms consumes 1.1
+
+        assert payload["groups"] == {"preamble": 400}
+
+    def test_the_substages_stay_visible_alongside_the_group(self):
+        """The group is an addition, not a replacement: the whole point of the
+        split is knowing WHICH sub-stage owns the time."""
+        prelude = TurnPrelude()
+        prelude.mark("preamble.ownership")
+        prelude.mark("preamble.quota")
+
+        payload = _emitted(prelude)
+
+        assert list(payload["stages"]) == ["preamble.ownership", "preamble.quota"]
+
+    def test_undotted_stages_are_not_grouped(self, monkeypatch):
+        clock = iter([0.0, 0.2, 0.5, 0.6])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("preamble.files")  # 200ms
+        prelude.mark("agent_build")  # 300ms
+
+        assert _emitted(prelude)["groups"] == {"preamble": 200}
+
+    def test_a_group_never_breaks_the_turn_it_measures(self, monkeypatch):
+        """Same fail-soft contract as `mark`: a stage name that is not a string
+        must cost a log line, not the turn."""
+        prelude = TurnPrelude()
+        prelude._marks.append((None, 5.0))  # type: ignore[arg-type]
+
+        prelude.emit(session_id="s", stream_kind="agent")  # must not raise
+
+
+class TestNestedGroups:
+    """P1a splits `agent_build.tools` (docs/specs/turn-path-ttft.md). Every
+    proper prefix is a group, so the split keeps `agent_build.tools` as a
+    number exactly as the first split kept `agent_build`."""
+
+    def test_every_prefix_level_is_a_group(self, monkeypatch):
+        # Binary-exact steps, so the int() truncation cannot shave a ms.
+        clock = iter([0.0, 0.125, 0.25, 1.25, 1.375, 1.5, 1.625])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("agent_build.tools.filter")  # 125ms
+        prelude.mark("agent_build.tools.gateway")  # 125ms
+        prelude.mark("agent_build.tools.mcp")  # 1000ms
+        prelude.mark("agent_build.tools.extra")  # 125ms
+        prelude.mark("agent_build.hooks")  # 125ms
+
+        assert _emitted(prelude)["groups"] == {
+            "agent_build": 1500,
+            "agent_build.tools": 1375,
+        }
+
+    def test_the_pre_split_metric_survives_as_a_group(self, monkeypatch):
+        """`AgentBuildToolsMs` is the series the cold-build baseline is stated
+        in; it must keep arriving after its own decomposition."""
+        record = _emf_record(
+            monkeypatch,
+            ["agent_build.tools.filter", "agent_build.tools.mcp", "agent_build.hooks"],
+        )
+
+        assert {
+            "AgentBuildMs",
+            "AgentBuildToolsMs",
+            "AgentBuildToolsFilterMs",
+            "AgentBuildToolsMcpMs",
+            "AgentBuildHooksMs",
+        } <= set(record["metrics"])
+
+
+class TestDetails:
+    """Log-only properties: which MCP server owned `tools.mcp`."""
+
+    def test_a_detail_rides_on_the_log_line(self):
+        prelude = TurnPrelude()
+        servers = [{"id": "canvas", "outcome": "loaded", "totalMs": 812}]
+        prelude.detail("mcpServers", servers)
+
+        assert _emitted(prelude)["mcpServers"] == servers
+
+    def test_a_detail_is_never_a_metric(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics",
+            lambda **kw: captured.update(kw),
+        )
+        prelude = TurnPrelude()
+        prelude.detail("mcpServers", [{"id": "canvas", "totalMs": 812}])
+        prelude.emit(session_id="s", stream_kind="agent")
+
+        assert "mcpServers" not in captured["metrics"]
+        assert "mcpServers" not in captured["properties"]
+
+    def test_the_caller_s_extras_win_a_key_collision(self):
+        prelude = TurnPrelude()
+        prelude.detail("isResume", "from-a-detail")
+
+        assert _emitted(prelude, extra={"isResume": True})["isResume"] is True
+
+
+class TestFirstToken:
+    """`turn_first_token` (docs/specs/turn-path-ttft.md P1b): the same clock,
+    continued past `turn_prelude` to the first model output."""
+
+    def _turn(self, monkeypatch, *, readings):
+        clock = iter(readings)
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+        return TurnPrelude()
+
+    def test_reports_only_what_came_after_the_prelude(self, monkeypatch):
+        prelude = self._turn(
+            monkeypatch, readings=[0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5]
+        )
+        prelude.mark("agent_build.session_mgr")  # 0.25 -> 250
+        prelude.mark("stream_setup")  # 0.5 -> 250
+        _emitted(prelude, extra={"isResume": False})  # totalMs reads 0.75
+        prelude.mark("head_of_turn.handoff")  # 1.0 -> 500 (from 0.5)
+        prelude.mark("head_of_turn.history_count")  # 1.5 -> 500
+        prelude.mark("pre_model")  # 2.0 -> 500
+
+        payload = _first_token(prelude)
+
+        # At the last mark (2.0), not at emit: the remaining reading (2.5) is
+        # never taken, and the wait for the second event is not first-token time.
+        assert payload["firstTokenMs"] == 2000
+        assert payload["preludeTotalMs"] == 750
+        assert payload["stages"] == {
+            "head_of_turn.handoff": 500,
+            "head_of_turn.history_count": 500,
+            "pre_model": 500,
+        }
+        assert payload["groups"] == {"head_of_turn": 1000}
+        # The prelude's identity and extras carry over: one join key, one shape.
+        assert payload["sessionId"] == "s"
+        assert payload["isResume"] is False
+
+    def test_first_token_ms_is_the_model_mark_not_the_emit(self, monkeypatch):
+        """The line is written on the coordinator's next pass, after the first
+        token was yielded. The time spent waiting for that next event is not
+        first-token time, and the stages must add up to `firstTokenMs`."""
+        prelude = self._turn(monkeypatch, readings=[0.0, 0.5, 1.0, 1.75, 9.0])
+        prelude.mark("stream_setup")  # 0.5
+        _emitted(prelude)  # totalMs reads 1.0
+        prelude.mark("pre_model")  # 1.75 -> 1250 (from 0.5)
+
+        payload = _first_token(prelude)  # a now-reading of 9.0 must not be used
+
+        assert payload["firstTokenMs"] == 1750
+        assert payload["firstTokenMs"] == 500 + sum(payload["stages"].values())
+
+    def test_emits_once(self, caplog):
+        prelude = TurnPrelude()
+        _emitted(prelude)
+        caplog.set_level(logging.INFO, logger="apis.inference_api.chat.turn_timing")
+
+        prelude.emit_first_token()
+        prelude.emit_first_token()
+
+        lines = [r for r in caplog.records if r.getMessage().startswith("turn_first_token ")]
+        assert len(lines) == 1
+
+    def test_without_a_prelude_line_it_reports_every_mark(self):
+        prelude = TurnPrelude()
+        prelude.mark("head_of_turn.handoff")
+
+        payload = _first_token(prelude)
+
+        assert list(payload["stages"]) == ["head_of_turn.handoff"]
+        assert payload["preludeTotalMs"] is None
+
+    def test_mark_at_closes_a_stage_at_an_earlier_reading(self, monkeypatch):
+        prelude = self._turn(monkeypatch, readings=[0.0, 1.0, 3.0, 3.5])
+        prelude.mark("head_of_turn.rest")  # 1.0
+        prelude.mark_at("pre_model", 2.0)  # stamped by a hook at 2.0 -> 1000
+        prelude.mark("model")  # 3.0 -> 1000 (from 2.0, not from 1.0)
+
+        stages = _first_token(prelude)["stages"]
+
+        assert stages["pre_model"] == 1000
+        assert stages["model"] == 1000
+
+    def test_mark_at_never_produces_a_negative_stage(self, monkeypatch):
+        """A stamp older than the last mark — a hook that fired before the
+        coordinator's own mark — is a zero stage, not a negative one."""
+        prelude = self._turn(monkeypatch, readings=[0.0, 2.0, 2.5])
+        prelude.mark("head_of_turn.rest")  # 2.0
+        prelude.mark_at("pre_model", 1.0)
+
+        assert _first_token(prelude)["stages"]["pre_model"] == 0
+
+    def test_metrics_carry_first_token_ms_not_prelude_total(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics",
+            lambda **kw: captured.append(kw),
+        )
+        prelude = TurnPrelude()
+        prelude.mark("agent_build.session_mgr")
+        prelude.emit(session_id="s", stream_kind="agent", extra={"isResume": True})
+        prelude.mark("head_of_turn.handoff")
+        prelude.mark("pre_model")
+        prelude.mark("model")
+        prelude.emit_first_token()
+
+        first_token = captured[-1]
+        assert {"FirstTokenMs", "HeadOfTurnMs", "HeadOfTurnHandoffMs", "PreModelMs", "ModelMs"} == set(
+            first_token["metrics"]
+        )
+        assert first_token["properties"]["isResume"] is True
+
+    def test_a_first_token_emit_never_raises(self, monkeypatch):
+        def _boom(**_kw):
+            raise RuntimeError("emf down")
+
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", _boom)
+        prelude = TurnPrelude()
+        prelude.mark("model")
+        prelude.emit_first_token()  # must not raise
+
+
+class TestMetricNames:
+    """The EMF metric name is derived from the stage name, not looked up.
+
+    A hand-kept table drifts silently: the dashboard widget renders an empty
+    graph, which is indistinguishable from "that stage never ran".
+    """
+
+    def test_dotted_and_snake_stages_become_camel_case_ms(self):
+        assert _metric_name("preamble.session_state") == "PreambleSessionStateMs"
+        assert _metric_name("preamble.ownership") == "PreambleOwnershipMs"
+        assert _metric_name("agent_build") == "AgentBuildMs"
+        assert _metric_name("rag") == "RagMs"
+
+    def test_a_group_prefix_renders_the_same_either_way(self):
+        """`groups.preamble` and a flat `preamble` mark must not disagree —
+        they are the same quantity, so the same name is correct."""
+        assert _metric_name("preamble") == "PreambleMs"
+
+
+class TestMetrics:
+    """One EMF record per turn, so the fleet has percentiles.
+
+    The log line answers "where did THIS turn go"; only an aggregate can
+    answer "did the change help", which is the question
+    docs/specs/turn-latency-preamble.md exists to make answerable.
+    """
+
+    def test_emits_every_stage_plus_the_group_and_the_total(self, monkeypatch):
+        record = _emf_record(monkeypatch, ["preamble.ownership", "preamble.quota", "agent_build"])
+
+        assert set(record["metrics"]) == {
+            "PreludeTotalMs",
+            "PreambleOwnershipMs",
+            "PreambleQuotaMs",
+            "PreambleMs",
+            "AgentBuildMs",
+        }
+
+    def test_every_metric_is_milliseconds(self, monkeypatch):
+        record = _emf_record(monkeypatch, ["preamble.quota"])
+
+        assert set(record["units"].values()) == {"Milliseconds"}
+
+    def test_the_group_total_rides_along_with_its_substages(self, monkeypatch):
+        """Both, not either: the sub-stages answer the new question and the
+        group keeps the pre-split baseline comparable."""
+        record = _emf_record(monkeypatch, ["preamble.ownership", "preamble.quota"])
+
+        assert "PreambleMs" in record["metrics"]
+        assert "PreambleOwnershipMs" in record["metrics"]
+
+    def test_turn_shape_rides_as_properties_not_dimensions(self, monkeypatch):
+        """Dimensions multiply metric streams AND invite reading a p99 off a
+        slice too thin to have one. The Logs Insights widgets slice instead."""
+        record = _emf_record(
+            monkeypatch,
+            ["preamble.quota"],
+            extra={"isResume": True, "deferredBuild": False, "hasAssistant": True},
+        )
+
+        assert record["properties"]["isResume"] is True
+        assert record["properties"]["deferredBuild"] is False
+        assert record["properties"]["streamKind"] == "agent"
+
+    def test_carries_no_message_content(self, monkeypatch):
+        """Same content-free rule as the log line and the cost rows."""
+        record = _emf_record(monkeypatch, ["preamble.quota"])
+
+        assert set(record["properties"]) <= {
+            "streamKind",
+            "sessionId",
+            "isResume",
+            "deferredBuild",
+            "hasAssistant",
+        }
+
+    def test_the_kill_switch_suppresses_only_the_metrics(self, monkeypatch, caplog):
+        """The marks stay ungated — they cost a perf_counter. The metrics cost
+        log ingestion and custom-metric charges, hence the switch."""
+        monkeypatch.setenv("TURN_LATENCY_METRICS_ENABLED", "false")
+        calls = []
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics",
+            lambda **kw: calls.append(kw),
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("preamble.quota")
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            prelude.emit(session_id="s", stream_kind="agent")
+
+        assert calls == []
+        assert [r for r in caplog.records if r.getMessage().startswith("turn_prelude ")]
+
+    def test_an_empty_flag_value_leaves_metrics_on(self, monkeypatch):
+        """House rule: a workflow env var can materialize as "" and that must
+        not read as off."""
+        monkeypatch.setenv("TURN_LATENCY_METRICS_ENABLED", "")
+
+        assert _emf_record(monkeypatch, ["preamble.quota"])["metrics"]
+
+    def test_a_metrics_failure_never_costs_the_log_line(self, monkeypatch, caplog):
+        """Two independent readers of the same turn; neither may take the
+        other down, and neither may take the turn down."""
+        def _boom(**_kwargs):
+            raise RuntimeError("cloudwatch exploded")
+
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics", _boom
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("preamble.quota")
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            prelude.emit(session_id="s", stream_kind="agent")  # must not raise
+
+        assert [r for r in caplog.records if r.getMessage().startswith("turn_prelude ")]
+
+
+def _emf_record(monkeypatch, stages, *, extra=None):
+    """Capture the kwargs the prelude hands to `emit_emf_metrics`."""
+    captured = {}
+    monkeypatch.setattr(
+        "apis.shared.observability.emf.emit_emf_metrics",
+        lambda **kw: captured.update(kw),
+    )
+
+    prelude = TurnPrelude()
+    for stage in stages:
+        prelude.mark(stage)
+    prelude.emit(session_id="s", stream_kind="agent", extra=extra)
+    return captured
+
+
+def _emitted(prelude, *, session_id="s", extra=None):
+    """The JSON payload the emit would log, parsed back."""
+    captured = {}
+
+    class _Sink(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if message.startswith("turn_prelude "):
+                captured.update(json.loads(message[len("turn_prelude ") :]))
+
+    logger = logging.getLogger("apis.inference_api.chat.turn_timing")
+    handler = _Sink()
+    logger.addHandler(handler)
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        prelude.emit(session_id=session_id, stream_kind="agent", extra=extra)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    return captured
+
+
+def _first_token(prelude):
+    """The JSON payload `emit_first_token` would log, parsed back."""
+    captured = {}
+
+    class _Sink(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if message.startswith("turn_first_token "):
+                captured.update(json.loads(message[len("turn_first_token ") :]))
+
+    logger = logging.getLogger("apis.inference_api.chat.turn_timing")
+    handler = _Sink()
+    logger.addHandler(handler)
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        prelude.emit_first_token()
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    return captured

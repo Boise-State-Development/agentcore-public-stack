@@ -6,13 +6,16 @@ Contains Pydantic models for chat API requests and responses.
 import json
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-# Hard upper bound on a user-supplied custom system prompt. Mirrors the
-# limit applied inside SystemPromptBuilder.from_user_prompt — surfacing
-# it at the API layer so oversized payloads are rejected before any
-# downstream work runs.
-MAX_USER_SYSTEM_PROMPT_CHARS = 8 * 1024
+from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
+from apis.shared.browser_takeover import coerce_frame_height
+from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
+
+# Hard upper bound on a request's ``system_prompt``. The Agent Designer preview sends an
+# agent's live instructions here, so it is the save-time instructions cap: at the old
+# 8 KiB, previewing any agent with longer instructions failed validation.
+MAX_USER_SYSTEM_PROMPT_CHARS = MAX_AGENT_INSTRUCTIONS_CHARS
 
 
 class FileContent(BaseModel):
@@ -60,10 +63,10 @@ class AppContextUpdateEntry(BaseModel):
 
     MCP Apps PR #6. The embedded App's JSON-RPC `ui/update-model-context`
     is relayed by app-api to `/invocations` with this directive. Like
-    `app_tool_call` it runs NO model turn — it stashes the payload on the
-    conversation agent's Strands `agent.state` under
-    `mcp_apps.context[resource_uri]`. The next real user turn merges any
-    pending entries into that turn's prompt and clears them.
+    `app_tool_call` it runs NO model turn — it holds the payload for the
+    `(session, user)` conversation (`chat/app_context_dispatch.py`). The
+    next real user turn merges any pending entries into that turn's prompt
+    and clears them.
 
     `resource_uri` is the bound MCP App resource (`ui://...`) and is the
     dedupe key: the host keeps only the last update per resource between
@@ -78,11 +81,39 @@ class AppContextUpdateEntry(BaseModel):
     structured_content: Optional[Dict[str, Any]] = None
 
 
+class CarriedSteerEntry(BaseModel):
+    """A queued follow-up carried into the turn this request starts.
+
+    Mid-turn steering's paused-turn path (docs/specs/mid-turn-steering.md).
+    A turn paused for OAuth consent or tool approval has no running loop to
+    steer, and the pause releases its lease — inbox and all — when the stream
+    closes. The follow-ups the user typed meanwhile are still in their
+    composer, so the resume request carries them here and the route seeds them
+    onto the resumed turn's lease, where the ordinary ``SteeringHook`` picks
+    them up at its first tool boundary.
+
+    ``id`` is the client-minted queue-entry id, unchanged from the one the
+    normal ``/sessions/{id}/steer`` path uses: it is what ``steering_applied``
+    names back, and what makes carrying an entry idempotent against the
+    composer's own end-of-turn flush.
+    """
+
+    id: str = Field(min_length=1, max_length=128)
+    text: str = Field(min_length=1, max_length=STEER_QUEUE_MAX_CHARS)
+
+
 class InvocationRequest(BaseModel):
     """Input for /invocations endpoint with multi-provider support"""
 
     session_id: str
     message: str = ""
+    # Session prewarm (docs/specs/agentcore-runtime-v2.md §5a): app-api sends
+    # `{"session_id": ..., "warm": true}` with the conversation's affinity header
+    # when the user opens a conversation, so the microVM the first real turn
+    # lands on is already started. The handler returns before reading anything:
+    # no ownership read, no session or metadata rows, no lease, no quota, no
+    # model call. Every other field is ignored on a warm request.
+    warm: Optional[bool] = None
     model_id: Optional[str] = None
     temperature: Optional[float] = None
     system_prompt: Optional[str] = None
@@ -90,6 +121,11 @@ class InvocationRequest(BaseModel):
     enabled_tools: Optional[List[str]] = None  # User-specific tool preferences
     files: Optional[List[FileContent]] = None  # Direct file content (base64-encoded)
     file_upload_ids: Optional[List[str]] = None  # Upload IDs to resolve from S3
+    # Attached Drive folders (docs/specs/drive-folder-attachments.md §4.4): folder
+    # attach ids from app-api's `POST /sessions/{id}/folders`. Each counts ONE
+    # against the per-message cap and reaches the model as a manifest; its files
+    # are never on `file_upload_ids`. Ignored while FOLDER_ATTACHMENTS_ENABLED is off.
+    folder_attachment_ids: Optional[List[str]] = None
     provider: Optional[str] = None  # LLM provider: "bedrock", "openai", or "gemini"
     max_tokens: Optional[int] = None  # Maximum tokens to generate
     # Per-request canonical inference param overrides (temperature, top_p,
@@ -98,10 +134,10 @@ class InvocationRequest(BaseModel):
     # silently by the merge step in routes.py.
     inference_params: Optional[Dict[str, Any]] = None
     # Which client the user is on, so the agent's interface guidance matches
-    # what they can actually see and press. "web" (the default) keeps the
-    # browser instructions every existing client already gets; "terminal"
-    # swaps in keybindings and forbids KaTeX/Mermaid, which a terminal renders
-    # as literal noise. Unknown values degrade to "web" rather than failing the
+    # what they can actually see and press. "web" (the default) gets the
+    # default prompt unchanged; "terminal" appends a block that overrides its
+    # browser-only instructions (keybindings instead of Customize → Tools, no
+    # KaTeX/Mermaid). Unknown values degrade to "web" rather than failing the
     # turn — see `system_prompt_builder.compose_base_prompt`.
     #
     # NOTE: this is a *rendering capability* hint, not an authorization input.
@@ -115,22 +151,56 @@ class InvocationRequest(BaseModel):
     # Marketplace D11: this turn was handed to the Agent by an `@`-mention in
     # the composer, rather than the whole conversation being bound to it.
     #
-    # A mention borrows the Agent for ONE turn: the route skips the
-    # bind-once-per-session validation (a mention is legitimate in a thread
-    # that already has messages, and in a thread bound to a different Agent),
-    # and skips writing `preferences.assistant_id`, so the next plain turn is
-    # plain again. Everything else — access check, RAG, binding resolution,
-    # memory injection — is identical to a bound turn, because the same Agent
-    # is running with the same governance.
+    # ⚠️ **LEGACY as of 2026-09-14 — the current SPA never sends this.** A mention now
+    # means "talk to this Agent": on an empty thread it binds like a launch, and in a
+    # thread that already has messages the SPA opens a *new* conversation with the Agent
+    # instead of sending a borrowed turn. The one-turn borrow this flag requests failed
+    # silently — the next message lost the Agent's tools, skills and model with no signal
+    # to the user or the model — and prod said nobody used what it was protecting (247 of
+    # 247 mentions started their conversation). See D11 in docs/specs/agent-marketplace.md.
+    #
+    # Still honoured for clients that predate the change, with one correction:
+    # `binds_conversation` now BINDS such a mention when the thread is empty, so a stale
+    # tab lands in the same place a current one does. A mention into a thread that already
+    # has messages keeps the old borrow semantics — that path is unreachable from the
+    # current SPA, and changing it for old clients would annex their conversation.
+    #
+    # A borrowed turn skips the bind-once-per-session validation and skips writing
+    # `preferences.assistant_id`. Everything else — access check, RAG, binding resolution,
+    # memory injection — is identical to a bound turn, because the same Agent is running
+    # with the same governance.
     #
     # ⚠️ It is the *client's* claim about intent, never an access decision:
     # `get_assistant_with_access_check` still gates the Agent itself, so the
     # worst a forged flag can do is decline to persist a binding.
     agent_mention: Optional[bool] = None
+    # Marketplace D2: this turn is a marketplace **reviewer** test-driving a submission
+    # before deciding on it. Two things change, and nothing else does.
+    #
+    # 1. The Agent resolves to the snapshot under review (`submittedVersion` while one is
+    #    pending, `publishedVersion` otherwise) rather than to the published-or-draft rule
+    #    every other caller gets. A reviewer who test-drove the author's live draft would
+    #    be testing something approval is not going to publish.
+    # 2. The PRIVATE access check is bypassed, because a PRIVATE Agent can be — and often
+    #    is — sitting in the review queue, and `get_assistant_with_access_check` refuses a
+    #    non-owner outright on one.
+    #
+    # ⚠️ Unlike `agent_mention`, this is NOT merely a claim about intent, so it cannot be
+    # treated like one: it widens access. The route re-checks `admin.marketplace` against
+    # the caller's own roles before honoring it, and a caller without the scope gets a 403
+    # rather than a quietly-ignored flag — a silently downgraded preview would run the
+    # wrong configuration and report it as the reviewed one.
+    review_preview: Optional[bool] = None
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.
     interrupt_responses: Optional[List[InterruptResponseEntry]] = None
+    # Follow-ups the user queued while this session's turn was paused awaiting
+    # consent or approval. Seeded onto this turn's steering inbox after the
+    # lease is acquired, so the agent reads them at its next tool boundary
+    # instead of the user having to send them as a separate turn that abandons
+    # the pause. Ignored when mid-turn steering is disabled.
+    steering: Optional[List[CarriedSteerEntry]] = None
     # When true, this is a "Continue" after a max_tokens truncation. Like a
     # resume, `message` is ignored: instead of synthesizing a new user turn,
     # the agent re-enters the loop with an empty prompt so the model
@@ -149,6 +219,17 @@ class InvocationRequest(BaseModel):
     # — client input can narrow the set, never grant. An empty (or fully
     # inaccessible) list yields zero skills, so the turn is plain chat.
     enabled_skills: Optional[List[str]] = None
+    # Skills the user named with a `/` slash command in the composer, for this
+    # turn only. A strict subset of the turn's effective skills — it is
+    # intersected server-side exactly like ``enabled_skills``, so it can never
+    # widen the set and an id that is not already active is simply dropped.
+    #
+    # It changes nothing about what is *disclosed*: the same skills are in
+    # ``<available_skills>`` either way, so the cacheable prefix is untouched.
+    # All it adds is a short directive on the user message telling the model to
+    # activate the named skill before answering, which is what makes a slash
+    # command deterministic rather than a hint the model may ignore.
+    invoked_skills: Optional[List[str]] = None
     # User-selected custom system prompt ("conversation mode") for this
     # turn. The frontend forwards the active selection on every submit so
     # the inference path doesn't have to round-trip session metadata to
@@ -164,6 +245,20 @@ class InvocationRequest(BaseModel):
     # `message` is ignored; no model turn runs. The context is merged into
     # (and cleared before) the next real user turn's prompt.
     app_context_update: Optional[AppContextUpdateEntry] = None
+    # The height, in CSS pixels, the SPA's docked browser panel would give the
+    # sign-in stream (authenticated-web-assessment spec D3a). Client data, not
+    # prompt data: the route hands it to tools through Strands'
+    # `invocation_state`, so it never reaches the model, and only
+    # `request_user_login` reads it, to size the handover. Sent on every
+    # request because the turn that hands the browser over is not known in
+    # advance. An unusable value becomes None rather than a 422: a hint about
+    # window size must never be able to fail a turn.
+    browser_frame_height: Optional[int] = None
+
+    @field_validator("browser_frame_height", mode="before")
+    @classmethod
+    def _drop_unusable_frame_height(cls, value: Any) -> Optional[int]:
+        return coerce_frame_height(value)
 
     @field_validator("system_prompt")
     @classmethod

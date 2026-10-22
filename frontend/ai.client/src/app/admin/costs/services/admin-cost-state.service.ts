@@ -6,6 +6,7 @@ import {
   SystemCostSummary,
   CostTrend,
   ModelUsageSummary,
+  PlatformCostSummary,
   DashboardRequestOptions,
   TopUsersRequestOptions,
   TopSessionCost,
@@ -35,6 +36,17 @@ export class AdminCostStateService {
   systemSummary = signal<SystemCostSummary | null>(null);
   trends = signal<CostTrend[]>([]);
   modelUsage = signal<ModelUsageSummary[]>([]);
+
+  /**
+   * All-in platform cost for the selected period.
+   *
+   * Loaded alongside the dashboard rather than on demand: it is one
+   * single-partition DynamoDB read (the AWS-side sync already happened
+   * overnight), and the Avg Cost/User card on the page header depends on it,
+   * so deferring it would make the headline number pop in late.
+   */
+  platformCosts = signal<PlatformCostSummary | null>(null);
+  loadingPlatformCosts = signal<boolean>(false);
 
   selectedPeriod = signal<string>(this.getCurrentPeriod());
 
@@ -162,6 +174,36 @@ export class AdminCostStateService {
       throw error;
     } finally {
       this.loadingTopSessions.set(false);
+    }
+  }
+
+  /**
+   * Load all-in platform cost for a period.
+   *
+   * Never throws: the platform figures are an enrichment of a page that
+   * already works without them. An environment with the sync disabled, or an
+   * account where `ce:GetCostAndUsage` is denied, must still render every
+   * other tab — so a failure here leaves `platformCosts` null and the UI
+   * falls back to inference-only, rather than setting `error` and blanking
+   * the dashboard.
+   */
+  async loadPlatformCosts(period?: string): Promise<void> {
+    this.loadingPlatformCosts.set(true);
+
+    try {
+      const targetPeriod = period ?? this.selectedPeriod();
+
+      if (targetPeriod === DEMO_PERIOD) {
+        this.platformCosts.set(null);
+        return;
+      }
+
+      const summary = await this.http.getPlatformCosts(targetPeriod).toPromise();
+      this.platformCosts.set(summary ?? null);
+    } catch {
+      this.platformCosts.set(null);
+    } finally {
+      this.loadingPlatformCosts.set(false);
     }
   }
 

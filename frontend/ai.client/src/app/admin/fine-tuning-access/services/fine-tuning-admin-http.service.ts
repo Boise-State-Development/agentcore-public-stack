@@ -26,18 +26,18 @@ export class FineTuningAdminHttpService {
   }
 
   /** Grant fine-tuning access to a user by email. */
-  grantAccess(email: string, monthlyQuotaHours: number): Observable<FineTuningGrant> {
+  grantAccess(email: string, monthlyQuotaUsd: number): Observable<FineTuningGrant> {
     return this.http.post<FineTuningGrant>(`${this.baseUrl()}/access`, {
       email,
-      monthly_quota_hours: monthlyQuotaHours,
+      monthly_quota_usd: monthlyQuotaUsd,
     });
   }
 
   /** Update the monthly GPU-hour quota for a user. */
-  updateQuota(email: string, monthlyQuotaHours: number): Observable<FineTuningGrant> {
+  updateQuota(email: string, monthlyQuotaUsd: number): Observable<FineTuningGrant> {
     return this.http.put<FineTuningGrant>(
       `${this.baseUrl()}/access/${encodeURIComponent(email)}`,
-      { monthly_quota_hours: monthlyQuotaHours },
+      { monthly_quota_usd: monthlyQuotaUsd },
     );
   }
 

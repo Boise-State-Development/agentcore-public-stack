@@ -6,6 +6,15 @@ import { Injectable, signal } from '@angular/core';
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
 /**
+ * A single call-to-action rendered as a button inside the toast. Clicking it
+ * runs `handler` and dismisses the toast.
+ */
+export interface ToastAction {
+  label: string;
+  handler: () => void;
+}
+
+/**
  * Toast message interface
  */
 export interface ToastMessage {
@@ -16,6 +25,7 @@ export interface ToastMessage {
   duration: number;
   dismissible: boolean;
   timestamp: Date;
+  action?: ToastAction;
 }
 
 /**
@@ -26,6 +36,8 @@ export interface ToastOptions {
   duration?: number;
   /** Whether the toast can be manually dismissed */
   dismissible?: boolean;
+  /** Optional button rendered in the toast (e.g. "Refresh") */
+  action?: ToastAction;
 }
 
 const DEFAULT_DURATION = 5000;
@@ -64,9 +76,10 @@ export class ToastService {
    * @param title - Toast title
    * @param message - Optional description
    * @param options - Toast options
+   * @returns The toast's id, for a later {@link dismiss}
    */
-  success(title: string, message?: string, options?: ToastOptions): void {
-    this.show('success', title, message, options);
+  success(title: string, message?: string, options?: ToastOptions): string {
+    return this.show('success', title, message, options);
   }
 
   /**
@@ -74,9 +87,10 @@ export class ToastService {
    * @param title - Toast title
    * @param message - Optional description
    * @param options - Toast options
+   * @returns The toast's id, for a later {@link dismiss}
    */
-  error(title: string, message?: string, options?: ToastOptions): void {
-    this.show('error', title, message, { duration: 8000, ...options });
+  error(title: string, message?: string, options?: ToastOptions): string {
+    return this.show('error', title, message, { duration: 8000, ...options });
   }
 
   /**
@@ -84,9 +98,10 @@ export class ToastService {
    * @param title - Toast title
    * @param message - Optional description
    * @param options - Toast options
+   * @returns The toast's id, for a later {@link dismiss}
    */
-  warning(title: string, message?: string, options?: ToastOptions): void {
-    this.show('warning', title, message, options);
+  warning(title: string, message?: string, options?: ToastOptions): string {
+    return this.show('warning', title, message, options);
   }
 
   /**
@@ -94,9 +109,10 @@ export class ToastService {
    * @param title - Toast title
    * @param message - Optional description
    * @param options - Toast options
+   * @returns The toast's id, for a later {@link dismiss}
    */
-  info(title: string, message?: string, options?: ToastOptions): void {
-    this.show('info', title, message, options);
+  info(title: string, message?: string, options?: ToastOptions): string {
+    return this.show('info', title, message, options);
   }
 
   /**
@@ -122,7 +138,7 @@ export class ToastService {
     title: string,
     message?: string,
     options?: ToastOptions
-  ): void {
+  ): string {
     const id = this.generateId();
     const duration = options?.duration ?? DEFAULT_DURATION;
     const dismissible = options?.dismissible ?? true;
@@ -134,7 +150,8 @@ export class ToastService {
       message,
       duration,
       dismissible,
-      timestamp: new Date()
+      timestamp: new Date(),
+      action: options?.action
     };
 
     this.toastsSignal.update(toasts => [...toasts, toast]);
@@ -143,6 +160,8 @@ export class ToastService {
     if (duration > 0) {
       setTimeout(() => this.dismiss(id), duration);
     }
+
+    return id;
   }
 
   /**

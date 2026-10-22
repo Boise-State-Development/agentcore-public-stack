@@ -1,0 +1,444 @@
+# Response feedback
+
+**Status:** PARTIALLY BUILT — capture and the read model shipped in PR #1142
+(2026-09-16, as document-context-offload PR-7) and the consequence
+(retry-with-correction) in the PR stacked on it; §11 PR-1 is therefore
+complete, and §11 PR-2 (implicit signals) followed for copy and continue.
+Eval sampling (§11 PR-4) followed too, opt-in per environment, and §11 PR-3's
+config-dimension attribution now has a fleet page. The author surfaces are not
+built. See §13. Written 2026-09-04 from the "how would we benefit?"
+conversation.
+**Refs:** `docs/specs/agentcore-evaluations-spike-findings.md` (the eval
+harness this feeds), `docs/specs/mid-turn-steering.md` (the injection path
+Phase 1 reuses), `docs/specs/agent-marketplace.md` D15 (the *other* feedback
+channel — see §3), `docs/kaizen/research/2026-08-28.md` (built-in skill
+evaluators)
+
+## 1. Problem
+
+Two commented-out lines have been sitting in the codebase for a long time:
+
+```
+backend/src/apis/shared/sessions/models.py:645   # Note: Feedback will be added in future implementation
+backend/src/apis/shared/sessions/models.py:646   # feedback: Optional[Feedback] = None
+backend/src/apis/app_api/messages/models.py:132  # Note: Feedback will be added in future implementation
+backend/src/apis/app_api/messages/models.py:133  # feedback: Optional[Feedback] = None
+```
+
+Nothing was ever built behind them. The question this spec answers is not "can
+we add a thumb" — that is an afternoon — but **what a thumb is worth here, and
+what shape makes it worth that.**
+
+The honest starting position is that thumbs data is usually near-worthless.
+Coverage runs 1–5% of turns, skews negative, and a single down-thumb conflates
+"factually wrong", "ignored my instructions", "far too long", and "the MCP tool
+500'd and the model apologised". Anyone treating the raw rate as a KPI is
+reading noise.
+
+What changes the calculus here is the **join surface this platform already
+has, and the one axis it is missing.**
+
+Every model call already writes a `C#` row carrying model id, attribution,
+cost breakdown, token usage, `cacheStatus`, `cacheGapSeconds`, `wastedUsd`,
+and `agentSwitched`. There is an admin anatomy endpoint over it
+(`GET /admin/costs/sessions/{id}/calls`), EMF metrics, a fleet dashboard, and
+a five-workstream cost-effectiveness roadmap. **Cost is instrumented to three
+decimal places. Quality is not instrumented at all.**
+
+CLAUDE.md's cost tenet states: *"When cost and answer quality genuinely
+conflict, quality wins."* Today there is no instrument that could ever detect
+that conflict. Every compaction tuning decision, every model downgrade, every
+context-offload threshold has been made against a cost number with quality
+asserted rather than measured. A thumb is the cheapest possible counterweight.
+
+## 2. The thesis
+
+> **Feedback is a sampler and a label. It is not a metric.**
+
+Three consequences follow, and they drive every decision below:
+
+1. **As a sampler:** a down-thumb marks the small subset of turns worth
+   spending expensive LLM-judge tokens on. The Evaluations spike proved the
+   judging pipeline works end to end today, but judging is per-trace and
+   costs real money — it cannot run fleet-wide. Human-marked failures are the
+   priority queue that makes it affordable.
+2. **As a label:** joined against the config dimensions already stamped on
+   every call, a down-thumb answers questions currently unanswerable — does
+   quality actually drop after compaction? is Sonnet worth 3× Haiku on *this*
+   workload? Relative comparison between config arms, never absolute rates.
+3. **Never as a metric:** the absolute rate over a self-selected 3% means
+   nothing. It must not appear on any leadership dashboard as a quality score.
+   §9 makes this a hard rule, not a caution.
+
+## 3. What this is NOT — de-conflicting with agent reports
+
+Marketplace Phase 8 (D15) already shipped a feedback channel, and it is a
+different object. `AgentReport` (`apis/shared/assistants/models.py:1621`) is
+agent-scoped, free-text, identity-bearing, and lands in a **moderation queue**
+sorted by `REPORT_REASON_SEVERITY`. `ReportReason` deliberately includes
+`suggestion` so that a user who does not know whether they hit a defect or a
+missing capability is not asked to pick the right intake form. It surfaces as
+`app-agent-feedback-link` at the foot of a conversation
+(`message-list.component.html`, `showFeedbackLink()`), published agents only.
+
+Response feedback is **per-message, fixed-set, high-volume, and analytical.**
+It has no queue and no moderator. Nobody reads an individual down-thumb.
+
+| | Agent report (D15, shipped) | Response feedback (this spec) |
+|---|---|---|
+| Scope | One published Agent | One assistant message |
+| Volume | Rare, hand-written | Frequent, one click |
+| Consumer | A human admin, one at a time | Aggregation + the eval harness |
+| Identity | `reporterId` shown to admin, never to author | Same rule (§8) |
+| Surface | Foot of conversation, published agents only | Every assistant message |
+
+**They must not be merged, and they must not both shout.** The conversation
+tail can hold one report link and per-message thumbs without collision, but the
+down-thumb reason sheet must include an escape hatch — *"this is a problem with
+the Agent itself"* — that hands off to the existing report dialog rather than
+inventing a second moderation path. That handoff is the only coupling.
+
+## 4. What already exists
+
+Almost every mechanism this needs is built for another reason.
+
+**A per-message row family keyed the right way.** `sessions-metadata` already
+holds two SK prefixes under `PK = USER#<user_id>`: `C#` cost rows
+(`SK C#{timestamp}#{uuid}`, `GSI_SK C#{timestamp}`, carrying `messageId`) and
+`D#` display rows (`SK D#{session_id}#{message_id}`, `GSI_SK D#{message_id}`).
+The `D#` row is the closer model: deterministic key, one row per message, no
+collision uuid. A feedback row is a third prefix in a table that already
+supports it, with a `GSI_PK = SESSION#<id>` read path that already exists.
+
+**A reader that already unions prefixes.** `get_session_cost_anatomy`
+(`admin/costs/routes.py:183`) queries `C#` and `D#` in parallel over
+`SessionLookupIndex` (`metadata.py:1987`). Adding `F#` is a third leg of a
+query that is already fan-out shaped.
+
+**A verified evaluation pipeline.** Per the Evaluations spike: 16 built-in
+`ACTIVE` evaluators, `EvaluationClient.run()` returning scored results with
+explanations quoting real dev conversation text, and — critically — session
+correlation that needs no new plumbing, since
+`runtime_session_id_for()` (`apis/shared/harness/runner.py`) is
+deterministic. It is `sid-<sha256(user_id NUL session_id)>`; it was
+`sid-<sha256(session_id)>` until per-user pinning, and the judge falls back to
+that form for older spans. A feedback row carrying `sessionId` + `userId` +
+`messageId` is already joinable to the spans.
+
+**Built-in skill evaluators.** `Builtin.SkillSelectionAccuracy` and
+`Builtin.SkillInstructionFollowing` (2026-08-28 research) target the exact
+failure mode the Skills v2 epic left unmeasured. They need a sampling signal
+to be affordable.
+
+**An injection path for the retry loop.** `POST /sessions/{id}/steer`
+(`app_api/sessions/routes.py:741`) already accepts a correction into a turn,
+gated by `mid_turn_steering_enabled()`. "Retry with this correction" is the
+same shape aimed at a finished turn instead of a running one.
+
+**A place to put the buttons.** `message-actions.component.ts` already renders
+Copy and Continue under every assistant message. Thumbs belong in that rail,
+not in a new component.
+
+**A precedent for attaching conversation content to feedback.**
+`report_service.file_report` verifies an attached `sessionId` belongs to the
+reporter before storing it. Reuse that check verbatim.
+
+## 5. Decision summary
+
+| Question | Decision |
+|---|---|
+| Storage | Third SK prefix `F#` on `sessions-metadata`, **never** on the message itself |
+| Key | `SK F#{session_id}#{message_id}`, `GSI_SK F#{message_id}` — deterministic, idempotent upsert |
+| Mutability | Overwrite in place. Changing or clearing your mind is a normal act, not an audit event |
+| Signal set | `up` / `down` + optional fixed-set reason + optional free text |
+| Reason set | Fixed and small (§6). Free text is secondary and never required |
+| Prompt cache | Feedback is a pure side-channel write. It never enters conversation history, `toolConfig`, or the system prompt |
+| Consequence | Phase 1 ships a **visible** consequence (retry-with-correction), not a suggestion box |
+| Implicit signals | Captured in the same row family, same phase. They are denser than thumbs and cost no UI |
+| LLM-judged signals | Offline batch over persisted turns only. Never an inline per-turn model call |
+| Reporting | Relative comparison between config arms. Absolute rate is never published as a quality score |
+| Identity | Stored. Visible to admins with the scope; never to an agent author |
+| Flag | `RESPONSE_FEEDBACK_ENABLED`, default on with a kill switch (house convention) |
+
+## 6. The signal set
+
+Down-thumb opens a chip row. One tap, no typing, dismissible:
+
+- **Wrong or made up** → routes to `Correctness` / `Faithfulness` evaluators
+- **Didn't follow my instructions** → `InstructionFollowing`
+- **Too long / too short** → a style signal, and a Memory Spaces input (§7)
+- **A tool or search failed** → **ops, not model.** Auto-corroborated against
+  the turn's `tool_result` blocks
+- **Out of date** → KB freshness; joins to `kb_sync` state
+- **Something else** → free text
+
+The mapping to evaluators is the point of a fixed set. An unbucketed
+down-thumb is noise; a bucketed one is a routing decision.
+
+Up-thumb takes no reason. Asking for one on a positive signal collapses the
+response rate and buys almost nothing.
+
+## 7. What it unlocks
+
+### Platform
+
+**Negative-sample mining.** Down-thumbed turns become the eval harness's input
+queue. This flips the harness from "run against a synthetic suite someone wrote"
+to "run against observed real-world failures" — a categorically better asset,
+and the reason this spec is worth more than the sum of its UI.
+
+**Config-dimension attribution.** The prize. Join down-thumb rate against
+dimensions already on the `C#` row and against session state:
+
+- **Compaction.** Does quality degrade after a compaction event? Today there is
+  a `compaction` SSE event, a checkpoint, and a truncation anchor — and zero
+  evidence about whether users notice. The compaction-death-spiral incident
+  cost a faculty member $27 of a $30 quota in five days; nobody knows what it
+  cost in answer quality.
+- **Model.** Haiku vs Sonnet per workload, measured rather than assumed.
+- **`agentSwitched`.** The `@`-mention history fork is a known cache cost. Is
+  it also a quality cost?
+- **KB freshness.** Do stale-sync assistants draw more "out of date"?
+- **Skills.** Which granted skills correlate with down-thumbs, as the cheap
+  pre-filter for `SkillSelectionAccuracy`.
+
+**Rework cost.** Sum the call cost of a down-thumbed turn plus the retries that
+follow it. This denominates quality in dollars, on the dashboards that already
+exist. Strategically this is the most valuable single number in the spec: it
+makes quality legible in the budget conversation instead of being the thing we
+assert but cannot defend.
+
+**Marketplace ranking and version regression.** Store tiles rank on nothing
+user-derived. A helpfulness rate per **published `AgentVersion`** gives ranking
+*and* an alarm when a new version's rate drops — a trigger for the §8 rollback
+path that currently has no automated reason to fire.
+
+**Tool and MCP health.** "A tool failed" + an errored `tool_result` is an ops
+alert, not a model signal. Worth noting that dev ran with zero working MCP
+tools for weeks and nothing surfaced it.
+
+**Preference data.** A `fine_tuning` domain already exists, and paired
+up/down on the same prompt is DPO-shaped. Explicitly **out of scope until
+Phase 5** and gated on a policy decision, not an engineering one (§8).
+
+### User
+
+**The retry loop is the actual user-facing feature.** A down-thumb that offers
+*"retry with that in mind"* turns feedback from a suggestion box into a
+steering act: the user gets a better answer in seconds, and we get a labeled
+pair for free. Ship the thumb without this and the response rate decays to
+zero within weeks — at which point the data is too sparse to use and the whole
+spec is dead. **The consequence is not a Phase 2 nicety; it is the thing that
+keeps Phase 1 alive.**
+
+**Personalization.** Repeated "too long" → a durable style preference in a
+Memory Space. The primitive exists; this is the missing input to it.
+
+**Agent authors are a distinct user class.** A marketplace publisher currently
+receives no signal about whether their instructions and tool bindings work in
+the wild. Aggregate-only, never per-user (§8).
+
+## 8. Governance
+
+An admin reading a down-thumbed turn is an admin reading someone's
+conversation. Three rules:
+
+1. **Aggregates by default; content behind a scope.** Rate, reason
+   distribution, and config joins need no content. Reading the actual message
+   requires a delegated-admin scope (`granular-admin-permissions.md`) and
+   writes an audit row.
+2. **Authors get substance, never identity.** Same rule as D15.2, for the same
+   reason: authors need to know what went wrong, admins need identity to spot a
+   brigade.
+3. **Training use is a separate consent decision.** Aggregation and evaluation
+   are platform operation. Building a preference dataset from user
+   conversations is not, and it does not ride in on this spec's flag. Per the
+   governance-via-identity-claims principle, that gate belongs at the claim
+   level, decided before Phase 5 is scoped — not inferred from the fact that
+   the rows exist.
+
+## 9. Risks and the rules that answer them
+
+| Risk | Rule |
+|---|---|
+| Someone publishes the raw rate as a quality KPI | Aggregate endpoints return **comparisons between arms**, and every response carries its `n` and coverage %. No single-number "quality score" field exists to be quoted |
+| Sparse, self-selected, negative-skewed data | Treat as a sampler. Implicit signals (§10) carry the density; thumbs carry the intent |
+| Feedback write mutates the cacheable prefix | Structural: `F#` is its own DynamoDB item. Nothing in this spec touches conversation history, `toolConfig`, or the system prompt. A design that puts feedback on the message object is rejected for this reason |
+| An inline LLM judge is added "just to classify" | Batch/offline over persisted turns only. An inline per-turn model call on every session for the life of the platform is exactly what the cost tenet exists to stop |
+| Two feedback affordances confuse users | The report link stays agent-scoped at the tail; thumbs are per-message. The down-thumb sheet hands off to the report dialog rather than duplicating it (§3) |
+| Feedback becomes a void | Phase 1 ships the consequence with the button, or Phase 1 does not ship |
+
+## 10. Implicit signals
+
+Denser than thumbs, ~100% coverage, and free of UI cost:
+
+- **Copy to clipboard** — already a click in `message-actions.component.ts`
+- **Continue** on a truncated or interrupted response
+- **Edit-and-resend** of the preceding user message
+- **Abandonment** — session goes idle immediately after a response
+- **Dissatisfaction in the *next* user message** — the strongest dense proxy,
+  and the one that most needs the offline-batch rule from §9
+
+These write the same `F#` row family with a `signal: "implicit"` discriminator.
+Explicit and implicit must never be summed into one rate; they answer
+different questions and have wildly different base rates.
+
+## 11. Phasing
+
+Sized so each phase is independently shippable and each earns the next.
+
+**PR-1 — Capture + consequence.** `F#` row, `POST/DELETE
+/sessions/{id}/messages/{message_id}/feedback` on **app-api** (per the
+inference-api boundary rule), thumbs in `message-actions.component.ts`, the
+reason sheet, and retry-with-correction. Uncomment and fill the `Feedback`
+model at the two placeholder sites. Flag `RESPONSE_FEEDBACK_ENABLED`.
+*User value on day one; no analytics build.*
+
+**PR-2 — Implicit signals.** Copy / continue / edit-resend / abandonment into
+the same row family. *Density.*
+
+**PR-3 — Read model + admin panel.** Third leg on the anatomy query; a quality
+panel beside the cost panels, joined to model / compaction / `agentSwitched` /
+skills. *The attribution payoff.*
+
+**PR-4 — Eval sampling.** Down-thumbed turns feed `EvaluationClient.run()`,
+routed to evaluators by reason bucket. *Makes judging affordable.*
+
+**PR-5 — Author and marketplace surfaces.** Per-version helpfulness rate,
+regression alarm against the rollback path.
+
+**Phase 6 (not scoped) — preference dataset.** Policy-gated per §8, and only
+if PR-3 proves the signal is real.
+
+## 12. Open questions
+
+1. **Does the retry-with-correction path reuse `/steer` or need its own?**
+   `/steer` targets a *running* turn via the lease row. Correcting a finished
+   turn is a normal new turn carrying a structured preamble. Probably a
+   different endpoint with the same UX — worth confirming before PR-1.
+2. **Does a corrected retry write a linked pair?** It should, for Phase 6 —
+   but that is the training-consent question, so PR-1 may need to record the
+   link without recording the content.
+3. **Coverage floor for publishing a comparison.** Below some `n`, an arm
+   comparison is theatre. Pick the number before the panel exists, not after
+   someone dislikes a result.
+4. **Do preview sessions participate?** The `D#` write skips them
+   (`metadata.py:156`); the `C#` cost write has **no such guard**, so the two
+   prefixes already disagree — settle the rule for `F#` deliberately rather
+   than copying whichever neighbour is read first. Agent Designer previews are
+   exactly where an author would want to thumb their own work, but that data
+   must never reach fleet aggregates.
+
+## 13. Built — PR #1142 (2026-09-16)
+
+Shipped as the outcome signal of `document-context-offload.md` §5 row 7, so
+it was built against that spec's content-free rule first and reconciled with
+this one after. What landed, and the decisions it took on this spec's open
+points:
+
+- **Storage exactly per §5**: `F#{session_id}#{message_id}` on
+  `sessions-metadata`, `GSI_SK F#{message_id}`, idempotent upsert, overwrite
+  in place, never on the message object (`apis/shared/sessions/feedback.py`).
+  Rows carry `signal: "explicit"` from day one so §10's implicit rows can
+  join the family without a backfill; every thumb reader filters on it, so
+  the two are never summed (§10's rule, enforced).
+- **Routes** `PUT`/`DELETE /sessions/{id}/messages/{message_id}/feedback` on
+  app-api (PUT rather than POST: the write is an upsert). Flag
+  `RESPONSE_FEEDBACK_ENABLED`, default on with a kill switch.
+- **Reason set = §6's six buckets as codes** (`wrong`, `instructions`,
+  `length`, `tool_failed`, `outdated`, `other`). **Free text is not stored,
+  and this is a decision, not an omission**: the row sits beside the `C#`
+  cost row and is read by the content-free admin profile, whose test walks
+  the projection against the denylist. "Something else → free text" is
+  served by the §3 hand-off to the Agent report dialog, which already has
+  moderation and a scope. Revisit only together with §8 rule 1.
+- **Read model**: the session profile (`GET /admin/costs/sessions/{id}/profile`)
+  joins thumbs to the call's document turn class with `n` per bucket
+  (§9's "every response carries its n"); `dataCoverage.feedback` says when
+  nothing is tracked. The other §7 attribution axes (model, compaction,
+  `agentSwitched`, skills) are further buckets in the same join loop.
+- **Open question 4 settled**: preview sessions echo the thumb and persist
+  nothing, matching the `D#` write. Preview data never reaches aggregates.
+- **Retry-with-correction (the consequence), second PR.** Open question 1
+  settled: **a new turn, not `/steer`** — the steer path targets a *running*
+  turn through the lease row, and a finished turn is corrected by an
+  ordinary next message. The down-thumb reason row offers *Retry with that
+  in mind*, which prefills the composer (`ComposerDraftService`) with a
+  correction template for the reason code; the user edits and sends it as a
+  normal message, so it goes where messages go (AgentCore Memory) and never
+  touches the metadata table. When that message is added, the send path
+  links it to the thumb as `retryMessageId` on the `F#` row — an index,
+  never the text — and a later re-thumb keeps the link. This is open
+  question 2's answer for now: the pair is *recorded* without its content,
+  so Phase 6 can find it once the consent decision is made. The profile
+  reports `feedback.retried` and `reworkUsd` (§7 "rework cost": the thumbed
+  call rows plus the retry turn's consecutive assistant rows).
+- **Implicit signals (§11 PR-2), third PR — copy and continue only.**
+  Same `F#` family under their own key, `F#{session}#{message}#{kind}`, so
+  they never collide with the thumb; `signal: "implicit"`, `kind`, and an
+  `ADD`ed `count`. `POST /sessions/{id}/messages/{message_id}/signals`,
+  fire-and-forget from the SPA (the Copy and Continue clicks in the actions
+  rail, once per message per kind per page load). The profile reports
+  `feedback.implicit` as *messages touched* per kind, on its own line — the
+  §10 rule that explicit and implicit are never summed is enforced in every
+  reader. Two of §10's four signals are deliberately not here:
+  **edit-and-resend** has no affordance in the SPA to hook, and
+  **abandonment** is deferred — a session that goes quiet after a good
+  answer is indistinguishable from one that goes quiet after a bad one, so
+  it needs its own design (or the §10 "dissatisfaction in the next message"
+  offline classifier) before it is worth a row.
+- **Eval sampling (§11 PR-4), fourth PR — opt-in.** Down-thumbs carry
+  `GSI1PK = FEEDBACK#down` / `GSI1SK = updatedAt` on the existing
+  `UserTimestampIndex`, so the fleet's recent down-thumbs are one query with
+  no new index. `POST /admin/feedback/evaluations/run` (scope `admin.costs`)
+  judges up to N not-yet-judged ones in a background task through
+  `bedrock_agentcore.evaluation.EvaluationClient` over the runtime log
+  group, keyed by the runtime session id the chat proxy already pins;
+  `GET /admin/feedback/evaluations` is the queue with verdicts. Routing is
+  §6's table: `wrong` → Correctness + Faithfulness, `instructions` →
+  InstructionFollowing, `length` → Conciseness, `other`/none → Helpfulness;
+  `tool_failed` gets **no judge** and is corroborated against the call's
+  tool census on the `C#` row (ops, not model); `outdated` gets no judge yet
+  (the KB-freshness join is a follow-up). The verdict stored on the `F#` row
+  is per-evaluator value / rating / n / tokens — **the judge's `explanation`
+  is dropped at summarisation, refused at the storage write, and denylisted
+  in the content policy**, because it quotes the conversation. The profile
+  shows `feedback.evaluations` (judged, mean per evaluator, tool failures
+  corroborated). **Default OFF** (`FEEDBACK_EVAL_SAMPLING_ENABLED`,
+  `CDK_FEEDBACK_EVAL_SAMPLING_ENABLED=true` to enable): the managed judge
+  reads the sampled conversation's spans, which is the scoping decision the
+  evaluations spike (§2) says to make explicitly per environment, and §8
+  rule 1 here. The IAM grant (Logs Insights on the runtime log group and
+  `aws/spans`; Evaluate / GetEvaluator) is wired but inert until an
+  environment opts in. Runs are admin-triggered; a schedule can follow once
+  a week of verdicts says the token spend is worth it.
+- **Fleet attribution (§11 PR-3, §7 "config-dimension attribution"), fifth
+  PR.** `GET /admin/feedback/fleet?days=` aggregates a trailing window of
+  thumbs into arms on four dimensions: **model**, **agent switch**,
+  **distance from a compaction cut** (the compaction spec's §7.2 question,
+  bucketed in model calls: never / same call / 1-3 / 4+), and **document
+  turn class**. The window is a range read on the `FEEDBACK#down` /
+  `FEEDBACK#up` partitions, then one cost-row query per session to join;
+  both are capped (2,000 thumbs, 300 sessions) and exceeding either is
+  reported as `coverage.truncated` / `sessionsOmitted` rather than silently
+  under-counted. `/admin/feedback` renders it, under the `admin.costs` scope.
+  §9 is enforced rather than promised: **every arm carries its own `n`**, an
+  arm under the floor returns `downRate: null` so there is no number to
+  quote, and **no fleet-wide rate field exists** at any level — the page
+  states the gap between the two furthest-apart reportable arms instead of a
+  score. Open question 3 is answered: the floor is **20**, picked because
+  below it one extra thumb swings the rate by more than five points; it is
+  env-tunable with `FEEDBACK_ARM_MINIMUM_N`.
+  Two deviations from §11 PR-3 as written. It is **a page of its own, not a
+  panel beside the cost panels** — the cost drill-down is per conversation
+  and this question is fleet-shaped, so co-locating them would have meant a
+  panel that ignored the session in whose page it sat. And the **skills axis
+  is not built**: `enabledTools` lives on the session row, not the `C#` row,
+  so a per-call skills arm needs either a denormalisation at write time or a
+  second join, and neither is worth doing before the signal is proven.
+- **Not built**: author/marketplace surfaces (PR-5), the report-dialog
+  escape hatch in the reason row, abandonment, the `outdated` → KB-freshness
+  join, a schedule for the sampler, the skills arm, and implicit signals in
+  the fleet view (their rows carry no `GSI1*` keys, so they are invisible to
+  the window query by construction — wiring them in is a follow-up to PR-2).
+

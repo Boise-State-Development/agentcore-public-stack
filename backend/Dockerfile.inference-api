@@ -1,12 +1,23 @@
 # Multi-stage build for Inference API (AWS Bedrock AgentCore Runtime)
 # Platform: linux/arm64 required for AgentCore Runtime
-# Pin base image to digest for reproducible builds
-FROM --platform=linux/arm64 python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d AS builder
+# Pin base image to digest for reproducible builds. Pulled from ECR Public's
+# mirror of the Docker Official Image (same digest): Docker Hub's anonymous
+# pull limit 429s GitHub-hosted runners and blocked the deploy.
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d AS builder
 
 # Install uv (pinned to specific version for reproducibility)
 COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /uvx /bin/
 
 WORKDIR /app
+
+# Compile every installed package to bytecode at build time. uv skips this by
+# default, so the venv shipped with no .pyc files and every fresh AgentCore
+# micro-VM compiled the whole dependency tree (strands, boto3, sympy behind the
+# calculator tool, ...) on the first message of a new session. The runtime user
+# is non-root and each micro-VM starts from the image layer, so nothing written
+# at runtime survives to the next session — the image is the only place the
+# bytecode can live. See docs/specs/load-test-assessment-2026-09.md §1 fix 2.
+ENV UV_COMPILE_BYTECODE=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -33,7 +44,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra agentcore --extra bidi --no-dev --no-editable
 
 # Production stage
-FROM --platform=linux/arm64 python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 WORKDIR /app
 
@@ -48,12 +59,29 @@ COPY --from=builder /app/.venv /app/.venv
 # Copy application code
 COPY backend/src /app/src
 
-# Create necessary directories
-RUN mkdir -p /app/output /app/uploads /app/generated_images
+# Precompile our own source the same way the venv was (see UV_COMPILE_BYTECODE
+# above). `-q` keeps the layer log quiet; a syntax error still fails the build,
+# which is the right time to learn about it.
+RUN python -m compileall -q /app/src
 
-# Create non-root user for security (AgentCore Runtime best practice)
-RUN useradd -m -u 1000 -s /bin/bash bedrock_agentcore && \
-    chown -R bedrock_agentcore:bedrock_agentcore /app
+# Create non-root user for security (AgentCore Runtime best practice).
+# Note what is NOT here any more: `chown -R bedrock_agentcore /app`. A recursive
+# chown rewrites every file it touches into a fresh layer, so /app shipped
+# TWICE — on this image that is the venv plus the whole source tree, duplicated
+# for nothing. Code and dependencies now stay root-owned, which is both smaller
+# and safer: a runtime compromise cannot rewrite the source it executes or drop
+# a backdoor into site-packages.
+#
+# This is only possible because nothing writes into the source tree any more.
+# It used to: main.py resolved base_dir from __file__ (landing in /app/src/apis)
+# and os.makedirs() there on every startup, and agents/utils/config.py did the
+# same one level up to hold per-session tool output. That whole local-output
+# mechanism was dead — its writer fired only for two tool names that no longer
+# exist — and has been deleted; generated output goes to S3. There is therefore
+# no writable directory under /app at all.
+# backend/tests/architecture/test_source_tree_not_written.py is the regression
+# guard — if it fails, this image stops booting.
+RUN useradd -m -u 1000 -s /bin/bash bedrock_agentcore
 
 # Switch to non-root user
 USER bedrock_agentcore
@@ -61,6 +89,15 @@ USER bedrock_agentcore
 # Version injection (defaults to "unknown" if not provided via --build-arg)
 ARG APP_VERSION=unknown
 ENV APP_VERSION=${APP_VERSION}
+
+# Runtime environment contract (docs/specs/agentcore-runtime-v2.md §7). This
+# image derives the resource-name variables listed in
+# apis/shared/config/derived_environment.json from PROJECT_PREFIX at startup,
+# so the Runtime does not have to be sent them. scripts/platform/deploy.sh
+# reads this label off the LIVE image before a CDK deploy that stops sending
+# them, and refuses if it is missing: an older image would start without its
+# table and bucket names. Bump the value only with a matching change there.
+LABEL org.agentcore-public-stack.runtime-env-contract="derived-names-v1"
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -73,6 +110,46 @@ ENV PATH="/app/.venv/bin:$PATH"
 ARG AWS_REGION=us-east-1
 ENV AWS_REGION=${AWS_REGION}
 ENV AWS_DEFAULT_REGION=${AWS_REGION}
+
+# Keep conversation content out of OpenTelemetry. Under AgentCore, ADOT
+# records every prompt and reply into the runtime log group's `otel-rt-logs`
+# stream, from two scopes that each have their own switch:
+#
+# - opentelemetry.instrumentation.botocore.bedrock-runtime: ADOT *defaults*
+#   this to "true" when AGENT_OBSERVABILITY_ENABLED is set, but with
+#   os.environ.setdefault, so a value already in the environment wins. With
+#   "false" the gen_ai.* events keep role, finish reason and tool name/id and
+#   lose the text.
+# - strands.telemetry.tracer: an empty `gen_ai_unredacted_attributes=` list
+#   turns on Strands' redaction with nothing exempt, so every message, system
+#   prompt and tool input/result becomes "[REDACTED]". Spans, timings and
+#   token usage are unchanged. The variable is comma-separated; add any other
+#   opt-in token alongside this one, never in place of it.
+#
+# ENV rather than a Runtime variable because the Runtime caps
+# EnvironmentVariables at 50 (runtime-env-var-limit.test.ts). A deployment
+# that wants content back (AgentCore Evaluations needs it) can override
+# either one on the Runtime. tests/security/test_otel_content_capture.py pins
+# both switches to the library code they depend on.
+ENV OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false
+ENV OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_unredacted_attributes=
+
+# Keep MCP tool arguments and results out of trace spans. ADOT's own MCP
+# instrumentor (entry point `aws_mcp`) writes gen_ai.tool.call.arguments and
+# gen_ai.tool.call.result onto every tools/call span with no capture gate, and
+# those spans go to `aws/spans`, which neither switch above reaches.
+# "disabled" skips all of ADOT's native agentic instrumentors (mcp, crewai,
+# langchain, llama_index, openai_agents); only mcp applies to this app. We
+# lose ADOT's MCP protocol spans (tools/list, tools/call timings); Strands'
+# redacted execute_tool spans remain, and Strands' MCPClient still injects
+# trace context into each request's `_meta` itself.
+#
+# Do not use OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=aws_mcp instead: ADOT fills
+# that variable with its own default list via setdefault, so setting it
+# replaces the list and turns requests, urllib3, sqlalchemy and others back on.
+# ADOT 0.20 renames this variable AWS_GENAI_INSTRUMENTATION and keeps this
+# name as a fallback.
+ENV AWS_AGENTIC_INSTRUMENTATION=disabled
 
 # Expose port 8080 (AgentCore Runtime standard port)
 EXPOSE 8080

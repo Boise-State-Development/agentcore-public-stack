@@ -153,6 +153,12 @@ def mock_storage():
     mock.store_message_metadata = AsyncMock()
     mock.get_session_metadata = AsyncMock(return_value=[])
     mock.get_message_metadata = AsyncMock(return_value=None)
+    # Platform cost sync rows (written by the platform-cost-sync Lambda).
+    # Default to "never synced", which is the real default: the feature is
+    # opt-in per environment, so an unavailable summary is the common path
+    # and every test that wants data must set it up explicitly.
+    mock.get_platform_cost_summary = AsyncMock(return_value=None)
+    mock.get_platform_service_costs = AsyncMock(return_value=[])
     return mock
 
 

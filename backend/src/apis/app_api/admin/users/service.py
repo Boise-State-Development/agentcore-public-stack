@@ -103,23 +103,29 @@ class UserAdminService:
             next_cursor=next_cursor
         )
 
-    async def search_by_email(self, email: str) -> Optional[UserListItemResponse]:
-        """Search for user by exact email."""
+    async def search_by_email(self, email: str) -> List[UserListItemResponse]:
+        """Every profile for an exact email, the live (most recent login) first.
+
+        Legacy logins left some emails with more than one PROFILE row, so this
+        returns them all rather than one arbitrarily: a support admin opening
+        the stale row would otherwise see (and act on) an account nobody can
+        sign in to.
+        """
         if not self.enabled:
-            return None
+            return []
 
-        profile = await self._user_repo.get_user_by_email(email)
-        if not profile:
-            return None
-
-        return UserListItemResponse(
-            user_id=profile.user_id,
-            email=profile.email,
-            name=profile.name,
-            status=profile.status.value if hasattr(profile.status, 'value') else str(profile.status),
-            last_login_at=profile.last_login_at,
-            email_domain=profile.email_domain
-        )
+        profiles = await self._user_repo.get_users_by_email(email)
+        return [
+            UserListItemResponse(
+                user_id=profile.user_id,
+                email=profile.email,
+                name=profile.name,
+                status=profile.status.value if hasattr(profile.status, 'value') else str(profile.status),
+                last_login_at=profile.last_login_at,
+                email_domain=profile.email_domain
+            )
+            for profile in profiles
+        ]
 
     async def get_user_detail(self, user_id: str) -> Optional[UserDetailResponse]:
         """

@@ -20,8 +20,16 @@ def aws(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_SECURITY_TOKEN", "testing")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    # Drop any boto3 client cached under a PREVIOUS test's moto backend, and
+    # again on the way out so nothing built here leaks into the next test.
+    # `mock_aws()` is per-test, so a cached client outliving its mock would
+    # talk to a torn-down backend — an order-dependent failure.
+    from apis.shared.aws_clients import reset_cached_clients
+
+    reset_cached_clients()
     with mock_aws():
         yield
+    reset_cached_clients()
 
 
 # ===================================================================
@@ -237,12 +245,18 @@ def sessions_metadata_table(aws, monkeypatch):
             {"AttributeName": "GSI3_SK", "AttributeType": "S"},
             {"AttributeName": "GSI4_PK", "AttributeType": "S"},
             {"AttributeName": "GSI4_SK", "AttributeType": "S"},
+            {"AttributeName": "GSI5_PK", "AttributeType": "S"},
+            {"AttributeName": "GSI5_SK", "AttributeType": "S"},
+            {"AttributeName": "GSI6_PK", "AttributeType": "S"},
+            {"AttributeName": "GSI6_SK", "AttributeType": "S"},
         ],
         gsis=[
             _gsi("UserTimestampIndex", "GSI1PK", "GSI1SK"),
             _gsi("SessionLookupIndex", "GSI_PK", "GSI_SK"),
             _gsi("DueScheduleIndex", "GSI3_PK", "GSI3_SK"),
             _gsi("SessionRecencyIndex", "GSI4_PK", "GSI4_SK"),
+            _gsi("ProjectSessionIndex", "GSI5_PK", "GSI5_SK"),
+            _gsi("PinnedSessionIndex", "GSI6_PK", "GSI6_SK"),
         ],
     )
 
@@ -282,11 +296,10 @@ def assistants_table(aws, monkeypatch):
 # KMS key
 # ===================================================================
 @pytest.fixture()
-def kms_key_arn(aws, monkeypatch):
+def kms_key_arn(aws):
     kms = boto3.client("kms", region_name=AWS_REGION)
     key = kms.create_key(Description="test-oauth-encryption")
     arn = key["KeyMetadata"]["Arn"]
-    monkeypatch.setenv("OAUTH_TOKEN_ENCRYPTION_KEY_ARN", arn)
     return arn
 
 
@@ -310,8 +323,6 @@ def secrets_manager(aws, monkeypatch):
     sm = boto3.client("secretsmanager", region_name=AWS_REGION)
     sm.create_secret(Name="auth-provider-secrets", SecretString="{}")
     monkeypatch.setenv("AUTH_PROVIDER_SECRETS_ARN", "auth-provider-secrets")
-    sm.create_secret(Name="oauth-client-secrets", SecretString="{}")
-    monkeypatch.setenv("OAUTH_CLIENT_SECRETS_ARN", "oauth-client-secrets")
     return sm
 
 

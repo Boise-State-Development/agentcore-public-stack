@@ -3,8 +3,8 @@ export interface FineTuningGrant {
   email: string;
   granted_by: string;
   granted_at: string;
-  monthly_quota_hours: number;
-  current_month_usage_hours: number;
+  monthly_quota_usd: number;
+  current_month_usage_usd: number;
   quota_period: string;
 }
 

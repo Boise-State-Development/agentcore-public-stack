@@ -12,6 +12,13 @@ minted it on the same redirect chain, and only its `sub` /
 to seed the session row. The access token is what drives downstream
 auth — its signature is checked by `_get_bff_cognito_validator()` on
 every request through the dependency.
+
+The `nonce` claim is also read unverified, and that's sound: this token
+arrives as the body of *our own* TLS request to the token endpoint, in
+response to a code we chose. A third party can't substitute a token into
+that response, so the nonce comparison the callback performs still tells
+us what we need — that the IdP issued this token for the authorization
+request we started, not for some other one.
 """
 
 from __future__ import annotations
@@ -62,6 +69,11 @@ class IdTokenClaims:
     # decode at /auth/callback — so we extract them here once instead of
     # threading another decode through the call site.
     roles: List[str] = field(default_factory=list)
+    # `nonce` echoed back by the IdP from the authorize request. The callback
+    # compares it against the value it stashed with the OAuth state so an ID
+    # token minted for a *different* authorization request can't be
+    # substituted into this one.
+    nonce: Optional[str] = None
 
 
 def _extract_roles_from_id_token(claims: dict) -> List[str]:
@@ -98,9 +110,17 @@ async def exchange_code_for_tokens(
     client_secret: str,
     code: str,
     redirect_uri: str,
+    code_verifier: Optional[str] = None,
     http_client: Optional[httpx.AsyncClient] = None,
 ) -> ExchangeResult:
     """Exchange an authorization code for Cognito tokens.
+
+    `code_verifier` is the PKCE secret generated at /auth/login and carried
+    in the OAuth state row. When present it's sent as `code_verifier` so the
+    IdP can check it against the `code_challenge` it recorded on the
+    authorize request; a code intercepted without the verifier is then
+    unredeemable. Optional so a state row minted by an older revision
+    (mid-deploy) still completes rather than dead-ending the user's login.
 
     `http_client` is injected so tests can swap in a mock transport without
     needing real network egress.
@@ -111,6 +131,8 @@ async def exchange_code_for_tokens(
         "code": code,
         "redirect_uri": redirect_uri,
     }
+    if code_verifier:
+        data["code_verifier"] = code_verifier
     auth = (client_id, client_secret)
 
     try:
@@ -179,4 +201,5 @@ def decode_id_token_claims(id_token: str) -> IdTokenClaims:
         ),
         picture=claims.get("picture"),
         roles=_extract_roles_from_id_token(claims),
+        nonce=claims.get("nonce"),
     )

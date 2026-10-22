@@ -124,7 +124,7 @@ async def put_role_agent_pins(
             f"Admin {scrub_log(admin.email)} set {len(request.pins)} default pin(s) on role {scrub_log(role_id)}",
             extra={
                 "event": "role_agent_pins_updated",
-                "role_id": role_id,
+                "role_id": scrub_log(role_id),
                 "pin_count": len(request.pins),
                 "admin_user_id": admin.user_id,
             },

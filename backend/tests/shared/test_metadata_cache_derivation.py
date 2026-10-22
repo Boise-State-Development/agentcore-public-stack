@@ -561,3 +561,51 @@ class TestAgentSwitchDimension:
         assert result["agentSwitched"] is True
         assert result["cacheStatus"] == "hit"
         assert result["wastedUsd"] == 0.0
+
+
+class TestModelSwitchFlag:
+    """A mid-conversation model switch keeps the conversation, and each model has its
+    own cache, so the first call on the new model re-writes the prefix with unchanged
+    fingerprints and classifies ``miss_avoidable``. ``modelSwitched`` says it was
+    explained; like ``agentSwitched`` it never changes the verdict or the waste."""
+
+    HAIKU = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    SONNET = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # what _metadata() runs on
+
+    def _derive(self, table, meta):
+        return md._derive_cache_observability(
+            session_id="sess-1", table=table, timestamp=NOW.isoformat(),
+            message_metadata=meta,
+        )
+
+    def _prev(self, model_id, **kwargs):
+        row = _prev_row(30, cache_read=4000, prints=("t", "s"), **kwargs)
+        row["modelInfo"] = {"modelId": model_id}
+        return row
+
+    def test_a_call_on_a_different_model_is_flagged_and_still_priced_as_waste(self):
+        table = _FakeTable([self._prev(self.HAIKU)])
+        result = self._derive(table, _metadata(cache_write=5000, prints=("t", "s")))
+
+        assert result["modelSwitched"] is True
+        assert result["cacheStatus"] == "miss_avoidable"
+        assert result["wastedUsd"] > 0
+
+    def test_the_same_model_twice_is_not_a_switch(self):
+        table = _FakeTable([self._prev(self.SONNET)])
+        result = self._derive(table, _metadata(cache_write=5000, prints=("t", "s")))
+
+        assert "modelSwitched" not in result
+
+    def test_a_previous_row_without_a_model_is_not_a_switch(self):
+        """Nothing to compare against; flagging would hide a real regression."""
+        table = _FakeTable([_prev_row(30, cache_read=4000, prints=("t", "s"))])
+        result = self._derive(table, _metadata(cache_write=5000, prints=("t", "s")))
+
+        assert "modelSwitched" not in result
+
+    def test_the_first_call_of_a_session_is_never_a_switch(self):
+        result = self._derive(_FakeTable(), _metadata(cache_write=5000, prints=("t", "s")))
+
+        assert "modelSwitched" not in result
+

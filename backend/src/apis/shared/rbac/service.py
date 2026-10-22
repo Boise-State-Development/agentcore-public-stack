@@ -9,8 +9,9 @@ role ``grantedTools`` alone, so a public-but-ungranted tool listed for
 everyone and then failed at use — silently dropped from a scheduled run,
 and a hard block on any Agent that bound it. Non-admins hit it; anyone
 holding ``"*"`` never did. Keep the two sides reading the same flag; this
-is the tools-axis twin of the ``_grants_access`` consolidation in
-``admin/services/model_access.py``.
+is the tools-axis twin of the model-axis consolidation in
+:mod:`.model_access`, which every model check (here, the ``/models`` catalog
+and ``account_tools``) reads.
 
 The public set is *not* merged into ``UserEffectivePermissions``. That
 object is per-user cached and its ``tools`` list is order-sensitive
@@ -18,21 +19,59 @@ object is per-user cached and its ``tools`` list is order-sensitive
 prompt-cache prefix). Unioning at the predicate instead keeps the
 catalog's own TTL cache as the freshness boundary for an ``isPublic``
 toggle and leaves the cached permission object untouched.
+
+**A direct user grant (``UserGrant``) IS merged into the cached object.**
+It is the opposite trade: there is no other cache to lean on, and six
+app-api routes read ``permissions.tools`` / ``permissions.models`` straight
+off the resolved object rather than through a predicate here, so a union at
+the predicate would miss them. The grant is read once per cache fill,
+concurrently with the role lookups so a cold resolve pays no extra latency
+on the turn path, and it has no switch of its own: a grant row can only
+exist where an admin wrote one through the (flag-gated) admin surface, so an
+absent row is the off state.
 """
 
+import asyncio
 import logging
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Union
 
 from apis.shared.auth.models import User
+from apis.shared.models.models import ManagedModel
 from apis.shared.tools.freshness import get_public_tool_ids
 from apis.shared.tools.scoped_ids import base_tool_id
 
-from .models import AppRole, UserEffectivePermissions
+from .models import AppRole, UserEffectivePermissions, UserGrant
 from .repository import AppRoleRepository
 from .cache import AppRoleCache, get_app_role_cache, roles_fingerprint
+from .model_access import grants_model_access
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
+
+
+class _LookupRecord:
+    """Sentinel type: ``can_access_model`` should find the catalog row itself."""
+
+
+LOOKUP_RECORD = _LookupRecord()
+
+
+async def _lookup_model_record(model_id: str) -> Optional[ManagedModel]:
+    """The catalog row for ``model_id``; ``None`` for no row or an unreadable catalog.
+
+    Fails open to the role grants, like ``resolve_effective_model``: a catalog
+    outage must not refuse every model call.
+    """
+    from apis.shared.models.managed_models import find_managed_model_by_model_id
+
+    try:
+        return await find_managed_model_by_model_id(model_id)
+    except Exception:
+        logger.warning(
+            "Model catalog unavailable; checking model access on role grants only",
+            exc_info=True,
+        )
+        return None
 
 
 class AppRoleService:
@@ -100,9 +139,42 @@ class AppRoleService:
             logger.debug(f"Cache hit for user permissions: {user.user_id}")
             return cached
 
-        # Step 2: Get all AppRoles that match user's JWT roles
+        # The direct grant is independent of the roles, so its read runs
+        # alongside them: a cold resolve is already on the turn path, and
+        # putting this read *after* the role loop would add its round trip
+        # to time-to-first-token.
+        grant_task = asyncio.ensure_future(self._load_active_grant(user.user_id))
+
+        # Steps 2–3: the AppRoles that match the user's JWT roles
+        try:
+            matching_roles = await self._resolve_matching_roles(user.roles or [], user.name)
+        except BaseException:
+            grant_task.cancel()
+            raise
+
+        # Step 4: Merge permissions — the roles, then the user's own grant on top
+        permissions = self._merge_permissions(
+            user.user_id, matching_roles, grant=await grant_task
+        )
+
+        # Step 5: Cache and return
+        await self.cache.set_user_permissions(user.user_id, fingerprint, permissions)
+
+        logger.debug(
+            f"Resolved permissions for {user.name}: "
+            f"roles={permissions.app_roles}, "
+            f"tools={len(permissions.tools)}, "
+            f"models={len(permissions.models)}"
+        )
+
+        return permissions
+
+    async def _resolve_matching_roles(
+        self, jwt_roles: List[str], user_name: str
+    ) -> List[AppRole]:
+        """Steps 2–3 of ``resolve_user_permissions``: the enabled AppRoles the
+        JWT roles map to, or ``[default]`` when none matched."""
         matching_roles: List[AppRole] = []
-        jwt_roles = user.roles or []
 
         for jwt_role in jwt_roles:
             # Check JWT mapping cache
@@ -128,23 +200,10 @@ class AppRoleService:
             if default_role and default_role.enabled:
                 matching_roles = [default_role]
                 logger.debug(
-                    f"No matching roles for user {user.name}, using default role"
+                    f"No matching roles for user {user_name}, using default role"
                 )
 
-        # Step 4: Merge permissions
-        permissions = self._merge_permissions(user.user_id, matching_roles)
-
-        # Step 5: Cache and return
-        await self.cache.set_user_permissions(user.user_id, fingerprint, permissions)
-
-        logger.debug(
-            f"Resolved permissions for {user.name}: "
-            f"roles={permissions.app_roles}, "
-            f"tools={len(permissions.tools)}, "
-            f"models={len(permissions.models)}"
-        )
-
-        return permissions
+        return matching_roles
 
     async def get_role(self, role_id: str) -> Optional[AppRole]:
         """A role record, through the same cache the permission resolution uses.
@@ -156,6 +215,30 @@ class AppRoleService:
         ``UserEffectivePermissions``.
         """
         return await self._get_role_with_cache(role_id)
+
+    async def _load_active_grant(self, user_id: str) -> Optional[UserGrant]:
+        """The user's direct grant if one exists and is in force, else ``None``.
+
+        Fails open to "no grant": a read error must not refuse the roles the
+        user already holds, and the worst case of swallowing it is that an
+        exception grant lands a cache TTL late. The type check guards the
+        test seam — an ``AsyncMock`` repository without this method returns
+        a mock, which must read as no grant rather than as a grant.
+        """
+        try:
+            grant = await self.repository.get_user_grant(user_id)
+        except Exception:
+            logger.warning(
+                f"Direct grant lookup failed for {user_id}; resolving on roles only",
+                exc_info=True,
+            )
+            return None
+        if not isinstance(grant, UserGrant):
+            return None
+        if not grant.is_active(utc_now_iso()):
+            logger.debug(f"Direct grant for {user_id} has expired; ignoring")
+            return None
+        return grant
 
     async def _get_role_with_cache(self, role_id: str) -> Optional[AppRole]:
         """Get role from cache or database."""
@@ -169,10 +252,13 @@ class AppRoleService:
         return role
 
     def _merge_permissions(
-        self, user_id: str, roles: List[AppRole]
+        self,
+        user_id: str,
+        roles: List[AppRole],
+        grant: Optional[UserGrant] = None,
     ) -> UserEffectivePermissions:
         """
-        Merge permissions from multiple AppRoles.
+        Merge permissions from multiple AppRoles, plus the user's direct grant.
 
         Merge rules:
         - Tools: Union (user gets access to all tools from all roles)
@@ -180,19 +266,13 @@ class AppRoleService:
         - Admin scopes: Union (but no ``"*"`` — there is no wildcard on this
           axis; full admin is the ``system_admin`` role, not a scope)
         - Quota Tier: Highest priority role's tier wins
+        - Direct grant: unioned into tools/models/skills exactly like one more
+          role, and recorded on ``direct_*`` so a display can attribute it.
+          A ``"*"`` in a stored grant is ignored (the write path refuses it;
+          this is belt and braces). It touches no other axis: quota tier has
+          its own per-user assignment in the quota resolver, and admin
+          scopes are delegated by role only.
         """
-        if not roles:
-            return UserEffectivePermissions(
-                user_id=user_id,
-                app_roles=[],
-                tools=[],
-                models=[],
-                skills=[],
-                admin_scopes=[],
-                quota_tier=None,
-                resolved_at=utc_now_iso(),
-            )
-
         # Collect all tools, models and skills (union)
         all_tools: Set[str] = set()
         all_models: Set[str] = set()
@@ -222,6 +302,20 @@ class AppRoleService:
                 # nothing rather than silently granting every admin surface.
                 all_admin_scopes.update(role.effective_permissions.admin_scopes)
 
+        direct_tools: List[str] = []
+        direct_models: List[str] = []
+        direct_skills: List[str] = []
+        if grant is not None:
+            direct_tools = sorted(set(grant.granted_tools) - {"*"})
+            direct_models = sorted(set(grant.granted_models) - {"*"})
+            direct_skills = sorted(set(grant.granted_skills) - {"*"})
+            if "*" not in all_tools:
+                all_tools.update(direct_tools)
+            if "*" not in all_models:
+                all_models.update(direct_models)
+            if "*" not in all_skills:
+                all_skills.update(direct_skills)
+
         # Determine quota tier (highest priority wins)
         sorted_roles = sorted(roles, key=lambda r: r.priority, reverse=True)
         quota_tier = None
@@ -246,6 +340,9 @@ class AppRoleService:
             admin_scopes=sorted(all_admin_scopes),
             quota_tier=quota_tier,
             resolved_at=utc_now_iso(),
+            direct_tools=direct_tools,
+            direct_models=direct_models,
+            direct_skills=direct_skills,
         )
 
     async def _tool_grant_set(self, user: User) -> Set[str]:
@@ -262,11 +359,17 @@ class AppRoleService:
         return granted | set(await get_public_tool_ids())
 
     async def can_access_tool(self, user: User, tool_id: str) -> bool:
-        """Check if user can access a specific tool.
+        """Check if user can access a specific tool, bare or scoped.
 
-        Exact-match on the id by design: callers pass a bare catalog id
-        (an Agent's ``binding.ref``, validated against the author's palette
-        at design time), never a scoped ``base::tool`` id.
+        ``tool_id`` may be a bare catalog id or a scoped ``base::tool`` id
+        referencing one tool within an MCP server (an Agent's ``binding.ref``
+        carries either). A scoped id is accessible when its **base server id**
+        is granted: scoping narrows a grant, it never widens one, so a role
+        that grants the whole server necessarily admits any subset of it.
+
+        This is the same predicate ``filter_requested_tools`` applies on the
+        ``enabled_tools`` axis — keep the two in agreement, or a subset the
+        picker admits will be denied on the bindings axis (and vice versa).
         """
         allowed = await self._tool_grant_set(user)
 
@@ -274,17 +377,42 @@ class AppRoleService:
         if "*" in allowed:
             return True
 
-        return tool_id in allowed
+        return tool_id in allowed or base_tool_id(tool_id) in allowed
 
-    async def can_access_model(self, user: User, model_id: str) -> bool:
-        """Check if user can access a specific model."""
+    async def can_access_model(
+        self,
+        user: User,
+        model_id: str,
+        *,
+        record: Union[Optional[ManagedModel], _LookupRecord] = LOOKUP_RECORD,
+    ) -> bool:
+        """Check if user can run ``model_id``, by the one shared rule.
+
+        See :mod:`.model_access` for the rule, including what an id with no
+        catalog row gets. Pass ``record`` when the caller already holds the
+        catalog row (``EffectiveModel.record`` from retirement resolution —
+        ``None`` meaning "no row"), so the turn path pays no second lookup;
+        otherwise the row is found in the cached catalog.
+        """
         permissions = await self.resolve_user_permissions(user)
+        if isinstance(record, _LookupRecord):
+            record = await _lookup_model_record(model_id)
+        return grants_model_access(
+            model_id, record, set(permissions.models), set(user.roles or [])
+        )
 
-        # Wildcard grants access to all
-        if "*" in permissions.models:
-            return True
-
-        return model_id in permissions.models
+    async def filter_accessible_models(
+        self, user: User, models: List[ManagedModel]
+    ) -> List[ManagedModel]:
+        """The catalog rows ``user`` may run, by the same rule as ``can_access_model``."""
+        permissions = await self.resolve_user_permissions(user)
+        model_permissions = set(permissions.models)
+        user_roles = set(user.roles or [])
+        return [
+            model
+            for model in models
+            if grants_model_access(model.model_id, model, model_permissions, user_roles)
+        ]
 
     async def get_accessible_tools(self, user: User) -> List[str]:
         """Get list of tool IDs user can access (role grant ∪ public tools).

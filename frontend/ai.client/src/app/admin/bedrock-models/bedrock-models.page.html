@@ -32,7 +32,7 @@
           [ngModel]="searchQuery()"
           (ngModelChange)="searchQuery.set($event)"
           placeholder="Search by ID, name, or provider…"
-          class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+          class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
         />
       </div>
 
@@ -41,7 +41,7 @@
         id="provider"
         [ngModel]="providerFilter()"
         (ngModelChange)="providerFilter.set($event)"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All providers</option>
         @for (provider of availableProviders(); track provider) {
@@ -54,7 +54,7 @@
         id="outputModality"
         [ngModel]="outputModalityFilter()"
         (ngModelChange)="outputModalityFilter.set($event)"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All modalities</option>
         @for (modality of availableOutputModalities(); track modality) {
@@ -67,7 +67,7 @@
         id="inferenceType"
         [ngModel]="inferenceTypeFilter()"
         (ngModelChange)="inferenceTypeFilter.set($event)"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All inference types</option>
         @for (type of availableInferenceTypes(); track type) {
@@ -80,7 +80,7 @@
         id="customizationType"
         [ngModel]="customizationTypeFilter()"
         (ngModelChange)="customizationTypeFilter.set($event)"
-        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
       >
         <option value="">All customizations</option>
         @for (type of availableCustomizationTypes(); track type) {
@@ -97,12 +97,12 @@
         placeholder="Max"
         min="1"
         max="1000"
-        class="w-24 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+        class="w-24 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
       />
 
       <button
         (click)="applyFilters()"
-        class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+        class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:brightness-110"
       >
         Apply
       </button>
@@ -125,9 +125,9 @@
 
     <!-- Error State -->
     @if (error()) {
-      <div class="rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
-        <h3 class="text-sm/6 font-medium text-red-800 dark:text-red-400">Error loading models</h3>
-        <p class="mt-1 text-sm/6 text-red-700 dark:text-red-500">{{ error() }}</p>
+      <div class="rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+        <h3 class="text-sm/6 font-medium text-state-danger-800 dark:text-state-danger-400">Error loading models</h3>
+        <p class="mt-1 text-sm/6 text-state-danger-700 dark:text-state-danger-500">{{ error() }}</p>
       </div>
     }
 
@@ -156,7 +156,7 @@
                   [attr.aria-expanded]="isExpanded(model.modelId)"
                   [attr.aria-controls]="'model-detail-' + model.modelId"
                   [attr.aria-label]="(isExpanded(model.modelId) ? 'Hide' : 'Show') + ' details for ' + model.modelName"
-                  class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                 >
                   <ng-icon
                     name="heroChevronDown"
@@ -180,14 +180,14 @@
                 </span>
 
                 @if (isModelAdded(model.modelId)) {
-                  <span class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl bg-green-100 px-3 py-1.5 text-xs/5 font-medium text-green-800 dark:bg-green-900/50 dark:text-green-300">
+                  <span class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl bg-state-success-100 px-3 py-1.5 text-xs/5 font-medium text-state-success-800 dark:bg-state-success-900/50 dark:text-state-success-300">
                     <ng-icon name="heroCheckCircleSolid" class="size-4" aria-hidden="true" />
                     Added
                   </span>
                 } @else {
                   <button
                     (click)="addModelFromBedrock(model)"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl bg-blue-600 px-3 py-1.5 text-xs/5 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+                    class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl bg-primary-accessible px-3 py-1.5 text-xs/5 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:brightness-110"
                   >
                     <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
                     Add

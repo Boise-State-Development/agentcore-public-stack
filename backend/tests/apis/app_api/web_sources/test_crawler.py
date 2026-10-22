@@ -46,6 +46,8 @@ class _Recorder:
         self.finalized_error: str | None = None
         self._doc_counter = 0
         self.preassigned_root_id = "DOC-root00000001"
+        self.created_statuses: List[str] = []  # the status each new page starts at
+        self.kb_record: dict | None = None  # the knowledge-base record a new page reads
 
     def next_doc_id(self) -> str:
         self._doc_counter += 1
@@ -65,11 +67,13 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         s3_key: str,
         document_id: str | None = None,
         provenance=None,
+        status: str = "uploading",
     ):
         document_id = document_id or rec.next_doc_id()
         rec.created_docs.append(
             (document_id, provenance.source_file_id if provenance else "")
         )
+        rec.created_statuses.append(status)
 
         class _Stub:
             pass
@@ -161,6 +165,11 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         await real_sleep(0)
 
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    # Each new page reads the knowledge-base record to pick its starting status.
+    monkeypatch.setattr(
+        "apis.shared.kb_backend.records.get_kb_record",
+        lambda assistant_id, app_kb_id: rec.kb_record,
+    )
 
     return rec
 
@@ -223,6 +232,35 @@ async def test_single_page_crawl_writes_one_doc(recorder: _Recorder):
     assert len(recorder.s3_puts) == 1
     assert recorder.fetched_delta == 1
     assert recorder.failed_delta == 0
+
+
+@pytest.mark.parametrize(
+    "kb_record,expected",
+    [
+        (None, "uploading"),  # legacy: no record
+        ({"retrievalEngine": "managed", "awsKbId": "kb", "awsDataSourceId": "ds"}, "uploading"),  # built
+        ({"retrievalEngine": "managed"}, "provisioning"),  # being born managed
+    ],
+)
+@pytest.mark.asyncio
+async def test_pages_wait_on_a_knowledge_base_still_being_provisioned(recorder: _Recorder, kb_record, expected):
+    # Otherwise the managed consumer defers them and the provisioning job, which
+    # ingests only `provisioning` rows, never picks them up.
+    recorder.kb_record = kb_record
+    pages = {
+        "https://example.com/": '<html><body><a href="/a">A</a></body></html>',
+        "https://example.com/a": "<html><head><title>A</title></head><body>a</body></html>",
+    }
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url="https://example.com/",
+        settings=CrawlSettings(max_depth=1, max_pages=5),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_build_handler(pages)),
+    )
+    assert recorder.created_statuses == [expected]
 
 
 @pytest.mark.asyncio
@@ -650,3 +688,41 @@ async def test_refresh_robots_disallow_is_not_seen(recorder: _Recorder):
     # Robots said stop indexing: the URL is deliberately NOT seen, so the
     # worker's miss counter starts ticking toward removal.
     assert state.seen_urls == set()
+
+
+@pytest.mark.asyncio
+async def test_refresh_stage_failure_emits_stage_failed(
+    recorder: _Recorder, monkeypatch: pytest.MonkeyPatch
+):
+    async def failing_put(*, assistant_id, document_id, markdown, filename):
+        raise RuntimeError("S3 PutObject failed")
+
+    monkeypatch.setattr(crawler, "_put_markdown", failing_put)
+    pages = {
+        ROOT: '<html><body><p>changed words</p><a href="/new">n</a></body></html>',
+        "https://example.com/new": "<html><body><p>new page</p></body></html>",
+    }
+    state, log = _refresh_state(
+        recorder, {ROOT: crawler.RefreshDoc(document_id="DOC-root", content_hash="different")}
+    )
+
+    await _run_refresh(recorder, pages, state)
+
+    # Each pre-stage emit is followed by stage_failed, so the worker can roll
+    # back the gate values it wrote for bytes that never reached S3.
+    outcomes = sorted((outcome, url) for outcome, url, _ in log.events)
+    assert outcomes == [
+        ("changed", ROOT),
+        ("created", "https://example.com/new"),
+        ("stage_failed", ROOT),
+        ("stage_failed", "https://example.com/new"),
+    ]
+    assert state.stage_failed == 2
+    assert recorder.failed_delta == 2
+    assert recorder.metadata_updates == []
+    # The existing page keeps serving its last-good version; the new page,
+    # which has nothing staged at all, is marked failed.
+    new_doc_id = recorder.created_docs[0][0]
+    assert (new_doc_id, "failed") in recorder.status_updates
+    assert ("DOC-root", "failed") not in recorder.status_updates
+    assert recorder.finalized_status == "complete"

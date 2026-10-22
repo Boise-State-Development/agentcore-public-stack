@@ -14,6 +14,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import {
   PUBLISHER_KIND_HINTS,
   PUBLISHER_KIND_LABELS,
@@ -45,7 +46,7 @@ import {
 @Component({
   selector: 'app-marketplace-publishers',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective],
+  imports: [NgIcon, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({ heroBuildingLibrary, heroCheckBadge, heroPlus, heroTrash }),
   ],
@@ -68,7 +69,7 @@ import {
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -91,7 +92,7 @@ import {
               [value]="newLabel()"
               (input)="onNewLabelInput($event)"
               placeholder="e.g. Office of the Registrar"
-              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
             />
           </div>
           <div class="sm:w-52">
@@ -105,7 +106,7 @@ import {
               id="new-publisher-kind"
               [value]="newKind()"
               (change)="onNewKindChange($event)"
-              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
             >
               @for (kind of kinds; track kind) {
                 <option [value]="kind">{{ kindLabels[kind] }}</option>
@@ -116,7 +117,7 @@ import {
             type="button"
             [disabled]="!newLabel().trim() || busy()"
             (click)="addPublisher()"
-            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
             Add
@@ -128,10 +129,7 @@ import {
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading publishers</span>
+            <app-spinner size="lg" label="Loading publishers" />
           </div>
         } @else if (publishers().length === 0) {
           <div
@@ -166,12 +164,12 @@ import {
                       [id]="'label-' + publisher.id"
                       [value]="publisher.label"
                       (change)="rename(publisher, $event)"
-                      class="block w-full rounded-2xl border border-transparent bg-transparent px-2 py-1 text-sm/6 font-medium text-gray-900 hover:border-gray-300 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white dark:hover:border-gray-600 dark:focus:bg-gray-900"
+                      class="block w-full rounded-2xl border border-transparent bg-transparent px-2 py-1 text-sm/6 font-medium text-gray-900 hover:border-gray-300 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 dark:text-white dark:hover:border-gray-600 dark:focus:bg-gray-900"
                     />
                     @if (publisher.verified) {
                       <ng-icon
                         name="heroCheckBadge"
-                        class="size-5 shrink-0 text-blue-600 dark:text-blue-400"
+                        class="size-5 shrink-0 text-state-info-600 dark:text-state-info-400"
                         aria-label="Verified"
                       />
                     }
@@ -187,7 +185,7 @@ import {
                     type="button"
                     [disabled]="busy()"
                     (click)="toggleVerified(publisher)"
-                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     appTooltip="A check mark meaning a university team stands behind this. Display only — it grants nothing."
                     appTooltipPosition="top"
                   >
@@ -197,7 +195,7 @@ import {
                     type="button"
                     [disabled]="busy()"
                     (click)="toggleEnabled(publisher)"
-                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     [appTooltip]="
                       publisher.enabled
                         ? 'Stop offering this in the submit picker. Listings already attributed to it keep rendering.'
@@ -211,7 +209,7 @@ import {
                     type="button"
                     [disabled]="busy()"
                     (click)="remove(publisher)"
-                    class="rounded-2xl border border-gray-300 bg-white p-1.5 text-gray-500 hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-rose-900/20 dark:hover:text-rose-400"
+                    class="rounded-2xl border border-gray-300 bg-white p-1.5 text-gray-500 hover:bg-state-danger-50 hover:text-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                     appTooltip="Delete. Refused while listings are attributed to it — disable instead."
                     appTooltipPosition="top"
                   >

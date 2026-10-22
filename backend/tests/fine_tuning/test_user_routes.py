@@ -37,8 +37,8 @@ class TestCheckAccess:
             "email": "allowed@example.com",
             "granted_by": "admin@example.com",
             "granted_at": "2026-01-01T00:00:00Z",
-            "monthly_quota_hours": 10.0,
-            "current_month_usage_hours": 3.5,
+            "monthly_quota_usd": 10.0,
+            "current_month_usage_usd": 3.5,
             "quota_period": "2026-03",
         }
         _override_repo(app, mock_repo)
@@ -49,8 +49,8 @@ class TestCheckAccess:
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_access"] is True
-        assert body["monthly_quota_hours"] == 10.0
-        assert body["current_month_usage_hours"] == 3.5
+        assert body["monthly_quota_usd"] == 10.0
+        assert body["current_month_usage_usd"] == 3.5
         assert body["quota_period"] == "2026-03"
 
     def test_returns_no_access_for_non_whitelisted_user(self, make_user):
@@ -68,7 +68,7 @@ class TestCheckAccess:
         assert resp.status_code == 200
         body = resp.json()
         assert body["has_access"] is False
-        assert body["monthly_quota_hours"] is None
+        assert body["monthly_quota_usd"] is None
 
     def test_returns_401_when_unauthenticated(self):
         app = _create_app()

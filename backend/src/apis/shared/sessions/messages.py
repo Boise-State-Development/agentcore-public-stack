@@ -1,12 +1,13 @@
 """Messages service layer
 
-Retrieves conversation history from AgentCore Memory.
+Retrieves conversation history from AgentCore Memory, falling back to the
+conversation archive (text only) for a session whose Memory events expired.
 """
 
 import base64
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 # Relative imports from shared sessions module
 from .models import Message, MessageContent, MessageResponse, MessagesListResponse, MessageMetadata, Citation
@@ -315,7 +316,10 @@ def _convert_message(msg: Any, metadata: Any = None) -> Message:
     return Message(role=role, content=content_blocks, timestamp=str(timestamp) if timestamp else None, metadata=message_metadata)
 
 
-def _apply_pagination(messages: List[Message], limit: Optional[int] = None, next_token: Optional[str] = None) -> Tuple[List[Message], Optional[str]]:
+_Page = TypeVar("_Page")
+
+
+def _apply_pagination(messages: List[_Page], limit: Optional[int] = None, next_token: Optional[str] = None) -> Tuple[List[_Page], Optional[str]]:
     """
     Apply pagination to a list of messages
 
@@ -354,6 +358,79 @@ def _apply_pagination(messages: List[Message], limit: Optional[int] = None, next
         next_token = None
 
     return paginated_messages, next_token
+
+
+def _archived_turn_messages(session_id: str, turns: List[Any]) -> List[MessageResponse]:
+    """Archived turns as the messages the SPA renders: text only, original ids.
+
+    Each turn becomes its user message at ``msg-{session}-{messageIndex}`` (the
+    id a search hit jumps to) and, when it has a reply, one assistant message
+    at ``messageIndex + 1``, which in the original history is always the first
+    assistant message of that turn. Tool calls, attachments and reasoning were
+    never archived, so they are not here.
+    """
+    responses: List[MessageResponse] = []
+    for turn in turns:
+        if turn.user_text:
+            responses.append(
+                MessageResponse(
+                    id=f"msg-{session_id}-{turn.message_index}",
+                    role="user",
+                    content=[MessageContent(type="text", text=turn.user_text)],
+                    created_at=turn.created_at,
+                )
+            )
+        if turn.assistant_text:
+            responses.append(
+                MessageResponse(
+                    id=f"msg-{session_id}-{turn.message_index + 1}",
+                    role="assistant",
+                    content=[MessageContent(type="text", text=turn.assistant_text)],
+                    created_at=turn.created_at,
+                )
+            )
+    return responses
+
+
+async def _get_archived_messages(
+    session_id: str,
+    user_id: str,
+    limit: Optional[int],
+    next_token: Optional[str],
+    pending_interrupts: List[Any],
+) -> Optional[MessagesListResponse]:
+    """The conversation archive's copy of a session Memory no longer holds, or None.
+
+    Only reached when Memory returned no message at all, so a session with
+    live events never pays for it. A brand-new session pays one S3 listing that
+    finds nothing. Never raises: a failed read is the same empty history the
+    caller would have shown anyway.
+    """
+    import asyncio
+
+    from apis.shared.sessions.preview import is_preview_session
+
+    if is_preview_session(session_id):
+        return None
+    try:
+        from apis.shared.conversation_archive import read_session_turns
+
+        turns = await asyncio.to_thread(read_session_turns, user_id, session_id)
+    except Exception as e:  # noqa: BLE001 - see docstring
+        logger.warning(f"Conversation archive fallback failed: {type(e).__name__}")
+        return None
+    if not turns:
+        return None
+
+    messages = _archived_turn_messages(session_id, turns)
+    page, next_page_token = _apply_pagination(messages, limit, next_token)
+    logger.info(f"Memory held no events; served {len(messages)} messages from the conversation archive")
+    return MessagesListResponse(
+        messages=page,
+        next_token=next_page_token,
+        pending_interrupts=pending_interrupts,
+        from_archive=True,
+    )
 
 
 async def get_messages_from_cloud(
@@ -436,17 +513,83 @@ async def get_messages_from_cloud(
                 user_id=user_id,
             )
 
-        # Run fetches in parallel
-        messages_raw, metadata_index, pending_interrupts, ui_resource_rows = (
-            await asyncio.gather(
-                fetch_messages(),
-                fetch_metadata(),
-                fetch_pending_interrupts(),
-                fetch_ui_resources(),
+        async def fetch_tool_summaries():
+            """Fetch persisted model-generated tool-batch summaries.
+
+            Sync DynamoDB query off the session GSI; runs in a thread pool.
+            Empty when the table is absent (dev) or nothing was summarized.
+            """
+            from apis.shared.tool_summaries import get_tool_summary_store
+
+            return await asyncio.to_thread(
+                get_tool_summary_store().list_for_session,
+                session_id=session_id,
+                user_id=user_id,
             )
+
+        async def fetch_source_provenance():
+            """Fetch persisted source-provenance verdicts.
+
+            Sync DynamoDB query off the session GSI; runs in a thread pool.
+            Empty when the table is absent (dev), the flag is off, or nothing
+            was verified.
+            """
+            from apis.shared.feature_flags import source_provenance_enabled
+
+            if not source_provenance_enabled():
+                return []
+            from apis.shared.files.provenance_store import get_source_provenance_store
+
+            return await asyncio.to_thread(
+                get_source_provenance_store().list_for_session,
+                session_id=session_id,
+                user_id=user_id,
+            )
+
+        async def fetch_extractions():
+            """Fetch persisted structured-extraction runs.
+
+            Sync DynamoDB query off the session GSI; runs in a thread pool.
+            Empty when the table is absent (dev), the flag is off, or nothing
+            was extracted.
+            """
+            from apis.shared.feature_flags import document_extract_enabled
+
+            if not document_extract_enabled():
+                return []
+            from apis.shared.extraction.extraction_store import get_extraction_store
+
+            return await asyncio.to_thread(
+                get_extraction_store().list_for_session,
+                session_id=session_id,
+                user_id=user_id,
+            )
+
+        # Run fetches in parallel
+        (
+            messages_raw,
+            metadata_index,
+            pending_interrupts,
+            ui_resource_rows,
+            tool_summary_rows,
+            source_provenance_rows,
+            extraction_rows,
+        ) = await asyncio.gather(
+            fetch_messages(),
+            fetch_metadata(),
+            fetch_pending_interrupts(),
+            fetch_ui_resources(),
+            fetch_tool_summaries(),
+            fetch_source_provenance(),
+            fetch_extractions(),
         )
 
         messages_raw = list(messages_raw or [])
+
+        if not messages_raw:
+            archived = await _get_archived_messages(session_id, user_id, limit, next_token, pending_interrupts)
+            if archived is not None:
+                return archived
 
         logger.info(f"AgentCore Memory returned {len(messages_raw)} raw messages")
         logger.info(f"Metadata index contains {len(metadata_index)} entries")
@@ -519,16 +662,128 @@ async def get_messages_from_cloud(
                     }
                 )
 
+        # Tool-batch summaries: the `tool_group_summary` SSE is emitted once
+        # mid-turn and never re-streams, so without this replay a reloaded
+        # conversation silently downgrades from the model's prose line to the
+        # SPA's deterministic formatter. First page only — the SPA keys them by
+        # toolUseId and holds them all regardless of which page renders the
+        # correlated tool_use block (same reasoning as uiResources above).
+        tool_summaries: List[Dict[str, Any]] = []
+        if not next_token:
+            tool_summaries = [
+                {
+                    "batchId": row.get("batchId", ""),
+                    "toolUseIds": row.get("toolUseIds") or [],
+                    "summary": row.get("summary", ""),
+                }
+                for row in tool_summary_rows
+                if row.get("summary")
+            ]
+
+        # Source provenance: the `source_provenance` SSE is emitted once
+        # mid-turn and never re-streams. Without this replay a reloaded
+        # conversation shows the cited values with no provenance at all, and the
+        # state a reader most needs is `quote_unsupported` — a verdict that
+        # vanishes on refresh reads as a clean answer. First page only, same
+        # reasoning as toolSummaries above.
+        source_provenance: List[Dict[str, Any]] = []
+        if not next_token:
+            source_provenance = [
+                {
+                    "toolUseId": row.get("toolUseId", ""),
+                    "claims": row.get("claims") or [],
+                }
+                for row in source_provenance_rows
+                if row.get("claims")
+            ]
+
+        # Structured extraction: the `document_extraction` SSE is emitted once
+        # mid-turn and never re-streams. Without this replay a reloaded
+        # conversation mentions values with no table and no provenance behind
+        # them — and a `quote_unsupported` that vanishes on refresh reads as a
+        # clean answer, exactly as above. First page only, same reasoning.
+        extractions: List[Dict[str, Any]] = []
+        if not next_token:
+            extractions = [row for row in extraction_rows if row.get("fields")]
+
         return MessagesListResponse(
             messages=message_responses,
             next_token=next_page_token,
             pending_interrupts=pending_interrupts,
             ui_resources=ui_resources,
+            tool_summaries=tool_summaries,
+            source_provenance=source_provenance,
+            extractions=extractions,
         )
 
     except Exception as e:
         logger.error(f"Error retrieving messages from AgentCore Memory: {e}")
         raise
+
+
+# The Memory SDK keeps its own records in a session's event stream beside the
+# messages: a ``SESSION`` event when the session is created and ``AGENT`` events
+# for agent state, each tagged with this metadata key. Message events carry no
+# such tag, so "is there a message?" is "is there an event without it?".
+_SDK_STATE_METADATA_KEY = "stateType"
+
+
+def _first_message_event(memory_id: str, actor_id: str, session_id: str) -> bool:
+    """Whether the session's event stream holds any message event. Blocking."""
+    from apis.shared.aws_clients import get_client
+
+    client = get_client("bedrock-agentcore", region_name=os.environ.get("AWS_REGION", "us-west-2"))
+    params: Dict[str, Any] = {
+        "memoryId": memory_id,
+        "actorId": actor_id,
+        "sessionId": session_id,
+        "maxResults": 1,
+        "includePayloads": False,
+        "filter": {
+            "eventMetadata": [
+                {"left": {"metadataKey": _SDK_STATE_METADATA_KEY}, "operator": "NOT_EXISTS"}
+            ]
+        },
+    }
+    # The filter is applied server-side, but a page may still come back empty
+    # with a continuation token; only an empty page WITHOUT one means "none".
+    while True:
+        response = client.list_events(**params)
+        if response.get("events"):
+            return True
+        token = response.get("nextToken")
+        if not token:
+            return False
+        params["nextToken"] = token
+
+
+async def session_has_messages(session_id: str, user_id: str) -> bool:
+    """True when the session has at least one persisted message, from any agent.
+
+    An existence check, and priced like one: one ``ListEvents`` with
+    ``maxResults=1``, no payloads, filtered server-side to events that are not
+    the SDK's own state records. It replaces ``get_messages(limit=1)``, which
+    read the WHOLE history plus its metadata, interrupts, UI resources and
+    tool summaries to return one message — ~540ms on a new conversation's first
+    agent turn on dev, growing with history — and, by constructing an
+    ``AgentCoreMemorySessionManager``, wrote a ``SESSION`` event into a session
+    that did not have one yet. The agent's own session manager creates that
+    event when the turn's agent is built, as it does on every plain turn.
+
+    Fails open: if the read itself fails this logs and returns False — the
+    same answer the old path gave, because the SDK swallowed a failed
+    ``ListEvents`` into an empty history.
+    """
+    import asyncio
+
+    memory_id = os.environ.get("AGENTCORE_MEMORY_ID")
+    if not memory_id:
+        raise ValueError("AGENTCORE_MEMORY_ID environment variable not set")
+    try:
+        return await asyncio.to_thread(_first_message_event, memory_id, user_id, session_id)
+    except Exception as e:  # noqa: BLE001 - an unanswerable check must not fail the turn
+        logger.warning(f"Could not check session {session_id} for messages: {type(e).__name__}: {e}")
+        return False
 
 
 async def get_messages(session_id: str, user_id: str, limit: Optional[int] = None, next_token: Optional[str] = None) -> MessagesListResponse:

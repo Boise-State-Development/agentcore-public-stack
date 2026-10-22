@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      Browser sign-in live view (docs/specs/authenticated-web-assessment.md D3).
+
+      Served from the mcp-sandbox origin and framed by the SPA. Plain JS on
+      purpose: the Amazon DCV Web Client SDK is framework-agnostic, so there is
+      no React here, no bundler, and no third-party code. `dcv/` is fetched and
+      signature-verified at build time by scripts/build/fetch-dcv-sdk.sh and is
+      never committed — it is a EULA-licensed AWS download and this repo is
+      public.
+
+      Why this page exists at a separate origin rather than inside the Angular
+      SPA: this is the one surface where a user types a password, and dcv.js
+      forwards their keystrokes. Keeping it in an origin that holds no session
+      cookie means a compromised SDK cannot also reach their session. The
+      isolation argument that justifies this origin for MCP Apps does NOT apply
+      (DCV streams pixels; the remote page's code runs in AWS's Chromium, never
+      in this document) — this is defence in depth, deliberately chosen.
+
+      `no-referrer` matters: without it this page's URL, which carries the CSP
+      query, would leak to the AgentCore endpoint on every request.
+    -->
+    <meta name="referrer" content="no-referrer" />
+    <title>Browser sign-in</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #000;
+        color: #e5e7eb;
+        font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      #display {
+        width: 100%;
+        height: 100%;
+      }
+      #status {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        text-align: center;
+      }
+      #status[hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="display" role="application" aria-label="Remote browser"></div>
+    <p id="status">Waiting for the sign-in session…</p>
+
+    <!-- UMD build: a plain script tag, no module loader. Exposes `window.dcv`. -->
+    <script src="./dcvjs/dcv.js"></script>
+    <script src="./live-view.js"></script>
+  </body>
+</html>

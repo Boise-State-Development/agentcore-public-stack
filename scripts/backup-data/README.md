@@ -14,8 +14,8 @@ exists — reads those artifacts and maps them into the new shape.
 
 | Component | Source | How |
 |---|---|---|
-| Application DynamoDB tables (~20) | `/{prefix}/.../...-table-name` SSM params + the conventionally-named `{prefix}-assistants` table | `ExportTableToPointInTime` → gzipped DynamoDB-JSON in S3 |
-| User-content S3 buckets | `/{prefix}/.../bucket-name` SSM params (user file uploads, RAG documents, conditional artifacts/fine-tuning) | `aws s3 sync` |
+| Application DynamoDB tables (~25) | `/{prefix}/.../...-table-name` SSM params + conventionally-named `{prefix}-{suffix}` tables (`DYNAMODB_TABLES_BY_CONVENTION`) | `ExportTableToPointInTime` → gzipped DynamoDB-JSON in S3 |
+| User-content S3 buckets | `/{prefix}/.../bucket-name` SSM params (user file uploads, RAG documents, shared-conversation snapshots, Memory Spaces files, skill reference files, conditional artifacts/fine-tuning) | `aws s3 sync` |
 | Cognito User Pool config | `/{prefix}/auth/cognito/user-pool-id` SSM | `DescribeUserPool` JSON |
 | **Cognito Identity Providers** | enumerate + describe each | full `ProviderDetails` incl. **OIDC `client_secret`** for automated re-registration |
 | **Cognito App Clients** | enumerate + describe each | full record incl. **`ClientSecret`** |

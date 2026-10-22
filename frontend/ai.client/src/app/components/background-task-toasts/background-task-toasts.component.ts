@@ -49,10 +49,10 @@ import { BackgroundTask, BackgroundTaskService } from '../../services/background
                   <span class="bg-toast-dot" aria-hidden="true"></span>
                 }
                 @case ('completed') {
-                  <ng-icon name="heroCheckCircle" class="size-4 text-green-500 dark:text-green-400" aria-hidden="true" />
+                  <ng-icon name="heroCheckCircle" class="size-4 text-state-success-500 dark:text-state-success-400" aria-hidden="true" />
                 }
                 @case ('error') {
-                  <ng-icon name="heroExclamationTriangle" class="size-4 text-amber-500 dark:text-amber-400" aria-hidden="true" />
+                  <ng-icon name="heroExclamationTriangle" class="size-4 text-state-warning-500 dark:text-state-warning-400" aria-hidden="true" />
                 }
               }
             </div>
@@ -67,7 +67,7 @@ import { BackgroundTask, BackgroundTaskService } from '../../services/background
                 <button
                   type="button"
                   (click)="view(task)"
-                  class="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700 focus:outline-2 focus:outline-offset-2 focus:outline-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+                  class="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-primary-accessible hover:underline focus:outline-2 focus:outline-offset-2 focus:outline-primary-500 dark:text-primary-accessible-dark"
                 >
                   {{ task.viewLabel ?? 'View' }}
                   <ng-icon name="heroArrowRight" class="size-4" aria-hidden="true" />
@@ -90,8 +90,7 @@ import { BackgroundTask, BackgroundTaskService } from '../../services/background
     </div>
   `,
   styles: `
-    @import "tailwindcss";
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../styles/theme.css";
 
     .bg-toast-enter {
       animation: bg-toast-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -126,7 +125,7 @@ import { BackgroundTask, BackgroundTaskService } from '../../services/background
       height: 300%;
       transform: translate(-50%, -50%);
       border-radius: 50%;
-      background-color: var(--color-blue-500);
+      background-color: var(--color-state-info-500);
       animation: bg-toast-pulse-ring 1.25s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
     }
     .bg-toast-dot::after {
@@ -137,12 +136,12 @@ import { BackgroundTask, BackgroundTaskService } from '../../services/background
       width: 100%;
       height: 100%;
       border-radius: 50%;
-      background-color: var(--color-blue-500);
+      background-color: var(--color-state-info-500);
       animation: bg-toast-pulse-dot 1.25s cubic-bezier(0.455, 0.03, 0.515, 0.955) -0.4s infinite;
     }
     :host-context(.dark) .bg-toast-dot::before,
     :host-context(.dark) .bg-toast-dot::after {
-      background-color: var(--color-blue-400);
+      background-color: var(--color-state-info-400);
     }
 
     @keyframes bg-toast-pulse-ring {

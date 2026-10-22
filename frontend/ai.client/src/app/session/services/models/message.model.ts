@@ -43,6 +43,27 @@ export interface FileAttachmentData {
 }
 
 /**
+ * A Drive folder attached to a user message, for the folder chip
+ * (docs/specs/drive-folder-attachments.md §4.7). Built from the folder row at
+ * send time, and from the `<folder …>` manifest in the stored message on reload,
+ * so a reloaded chip shows exactly the files the model was given.
+ */
+export interface FolderAttachmentData {
+  /** Known for a message sent in this tab; absent on one rebuilt from history. */
+  folderAttachId?: string;
+  name: string;
+  /** The connector's display name ("Google Drive for Employees"). */
+  source: string | null;
+  /** expanding | ready | partial | failed, as of the send. */
+  status: string;
+  fileCount: number;
+  /** Paths inside the folder, as the manifest lists them (bounded by it). */
+  files: string[];
+  /** Files beyond `files` the manifest counted but did not list. */
+  moreCount: number;
+}
+
+/**
  * Citation data from RAG retrieval.
  * Sent as SSE events before the assistant response starts streaming.
  */
@@ -68,6 +89,8 @@ export interface ToolUseData {
   result?: {
     content: ToolResultContent[];
     status: 'success' | 'error';
+    /** The tool's MCP `structuredContent`, when it returned one. */
+    structuredContent?: unknown;
   };
   /** Tool execution status */
   status?: 'pending' | 'complete' | 'error';
@@ -99,8 +122,46 @@ export interface ContentBlock {
   document?: Record<string, unknown> | null;
   /** Reasoning content (if type is reasoningContent) - extended thinking from Claude 3.7+, GPT, etc. */
   reasoningContent?: ReasoningContentData | null;
+  /**
+   * How long the model spent on this reasoning block, in ms — the "Thought for
+   * 17s" readout on its header.
+   *
+   * Sits here rather than inside `reasoningContent` on purpose: that nested
+   * object is Bedrock's Converse shape, and a display-only number belongs
+   * outside it (the same reason `tool_group_summary` is kept off the content
+   * blocks — see CLAUDE.md).
+   *
+   * Live-only by construction. Only the stream parser sets it; `GET /messages`
+   * never does, so a reloaded conversation falls back to the plain "Thinking"
+   * header rather than showing a duration nobody measured. Same posture as the
+   * tool rail's durations.
+   */
+  reasoningDurationMs?: number;
+  /** Folder attachment (if type is folderAttachment) - for the folder chip in user messages */
+  folderAttachment?: FolderAttachmentData;
   /** File attachment metadata (if type is fileAttachment) - for displaying file badges in user messages */
   fileAttachment?: FileAttachmentData | null;
+}
+
+/** Implicit signals (docs/specs/response-feedback.md §10): a closed enum, never summed with thumbs. */
+export type ImplicitSignalKind = 'copy' | 'continue';
+
+/** Reason codes a thumbs-down may carry — the six buckets of
+ * docs/specs/response-feedback.md §6. A closed enum, never free text. */
+export type FeedbackReason = 'wrong' | 'instructions' | 'length' | 'tool_failed' | 'outdated' | 'other';
+
+/**
+ * A user's thumb on an assistant message. Persisted content-free on the
+ * sessions-metadata table beside the message's cost row and merged onto
+ * `metadata.feedback` by `GET /sessions/{id}/messages`.
+ */
+export interface MessageFeedback {
+  /** +1 thumbs up, -1 thumbs down */
+  value: 1 | -1;
+  reason?: FeedbackReason;
+  /** Index of the user message sent as a retry-with-correction after this thumb. */
+  retryMessageId?: number;
+  updatedAt: string;
 }
 
 /**
@@ -120,6 +181,26 @@ export interface Message {
   metadata?: Record<string, unknown> | null;
   /** RAG citations from knowledge base retrieval (assistant messages only) */
   citations?: Citation[];
+  /**
+   * True for a follow-up the user sent **while this turn was still running**,
+   * which the backend injected at a tool boundary (see
+   * docs/specs/mid-turn-steering.md).
+   *
+   * It is a real user message and renders as one, but it is not the start of a
+   * turn — the turn it interrupted is still the turn in progress. Turn grouping
+   * in the message list keys off this so a steer does not split one response
+   * into two groups (and does not move the scroll reserve mid-stream).
+   */
+  steering?: boolean;
+  /**
+   * Set on a user message whose request was refused before any of the
+   * response streamed — the BFF or the Runtime answered non-2xx, or the
+   * connection never opened. The agent never saw it, so the bubble says so
+   * and offers a retry (`FailedSendService`) instead of looking delivered.
+   * Client-only: the backend never persisted the message, so a reload drops
+   * the bubble along with the flag.
+   */
+  sendFailure?: { reason: string };
 }
 
 // ============================================================================

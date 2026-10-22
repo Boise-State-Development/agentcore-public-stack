@@ -1,0 +1,15 @@
+#include "Base.xcconfig"
+#include "Version.xcconfig"
+
+SWIFT_OPTIMIZATION_LEVEL = -Onone
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG
+GCC_OPTIMIZATION_LEVEL = 0
+GCC_PREPROCESSOR_DEFINITIONS = DEBUG=1
+DEBUG_INFORMATION_FORMAT = dwarf
+ENABLE_TESTABILITY = YES
+ONLY_ACTIVE_ARCH = YES
+MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE
+COPY_PHASE_STRIP = NO
+
+// Last so it wins: untracked signing and bundle id overrides.
+#include? "Local.xcconfig"

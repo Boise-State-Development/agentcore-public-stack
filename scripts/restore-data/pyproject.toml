@@ -18,4 +18,5 @@ dev = [
 package = false
 
 # Security: constrain transitive cryptography to patched OpenSSL (GHSA-537c-gmf6-5ccf)
-constraint-dependencies = ["cryptography>=48.0.1"]
+# and to the PKCS#7 Bleichenbacher-oracle fix (CVE-2026-69247), patched in 50.0.0.
+constraint-dependencies = ["cryptography>=50.0.1"]

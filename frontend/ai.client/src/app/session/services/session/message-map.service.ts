@@ -1,12 +1,20 @@
 // services/message-map.service.ts (updated integration)
 import { EffectRef, Injectable, Injector, Signal, WritableSignal, signal, effect, inject } from '@angular/core';
-import { ContentBlock, FileAttachmentData, Message } from '../models/message.model';
+import { ContentBlock, FileAttachmentData, FolderAttachmentData, Message } from '../models/message.model';
+import { parseFolderManifests } from './folder-manifest';
 import { StreamParserService } from '../chat/stream-parser.service';
 import { PendingInterrupt, SessionService } from './session.service';
 import { FileUploadService, FileMetadata } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
+import { UserQuestionService } from '../../../services/user-question/user-question.service';
+import { validateUserQuestions } from '../../../shared/utils/stream-parser';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
+import { ToolInsightService } from '../chat/tool-insight.service';
+import { normalizeSteeringMessages } from '../chat/steering';
+import { matchToolResultsToToolUses } from './tool-results';
+import { ChatStateService } from '../chat/chat-state.service';
+import { ContextBreakdown } from '../models/content-types';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
 const ATTACHED_FILES_PATTERN = /\n\n\[Attached files: ([^\]]+)\]$/;
@@ -55,6 +63,19 @@ export class MessageMapService {
   readonly isLoadingSession = this._isLoadingSession.asReadonly();
 
   /**
+   * Sessions whose last fetch was served from the conversation archive
+   * (`fromArchive` on the messages response): Memory's events expired, so the
+   * agent would start with no context and a new turn would overwrite the
+   * archived history. The composer is replaced while a session is in here.
+   */
+  private archiveServedSessions = signal<ReadonlySet<string>>(new Set());
+
+  /** Whether the session's history was served from the conversation archive. */
+  isArchiveServed(sessionId: string | null | undefined): boolean {
+    return !!sessionId && this.archiveServedSessions().has(sessionId);
+  }
+
+  /**
    * Set the loading session state.
    * Call this before loadMessagesForSession to show skeleton immediately on route change.
    */
@@ -67,8 +88,11 @@ export class MessageMapService {
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
+  private userQuestionService = inject(UserQuestionService);
   private mcpAppState = inject(McpAppStateService);
+  private toolInsight = inject(ToolInsightService);
   private injector = inject(Injector);
+  private chatStateService = inject(ChatStateService);
 
   /**
    * Start streaming for a session.
@@ -198,7 +222,12 @@ export class MessageMapService {
    * @param content - The text content of the message
    * @param fileAttachments - Optional array of file attachment metadata
    */
-  addUserMessage(sessionId: string, content: string, fileAttachments?: FileAttachmentData[]): Message {
+  addUserMessage(
+    sessionId: string,
+    content: string,
+    fileAttachments?: FileAttachmentData[],
+    folderAttachments?: FolderAttachmentData[],
+  ): Message {
     // Get current message count for this session to compute ID
     const currentMessages = this.messageMap()[sessionId]?.() ?? [];
     const messageIndex = currentMessages.length;
@@ -217,6 +246,12 @@ export class MessageMapService {
           fileAttachment: attachment
         });
       }
+    }
+
+    // Folder chips after the files: a folder is one attachment, shown as one
+    // chip however many files it holds (drive-folder spec §4.7).
+    for (const folder of folderAttachments ?? []) {
+      contentBlocks.push({ type: 'folderAttachment', folderAttachment: folder });
     }
 
     // Add text content block
@@ -241,6 +276,31 @@ export class MessageMapService {
     });
 
     return message;
+  }
+
+  /**
+   * Flag a user message as not sent — see `Message.sendFailure`. Replaces the
+   * message object rather than mutating it so OnPush bubbles re-render.
+   */
+  markSendFailed(sessionId: string, messageId: string, reason: string): void {
+    this.messageMap()[sessionId]?.update(msgs =>
+      msgs.map(m => (m.id === messageId ? { ...m, sendFailure: { reason } } : m)),
+    );
+  }
+
+  /**
+   * Drop a message the server never received, ahead of resending it. Only a
+   * trailing message is safe to drop: ids are `msg-{sessionId}-{index}`, so
+   * removing one from the middle would leave every later id pointing at a
+   * different index than the server will assign on reload. Returns whether
+   * it was removed.
+   */
+  removeTrailingMessage(sessionId: string, messageId: string): boolean {
+    const sessionSignal = this.messageMap()[sessionId];
+    const msgs = sessionSignal?.() ?? [];
+    if (msgs.length === 0 || msgs[msgs.length - 1].id !== messageId) return false;
+    sessionSignal!.set(msgs.slice(0, -1));
+    return true;
   }
 
   /**
@@ -297,10 +357,20 @@ export class MessageMapService {
         return [...continuationPrefix, ...streamMessages];
       }
 
-      // Find the index of the last user message
+      // Find the index of the last TURN-STARTING user message.
+      //
+      // A mid-turn steer is a user message that does not start a turn — it is
+      // part of the response already streaming, and the parser is still
+      // emitting it in `streamMessages` every tick. Treating it as the
+      // truncation point moves that point forward past itself, so the stream's
+      // copy is appended again on the next tick, and the next, and the next:
+      // one bubble per sync tick (observed live in dev as ~36 copies of one
+      // follow-up). Skipping it keeps the truncation anchored on the user
+      // message that actually opened the turn, which is what makes repeated
+      // syncs idempotent. Same predicate turn grouping uses.
       let lastUserMessageIndex = -1;
       for (let i = existingMessages.length - 1; i >= 0; i--) {
-        if (existingMessages[i].role === 'user') {
+        if (existingMessages[i].role === 'user' && !existingMessages[i].steering) {
           lastUserMessageIndex = i;
           break;
         }
@@ -367,6 +437,23 @@ export class MessageMapService {
   }
 
   /**
+   * Seed the context meter's breakdown from persisted history. Only the
+   * conversation's last assistant message counts: the backend stores the
+   * breakdown on each turn's last message, so an older one would describe a
+   * prompt that is no longer the latest — and a last turn without one (a
+   * provider that can't attribute) must read "no breakdown", not an old one.
+   * Never overwrites a breakdown a live stream already set.
+   */
+  private hydrateContextBreakdown(sessionId: string, messages: Message[]): void {
+    if (this.chatStateService.contextBreakdownFor(sessionId)) return;
+    const last = [...messages].reverse().find((m) => m.role === 'assistant');
+    const breakdown = last?.metadata?.['contextBreakdown'] as ContextBreakdown | undefined;
+    if (breakdown && Array.isArray(breakdown.partitions) && breakdown.partitions.length > 0) {
+      this.chatStateService.seedContextBreakdown(sessionId, breakdown);
+    }
+  }
+
+  /**
    * Fetch a session's messages + file metadata, reconstruct tool results and
    * file attachments, and replace the message map entry. Shared by the
    * initial load and the post-resume reconcile.
@@ -390,7 +477,15 @@ export class MessageMapService {
       }
 
       // Process messages to match tool results and restore file attachments
-      let processedMessages = this.matchToolResultsToToolUses(messagesResponse.messages);
+      let processedMessages = matchToolResultsToToolUses(messagesResponse.messages);
+      // Mid-turn steering rides inside the tool-result message, so a reload
+      // hands back a user message of `[toolResult…, text]` whose text is still
+      // wrapped in the tags the model reads. Unwrap it, drop the results
+      // (already folded into their toolUse above) and mark it as steering so
+      // turn grouping doesn't split the response it interrupted. Runs after
+      // the fold and before file restoration, both of which key on shapes it
+      // leaves intact. See docs/specs/mid-turn-steering.md.
+      processedMessages = normalizeSteeringMessages(processedMessages);
       processedMessages = this.restoreFileAttachments(processedMessages, filesByName);
 
       // Update the message map with loaded messages
@@ -406,6 +501,8 @@ export class MessageMapService {
         return updated;
       });
 
+      this.setArchiveServed(sessionId, messagesResponse.fromArchive === true);
+
       // Hydrate OAuth consent service from any persisted pending interrupts
       // so a reload restores the consent prompt anchored to the right turn.
       // Anchor falls back to the most recent assistant message in history,
@@ -413,13 +510,43 @@ export class MessageMapService {
       // URL is intentionally omitted — fresh URL is fetched lazily on Connect.
       this.hydratePendingInterrupts(sessionId, messagesResponse.pendingInterrupts, processedMessages);
 
+      // The context meter's breakdown survives a reload on the last
+      // assistant message's metadata; session metadata has no copy of it.
+      this.hydrateContextBreakdown(sessionId, processedMessages);
+
       // MCP Apps (SEP-1865): re-seed the App registry from the persisted
       // resources the backend replays on this response. The inline
       // `ui_resource` event never re-streams, so without this the
       // `mcp-app-frame` falls back to a plain tool card after a refresh.
-      // session.page resets McpAppStateService before this load, so the
-      // non-clobbering seed lands cleanly.
-      this.mcpAppState.seedFromHydration(messagesResponse.uiResources ?? []);
+      // Only reached on a real fetch — `loadMessagesForSession` skips this
+      // whole path once a conversation's messages are cached, which is why
+      // McpAppStateService retains per conversation instead of resetting on
+      // navigation. The seed is non-clobbering, so it can't undo a live
+      // `recordLive` entry for the same invocation.
+      this.mcpAppState.seedFromHydration(
+        sessionId,
+        messagesResponse.uiResources ?? [],
+      );
+
+      // Tool-batch summaries: same reasoning, same non-clobbering seed. The
+      // `tool_group_summary` event is emitted once mid-turn and never
+      // re-streams, so without this a refreshed conversation silently drops
+      // every rail from the model's prose ("Found the Syllabus Acknowledgment
+      // assignment in BIO 101") back to the client-side formatter
+      // ("Listed 12 assignments"). Durations are deliberately not replayed —
+      // see ToolInsightService.
+      this.toolInsight.seedFromHydration(
+        sessionId,
+        messagesResponse.toolSummaries ?? [],
+      );
+
+      // Source-provenance verdicts: same contract again. The one that matters
+      // is `quote_unsupported` — a warning the user saw live that silently
+      // disappeared on reload would leave the answer looking clean.
+      this.toolInsight.seedProvenanceFromHydration(
+        sessionId,
+        messagesResponse.sourceProvenance ?? [],
+      );
     } finally {
       if (showLoading) {
         this._isLoadingSession.set(null);
@@ -435,6 +562,50 @@ export class MessageMapService {
    * anchor to the most recent assistant message, mirroring the live-stream
    * behavior in stream-parser.service.ts.
    */
+  /**
+   * Re-render a clarifying-question picker from its persisted breadcrumb.
+   *
+   * The questions arrive as a JSON string (DynamoDB would otherwise coerce
+   * numbers nested inside them), so this is the one place in the SPA that
+   * parses untrusted stored JSON back into questions. Both failure modes —
+   * unparseable text and a parsed payload that is not renderable — drop the
+   * prompt rather than render a broken one: a picker with no options is a
+   * dead end the user cannot answer or dismiss, whereas a missing picker
+   * leaves them able to retype their request.
+   */
+  private hydrateUserQuestion(
+    sessionId: string,
+    interrupt: PendingInterrupt,
+    messageId: string | undefined,
+  ): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(interrupt.questions ?? '');
+    } catch {
+      console.warn(
+        'Skipping user_question interrupt with unparseable questions',
+        interrupt.interruptId,
+      );
+      return;
+    }
+
+    if (!validateUserQuestions(parsed)) {
+      console.warn(
+        'Skipping user_question interrupt with unrenderable questions',
+        interrupt.interruptId,
+      );
+      return;
+    }
+
+    this.userQuestionService.requestAnswers({
+      interruptId: interrupt.interruptId,
+      toolUseId: interrupt.toolUseId ?? '',
+      questions: parsed,
+      messageId,
+      sessionId,
+    });
+  }
+
   private hydratePendingInterrupts(
     sessionId: string,
     interrupts: PendingInterrupt[] | undefined,
@@ -453,6 +624,11 @@ export class MessageMapService {
     for (const interrupt of interrupts) {
       const messageId = interrupt.triggeringMessageId ?? lastAssistantId;
       const kind = interrupt.kind ?? 'oauth';
+
+      if (kind === 'user_question') {
+        this.hydrateUserQuestion(sessionId, interrupt, messageId);
+        continue;
+      }
 
       if (kind === 'tool_approval') {
         if (!interrupt.toolName) {
@@ -521,8 +697,20 @@ export class MessageMapService {
       // Process each content block
       const newContent: ContentBlock[] = [];
       const fileAttachmentBlocks: ContentBlock[] = [];
+      const folderAttachmentBlocks: ContentBlock[] = [];
 
-      for (const block of message.content) {
+      for (const rawBlock of message.content) {
+        let block = rawBlock;
+        // A folder's manifest sits in the stored text, ahead of the files
+        // marker; read it back as a chip and take it out of the text.
+        if (block.type === 'text' && block.text && block.text.includes('<folder ')) {
+          const parsed = parseFolderManifests(block.text);
+          for (const folder of parsed.folders) {
+            folderAttachmentBlocks.push({ type: 'folderAttachment', folderAttachment: folder });
+          }
+          block = { ...block, text: parsed.text };
+          if (!parsed.text) continue;
+        }
         if (block.type === 'text' && block.text) {
           // Check for attached files marker
           const match = block.text.match(ATTACHED_FILES_PATTERN);
@@ -557,116 +745,14 @@ export class MessageMapService {
         }
       }
 
-      // Return message with file attachments first, then other content
-      if (fileAttachmentBlocks.length > 0) {
+      // Return message with file attachments first, then folders, then other content
+      if (fileAttachmentBlocks.length > 0 || folderAttachmentBlocks.length > 0) {
         return {
           ...message,
-          content: [...fileAttachmentBlocks, ...newContent]
+          content: [...fileAttachmentBlocks, ...folderAttachmentBlocks, ...newContent]
         };
       }
 
-      return message;
-    });
-  }
-
-  /**
-   * Match tool results from user messages to their corresponding tool uses in assistant messages.
-   * This reconstructs the tool state as it appears during streaming.
-   *
-   * The backend stores tool_use and tool_result as separate content blocks in separate messages:
-   * - Assistant message: contains toolUse blocks
-   * - User message: contains toolResult blocks
-   *
-   * This method merges the results into the toolUse blocks for proper UI display.
-   *
-   * @param messages - Array of messages from the API
-   * @returns Processed messages with tool results embedded in tool uses
-   */
-  private matchToolResultsToToolUses(messages: Message[]): Message[] {
-    // Create a map of toolUseId -> tool result for quick lookup
-    const toolResultMap = new Map<string, { content: any[]; status: 'success' | 'error' }>();
-
-    // First pass: collect all tool results from user messages
-    // Note: Tool results are now embedded in toolUse.result, but we still check
-    // for legacy toolResult blocks for backwards compatibility
-    for (const message of messages) {
-      if (message.role === 'user') {
-        for (const contentBlock of message.content) {
-          // Check for legacy toolResult blocks (deprecated format)
-          if (contentBlock.type === 'toolResult' && contentBlock.toolResult) {
-            const toolResult = contentBlock.toolResult as any;
-            const toolUseId = toolResult.toolUseId;
-            if (toolUseId) {
-              // Determine status from explicit status field or by inspecting content
-              let status: 'success' | 'error' = toolResult.status || 'success';
-
-              // Check if content indicates an error (for backwards compatibility with old format)
-              if (status === 'success' && toolResult.content && Array.isArray(toolResult.content)) {
-                for (const contentItem of toolResult.content) {
-                  // Check if JSON content has success: false
-                  if (contentItem.json && typeof contentItem.json === 'object') {
-                    if (contentItem.json.success === false || contentItem.json.error) {
-                      status = 'error';
-                      break;
-                    }
-                  }
-                  // Check if text content indicates error
-                  if (contentItem.text && typeof contentItem.text === 'string') {
-                    try {
-                      const parsed = JSON.parse(contentItem.text);
-                      if (parsed.success === false || parsed.error) {
-                        status = 'error';
-                        break;
-                      }
-                    } catch {
-                      // Not JSON, ignore
-                    }
-                  }
-                }
-              }
-
-              toolResultMap.set(toolUseId, {
-                content: toolResult.content || [],
-                status: status
-              });
-            }
-          }
-        }
-      }
-    }
-
-    // Second pass: match results to tool uses
-    return messages.map(message => {
-      if (message.role === 'assistant') {
-        // Process content blocks to add results to tool uses
-        const updatedContent = message.content.map(contentBlock => {
-          if ((contentBlock.type === 'toolUse' || contentBlock.type === 'tool_use') && contentBlock.toolUse) {
-            const toolUse = contentBlock.toolUse as any;
-            const toolUseId = toolUse.toolUseId;
-
-            // Check if we have a result for this tool use
-            if (toolUseId && toolResultMap.has(toolUseId)) {
-              const result = toolResultMap.get(toolUseId)!;
-
-              // Create updated toolUse with embedded result
-              return {
-                ...contentBlock,
-                toolUse: {
-                  ...toolUse,
-                  result: result,
-                  status: result.status === 'error' ? 'error' : 'complete'
-                }
-              };
-            }
-          }
-          return contentBlock;
-        });
-
-        return {
-          ...message,
-          content: updatedContent
-        };
-      }
       return message;
     });
   }
@@ -681,6 +767,22 @@ export class MessageMapService {
     this.messageMap.update(map => {
       const { [sessionId]: _, ...rest } = map;
       return rest;
+    });
+    this.setArchiveServed(sessionId, false);
+  }
+
+  private setArchiveServed(sessionId: string, served: boolean): void {
+    if (this.archiveServedSessions().has(sessionId) === served) {
+      return;
+    }
+    this.archiveServedSessions.update(set => {
+      const next = new Set(set);
+      if (served) {
+        next.add(sessionId);
+      } else {
+        next.delete(sessionId);
+      }
+      return next;
     });
   }
 

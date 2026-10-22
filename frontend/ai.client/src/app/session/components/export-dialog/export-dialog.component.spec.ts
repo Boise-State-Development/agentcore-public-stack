@@ -5,7 +5,8 @@ import { of } from 'rxjs';
 import { Dialog, DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { ExportDialogComponent } from './export-dialog.component';
+import { expectNamedDialog, openInCdkDialog } from '../../../../testing/cdk-dialog';
+import { ExportDialogComponent, ExportDialogData } from './export-dialog.component';
 import { ExportService } from '../../services/export/export.service';
 import { ExportTargetConnector } from '../../services/export/export.model';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
@@ -50,8 +51,7 @@ function setup(
   const consentService = {
     completion: signal<unknown>(null),
     inFlightProviders: signal(new Set<string>()),
-    requestConsent: vi.fn(),
-    openConsentPopup: vi.fn().mockResolvedValue(true),
+    startUserConsent: vi.fn().mockResolvedValue(true),
     acknowledgeCompletion: vi.fn(),
   };
   const toast = { error: vi.fn(), success: vi.fn() };
@@ -135,7 +135,7 @@ describe('ExportDialogComponent', () => {
     await (component['save'] as () => Promise<void>)();
 
     expect(connectorsService.initiateConsent).toHaveBeenCalledWith('gdrive');
-    expect(consentService.openConsentPopup).toHaveBeenCalledWith('gdrive');
+    expect(consentService.startUserConsent).toHaveBeenCalledWith('gdrive', 'https://auth.example/x');
     // The save itself is deferred until consent completes.
     expect(exportService.exportSession).not.toHaveBeenCalled();
   });
@@ -234,5 +234,40 @@ describe('ExportDialogComponent', () => {
 
     (component['cancel'] as () => void)();
     expect(dialogRef.close).toHaveBeenCalledWith(undefined);
+  });
+});
+
+describe('ExportDialogComponent in a CDK dialog', () => {
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ExportService, useValue: { listExportTargets: vi.fn().mockResolvedValue([CONNECTED]) } },
+        { provide: UserConnectorsService, useValue: { initiateConsent: vi.fn() } },
+        {
+          provide: OAuthConsentService,
+          useValue: { completion: signal(null), inFlightProviders: signal(new Set<string>()) },
+        },
+        { provide: ToastService, useValue: { error: vi.fn() } },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.inject(Dialog).closeAll());
+
+  it('names the dialog from its title and closes on Escape', async () => {
+    const { ref, container } = await openInCdkDialog<ExportDialogComponent, ExportDialogData>(ExportDialogComponent, {
+      data: { sessionId: 'sess-1', title: 'My Chat' },
+    });
+    expectNamedDialog(container, { name: 'Save conversation' });
+
+    let closed = false;
+    ref.closed.subscribe(() => (closed = true));
+    container
+      .querySelector('app-dialog-shell')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(closed).toBe(true);
   });
 });

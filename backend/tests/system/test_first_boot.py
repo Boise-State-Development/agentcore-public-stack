@@ -91,19 +91,6 @@ class TestCognitoService:
         # Should not raise
         svc.delete_user("admin")
 
-    def test_disable_self_signup(self):
-        svc = self._make_service()
-        svc.disable_self_signup()
-        svc._client.update_user_pool.assert_called_once()
-        call_kwargs = svc._client.update_user_pool.call_args[1]
-        assert call_kwargs["AdminCreateUserConfig"]["AllowAdminCreateUserOnly"] is True
-
-    def test_disable_self_signup_raises_on_disabled(self):
-        with patch.dict("os.environ", {}, clear=True):
-            svc = CognitoService(user_pool_id=None)
-        with pytest.raises(RuntimeError, match="not enabled"):
-            svc.disable_self_signup()
-
 
 # =========================================================================
 # First-boot endpoint tests
@@ -111,7 +98,12 @@ class TestCognitoService:
 
 
 class TestFirstBootEndpoint:
-    """Validates: Requirements 2.3, 2.4, 2.5, 2.6, 2.7, 2.8."""
+    """Validates: Requirements 2.3, 2.4, 2.5, 2.7, 2.8.
+
+    Requirement 2.6 (first-boot disables self-signup) was dropped: self-signup
+    is declared by `config.cognito.selfSignUpEnabled` in the CDK config, which
+    every deploy re-asserts over any runtime change.
+    """
 
     def _make_mocks(self):
         """Create mocked dependencies for the first-boot endpoint."""
@@ -181,7 +173,6 @@ class TestFirstBootEndpoint:
         created_profile = mock_user_repo.create_user.call_args[0][0]
         assert "system_admin" in created_profile.roles
         mock_settings.mark_first_boot_completed.assert_called_once()
-        mock_cognito.disable_self_signup.assert_called_once()
 
     async def test_rejects_when_already_completed(self):
         """Req 2.7: returns 409 if first-boot already done."""
@@ -254,19 +245,6 @@ class TestFirstBootEndpoint:
         assert exc_info.value.status_code == 409
 
         mock_cognito.delete_user.assert_called_once_with("admin")
-
-    async def test_disable_self_signup_failure_is_non_fatal(self):
-        """Req 2.6: disable_self_signup failure doesn't fail the endpoint."""
-        mock_settings, mock_cognito, mock_user_repo = self._make_mocks()
-        mock_cognito.disable_self_signup.side_effect = ClientError(
-            {"Error": {"Code": "InternalErrorException", "Message": "oops"}},
-            "UpdateUserPool",
-        )
-
-        result = await self._call_first_boot(mock_settings, mock_cognito, mock_user_repo)
-        # Should still succeed
-        assert result.success is True
-        assert result.user_id == "sub-uuid-123"
 
     async def test_user_profile_has_correct_fields(self):
         """Req 2.4: user record has system_admin role and correct fields."""

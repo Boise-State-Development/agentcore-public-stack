@@ -1,11 +1,12 @@
-import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector, effect, untracked } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { ChatStateService } from '../../../../session/services/chat/chat-state.service';
@@ -17,11 +18,53 @@ import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../confirmation-dialog';
 import { parseIso } from '../../../../utils/date';
+import { InViewDirective } from './in-view.directive';
+import { ProjectsService } from '../../../../projects/services/projects.service';
+import { FEATURES } from '../../../../services/features';
+import { UNTITLED_SESSION_TITLE } from './session-title-filter';
+import { bindingQueryParams } from '../../../../session/services/session/conversation-binding.service';
+import { appPin, appPinOff } from './pin-icons';
+
+/**
+ * One row of a time bucket: a plain conversation, or the tasks of one project
+ * under a small project heading. Grouping happens INSIDE each bucket, so the
+ * buckets and their order stay exactly as they were (shared-projects §6).
+ */
+export type SessionListEntry =
+  | { kind: 'session'; session: SessionMetadata }
+  | { kind: 'project'; projectId: string; name: string; sessions: SessionMetadata[] };
+
+/** The status dot a conversation row shows, if any (see `rowIndicator`). */
+export type SessionRowIndicator = 'streaming' | 'awaiting-input' | 'unread' | null;
+
+/** Where a project's group sits: where its most recent task in the bucket would. */
+export function groupProjectSessions(
+  sessions: SessionMetadata[],
+  projectNames: ReadonlyMap<string, string>,
+): SessionListEntry[] {
+  const entries: SessionListEntry[] = [];
+  const groups = new Map<string, Extract<SessionListEntry, { kind: 'project' }>>();
+  for (const session of sessions) {
+    const projectId = session.preferences?.projectId;
+    if (!projectId) {
+      entries.push({ kind: 'session', session });
+      continue;
+    }
+    let group = groups.get(projectId);
+    if (!group) {
+      group = { kind: 'project', projectId, name: projectNames.get(projectId) ?? 'Project', sessions: [] };
+      groups.set(projectId, group);
+      entries.push(group);
+    }
+    group.sessions.push(session);
+  }
+  return entries;
+}
 
 @Component({
   selector: 'app-session-list',
-  imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen })],
+  imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -35,6 +78,15 @@ export class SessionList {
   private router = inject(Router);
   private injector = inject(Injector);
   private userService = inject(UserService);
+  private projectsService = inject(ProjectsService);
+  /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
+  private readonly projectsOn = inject(FEATURES).projects;
+
+  /** Project names for the group headings; a project not in the list reads "Project". */
+  private readonly projectNames = computed(
+    () => new Map(this.projectsService.projects$().map(p => [p.projectId, p.name] as const)),
+  );
+  private projectsRequested = false;
 
   /**
    * Signal tracking which session is currently being deleted.
@@ -87,8 +139,11 @@ export class SessionList {
    * Today, Yesterday, Last 7 Days, Last 30 Days, Older.
    */
   readonly groupedSessions = computed(() => {
-    const sessions = this.sessions();
-    if (!sessions || sessions.length === 0) return [];
+    // Pinned conversations get their own group on top and leave their time bucket.
+    const pinned = this.sessionService.pinnedSessions();
+    const pinnedIds = this.sessionService.pinnedSessionIds();
+    const sessions = this.sessions()?.filter(s => !pinnedIds.has(s.sessionId)) ?? [];
+    if (sessions.length === 0 && pinned.length === 0) return [];
 
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -120,8 +175,41 @@ export class SessionList {
     }
 
     // Only return groups that have sessions
-    return groups.filter(g => g.sessions.length > 0);
+    const names = this.projectNames();
+    const timeGroups = groups
+      .filter(g => g.sessions.length > 0)
+      .map(g => ({
+        ...g,
+        entries: this.projectsOn
+          ? groupProjectSessions(g.sessions, names)
+          : g.sessions.map(session => ({ kind: 'session' as const, session })),
+      }));
+    if (pinned.length === 0) return timeGroups;
+    return [
+      {
+        label: 'Pinned',
+        sessions: pinned,
+        entries: pinned.map(session => ({ kind: 'session' as const, session }) as SessionListEntry),
+      },
+      ...timeGroups,
+    ];
   });
+
+  constructor() {
+    // Project names load once, and only for someone who has a project task. The
+    // projects page shares this list, so a project created or renamed there is
+    // already current here.
+    effect(() => {
+      if (this.projectsRequested || !this.projectsOn) return;
+      if (!this.sessions()?.some(s => s.preferences?.projectId)) return;
+      this.projectsRequested = true;
+      untracked(() => {
+        if (this.projectsService.available$() === null && !this.projectsService.loading$()) {
+          void this.projectsService.load();
+        }
+      });
+    });
+  }
 
   /**
    * Computed signal for pagination token.
@@ -131,12 +219,74 @@ export class SessionList {
     return response?.nextToken ?? null;
   });
 
+  /** The end-of-list sentinel was last reported on (or just below) screen. */
+  protected readonly endOfListVisible = signal(false);
+
+  /** Bumped after every page attempt, so the sentinel re-reports once it lays out. */
+  protected readonly endOfListRemeasure = signal(0);
+
+  protected readonly loadMoreError = this.sessionService.loadMoreSessionsError;
+
   /**
-   * Computed signal for loading state.
+   * Fetch the next page while the end of the list is in view.
+   *
+   * Each sighting pays for one page. It is spent the moment the fetch starts,
+   * and the sentinel is re-measured once the attempt settles — after the new
+   * rows have laid out. Without that, the effect re-runs the instant the page
+   * lands, still holding the stale "visible" from before the rows pushed the
+   * sentinel down, and every scroll to the bottom fetches a page too many.
+   *
+   * The re-measure also keeps a short list pulling: a page that leaves the
+   * sentinel on screen (a tall window, or a page dropped because a reload
+   * overtook it) reports visible again and fetches the next. A sighting that
+   * arrives mid-reload waits for it rather than being spent. An error stops
+   * the loop until retried.
+   */
+  private readonly loadMoreEffect = effect(() => {
+    if (!this.endOfListVisible() || !this.nextToken()) return;
+    if (this.sessionService.isLoadingMoreSessions() || this.loadMoreError()) return;
+    if (this.sessionsResource.isLoading()) return;
+    untracked(() => {
+      this.endOfListVisible.set(false);
+      this.loadMore();
+    });
+  });
+
+  protected retryLoadMore(): void {
+    this.loadMore();
+  }
+
+  private loadMore(): void {
+    void this.sessionService.loadMoreSessions().finally(() => this.endOfListRemeasure.update(n => n + 1));
+  }
+
+  /**
+   * Computed signal for loading state — i.e. "we have nothing to draw yet".
+   *
+   * `value()` alone is not enough. The loader short-circuits to `null` while
+   * `sessionsRequest` is still false, and that is the ordinary cold-start path:
+   * `SessionService` is constructed during the APP_INITIALIZER pass (via
+   * `AnnouncementModalService` -> `MessageMapService`), and Angular runs every
+   * initializer synchronously before awaiting any of them — so the BFF
+   * `bootstrap()` promise is still in flight and `isAuthenticated()` is false.
+   * The eager-fetch branch in the constructor is skipped, the resource resolves
+   * `null`, and the auth effect only enables loading afterwards. `reload()`
+   * keeps the previous value, so `null` survives the entire real fetch: testing
+   * `=== undefined` reported "loaded, no sessions" and the sidebar rendered the
+   * "No Chats Yet" empty state instead of the skeleton.
+   *
+   * So: no API response yet (`undefined` before the first load resolves, `null`
+   * while it is short-circuited) means loading. An empty `sessions` array is a
+   * real response and must fall through to the empty state.
+   *
+   * `error()` is read first — reading `value()` on an errored resource throws.
    */
   readonly isLoading = computed(() => {
-    const value = this.sessionsResource.value();
-    return value === undefined;
+    if (this.sessionsResource.error()) return false;
+    if (this.sessionsResource.value() != null) return false;
+    // Locally created sessions can exist before the API answers; draw those
+    // rather than covering them with a skeleton.
+    return this.groupedSessions().length === 0;
   });
 
   /**
@@ -185,6 +335,30 @@ export class SessionList {
   }
 
   /**
+   * Whether this conversation's turn is paused waiting on the user (OAuth
+   * consent, tool approval, a clarifying question, a browser sign-in), which
+   * shows the amber dot. Precedence on the row: streaming > awaiting input >
+   * unread. The server derives `awaitingInput` only while the pause can still
+   * be resumed; ChatStateService layers this tab's live knowledge on top (a
+   * background stream that just ended on a prompt, or a prompt just answered).
+   */
+  protected isAwaitingInput(session: SessionMetadata): boolean {
+    return this.chatStateService.awaitingInputFor(session) !== null;
+  }
+
+  /**
+   * The one status dot a row shows, highest first: a streaming response, a
+   * turn paused on the user, then unread. The template draws exactly this, so
+   * the order lives here and nowhere else.
+   */
+  protected rowIndicator(session: SessionMetadata): SessionRowIndicator {
+    if (this.isSessionStreaming(session.sessionId)) return 'streaming';
+    if (this.isAwaitingInput(session)) return 'awaiting-input';
+    if (this.shouldShowUnreadDot(session)) return 'unread';
+    return null;
+  }
+
+  /**
    * Whether this conversation should show the blue unread dot (distinct from
    * the pulsing secondary streaming dot). Unread has two sources, ORed here:
    *
@@ -206,7 +380,9 @@ export class SessionList {
   /**
    * Gets the queryParams for a session's routerLink. When the session has
    * an assistant attached in preferences, we include it in the URL so the
-   * session page can load the assistant without a second round-trip. Keeping
+   * session page can load the assistant without a second round-trip: a
+   * project task as `?project=` (its Agent is the project's hidden harness),
+   * any other Agent as `?assistantId=`. Keeping
    * the URL the single source of truth also avoids a race where the user
    * sends a message before the metadata fetch hydrates preferences.
    *
@@ -214,7 +390,12 @@ export class SessionList {
    * @returns queryParams object for routerLink, or null when no assistant
    */
   protected getSessionQueryParams(session: SessionMetadata): Record<string, string> | null {
-    const assistantId = session.preferences?.assistantId;
+    const { project, assistantId } = bindingQueryParams(
+      session.preferences?.assistantId,
+      session.preferences?.projectId,
+      this.projectsOn,
+    );
+    if (project) return { project };
     return assistantId ? { assistantId } : null;
   }
 
@@ -253,7 +434,7 @@ export class SessionList {
    * @returns Display title
    */
   protected getSessionTitle(session: SessionMetadata): string {
-    return session.title || 'Untitled Session';
+    return session.title || UNTITLED_SESSION_TITLE;
   }
 
   /**
@@ -287,6 +468,11 @@ export class SessionList {
     if (session.unread) {
       this.sessionService.markSessionRead(session);
     }
+    this.sidenavService.close();
+  }
+
+  /** A project heading opens the project; on mobile the drawer gets out of the way. */
+  protected onProjectHeadingClick(): void {
     this.sidenavService.close();
   }
 
@@ -379,6 +565,7 @@ export class SessionList {
       data: {
         sessionId: session.sessionId,
         ownerEmail: this.userService.currentUser()?.email ?? '',
+        projectId: this.projectsOn ? session.preferences?.projectId ?? null : null,
       } as ShareModalData,
     });
   }
@@ -420,6 +607,36 @@ export class SessionList {
         this.chatStateService.markSessionUnread(session.sessionId);
         this.sessionService.refreshSessions();
       }
+    });
+  }
+
+  protected isPinned(session: SessionMetadata): boolean {
+    return this.sessionService.pinnedSessionIds().has(session.sessionId);
+  }
+
+  /** Project tasks already list under their project, so they can't be pinned. */
+  protected canPin(session: SessionMetadata): boolean {
+    return !session.preferences?.projectId;
+  }
+
+  /**
+   * Pins or unpins a conversation. The row moves right away (optimistic);
+   * a failed request moves it back and shows a toast.
+   */
+  protected onTogglePinClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const pin = !this.isPinned(session);
+
+    // Deferred past the CDK menu's close, for the same reason as onToggleReadClick.
+    queueMicrotask(() => {
+      this.sessionService.setSessionPinned(session.sessionId, pin).catch(error => {
+        console.error('Failed to update pin:', error);
+        this.toastService.error(
+          pin ? 'Failed to pin' : 'Failed to unpin',
+          'There was an error updating the conversation. Please try again.'
+        );
+      });
     });
   }
 

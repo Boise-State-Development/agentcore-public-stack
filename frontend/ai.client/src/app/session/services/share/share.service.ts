@@ -1,20 +1,39 @@
 import { inject, Injectable, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { Message } from '../models/message.model';
+import type { RenderToken } from '../artifacts/artifact-http.service';
 
 // ------------------------------------------------------------------
 // Interfaces
 // ------------------------------------------------------------------
 
+/**
+ * Who can open a share. `project` means the members of the task's project
+ * (shared-projects §5, 1.6): only offered for a session with
+ * `preferences.projectId`.
+ */
+export type ShareAccessLevel = 'public' | 'specific' | 'project';
+
+/** Who a project share tells (2.5b): everyone, or the members named. Omitted, nobody is told. */
+export type ShareNotify = { all: true } | { emails: string[] };
+
+/** The longest note a project share carries (`MAX_SHARE_NOTE_CHARS`). */
+export const MAX_SHARE_NOTE_CHARS = 280;
+
 export interface CreateShareRequest {
-  accessLevel: 'public' | 'specific';
+  accessLevel: ShareAccessLevel;
   allowedEmails?: string[];
+  /** Project shares only. */
+  notify?: ShareNotify;
+  /** Project shares only: shown with the task and in the notification. */
+  note?: string;
 }
 
 export interface UpdateShareRequest {
-  accessLevel?: 'public' | 'specific';
+  accessLevel?: ShareAccessLevel;
   allowedEmails?: string[];
 }
 
@@ -22,8 +41,10 @@ export interface ShareResponse {
   shareId: string;
   sessionId: string;
   ownerId: string;
-  accessLevel: 'public' | 'specific';
+  accessLevel: ShareAccessLevel;
   allowedEmails?: string[];
+  /** Set on a `project` share. */
+  projectId?: string | null;
   createdAt: string;
   shareUrl: string;
 }
@@ -32,13 +53,40 @@ export interface ShareListResponse {
   shares: ShareResponse[];
 }
 
+/**
+ * One artifact pinned into a shared conversation's snapshot.
+ *
+ * The recipient shape — no artifact-level share id, because there is no
+ * artifact share: the CONVERSATION share is the grant, and the pair
+ * (conversation shareId, artifactId) is the whole handle a recipient
+ * has. `version` is the version the artifact stood at when the
+ * conversation was shared, matching the frozen transcript around it
+ * rather than whatever the owner has edited it into since.
+ */
+export interface SharedConversationArtifact {
+  artifactId: string;
+  version: number;
+  title: string;
+  contentType: string;
+  /** Anchors the card under the same turn the owner sees it under.
+   *  Null for artifacts written before that linkage existed. */
+  producedByMessageIndex: number | null;
+}
+
 export interface SharedConversationResponse {
   shareId: string;
   title: string;
-  accessLevel: 'public' | 'specific';
+  accessLevel: ShareAccessLevel;
   createdAt: string;
   ownerId: string;
   messages: Message[];
+  /** Empty for shares created before artifacts were captured, and for
+   *  conversations that produced none — indistinguishable, and neither
+   *  is an error. */
+  artifacts: SharedConversationArtifact[];
+  /** The model's tool-batch summaries, frozen with the snapshot. Absent or
+   *  empty on shares created before they were captured. */
+  toolSummaries?: { batchId?: string; toolUseIds?: string[]; summary?: string }[];
 }
 
 export interface ExportResponse {
@@ -58,14 +106,34 @@ export class ShareService {
   private readonly sharesUrl = computed(() => `${this.config.appApiUrl()}/shares`);
   private readonly sharedUrl = computed(() => `${this.config.appApiUrl()}/shared`);
 
-  async createShare(sessionId: string, accessLevel: string, allowedEmails?: string[]): Promise<ShareResponse> {
+  /**
+   * For callers that show the failure inline themselves (the share modal, a
+   * project's Tasks tab), so the global toast doesn't repeat it.
+   */
+  private quiet(suppressErrorToast: boolean | undefined) {
+    return suppressErrorToast ? { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) } : {};
+  }
+
+  async createShare(
+    sessionId: string,
+    accessLevel: ShareAccessLevel,
+    allowedEmails?: string[],
+    options?: { suppressErrorToast?: boolean; notify?: ShareNotify; note?: string },
+  ): Promise<ShareResponse> {
+    const note = options?.note?.trim();
     const body: CreateShareRequest = {
-      accessLevel: accessLevel as CreateShareRequest['accessLevel'],
+      accessLevel,
       ...(allowedEmails?.length ? { allowedEmails } : {}),
+      ...(options?.notify ? { notify: options.notify } : {}),
+      ...(note ? { note } : {}),
     };
 
     return firstValueFrom(
-      this.http.post<ShareResponse>(`${this.conversationsUrl()}/${sessionId}/share`, body)
+      this.http.post<ShareResponse>(
+        `${this.conversationsUrl()}/${sessionId}/share`,
+        body,
+        this.quiet(options?.suppressErrorToast),
+      )
     );
   }
 
@@ -81,9 +149,36 @@ export class ShareService {
     );
   }
 
-  async updateShare(shareId: string, accessLevel?: string, allowedEmails?: string[]): Promise<ShareResponse> {
+  /**
+   * Mint a render URL for one artifact inside a shared conversation.
+   *
+   * The grant is the conversation share, so this is addressed by
+   * (shareId, artifactId) and never by an artifact share id — there
+   * isn't one. The backend serves only artifacts the snapshot pinned,
+   * at the version it pinned, so a 404 here means "not part of this
+   * share" as much as "gone".
+   *
+   * The returned URL embeds a short-lived (~120s) bearer credential:
+   * set it as an iframe `src` and re-mint on each open rather than
+   * caching it.
+   */
+  async mintConversationArtifactToken(
+    shareId: string,
+    artifactId: string,
+  ): Promise<RenderToken> {
+    const res = await firstValueFrom(
+      this.http.post<{ url: string; expires_at: string }>(
+        `${this.sharedUrl()}/${encodeURIComponent(shareId)}/artifacts/` +
+          `${encodeURIComponent(artifactId)}/render-token`,
+        {},
+      ),
+    );
+    return { url: res.url, expiresAt: res.expires_at };
+  }
+
+  async updateShare(shareId: string, accessLevel?: ShareAccessLevel, allowedEmails?: string[]): Promise<ShareResponse> {
     const body: UpdateShareRequest = {};
-    if (accessLevel) body.accessLevel = accessLevel as UpdateShareRequest['accessLevel'];
+    if (accessLevel) body.accessLevel = accessLevel;
     if (allowedEmails) body.allowedEmails = allowedEmails;
 
     return firstValueFrom(
@@ -91,15 +186,23 @@ export class ShareService {
     );
   }
 
-  async revokeShare(shareId: string): Promise<void> {
+  async revokeShare(shareId: string, options?: { suppressErrorToast?: boolean }): Promise<void> {
     await firstValueFrom(
-      this.http.delete(`${this.sharesUrl()}/${shareId}`)
+      this.http.delete(`${this.sharesUrl()}/${shareId}`, this.quiet(options?.suppressErrorToast))
     );
   }
 
-  async exportSharedConversation(shareId: string): Promise<ExportResponse> {
+  /**
+   * Fork a share into a new session of the caller's. A member forking a task
+   * of an active project gets a task in that project, on its current agent.
+   */
+  async exportSharedConversation(shareId: string, options?: { suppressErrorToast?: boolean }): Promise<ExportResponse> {
     return firstValueFrom(
-      this.http.post<ExportResponse>(`${this.sharesUrl()}/${shareId}/export`, {})
+      this.http.post<ExportResponse>(
+        `${this.sharesUrl()}/${shareId}/export`,
+        {},
+        this.quiet(options?.suppressErrorToast),
+      )
     );
   }
 }

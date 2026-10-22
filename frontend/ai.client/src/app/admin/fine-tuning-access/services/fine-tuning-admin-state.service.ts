@@ -47,11 +47,11 @@ export class FineTuningAdminStateService {
   }
 
   /** Grant fine-tuning access and refresh the list. */
-  async grantAccess(email: string, monthlyQuotaHours: number): Promise<void> {
+  async grantAccess(email: string, monthlyQuotaUsd: number): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
     try {
-      await firstValueFrom(this.http.grantAccess(email, monthlyQuotaHours));
+      await firstValueFrom(this.http.grantAccess(email, monthlyQuotaUsd));
       await this.loadGrants();
       this.showGrantForm.set(false);
     } catch (err: unknown) {
@@ -62,11 +62,11 @@ export class FineTuningAdminStateService {
   }
 
   /** Update the monthly quota for a user and refresh the list. */
-  async updateQuota(email: string, monthlyQuotaHours: number): Promise<void> {
+  async updateQuota(email: string, monthlyQuotaUsd: number): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
     try {
-      await firstValueFrom(this.http.updateQuota(email, monthlyQuotaHours));
+      await firstValueFrom(this.http.updateQuota(email, monthlyQuotaUsd));
       await this.loadGrants();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to update quota';

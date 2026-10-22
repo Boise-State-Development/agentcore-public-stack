@@ -3,7 +3,7 @@ import { Router, RouterLink } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroPlus, heroExclamationTriangle } from '@ng-icons/heroicons/outline';
+import { heroPlus, heroExclamationTriangle, heroRectangleStack } from '@ng-icons/heroicons/outline';
 import { ScheduleService } from './services/schedule.service';
 import { GrantService } from './services/grant.service';
 import { ScheduledPrompt } from './models/schedule.model';
@@ -12,27 +12,26 @@ import {
   ConfirmationDialogData,
 } from '../components/confirmation-dialog/confirmation-dialog.component';
 import { ToastService } from '../services/toast/toast.service';
-import { parseIso } from '../utils/date';
-
-const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+import { FEATURES } from '../services/features';
+import { ProjectsService } from '../projects/services/projects.service';
+import { cadenceSummary, relativeFuture, relativePast } from './schedule-wording';
 
 /**
  * Schedules management page — list, create/edit (routed), pause/resume,
  * delete, and the grant-enablement UX (docs/specs/scheduled-runs-phase-b-brief.md
  * §2 B3).
  *
- * Visibility gating: this page (and the nav entry that links to it) is only
- * meaningful for users with the `scheduled-runs` RBAC capability. There is
- * no client-side capability signal yet (see UserPermissions), so gating
- * rides the `/schedules` list call itself — a 403/404 (kill switch off or
- * capability missing) flips `ScheduleService.accessible$` to false and this
- * page renders a graceful "not available" state instead of an error.
+ * Open to every signed-in user, and reached from the sidebar's Schedules
+ * entry. The only control is the environment's `SCHEDULED_RUNS_ENABLED` kill
+ * switch: with it off the `/schedules` list call 404s, which flips
+ * `ScheduleService.accessible$` to false and this page renders a graceful
+ * "not available" state instead of an error.
  */
 @Component({
   selector: 'app-schedules-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, NgIcon],
-  providers: [provideIcons({ heroPlus, heroExclamationTriangle })],
+  providers: [provideIcons({ heroPlus, heroExclamationTriangle, heroRectangleStack })],
   templateUrl: './schedules.page.html',
 })
 export class SchedulesPage implements OnInit {
@@ -41,6 +40,8 @@ export class SchedulesPage implements OnInit {
   private readonly grantService = inject(GrantService);
   private readonly dialog = inject(Dialog);
   private readonly toast = inject(ToastService);
+  private readonly projects = inject(ProjectsService);
+  protected readonly features = inject(FEATURES);
 
   readonly schedules = this.scheduleService.schedules$;
   readonly loading = this.scheduleService.loading$;
@@ -56,7 +57,25 @@ export class SchedulesPage implements OnInit {
 
   readonly needsEnablement = computed(() => !this.grantStatus().enabled);
 
+  /** Project names by id, from the list the sidebar already loads. */
+  private readonly projectNames = computed(
+    () => new Map(this.projects.projects$().map((p) => [p.projectId, p.name] as const)),
+  );
+
+  /** A project schedule is changed and resumed from its project (shared-projects 3.2). */
+  projectNameOf(schedule: ScheduledPrompt): string {
+    return (schedule.projectId && this.projectNames().get(schedule.projectId)) || 'a project';
+  }
+
+  /** Where "Manage in project" goes: the project with its Schedules dialog open. */
+  projectLink(schedule: ScheduledPrompt): string[] | null {
+    return this.features.projects && schedule.projectId ? ['/projects', schedule.projectId, 'schedules'] : null;
+  }
+
   async ngOnInit(): Promise<void> {
+    if (this.features.projects && this.projects.available$() === null && !this.projects.loading$()) {
+      void this.projects.load();
+    }
     await Promise.allSettled([
       this.scheduleService.loadSchedules(),
       this.grantService.loadStatus(),
@@ -68,6 +87,12 @@ export class SchedulesPage implements OnInit {
   }
 
   onEdit(schedule: ScheduledPrompt): void {
+    const project = this.projectLink(schedule);
+    if (project) {
+      this.router.navigate(project);
+      return;
+    }
+    if (schedule.projectId) return;
     this.router.navigate(['/schedules', schedule.scheduleId, 'edit']);
   }
 
@@ -87,6 +112,11 @@ export class SchedulesPage implements OnInit {
   async onReauthenticate(schedule: ScheduledPrompt): Promise<void> {
     try {
       await this.grantService.enable();
+      if (schedule.projectId) {
+        // A project schedule resumes from its project, where the rule it runs under is checked.
+        this.toast.success('Access renewed', `Resume "${schedule.label}" from ${this.projectNameOf(schedule)}.`);
+        return;
+      }
       await this.onResume(schedule);
       this.toast.success('Access renewed', `"${schedule.label}" will resume on its normal cadence.`);
     } catch {
@@ -158,65 +188,27 @@ export class SchedulesPage implements OnInit {
     });
   }
 
-  /** "Every day at 7:00 AM (America/Boise)" style summary. */
+  /** "Every day at 7:00 AM" style summary. */
   cadenceSummary(schedule: ScheduledPrompt): string {
-    const time = this.formatHour(schedule.hourLocal);
-    switch (schedule.cadence) {
-      case 'daily':
-        return `Every day at ${time}`;
-      case 'weekday':
-        return `Every weekday at ${time}`;
-      case 'weekly': {
-        const day = schedule.weekday !== null && schedule.weekday !== undefined
-          ? WEEKDAY_LABELS[schedule.weekday]
-          : '';
-        return `Every ${day} at ${time}`;
-      }
-      case 'interval': {
-        const value = schedule.intervalValue ?? 0;
-        const unit = schedule.intervalUnit ?? 'hours';
-        const singular = value === 1 ? unit.replace(/s$/, '') : unit;
-        return value === 1 ? `Every ${singular}` : `Every ${value} ${singular}`;
-      }
-      default:
-        return time;
-    }
-  }
-
-  private formatHour(hour: number): string {
-    if (hour === 0) return '12:00 AM';
-    if (hour < 12) return `${hour}:00 AM`;
-    if (hour === 12) return '12:00 PM';
-    return `${hour - 12}:00 PM`;
+    return cadenceSummary(schedule);
   }
 
   nextRunLabel(schedule: ScheduledPrompt): string {
     if (schedule.state !== 'active' || !schedule.nextRunAt) {
       return '—';
     }
-    return this.formatRelativeFuture(schedule.nextRunAt);
-  }
-
-  private formatRelativeFuture(iso: string): string {
-    const then = parseIso(iso).getTime();
-    if (Number.isNaN(then)) return '—';
-    const diffMins = Math.round((then - Date.now()) / 60_000);
-    if (diffMins <= 0) return 'due now';
-    if (diffMins < 60) return `in ${diffMins}m`;
-    const diffHours = Math.round(diffMins / 60);
-    if (diffHours < 24) return `in ${diffHours}h`;
-    return `in ${Math.round(diffHours / 24)}d`;
+    return relativeFuture(schedule.nextRunAt);
   }
 
   stateBadgeClasses(schedule: ScheduledPrompt): string {
     const base = 'inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium';
     switch (schedule.state) {
       case 'active':
-        return `${base} bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300`;
+        return `${base} bg-state-success-100 text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300`;
       case 'paused':
         return `${base} bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300`;
       case 'paused_error':
-        return `${base} bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300`;
+        return `${base} bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/30 dark:text-state-warning-300`;
       default:
         return `${base} bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300`;
     }
@@ -250,17 +242,6 @@ export class SchedulesPage implements OnInit {
       return 'Never run';
     }
     const status = schedule.lastRunStatus ?? 'unknown';
-    return `${status} · ${this.formatRelativePast(schedule.lastRunAt)}`;
-  }
-
-  private formatRelativePast(iso: string): string {
-    const then = parseIso(iso).getTime();
-    if (Number.isNaN(then)) return '';
-    const diffMins = Math.floor((Date.now() - then) / 60_000);
-    if (diffMins < 1) return 'just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) return `${diffHours}h ago`;
-    return `${Math.floor(diffHours / 24)}d ago`;
+    return `${status} · ${relativePast(schedule.lastRunAt)}`;
   }
 }

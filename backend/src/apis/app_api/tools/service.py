@@ -101,6 +101,14 @@ class ToolCatalogService:
                 user_enabled if user_enabled is not None else tool.enabled_by_default
             )
 
+            # An admin pinned the whole tool. The stored preference is left
+            # alone — it is the user's, and it applies again the moment an
+            # admin unpins — but it does not win while the pin is in force.
+            # Only meaningful here because this loop has already established
+            # the user is granted the tool: always-on enables, never grants.
+            if tool.always_on:
+                default_enabled = True
+
             # Surface an MCP server's individual tools so the UI can enable a
             # subset. Empty for non-MCP tools or servers with no curated list.
             # Each sub-tool's effective state: its own scoped preference, else
@@ -110,12 +118,19 @@ class ToolCatalogService:
             for entry in getattr(cfg, "tools", None) or []:
                 scoped_key = f"{tool.tool_id}{SCOPE_DELIMITER}{entry.name}"
                 scoped_pref = prefs.tool_preferences.get(scoped_key)
+                # Pinned either individually (the per-entry flag, §2.3) or by
+                # the whole server carrying the flag.
+                entry_always_on = bool(getattr(entry, "always_on", False)) or tool.always_on
+                entry_enabled = (
+                    scoped_pref if scoped_pref is not None else default_enabled
+                )
                 server_tools.append(
                     UserToolServerTool(
                         name=entry.name,
                         description=entry.description,
                         needs_approval=entry.needs_approval,
-                        enabled=scoped_pref if scoped_pref is not None else default_enabled,
+                        enabled=True if entry_always_on else entry_enabled,
+                        always_on=entry_always_on,
                     )
                 )
 
@@ -127,6 +142,14 @@ class ToolCatalogService:
                 else default_enabled
             )
 
+            # The row is locked when the whole tool is pinned. A server with
+            # only *some* tools pinned is deliberately NOT locked at the row
+            # level — the user may still turn the unpinned ones off, and the
+            # per-entry `alwaysOn` locks only the pinned rows.
+            row_always_on = bool(tool.always_on)
+            if row_always_on:
+                is_enabled = True
+
             accessible.append(
                 UserToolAccess(
                     tool_id=tool.tool_id,
@@ -135,8 +158,17 @@ class ToolCatalogService:
                     category=tool.category,
                     protocol=tool.protocol,
                     status=tool.status,
+                    retirement_note=tool.retirement_note,
+                    retires_on=tool.retires_on,
+                    # UserToolAccess has always declared this field; nothing ever
+                    # passed it, so every tool reported `requiresOauthProvider:
+                    # null` and the SPA had no way to tell that 13 of the 31
+                    # tools in prod need a connection before they will work.
+                    requires_oauth_provider=tool.requires_oauth_provider,
                     granted_by=granted_by,
                     enabled_by_default=tool.enabled_by_default,
+                    hidden=tool.hidden,
+                    always_on=row_always_on,
                     user_enabled=user_enabled,
                     is_enabled=is_enabled,
                     server_tools=server_tools,
@@ -151,13 +183,29 @@ class ToolCatalogService:
     def _compute_granted_by(
         self, tool: ToolDefinition, permissions: UserEffectivePermissions
     ) -> List[str]:
-        """Compute which sources grant access to this tool."""
+        """Compute which sources grant access to this tool.
+
+        ``"public"`` for the catalog flag, ``"direct"`` for the user's own
+        grant, and the user's role ids when a *role* grants it.
+        ``permissions.tools`` is the union of roles and direct grant, so a
+        tool that is in it only because of the grant is not attributed to
+        the roles.
+        """
         granted_by = []
 
         if tool.is_public:
             granted_by.append("public")
 
-        if "*" in permissions.tools or tool.tool_id in permissions.tools:
+        # ``direct_tools`` is a trailing-default field on the permissions
+        # object, read with a default here for the same reason: a permissions
+        # value built before the field existed (a cached entry, a test stub)
+        # has no direct grant, not a missing attribute.
+        direct_tools = set(getattr(permissions, "direct_tools", None) or [])
+        if tool.tool_id in direct_tools:
+            granted_by.append("direct")
+
+        role_tools = set(permissions.tools) - direct_tools
+        if "*" in permissions.tools or tool.tool_id in role_tools:
             granted_by.extend(permissions.app_roles)
 
         return list(set(granted_by))
@@ -220,8 +268,59 @@ class ToolCatalogService:
                 f"Cannot configure tools not exposed by their server: {unexposed_tools}"
             )
 
+        preferences = self._drop_always_on_opt_outs(preferences, accessible_by_id)
+
         # Save preferences
         return await self.repository.save_user_preferences(user.user_id, preferences)
+
+    @staticmethod
+    def _drop_always_on_opt_outs(
+        preferences: Dict[str, bool],
+        accessible_by_id: Dict[str, UserToolAccess],
+    ) -> Dict[str, bool]:
+        """Strip attempts to turn OFF a tool an admin pinned (D6).
+
+        The backend unions pinned tools into every turn regardless of what is
+        stored here, so persisting ``False`` for one would record a preference
+        that never takes effect — and the picker, reading the forced-on state
+        back, would disagree with the database about what the user asked for.
+
+        **Dropped, not rejected.** The obvious alternative is to 400 the whole
+        request, but the SPA sends the full preference map on every toggle: one
+        pinned tool in the payload would then block the user from changing any
+        *other* tool, turning an admin's pin into a broken settings page. The
+        caller gets back the normalized map (``GET /tools`` re-derives it), so
+        the two cannot drift.
+
+        A ``True`` is left alone — it agrees with the pin, and it is what the
+        user's preference should be again if an admin ever unpins the tool.
+        Only the contradiction is dropped.
+        """
+        cleaned: Dict[str, bool] = {}
+        for key, enabled in preferences.items():
+            if enabled:
+                cleaned[key] = enabled
+                continue
+            base, tool_name = parse_scoped_tool_id(key)
+            access = accessible_by_id.get(base)
+            if access is None:
+                cleaned[key] = enabled
+                continue
+            if tool_name is None:
+                pinned = access.always_on
+            else:
+                pinned = access.always_on or any(
+                    st.name == tool_name and st.always_on
+                    for st in access.server_tools
+                )
+            if pinned:
+                logger.info(
+                    "Ignoring opt-out of always-on tool %s in a preference save",
+                    key,
+                )
+                continue
+            cleaned[key] = enabled
+        return cleaned
 
     # =========================================================================
     # Admin Methods - Tool CRUD

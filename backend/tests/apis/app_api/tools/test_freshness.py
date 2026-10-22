@@ -170,6 +170,97 @@ async def test_repository_error_falls_back_to_last_known_value():
         assert await freshness.get_tool_updated_at("gmail") is None
 
 
+def _sys_tool(tool_id: str, *, is_public: bool = False, system: bool = False, status: str = "active"):
+    """A catalog-tool stand-in carrying the attrs the snapshot pass reads."""
+    return SimpleNamespace(
+        tool_id=tool_id,
+        is_public=is_public,
+        system=system,
+        status=status,
+        always_on=False,
+        mcp_config=None,
+        mcp_gateway_config=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_snapshot_excludes_non_active_status():
+    """The admin runtime off-switch: a system tool flipped to `disabled`
+    (or `deprecated`) drops out of the injected set, no redeploy."""
+    repo = _repo_with_tools(
+        _sys_tool("whoami", system=True, status="active"),
+        _sys_tool("get_my_quota", system=True, status="disabled"),
+        _sys_tool("get_my_settings", system=True, status="deprecated"),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        system_ids = await freshness.get_system_tool_ids()
+
+    assert system_ids == frozenset({"whoami"})
+
+
+@pytest.mark.asyncio
+async def test_system_snapshot_contains_only_system_tools():
+    repo = _repo_with_tools(
+        _sys_tool("whoami", system=True),
+        _sys_tool("get_my_quota", system=True),
+        _sys_tool("search_web"),  # ordinary tool
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        system_ids = await freshness.get_system_tool_ids()
+
+    assert system_ids == frozenset({"whoami", "get_my_quota"})
+
+
+@pytest.mark.asyncio
+async def test_system_snapshot_shares_one_read_with_the_other_slots():
+    """All four id snapshots fill from a single list_tools() pass."""
+    repo = _repo_with_tools(
+        _sys_tool("whoami", system=True),
+        _sys_tool("public_tool", is_public=True),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        await freshness.get_all_tool_ids()
+        await freshness.get_public_tool_ids()
+        await freshness.get_always_on_tool_ids()
+        await freshness.get_system_tool_ids()
+
+    # One read serves all four within the TTL window.
+    assert repo.list_tools.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_invalidate_clears_the_system_snapshot():
+    repo = _repo_with_tools(_sys_tool("whoami", system=True))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        await freshness.get_system_tool_ids()
+        freshness.invalidate()
+        await freshness.get_system_tool_ids()
+
+    assert repo.list_tools.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_system_snapshot_never_raises_on_repo_error():
+    repo = SimpleNamespace(list_tools=AsyncMock(side_effect=RuntimeError("boom")))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.get_system_tool_ids() == frozenset()
+
+
 @pytest.mark.asyncio
 async def test_public_tool_ids_returns_only_flagged_tools():
     repo = _repo_with_tools(
@@ -248,3 +339,81 @@ async def test_hash_is_stable_regardless_of_input_order():
         h2 = await freshness.get_freshness_hash(["jira", "gmail"])
 
     assert h1 == h2
+
+
+# --- disabled tools: the runtime off-switch for every tool -------------------
+
+
+@pytest.mark.asyncio
+async def test_disabled_snapshot_holds_only_disabled_tools():
+    """`disabled` is out of service; `deprecated` (being retired) still runs
+    for whoever has it (docs/specs/mcp-server-retirement.md §7)."""
+    from apis.shared.tools.models import ToolStatus
+
+    repo = _repo_with_tools(
+        _sys_tool("search_web", status="active"),
+        _sys_tool("zoom_race_2", status="disabled"),
+        _sys_tool("zoom_race_3", status=ToolStatus.DISABLED),
+        _sys_tool("old_canvas", status="deprecated"),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        disabled = await freshness.get_disabled_tool_ids()
+
+    assert disabled == frozenset({"zoom_race_2", "zoom_race_3"})
+
+
+@pytest.mark.asyncio
+async def test_disabled_snapshot_shares_the_one_catalog_read():
+    repo = _repo_with_tools(_sys_tool("zoom_race_2", status="disabled"))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        await freshness.get_all_tool_ids()
+        await freshness.get_disabled_tool_ids()
+
+    assert repo.list_tools.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_drop_disabled_tools_removes_bare_and_scoped_ids_in_order():
+    repo = _repo_with_tools(
+        _sys_tool("zoom_race_2", status="disabled"),
+        _sys_tool("canvas", status="active"),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        kept = await freshness.drop_disabled_tools(
+            ["search_web", "zoom_race_2", "canvas::list_courses", "zoom_race_2::search"]
+        )
+
+    assert kept == ["search_web", "canvas::list_courses"]
+
+
+@pytest.mark.asyncio
+async def test_drop_disabled_tools_passes_none_and_empty_through_without_a_read():
+    repo = _repo_with_tools()
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.drop_disabled_tools(None) is None
+        assert await freshness.drop_disabled_tools([]) == []
+
+    repo.list_tools.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_drop_disabled_tools_fails_open_on_a_catalog_error():
+    """A DynamoDB blip must not strip every tool from the turn."""
+    repo = SimpleNamespace(list_tools=AsyncMock(side_effect=RuntimeError("boom")))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.drop_disabled_tools(["zoom_race_2"]) == ["zoom_race_2"]

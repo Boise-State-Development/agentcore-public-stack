@@ -12,7 +12,7 @@
       </div>
       <div class="flex items-center gap-2">
         @if (!loading() && mode() === 'edit' && userPermission() === 'owner') {
-          <button type="button" (click)="openShareDialog()" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
+          <button type="button" (click)="openShareDialog()" class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
             <ng-icon name="heroShare" class="size-4" aria-hidden="true" />
             Share
           </button>
@@ -20,7 +20,7 @@
         <button type="button" (click)="onCancel()" class="rounded-lg px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">
           Cancel
         </button>
-        <button type="button" (click)="onSubmit()" [disabled]="loading() || saving() || isViewer()" class="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white shadow-xs transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50">
+        <button type="button" (click)="onSubmit()" [disabled]="loading() || saving() || isViewer()" class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm font-semibold text-white shadow-xs transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50">
           <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
           {{ saving() ? 'Saving…' : 'Save Agent' }}
         </button>
@@ -90,8 +90,37 @@
   } @else {
   <form [formGroup]="form" (ngSubmit)="onSubmit()" class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
     @if (isViewer()) {
-      <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
+      <div class="rounded-xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm text-state-warning-800 dark:border-state-warning-800/50 dark:bg-state-warning-900/20 dark:text-state-warning-300">
         You have viewer access to this agent — changes can't be saved.
+      </div>
+    }
+
+    @if (unavailableBindingNote(); as note) {
+      <div role="status" class="rounded-xl border border-state-info-200 bg-state-info-50 px-4 py-3 text-sm text-state-info-800 dark:border-state-info-800/50 dark:bg-state-info-900/20 dark:text-state-info-300">
+        {{ note }}
+      </div>
+    }
+
+    @if (hasTemplateNotice()) {
+      <div class="rounded-xl border border-state-info-200 bg-state-info-50 px-4 py-3 text-sm text-state-info-800 dark:border-state-info-800/50 dark:bg-state-info-900/20 dark:text-state-info-300">
+        <div class="flex items-start justify-between gap-3">
+          <div class="space-y-1">
+            @if (templateFlaggedNotice()) {
+              <p>{{ templateFlaggedNotice() }}</p>
+            }
+            @if (templateDroppedNotice()) {
+              <p>{{ templateDroppedNotice() }}</p>
+            }
+          </div>
+          <button
+            type="button"
+            (click)="dismissTemplateNotice()"
+            class="shrink-0 rounded-md p-1 text-state-info-600 transition hover:bg-state-info-100 dark:text-state-info-300 dark:hover:bg-state-info-800/40"
+            [attr.aria-label]="'Dismiss'"
+          >
+            <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+          </button>
+        </div>
       </div>
     }
 
@@ -160,7 +189,7 @@
         <div class="flex-1">
           <label for="name" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Name</label>
           <input id="name" type="text" formControlName="name" placeholder="e.g. Research Agent" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
-          @if (getFieldError('name'); as e) { <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ e }}</p> }
+          @if (getFieldError('name'); as e) { <p class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ e }}</p> }
         </div>
       </div>
 
@@ -168,14 +197,14 @@
       <div class="mt-4">
         <label for="description" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Description</label>
         <input id="description" type="text" formControlName="description" placeholder="A short summary shown on the agent card" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
-        @if (getFieldError('description'); as e) { <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ e }}</p> }
+        @if (getFieldError('description'); as e) { <p class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ e }}</p> }
       </div>
 
       <!-- Instructions -->
       <div class="mt-4">
         <label for="instructions" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Instructions</label>
         <textarea id="instructions" formControlName="instructions" rows="6" placeholder="You are a helpful assistant that…" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"></textarea>
-        @if (getFieldError('instructions'); as e) { <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ e }}</p> }
+        @if (getFieldError('instructions'); as e) { <p class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ e }}</p> }
       </div>
 
       <!-- Visibility + tags -->
@@ -208,14 +237,14 @@
       <div class="mt-4" formArrayName="starters">
         <div class="flex items-center justify-between">
           <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Conversation starters</label>
-          <button type="button" (click)="addStarter()" class="inline-flex items-center gap-1 text-xs/5 font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+          <button type="button" (click)="addStarter()" class="inline-flex items-center gap-1 text-xs/5 font-medium text-primary-accessible hover:text-primary-700 dark:text-primary-accessible-dark">
             <ng-icon name="heroPlus" class="size-3.5" /> Add
           </button>
         </div>
         @for (starter of starters.controls; track $index) {
           <div class="mt-2 flex items-center gap-2">
             <input [formControlName]="$index" type="text" placeholder="Suggested first message" class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
-            <button type="button" (click)="removeStarter($index)" class="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-red-600 dark:hover:bg-gray-700"><ng-icon name="heroTrash" class="size-4" /></button>
+            <button type="button" (click)="removeStarter($index)" class="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-state-danger-600 dark:hover:bg-gray-700"><ng-icon name="heroTrash" class="size-4" /></button>
           </div>
         }
       </div>
@@ -226,11 +255,11 @@
       <div class="flex items-center gap-2">
         <ng-icon name="heroCpuChip" class="size-5 text-primary-500" aria-hidden="true" />
         <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Model</h2>
-        <span class="text-xs/5 text-red-500">required</span>
+        <span class="text-xs/5 text-state-danger-500">required</span>
       </div>
       <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">The agent runs on this model. Only models your role allows are shown.</p>
 
-      @if (models().length === 0) {
+      @if (visibleModels().length === 0) {
         <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">No models are available to your role.</p>
       } @else {
         <!--
@@ -253,8 +282,14 @@
           a wash reads even when its edge does not. `primary-300` measures 3.45:1. Same
           reason the check steps up with it.
         -->
+        @if (retiringModelNotice(); as notice) {
+          <div class="mt-3 rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
+            <p><span class="font-medium">{{ notice.lead }}</span>{{ notice.detail ? ' ' + notice.detail : '' }}</p>
+            <p class="mt-1.5">{{ notice.action }}</p>
+          </div>
+        }
         <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          @for (m of models(); track m.ref) {
+          @for (m of visibleModels(); track m.ref) {
             <button
               type="button"
               (click)="selectModel(m.ref)"
@@ -264,10 +299,15 @@
                 selectedModelId() === m.ref
                   ? 'border-primary-500 ring-1 ring-primary-500 dark:border-primary-300 dark:ring-primary-300'
                   : 'border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600'
-              "
+             "
             >
               <div class="min-w-0">
-                <p class="truncate text-sm font-medium text-gray-900 dark:text-white">{{ m.label }}</p>
+                <p class="flex min-w-0 items-center gap-1.5 text-sm font-medium text-gray-900 dark:text-white">
+                  <span class="truncate">{{ m.label }}</span>
+                  @if (isModelRetiring(m)) {
+                    <span class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">retiring</span>
+                  }
+                </p>
                 <p class="truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ m.description }}</p>
               </div>
               @if (selectedModelId() === m.ref) {
@@ -356,19 +396,73 @@
     <!-- Tools -->
     @if (tools().length) {
       <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-        <div class="flex items-center gap-2">
-          <ng-icon name="heroWrenchScrewdriver" class="size-5 text-blue-500" aria-hidden="true" />
-          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Tools</h2>
-        </div>
-        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Capabilities this agent can call.</p>
-        <div class="mt-4 flex flex-wrap gap-2">
-          @for (t of tools(); track t.ref) {
-            <button type="button" (click)="toggleTool(t.ref)" class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition" [class.border-blue-500]="isToolSelected(t.ref)" [class.bg-blue-50]="isToolSelected(t.ref)" [class.text-blue-700]="isToolSelected(t.ref)" [class.dark:bg-blue-900/30]="isToolSelected(t.ref)" [class.dark:text-blue-300]="isToolSelected(t.ref)" [class.border-gray-200]="!isToolSelected(t.ref)" [class.text-gray-700]="!isToolSelected(t.ref)" [class.dark:border-gray-700]="!isToolSelected(t.ref)" [class.dark:text-gray-300]="!isToolSelected(t.ref)" [appTooltip]="t.description" appTooltipPosition="top">
-              @if (isToolSelected(t.ref)) { <ng-icon name="heroCheck" class="size-3.5" /> }
-              {{ t.label }}
-            </button>
-          }
-        </div>
+        <!--
+          Tools is a disclosure, not a chip cloud. The cloud had outgrown itself: a
+          ragged wrap of 30-plus pills with no scanning order, descriptions trapped in
+          hover-only tooltips, and — the structural tell — a per-tool panel that could
+          not open beneath the chip that owned it, so it was rendered after the whole
+          cloud instead. A column of rows fixes all three and lets the panel nest where
+          it belongs. The collapse default is conditional; see `toolsOpen`.
+        -->
+        <h2>
+          <button
+            type="button"
+            (click)="toggleToolsOpen()"
+            [attr.aria-expanded]="toolsOpen()"
+            aria-controls="agent-tools-panel"
+            class="flex w-full items-center gap-2 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+          >
+            <ng-icon name="heroWrenchScrewdriver" class="size-5 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+            <span id="agent-tools-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white">Tools</span>
+            @if (selectedToolCount()) {
+              <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs/5 font-medium tabular-nums text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ selectedToolCount() }}</span>
+            }
+            <ng-icon name="heroChevronDown" class="ml-auto size-4 shrink-0 text-gray-400 transition-transform dark:text-gray-500" [class.rotate-180]="toolsOpen()" aria-hidden="true" />
+          </button>
+        </h2>
+        @if (toolsOpen()) {
+          <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Capabilities this agent can call. It never uses the tools people turn on for their own chats, so with none selected it runs without tools.</p>
+        } @else {
+          <!-- Collapsed, the summary IS the section: the names are the whole point of
+               closing it, and a bare "Tools ▸" would trade a click for nothing. -->
+          <p class="mt-0.5 truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ selectedToolSummary() || 'No tools selected. This agent runs without tools.' }}</p>
+        }
+
+        <!--
+          Deliberately OUTSIDE the `toolsOpen()` disclosure: the notice is the one thing
+          in this section the author has to act on, and collapsing Tools must not be a way
+          to stop seeing it. See docs/specs/mcp-server-retirement.md §7.
+        -->
+        @if (retiringSelectedTools().length; as retiringCount) {
+          <div class="mt-2 rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
+            <!-- One line per tool, not one sentence listing them all: two tools being
+                 retired are usually two different stories, with different replacements
+                 and different dates, and a comma-joined list would attribute one
+                 tool's replacement to the other. -->
+            <ul class="flex flex-col gap-1">
+              @for (t of retiringSelectedTools(); track t.label) {
+                <li><span class="font-medium">{{ t.label }}</span> is being retired. {{ t.detail }}</li>
+              }
+            </ul>
+            <p class="mt-1.5">
+              This agent keeps working until then — please remove {{ retiringCount === 1 ? 'it' : 'them' }}. If this agent is published, resubmit it so the change reaches the people using it.
+            </p>
+          </div>
+        }
+
+        @if (toolsOpen()) {
+          <!-- Search and grouping are what scale past thirty, not the scroll box; the
+               ceiling is generous so most authors never hit a nested scroller. -->
+          <app-tool-selector
+            id="agent-tools-panel"
+            class="mt-4"
+            [items]="toolItems()"
+            [selected]="selectedToolRefs()"
+            (selectedChange)="onToolSelectionChange($event)"
+            labelledBy="agent-tools-heading"
+            maxHeight="lg"
+          />
+        }
       </section>
     }
 
@@ -376,60 +470,19 @@
     @if (skills().length) {
       <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
         <div class="flex items-center gap-2">
-          <ng-icon name="heroSparkles" class="size-5 text-purple-500" aria-hidden="true" />
+          <ng-icon name="heroSparkles" class="size-5 text-category-accent-skills-500" aria-hidden="true" />
           <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Skills</h2>
         </div>
-        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Reusable instruction bundles the agent can load on demand.</p>
+        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Reusable instruction bundles the agent can load on demand. It never uses the skills people turn on for their own chats, so with none selected it runs without skills.</p>
+        <!-- Skills' selected-chip accent is a section identity color (which capability
+             section this is), not a status — see the category-accent-* note in
+             identity.css. Kept distinct from Tools (primary brand). -->
         <div class="mt-4 flex flex-wrap gap-2">
           @for (s of skills(); track s.ref) {
-            <button type="button" (click)="toggleSkill(s.ref)" class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition" [class.border-purple-500]="isSkillSelected(s.ref)" [class.bg-purple-50]="isSkillSelected(s.ref)" [class.text-purple-700]="isSkillSelected(s.ref)" [class.dark:bg-purple-900/30]="isSkillSelected(s.ref)" [class.dark:text-purple-300]="isSkillSelected(s.ref)" [class.border-gray-200]="!isSkillSelected(s.ref)" [class.text-gray-700]="!isSkillSelected(s.ref)" [class.dark:border-gray-700]="!isSkillSelected(s.ref)" [class.dark:text-gray-300]="!isSkillSelected(s.ref)" [appTooltip]="s.description" appTooltipPosition="top">
+            <button type="button" (click)="toggleSkill(s.ref)" class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition" [class.border-category-accent-skills-500]="isSkillSelected(s.ref)" [class.bg-category-accent-skills-50]="isSkillSelected(s.ref)" [class.text-category-accent-skills-700]="isSkillSelected(s.ref)" [class.dark:bg-category-accent-skills-900/30]="isSkillSelected(s.ref)" [class.dark:text-category-accent-skills-300]="isSkillSelected(s.ref)" [class.border-gray-200]="!isSkillSelected(s.ref)" [class.text-gray-700]="!isSkillSelected(s.ref)" [class.dark:border-gray-700]="!isSkillSelected(s.ref)" [class.dark:text-gray-300]="!isSkillSelected(s.ref)" [appTooltip]="s.description" appTooltipPosition="top">
               @if (isSkillSelected(s.ref)) { <ng-icon name="heroCheck" class="size-3.5" /> }
               {{ s.label }}
             </button>
-          }
-        </div>
-      </section>
-    }
-
-    <!-- Memory spaces -->
-    @if (spaces().length) {
-      <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-        <div class="flex items-center gap-2">
-          <ng-icon name="heroCircleStack" class="size-5 text-emerald-500" aria-hidden="true" />
-          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Memory spaces</h2>
-        </div>
-        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">A persistent "second brain" the agent reads from — and can write to with editor access.</p>
-        <div class="mt-4 space-y-2">
-          @for (space of spaces(); track space.ref) {
-            <div class="rounded-xl border px-4 py-3 transition" [class.border-emerald-500]="isSpaceSelected(space.ref)" [class.bg-emerald-50]="isSpaceSelected(space.ref)" [class.dark:bg-emerald-900/20]="isSpaceSelected(space.ref)" [class.border-gray-200]="!isSpaceSelected(space.ref)" [class.dark:border-gray-700]="!isSpaceSelected(space.ref)">
-              <label class="flex cursor-pointer items-center justify-between gap-3">
-                <span class="min-w-0">
-                  <span class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ space.label }}</span>
-                  <span class="block text-xs/5 text-gray-500 dark:text-gray-400">your role: {{ space.meta['role'] }}</span>
-                </span>
-                <input type="checkbox" [checked]="isSpaceSelected(space.ref)" (change)="toggleSpace(space)" class="size-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
-              </label>
-
-              @if (isSpaceSelected(space.ref)) {
-                @for (sel of memorySelections(); track sel.ref) {
-                  @if (sel.ref === space.ref) {
-                    <div class="mt-3 flex flex-wrap items-center gap-4 border-t border-emerald-200/60 pt-3 dark:border-emerald-800/40">
-                      <div class="flex items-center gap-2">
-                        <span class="text-xs/5 font-medium text-gray-600 dark:text-gray-300">Access:</span>
-                        <div class="flex rounded-lg border border-gray-300 p-0.5 dark:border-gray-600">
-                          <button type="button" (click)="setAccess(sel.ref, 'read')" class="rounded-md px-2.5 py-1 text-xs/5 font-medium transition" [class.bg-white]="sel.access === 'read'" [class.shadow-xs]="sel.access === 'read'" [class.text-gray-900]="sel.access === 'read'" [class.dark:bg-gray-700]="sel.access === 'read'" [class.dark:text-white]="sel.access === 'read'" [class.text-gray-500]="sel.access !== 'read'">Read</button>
-                          <button type="button" (click)="setAccess(sel.ref, 'readwrite')" [disabled]="!canWrite(sel)" class="rounded-md px-2.5 py-1 text-xs/5 font-medium transition disabled:cursor-not-allowed disabled:opacity-40" [class.bg-white]="sel.access === 'readwrite'" [class.shadow-xs]="sel.access === 'readwrite'" [class.text-gray-900]="sel.access === 'readwrite'" [class.dark:bg-gray-700]="sel.access === 'readwrite'" [class.dark:text-white]="sel.access === 'readwrite'" [class.text-gray-500]="sel.access !== 'readwrite'" [appTooltip]="canWrite(sel) ? '' : 'Editor access on the space is required to write'" appTooltipPosition="top">Read + write</button>
-                        </div>
-                      </div>
-                      <label class="flex items-center gap-2 text-xs/5 text-gray-600 dark:text-gray-300">
-                        <input type="checkbox" [checked]="sel.alwaysLoadIndex" (change)="toggleAlwaysLoad(sel.ref)" class="size-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
-                        Always load MEMORY.md into the prompt
-                      </label>
-                    </div>
-                  }
-                }
-              }
-            </div>
           }
         </div>
       </section>
@@ -443,31 +496,101 @@
       [createDraft]="createDraftAgent"
     />
 
+    <!-- Sources: citations & document download (#111) -->
+    <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+      <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Sources</h2>
+      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+        Control what end users see about the knowledge-base documents behind this agent's
+        answers. Retrieval quality is unaffected — the model still uses the documents either way.
+      </p>
+
+      <!-- Show source citations -->
+      <label class="mt-4 flex items-start gap-3">
+        <input
+          type="checkbox"
+          formControlName="showCitations"
+          class="mt-0.5 size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
+        />
+        <span class="min-w-0">
+          <span class="block text-sm font-medium text-gray-900 dark:text-white">Show source citations</span>
+          <span class="block text-xs/5 text-gray-500 dark:text-gray-400">
+            Show the documents used to answer, as citations beneath each reply.
+          </span>
+        </span>
+      </label>
+
+      <!-- Allow document downloads (nested; disabled when citations are off) -->
+      <label
+        class="mt-3 ml-7 flex items-start gap-3"
+        [attr.title]="liveShowCitations() ? null : 'Turn on source citations to allow downloads.'"
+      >
+        <input
+          type="checkbox"
+          formControlName="allowDocumentDownload"
+          class="mt-0.5 size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700"
+        />
+        <span class="min-w-0" [class.opacity-50]="!liveShowCitations()">
+          <span class="block text-sm font-medium text-gray-900 dark:text-white">Allow document downloads</span>
+          <span class="block text-xs/5 text-gray-500 dark:text-gray-400">
+            Let users download the original source document from a citation.
+          </span>
+        </span>
+      </label>
+    </section>
+
   </form>
   }
     </div>
 
     <!-- Right: live preview (lg+, independently scrollable) -->
-    <aside class="hidden shrink-0 flex-col bg-gray-50 p-4 lg:flex lg:w-[30rem] lg:min-h-0 xl:w-[34rem] dark:bg-gray-900">
+    <!-- Shares the row with the editor instead of sitting in a fixed 30/34rem gutter.
+         The form column is `mx-auto max-w-4xl`, so it stops growing at 896px and the
+         slack on a wide screen went to empty margin; the preview is the half that can
+         actually use it. `min-w-[28rem]` keeps it from collapsing under the composer's
+         controls on a small laptop, and the form keeps `min-w-0` so it yields first. -->
+    <aside class="hidden shrink-0 flex-col bg-gray-50 lg:flex lg:min-h-0 lg:min-w-[28rem] lg:flex-1 dark:bg-gray-900">
       @if (loading()) {
         <!-- Hold the preview back too: it resolves from the saved record, and mounting
              it against a half-hydrated form flashes an empty agent card. -->
-        <div class="flex h-full animate-pulse flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800" aria-hidden="true">
-          <div class="shrink-0 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-            <div class="h-4 w-20 rounded bg-gray-200 dark:bg-gray-700"></div>
-            <div class="mt-2 h-3 w-3/4 rounded bg-gray-100 dark:bg-gray-700/50"></div>
-            <div class="mt-3 flex gap-1.5">
-              <div class="h-5 w-24 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
-              <div class="h-5 w-16 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+        <div class="flex h-full animate-pulse flex-col overflow-hidden bg-gray-50 dark:bg-gray-900" aria-hidden="true">
+          <!-- Header: title + subtitle on the left, the open-in-full action on the
+               right. No pill row here — the preview used to carry a capability strip
+               restating the model/tools/skills, and it was removed as a read-out of
+               the form sitting one column to the left. A skeleton that still draws
+               those pills promises a row that never arrives. -->
+          <div class="shrink-0 border-b border-gray-200/80 px-4 py-3 dark:border-gray-700/60">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <div class="h-4 w-16 rounded bg-gray-200 dark:bg-gray-700"></div>
+                <div class="mt-2 h-3 w-4/5 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+              </div>
+              <div class="size-7 shrink-0 rounded-md bg-gray-100 dark:bg-gray-700/50"></div>
             </div>
           </div>
-          <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6">
-            <div class="size-14 rounded-2xl bg-gray-100 dark:bg-gray-700/50"></div>
-            <div class="h-4 w-40 rounded bg-gray-200 dark:bg-gray-700"></div>
-            <div class="h-3 w-56 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+
+          <!-- Body: the agent launch card — icon tile, name, description, then the
+               "try asking" starter. Left-aligned in a card, matching the real one
+               rather than the centred stack this used to draw. -->
+          <div class="flex flex-1 items-center justify-center p-6">
+            <div class="w-full max-w-[720px] rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800/60">
+              <div class="flex items-start gap-3">
+                <div class="size-11 shrink-0 rounded-xl bg-gray-100 dark:bg-gray-700/50"></div>
+                <div class="min-w-0 flex-1 pt-1">
+                  <div class="h-4 w-2/5 rounded bg-gray-200 dark:bg-gray-700"></div>
+                  <div class="mt-2.5 h-3 w-full rounded bg-gray-100 dark:bg-gray-700/50"></div>
+                  <div class="mt-1.5 h-3 w-11/12 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+                  <div class="mt-1.5 h-3 w-3/4 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+                </div>
+              </div>
+              <div class="mt-5 h-2.5 w-20 rounded bg-gray-200 dark:bg-gray-700"></div>
+              <div class="mt-2.5 h-10 w-full rounded-xl border border-gray-200 dark:border-gray-700"></div>
+            </div>
           </div>
-          <div class="shrink-0 border-t border-gray-200 p-4 dark:border-gray-700">
-            <div class="h-12 rounded-xl bg-gray-100 dark:bg-gray-700/50"></div>
+
+          <!-- Composer: sits on the same surface with no dividing rule, matching
+               the real one's gradient fade, and on the same 720px measure. -->
+          <div class="shrink-0 px-4 pb-4 pt-2">
+            <div class="mx-auto h-12 w-full max-w-[720px] rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800/60"></div>
           </div>
         </div>
       } @else {

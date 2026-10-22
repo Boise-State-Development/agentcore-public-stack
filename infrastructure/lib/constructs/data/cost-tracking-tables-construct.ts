@@ -98,6 +98,36 @@ export class CostTrackingTablesConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // ProjectSessionIndex — a member's own tasks in one Shared Project, newest
+    // first (docs/specs/shared-projects.md §3.4, PR-1.6). GSI5_PK =
+    // PROJECT#{projectId}#USER#{userId}, GSI5_SK = {lastMessageAt}#{sessionId},
+    // the same recency key as SessionRecencyIndex/GSI4. Sparse the same way:
+    // written only on active sessions whose preferences.projectId is set, and
+    // removed with GSI4 on soft-delete. Tasks are private to their creator, so
+    // the partition includes the user — "everyone's tasks in a project" is not
+    // a query the product makes. Deploys ahead of any writer (a no-op until
+    // rows carry GSI5 keys). ⚠️ The one GSI this plan adds to this table, and
+    // it must land alone: one GSI per UpdateTable.
+    this.sessionsMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'ProjectSessionIndex',
+      partitionKey: { name: 'GSI5_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI5_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // PinnedSessionIndex — a user's pinned conversations, most recently pinned
+    // first (issue #711). GSI6_PK = USER#{userId}, GSI6_SK = {pinnedAt}#{sessionId}.
+    // Sparse: the keys exist only while a session is pinned, so the sidebar reads
+    // exactly the pins and nothing else, independent of list pagination. Removed
+    // on unpin and on soft-delete. Deploys ahead of any writer (a no-op until rows
+    // carry GSI6 keys). ⚠️ One GSI per UpdateTable: must land alone.
+    this.sessionsMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'PinnedSessionIndex',
+      partitionKey: { name: 'GSI6_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI6_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
 
 
     // UserCostSummary Table

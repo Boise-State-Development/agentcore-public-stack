@@ -6,17 +6,25 @@ This module handles:
 - Multi-provider cost support (Bedrock, OpenAI, Gemini)
 """
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 from .models import CostBreakdown
 
 
 class CostCalculator:
     """Calculate costs from token usage and pricing"""
 
+    # Bedrock's cache-write premium for a 1-hour TTL, as a multiple of the
+    # model's base input rate (5m is 1.25x — that is what the catalog's
+    # cacheWritePricePerMtok already carries). See the prompt-cache contract
+    # in CLAUDE.md.
+    LONG_TTL_CACHE_WRITE_MULTIPLIER = 2.0
+
     @staticmethod
     def calculate_message_cost(
         usage: Dict[str, int],
-        pricing: Dict[str, float]
+        pricing: Dict[str, float],
+        *,
+        long_ttl_static_prefix_tokens: Optional[int] = None,
     ) -> Tuple[float, CostBreakdown]:
         """
         Calculate cost for a single message
@@ -24,6 +32,15 @@ class CostCalculator:
         Args:
             usage: Token usage dict with inputTokens, outputTokens, etc.
             pricing: Pricing dict with inputPricePerMtok, etc.
+            long_ttl_static_prefix_tokens: When the turn ran with the 1h TTL on
+                the static (tools + system) cachePoints, the size of that static
+                segment. Cache writes that cover it are billed at the 1h premium
+                (2x base) instead of the 5m one. Which part of the write was
+                static is inferred from the read: a static segment that was
+                read (cacheRead >= static) was not written, so the write is all
+                history at 5m; otherwise the unread remainder of the static
+                segment was written at 1h. ``None`` (the default) prices every
+                cache write at the catalog's 5m rate — today's behavior.
 
         Returns:
             Tuple of (total_cost, cost_breakdown)
@@ -69,12 +86,25 @@ class CostCalculator:
         # - cacheReadInputTokens: tokens read from cache
         # - cacheWriteInputTokens: tokens written to cache
         # Total input = inputTokens + cacheReadInputTokens + cacheWriteInputTokens
+        #
+        # That is the Bedrock Converse convention. The OpenAI family reports an
+        # *inclusive* inputTokens instead, so its usage is rewritten to this
+        # shape at the model seam — see apis/shared/models/usage_normalization.py.
+        # Feeding raw OpenAI usage in here bills every cached token twice.
 
         # Calculate costs (per million tokens)
         input_cost = (input_tokens / 1_000_000) * input_price
         output_cost = (output_tokens / 1_000_000) * output_price
         cache_read_cost = (cache_read_tokens / 1_000_000) * cache_read_price
-        cache_write_cost = (cache_write_tokens / 1_000_000) * cache_write_price
+
+        long_ttl_written = 0
+        if long_ttl_static_prefix_tokens and long_ttl_static_prefix_tokens > 0 and cache_write_tokens > 0:
+            long_ttl_written = max(0, min(cache_write_tokens, int(long_ttl_static_prefix_tokens) - cache_read_tokens))
+        long_ttl_write_price = input_price * CostCalculator.LONG_TTL_CACHE_WRITE_MULTIPLIER
+        cache_write_cost = (
+            (long_ttl_written / 1_000_000) * long_ttl_write_price
+            + ((cache_write_tokens - long_ttl_written) / 1_000_000) * cache_write_price
+        )
 
         total_cost = input_cost + output_cost + cache_read_cost + cache_write_cost
 
@@ -86,6 +116,78 @@ class CostCalculator:
             totalCost=total_cost
         )
 
+        return total_cost, breakdown
+
+    @staticmethod
+    def calculate_voice_cost(
+        usage: Dict[str, int],
+        pricing: Dict[str, float],
+    ) -> Tuple[float, CostBreakdown]:
+        """Price a speech-to-speech (Nova Sonic) session.
+
+        Sonic bills four buckets — speech in/out and text in/out — and the
+        speech rates are roughly 10x the text ones ($3.00 / $12.00 against
+        $0.32 / $2.65 per MTok in us-west-2, Price List API 2026-09-30). The
+        model's ``usageEvent`` carries the split under ``details.total``;
+        ``VoiceAgent`` surfaces it here as ``speechInputTokens`` /
+        ``textInputTokens`` / ``speechOutputTokens`` / ``textOutputTokens``.
+
+        When the split is missing (an older Strands that only forwards
+        the totals, or a session that ended before the first usage event), the
+        totals are priced **at the speech rates**. That over-counts text
+        tokens rather than under-counting speech ones — a session that was
+        mostly listening and talking is priced about right, and one that was
+        mostly text history is priced high, which is the safe direction for a
+        quota. Never falls back to the text rates: that would be the $0-ish
+        bill this method exists to replace.
+
+        ``pricing`` is the ``get_model_pricing`` dict: ``inputPricePerMtok`` /
+        ``outputPricePerMtok`` are the TEXT rates on a speech model, and
+        ``speechInputPricePerMtok`` / ``speechOutputPricePerMtok`` the speech
+        ones. A catalog row without the speech rates prices speech tokens at
+        the text rates — better than nothing, and ``UnmeteredModelCall`` no
+        longer fires, so the fix is to fill the row in, not to guess here.
+        """
+        text_in_price = pricing.get("inputPricePerMtok") or 0.0
+        text_out_price = pricing.get("outputPricePerMtok") or 0.0
+        speech_in_price = pricing.get("speechInputPricePerMtok")
+        speech_out_price = pricing.get("speechOutputPricePerMtok")
+        if speech_in_price is None:
+            speech_in_price = text_in_price
+        if speech_out_price is None:
+            speech_out_price = text_out_price
+
+        total_in = usage.get("inputTokens") or 0
+        total_out = usage.get("outputTokens") or 0
+        has_split = any(
+            usage.get(k) is not None
+            for k in ("speechInputTokens", "textInputTokens", "speechOutputTokens", "textOutputTokens")
+        )
+        if has_split:
+            speech_in = usage.get("speechInputTokens") or 0
+            text_in = usage.get("textInputTokens") or 0
+            speech_out = usage.get("speechOutputTokens") or 0
+            text_out = usage.get("textOutputTokens") or 0
+            # The totals are authoritative; a split that does not add up to
+            # them (a usage event missing one bucket) puts the remainder in
+            # the speech bucket, for the same reason as the no-split case.
+            speech_in += max(0, total_in - speech_in - text_in)
+            speech_out += max(0, total_out - speech_out - text_out)
+        else:
+            speech_in, text_in = total_in, 0
+            speech_out, text_out = total_out, 0
+
+        input_cost = (speech_in / 1_000_000) * speech_in_price + (text_in / 1_000_000) * text_in_price
+        output_cost = (speech_out / 1_000_000) * speech_out_price + (text_out / 1_000_000) * text_out_price
+        total_cost = input_cost + output_cost
+
+        breakdown = CostBreakdown(
+            inputCost=input_cost,
+            outputCost=output_cost,
+            cacheReadCost=0.0,
+            cacheWriteCost=0.0,
+            totalCost=total_cost,
+        )
         return total_cost, breakdown
 
     @staticmethod

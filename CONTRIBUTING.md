@@ -42,6 +42,7 @@ implement it or coordinate with the reporter on next steps.
 - **AWS CLI** v2 (for cloud operations)
 - **uv** (Python package manager — [install guide](https://docs.astral.sh/uv/getting-started/installation/))
 - **npm** 11.2.0+ (for frontend/infrastructure dependencies)
+- **Xcode** 26+ on macOS (only for the optional iOS client in `ios/`)
 
 ## Clone and Install
 
@@ -75,6 +76,13 @@ npm ci
 cd infrastructure
 npm ci
 ```
+
+### iOS client (optional, macOS only)
+
+Nothing to install beyond Xcode. Open `ios/AgentCore.xcworkspace`, or build from
+the command line as shown under [Running Tests](#running-tests). Device builds
+need an untracked `ios/Config/Local.xcconfig` (copy the `.example`); the
+simulator does not. See `ios/README.md`.
 
 ## Environment Configuration
 
@@ -128,6 +136,14 @@ cd infrastructure
 npx cdk synth  # validates CDK stacks compile and synthesize
 ```
 
+### iOS client
+
+```bash
+cd ios
+xcodebuild test -workspace AgentCore.xcworkspace -scheme AgentCore \
+  -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
+```
+
 ## AWS Credentials
 
 For local development, configure AWS credentials via one of:
@@ -151,4 +167,9 @@ uv run mypy src/           # type checking
 cd frontend/ai.client
 npx eslint src/            # linting
 npx prettier --check src/  # formatting
+
+# iOS client (swift format ships inside Xcode)
+cd ios
+swift format lint --strict --recursive --parallel AgentCore AgentCoreKit
+swift format --in-place --recursive AgentCore AgentCoreKit
 ```

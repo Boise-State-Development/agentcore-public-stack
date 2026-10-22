@@ -45,6 +45,15 @@ class TestCleanupDocumentResources:
                 new_callable=AsyncMock,
             ),
             patch("boto3.client", return_value=mock_s3_client),
+            # These cases are all about a LEGACY knowledge base — the state of
+            # every assistant that predates the managed-KB migration. Absence of
+            # a KB record is what "legacy" looks like, so the managed deletion
+            # phase resolves to a no-op. Stated explicitly rather than left to a
+            # real DynamoDB read.
+            patch(
+                "apis.shared.kb_backend.records.get_kb_record",
+                return_value=None,
+            ),
             patch(
                 "apis.app_api.documents.services.document_service.hard_delete_document",
                 mock_hard_delete,
@@ -83,6 +92,15 @@ class TestCleanupDocumentResources:
                 side_effect=Exception("vector fallback error"),
             ),
             patch("boto3.client", return_value=mock_s3_client),
+            # These cases are all about a LEGACY knowledge base — the state of
+            # every assistant that predates the managed-KB migration. Absence of
+            # a KB record is what "legacy" looks like, so the managed deletion
+            # phase resolves to a no-op. Stated explicitly rather than left to a
+            # real DynamoDB read.
+            patch(
+                "apis.shared.kb_backend.records.get_kb_record",
+                return_value=None,
+            ),
             patch(
                 "apis.app_api.documents.services.cleanup_service.asyncio.sleep",
                 new_callable=AsyncMock,
@@ -123,6 +141,15 @@ class TestCleanupDocumentResources:
                 new_callable=AsyncMock,
             ),
             patch("boto3.client", return_value=mock_s3_client),
+            # These cases are all about a LEGACY knowledge base — the state of
+            # every assistant that predates the managed-KB migration. Absence of
+            # a KB record is what "legacy" looks like, so the managed deletion
+            # phase resolves to a no-op. Stated explicitly rather than left to a
+            # real DynamoDB read.
+            patch(
+                "apis.shared.kb_backend.records.get_kb_record",
+                return_value=None,
+            ),
             patch(
                 "apis.app_api.documents.services.cleanup_service.asyncio.sleep",
                 new_callable=AsyncMock,
@@ -165,6 +192,15 @@ class TestCleanupDocumentResources:
                 side_effect=Exception("vector fallback error"),
             ),
             patch("boto3.client", return_value=mock_s3_client),
+            # These cases are all about a LEGACY knowledge base — the state of
+            # every assistant that predates the managed-KB migration. Absence of
+            # a KB record is what "legacy" looks like, so the managed deletion
+            # phase resolves to a no-op. Stated explicitly rather than left to a
+            # real DynamoDB read.
+            patch(
+                "apis.shared.kb_backend.records.get_kb_record",
+                return_value=None,
+            ),
             patch(
                 "apis.app_api.documents.services.cleanup_service.asyncio.sleep",
                 new_callable=AsyncMock,
@@ -214,6 +250,15 @@ class TestCleanupDocumentResources:
                 new_callable=AsyncMock,
             ),
             patch("boto3.client", return_value=mock_s3_client),
+            # These cases are all about a LEGACY knowledge base — the state of
+            # every assistant that predates the managed-KB migration. Absence of
+            # a KB record is what "legacy" looks like, so the managed deletion
+            # phase resolves to a no-op. Stated explicitly rather than left to a
+            # real DynamoDB read.
+            patch(
+                "apis.shared.kb_backend.records.get_kb_record",
+                return_value=None,
+            ),
             patch(
                 "apis.app_api.documents.services.cleanup_service.asyncio.sleep",
                 new_callable=AsyncMock,
@@ -256,6 +301,15 @@ class TestCleanupDocumentResources:
                 new_callable=AsyncMock,
             ),
             patch("boto3.client", return_value=mock_s3_client),
+            # These cases are all about a LEGACY knowledge base — the state of
+            # every assistant that predates the managed-KB migration. Absence of
+            # a KB record is what "legacy" looks like, so the managed deletion
+            # phase resolves to a no-op. Stated explicitly rather than left to a
+            # real DynamoDB read.
+            patch(
+                "apis.shared.kb_backend.records.get_kb_record",
+                return_value=None,
+            ),
             patch(
                 "apis.app_api.documents.services.document_service.hard_delete_document",
                 mock_hard_delete,
@@ -294,6 +348,15 @@ class TestCleanupDocumentResources:
                 side_effect=Exception("vector fallback error"),
             ),
             patch("boto3.client", return_value=mock_s3_client),
+            # These cases are all about a LEGACY knowledge base — the state of
+            # every assistant that predates the managed-KB migration. Absence of
+            # a KB record is what "legacy" looks like, so the managed deletion
+            # phase resolves to a no-op. Stated explicitly rather than left to a
+            # real DynamoDB read.
+            patch(
+                "apis.shared.kb_backend.records.get_kb_record",
+                return_value=None,
+            ),
             patch(
                 "apis.app_api.documents.services.cleanup_service.asyncio.sleep",
                 new_callable=AsyncMock,

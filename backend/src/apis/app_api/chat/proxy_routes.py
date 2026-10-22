@@ -19,16 +19,21 @@ import asyncio
 import json
 import logging
 import os
-from typing import Optional
+import threading
+import time
+from typing import Dict, List, Optional, Set, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.feature_flags import session_prewarm_enabled
 from apis.shared.harness.runner import (
     apply_runtime_session_header,
     build_invocations_url,
+    runtime_session_affinity_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,6 +122,46 @@ async def _resolve_upstream_error_status(
     return status_code, None
 
 
+# What the Runtime's inbound JWT authorizer says when it refuses the token we
+# forwarded. It answers from the data plane, before the container sees the
+# request, so retrying it cannot run a turn twice.
+_RUNTIME_TOKEN_REFUSED_MARKER = b"Unauthorized inbound token"
+
+# Lifetime to demand of the token before the one retry. Not a known Runtime
+# margin: on dev (2026-10-09) the Runtime refused a token with ~61s left, then
+# accepted ones with 61.8s and 60.6s left in timed tests, so the refusal looks
+# transient rather than age-based. Refreshing a token this close to expiry is
+# still the cheaper bet for the retry, and a token a peer task just refreshed
+# (~an hour left) is adopted rather than refreshed again.
+_RUNTIME_RETRY_MIN_TOKEN_SECONDS = 300
+
+
+async def _token_for_retry(
+    request: Request, error_body: bytes, forwarded_token: str
+) -> Optional[str]:
+    """The access token to retry a Runtime token refusal with, or None.
+
+    None only when the 403 is not a token refusal, which is relayed as-is.
+    For a refusal, a refreshed token is preferred; when the refresh yields the
+    same token, fails, or has no session handle to go through, the forwarded
+    token is retried as-is, since a refusal that does not track the token's
+    age is most likely transient.
+    """
+    if _RUNTIME_TOKEN_REFUSED_MARKER not in error_body:
+        return None
+    refresh = getattr(request.state, "bff_refresh_session", None)
+    if refresh is None:
+        return forwarded_token
+    try:
+        record = await refresh(_RUNTIME_RETRY_MIN_TOKEN_SECONDS)
+    except Exception:  # noqa: BLE001 - a failed refresh still gets the one retry
+        logger.warning("Could not refresh the session after a Runtime 403", exc_info=True)
+        return forwarded_token
+    if record is None:
+        return forwarded_token
+    return record.cognito_access_token
+
+
 def _build_upstream_client() -> httpx.AsyncClient:
     """Single seam where the proxy's upstream client is constructed.
 
@@ -147,8 +192,10 @@ async def chat_stream(
         "Authorization": f"Bearer {current_user.raw_token}",
     }
 
-    # Pin this conversation to one microVM so the container it lands on stays
-    # warm across turns. Measured in dev, steady-state turns:
+    # Pin this user's conversation to one microVM so the container it lands on
+    # stays warm across turns. Pinned per (user, session), never per session
+    # alone: two users on one session id must not share a container and its
+    # agent cache (see `runtime_session_id_for`). Measured in dev, steady-state turns:
     #
     #   no pinning, agent-cache miss     ~7.6s
     #   pinned, agent-cache miss         ~4.8s   ← warm container alone
@@ -177,7 +224,7 @@ async def chat_stream(
             session_id = raw if isinstance(raw, str) and raw else None
     except (ValueError, TypeError):
         logger.debug("chat proxy: body is not JSON; skipping runtime-session pinning")
-    apply_runtime_session_header(headers, session_id)
+    apply_runtime_session_header(headers, session_id, current_user.user_id)
 
     # Forward OAuth2CallbackUrl when the SPA supplies it. Inference-api's
     # AgentCoreContextMiddleware reads this header to scope the on-tool
@@ -203,6 +250,33 @@ async def chat_stream(
             client.build_request("POST", target_url, headers=headers, content=body),
             stream=True,
         )
+        if response.status_code == status.HTTP_403_FORBIDDEN:
+            # Only a request that has already failed reaches this branch, so
+            # the healthy turn path pays nothing for it.
+            error_body = await response.aread()
+            retry_token = await _token_for_retry(
+                request, error_body, current_user.raw_token
+            )
+            if retry_token is not None:
+                await response.aclose()
+                token_kind = (
+                    "same" if retry_token == current_user.raw_token else "refreshed"
+                )
+                headers["Authorization"] = f"Bearer {retry_token}"
+                response = await client.send(
+                    client.build_request(
+                        "POST", target_url, headers=headers, content=body
+                    ),
+                    stream=True,
+                )
+                # One line per refusal, so the logs answer whether a retry
+                # recovers and whether a refreshed token was what it took.
+                logger.info(
+                    "Runtime refused the forwarded access token; retried once "
+                    "with the %s token -> %s",
+                    token_kind,
+                    response.status_code,
+                )
     except httpx.ConnectError:
         await client.aclose()
         logger.error(f"Cannot reach Inference API at {target_url}")
@@ -313,5 +387,166 @@ router.add_api_route(
         403: {"description": "CSRF token missing or invalid"},
         502: {"description": "Inference API unreachable"},
         504: {"description": "Inference API request timed out"},
+    },
+)
+
+
+# ---------------------------------------------------------------------------
+# Session prewarm (docs/specs/agentcore-runtime-v2.md §5a)
+# ---------------------------------------------------------------------------
+#
+# AgentCore starts a conversation's microVM only when an invocation arrives
+# carrying its runtime session id, so a new conversation's first send pays the
+# start: a V2 snapshot restore (~0.7 s) and the first-turn setup that cannot be
+# snapshotted. `POST /chat/prewarm` sends a no-op `warm` invocation with the
+# same affinity header the first real turn will carry, as soon as the SPA opens
+# the conversation, so that start overlaps the user reading and typing.
+#
+# The browser never waits on it: the route answers 202 at once and forwards in
+# the background. It never fails anything either: an upstream error is logged
+# and the first send simply starts the microVM itself, exactly as before.
+
+# Re-warm the same conversation no sooner than this. Inside the Runtime's
+# 900 s idle window, so a conversation the user keeps open stays warm across a
+# re-warm, while a page reload or two within the window costs nothing extra.
+_PREWARM_REWARM_AFTER_SECONDS = 600.0
+# Per-user ceiling on forwarded warms per minute, so a script or a burst of
+# tabs cannot start microVMs faster than any person could use them.
+_PREWARM_MAX_PER_USER_PER_MINUTE = 10
+# A restore takes about a second on V2 and a cold boot several on V1; a warm
+# call still pending after this is abandoned (the first send starts the VM).
+_PREWARM_TIMEOUT_SECONDS = 30.0
+# Bound on the in-process ledger, so a long-lived task cannot grow it forever.
+_PREWARM_LEDGER_MAX_ENTRIES = 20_000
+
+
+class PrewarmRequest(BaseModel):
+    """The conversation to warm: the id the SPA will send its first turn with."""
+
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class _PrewarmLedger:
+    """In-process dedupe and rate limit for warm calls.
+
+    Per app-api task, not shared: a warm that slips past it on another task
+    costs one idle Runtime session, never data, so a DynamoDB round trip on
+    every page load is not worth it (the shared ``RateLimiter`` writes one per
+    call).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last_warm: Dict[Tuple[str, str], float] = {}
+        self._recent_by_user: Dict[str, List[float]] = {}
+
+    def admit(self, user_id: str, session_id: str, now: float) -> str:
+        """``"accepted"``, ``"recently_warmed"`` or ``"rate_limited"``."""
+        with self._lock:
+            last = self._last_warm.get((user_id, session_id))
+            if last is not None and now - last < _PREWARM_REWARM_AFTER_SECONDS:
+                return "recently_warmed"
+            recent = [t for t in self._recent_by_user.get(user_id, []) if now - t < 60.0]
+            if len(recent) >= _PREWARM_MAX_PER_USER_PER_MINUTE:
+                self._recent_by_user[user_id] = recent
+                return "rate_limited"
+            recent.append(now)
+            self._recent_by_user[user_id] = recent
+            self._last_warm[(user_id, session_id)] = now
+            if len(self._last_warm) > _PREWARM_LEDGER_MAX_ENTRIES:
+                self._prune(now)
+            return "accepted"
+
+    def _prune(self, now: float) -> None:
+        self._last_warm = {
+            key: t for key, t in self._last_warm.items() if now - t < _PREWARM_REWARM_AFTER_SECONDS
+        }
+        self._recent_by_user = {
+            user: [t for t in times if now - t < 60.0]
+            for user, times in self._recent_by_user.items()
+            if any(now - t < 60.0 for t in times)
+        }
+
+    def reset(self) -> None:
+        """Tests only."""
+        with self._lock:
+            self._last_warm.clear()
+            self._recent_by_user.clear()
+
+
+_prewarm_ledger = _PrewarmLedger()
+# Strong references to in-flight forwards: the event loop holds tasks weakly.
+_prewarm_tasks: Set[asyncio.Task] = set()
+
+
+def _build_prewarm_client() -> httpx.AsyncClient:
+    """Seam for tests, like ``_build_upstream_client``."""
+    return httpx.AsyncClient(timeout=httpx.Timeout(_PREWARM_TIMEOUT_SECONDS))
+
+
+async def _forward_prewarm(session_id: str, user_id: str, access_token: str) -> None:
+    """Send the warm invocation and log how long the start took. Never raises."""
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {access_token}",
+    }
+    apply_runtime_session_header(headers, session_id, user_id)
+    body = json.dumps({"session_id": session_id, "warm": True})
+    started = time.monotonic()
+    try:
+        async with _build_prewarm_client() as client:
+            response = await client.post(
+                _build_invocations_url(_inference_api_url()), headers=headers, content=body
+            )
+        logger.info(
+            "prewarm forwarded -> %s in %d ms",
+            response.status_code,
+            int((time.monotonic() - started) * 1000),
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed warm is a missed optimisation, never an error
+        logger.warning(
+            "prewarm failed after %d ms: %s",
+            int((time.monotonic() - started) * 1000),
+            type(exc).__name__,
+        )
+
+
+async def chat_prewarm(
+    body: PrewarmRequest,
+    current_user: User = Depends(get_current_user_from_session),
+) -> JSONResponse:
+    """Start the conversation's Runtime microVM before its first send.
+
+    Always 202 once admitted or declined, so the SPA has nothing to handle:
+    ``status`` says what happened (``accepted``, ``recently_warmed``,
+    ``rate_limited``, or ``skipped`` when runtime-session affinity is off and a
+    warm call could not reach the microVM the turn will use). 404 while
+    ``SESSION_PREWARM_ENABLED`` is off.
+    """
+    if not session_prewarm_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not runtime_session_affinity_enabled():
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "skipped"})
+
+    outcome = _prewarm_ledger.admit(current_user.user_id, body.session_id, time.monotonic())
+    if outcome == "accepted":
+        task = asyncio.create_task(
+            _forward_prewarm(body.session_id, current_user.user_id, current_user.raw_token)
+        )
+        _prewarm_tasks.add(task)
+        task.add_done_callback(_prewarm_tasks.discard)
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": outcome})
+
+
+router.add_api_route(
+    "/prewarm",
+    chat_prewarm,
+    methods=["POST"],
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start a conversation's AgentCore Runtime session ahead of its first send",
+    operation_id="chat_prewarm",
+    responses={
+        401: {"description": "No active BFF session"},
+        404: {"description": "Session prewarm is not enabled"},
     },
 )

@@ -16,6 +16,7 @@ import os
 os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
@@ -41,6 +42,28 @@ model_id_strategy = st.text(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_live_session_reads():
+    """Stub the two session-scoped reads the invocation path makes.
+
+    ``system_prompt_resolver.resolve_active_prompt_text`` reads session
+    metadata, and ``_session_has_documents`` asks the file index whether to
+    inject ``document_read``. Both build real DynamoDB clients, and both are
+    fail-open — so these property tests were issuing live AWS calls on every
+    Hypothesis example while still passing. See the off-box socket guard in
+    ``tests/conftest.py``.
+    """
+    with patch(
+        "apis.inference_api.chat.system_prompt_resolver.get_session_metadata",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        # Imported inside the function, so patch it at the source module.
+        "apis.shared.files.document_read.session_has_documents",
+        new=AsyncMock(return_value=False),
+    ):
+        yield
+
 
 def _make_mock_user() -> User:
     return User(
@@ -120,7 +143,7 @@ class TestAuthorizedAccessInvocations:
     )
     def test_authorized_model_proceeds_invocations(self, model_id: str):
         """For all model_id strings, when can_access_model returns True,
-        the endpoint proceeds to agent creation (status != 403).
+        the endpoint proceeds to agent creation (no forbidden refusal).
 
         **Validates: Requirements 3.1**
         """
@@ -159,8 +182,8 @@ class TestAuthorizedAccessInvocations:
                 },
             )
 
-        assert resp.status_code != 403, (
-            f"Authorized model_id={model_id!r} should NOT get 403, "
+        assert '"code": "forbidden"' not in resp.text, (
+            f"Authorized model_id={model_id!r} should NOT be refused, "
             f"got {resp.status_code}: {resp.text[:200]}"
         )
 
@@ -290,8 +313,8 @@ class TestWildcardAccess:
                 },
             )
 
-        assert resp.status_code != 403, (
-            f"Wildcard access model_id={model_id!r} should NOT get 403, "
+        assert '"code": "forbidden"' not in resp.text, (
+            f"Wildcard access model_id={model_id!r} should NOT be refused, "
             f"got {resp.status_code}: {resp.text[:200]}"
         )
 
@@ -403,8 +426,8 @@ class TestNullEmptyModelIdPassthrough:
                 },
             )
 
-        assert resp.status_code != 403, (
-            f"None model_id should NOT get 403, got {resp.status_code}"
+        assert '"code": "forbidden"' not in resp.text, (
+            f"None model_id should NOT be refused, got {resp.text[:200]}"
         )
         # can_access_model should NOT have been called
         mock_svc.can_access_model.assert_not_called()
@@ -450,8 +473,8 @@ class TestNullEmptyModelIdPassthrough:
                 },
             )
 
-        assert resp.status_code != 403, (
-            f"Empty model_id should NOT get 403, got {resp.status_code}"
+        assert '"code": "forbidden"' not in resp.text, (
+            f"Empty model_id should NOT be refused, got {resp.text[:200]}"
         )
         # can_access_model should NOT have been called
         mock_svc.can_access_model.assert_not_called()

@@ -1,150 +1,185 @@
 <div class="relative flex h-full flex-col w-72 border-r border-gray-300 bg-gray-100 dark:border-white/10 dark:bg-gray-900">
     <div class="flex h-16 shrink-0 items-center justify-between px-4">
-        <img src="img/logo-light.png" alt="Boise State University Logo" class="h-12 w-auto dark:hidden" />
-        <img src="img/logo-dark.png" alt="Boise State University Logo" class="h-12 w-auto hidden dark:block" />
-        <!-- Collapse button (desktop only) -->
-        <button
-            type="button"
-            (click)="toggleCollapse()"
-            [appTooltip]="'Close sidebar'"
-            appTooltipPosition="right"
-            class="hidden lg:flex items-center justify-center size-8 rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
-            aria-label="Collapse sidebar">
-            <!-- Sidebar panel icon -->
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="size-6" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2" ry="2" />
-                <line x1="9" y1="4" x2="9" y2="20" />
-            </svg>
-        </button>
-    </div>
-
-    <div class="shrink-0 px-3 pb-2">
-        <!-- New Session -->
-        <button
-            (click)="newSession()"
-            type="button"
-            class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-            <div class="flex size-7 shrink-0 items-center justify-center text-secondary-500 dark:text-secondary-400">
-                <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        @if (!logoLoadFailed()) {
+            <img [src]="branding.logo.light" [alt]="branding.appName" (error)="onLogoError($event)" class="h-12 w-auto dark:hidden" />
+            <img [src]="branding.logo.dark" [alt]="branding.appName" (error)="onLogoError($event)" class="h-12 w-auto hidden dark:block" />
+        } @else {
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-gray-200 text-gray-500 dark:bg-white/10 dark:text-gray-400" role="img" [attr.aria-label]="branding.appName + ' (logo failed to load)'">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="size-6" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Z" />
                 </svg>
             </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">New Session</span>
-        </button>
-
-        <!--
-            Agents (Agent Designer + Marketplace) — the ONE noun (Marketplace D1).
-
-            Gated on the API surface alone (D14): `showAgents()` is "the /agents list call did
-            not 404", i.e. the AGENTS_API_ENABLED / AGENT_MARKETPLACE_ENABLED kill switches.
-            The former `&& isAdmin()` came off when the marketplace went GA — it hid the nav
-            entry while `/agents/discover`, `/agents/:id`, the composer `@`-menu and
-            role-seeded pins were all reachable by any authenticated user, so the one entry
-            point we controlled was the only one that was closed. There is deliberately no
-            RBAC capability behind this: a capability id cannot be granted from the admin
-            roles UI (see `AppRoleService.resolve_user_permissions`), which is what made the
-            `skills` and `scheduled-runs` gates inoperable.
-
-            ⚠️ This is now the only authoring entry point, so `AGENTS_API_ENABLED=false` no
-            longer degrades to an older surface — it removes agent authoring outright. The
-            flag's semantics changed from "fall back to Assistants" to "there is nothing
-            here"; see `agents_enabled()` in the backend for the same note.
-        -->
-        @if (showAgents()) {
-            <!--
-                Assistants — a **signpost, not a feature**. The entry was removed in
-                Designer Phase 5 on the grounds that there is one noun; it comes back
-                because removing the word from the nav is exactly what makes someone who
-                built an assistant think theirs is gone. It does not lead to an Assistants
-                page (there is none): `/assistants` renders the migration explainer, whose
-                every route out lands on `/agents`.
-
-                Deliberately inside the `showAgents()` block. With the agent surface off,
-                every call to action on that page is dead, and a nav entry leading to a
-                page of dead links is worse than no entry.
-
-                Sits **above** Agents and wears the ordinary link treatment — no muting, no
-                "Moved" tag. Someone still thinking in the old noun scans for the word they
-                know, and a greyed-out entry with a past-tense badge reads as deactivated
-                rather than as a door. Retire it, and the "New" badge below, once the
-                rename has landed with users.
-
-                ⚠️ TEMPORARY host gate (`showAssistantsSignpost`): production apex only, the
-                same gate the `/assistants` route carries, because the page now also answers
-                "where did my assistants from the *previous site* go?" — a question only
-                people arriving off legacy.boisestate.ai have. See
-                `shared/utils/legacy-migration-host.ts`.
-            -->
-            @if (showAssistantsSignpost) {
-            <a
-                routerLink="/assistants"
-                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
-                (click)="sidenavService.close()"
-                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 0 0 .75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 0 0-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0 1 12 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 0 1-.673-.38m0 0A2.18 2.18 0 0 1 3 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 0 1 3.413-.387m7.5 0V5.25A2.25 2.25 0 0 0 13.5 3h-3a2.25 2.25 0 0 0-2.25 2.25v.894m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                    </svg>
-                </div>
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assistants</span>
-            </a>
-            }
-
-            <a
-                routerLink="/agents"
-                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
-                (click)="sidenavService.close()"
-                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
-                    </svg>
-                </div>
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Agents</span>
-                <!--
-                    "New" rather than the amber "Preview" badge the preview surfaces wore:
-                    this is not unstable, it is unfamiliar.
-
-                    Ember (`secondary`), not primary blue. Blue is the nav's structural
-                    colour — the active-row wash, the links, the icons — so a blue badge
-                    sits *inside* the furniture and reads as one more piece of chrome. The
-                    one job of this badge is to be the thing your eye lands on first, and
-                    ember is the only accent here that is not already load-bearing.
-
-                    Filled `secondary-500` — the brand ember itself (#d64309), the same
-                    value the New Session `+` above is drawn in. Only the 500 step: it is
-                    the one literal hex in the scale, and every other step is derived by
-                    moving lightness alone while holding chroma, which walks the colour out
-                    of gamut in both directions. 50 clipped to a pale yellow and read as
-                    amber; 600 clipped toward pure red. Neither is the brand colour.
-
-                    ⚠️ White on 500 measures exactly 4.50:1 — it clears the AA floor for
-                    10px text with nothing to spare. Any change that darkens the text,
-                    lightens the fill, or puts this treatment on smaller type needs the
-                    contrast re-measured, not assumed.
-
-                    Remove this once the rename has stopped being news, together with the
-                    Assistants signpost above.
-                -->
-                <span class="ml-auto rounded-full bg-secondary-500 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-white">New</span>
-            </a>
         }
-
-        <!--
-            No "My Skills" nav entry: the /my-skills route, page, and service are
-            live, but how users reach them is still undecided, so the link stays
-            out of the sidenav until that navigation path is settled.
-        -->
+        <div class="flex items-center gap-1">
+            <!-- Search (conversation-search §6): the discoverable, touch-friendly
+                 way into the Cmd/Ctrl+K dialog. Beside the collapse control, and
+                 unlike it shown at every width, since touch has no shortcut.
+                 Compile-time flag, so the button never pops in after a request. -->
+            @if (features.conversationSearch) {
+                <button
+                    type="button"
+                    (click)="openSearch()"
+                    [appTooltip]="searchTooltip"
+                    appTooltipPosition="bottom"
+                    aria-label="Search"
+                    [attr.aria-keyshortcuts]="searchShortcutAria"
+                    class="flex size-8 items-center justify-center rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white">
+                    <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                    </svg>
+                </button>
+            }
+            <!-- Collapse button (desktop only) -->
+            <button
+                type="button"
+                (click)="toggleCollapse()"
+                [appTooltip]="collapseTooltip"
+                appTooltipPosition="right"
+                class="hidden lg:flex items-center justify-center size-8 rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
+                aria-label="Collapse sidebar"
+                [attr.aria-keyshortcuts]="sidebarShortcutAria">
+                <!-- Sidebar panel icon -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="size-6" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="16" rx="2" ry="2" />
+                    <line x1="9" y1="4" x2="9" y2="20" />
+                </svg>
+            </button>
+        </div>
     </div>
 
-    <nav class="flex-1 overflow-y-auto px-3 pb-4">
-        <app-session-list></app-session-list>
-    </nav>
+    <!--
+        Body: the chat navigation, or the admin console's.
+
+        The admin console used to render its own nav as a second column inside
+        the page, which left an admin page squeezed between two navigations —
+        this one, listing conversations they cannot open from `/admin`, and
+        that one. Swapping the body instead frees the whole content area and
+        keeps the frame (logo, collapse control, user menu) continuous across
+        the boundary; `AdminNav` puts "Back to Chat" at the top of it.
+
+        Driven by the route's `chrome` flag rather than a URL prefix, so the
+        shell and the console agree on one source of truth.
+    -->
+    @if (isAdminChrome()) {
+        <app-admin-nav />
+    } @else {
+        <!--
+            New Session is the only part of the chat body pinned in place; the
+            nav entries and the session list scroll together beneath it, so a
+            short window gives the conversations the whole column instead of
+            what is left under a frozen block of links.
+        -->
+        <div class="sidenav-body-enter shrink-0 px-3">
+            <!-- New Session -->
+            <button
+                (click)="newSession()"
+                type="button"
+                [attr.aria-keyshortcuts]="newSessionShortcutAria"
+                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                <div class="flex size-7 shrink-0 items-center justify-center text-secondary-500 dark:text-secondary-400">
+                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                </div>
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">New Session</span>
+            </button>
+        </div>
+
+        <div class="relative flex min-h-0 flex-1 flex-col">
+            <!-- Fade under New Session, shown once the region has scrolled, so
+                 rows slide out beneath the button instead of being sliced by it. -->
+            <div
+                aria-hidden="true"
+                class="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-linear-to-b from-gray-100 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-gray-900"
+                [class.opacity-0]="!bodyScrolled()"></div>
+
+            <div class="flex-1 overflow-y-auto px-3 pb-4" (scroll)="onBodyScroll($event)">
+                <div class="sidenav-body-enter pb-2">
+                    <!--
+                        The navigation entries, in the order and with the visibility the
+                        user chose (Edit sidebar, under More). The entries are defined in
+                        `sidebar-items.ts`, which also carries why each is gated or not.
+
+                        None of them waits on a request: the layout renders from the
+                        build's defaults or the first-paint cache and is replaced, at
+                        most once, when the account setting lands. Agents used to hang
+                        on an `/agents` probe and pop into a nav the user was already
+                        reading; keep it that way.
+                    -->
+                    @for (entry of sidebarLayout.visibleEntries(); track entry.id) {
+                        <a
+                            [routerLink]="entry.route"
+                            routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                            (click)="sidenavService.close()"
+                            class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                            <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                                <ng-icon [name]="entry.icon" class="size-5" aria-hidden="true" />
+                            </div>
+                            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ entry.label }}</span>
+                        </a>
+                    }
+
+                    <!--
+                        More: the entries the user hid, and the way to change which
+                        those are. Always present, so Edit sidebar can never be hidden.
+                        Highlighted while the active page is one of the hidden entries,
+                        so the user can see where they are.
+                    -->
+                    <button
+                        type="button"
+                        [cdkMenuTriggerFor]="moreMenu"
+                        [cdkMenuPosition]="moreMenuPositions"
+                        [attr.data-active]="moreActive() ? '' : null"
+                        class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 aria-expanded:bg-gray-200/60 data-active:bg-gray-200/80 dark:hover:bg-white/5 dark:aria-expanded:bg-white/5 dark:data-active:bg-white/10">
+                        <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                            <ng-icon name="heroChevronRight" class="size-5" aria-hidden="true" />
+                        </div>
+                        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">More</span>
+                    </button>
+
+                    <ng-template #moreMenu>
+                        <div
+                            cdkMenu
+                            class="w-56 rounded-md bg-white p-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10">
+                            @for (entry of sidebarLayout.hiddenEntries(); track entry.id) {
+                                <a
+                                    cdkMenuItem
+                                    [routerLink]="entry.route"
+                                    (click)="sidenavService.close()"
+                                    class="flex w-full items-center gap-3 rounded-xs px-3 py-2 text-sm/6 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700">
+                                    <ng-icon [name]="entry.icon" class="size-5 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                                    <span>{{ entry.label }}</span>
+                                </a>
+                            }
+                            @if (sidebarLayout.hiddenEntries().length) {
+                                <div role="separator" class="my-1 border-t border-gray-200 dark:border-gray-700"></div>
+                            }
+                            <button
+                                type="button"
+                                cdkMenuItem
+                                (click)="openEditSidebar()"
+                                class="flex w-full items-center gap-3 rounded-xs px-3 py-2 text-left text-sm/6 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700">
+                                Edit sidebar…
+                            </button>
+                        </div>
+                    </ng-template>
+                </div>
+
+                <nav>
+                    <app-session-list></app-session-list>
+                </nav>
+            </div>
+        </div>
+    }
 
     <!-- User dropdown fixed at bottom -->
     @if (userService.currentUser(); as user) {
-        <div class="shrink-0 border-t border-gray-200 px-3 py-3 dark:border-white/10">
-            <app-user-dropdown [user]="user" [isAdmin]="isAdmin()" (logout)="handleLogout()"></app-user-dropdown>
+        <div class="flex shrink-0 items-center gap-1 border-t border-gray-200 px-3 py-2 dark:border-white/10">
+            <app-user-dropdown class="min-w-0 flex-1" [user]="user" [isAdmin]="isAdmin()" (logout)="handleLogout()"></app-user-dropdown>
+            @if (features.projects) {
+                <!-- Projects are the inbox's only producer so far; show the bell with them. -->
+                <app-notification-bell class="shrink-0" />
+            }
         </div>
     }
 

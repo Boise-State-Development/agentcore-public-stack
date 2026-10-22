@@ -84,4 +84,8 @@ def to_agent_view(assistant: Assistant) -> dict:
         # holds where to fetch it from. ``None`` when unset → the SPA's generated gradient.
         "iconUrl": icon_url(assistant.assistant_id, assistant.icon_key),
         "listing": assistant.listing.model_dump(by_alias=True) if assistant.listing else None,
+        # Configurable citations & document download (#111). Always projected (bool, never
+        # None) so the SPA can render the download affordance from the read shape alone.
+        "showCitations": assistant.show_citations,
+        "allowDocumentDownload": assistant.allow_document_download,
     }

@@ -95,6 +95,16 @@ class FineTuningS3Service:
         prefix = self.get_output_s3_prefix(user_id, job_id)
         return f"s3://{self.bucket_name}/{prefix}"
 
+    def get_checkpoint_s3_uri(self, user_id: str, job_id: str) -> str:
+        """Return the s3:// URI SageMaker mirrors the checkpoint dir to.
+
+        Kept beside the job's output rather than inside it: SageMaker writes
+        the finished ``model.tar.gz`` under the output prefix, and mixing a
+        live-mirrored directory into the same prefix makes it ambiguous which
+        objects belong to the completed artifact.
+        """
+        return f"s3://{self.bucket_name}/checkpoints/{user_id}/{job_id}"
+
     # =====================================================================
     # Inference (Batch Transform) S3 methods
     # =====================================================================

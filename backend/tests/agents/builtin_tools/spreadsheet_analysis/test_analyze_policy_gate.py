@@ -7,16 +7,13 @@ short-circuit *before* any sandbox lookup or file resolution work runs.
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import patch
+
+import pytest
 
 from agents.builtin_tools.spreadsheet_analysis.analyze_tool import (
     make_analyze_tool,
 )
-
-
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _underlying(tool_obj):
@@ -26,7 +23,8 @@ def _underlying(tool_obj):
     return inner
 
 
-def test_subprocess_in_analyze_code_rejected_before_file_resolution() -> None:
+@pytest.mark.asyncio
+async def test_subprocess_in_analyze_code_rejected_before_file_resolution() -> None:
     tool = make_analyze_tool(assistant_id=None, session_id="s1", user_id="u1")
     impl = _underlying(tool)
 
@@ -37,11 +35,9 @@ def test_subprocess_in_analyze_code_rejected_before_file_resolution() -> None:
         ),
         patch("agents.builtin_tools.spreadsheet_analysis.analyze_tool._find_file") as find_file,
     ):
-        result = _run(
-            impl(
-                filename="ledger.csv",
-                python_code="import subprocess\nsubprocess.run(['id'])",
-            )
+        result = await impl(
+            filename="ledger.csv",
+            python_code="import subprocess\nsubprocess.run(['id'])",
         )
 
     assert result["status"] == "error"
@@ -50,7 +46,8 @@ def test_subprocess_in_analyze_code_rejected_before_file_resolution() -> None:
     find_file.assert_not_called()
 
 
-def test_eval_in_analyze_code_rejected() -> None:
+@pytest.mark.asyncio
+async def test_eval_in_analyze_code_rejected() -> None:
     tool = make_analyze_tool(assistant_id=None, session_id="s1", user_id="u1")
     impl = _underlying(tool)
 
@@ -61,11 +58,9 @@ def test_eval_in_analyze_code_rejected() -> None:
         ),
         patch("agents.builtin_tools.spreadsheet_analysis.analyze_tool._find_file") as find_file,
     ):
-        result = _run(
-            impl(
-                filename="ledger.csv",
-                python_code="eval('1+1')",
-            )
+        result = await impl(
+            filename="ledger.csv",
+            python_code="eval('1+1')",
         )
 
     assert result["status"] == "error"
@@ -73,7 +68,8 @@ def test_eval_in_analyze_code_rejected() -> None:
     find_file.assert_not_called()
 
 
-def test_legitimate_pandas_code_passes_policy() -> None:
+@pytest.mark.asyncio
+async def test_legitimate_pandas_code_passes_policy() -> None:
     """Realistic analysis code makes it past policy and proceeds to file
     resolution (which we short-circuit with a not-found result).
     """
@@ -95,7 +91,7 @@ def test_legitimate_pandas_code_passes_policy() -> None:
             side_effect=_no_file,
         ),
     ):
-        result = _run(impl(filename="ledger.csv", python_code=src))
+        result = await impl(filename="ledger.csv", python_code=src)
 
     # Policy passed; we land in the file-not-found branch.
     assert result["status"] == "error"

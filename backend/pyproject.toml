@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcore-stack"
-version = "1.15.0"
+version = "1.30.0"
 requires-python = ">=3.10"
 description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
     "uvicorn[standard]==0.46.0",
 
     # AWS and cloud services
-    "boto3==1.43.68",
+    "boto3==1.43.103",
 
     # Utilities
     "python-dotenv==1.2.2",
@@ -25,7 +25,7 @@ dependencies = [
     "aiofiles==25.1.0",
 
     # Authentication (for shared auth module)
-    "pyjwt[crypto]==2.13.0",
+    "pyjwt[crypto]==2.15.0",
 
     # OAuth provider management
     "authlib==1.7.1",
@@ -36,13 +36,24 @@ dependencies = [
 
     # Security: pin transitive deps to fix Dependabot alerts
     "pillow==12.3.0",
-    "cryptography==48.0.1",
+    # Reads .xlsx workbooks into rows for the UI's spreadsheet preview
+    # (apis/app_api/files/sheet_preview.py). MIT, pure Python, one
+    # dependency (et-xmlfile). Already the library our own
+    # create_excel_spreadsheet tool drives inside Code Interpreter, and
+    # the one the RAG ingestion image uses via docling — this pin brings
+    # it into app-api's own closure, which it was not in before.
+    "openpyxl==3.1.5",
+    "cryptography==50.0.1",
     "python-multipart==0.0.31",
-    "aiohttp==3.14.1",
-    "urllib3==2.7.0",
+    "aiohttp==3.14.3",
+    "urllib3==2.8.0",
     "idna==3.15",
     "pyasn1==0.6.4",
-    "soupsieve==2.8.4",
+    "soupsieve==2.9.0",
+    # Transitive via starlette/httpx/fastapi. Pinned to 4.14.2 for
+    # GHSA-82r6-8w77-94w6 (TLSStream IDNA 2003 host-name encoding allowed
+    # TLS certificate spoofing for internationalized domain names).
+    "anyio==4.14.2",
 
     # PDF page-1 rasterization for attachment thumbnails (Apache 2.0 / BSD).
     # Bundles PDFium (no system poppler/ghostscript needed).
@@ -56,11 +67,11 @@ dependencies = [
 [project.optional-dependencies]
 # AgentCore-specific dependencies (for inference_api)
 agentcore = [
-    "strands-agents==1.51.0",
-    "strands-agents-tools==0.8.6",
+    "strands-agents==1.61.1",
+    "strands-agents-tools==0.8.8",
 
     "aws-opentelemetry-distro==0.19.0",
-    "bedrock-agentcore==1.21.0",
+    "bedrock-agentcore==1.24.2",
     # Multi-provider LLM support
     "openai==2.32.0",  # For OpenAI models
     "google-genai==1.73.1",  # For Google Gemini models
@@ -71,7 +82,7 @@ agentcore = [
 
 # Voice/BidiAgent dependencies (Nova Sonic speech-to-speech)
 bidi = [
-    "strands-agents[bidi]==1.51.0",
+    "strands-agents[bidi]==1.61.1",
 ]
 
 # Document ingestion pipeline dependencies (for Lambda deployment)
@@ -85,6 +96,10 @@ dev = [
     "pytest==9.0.3",
     "pytest-asyncio==1.3.0",
     "pytest-cov==7.1.0",
+    # Parallelises the suite across CPU cores (CI runs `pytest -n auto`). The
+    # tests are xdist-safe: moto mocks and hypothesis are per-worker, and no
+    # test mutates shared on-disk state.
+    "pytest-xdist==3.6.1",
     "hypothesis==6.152.3",
     "moto[dynamodb,cognitoidp]==5.1.22",
     "black==26.3.1",
@@ -93,12 +108,49 @@ dev = [
     "types-aiofiles==25.1.0.20260409",
     "tiktoken==0.12.0",
     "numpy==2.2.6",
+    # Exercises the fine-tuning dataset contract (manifest reading, label
+    # normalisation, the image-archive path). The SageMaker containers install
+    # their own unpinned pandas; 2.x is what the py3.10 text DLC resolves to,
+    # and it is the only line compatible with the numpy pin above — pandas 3.x
+    # requires numpy>=2.3.3 on py3.14+.
+    "pandas==2.3.3",
 ]
 
 # All dependencies (convenience)
 all = [
     "agentcore-stack[agentcore,bidi,dev]",
 ]
+
+[tool.uv]
+# Guard rail on a TRANSITIVE dependency — this is not a loosened pin.
+#
+# `mcp` arrives only via `strands-agents`; we do not depend on it directly and
+# deliberately do not promote it to a direct dependency. `strands-agents==1.61.1`
+# — the version pinned above, today — declares `mcp>=1.23.0,<2.2`, the same range
+# 1.57.2 declared, so the resolver is free to cross into `mcp` 2.x whenever it
+# gets the chance. Measured: left unconstrained, 1.61.1 resolves `mcp` to 2.1.1
+# on its own.
+#
+# Without this constraint the only thing holding us on 1.x is incidental: `mcp` 2.x
+# pulls `httpx2>=2.5.0`, which needs `idna>=3.18`, and we pin `idna==3.15` for
+# an unrelated Dependabot alert. A routine security bump of `idna` would quietly
+# unblock the major crossing — nobody would be choosing it, and nothing in the
+# diff would say "MCP".
+#
+# That crossing lands under `src/agents/main_agent/integrations/mcp_apps.py`,
+# which substitutes `strands.tools.mcp.mcp_client.ClientSession` with
+# `_UIExtensionClientSession` to advertise the MCP Apps UI extension (SEP-1865)
+# on `initialize`. That seam reaches through a Strands internal into an MCP SDK
+# class and has never been exercised against 2.x — where the transport
+# dependency itself changed (httpx -> httpx2) and the types moved to a separate
+# `mcp-types` distribution. The failure mode is silent: MCP App frame headers
+# degrade to a generic glyph rather than raising an ImportError.
+#
+# A constraint, not a dependency: it bounds the version IF `mcp` is in the
+# resolution graph, without adding it to our own dependency metadata. Lift it
+# deliberately, together with a test pass over that `ClientSession` patch.
+# Asserted by backend/tests/supply_chain/test_strands_agentcore_pairing.py.
+constraint-dependencies = ["mcp<2"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

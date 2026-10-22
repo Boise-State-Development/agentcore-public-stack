@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, computed, inject, OnInit, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { DatePipe } from '@angular/common';
@@ -14,11 +14,17 @@ import { firstValueFrom } from 'rxjs';
 import { FineTuningStateService } from '../../services/fine-tuning-state.service';
 import { FineTuningHttpService } from '../../services/fine-tuning-http.service';
 import { FineTuningUploadService } from '../../services/fine-tuning-upload.service';
-import { FileUploadState, CreateInferenceJobRequest } from '../../models/fine-tuning.models';
+import {
+  CreateInferenceJobRequest,
+  DEFAULT_TASK_TYPE,
+  FileUploadState,
+  FineTuningTaskType,
+} from '../../models/fine-tuning.models';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-create-inference-job',
-  imports: [RouterLink, ReactiveFormsModule, DatePipe, NgIcon],
+  imports: [RouterLink, ReactiveFormsModule, DatePipe, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -42,6 +48,30 @@ export class CreateInferenceJobPage implements OnInit {
   /** Upload state tracking. */
   readonly uploadState = signal<FileUploadState | null>(null);
 
+  /** The currently chosen training job id, mirrored from the form control. */
+  readonly selectedTrainingJobId = signal<string>('');
+
+  /**
+   * The task the chosen model was fine-tuned for.
+   *
+   * The artifact can only serve its own task, so the accepted input format
+   * follows the model rather than anything the user picks — an image
+   * classifier cannot read a .txt of one line per record.
+   */
+  readonly selectedTaskType = computed<FineTuningTaskType>(() => {
+    const jobId = this.selectedTrainingJobId();
+    const model = this.state.trainedModels().find((m) => m.training_job_id === jobId);
+    return model?.task_type ?? DEFAULT_TASK_TYPE;
+  });
+
+  /** Whether the chosen model expects a .zip of images. */
+  readonly requiresArchive = computed(() => this.selectedTaskType() !== 'text-classification');
+
+  /** `accept` attribute for the inference input, per the chosen model's task. */
+  readonly uploadAccept = computed(() =>
+    this.requiresArchive() ? '.zip' : '.txt,.csv,.jsonl,.json',
+  );
+
   /** Whether the form is being submitted. */
   readonly submitting = signal(false);
 
@@ -56,6 +86,18 @@ export class CreateInferenceJobPage implements OnInit {
 
   ngOnInit(): void {
     this.state.loadTrainedModels();
+
+    // Mirror the model choice into a signal so the accepted input format can
+    // follow it, and drop any file already staged under the previous model's
+    // contract — a .txt uploaded for a text classifier is not valid input for
+    // an image one.
+    this.form.get('trainingJobId')?.valueChanges.subscribe((jobId) => {
+      const next = jobId ?? '';
+      if (next === this.selectedTrainingJobId()) return;
+      this.selectedTrainingJobId.set(next);
+      this.uploadState.set(null);
+      this.submitError.set(null);
+    });
   }
 
   /** Handle file selection from the file input. */
@@ -71,6 +113,7 @@ export class CreateInferenceJobPage implements OnInit {
       // Step 1: Get presigned URL for inference input
       const presignResponse = await firstValueFrom(
         this.http.presignInferenceUpload({
+          task_type: this.selectedTaskType(),
           filename: file.name,
           content_type: file.type || 'application/octet-stream',
         }),

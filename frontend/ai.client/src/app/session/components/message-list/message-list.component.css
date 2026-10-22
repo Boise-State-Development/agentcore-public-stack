@@ -1,4 +1,45 @@
 /* Message list component styles */
 
-@import "tailwindcss";
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../../styles/theme.css";
+/* ========================================
+   End-of-turn recap dot
+   ========================================
+
+   The same 11px orb the loading line pulses while a turn runs, left in place
+   once the turn ends — at rest. It is the period on the sentence: the mark
+   that says the response is finished, in the spot the user was already
+   watching. Same geometry and same colour token as
+   `PulsatingLoaderComponent`'s `.pulse-dot`, minus the animation, so the
+   transition from live to finished reads as the dot settling rather than as
+   one element being swapped for another.
+
+   Nothing here animates, so there is no `prefers-reduced-motion` case. */
+.turn-recap-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  flex: none;
+  background-color: var(--color-secondary-500);
+  /* Muted rather than recoloured: opacity blends toward whatever is behind
+     it, so the one value reads as "settled" in both themes, where a lighter
+     token would mute on white and brighten on the dark surface. It keeps the
+     hue — this is still the same orb, just no longer the loudest thing on a
+     line of gray text. */
+  opacity: 0.55;
+}
+
+:host-context(.dark) .turn-recap-dot {
+  background-color: var(--color-secondary-400);
+}
+
+/* The loader's separator, same size and colour, so the two lines read as one
+   idiom rather than two. */
+.turn-recap-sep {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-gray-400);
+}
+
+:host-context(.dark) .turn-recap-sep {
+  color: var(--color-gray-600);
+}

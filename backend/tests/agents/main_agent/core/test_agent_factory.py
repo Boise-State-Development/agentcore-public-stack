@@ -5,11 +5,13 @@ Covers create_agent for Bedrock, OpenAI, and Gemini providers, API key validatio
 retry strategy configuration, and SequentialToolExecutor usage.
 """
 
+import copy
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider, RetryConfig
+from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +168,95 @@ class TestCreateAgentMantle:
 
 
 # ---------------------------------------------------------------------------
+# bedrock-responses provider creates an Agent with an OpenAI Responses model on
+# the bedrock-runtime endpoint — the only Bedrock path that caches for GPT-5.6.
+# ---------------------------------------------------------------------------
+class TestCreateAgentBedrockResponses:
+    """Delegation contract for the second OpenAI-compatible Bedrock surface.
+
+    Construction behavior (base URL, per-request token mint, usage
+    normalization) is covered directly on the builder in
+    ``tests/shared/test_bedrock_responses.py``.
+    """
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_bedrock_responses_model")
+    def test_delegates_to_the_shared_builder(self, mock_build, mock_agent_cls, monkeypatch):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        mock_model_instance = MagicMock()
+        mock_build.return_value = mock_model_instance
+
+        config = ModelConfig(
+            model_id="us.openai.gpt-5.6-sol",
+            provider=ModelProvider.BEDROCK_RESPONSES,
+        )
+        AgentFactory.create_agent(model_config=config, **_COMMON_KWARGS)
+
+        mock_build.assert_called_once()
+        call_kwargs = mock_build.call_args.kwargs
+        assert call_kwargs["model_id"] == "us.openai.gpt-5.6-sol"
+        assert call_kwargs["region"] == "us-west-2"
+        assert mock_agent_cls.call_args.kwargs["model"] is mock_model_instance
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_bedrock_responses_model")
+    def test_region_override_pins_the_endpoint(self, mock_build, mock_agent_cls, monkeypatch):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        config = ModelConfig(
+            model_id="global.openai.gpt-5.6-sol",
+            provider=ModelProvider.BEDROCK_RESPONSES,
+            mantle_region="us-east-1",
+        )
+        AgentFactory.create_agent(model_config=config, **_COMMON_KWARGS)
+
+        assert mock_build.call_args.kwargs["region"] == "us-east-1"
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_bedrock_responses_model")
+    def test_never_routes_through_the_mantle_builder(
+        self, mock_build, mock_agent_cls, monkeypatch
+    ):
+        """The two surfaces must not cross: Mantle's config hardcodes its host."""
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        config = ModelConfig(
+            model_id="us.openai.gpt-5.6-sol",
+            provider=ModelProvider.BEDROCK_RESPONSES,
+        )
+        with patch("agents.main_agent.core.agent_factory.build_mantle_model") as mantle:
+            AgentFactory.create_agent(model_config=config, **_COMMON_KWARGS)
+
+        mantle.assert_not_called()
+        mock_build.assert_called_once()
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_bedrock_responses_model")
+    def test_inference_params_translate_to_responses_native_names(
+        self, mock_build, mock_agent_cls, monkeypatch
+    ):
+        """`max_tokens` is `max_output_tokens` on the Responses API."""
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        config = ModelConfig(
+            model_id="us.openai.gpt-5.6-sol",
+            provider=ModelProvider.BEDROCK_RESPONSES,
+            inference_params={"max_tokens": 2048, "temperature": 0.3},
+        )
+        AgentFactory.create_agent(model_config=config, **_COMMON_KWARGS)
+
+        params = mock_build.call_args.kwargs["params"]
+        assert params["max_output_tokens"] == 2048
+        assert params["temperature"] == 0.3
+        assert "max_tokens" not in params
+
+
+# ---------------------------------------------------------------------------
 # Req 4.3 — Gemini provider with API key creates Agent with GeminiModel
 # ---------------------------------------------------------------------------
 class TestCreateAgentGemini:
@@ -266,8 +357,8 @@ class TestRetryStrategy:
 
     @patch("agents.main_agent.core.agent_factory.Agent")
     @patch("agents.main_agent.core.agent_factory.OpenAIModel")
-    def test_openai_retry_strategy_is_none(self, mock_openai_cls, mock_agent_cls, monkeypatch):
-        """Req 4.7 — non-Bedrock provider → retry_strategy is None even with retry_config."""
+    def test_openai_gets_the_transient_strategy(self, mock_openai_cls, mock_agent_cls, monkeypatch):
+        """Non-Bedrock providers get the same strategy: None would mean retries OFF."""
         from agents.main_agent.core.agent_factory import AgentFactory
 
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
@@ -281,12 +372,12 @@ class TestRetryStrategy:
         AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
 
         agent_kwargs = mock_agent_cls.call_args.kwargs
-        assert agent_kwargs["retry_strategy"] is None
+        assert isinstance(agent_kwargs["retry_strategy"], TransientModelRetryStrategy)
 
     @patch("agents.main_agent.core.agent_factory.Agent")
     @patch("agents.main_agent.core.agent_factory.GeminiModel")
-    def test_gemini_retry_strategy_is_none(self, mock_gemini_cls, mock_agent_cls, monkeypatch):
-        """Req 4.7 — Gemini provider → retry_strategy is None."""
+    def test_gemini_gets_the_transient_strategy(self, mock_gemini_cls, mock_agent_cls, monkeypatch):
+        """Gemini too: its client never retries unless configured to."""
         from agents.main_agent.core.agent_factory import AgentFactory
 
         monkeypatch.setenv("GOOGLE_GEMINI_API_KEY", "gemini-test-key")
@@ -300,7 +391,7 @@ class TestRetryStrategy:
         AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
 
         agent_kwargs = mock_agent_cls.call_args.kwargs
-        assert agent_kwargs["retry_strategy"] is None
+        assert isinstance(agent_kwargs["retry_strategy"], TransientModelRetryStrategy)
 
 
 # ---------------------------------------------------------------------------
@@ -319,3 +410,147 @@ class TestSequentialToolExecutor:
 
         agent_kwargs = mock_agent_cls.call_args.kwargs
         assert isinstance(agent_kwargs["tool_executor"], SequentialToolExecutor)
+
+
+# ---------------------------------------------------------------------------
+# A text-only model sees history with media blocks replaced by text
+# ---------------------------------------------------------------------------
+class TestTextOnlyModel:
+    """A conversation that sent an image to a vision model keeps the block in
+    history; a TEXT-only model rejects the whole request over it."""
+
+    HISTORY = [
+        {"role": "user", "content": [{"image": {"format": "png", "source": {"bytes": b"x"}}}, {"text": "look"}]},
+    ]
+
+    @pytest.mark.parametrize(
+        "patch_target,cfg",
+        [
+            ("CountTokensBedrockModel", ModelConfig(model_id="zai.glm-5", text_only=True)),
+            (
+                "build_mantle_model",
+                ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE, text_only=True),
+            ),
+        ],
+    )
+    def test_text_only_model_streams_the_projection(self, patch_target, cfg):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        with patch(f"agents.main_agent.core.agent_factory.{patch_target}", return_value=model), \
+             patch("agents.main_agent.core.agent_factory.Agent") as mock_agent_cls:
+            AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
+
+        built = mock_agent_cls.call_args.kwargs["model"]
+        assert built is model
+        built.stream(self.HISTORY, None, "system")
+        sent = inner_stream.call_args.args[0]
+        assert sent[0]["content"][0] == {"text": "[Image omitted: the current model reads text only]"}
+        assert "image" in self.HISTORY[0]["content"][0], "the shared history is untouched"
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_other_models_are_left_alone(self, mock_bedrock_cls, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        mock_bedrock_cls.return_value = model
+
+        AgentFactory.create_agent(
+            model_config=ModelConfig(model_id="amazon.nova-pro-v1:0", provider=ModelProvider.BEDROCK),
+            **_COMMON_KWARGS,
+        )
+
+        assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream
+
+
+# ---------------------------------------------------------------------------
+# Reasoning hygiene across a model switch — now Strands' job, not ours
+# ---------------------------------------------------------------------------
+class TestReasoningHygiene:
+    """A turn on GPT stores its reasoning unsigned; after a switch to Claude,
+    Claude would be asked to verify a block that has no signature.
+
+    We projected that away ourselves (29b05de1) until strands-agents 1.61.1
+    (#5166) did it upstream in ``BedrockModel._format_bedrock_messages``. The
+    factory no longer wraps anything, so these tests pin the *upstream*
+    behaviour: if a bump dropped it, every cross-model Claude turn would start
+    failing signature verification with nothing of ours left to catch it.
+    """
+
+    HISTORY = [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {
+            "role": "assistant",
+            "content": [{"reasoningContent": {"reasoningText": {"text": "thinking"}}}, {"text": "hello"}],
+        },
+        {"role": "user", "content": [{"text": "and now?"}]},
+    ]
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_factory_no_longer_wraps_claudes_model(self, mock_bedrock_cls, mock_agent_cls):
+        """The local projection is gone; Strands filters inside its own formatter."""
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        mock_bedrock_cls.return_value = model
+
+        AgentFactory.create_agent(model_config=_bedrock_config(), **_COMMON_KWARGS)
+
+        assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_mantle_model")
+    def test_mantle_models_are_not_wrapped_either(self, mock_mantle, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        mock_mantle.return_value = model
+
+        AgentFactory.create_agent(
+            model_config=ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE),
+            **_COMMON_KWARGS,
+        )
+
+        assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream
+
+    def test_strands_drops_unsigned_reasoning_before_sending_to_claude(self):
+        """GPT -> Claude. Drives the real SDK formatter, not a stub."""
+        from strands.models.bedrock import BedrockModel
+
+        formatted = BedrockModel(
+            model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0", region_name="us-west-2"
+        )._format_bedrock_messages(copy.deepcopy(self.HISTORY))
+
+        assert formatted[1]["content"] == [{"text": "hello"}]
+
+    def test_strands_keeps_claudes_own_signed_reasoning(self):
+        """A Claude-only history has nothing to drop — the cached prefix is unchanged."""
+        from strands.models.bedrock import BedrockModel
+
+        signed = {"reasoningContent": {"reasoningText": {"text": "thinking", "signature": "sig"}}}
+        history = [{"role": "assistant", "content": [copy.deepcopy(signed), {"text": "hello"}]}]
+
+        formatted = BedrockModel(
+            model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0", region_name="us-west-2"
+        )._format_bedrock_messages(history)
+
+        assert formatted[0]["content"] == [signed, {"text": "hello"}]
+
+    def test_strands_drops_signed_reasoning_for_models_that_reject_it(self):
+        """Claude -> Nova, the direction our own projection never covered."""
+        from strands.models.bedrock import BedrockModel
+
+        signed = {"reasoningContent": {"reasoningText": {"text": "thinking", "signature": "sig"}}}
+        history = [{"role": "assistant", "content": [signed, {"text": "hello"}]}]
+
+        formatted = BedrockModel(
+            model_id="us.amazon.nova-pro-v1:0", region_name="us-west-2"
+        )._format_bedrock_messages(history)
+
+        assert formatted[0]["content"] == [{"text": "hello"}]

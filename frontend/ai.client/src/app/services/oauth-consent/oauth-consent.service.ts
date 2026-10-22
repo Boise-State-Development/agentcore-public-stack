@@ -3,6 +3,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { fromEvent } from 'rxjs';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { SessionService } from '../../session/services/session/session.service';
+import { ChatStateService } from '../../session/services/chat/chat-state.service';
 
 /**
  * Pending OAuth consent request surfaced by the backend when an external
@@ -30,6 +31,12 @@ export interface OAuthConsentRequest {
    *  endpoint to clear the persisted breadcrumb so a refresh doesn't
    *  resurrect a dismissed prompt. */
   sessionId?: string;
+  /** Started by the user from a connect control (a Connectors page, a
+   *  composer switch, a file-source browser) rather than by a turn. Such a
+   *  request rides the popup and completion machinery but is never a prompt:
+   *  {@link OAuthConsentService.pending} leaves it out, so the conversation
+   *  never draws a consent card for a sign-in the user started elsewhere. */
+  userInitiated?: boolean;
 }
 
 /**
@@ -97,6 +104,7 @@ export class OAuthConsentService {
   private readonly destroyRef = inject(DestroyRef);
   private readonly userConnectorsService = inject(UserConnectorsService);
   private readonly sessionService = inject(SessionService);
+  private readonly chatState = inject(ChatStateService);
 
   /** Map of providerId → request. A provider only appears once, even if
    *  the backend emits duplicates mid-stream. */
@@ -139,11 +147,16 @@ export class OAuthConsentService {
    *  consent completes successfully. */
   private resumeHandler: OAuthResumeHandler | null = null;
 
+  /** Consent prompts a conversation owes the user: the ones a turn raised.
+   *  User-initiated sign-ins are tracked in {@link requests} for the popup
+   *  and completion, but the control that started one shows its progress. */
   readonly pending = computed<OAuthConsentRequest[]>(() =>
-    Array.from(this.requests().values()).sort((a, b) => a.receivedAt - b.receivedAt),
+    Array.from(this.requests().values())
+      .filter((req) => !req.userInitiated)
+      .sort((a, b) => a.receivedAt - b.receivedAt),
   );
 
-  readonly hasPending = computed<boolean>(() => this.requests().size > 0);
+  readonly hasPending = computed<boolean>(() => this.pending().length > 0);
 
   readonly completion = this.lastCompletion.asReadonly();
 
@@ -246,6 +259,40 @@ export class OAuthConsentService {
       next.delete(providerId);
       return next;
     });
+  }
+
+  /**
+   * Start a sign-in the user asked for from a connect control, and open its
+   * popup. Resolves as {@link openConsentPopup} does: false when the popup
+   * was blocked (see {@link isBlocked}, {@link getAuthorizationUrl} for the
+   * link fallback) or the provider turned out to be connected already.
+   *
+   * The request is marked {@link OAuthConsentRequest.userInitiated}, so no
+   * conversation renders it. A turn already paused on the same provider
+   * keeps its request: this popup then completes that consent, and the turn
+   * resumes, which is what the user wanted either way.
+   *
+   * `authorizationUrl` may be omitted; the popup fetches a fresh one.
+   */
+  startUserConsent(providerId: string, authorizationUrl?: string): Promise<boolean> {
+    const existing = this.requests().get(providerId);
+    if (!existing || existing.userInitiated) {
+      if (authorizationUrl !== undefined && !isSafeConsentUrl(authorizationUrl)) {
+        console.error('OAuth consent rejected: authorizationUrl is not https', { providerId });
+        return Promise.resolve(false);
+      }
+      this.requests.update((map) => {
+        const next = new Map(map);
+        next.set(providerId, {
+          providerId,
+          authorizationUrl,
+          receivedAt: Date.now(),
+          userInitiated: true,
+        });
+        return next;
+      });
+    }
+    return this.openConsentPopup(providerId);
   }
 
   /**
@@ -415,6 +462,15 @@ export class OAuthConsentService {
         next.delete(providerId);
         return next;
       });
+      // A user-initiated sign-in has no prompt to offer a retry from; the
+      // control that started it does that. Drop it rather than keep it.
+      if (this.requests().get(providerId)?.userInitiated) {
+        this.requests.update((map) => {
+          const next = new Map(map);
+          next.delete(providerId);
+          return next;
+        });
+      }
     }, 500);
     this.closeWatchers.set(providerId, interval);
     this.destroyRef.onDestroy(() => this.cancelCloseWatcher(providerId));
@@ -476,7 +532,7 @@ export class OAuthConsentService {
     // A pre-flight prompt has no server-side breadcrumb to clear, so the
     // only way to make the dismissal stick against next turn's re-emission
     // is to remember it here.
-    if (entry && !interruptId) {
+    if (entry && !interruptId && !entry.userInitiated) {
       this.dismissedPreflightProviders.add(providerId);
     }
 
@@ -508,6 +564,11 @@ export class OAuthConsentService {
     if (options?.syncServer === false || !sessionId || !interruptId) {
       return;
     }
+
+    // The user turned the paused turn's prompt down, so the conversation is
+    // no longer waiting on them; drop its "needs your input" dot now rather
+    // than after the next list refetch.
+    this.chatState.clearSessionAwaitingInput(sessionId);
 
     // Best-effort: a backend cleanup failure shouldn't block the UI from
     // hiding the prompt — the prompt is already gone locally.

@@ -13,13 +13,13 @@ import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
-  heroArrowRight,
   heroCheck,
   heroCheckBadge,
   heroCheckCircle,
   heroExclamationTriangle,
   heroFlag,
   heroLockClosed,
+  heroMicrophone,
   heroNoSymbol,
   heroPlus,
 } from '@ng-icons/heroicons/outline';
@@ -34,7 +34,9 @@ import {
   ReportAgentDialogResult,
 } from '../components/report-agent-dialog.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 import { parseIso } from '../../utils/date';
+import { modelRetirementDetail } from '../../shared/utils/retirement';
 
 /**
  * Agent detail — the page a shelf row taps through to (Marketplace Phase 3).
@@ -67,17 +69,17 @@ import { parseIso } from '../../utils/date';
 @Component({
   selector: 'app-agent-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AgentIconComponent, NgIcon, TooltipDirective],
+  imports: [AgentIconComponent, NgIcon, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
-      heroArrowRight,
       heroCheck,
       heroCheckBadge,
       heroCheckCircle,
       heroExclamationTriangle,
       heroFlag,
       heroLockClosed,
+      heroMicrophone,
       heroNoSymbol,
       heroPlus,
     }),
@@ -97,16 +99,13 @@ import { parseIso } from '../../utils/date';
         @if (error()) {
           <div
             role="alert"
-            class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
         } @else if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading agent</span>
+            <app-spinner size="lg" label="Loading agent" />
           </div>
         } @else if (agent(); as a) {
           <!-- Identity -->
@@ -127,7 +126,7 @@ import { parseIso } from '../../utils/date';
               >
                 <span>{{ publisherLabel() }}</span>
                 @if (a.publisher?.verified) {
-                  <span class="inline-flex items-center gap-1 font-semibold text-blue-600 dark:text-blue-400">
+                  <span class="inline-flex items-center gap-1 font-semibold text-state-info-600 dark:text-state-info-400">
                     <ng-icon
                       name="heroCheckBadge"
                       class="size-4"
@@ -168,9 +167,9 @@ import { parseIso } from '../../utils/date';
                 class="inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm/6 font-semibold disabled:cursor-not-allowed disabled:opacity-45"
                 [class]="
                   isPinned()
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-300'
+                    ? 'border-state-success-200 bg-state-success-50 text-state-success-700 hover:bg-state-success-100 dark:border-state-success-900 dark:bg-state-success-900/20 dark:text-state-success-300'
                     : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700'
-                "
+               "
               >
                 <ng-icon
                   [name]="isPinned() ? 'heroCheck' : 'heroPlus'"
@@ -186,7 +185,7 @@ import { parseIso } from '../../utils/date';
                 [disabled]="isBlocked()"
                 [appTooltip]="startChatTooltip()"
                 appTooltipPosition="top"
-                class="rounded-full bg-blue-600 px-4 py-2 text-sm/6 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45 dark:bg-blue-500 dark:hover:bg-blue-400"
+                class="rounded-full bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Start chat
               </button>
@@ -196,33 +195,63 @@ import { parseIso } from '../../utils/date';
           @if (pinError()) {
             <p
               role="alert"
-              class="mt-3 text-sm/6 text-rose-700 dark:text-rose-400"
+              class="mt-3 text-sm/6 text-state-danger-700 dark:text-state-danger-400"
             >
               {{ pinError() }}
             </p>
           }
 
           <!--
-            Hero: the @-mention prompt this agent answers to. Display-only — the
-            composer has no prompt-prefill entry point, and @-mention itself is
-            Phase 7, so a clickable pill here would be an affordance with no lever
-            behind it. It shows the shape of the thing; Start chat performs it.
+            Hero: the @-mention prompt this agent answers to, drawn as our compact
+            chat composer (session/components/chat-input) — same shell, the same
+            leading attach and trailing dictate / voice glyphs, and the same tint
+            the composer puts under a live @mention. No send button, because the
+            composer has none on desktop: Enter sends.
+
+            Display-only — the composer has no prompt-prefill entry point, so a
+            clickable replica would be an affordance with no lever behind it. It
+            shows the shape of the thing; Start chat performs it. Keep it in step
+            with the composer when that changes, or it teaches the wrong input.
           -->
           <div
             class="mt-6 grid place-items-center rounded-3xl bg-linear-to-br from-blue-700 to-sky-500 px-6 py-12 dark:from-blue-900 dark:to-sky-700"
           >
             <p
-              class="flex w-full max-w-xl items-center gap-4 rounded-full bg-white/95 px-5 py-3.5 text-sm/6 text-gray-900 shadow-md"
+              class="flex w-full max-w-xl items-center gap-0.5 rounded-2xl bg-white p-2 shadow-xl outline-1 -outline-offset-1 outline-gray-300 dark:bg-slate-800 dark:outline-white/10"
             >
-              <span class="min-w-0 flex-1">
-                <span class="font-semibold text-blue-700">{{ mention() }}</span>
+              <span
+                class="grid size-10 shrink-0 place-items-center text-gray-500 dark:text-gray-400"
+                aria-hidden="true"
+              >
+                <ng-icon name="heroPlus" class="size-5" />
+              </span>
+              <span class="min-w-0 flex-1 truncate px-2 py-2 text-base text-gray-900 dark:text-gray-100">
+                <span
+                  class="rounded-sm bg-primary-500/14 ring-2 ring-primary-500/14 dark:bg-primary-400/30 dark:ring-primary-400/30"
+                  >{{ mention() }}</span
+                >
                 {{ heroSuffix() }}
               </span>
               <span
-                class="grid size-7 shrink-0 place-items-center rounded-full bg-gray-900 text-white"
+                class="hidden size-10 shrink-0 place-items-center text-gray-500 sm:grid dark:text-gray-400"
                 aria-hidden="true"
               >
-                <ng-icon name="heroArrowRight" class="size-3.5" />
+                <ng-icon name="heroMicrophone" class="size-5" />
+              </span>
+              <span
+                class="grid size-10 shrink-0 place-items-center text-gray-500 dark:text-gray-400"
+                aria-hidden="true"
+              >
+                <svg
+                  class="size-5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                >
+                  <path d="M3 10.5v3M7 7.5v9M11 4v16M15 7.5v9M19 10.5v3" />
+                </svg>
               </span>
             </p>
           </div>
@@ -273,6 +302,11 @@ import { parseIso } from '../../utils/date';
                         {{ row.value }}
                       </dd>
                     </div>
+                    @if (row.note) {
+                      <p class="pb-1 text-right text-xs/5 text-state-warning-700 dark:text-state-warning-300">
+                        {{ row.note }}
+                      </p>
+                    }
                   }
                 </dl>
               </section>
@@ -308,9 +342,9 @@ import { parseIso } from '../../utils/date';
                     class="mt-3 flex items-start gap-1.5 border-t border-gray-200 pt-3 text-sm/6 dark:border-gray-700"
                     [class]="
                       r.state === 'ready'
-                        ? 'text-emerald-700 dark:text-emerald-400'
-                        : 'text-rose-700 dark:text-rose-400'
-                    "
+                        ? 'text-state-success-700 dark:text-state-success-400'
+                        : 'text-state-danger-700 dark:text-state-danger-400'
+                   "
                   >
                     <ng-icon [name]="availabilityIcon()" class="mt-1 size-4 shrink-0" aria-hidden="true" />
                     <span>{{ availabilityText() }}</span>
@@ -329,7 +363,7 @@ import { parseIso } from '../../utils/date';
               @if (reportConfirmation()) {
                 <p
                   role="status"
-                  class="flex items-start gap-2 text-sm/6 text-emerald-700 dark:text-emerald-400"
+                  class="flex items-start gap-2 text-sm/6 text-state-success-700 dark:text-state-success-400"
                 >
                   <ng-icon name="heroCheckCircle" class="mt-1 size-4 shrink-0" aria-hidden="true" />
                   <span>{{ reportConfirmation() }}</span>
@@ -348,7 +382,7 @@ import { parseIso } from '../../utils/date';
                 </button>
               }
               @if (reportError()) {
-                <p role="alert" class="mt-2 text-sm/6 text-rose-700 dark:text-rose-400">
+                <p role="alert" class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-400">
                   {{ reportError() }}
                 </p>
               }
@@ -450,15 +484,37 @@ export class AgentDetailPage implements OnInit {
     return starter.charAt(0).toLowerCase() + starter.slice(1);
   });
 
-  readonly details = computed(() => {
+  readonly details = computed<{ label: string; value: string; note?: string }[]>(() => {
     const a = this.agent();
     if (!a) return [];
     return [
       { label: 'Publisher', value: this.publisherLabel() },
       { label: 'Category', value: a.categoryLabel || '—' },
-      { label: 'Model', value: a.modelLabel || '—' },
+      { label: 'Model', value: a.modelLabel || '—', note: this.modelRetirementNote() ?? undefined },
       { label: 'Last updated', value: this.formatDate(a.updatedAt) },
     ];
+  });
+
+  /**
+   * What happens to this agent's model, when it is being retired. Without it the panel
+   * names a model the runtime no longer runs (docs/specs/model-retirement.md): a retired
+   * model answers as its successor, or not at all.
+   */
+  readonly modelRetirementNote = computed<string | null>(() => {
+    const r = this.agent()?.modelRetirement;
+    if (!r) return null;
+    const detail = modelRetirementDetail({
+      status: r.status,
+      successorName: r.successorLabel,
+      retiresOn: r.retiresOn,
+      retirementNote: r.retirementNote,
+    });
+    if (r.status === 'retired') {
+      return r.successorLabel
+        ? `Retired. ${detail}`
+        : 'Retired. This agent can’t run until its owner chooses another model.';
+    }
+    return detail ? `Being retired. ${detail}` : 'Being retired.';
   });
 
   /**
@@ -570,8 +626,6 @@ export class AgentDetailPage implements OnInit {
         return 'tool';
       case 'skill':
         return 'skill';
-      case 'memory_space':
-        return 'memory';
       default:
         return kind;
     }

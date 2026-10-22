@@ -19,10 +19,22 @@ export interface Assistant {
   status: 'DRAFT' | 'COMPLETE';
   imageUrl?: string;
 
+  /** Configurable source citations & document download (#111); default true. */
+  showCitations?: boolean;
+  allowDocumentDownload?: boolean;
+
   // Share metadata (only present for shared assistants)
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;
   userPermission?: UserPermission;
+
+  /**
+   * Shared Projects: `'project'` when this is a project's hidden harness, which a
+   * project task binds. The chat renders it as the project, not as an Agent.
+   */
+  kind?: 'project';
+  /** The owning project when `kind === 'project'`. */
+  projectId?: string;
 }
 
 export interface CreateAssistantDraftRequest {

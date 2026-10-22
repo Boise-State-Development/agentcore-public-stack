@@ -1,0 +1,66 @@
+# conversation-index Lambda image — the conversation-search index consumer and
+# its daily reconciler.
+#
+# Two functions, handler selected per function by ImageConfig.Command:
+#   - apis.app_api.conversation_index.consumer.lambda_handler (default CMD), fed
+#     by an SQS queue that the conversation archive bucket's EventBridge rules
+#     fill (docs/specs/conversation-search.md §4, PR-2b);
+#   - apis.app_api.conversation_index.reconciler.lambda_handler, a daily
+#     schedule that expires archive objects past retention and deletes KB
+#     documents with no archive object (§3, PR-2c). Same import closure, so
+#     one image and one deploy job serve both.
+# CDK
+# (infrastructure/lib/constructs/conversation-index/conversation-index-construct.ts)
+# ships bootstrap stubs from infrastructure/bootstrap-assets/conversation-index/
+# and .../conversation-index-reconciler/; the backend workflow swaps this image
+# in with `update-function-code`.
+#
+# Keep the COPY surface minimal but COMPLETE: it must cover the handler's whole
+# import closure, function-local imports included.
+# backend/tests/supply_chain/test_lambda_image_imports.py enforces it. When
+# adding a COPY here, add the path to the conversation-index SOURCE_DIRS /
+# MANIFESTS in scripts/build/build-one.sh as well, or the content-hash tag will
+# not notice the change and the deploy becomes a silent no-op.
+#
+# Base image digest-pinned to the same digest as the other Lambda images; the
+# supply-chain dockerfile-pinning test asserts they agree.
+
+FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a2225831c96394ae70c0c2a7c7c6168
+
+# Dependencies (exact pins). The boto3 pin is what makes the managed knowledge
+# base API reachable; see the kb-migration requirements file.
+COPY backend/src/apis/app_api/conversation_index/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Application code — namespace-package layout mirrors backend/src. `apis/` and
+# `apis/app_api/` have no `__init__.py` and rely on implicit namespace packages.
+COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
+# aws_clients.py — kb_backend/records.py and the archive store read through it.
+COPY backend/src/apis/shared/aws_clients.py ${LAMBDA_TASK_ROOT}/apis/shared/aws_clients.py
+# feature_flags.py — CONVERSATION_INDEX_ENABLED (stdlib only).
+COPY backend/src/apis/shared/feature_flags.py ${LAMBDA_TASK_ROOT}/apis/shared/feature_flags.py
+# observability/ — kb_backend/metrics.py publishes through it.
+COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/observability/
+# kb_backend/ — whole package, as in the kb-migration image: provisioning,
+# records, managed_backend and their stdlib-only siblings.
+COPY backend/src/apis/shared/kb_backend/ ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/
+# conversation_archive/ — the document shape and key rules. File by file, not
+# the package: live.py reaches the runtime's session code and is not used here.
+COPY backend/src/apis/shared/conversation_archive/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/__init__.py
+COPY backend/src/apis/shared/conversation_archive/documents.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/documents.py
+COPY backend/src/apis/shared/conversation_archive/store.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/store.py
+COPY backend/src/apis/shared/conversation_archive/index_documents.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/index_documents.py
+COPY backend/src/apis/shared/conversation_archive/retention.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/retention.py
+# extract_records, shared with the kb-migration ingestion consumer.
+COPY backend/src/apis/app_api/kb_migration/__init__.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/__init__.py
+COPY backend/src/apis/app_api/kb_migration/ingestion_consumer.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/ingestion_consumer.py
+
+# The handlers.
+COPY backend/src/apis/app_api/conversation_index/ ${LAMBDA_TASK_ROOT}/apis/app_api/conversation_index/
+
+# /var/task is read-only at runtime, so precompile what we COPYed; pip already
+# compiled site-packages.
+RUN python -m compileall -q ${LAMBDA_TASK_ROOT}
+
+CMD ["apis.app_api.conversation_index.consumer.lambda_handler"]

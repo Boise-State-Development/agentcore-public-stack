@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # Agent Designer Phase 1 (D3): the uniform binding kinds. Requests validate against
 # this set; storage tolerates unknown kinds on read so records written by newer code
 # survive a read/write round trip through older code (forward + rollback compat).
-KNOWN_BINDING_KINDS = ("knowledge_base", "tool", "skill", "memory_space")
-BindingKind = Literal["knowledge_base", "tool", "skill", "memory_space"]
+KNOWN_BINDING_KINDS = ("knowledge_base", "tool", "skill")
+BindingKind = Literal["knowledge_base", "tool", "skill"]
 
 # Agent Marketplace Phase 1 (D2): the listing lifecycle. The transition table and the
 # sparse-index key derivation live in ``assistants.listing`` — this is only the wire type.
@@ -21,6 +21,7 @@ ListingState = Literal[
     "changes_requested",
     "taken_down",
     "withdrawal_requested",
+    "rejected",
 ]
 PublisherKind = Literal["institution", "department", "individual"]
 
@@ -101,13 +102,19 @@ class AgentModelConfig(BaseModel):
     )
 
 
+# The most an author may write as an agent's instructions (characters). Enforced where
+# instructions are saved and where a preview sends them live. The prompt builder's
+# runtime bound is this plus room for the platform text composed around it, so a saved
+# agent is never truncated. Prod's longest was 32,887 on 2026-09-24.
+MAX_AGENT_INSTRUCTIONS_CHARS = 100_000
+
+
 class AgentBinding(BaseModel):
     """A single primitive binding on an Agent (D3).
 
     ``kind`` is an open string on read (unknown kinds pass through untouched); the
-    request layer validates it against ``KNOWN_BINDING_KINDS``. Phase 1 resolves only
-    ``memory_space`` and ``knowledge_base``; ``tool`` and ``skill`` are accepted and
-    stored but inert (not resolved) until Phase 2/3.
+    request layer validates it against ``KNOWN_BINDING_KINDS``. A stored ``memory_space``
+    binding (the kind was retired — memory belongs to Projects) is ignored at run time.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -388,6 +395,21 @@ class Assistant(BaseModel):
         None, description="Uniform primitive bindings (D3); absent = synthesize legacy KB binding via compat"
     )
 
+    # Configurable citations & document download (issue #111): additive, optional.
+    # ``extra="allow"`` + these ``True`` defaults mean every legacy row (no attribute)
+    # keeps today's behavior — citations shown, source docs downloadable — with no
+    # backfill. A creator opts a specific agent OUT by setting either to False.
+    show_citations: bool = Field(
+        True,
+        alias="showCitations",
+        description="Whether RAG source-citation SSE events are streamed to the client and persisted (#111)",
+    )
+    allow_document_download: bool = Field(
+        True,
+        alias="allowDocumentDownload",
+        description="Whether source documents may be downloaded from citations (#111); only meaningful when showCitations is True",
+    )
+
     # Agent Marketplace Phase 1: additive, optional, absent on every existing row. There
     # is no backfill — an absent ``listing`` IS the D3 default and means "never submitted".
     tagline: Optional[str] = Field(
@@ -398,6 +420,15 @@ class Assistant(BaseModel):
     )
     listing: Optional[AgentListing] = Field(
         None, description="Marketplace publication state (D2); absent = never submitted (D3)"
+    )
+    # Shared Projects (docs/specs/shared-projects.md §3.2). A project's harness is an
+    # ordinary Agent record marked with the project that owns it: access resolves through
+    # project membership, and it never appears in agent lists, pins or the store.
+    kind: Optional[Literal["project"]] = Field(
+        None, description="'project' for a Shared Project's hidden harness; absent for every other agent"
+    )
+    project_id: Optional[str] = Field(
+        None, alias="projectId", description="The owning project when kind == 'project'"
     )
 
 
@@ -416,7 +447,7 @@ class CreateAssistantRequest(BaseModel):
 
     name: str = Field(..., description="Assistant display name")
     description: str = Field(..., description="Short summary")
-    instructions: str = Field(..., description="System prompt")
+    instructions: str = Field(..., max_length=MAX_AGENT_INSTRUCTIONS_CHARS, description="System prompt")
     visibility: Literal["PRIVATE", "PUBLIC", "SHARED"] = Field("PRIVATE", description="Access control")
     tags: Optional[List[str]] = Field(default_factory=list, description="Search keywords")
     starters: Optional[List[str]] = Field(default_factory=list, description="Conversation starter prompts")
@@ -426,6 +457,11 @@ class CreateAssistantRequest(BaseModel):
     model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
     bindings: Optional[List[AgentBinding]] = Field(None, description="Uniform primitive bindings")
     tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle (D4)")
+    # Configurable citations & document download (#111); default True = today's behavior.
+    show_citations: bool = Field(True, alias="showCitations", description="Stream/persist source citations (#111)")
+    allow_document_download: bool = Field(
+        True, alias="allowDocumentDownload", description="Allow source-document download from citations (#111)"
+    )
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -435,7 +471,7 @@ class UpdateAssistantRequest(BaseModel):
 
     name: Optional[str] = Field(None, description="Assistant display name")
     description: Optional[str] = Field(None, description="Short summary")
-    instructions: Optional[str] = Field(None, description="System prompt")
+    instructions: Optional[str] = Field(None, max_length=MAX_AGENT_INSTRUCTIONS_CHARS, description="System prompt")
     visibility: Optional[Literal["PRIVATE", "PUBLIC", "SHARED"]] = Field(None, description="Access control")
     tags: Optional[List[str]] = Field(None, description="Search keywords")
     starters: Optional[List[str]] = Field(None, description="Conversation starter prompts")
@@ -448,6 +484,11 @@ class UpdateAssistantRequest(BaseModel):
     # Marketplace: the author owns their own tagline. Admins may also edit it, but only
     # through PATCH /admin/agents/{id}/listing, which records the edit (D13).
     tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle (D4)")
+    # Configurable citations & document download (#111); None = leave the stored value unchanged.
+    show_citations: Optional[bool] = Field(None, alias="showCitations", description="Stream/persist source citations (#111)")
+    allow_document_download: Optional[bool] = Field(
+        None, alias="allowDocumentDownload", description="Allow source-document download from citations (#111)"
+    )
 
 
 class AssistantResponse(BaseModel):
@@ -471,6 +512,13 @@ class AssistantResponse(BaseModel):
     status: Literal["DRAFT", "COMPLETE"] = Field(..., description="Lifecycle status")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
 
+    # Configurable citations & document download (#111). Always present (default True) so
+    # the SPA can render the download affordance without waiting for a 403.
+    show_citations: bool = Field(True, alias="showCitations", description="Whether source citations are shown (#111)")
+    allow_document_download: bool = Field(
+        True, alias="allowDocumentDownload", description="Whether source documents may be downloaded from citations (#111)"
+    )
+
     # Share metadata (only present for shared assistants)
     first_interacted: Optional[bool] = Field(None, alias="firstInteracted", description="Whether user has interacted with this shared assistant")
     is_shared_with_me: Optional[bool] = Field(
@@ -478,6 +526,15 @@ class AssistantResponse(BaseModel):
     )
     user_permission: Optional[Literal["owner", "editor", "viewer"]] = Field(
         None, alias="userPermission", description="Requesting user's permission level on this assistant"
+    )
+
+    # Shared Projects: a project task binds the project's harness, and the chat's crumb
+    # renders it as the project (not an Agent with Edit / Share, which the harness refuses).
+    kind: Optional[Literal["project"]] = Field(
+        None, description="'project' for a Shared Project's hidden harness; absent for every other agent"
+    )
+    project_id: Optional[str] = Field(
+        None, alias="projectId", description="The owning project when kind == 'project'"
     )
 
 
@@ -488,6 +545,24 @@ class AssistantsListResponse(BaseModel):
 
     assistants: List[AssistantResponse] = Field(..., description="List of assistants for the user")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
+
+
+class AgentModelRetirement(BaseModel):
+    """The pinned model is being retired, as the detail page says so (docs/specs/model-retirement.md).
+
+    Present only when the model is ``deprecated`` or ``retired``: without it the Details
+    panel names a model the runtime no longer runs. ``successorLabel`` is the model that
+    answers in its place — a display name, like every other detail-page field, never an id.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str = Field(..., description="'deprecated' or 'retired'")
+    successor_label: Optional[str] = Field(
+        None, alias="successorLabel", description="Display name of the replacement model, when there is one"
+    )
+    retires_on: Optional[str] = Field(None, alias="retiresOn", description="ISO date of the cutover")
+    retirement_note: Optional[str] = Field(None, alias="retirementNote", description="Admin note for users")
 
 
 class AgentCapability(BaseModel):
@@ -506,7 +581,7 @@ class AgentCapability(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     label: str = Field(..., description="Display name of the bound primitive")
-    kind: str = Field(..., description="Binding kind (tool | skill | memory_space)")
+    kind: str = Field(..., description="Binding kind (tool | skill)")
 
 
 # Two states, not three. The Marketplace spec's D6 sketched a middle "limits"
@@ -582,6 +657,14 @@ class AgentResponse(BaseModel):
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 creation timestamp")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 update timestamp")
 
+    # Configurable citations & document download (#111). Carried on the agent surface so
+    # the citation card can hide its download button without probing for a 403. Defaults
+    # True, so a legacy agent's payload reads exactly as before.
+    show_citations: bool = Field(True, alias="showCitations", description="Whether source citations are shown (#111)")
+    allow_document_download: bool = Field(
+        True, alias="allowDocumentDownload", description="Whether source documents may be downloaded from citations (#111)"
+    )
+
     # Marketplace Phase 1. All three are ``None`` on an agent that has never been
     # submitted, and the routes serve this model with ``response_model_exclude_none``,
     # so an unsubmitted agent's payload is byte-identical to before this shipped.
@@ -608,6 +691,11 @@ class AgentResponse(BaseModel):
         None,
         alias="modelLabel",
         description="Display name of the pinned model, for the detail Details panel; absent when no model is pinned",
+    )
+    model_retirement: Optional[AgentModelRetirement] = Field(
+        None,
+        alias="modelRetirement",
+        description="Set when the pinned model is deprecated or retired; absent for an active model",
     )
     publisher: Optional["ListingPublisher"] = Field(
         None,
@@ -655,7 +743,7 @@ class BindableItem(BaseModel):
     of these so every picker in the Designer consumes the same shape. ``ref`` is the
     value the UI stores: ``modelConfig.modelId`` for ``kind == "model"``, otherwise a
     ``binding.ref``. ``meta`` carries kind-specific display extras (provider, MCP
-    server sub-tools, memory-space role, …) that the picker renders but never has to
+    server sub-tools, …) that the picker renders but never has to
     understand structurally.
     """
 
@@ -738,6 +826,23 @@ class SkillExposure(BaseModel):
     label: str = Field(..., description="Skill display name, for the submit dialog's enumeration")
 
 
+class ShareSkillExposureResponse(BaseModel):
+    """The owner-authored skills that come along with sharing an Agent (§6/D7).
+
+    The share dialog's half of D7.1: the same enumeration the submit dialog shows, for the
+    narrower act of adding people or leaving the Agent PUBLIC. Owner only.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    exposed_skills: List[SkillExposure] = Field(
+        default_factory=list,
+        alias="exposedSkills",
+        description="Skills the owner wrote that anyone with access to the Agent can use and read",
+    )
+
+
 class ListingSubmissionResponse(BaseModel):
     """The resulting listing plus the disclosures the author was shown (D7)."""
 
@@ -756,7 +861,7 @@ class ListingPreflightResponse(BaseModel):
     """What the submit dialog shows before the author commits (D7).
 
     The same checks ``submit_listing`` runs, answered without a transition: the skills
-    publication would expose, the memory-space block if there is one, and whether the
+    publication would expose, the project-harness block if there is one, and whether the
     author has to consent to going public.
 
     ⚠️ ``blockReason`` and ``requiresPublic`` are deliberately **separate signals**, not
@@ -801,13 +906,25 @@ class ListingPreflightResponse(BaseModel):
 
 
 class ReviewListingRequest(BaseModel):
-    """Admin approves a submission or returns it with a reason (D2)."""
+    """Admin approves a submission, returns it with a reason, or declines it (D2).
+
+    ⚠️ ``reject`` is a third decision, not a harsher ``request_changes``. Both return the
+    submission with a required reason; they differ in what the author is told and in what
+    the admin is committing to. See ``assistants.listing``'s note on the ``rejected`` state.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    decision: Literal["approve", "request_changes"] = Field(..., description="Reviewer's decision")
+    decision: Literal["approve", "request_changes", "reject"] = Field(
+        ..., description="Reviewer's decision"
+    )
     note: Optional[str] = Field(
-        None, max_length=2000, description="Reason; required for request_changes, renders on the author's card"
+        None,
+        max_length=2000,
+        description=(
+            "Reason; required for request_changes and reject, renders on the author's card. "
+            "A decline with no reason is the one outcome an author cannot act on at all."
+        ),
     )
     category: Optional[str] = Field(None, description="Optionally recategorize at approval (D12/D13)")
     publisher_id: Optional[str] = Field(
@@ -1070,6 +1187,105 @@ class AdminListingRow(BaseModel):
         ),
     )
     admin_edits: List[AdminEdit] = Field(default_factory=list, alias="adminEdits", description="Admin edit log (D13)")
+
+
+class AdminSubmissionReview(BaseModel):
+    """Everything a reviewer needs to decide, read from the **frozen snapshot** (D2).
+
+    The gap this closes: before it, a reviewer had a name, an author, a category and a
+    collapsible diff. ``instructions`` is gated to owner/editor on the user-facing detail
+    read, and ``get_assistant_with_access_check`` refuses a non-owner outright on a PRIVATE
+    Agent — so the person deciding whether to publish something could not read its system
+    prompt, could not see what it binds, and on a **first** submission saw no content at
+    all, because a diff against nothing is empty by construction.
+
+    ⚠️ **The snapshot, never the live record, and that is the whole design.** Widening the
+    user-facing ``GET /agents/{id}`` for admins would have been fewer lines and wrong: it
+    serves the author's *draft*, which the author can edit between the reviewer reading it
+    and the reviewer approving it. ``AgentVersion`` exists precisely to close that window
+    (it is cut at submission, not at approval), and ``review_listing`` promotes
+    ``submitted_version`` — so reading anything else would show an admin one configuration
+    and publish another. Reading the snapshot also sidesteps the PRIVATE 403 without
+    loosening anyone's access gate: this is an admin projection of a frozen artifact, not a
+    hole in ``get_assistant_with_access_check``.
+
+    Disclosure note: ``instructions`` reaches a marketplace admin here, deliberately. You
+    cannot review what you cannot read, and the review diff already discloses them on every
+    *update*; what this changes is that a first submission is no longer the one case where
+    the reviewer is asked to approve prose nobody showed them.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    name: str = Field(..., description="Display name as of the reviewed snapshot")
+    description: str = Field(..., description="Summary as of the reviewed snapshot")
+    tagline: Optional[str] = Field(None, description="Shelf subtitle as of the reviewed snapshot")
+    instructions: str = Field(..., description="System prompt as of the reviewed snapshot — the thing being reviewed")
+    starters: List[str] = Field(default_factory=list, description="Conversation starters as of the reviewed snapshot")
+    emoji: Optional[str] = Field(None, description="Emoji, for the generated icon fallback (D5)")
+    icon_url: Optional[str] = Field(
+        None, alias="iconUrl", description="Where to render the icon from; absent → generated gradient"
+    )
+    owner_name: str = Field(..., alias="ownerName", description="Author display name — who to talk to about behavior")
+    publisher: Optional[PublisherProfile] = Field(None, description="Resolved attribution (D12), display only")
+    category: str = Field(..., description="Category id")
+    category_label: Optional[str] = Field(
+        None,
+        alias="categoryLabel",
+        description="Human label for ``category``; ids are not display content (see ``resolve_listing_display``)",
+    )
+    state: ListingState = Field(..., description="Publication state")
+    capabilities: List[AgentCapability] = Field(
+        default_factory=list,
+        description=(
+            "What the snapshot binds, by name. Resolved against the snapshot's own "
+            "``bindings`` rather than the live record's, so a tool the author added after "
+            "submitting is not attributed to the version under review."
+        ),
+    )
+    model_label: Optional[str] = Field(
+        None, alias="modelLabel", description="Display name of the pinned model; absent = resolve as today"
+    )
+    review_version: Optional[int] = Field(
+        None,
+        alias="reviewVersion",
+        description=(
+            "The snapshot this read is of. ``submittedVersion`` while a submission is "
+            "pending, ``publishedVersion`` otherwise — never 'the latest', which an admin "
+            "presentation edit (§6.2) could have moved underneath the reviewer."
+        ),
+    )
+    published_version: Optional[int] = Field(
+        None, alias="publishedVersion", description="Which snapshot the store is currently serving"
+    )
+    snapshot_unavailable: bool = Field(
+        False,
+        alias="snapshotUnavailable",
+        description=(
+            "No snapshot backs this read, so the fields above come from the Agent's **live "
+            "record** — which its author can still change. True for submissions that predate "
+            "version snapshots.\n\n"
+            "Reported rather than refused. ``diff_pending_version`` 400s in this case because "
+            "a diff of one thing is meaningless, but a reviewer looking at a row in their own "
+            "queue needs *something* to read; answering 'no' would leave them exactly where "
+            "the empty diff left them. The flag is what lets the page say the content is not "
+            "frozen instead of implying it is."
+        ),
+    )
+    submitted_at: Optional[str] = Field(None, alias="submittedAt", description="ISO 8601 submission timestamp")
+    withdrawal_requested_at: Optional[str] = Field(
+        None, alias="withdrawalRequestedAt", description="ISO 8601 timestamp of a pending withdrawal request"
+    )
+    reviewed_at: Optional[str] = Field(None, alias="reviewedAt", description="ISO 8601 timestamp of the last review")
+    review_note: Optional[str] = Field(None, alias="reviewNote", description="Most recent reviewer note")
+    reachability: ListingReachability = Field(
+        ...,
+        description=(
+            "Who can open this Agent if it is shelved. Carried here as well as on the queue "
+            "row because this page is where the decision is actually made."
+        ),
+    )
 
 
 class AdminListingsResponse(BaseModel):
@@ -1418,8 +1634,8 @@ class RoleAgentPinRow(BaseModel):
     notes: List[str] = Field(
         default_factory=list,
         description=(
-            "What the role-level check could not decide — a memory-space binding resolves "
-            "per person, so 'ready' here never claims to have checked it"
+            "What the role-level check could not decide, so 'ready' here never claims "
+            "to have checked it"
         ),
     )
 
@@ -1695,15 +1911,6 @@ class AdminQueueCountsResponse(BaseModel):
     open_report_count: int = Field(
         0, alias="openReportCount", description="Problem reports awaiting triage (D15)"
     )
-
-
-class AssistantTestChatRequest(BaseModel):
-    """Request body for testing assistant chat with RAG"""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    message: str = Field(..., description="User message to test")
-    session_id: Optional[str] = Field(None, description="Optional session ID for ephemeral chat")
 
 
 class ShareAssistantRequest(BaseModel):

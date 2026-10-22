@@ -1,16 +1,19 @@
 import { Injectable, inject, computed } from '@angular/core';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { HttpClient, HttpContext, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../services/config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import {
   CreateDocumentRequest,
   UploadUrlResponse,
   Document,
   DocumentsListResponse,
   DownloadUrlResponse,
+  ExtractedChunksResponse,
   STALE_DOCUMENT_THRESHOLD_MS,
 } from '../models/document.model';
 import { parseIso } from '../../utils/date';
+import { KnowledgeTarget, knowledgePaths } from '../models/knowledge-target.model';
 
 /**
  * Error class for document upload operations
@@ -48,10 +51,17 @@ export class DocumentService {
    *
    * @param assistantId - The assistant identifier
    * @param file - The file to upload
+   * @param options - `suppressErrorToast` skips the global error toast, for a
+   *   caller that handles the failure itself (the replace flow turns a 413 into
+   *   a confirmation dialog, so a toast first would contradict it)
    * @returns Promise resolving to upload URL response
    * @throws DocumentUploadError on validation or API failure
    */
-  async requestUploadUrl(assistantId: string, file: File): Promise<UploadUrlResponse> {
+  async requestUploadUrl(
+    assistantId: string,
+    file: File,
+    options?: { suppressErrorToast?: boolean },
+  ): Promise<UploadUrlResponse> {
     const request: CreateDocumentRequest = {
       filename: file.name,
       contentType: file.type || 'application/octet-stream',
@@ -63,6 +73,11 @@ export class DocumentService {
         this.http.post<UploadUrlResponse>(
           `${this.baseUrl()}/${assistantId}/documents/upload-url`,
           request,
+          {
+            context: options?.suppressErrorToast
+              ? new HttpContext().set(SUPPRESS_ERROR_TOAST, true)
+              : undefined,
+          },
         ),
       );
     } catch (err) {
@@ -199,10 +214,24 @@ export class DocumentService {
    * @returns Promise resolving to document
    * @throws DocumentUploadError on API failure
    */
-  async getDocument(assistantId: string, documentId: string): Promise<Document> {
+  async getDocument(
+    assistantId: string,
+    documentId: string,
+    options?: { suppressErrorToast?: boolean },
+  ): Promise<Document> {
     try {
       return await firstValueFrom(
-        this.http.get<Document>(`${this.baseUrl()}/${assistantId}/documents/${documentId}`),
+        this.http.get<Document>(`${this.baseUrl()}/${assistantId}/documents/${documentId}`, {
+          // The global error interceptor pops a dialog for every failed request
+          // BEFORE any caller's catch runs, so a caller that handles its own
+          // failures has to say so here or the user sees both. The polling loop
+          // tolerates up to five consecutive 404s by design — a document deleted
+          // mid-upload produced five "Not found" dialogs, one per tolerated retry,
+          // even though the code was handling it correctly all along.
+          context: options?.suppressErrorToast
+            ? new HttpContext().set(SUPPRESS_ERROR_TOAST, true)
+            : undefined,
+        }),
       );
     } catch (err) {
       throw this.handleApiError(err, 'Failed to get document');
@@ -227,6 +256,46 @@ export class DocumentService {
       );
     } catch (err) {
       throw this.handleApiError(err, 'Failed to get download URL');
+    }
+  }
+
+  /**
+   * Read the content the knowledge base actually extracted from a document.
+   *
+   * The tooling half of the §5.41 decision: the managed backend flattens a
+   * column-structured diagram at ingestion, so a per-column question gets a
+   * confident wrong answer with no trace. This is how an owner sees that for
+   * themselves and decides to reformat their source.
+   *
+   * A 409 means the document exists but has nothing to show yet (still processing,
+   * or its knowledge base is still being created). That is surfaced as a `reason`
+   * rather than thrown, because it is an answer to the user's question, not a fault
+   * they need to see as an error.
+   */
+  async getExtractedChunks(
+    target: KnowledgeTarget,
+    documentId: string,
+  ): Promise<ExtractedChunksResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<ExtractedChunksResponse>(
+          `${this.config.appApiUrl()}${knowledgePaths(target).documents}/${encodeURIComponent(documentId)}/chunks`,
+        ),
+      );
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 409) {
+        return {
+          documentId,
+          fileName: '',
+          engine: '',
+          available: false,
+          reason: err.error?.detail ?? 'This document is not ready to inspect yet.',
+          chunks: [],
+          returned: 0,
+          capReached: false,
+        };
+      }
+      throw this.handleApiError(err, 'Failed to read extracted content');
     }
   }
 
@@ -298,6 +367,15 @@ export class DocumentService {
     maxPollTime: number = 5 * 60 * 1000, // 5 minutes
     initialInterval: number = 500, // 500ms - start fast to catch quick status changes
     maxInterval: number = 10000, // 10 seconds
+    /**
+     * Asked before every request. Return true to abandon the poll immediately.
+     *
+     * Without this the loop keeps asking about a document the user has just
+     * deleted: it has no way to know, so it runs until its 404 tolerance is spent.
+     * The caller knows the moment the row goes away, which is why the decision
+     * belongs to it and not to a timeout in here.
+     */
+    isCancelled?: () => boolean,
   ): Promise<Document> {
     const startTime = Date.now();
     let currentInterval = initialInterval;
@@ -308,8 +386,17 @@ export class DocumentService {
     const STALE_THRESHOLD_MS = STALE_DOCUMENT_THRESHOLD_MS;
 
     while (Date.now() - startTime < maxPollTime) {
+      if (isCancelled?.()) {
+        throw new DocumentUploadError(
+          'Polling cancelled — the document is no longer being tracked',
+          'POLL_CANCELLED',
+          { documentId, assistantId },
+        );
+      }
       try {
-        const document = await this.getDocument(assistantId, documentId);
+        const document = await this.getDocument(assistantId, documentId, {
+          suppressErrorToast: true,
+        });
 
         // Reset 404 counter on successful response
         consecutive404Count = 0;
@@ -374,7 +461,9 @@ export class DocumentService {
     }
 
     // Timeout - get final status
-    const finalDocument = await this.getDocument(assistantId, documentId);
+    const finalDocument = await this.getDocument(assistantId, documentId, {
+      suppressErrorToast: true,
+    });
     if (onStatusUpdate) {
       onStatusUpdate(finalDocument);
     }

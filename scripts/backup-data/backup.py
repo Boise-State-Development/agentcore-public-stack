@@ -73,6 +73,10 @@ DYNAMODB_TABLES: list[dict[str, Any]] = [
     {"logical": "system-cost-rollup",   "ssm": "/cost-tracking/system-cost-rollup-table-name"},
     {"logical": "managed-models",       "ssm": "/admin/managed-models-table-name"},
     {"logical": "user-menu-links",      "ssm": "/admin/user-menu-links-table-name"},
+    {"logical": "announcements",        "ssm": "/admin/announcements-table-name",       "optional": True},
+    {"logical": "system-prompts",       "ssm": "/admin/system-prompts-table-name",      "optional": True},
+    {"logical": "agent-templates",      "ssm": "/admin/agent-templates-table-name",     "optional": True},
+    {"logical": "audit-log",            "ssm": "/audit/audit-log-table-name",           "optional": True},
     {"logical": "user-settings",        "ssm": "/settings/user-settings-table-name"},
     {"logical": "user-file-uploads",    "ssm": "/user-file-uploads/table-name"},
     {"logical": "shared-conversations", "ssm": "/shares/shared-conversations-table-name"},
@@ -86,8 +90,11 @@ DYNAMODB_TABLES: list[dict[str, Any]] = [
 # table from the pre-refactor architecture. That table was decommissioned in
 # commit c977e04e — the python app uses the rag-assistants table for both
 # assistant config and document metadata via DYNAMODB_ASSISTANTS_TABLE_NAME.
-# Empty for now; convention-named tables that show up later go here.
-DYNAMODB_TABLES_BY_CONVENTION: list[dict[str, str]] = []
+# Convention-named tables (no SSM parameter): `{prefix}-{suffix}`.
+DYNAMODB_TABLES_BY_CONVENTION: list[dict[str, str]] = [
+    {"logical": "memory-spaces",        "suffix": "memory-spaces"},
+    {"logical": "projects",             "suffix": "projects"},
+]
 
 # Ephemeral / TTL-driven tables. Excluded by default; include with --include-ephemeral.
 DYNAMODB_TABLES_EPHEMERAL: list[dict[str, str]] = [
@@ -101,6 +108,13 @@ S3_BUCKETS: list[dict[str, Any]] = [
     {"logical": "rag-documents",        "ssm": "/rag/documents-bucket-name"},
     {"logical": "artifacts",            "ssm": "/artifacts/bucket-name",                "optional": True},
     {"logical": "fine-tuning-data",     "ssm": "/fine-tuning/data-bucket-name",         "optional": True},
+    {"logical": "shared-conversations", "ssm": "/shares/shared-conversations-bucket-name", "optional": True},
+    {"logical": "memory-spaces",        "ssm": "/memory-spaces/bucket-name",            "optional": True},
+    {"logical": "skill-resources",      "ssm": "/skills/skill-resources-bucket-name",   "optional": True},
+    # Per-turn conversation transcripts (conversation search). Once Memory's
+    # events expire this is the only copy of a turn's text, and the search
+    # index is rebuilt from it, so it is user data, not a derived cache.
+    {"logical": "conversation-archive", "ssm": "/conversations/archive-bucket-name",    "optional": True},
 ]
 
 # S3 Vectors indexes. Distinct from S3_BUCKETS because S3 Vectors is a

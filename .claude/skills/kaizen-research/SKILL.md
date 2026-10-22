@@ -1,6 +1,6 @@
 ---
 name: kaizen-research
-description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns (including opencode (anomalyco/opencode) as an open-source coding-agent harness reference scanned through tooling, cost-effectiveness, and context-engineering lenses — releases-first, light touch), agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs), and LibreChat as a parallel open-source agentic-platform reference (releases-first, light touch). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
+description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, multi-agent patterns and inter-agent communication (a standing watch that keeps docs/specs/multi-agent-patterns.md and docs/specs/agent-handoffs-and-consults.md in sync by queuing spec-sync items), FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns (including opencode (anomalyco/opencode) as an open-source coding-agent harness reference scanned through tooling, cost-effectiveness, and context-engineering lenses — releases-first, light touch), agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs), and LibreChat as a parallel open-source agentic-platform reference (releases-first, light touch). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~4 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
 ---
 
 # Kaizen Research
@@ -18,7 +18,7 @@ Friday early morning. The "what's the rest of the world learning that we should 
 
 ## When to run
 
-Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am MT) so both docs are waiting when Phil sits down Friday morning. Phil reviews, picks 1–3 to ship over the coming week, and POCs additional items over the weekend. Last weekend's POC findings surface in *this* run's review-prep as Carried Over items (lifted from comments on the previous week's research PR).
+Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am MT), a gap sized to this scan's own runtime (2h18m on 2026-09-11) rather than to the 2 hours the two skills used to claim — on 2026-09-18 the prep ran 18 minutes after this scan started and produced a review with no research doc. Both docs are waiting when Phil sits down Friday late morning; he reviews, picks 1–3 to ship over the coming week, and the *outcomes* of those picks are what review-prep reads the following Friday.
 
 ## Sources
 
@@ -29,11 +29,166 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
    - https://aws.amazon.com/blogs/machine-learning/ (filter: bedrock, agentcore)
    - Filter to: Bedrock, AgentCore, Bedrock Agents, Knowledge Bases, Guardrails, model availability/region/quota changes.
 
-2. **Strands Agents SDK**
-   - https://github.com/strands-agents/sdk-python/releases
-   - https://github.com/strands-agents/sdk-python/blob/main/CHANGELOG.md
-   - https://github.com/strands-agents/sdk-python/issues?q=is%3Aissue+sort%3Aupdated-desc
+2. **Strands Agents SDK** — note the repo moved: `strands-agents/sdk-python` now
+   redirects to **`strands-agents/harness-sdk`** (a monorepo; the Python SDK lives
+   under `strands-py/`). Use the new name — `gh` search against the old one errors.
+   - https://github.com/strands-agents/harness-sdk/releases
+   - https://github.com/strands-agents/harness-sdk/blob/main/strands-py/CHANGELOG.md
+   - https://github.com/strands-agents/harness-sdk/issues?q=is%3Aissue+sort%3Aupdated-desc
    - For each new release, identify: breaking changes, new hooks/features, fixes that map to current usage in `backend/src/agents/main_agent/`.
+
+2a. **Prompt caching across providers — standing watch (added 2026-09-05)**
+
+   We carry custom code that exists only because Strands' caching support is
+   Bedrock/Anthropic-shaped. Upstream is converging on a provider-agnostic
+   `CacheConfig`, so this is *mostly* a **subtraction** item: each upstream landing
+   should delete code here, not add it. Check every run, and check it for *all*
+   cacheable families — Anthropic, OpenAI/GPT, and any newly cacheable model — not
+   just the one that prompted this.
+
+   ⚠️ **Amended 2026-09-11: it is not subtraction-only, and the second half is now
+   the more valuable one.** Two kinds of drift matter, and only the first deletes
+   code. **(i) Convergence** — upstream absorbs something we hand-roll; propose the
+   swap. **(ii) Coverage** — a Bedrock family gains prompt caching that *neither*
+   we nor upstream will use, because both gate on the same `_cache_strategy`
+   string test for `"claude"`/`"anthropic"`. Measured that day: **Nova Micro
+   accepts an explicit system cachePoint and honors it** (7,203 input tokens → 2,
+   7,201 cache-written) while `bedrock_cache_points_supported()` refuses it. That
+   is caching left on the floor, it grows every time AWS ships a cacheable model,
+   and no test can catch it — a string predicate keeps answering the same thing
+   while the platform moves underneath it. Coverage findings are **additions**;
+   file them anyway.
+
+   Our carried code, and what would retire it:
+
+   | Ours | Retired by |
+   |---|---|
+   | `usage_normalization.py` — maps `cache_write_tokens`, which Strands drops | [harness-sdk#4193](https://github.com/strands-agents/harness-sdk/pull/4193) (ours) — **merged 2026-09-25, after `python/v1.57.1`**; retires on the first release that contains it |
+   | `usage_normalization.py` — disjointness shim for OpenAI's inclusive `input_tokens` | **Not retired by upstream — see the #4618 warning below.** [#3546](https://github.com/strands-agents/harness-sdk/issues/3546) closes once [#4617](https://github.com/strands-agents/harness-sdk/pull/4617) merges; its successor [#4618](https://github.com/strands-agents/harness-sdk/issues/4618) picks the *other* convention |
+   | `build_prompt_cache_key()` in `bedrock_responses.py` | `strands/models/_openai_cache.py::apply_cache_config` — **already on upstream main**, maps `CacheConfig.cache_key` → `prompt_cache_key`. Adopt on the next pin bump. |
+   | `apply_explicit_prompt_cache()` (breakpoints) | No upstream equivalent yet — `apply_cache_config` emits no `prompt_cache_breakpoint`. Ours is OFF by default (measured 57% worse); don't re-enable without re-running the probe. |
+   | `cache_ttl_seconds_for()` in `observability/prompt_cache.py` | A model-derived TTL upstream. Note `apply_cache_config` maps ttl to `prompt_cache_retention` (`in_memory`/`24h`), *not* GPT-5.6's `prompt_cache_options.ttl: "30m"` — so these are not yet the same concept. |
+   | `bedrock_cache_points_supported()` + the hand-placed system cachePoint | **NOTHING upstream can retire this — settled by measurement 2026-09-11, do not re-propose.** `format_request` copies `system_prompt_content` verbatim and `_apply_system_cache_ttl` never removes a point, so the block reaches Bedrock, which answers `AccessDeniedException` on a model that can't cache. The rejection is Bedrock's, not the SDK's. Only its `tools_ttl` half is redundant (upstream applies the same test at `bedrock.py:579`). |
+
+   ⚠️ **harness-sdk#4618 (tracked from 2026-09-25) inverts our convention. It is a
+   pin-bump hazard, not a subtraction.** #4618 proposes one canonical `Usage`
+   convention, semconv **subset**: `inputTokens` *includes* cache reads and
+   writes, and `totalTokens == inputTokens + outputTokens`. It enforces this at
+   the provider boundary, so the **Bedrock and Anthropic adapters would fold
+   cache tokens into `inputTokens`**. Everything we own assumes the opposite,
+   the disjoint Converse convention: `CostCalculator.calculate_message_cost`,
+   the context-size sum in `stream_coordinator.py`, `observability/prompt_cache.py`
+   and `prefix_tokens.py`, and the `C#` metadata rows. The day a pin containing
+   it lands, every cached Bedrock token is billed twice (input rate *plus* the
+   cache rate), and a cache write is billed at the input rate plus the 1.25×
+   premium. On our default path that is most of the prompt. Nothing errors,
+   and the only symptom is cost and quota inflating on cache hits.
+   `normalize_usage()` would have to learn to subtract for Bedrock too. Its
+   docstring's "leaves Bedrock usage untouched" would then be the bug. Direct
+   boto3 Converse callers (e.g. `app_api/chat/converse_routes.py`) keep the
+   disjoint shape, so two conventions would coexist inside our own code. The
+   proposal also adds a reasoning-token field (a *subset* of `outputTokens`,
+   so it is a breakdown, never an extra charge). Status at filing: open,
+   "warrants a short design doc before implementation", no PR yet.
+
+   Each run, answer:
+   - **#4618:** did a design doc, a PR, or a release note land? Does any adapter
+     in the pinned version (or the candidate bump) now fold cache tokens into
+     `inputTokens`? Check Bedrock specifically:
+     `strands/models/bedrock.py` usage handling, and whether `_total_prompt_tokens`
+     still exists (its deletion is the tell that the flip shipped). If it
+     shipped, **the bump PR must carry the matching `normalize_usage` change**,
+     plus a live check that one cached Bedrock call prices identically before
+     and after. Queue it as a blocking gate on the bump, not an idea.
+   - Does the pinned Strands version now ship `_openai_cache.py` / a `CacheConfig`
+     that covers a provider we hand-roll? If so, propose the swap and say which of
+     our modules shrinks.
+   - Did `CacheConfig` gain a field (`cache_key`, `tools_ttl`, `system_prompt_ttl`, …)
+     that maps onto something we do manually?
+   - Any new Bedrock model family with prompt caching? Confirm which API surface
+     serves it — GPT-5.6 caches **only** over the Responses API, and the same model
+     over Converse caches not at all. Then **measure it, don't read it**:
+
+         cd backend
+         AWS_PROFILE=dev-ai uv run python scripts/probe_bedrock_cache_point_support.py \
+             --model-id <the new model id>
+
+     One command, ~$0.01, and it answers both layers at once — what the pinned
+     Strands emits for that id, and whether Bedrock accepts and honors an explicit
+     cachePoint. A row where Bedrock caches but `_cache_strategy` is `None` is a
+     coverage finding (ii) — file it. Use `--offline-only` for a free check of the
+     SDK half alone after a pin bump.
+   - Movement on #3546 / #4617 / #4618, and whether #4193 has reached a release.
+     All of them change what our cost math may assume.
+
+   ⚠️ Never adopt an upstream caching default on inspection alone. This stack has
+   already shipped one caching change whose premise was wrong and cost ~57% more
+   in a live measurement. `backend/scripts/probe_gpt56_cache_rates.py` is the gate:
+   beat the current arm, measured, before switching.
+
+   ⚠️ **A caching A/B measures nothing if its prefix is under the model's minimum.**
+   Below that floor Bedrock **silently ignores** the cache point — no error, no
+   cache buckets, a result indistinguishable from "unsupported". Measured on Haiku
+   4.5 in us-west-2 (2026-09-11): 2,351 and 3,911 tokens wrote **nothing**, 5,202
+   wrote in full — a real floor of **4,096**, twice the 2,048 the first-party
+   Anthropic docs publish for Haiku. Do not trust a vendor-documented minimum;
+   bracket it. This already produced one false "does not cache" against our own
+   production model.
+
+2b. **Multi-agent patterns and inter-agent communication — standing watch (added 2026-10-13)**
+
+   This is strategic: composing agents (agents as tools, Swarm, Graph, messages
+   between conversations, and eventually a drag-and-drop canvas in the Agent
+   Designer) is where the platform is headed. Two living specs carry the plan,
+   and this watch keeps them true:
+
+   - `docs/specs/multi-agent-patterns.md`: the pattern map, the shared sub-agent
+     runner (§4), what Strands handles vs. what's ours (§4.2), the Designer
+     composition model (§6), the sequence (§8)
+   - `docs/specs/agent-handoffs-and-consults.md`: handoffs (Phase 0), deliveries
+     (§4.8), consults (Phase 1), messages between conversations (Phase 2)
+
+   Read both before scanning. Lens (b), **capability unlock**, usually dominates
+   here, but subtraction matters too: each upstream release that ships a piece of
+   §4's substrate (nested interrupts, multi-agent session persistence, per-node
+   metering, nested streaming) is a piece we shouldn't build.
+
+   Sources:
+   - **Strands multi-agent.** In each harness-sdk release, look for changes to
+     `strands/multiagent/` (`swarm.py`, `graph.py`, `a2a/`, `_snapshot.py`) and to
+     `strands-agents-tools`' `workflow`, `swarm`, `agent_graph`, `use_agent` and
+     `a2a_client` tools. Shares source 2's web requests; no extra budget.
+   - **A2A protocol.** The spec and SDK releases (confirm the current repo; it moved
+     to the `a2aproject` org), and AgentCore Runtime A2A support in source 1.
+   - **Inter-agent patterns in shipped harnesses.** Claude Code's changelog (source
+     6) for subagents, cross-session messaging and agent teams; opencode (6a) for
+     sub-agent and task delegation.
+   - **Visual agent composition.** Products that let users wire agents together
+     (e.g. Amazon Bedrock Flows, OpenAI's agent builder, LangGraph Studio). Pattern-only
+     references for the Designer canvas (§6 of the patterns doc); 1–2 requests, and
+     only when a release headlines composition.
+
+   Each run, answer:
+   - **Did §4.2 move?** Does the pinned Strands version (or the candidate bump)
+     change how Swarm/Graph handle interrupts, `session_manager`, hooks, plugins or
+     prebuilt nodes? Does either of §4.2's two verify-firsts now have an upstream
+     answer?
+   - **Did anything retire a piece of the substrate?** Name the row of the patterns
+     doc §4 table it retires, and what we'd no longer build.
+   - **Did our own code move?** `git log origin/develop --since="7 days ago"` plus a grep for
+     the names the specs promise: `HANDOFF#`, `DELIVERY#`, `apis.shared.handoff`,
+     `resolve_turn_agent`, `send_to_conversation`, `consult-`, `strands.multiagent`,
+     `Binding.kind` `'agent'`. A landed PR means a spec's **Status** line, phase
+     table or "what already exists" section is now stale.
+   - **Does any claim in either spec no longer hold?** A pinned version, a parameter
+     name, a "not used in `backend/src`", a cost figure, a gate assumption.
+
+   **Output: a "Spec sync" list** in the research doc (see the template). Each entry
+   names the doc and section, quotes the stale claim, cites the evidence (URL, commit
+   or file:line) and gives the proposed replacement text. Queue each as a review-queue
+   item with **Surface: docs**. This skill still never edits the specs; the sync lands
+   in its own small PR after review, like every other idea. An empty week says
+   "no drift found" explicitly, so silence is distinguishable from not checking.
 
 3. **Reference repo — `aws-samples/sample-strands-agent-with-agentcore`**
    - https://github.com/aws-samples/sample-strands-agent-with-agentcore/commits/main
@@ -114,7 +269,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 ### Internal (this repo)
 
-13. **Recent commits.** `git log develop --since="7 days ago" --oneline --no-merges`. Cluster by area (`backend/`, `frontend/`, `infrastructure/`). Reverts and high-churn files signal pain points.
+13. **Recent commits.** `git log origin/develop --since="7 days ago" --oneline --no-merges`. Cluster by area (`backend/`, `frontend/`, `infrastructure/`). Reverts and high-churn files signal pain points.
 
 14. **Open PRs + review comments.** `gh pr list --base develop --state open --limit 20`, then `gh pr view <n> --comments` on the top 3 by comment count. Repeated review feedback is a CLAUDE.md or skill-update signal.
 
@@ -168,6 +323,14 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 #### Strands Agents
 - **[Item]** — …
+
+#### Multi-agent patterns / inter-agent communication
+- **[Item]** — [URL or commit] — *relevance*: [patterns doc / handoffs spec section] — *unlocks* (if applicable): […]
+
+**Spec sync** (source 2b — required every run; "no drift found" when empty)
+| Doc § | Stale claim (quoted) | Evidence | Proposed text |
+|---|---|---|---|
+| multi-agent-patterns.md §4.2 | "…" | [URL / SHA / file:line] | "…" |
 
 #### Reference repo (aws-samples/sample-strands-agent-with-agentcore)
 - **[Commit / change]** — [diff summary] — [URL] — *applicability*: [does our equivalent code do this differently? worth porting?]
@@ -311,14 +474,14 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - Last 14 days of `CHANGELOG.md` and `RELEASE_NOTES.md`
 
 3. **Inventory internal signals** (parallel Bash calls):
-   - `git log develop --since="7 days ago" --oneline --no-merges`
+   - `git log origin/develop --since="7 days ago" --oneline --no-merges`
    - `gh pr list --base develop --state open --limit 20`
    - `gh issue list --state open --search "created:>$(date -v-7d +%Y-%m-%d)"`
    - `gh run list --status=failure --limit 30`
    - `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`
    - Read pinned versions from the three manifest files.
 
-4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (15 categories total including 4a FastMCP, 4b Agentic UI/UX, 6a opencode, and 12 LibreChat). LibreChat and opencode each get a *light* subagent — releases-first, 1–2 web requests; do not fan either out further unless a headline maps onto something we're shipping. Each subagent receives:
+4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (16 categories total including 2b multi-agent, 4a FastMCP, 4b Agentic UI/UX, 6a opencode, and 12 LibreChat). The 2b subagent also receives both living specs and the internal grep list, and must return the Spec sync rows. LibreChat and opencode each get a *light* subagent — releases-first, 1–2 web requests; do not fan either out further unless a headline maps onto something we're shipping. Each subagent receives:
    - The exact URLs to scan
    - Scope: last 7 days
    - Web budget for that subagent (3–5 requests soft target)
@@ -334,7 +497,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - **Capability-unlock** items — new platform primitives, SDK hooks, spec capabilities, or UX patterns that enable net-new product surface we couldn't easily build before — rank on their strategic merit, *not* deprioritized just because they don't intersect existing code. Apply the dual lens from Philosophy: if a feature genuinely unlocks new capability (code-interpreter, persistent agent state, multi-agent UI attribution, etc.), rank it like a fit item, not like a "monitor" item. Resist the temptation to hedge unlock items into "replaces future glue we haven't written" — that under-weights the real story.
    - **Concrete fit** UI/UX patterns that match an existing surface (tool-call rendering, attachments, A2A attribution, consent flows) get a fit boost over generic "interesting trend" items.
 
-7. **Update review queue.** For each Top 5 idea, prepend a new entry under `## Open` in `docs/kaizen/review-queue.md`. Never touch `## Resolved`.
+7. **Update review queue.** For each Top 5 idea, prepend a new entry under `## Open` in `docs/kaizen/review-queue.md`. Also prepend one entry per Spec sync row (titled "Spec sync: <doc> §<n>", Surface: docs); these don't count toward the Top 5. Never touch `## Resolved`.
 
 8. **Open a PR** — see "PR creation".
 
@@ -344,7 +507,11 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 DATE=$(TZ=America/Denver date +'%Y-%m-%d')
 BRANCH="kaizen/research-${DATE}"
 
-git checkout -b "$BRANCH" develop
+# Branch from the remote tip, never local `develop`: the main checkout often
+# sits detached or on another branch, and local `develop` is usually checked
+# out in some other worktree and weeks behind.
+git fetch origin develop
+git checkout -b "$BRANCH" origin/develop
 git add docs/kaizen/
 git commit -m "$(cat <<EOF
 chore(kaizen): weekly research scan ${DATE}
@@ -365,8 +532,7 @@ gh pr create --base develop --head "$BRANCH" \
 
 ## Review
 - Read the research doc.
-- Comment on the PR with reactions and any weekend POC findings — these become first-class signal for *next* Friday's `kaizen-review-prep`.
-- POC promising ideas over the weekend.
+- Ship, decline or defer individual ideas in their own PRs — a merged PR is the signal `kaizen-review-prep` reads next Friday. Deep analysis belongs in a `docs/kaizen/review-queue.md` entry on the PR branch that produced it, where the next review will find it.
 
 ## Decision
 Ship the doc to `develop`. Ranking into decisions happens in the kaizen-review-prep PR opened later this morning. Action on individual ideas happens in separate PRs the following week.

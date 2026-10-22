@@ -4,6 +4,14 @@ inclusion: manual
 
 # Theming Reference
 
+> **Brand color scales are generated — never hand-write them.**
+> `primary-*`, `secondary-*` and `tertiary-*` are emitted into
+> `src/styles/generated/brand-theme.css` from `src/branding/brand.config.ts`.
+> To change a brand color, edit that config. Status and category colors live
+> in `src/styles/tokens/`. See the Colors reference for the full picture; the
+> `@theme` examples below are for non-color theme values (spacing, radius,
+> fonts) and for understanding what the generator emits.
+
 ## @theme Configuration
 
 Define custom theme values in your CSS:
@@ -12,18 +20,14 @@ Define custom theme values in your CSS:
 @import 'tailwindcss';
 
 @theme {
-  /* Custom colors become utilities: bg-brand, text-brand, etc. */
-  --color-brand: #0033a0;
-  
-  /* Color scales */
-  --color-primary-500: #0033a0;
-  --color-primary-600: oklch(from #0033a0 calc(l - 0.1) c h);
-  
   /* Custom spacing */
   --spacing-18: 4.5rem;
   
   /* Custom radius */
   --radius-pill: 9999px;
+  
+  /* Custom font */
+  --font-display: 'InterVariable', sans-serif;
 }
 ```
 
@@ -60,23 +64,21 @@ Support class-based toggle AND system preference:
 
 ### Theme-Aware Colors
 
-Define colors that adapt to light/dark:
-
-```css
-@theme {
-  /* Semantic colors that flip in dark mode */
-  --color-surface: white;
-  --color-surface-dark: #1a1a1a;
-  
-  --color-text: #111827;
-  --color-text-dark: #f3f4f6;
-}
-```
+This project styles light/dark with explicit `dark:` variants on Tailwind
+neutrals rather than flipping custom surface tokens:
 
 ```html
-<div class="bg-surface text-text dark:bg-surface-dark dark:text-text-dark">
+<div class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white">
   Content adapts to mode
 </div>
+```
+
+Brand colors are the exception worth knowing: a solid brand fill carrying white
+text needs **no** `dark:` override, because the contrast that matters is fill
+against its white text, which does not change between modes.
+
+```html
+<button class="bg-primary-accessible text-white hover:brightness-95">Save</button>
 ```
 
 ## Dark Mode Patterns
@@ -136,7 +138,7 @@ Don't forget borders:
 ```html
 <button class="
   focus-visible:ring-2 
-  focus-visible:ring-primary-500 
+  focus-visible:ring-primary-accessible 
   focus-visible:ring-offset-2
   focus-visible:ring-offset-white
   dark:focus-visible:ring-offset-gray-900
@@ -162,7 +164,7 @@ Shadows are less visible on dark backgrounds:
 <input class="
   bg-white border-gray-300 text-gray-900 placeholder-gray-400
   dark:bg-gray-800 dark:border-gray-600 dark:text-white dark:placeholder-gray-500
-  focus:ring-primary-500 focus:border-primary-500
+  focus:ring-primary-accessible focus:border-primary-accessible
 "/>
 ```
 
@@ -170,44 +172,36 @@ Shadows are less visible on dark backgrounds:
 
 ### Using oklch for Scales
 
-Generate consistent color scales from a base color:
+This is what the generator emits for each brand role, shown for reference —
+do not hand-write it. Holding chroma and hue while varying lightness keeps a
+scale perceptually consistent:
 
 ```css
-@theme {
-  /* Base color */
-  --color-primary-500: #0033a0;
-  
-  /* Lighter shades (increase lightness) */
-  --color-primary-400: oklch(from #0033a0 calc(l + 0.1) c h);
-  --color-primary-300: oklch(from #0033a0 calc(l + 0.2) c h);
-  
-  /* Darker shades (decrease lightness) */
-  --color-primary-600: oklch(from #0033a0 calc(l - 0.1) c h);
-  --color-primary-700: oklch(from #0033a0 calc(l - 0.15) c h);
-}
+/* generated output, illustrative */
+--color-primary-500: #0033a0;
+--color-primary-400: oklch(from #0033a0 calc(l + 0.1) c h);
+--color-primary-600: oklch(from #0033a0 calc(l - 0.1) c h);
 ```
+
+It also emits `--color-primary-accessible` and
+`--color-primary-accessible-dark`, which shift lightness only as far as needed
+to clear WCAG AA. Use those wherever legibility depends on the color, since a
+fixed numbered step is not safe for an arbitrary configured brand color.
 
 ### Semantic Color Naming
 
-Consider semantic names for common use cases:
+This project already has a semantic layer — use it rather than inventing
+parallel names. Three groups, each with its own source file:
 
-```css
-@theme {
-  /* Action colors */
-  --color-action-primary: var(--color-primary-500);
-  --color-action-secondary: var(--color-secondary-500);
-  
-  /* Status colors */
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-error: #ef4444;
-  
-  /* Surface colors */
-  --color-surface-1: white;
-  --color-surface-2: #f9fafb;
-  --color-surface-3: #f3f4f6;
-}
-```
+| Group | Utilities | Source |
+| --- | --- | --- |
+| Brand (accent, interactive) | `primary-*`, `secondary-*`, `tertiary-*` | `styles/generated/brand-theme.css` |
+| Status (error, warning, success, info) | `state-danger-*`, `state-warning-*`, `state-success-*`, `state-info-*` | `styles/tokens/state.css` |
+| Category (vendor, file type) | `vendor-*`, `filetype-*` | `styles/tokens/identity.css` |
+
+Do not add `--color-success`, `--color-error` or similar aliases; `state-*`
+already covers that role. Surfaces use Tailwind's neutrals directly
+(`bg-white dark:bg-gray-900`), which need no token layer.
 
 ## Theme Toggle Implementation
 

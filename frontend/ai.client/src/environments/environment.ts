@@ -1,5 +1,27 @@
-// Local-dev environment. Production builds replace this with
-// environment.production.ts via angular.json fileReplacements.
+// Local-dev environment (`ng serve`, `ng test`). Deployed builds replace this with
+// environment.development.ts (dev) or environment.production.ts (prod) via
+// angular.json fileReplacements.
+import { FeatureFlags } from './feature-flags';
+
 export const environment = {
     appApiUrl: 'http://localhost:8000',
+    // Proactive new-build check (AppUpdateService). Inert on the dev server,
+    // whose unhashed `main.js` gives it nothing to compare.
+    versionCheckEnabled: true,
+    // Front-end feature switches (feature-flags.ts). Finished features are on, and
+    // in-development ones off until you choose to turn them on; match your
+    // backend's *_ENABLED values.
+    features: {
+        projects: true,
+        conversationSearch: true,
+        userGrants: true,
+        sessionPrewarm: false,
+        clientTurnTiming: true,
+        largeDocumentAttachments: true,
+        folderAttachments: true,
+        attachmentKb: false,
+        folderSync: true,
+        sourceProvenance: false,
+        documentExtract: false,
+    } satisfies FeatureFlags,
 };

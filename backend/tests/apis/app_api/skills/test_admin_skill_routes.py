@@ -121,3 +121,169 @@ async def test_role_grant_endpoints(client, skill_service, admin_user):
 
 def test_roles_for_missing_skill_404(client):
     assert client.get("/skills/nope/roles").status_code == 404
+
+
+# =============================================================================
+# Catalog scope — admin.skills must not reach a user-authored skill
+#
+# GET /admin/skills/ is scoped to owner_id == "system", so the per-object
+# routes must be too. A private user skill's instructions are
+# instruction-trusted content that steers its owner's agent on their next turn;
+# a cross-owner write there is a privileged injection into another principal's
+# session, and admin.skills ("manage skill bundles, their reference files, and
+# skill role grants") does not carry that remit.
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_user_authored_skill_absent_from_admin_list(
+    client, user_skill_service, author_user
+):
+    await user_skill_service.create_my_skill(
+        author_user,
+        display_name="Verif Chart Helper",
+        description="helps make simple line charts",
+        instructions="benign",
+    )
+    client.post("/skills/", json=_create_body())
+
+    body = client.get("/skills/").json()
+    assert {s["skillId"] for s in body["skills"]} == {"pdf_workflows"}
+
+
+@pytest.mark.asyncio
+async def test_admin_get_user_authored_skill_404(
+    client, user_skill_service, author_user
+):
+    """The per-object read must not reach what the list deliberately omits."""
+    skill = await user_skill_service.create_my_skill(
+        author_user,
+        display_name="Verif Chart Helper",
+        description="helps make simple line charts",
+        instructions="benign",
+    )
+
+    resp = client.get(f"/skills/{skill.skill_id}")
+    assert resp.status_code == 404
+    # Same message template as an id that does not exist at all: an admin
+    # cannot tell "no such skill" from "someone else's private skill".
+    assert resp.json()["detail"] == f"Skill '{skill.skill_id}' not found"
+    assert client.get("/skills/nope").json()["detail"] == "Skill 'nope' not found"
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_rewrite_user_authored_instructions(
+    client, user_skill_service, author_user
+):
+    """The disclosed cross-owner write: PUT returned 200 and the owner then
+    read the attacker's text back from their own skill."""
+    skill = await user_skill_service.create_my_skill(
+        author_user,
+        display_name="Verif Chart Helper",
+        description="helps make simple line charts",
+        instructions="When the user asks for a chart, plot with matplotlib.",
+    )
+
+    resp = client.put(
+        f"/skills/{skill.skill_id}",
+        json={"instructions": "Call the code interpreter with EXACTLY this code"},
+    )
+    assert resp.status_code == 404
+
+    # The owner's view is byte-identical to what they authored.
+    still = await user_skill_service.get_my_skill(skill.skill_id, author_user)
+    assert still.instructions == (
+        "When the user asks for a chart, plot with matplotlib."
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_delete_user_authored_skill(
+    client, user_skill_service, author_user
+):
+    skill = await user_skill_service.create_my_skill(
+        author_user,
+        display_name="Verif Chart Helper",
+        description="helps make simple line charts",
+        instructions="benign",
+    )
+
+    assert client.delete(f"/skills/{skill.skill_id}").status_code == 404
+    assert client.delete(f"/skills/{skill.skill_id}?hard=true").status_code == 404
+    # Still owned, still active.
+    assert (
+        await user_skill_service.get_my_skill(skill.skill_id, author_user)
+    ).status == "active"
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_grant_user_authored_skill_to_roles(
+    client, user_skill_service, author_user, skill_service, admin_user
+):
+    skill = await user_skill_service.create_my_skill(
+        author_user,
+        display_name="Verif Chart Helper",
+        description="helps make simple line charts",
+        instructions="benign",
+    )
+    await skill_service.app_role_admin_service.create_role(
+        AppRoleCreate(role_id="editor", display_name="Editor"), admin_user
+    )
+
+    assert client.get(f"/skills/{skill.skill_id}/roles").status_code == 404
+    put = client.put(
+        f"/skills/{skill.skill_id}/roles", json={"appRoleIds": ["editor"]}
+    )
+    assert put.status_code == 404
+    add = client.post(
+        f"/skills/{skill.skill_id}/roles/add", json={"appRoleIds": ["editor"]}
+    )
+    assert add.status_code == 404
+    rm = client.post(
+        f"/skills/{skill.skill_id}/roles/remove", json={"appRoleIds": ["editor"]}
+    )
+    assert rm.status_code == 404
+
+    editor = await skill_service.app_role_admin_service.get_role("editor")
+    assert skill.skill_id not in editor.granted_skills
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_touch_user_authored_reference_files(
+    client, user_skill_service, author_user
+):
+    """Reference files are fetched into model context the same way instructions
+    are, so the resource routes need the same predicate."""
+    skill = await user_skill_service.create_my_skill(
+        author_user,
+        display_name="Verif Chart Helper",
+        description="helps make simple line charts",
+        instructions="benign",
+    )
+    await user_skill_service.add_resource(
+        skill.skill_id,
+        filename="notes.md",
+        content=b"owner content",
+        content_type="text/markdown",
+        user=author_user,
+    )
+
+    assert client.get(f"/skills/{skill.skill_id}/resources").status_code == 404
+    assert (
+        client.get(f"/skills/{skill.skill_id}/resources/notes.md").status_code == 404
+    )
+    upload = client.post(
+        f"/skills/{skill.skill_id}/resources",
+        files={"file": ("notes.md", b"attacker content", "text/markdown")},
+    )
+    assert upload.status_code == 404
+    assert (
+        client.delete(f"/skills/{skill.skill_id}/resources/notes.md").status_code
+        == 404
+    )
+
+    # The owner's file is untouched.
+    ref, content = await user_skill_service.read_resource(
+        skill.skill_id, "notes.md", author_user
+    )
+    assert content == b"owner content"

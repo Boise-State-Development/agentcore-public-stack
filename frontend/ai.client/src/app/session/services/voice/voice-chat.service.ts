@@ -1,9 +1,11 @@
-import { Injectable, signal, computed, inject, OnDestroy } from '@angular/core';
+import { Injectable, signal, computed, effect, inject, untracked, OnDestroy } from '@angular/core';
 import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '../../../services/config.service';
 import { AudioRecorderService } from './audio-recorder.service';
 import { AudioPlayerService } from './audio-player.service';
 import { VoiceTicketService } from './voice-ticket.service';
+import { UserSettingsService } from '../../../services/user-settings.service';
+import { DEFAULT_VOICE_ID, findVoice, type NovaSonicVoice } from './voice-catalog';
 import { Message } from '../models/message.model';
 import {
   IDLE_TIMEOUT_MS,
@@ -52,6 +54,24 @@ export class VoiceChatService implements OnDestroy {
   private readonly player = inject(AudioPlayerService);
   private readonly ticketService = inject(VoiceTicketService);
   private readonly config = inject(ConfigService);
+  private readonly userSettings = inject(UserSettingsService);
+
+  // --- Voice choice ---
+  /**
+   * The Nova 2 Sonic voice the next session speaks with. Seeded from the
+   * user's saved settings once they load; a change is persisted silently, so
+   * a storage hiccup never interrupts starting the conversation. It applies
+   * on the next connect — a live session keeps the voice it opened with,
+   * because the voice is fixed at Bedrock's `promptStart`.
+   */
+  private readonly _voiceId = signal<string>(DEFAULT_VOICE_ID);
+  readonly voiceId = this._voiceId.asReadonly();
+  readonly voice = computed<NovaSonicVoice>(
+    () => findVoice(this._voiceId()) ?? (findVoice(DEFAULT_VOICE_ID) as NovaSonicVoice),
+  );
+  /** The voice the live session actually opened with (the server confirms it). */
+  private readonly _activeVoiceId = signal<string | null>(null);
+  readonly activeVoiceId = this._activeVoiceId.asReadonly();
 
   // --- State signals ---
   private readonly _status = signal<VoiceStatus>('idle');
@@ -128,6 +148,32 @@ export class VoiceChatService implements OnDestroy {
   private ws: WebSocket | null = null;
   private sessionId: string | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    // Seed the voice from the saved settings. The resource is shared with
+    // ModelService's default-model read, so this costs no extra request.
+    effect(() => {
+      const saved = this.userSettings.settingsResource.value()?.voiceId;
+      if (saved && findVoice(saved)) {
+        untracked(() => this._voiceId.set(saved));
+      }
+    });
+  }
+
+  /**
+   * Choose the voice for the next session and remember it on the account.
+   * Unknown ids are ignored rather than sent: the backend would refuse them.
+   */
+  async setVoice(voiceId: string): Promise<void> {
+    const voice = findVoice(voiceId);
+    if (!voice || voice.id === this._voiceId()) return;
+    this._voiceId.set(voice.id);
+    try {
+      await this.userSettings.updateSettings({ voiceId: voice.id }, { silent: true });
+    } catch {
+      // Kept in memory for this visit; the next load falls back to the saved one.
+    }
+  }
 
   /**
    * Connect to the voice endpoint and start recording.
@@ -302,6 +348,7 @@ export class VoiceChatService implements OnDestroy {
         this.sendMessage({
           type: 'config',
           session_id: sessionId,
+          voice: this._voiceId(),
         });
         resolve();
       };
@@ -346,7 +393,9 @@ export class VoiceChatService implements OnDestroy {
 
     switch (type) {
       case 'bidi_connection_start':
-        // Connection confirmed
+        // Connection confirmed. `voice` is the id the server actually used —
+        // it falls back to the default for an id it does not know.
+        this._activeVoiceId.set(typeof data['voice'] === 'string' ? (data['voice'] as string) : this._voiceId());
         break;
 
       case 'bidi_audio_stream':
@@ -615,6 +664,7 @@ export class VoiceChatService implements OnDestroy {
 
   private cleanupAll(): void {
     this.stopRevealTimer();
+    this._activeVoiceId.set(null);
 
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);

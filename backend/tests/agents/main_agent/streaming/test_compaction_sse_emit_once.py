@@ -95,7 +95,11 @@ class _RecordingSessionManager:
         self,
         input_tokens: int,
         current_messages: Optional[List[Dict]] = None,
+        context_window: Optional[int] = None,
+        history_tokens: Optional[int] = None,
     ) -> Optional[CompactionResult]:
+        # Same seam as TurnBasedSessionManager.update_after_turn — the policy
+        # inputs (context_window / history_tokens) are accepted and ignored.
         self.calls.append(input_tokens)
         return self._result
 
@@ -158,6 +162,14 @@ async def test_compaction_sse_emitted_exactly_once_when_checkpoint_advances():
         "newCheckpoint": 4,
         "summarizedTurns": 2,
         "inputTokens": 150_000,
+        # Model-relative policy fields (additive; the stub result leaves
+        # them at their defaults).
+        "contextWindow": None,
+        "ceiling": None,
+        "floor": None,
+        "hardCeiling": None,
+        "forced": False,
+        "retainedTokensEstimate": None,
     }
 
 
@@ -213,3 +225,49 @@ async def test_strands_result_metadata_track_does_not_double_fire():
     # accumulated_usage — so the input is call_1's 150_000, not 230_000.
     assert sm.calls == [150_000]
     assert len(_compaction_frames(frames)) == 1
+
+
+class _RecordingLedgerHook:
+    def __init__(self, order: List[str]) -> None:
+        self.order = order
+        self.managers: List[Any] = []
+
+    def record_post_turn_events(self, session_manager: Any) -> None:
+        self.order.append("record_post_turn_events")
+        self.managers.append(session_manager)
+
+
+class _OrderedSessionManager(_RecordingSessionManager):
+    def __init__(self, result: Optional[CompactionResult], order: List[str]) -> None:
+        super().__init__(result)
+        self.order = order
+
+    async def update_after_turn(self, input_tokens: int, **kwargs: Any) -> Optional[CompactionResult]:
+        self.order.append("update_after_turn")
+        return await super().update_after_turn(input_tokens, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_post_turn_compaction_events_are_handed_to_the_ledger_after_the_decision():
+    """The cut's ledger events go onto this turn's last call (whose C# row is
+    written after the stream), not left waiting for a next call on the same
+    manager instance — the path that lost ~43% of prod cuts."""
+    from types import SimpleNamespace
+
+    order: List[str] = []
+    hook = _RecordingLedgerHook(order)
+    sm = _OrderedSessionManager(None, order)
+    agent = _FakeAgent([_raw_metadata_event(_TURN_USAGE)])
+
+    async for _ in StreamCoordinator().stream_response(
+        agent=agent,
+        prompt="hi",
+        session_manager=sm,
+        session_id="sess-1",
+        user_id="user-1",
+        main_agent_wrapper=SimpleNamespace(context_ledger_hook=hook),
+    ):
+        pass
+
+    assert order == ["update_after_turn", "record_post_turn_events"]
+    assert hook.managers == [sm]

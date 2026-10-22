@@ -33,7 +33,7 @@ interface PeriodOption {
       <select
         [ngModel]="selectedPeriod()"
         (ngModelChange)="onPeriodChange($event)"
-        class="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg pl-10 pr-10 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+        class="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg pl-10 pr-10 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
       >
         @for (option of periodOptions(); track option.value) {
           <option [value]="option.value">{{ option.label }}</option>

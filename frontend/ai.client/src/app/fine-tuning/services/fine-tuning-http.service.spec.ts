@@ -34,7 +34,7 @@ describe('FineTuningHttpService', () => {
   // ── Access ──────────────────────────────────────────────────────────
 
   it('should check access via GET /access', () => {
-    const mockResponse = { has_access: true, monthly_quota_hours: 10, current_month_usage_hours: 2, quota_period: '2026-03' };
+    const mockResponse = { has_access: true, monthly_quota_usd: 10, current_month_usage_usd: 2, quota_period: '2026-03' };
     service.checkAccess().subscribe(result => {
       expect(result).toEqual(mockResponse);
     });

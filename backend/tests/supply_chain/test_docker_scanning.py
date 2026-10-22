@@ -17,6 +17,9 @@ EXPECTED_DOCKERFILES = [
     "Dockerfile.inference-api",
     "Dockerfile.rag-ingestion",
     "Dockerfile.kb-sync",
+    "Dockerfile.conversation-index",
+    "Dockerfile.memory-maintenance",
+    "Dockerfile.large-document-prepare",
 ]
 
 

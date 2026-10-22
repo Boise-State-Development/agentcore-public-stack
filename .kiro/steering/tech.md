@@ -50,7 +50,7 @@
 - **Version Control**: Git
 - **Containerization**: Docker
 - **Testing**: Vitest (frontend), pytest (backend)
-- **Linting**: ESLint (frontend), ruff (backend)
+- **Linting**: ruff (backend only; frontend linting via vitest guard specs, not ESLint)
 - **Formatting**: Prettier (frontend), black (backend)
 - **Type Checking**: TypeScript compiler, mypy
 

@@ -22,9 +22,13 @@ describe('PlatformStack', () => {
       infrastructureHostedZoneDomain: 'example.com',
       certificateArn: cert,
       frontend: { cloudFrontPriceClass: 'PriceClass_100', certificateArn: cert },
-      artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
+      artifacts: {
+        shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
       mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
-      fineTuning: {},
+      fineTuning: {
+        enabled: true,
+        defaultQuotaHours: 0,
+      },
     });
     const app = new cdk.App();
     mockSsmContext(app, config);
@@ -135,23 +139,35 @@ describe('PlatformStack', () => {
     });
 
     it('creates KMS keys', () => {
-      // OAuth token encryption + BFF cookie signing
-      template.resourceCountIs('AWS::KMS::Key', 2);
+      // OAuth token encryption + BFF cookie signing + alarm topic encryption.
+      //
+      // The third is the alarm topic's CMK. It is customer-managed rather than
+      // alias/aws/sns out of necessity, not preference: CloudWatch cannot be
+      // granted kms:GenerateDataKey* on an AWS-managed key, so an
+      // alias/aws/sns-encrypted topic accepts the alarm and silently drops the
+      // notification. See constructs/observability/alarm-topic-construct.ts.
+      template.resourceCountIs('AWS::KMS::Key', 3);
     });
   });
 
   describe('DynamoDB tables', () => {
     it('creates all shared tables', () => {
-      // 26 tables. Was 25 — the audit-log table was added for the
-      // administrative audit trail (delegated admin scopes, PR-5). Prior
-      // note: the memory-spaces table was added for the Memory Spaces
-      // feature; before that the system-prompts table was added for
-      // admin-managed Conversation Modes (custom system prompt catalog);
-      // previously 24 before the standalone "assistants" table was
-      // decommissioned (the python app uses rag-assistants for both
-      // assistant config and document metadata via
+      // 29 tables. Was 28 — the projects table was added for Shared Projects
+      // (docs/specs/shared-projects.md §3.1). Before that, 27 → 28: the
+      // agent-templates table was added for the
+      // admin-managed Agent Templates catalog (mirrors system-prompts,
+      // read by app_api only). Before that: the announcements table was
+      // added for the feature-announcement system (admin-authored notices
+      // + per-user acknowledgement rows). Prior note: the audit-log table
+      // was added for the administrative audit trail (delegated admin
+      // scopes, PR-5); before that the memory-spaces table was added for
+      // the Memory Spaces feature; before that the system-prompts table
+      // was added for admin-managed Conversation Modes (custom system
+      // prompt catalog); previously 24 before the standalone "assistants"
+      // table was decommissioned (the python app uses rag-assistants for
+      // both assistant config and document metadata via
       // DYNAMODB_ASSISTANTS_TABLE_NAME).
-      template.resourceCountIs('AWS::DynamoDB::Table', 26);
+      template.resourceCountIs('AWS::DynamoDB::Table', 29);
     });
   });
 
@@ -161,8 +177,14 @@ describe('PlatformStack', () => {
       // artifacts-content, skill-resources (admin-managed Skills reference files),
       // memory-spaces (Memory Spaces feature content bucket),
       // shared-conversations (share snapshot-body offload),
-      // alb-access-logs (who terminated a connection — SSE disconnect attribution)
-      template.resourceCountIs('AWS::S3::Bucket', 10);
+      // alb-access-logs (who terminated a connection — SSE disconnect attribution),
+      // frontend-access-logs (what the SPA edge answered on its own — 404'd
+      // chunks never reach the ALB),
+      // browser-policy (the Chromium MANAGED policy every browser session
+      // starts with — spec D6),
+      // conversation-archive (per-turn transcripts conversation search is
+      // built from — docs/specs/conversation-search.md §4)
+      template.resourceCountIs('AWS::S3::Bucket', 13);
     });
   });
 
@@ -178,6 +200,20 @@ describe('PlatformStack', () => {
       // SPA: api-path-strip + spa-routing
       // MCP sandbox: csp-function
       template.resourceCountIs('AWS::CloudFront::Function', 3);
+    });
+
+    it('tells app-api which prefix the path-strip function removed', () => {
+      // app-api cannot see the public URL: CloudFront strips `/api`, swaps in
+      // the origin's own hostname, and the ALB terminates TLS. Without this
+      // header a redirect Starlette generates for itself comes back as
+      // `http://api.<domain>/<path>`, which the browser blocks as mixed
+      // content. `ProxiedRedirectMiddleware` reads it to put the redirect
+      // back on the public URL.
+      template.hasResourceProperties('AWS::CloudFront::Function', {
+        FunctionCode: Match.stringLikeRegexp(
+          "x-forwarded-prefix'\\] = \\{ value: '/api' \\}",
+        ),
+      });
     });
   });
 
@@ -195,9 +231,41 @@ describe('PlatformStack', () => {
       // Every other SSM publish was dead weight: the value was either
       // consumed only by sibling CDK constructs (now sourced via typed
       // PlatformComputeRefs) or never read by anyone.
+      //
+      // Upper bound raised 45 → 49 for the four kb-migration
+      // function-name publishes (dispatcher / worker / reconciler /
+      // ingestion-consumer). Those functions are deliberately unnamed so
+      // CDK generates their physical names, which means the backend
+      // workflow's `update-function-code` step has no way to find them
+      // except through SSM — the deploy-time-discovery bucket above.
+      //
+      // Raised 49 → 51 for the agent-templates table name + ARN publishes
+      // (mirrors the system-prompts name+arn pair; consumed by restore
+      // tooling and ad-hoc IAM scoping).
+      //
+      // Raised 51 → 53 for the memory-spaces and skill-resources bucket
+      // name publishes — restore tooling only (S3_BUCKETS / BUCKET_SSM_MAP);
+      // compute still takes both buckets via PlatformComputeRefs.
+      //
+      // Raised 53 → 54 for the conversation-archive bucket name. Runtime
+      // discovery, not restore: the AgentCore Runtime has no env slot left
+      // for the bucket (runtime-env-var-limit.test.ts), so it reads this
+      // parameter under PROJECT_PREFIX, as the artifacts tools do.
+      //
+      // Raised 54 → 55 for the conversation-index consumer's function name.
+      // Deploy-script discovery, the same pattern as every image Lambda:
+      // deploy-image-lambda-one.sh resolves the CDK-generated name from it to
+      // swap in the real image, and skips gracefully until it exists.
+      //
+      // Raised 55 → 56 for the conversation-index reconciler's function name,
+      // the same deploy-script discovery for the image's second function.
+      //
+      // Raised 56 → 57 for the memory-maintenance worker's function name
+      // (Shared Projects 2.6), the same deploy-script discovery. app-api
+      // takes the name through PlatformComputeRefs, not this parameter.
       const params = template.findResources('AWS::SSM::Parameter');
       expect(Object.keys(params).length).toBeGreaterThanOrEqual(30);
-      expect(Object.keys(params).length).toBeLessThanOrEqual(45);
+      expect(Object.keys(params).length).toBeLessThanOrEqual(57);
     });
   });
 
@@ -272,9 +340,13 @@ describe('PlatformStack', () => {
         infrastructureHostedZoneDomain: 'example.com',
         certificateArn: cert,
         frontend: { cloudFrontPriceClass: 'PriceClass_100', certificateArn: cert },
-        artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
+        artifacts: {
+          shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
         mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
-        fineTuning: {},
+        fineTuning: {
+          enabled: true,
+          defaultQuotaHours: 0,
+        },
         mcpIdentity,
       });
       const app = new cdk.App();
@@ -340,6 +412,43 @@ describe('PlatformStack', () => {
           },
         },
       });
+    });
+  });
+  describe('Managed knowledge base grants on the real compute roles', () => {
+    // The recurring failure on this feature is code that reads correctly with
+    // no IAM behind it — a grant on a fake role in a construct test proves the
+    // statement is well-formed, not that the identity which runs the code ever
+    // receives it. These assert the wiring, on the synthesized stack.
+    it('the app-api task role may delete documents from a managed KB', () => {
+      // `DELETE /assistants/{id}/documents/{doc}` reaches
+      // `cleanup_service._delete_managed_documents_with_retries`. Without this
+      // the delete fails, the DOC# row is kept so the fail-closed status filter
+      // keeps hiding the chunks, and the managed corpus grows forever.
+      const policies = {
+        ...template.findResources('AWS::IAM::Policy'),
+        ...template.findResources('AWS::IAM::ManagedPolicy'),
+      };
+      const found = Object.values(policies).some((r) => {
+        const statements =
+          (r.Properties as { PolicyDocument?: { Statement?: Array<{ Sid?: string }> } })
+            .PolicyDocument?.Statement ?? [];
+        return statements.some((st) => st.Sid === 'ManagedKbDocumentDeletion');
+      });
+      expect(found).toBe(true);
+    });
+
+    it('the app-api task role may retrieve from a managed KB', () => {
+      const policies = {
+        ...template.findResources('AWS::IAM::Policy'),
+        ...template.findResources('AWS::IAM::ManagedPolicy'),
+      };
+      const found = Object.values(policies).some((r) => {
+        const statements =
+          (r.Properties as { PolicyDocument?: { Statement?: Array<{ Sid?: string }> } })
+            .PolicyDocument?.Statement ?? [];
+        return statements.some((st) => st.Sid === 'ManagedKbRetrieve');
+      });
+      expect(found).toBe(true);
     });
   });
 });

@@ -7,6 +7,7 @@ Fail-open: any DynamoDB error returns *allowed* so a rate-limit outage
 never blocks legitimate traffic.
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -39,13 +40,18 @@ class RateLimiter:
         Stores a counter item per key per time window.  TTL auto-cleans
         expired windows.  Fail-open: returns ``True`` on any error.
 
+        The DynamoDB call runs on a worker thread: boto3 is synchronous, and
+        app-api is one uvicorn process, so a call made here directly would
+        hold the event loop for the round trip on every API-key request.
+
         Returns ``True`` if the request is allowed, ``False`` if rate-limited.
         """
         now = int(time.time())
         window_key = now // window_seconds
 
         try:
-            resp = self.table.update_item(
+            resp = await asyncio.to_thread(
+                self.table.update_item,
                 Key={"PK": f"RATE#{key_id}", "SK": f"WIN#{window_key}"},
                 UpdateExpression=(
                     "SET #cnt = if_not_exists(#cnt, :zero) + :one, #ttl = :ttl"

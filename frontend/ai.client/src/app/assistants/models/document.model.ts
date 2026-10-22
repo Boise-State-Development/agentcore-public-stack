@@ -1,12 +1,24 @@
 /**
  * Document status types matching backend DocumentStatus
+ *
+ * `provisioning` is the leading status of a born-managed first upload
+ * (MANAGED_KB_NEW_DEFAULT): the file is uploaded and the assistant's knowledge
+ * base is still being created. Only ever the FIRST document of an assistant —
+ * every upload after that starts at `uploading`.
  */
-export type DocumentStatus = 'uploading' | 'chunking' | 'embedding' | 'complete' | 'failed';
+export type DocumentStatus =
+  | 'provisioning'
+  | 'uploading'
+  | 'chunking'
+  | 'embedding'
+  | 'complete'
+  | 'failed';
 
 /**
  * Statuses that indicate a document is still being processed.
  */
 export const PROCESSING_STATUSES: readonly DocumentStatus[] = [
+  'provisioning',
   'uploading',
   'chunking',
   'embedding',
@@ -65,6 +77,32 @@ export interface Document {
   /** Back-pointer to the covering sync policy, when one exists. */
   syncPolicyId?: string | null;
   lastSyncedAt?: string | null;
+  /**
+   * A folder sync found the file no longer in its Drive folder. The document is
+   * kept (assistant-kb-sync spec §11.3); an editor decides whether to delete it.
+   */
+  removedFromSource?: boolean | null;
+}
+
+/**
+ * Knowledge-base storage usage, returned alongside the documents list.
+ *
+ * Only managed KBs are byte-capped (Requirement 12.11): `cap` is the binding
+ * limit (the smaller of the owner tier and the per-KB ceiling). A legacy
+ * (S3-Vectors) KB is uncapped and tracks no bytes, so `cap` is null and the
+ * counters are 0 — the UI renders an uncapped indicator.
+ */
+export interface KbUsage {
+  /** 'managed' | 's3vectors'. */
+  engine: string;
+  /** Bytes committed to the KB. */
+  storedBytes: number;
+  /** Bytes reserved by in-flight uploads. */
+  reservedBytes: number;
+  /** Binding byte cap, or null for an uncapped legacy KB. */
+  cap: number | null;
+  /** Whether the elevated owner tier applies. */
+  elevated: boolean;
 }
 
 /**
@@ -73,6 +111,8 @@ export interface Document {
 export interface DocumentsListResponse {
   documents: Document[];
   nextToken?: string;
+  /** Storage usage + cap for the assistant's KB; absent when not resolved. */
+  kbUsage?: KbUsage | null;
 }
 
 /**
@@ -82,5 +122,45 @@ export interface DownloadUrlResponse {
   downloadUrl: string;
   filename: string;
   expiresIn: number;
+}
+
+/**
+ * One passage as the knowledge base actually holds it.
+ *
+ * `text` is the FULL extracted text. The per-answer citation trace caps excerpts at
+ * 500 characters, which is precisely why it cannot serve this purpose: a flattened
+ * table's damage is usually past the cut, so a truncated excerpt of a mangled table
+ * reads like a fine excerpt of a fine table.
+ */
+export interface ExtractedChunk {
+  text: string;
+  /** Position in the returned set — NOT the document's own order. */
+  order: number;
+  score?: number | null;
+  /** Page when the backend supplied one. Never inferred. */
+  page?: number | null;
+}
+
+/**
+ * Response from GET /assistants/{assistantId}/documents/{documentId}/chunks
+ *
+ * `available` is false with a `reason` when the engine cannot show a single
+ * document's chunks — a classic knowledge base cannot scope a retrieval to one
+ * document, and approximating would render other documents' content under this
+ * document's name. The shape is identical either way so the UI never branches on
+ * engine.
+ *
+ * `capReached` is honesty rather than a paging hint: Bedrock exposes no
+ * chunk-enumeration API, so a complete set is never guaranteed.
+ */
+export interface ExtractedChunksResponse {
+  documentId: string;
+  fileName: string;
+  engine: string;
+  available: boolean;
+  reason?: string | null;
+  chunks: ExtractedChunk[];
+  returned: number;
+  capReached: boolean;
 }
 

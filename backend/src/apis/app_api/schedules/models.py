@@ -111,6 +111,10 @@ class ScheduledPromptResponse(BaseModel):
     max_runs_per_day: int = Field(24, alias="maxRunsPerDay")
     enabled_tools: Optional[List[str]] = Field(None, alias="enabledTools")
     deliver_email: bool = Field(False, alias="deliverEmail")
+    project_id: Optional[str] = Field(
+        None, alias="projectId", description="Runs in this project; change or resume it from the project"
+    )
+    deliver_to: str = Field("owner", alias="deliverTo", description='"project": each run is shared with the project')
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
 
@@ -138,6 +142,8 @@ class ScheduledPromptResponse(BaseModel):
             max_runs_per_day=schedule.max_runs_per_day,
             enabled_tools=schedule.enabled_tools,
             deliver_email=schedule.deliver_email,
+            project_id=schedule.project_id,
+            deliver_to=schedule.deliver_to,
             created_at=schedule.created_at,
             updated_at=schedule.updated_at,
         )

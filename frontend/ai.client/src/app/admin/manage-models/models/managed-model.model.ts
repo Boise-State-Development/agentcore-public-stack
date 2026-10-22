@@ -1,17 +1,117 @@
 /**
  * Available model providers.
  *
- * `mantle` is Amazon Bedrock Mantle — AWS's OpenAI-compatible inference
- * surface for Bedrock-hosted open-weight models. It is a distinct provider
- * from `bedrock` because the backend reaches it over the OpenAI wire
- * protocol with a bearer token rather than the Converse API.
+ * Two of them are OpenAI-compatible Bedrock surfaces — the backend reaches
+ * both over the OpenAI wire protocol with a bearer token rather than the
+ * Converse API, which is why neither is just `bedrock`:
+ *
+ * - `mantle` — Amazon Bedrock Mantle, AWS's OpenAI-compatible surface for
+ *   Bedrock-hosted open-weight models.
+ * - `bedrock-responses` — the OpenAI **Responses** API on `bedrock-runtime`.
+ *   Exists because GPT-5.6 serves prompt caching only over the Responses API;
+ *   the same model routed over Converse gets no caching at all.
  */
-export type ModelProvider = 'bedrock' | 'openai' | 'gemini' | 'mantle';
+export type ModelProvider = 'bedrock' | 'openai' | 'gemini' | 'mantle' | 'bedrock-responses';
 
 /**
  * Available model providers as a constant array.
  */
-export const AVAILABLE_PROVIDERS: ModelProvider[] = ['bedrock', 'openai', 'gemini', 'mantle'];
+export const AVAILABLE_PROVIDERS: ModelProvider[] = [
+  'bedrock',
+  'openai',
+  'gemini',
+  'mantle',
+  'bedrock-responses',
+];
+
+/**
+ * Providers that ride the OpenAI wire protocol against a Bedrock endpoint.
+ *
+ * These share the `apiMode` / `region` fields and the bearer-token transport.
+ * Kept as one list so the form doesn't accumulate `=== 'mantle' || === ...`
+ * checks that drift apart.
+ */
+export const OPENAI_SURFACE_PROVIDERS: readonly ModelProvider[] = ['mantle', 'bedrock-responses'];
+
+/**
+ * Providers whose models prompt-cache by default.
+ *
+ * Mirrors `_resolve_supports_caching` on the backend. The form has to know
+ * this because it always posts a `supportsCaching` value — so the backend's
+ * own provider default never sees `None` from the UI and can never apply.
+ */
+export const CACHING_DEFAULT_PROVIDERS: readonly ModelProvider[] = ['bedrock', 'bedrock-responses'];
+
+/**
+ * Providers where prompt caching is **not optional**.
+ *
+ * GPT-5.6 on `bedrock-runtime` caches implicitly, server-side, and we have no
+ * way to turn that off. So "supports caching = false" there is simply untrue,
+ * and the only thing it changes is that the cache rate fields get cleared —
+ * which prices cached tokens at $0.00 while AWS bills them in full. On a warm
+ * conversation nearly all input tokens sit in the cache buckets, so that is
+ * close to total under-reporting.
+ *
+ * Treated the same way as `apiMode` on this transport: normalized, not honored.
+ */
+export const CACHING_FORCED_PROVIDERS: readonly ModelProvider[] = ['bedrock-responses'];
+
+/**
+ * Providers whose models *can* prompt-cache, and therefore need the caching
+ * controls and cache-rate fields on the admin form.
+ *
+ * Wider than {@link CACHING_DEFAULT_PROVIDERS} on purpose. `mantle` is not a
+ * caching default — most Mantle models are open-weight and don't cache — but
+ * `openai.gpt-5.x` there *does*, implicitly, with a cache-read discount and no
+ * write fee. Excluding Mantle from the form meant an admin had no way to enable
+ * caching or enter a cache-read rate for those models, so their cached tokens
+ * were priced at $0.00 while the provider billed them. Measured live on
+ * `openai.gpt-5.4`: a warm turn read 3,642 tokens from cache and contributed
+ * nothing to the recorded cost.
+ */
+export const CACHING_CAPABLE_PROVIDERS: readonly ModelProvider[] = [
+  'bedrock',
+  'bedrock-responses',
+  'mantle',
+];
+
+/**
+ * The caching default for a provider when nothing has been chosen.
+ *
+ * Mirrors `_resolve_supports_caching` on the backend — kept in step by
+ * `tests/shared/test_caching_provider_contract.py`, which reads this file.
+ */
+export function defaultSupportsCaching(provider: ModelProvider): boolean {
+  return CACHING_DEFAULT_PROVIDERS.includes(provider);
+}
+
+/**
+ * The `supportsCaching` value to persist for a provider.
+ *
+ * Forced on where caching is unconditional; otherwise the admin's choice wins,
+ * falling back to the provider default when unset.
+ */
+export function supportsCachingForProvider(
+  provider: ModelProvider,
+  chosen: boolean | null | undefined,
+): boolean {
+  if (CACHING_FORCED_PROVIDERS.includes(provider)) return true;
+  return chosen ?? defaultSupportsCaching(provider);
+}
+
+/**
+ * Human-readable labels for the provider picker.
+ *
+ * The raw values are wire identifiers; `bedrock-responses` in particular says
+ * nothing useful to an admin choosing a transport.
+ */
+export const PROVIDER_LABELS: Record<ModelProvider, string> = {
+  bedrock: 'Bedrock (Converse)',
+  openai: 'OpenAI',
+  gemini: 'Google Gemini',
+  mantle: 'Bedrock Mantle',
+  'bedrock-responses': 'Bedrock Runtime (Responses API)',
+};
 
 /**
  * Capability + bounds for a single inference parameter.
@@ -62,6 +162,29 @@ export interface ManagedModel {
   modelId: string;
   /** Human-readable name of the model */
   modelName: string;
+  /**
+   * One-line reason a user would pick this model, shown under its name in the
+   * chat model picker. Deliberately shorter than the catalog card's `tagline`
+   * — the picker is a narrow menu, not a card, so this reads as a fragment
+   * ("For your toughest challenges"), not a sentence.
+   */
+  shortDescription?: string | null;
+  /**
+   * Built-in vendor logo slug (e.g. 'anthropic'), resolved client-side to the
+   * light/dark SVG pair the SPA ships. See `model-icons.ts` for the precedence
+   * against `iconUrl`.
+   */
+  iconSlug?: string | null;
+  /**
+   * S3 object key for an uploaded icon. Server-side detail — read `iconUrl`,
+   * which is derived from it and carries the cache-busting `?v=` digest.
+   */
+  iconKey?: string | null;
+  /**
+   * Relative app-api path serving an uploaded icon (`/models/{id}/icon?v=…`),
+   * or absent when the model has none. Takes precedence over `iconSlug`.
+   */
+  iconUrl?: string | null;
   /** Model provider (AWS, OpenAI, Google) */
   provider: ModelProvider;
   /** Provider name (e.g., 'Anthropic', 'Amazon', 'Meta') */
@@ -105,6 +228,14 @@ export interface ManagedModel {
   cacheWritePricePerMillionTokens?: number | null;
   /** Cache read price per million tokens (in USD) - Bedrock only */
   cacheReadPricePerMillionTokens?: number | null;
+  /**
+   * Speech input price per million tokens (in USD). Speech-to-speech models
+   * only (Nova 2 Sonic): `inputPricePerMillionTokens` is the TEXT rate on
+   * such a model; this is the rate for spoken input, ~10x higher.
+   */
+  speechInputPricePerMillionTokens?: number | null;
+  /** Speech output price per million tokens (in USD). Speech-to-speech models only. */
+  speechOutputPricePerMillionTokens?: number | null;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */
@@ -112,22 +243,61 @@ export interface ManagedModel {
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
   /**
-   * Bedrock Mantle API surface (`provider === 'mantle'` only): `chat` (OpenAI
-   * Chat Completions, the default) or `responses` (OpenAI Responses API —
-   * required by models that don't serve Chat Completions, e.g. openai.gpt-5.x).
-   * Null/absent for every other provider.
+   * Whether the model sits at the top level of the chat model picker. `false`
+   * collapses it into the picker's "More models" submenu — the model stays
+   * fully available, it just stops competing for the first glance.
+   *
+   * Defaults to `true` on the backend so a catalog nobody has curated keeps
+   * showing every model exactly where it always has.
+   *
+   * Optional because a record stored before this field existed genuinely has
+   * no value for it. Read it as `isFeatured !== false`, never `=== true`.
+   */
+  isFeatured?: boolean;
+  /**
+   * Position in the catalog, lowest first — the order the admin list and the
+   * chat model picker show models in. The backend returns the catalog already
+   * sorted, so clients render it as-is rather than sorting on this.
+   *
+   * Set only by `PUT /admin/managed-models/order` (the admin list's drag and
+   * drop), never through the model form. Absent on a model that has never been
+   * placed; those sort after every ordered model, newest first.
+   */
+  sortOrder?: number | null;
+  /**
+   * OpenAI-compatible API surface: `chat` (OpenAI Chat Completions, the
+   * default) or `responses` (OpenAI Responses API — required by models that
+   * don't serve Chat Completions, e.g. openai.gpt-5.x).
+   *
+   * Selectable for `provider === 'mantle'`. Forced to `responses` for
+   * `provider === 'bedrock-responses'`, whose whole reason to exist is that
+   * GPT-5.6 caches only over that API. Null/absent for every other provider.
    */
   apiMode?: MantleApiMode | null;
   /**
-   * Bedrock Mantle region override (`provider === 'mantle'` only): pins
-   * inference to the region hosting the model (e.g. `us-east-1`), independent
-   * of where the app runs. Null/absent -> the app's region and for other providers.
+   * Region override for an OpenAI-compatible Bedrock surface (`mantle` or
+   * `bedrock-responses`): pins inference to the region hosting the model
+   * (e.g. `us-east-1`), independent of where the app runs, and signs the
+   * bearer token for it. Null/absent -> the app's region and for other providers.
    */
   region?: string | null;
   /** @deprecated No longer used — the SDK derives the base path from the model id. */
   mantleEndpointPath?: string | null;
   /** Per-model inference parameter capabilities (temperature, top_p, etc.) */
   supportedParams?: SupportedParams | null;
+  /**
+   * Lifecycle (docs/specs/model-retirement.md §7). `deprecated`: pickers refuse
+   * a new selection but leave an existing one alone. `retired`: the backend runs
+   * `replacedBy` in its place, or refuses the turn when there is none. Absent on
+   * rows written before retirement shipped, which reads as `active`.
+   */
+  status?: ModelStatus | null;
+  /** modelId of the successor a retired model is redirected to. */
+  replacedBy?: string | null;
+  /** ISO `YYYY-MM-DD` of the cutover. Display only. */
+  retiresOn?: string | null;
+  /** Free text shown wherever a non-active model is surfaced. Display only. */
+  retirementNote?: string | null;
   /** Date the model was added to the system (ISO string from API) */
   createdAt?: string | Date;
   /** Date the model was last updated (ISO string from API) */
@@ -142,6 +312,20 @@ export interface ManagedModelFormData {
   modelId: string;
   /** Human-readable name of the model */
   modelName: string;
+  /**
+   * One-line reason a user would pick this model, shown under its name in the
+   * chat model picker. Deliberately shorter than the catalog card's `tagline`
+   * — the picker is a narrow menu, not a card, so this reads as a fragment
+   * ("For your toughest challenges"), not a sentence.
+   */
+  shortDescription?: string | null;
+  /**
+   * Built-in vendor logo to show beside this model in the chat picker. Empty
+   * string clears it — not null: the update path drops null fields, so null
+   * could never remove a slug once set (same rule as `shortDescription`).
+   * The uploaded icon, when there is one, wins over this.
+   */
+  iconSlug?: string | null;
   /** Model provider (AWS, OpenAI, Google) */
   provider: ModelProvider;
   /** Provider name (e.g., 'Anthropic', 'Amazon', 'Meta') */
@@ -176,6 +360,14 @@ export interface ManagedModelFormData {
   cacheWritePricePerMillionTokens?: number | null;
   /** Cache read price per million tokens (in USD) - Bedrock only */
   cacheReadPricePerMillionTokens?: number | null;
+  /**
+   * Speech input price per million tokens (in USD). Speech-to-speech models
+   * only (Nova 2 Sonic): `inputPricePerMillionTokens` is the TEXT rate on
+   * such a model; this is the rate for spoken input, ~10x higher.
+   */
+  speechInputPricePerMillionTokens?: number | null;
+  /** Speech output price per million tokens (in USD). Speech-to-speech models only. */
+  speechOutputPricePerMillionTokens?: number | null;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */
@@ -183,24 +375,50 @@ export interface ManagedModelFormData {
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
   /**
-   * Bedrock Mantle API surface (`provider === 'mantle'` only): `chat` or
-   * `responses`. Inert for other providers.
+   * Whether the model sits at the top level of the chat model picker. `false`
+   * collapses it into the picker's "More models" submenu — the model stays
+   * fully available, it just stops competing for the first glance.
+   *
+   * Defaults to `true` on the backend so a catalog nobody has curated keeps
+   * showing every model exactly where it always has.
+   */
+  isFeatured?: boolean;
+  /**
+   * OpenAI-compatible API surface: `chat` or `responses`. Selectable for
+   * `mantle`; forced to `responses` for `bedrock-responses`. Inert for other
+   * providers.
    */
   apiMode?: MantleApiMode | null;
   /**
-   * Bedrock Mantle region override (`provider === 'mantle'` only). Empty ->
-   * the app's region. Inert for other providers.
+   * Region override for an OpenAI-compatible Bedrock surface (`mantle` or
+   * `bedrock-responses`). Empty -> the app's region. Inert for other providers.
    */
   region?: string | null;
   /** Per-model inference parameter capabilities */
   supportedParams?: SupportedParams | null;
+  /** Lifecycle — see `ManagedModel.status`. */
+  status?: ModelStatus;
+  /** `''` clears it on an update; absent leaves it alone. */
+  replacedBy?: string;
+  retiresOn?: string;
+  retirementNote?: string;
 }
 
-/** Selectable Bedrock Mantle API surfaces for the model form. */
+/** Model lifecycle states (docs/specs/model-retirement.md §7). */
+export const MODEL_STATUSES = ['active', 'deprecated', 'retired'] as const;
+export type ModelStatus = (typeof MODEL_STATUSES)[number];
+
+export const MODEL_STATUS_LABELS: Record<ModelStatus, string> = {
+  active: 'Active',
+  deprecated: 'Deprecated — no new selections',
+  retired: 'Retired — redirected or refused',
+};
+
+/** Selectable OpenAI-compatible API surfaces for the model form. */
 export const MANTLE_API_MODES = ['chat', 'responses'] as const;
 export type MantleApiMode = (typeof MANTLE_API_MODES)[number];
 
-/** Human-readable labels for the Mantle API surface options. */
+/** Human-readable labels for the OpenAI API surface options. */
 export const MANTLE_API_MODE_LABELS: Record<MantleApiMode, string> = {
   chat: 'Chat Completions',
   responses: 'Responses API',
@@ -268,8 +486,9 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
       openai: { min: 0, max: 2 },    // OpenAI accepts 0–2
       gemini: { min: 0, max: 1 },
       mantle: { min: 0, max: 2 },    // OpenAI wire protocol range
+      'bedrock-responses': { min: 0, max: 2 },
     },
-    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle', 'bedrock-responses'],
   },
   {
     key: 'top_p',
@@ -278,7 +497,7 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     kind: 'number',
     defaultMin: 0,
     defaultMax: 1,
-    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle', 'bedrock-responses'],
   },
   {
     key: 'top_k',
@@ -294,7 +513,7 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     description: 'Maximum tokens in the model response.',
     kind: 'integer',
     defaultMin: 1,
-    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle', 'bedrock-responses'],
   },
   {
     key: 'thinking',
@@ -321,9 +540,22 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
   {
     key: 'reasoning_effort',
     label: 'Reasoning Effort',
-    description: 'Reasoning depth (OpenAI o-series and reasoning models on Bedrock Mantle).',
-    kind: 'number',
-    providers: ['openai', 'mantle'],
+    description:
+      'Reasoning depth (OpenAI o-series and reasoning models on the ' +
+      'OpenAI-compatible Bedrock surfaces). Check the levels this model ' +
+      'supports; pick a default.',
+    // A string enum, not a number — `kind: 'number'` here was simply wrong,
+    // and it was load-bearing: the admin form renders the `allowed` checklist
+    // only for `kind: 'select'`, so there was no way to declare the levels a
+    // model accepts, and anything that reads `allowed` (the chat picker's
+    // Effort submenu, the backend's enum branch) could never see one.
+    kind: 'select',
+    // The union across the OpenAI-compatible surfaces. Per-model subsets are
+    // declared in each model's `allowed`, which is what actually gates a
+    // request — `none` and `max` are real GPT-5.6 levels but absent from the
+    // older o-series, so this list is a superset by design.
+    options: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    providers: ['openai', 'mantle', 'bedrock-responses'],
   },
 ];
 
@@ -338,3 +570,63 @@ export const AVAILABLE_ROLES = [
   'User',
   'Guest',
 ] as const;
+
+/**
+ * Canonical param keys that express reasoning/output effort, in the order the
+ * picker prefers them. Anthropic calls it `effort` (output_config.effort);
+ * the OpenAI-compatible surfaces call it `reasoning_effort`. A model declares
+ * at most one.
+ */
+export const EFFORT_PARAM_KEYS = ['effort', 'reasoning_effort'] as const;
+
+/** An effort control the chat model picker can render for a model. */
+export interface EffortControl {
+  /** Canonical param key to send in `inference_params`. */
+  key: string;
+  /** Selectable levels, admin-declared, ordered low -> high. */
+  levels: string[];
+  /** The admin's default level, or null when they didn't pick one. */
+  defaultLevel: string | null;
+}
+
+/**
+ * Resolve the effort control for a model, or null when it has none.
+ *
+ * Deliberately strict: an effort param is only offered when the admin declared
+ * it `supported`, left it unlocked, AND enumerated the `allowed` levels. That
+ * mirrors `_merge_inference_params` on the backend, whose enum branch keeps a
+ * user override *only* if it's a member of `allowed` and otherwise silently
+ * falls back to the default. Rendering a level the backend would discard would
+ * show the user a choice that does nothing.
+ *
+ * `locked` is excluded for the same reason — the backend pins those to the
+ * admin default and drops overrides without erroring.
+ */
+export function resolveEffortControl(model: ManagedModel | null | undefined): EffortControl | null {
+  const spec = model?.supportedParams?.params;
+  if (!spec) return null;
+
+  for (const key of EFFORT_PARAM_KEYS) {
+    const paramSpec = spec[key];
+    if (!paramSpec?.supported || paramSpec.locked) continue;
+    const levels = (paramSpec.allowed ?? []).map(level => String(level));
+    if (levels.length === 0) continue;
+    const declaredDefault =
+      paramSpec.default === null || paramSpec.default === undefined
+        ? null
+        : String(paramSpec.default);
+    return {
+      key,
+      levels,
+      defaultLevel: declaredDefault !== null && levels.includes(declaredDefault) ? declaredDefault : null,
+    };
+  }
+
+  return null;
+}
+
+/** Title-case an effort level for display ('xhigh' -> 'Extra high'). */
+export function effortLevelLabel(level: string): string {
+  if (level === 'xhigh') return 'Extra high';
+  return level.charAt(0).toUpperCase() + level.slice(1);
+}

@@ -7,7 +7,7 @@ voice router pattern.
 
 Protocol:
     Client → Server:
-        {"type": "config", "session_id": "...", "auth_token": "...", ...}  (first message)
+        {"type": "config", "session_id": "...", "auth_token": "...", "voice": "tiffany", ...}  (first message)
         {"type": "bidi_audio_input", "audio": "<base64>", "sample_rate": 16000}
         {"type": "bidi_text_input", "text": "..."}
         {"type": "ping"}
@@ -29,7 +29,13 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
+from apis.shared.sessions.metadata import (
+    get_session_metadata,
+    session_owned_by_other_user,
+    store_session_metadata,
+)
+from apis.shared.tools.always_on import union_enabled_tools
+from apis.shared.tools.freshness import drop_disabled_tools
 from apis.shared.sessions.models import SessionMetadata
 
 logger = logging.getLogger(__name__)
@@ -72,14 +78,145 @@ def _extract_user_from_token(token: str) -> Optional[Dict[str, str]]:
         user_id = payload.get("sub")
         if not user_id:
             return None
+        # Same claim precedence as `get_current_user_trusted`: Cognito groups
+        # first, then a plain `roles` claim, normalised to a list. Voice needs
+        # these to resolve RBAC at all — without them a `User` would carry no
+        # roles and `resolve_user_permissions` would fall back to the `default`
+        # role, which is a *substitute* for matching nothing, not a baseline
+        # everyone shares. Resolving against it would answer a different
+        # question than "what may this caller use?".
+        roles = payload.get("cognito:groups") or payload.get("roles", [])
+        if isinstance(roles, str):
+            roles = [roles]
         return {
             "user_id": str(user_id),
             "email": payload.get("email") or payload.get("preferred_username") or "",
+            "roles": list(roles),
             "raw_token": token,
         }
     except jwt.DecodeError as e:
         logger.warning(f"Failed to decode voice auth token: {e}")
         return None
+
+
+def _handshake_bearer_token(websocket: WebSocket) -> str:
+    """The ``Authorization: Bearer`` token on the WebSocket upgrade, or ``""``.
+
+    In the deployed Runtime this is the token its JWT authorizer validated:
+    ``Authorization`` is on ``requestHeaderAllowlist``, so the Runtime forwards
+    it to the container, and app-api's relay sends its bearer here (local dev
+    too). The browser-only ``base64UrlBearerAuthorization`` subprotocol is
+    deliberately not read: nothing says the Runtime forwards it, nor which of
+    several offered protocols it checked.
+    """
+    authorization = websocket.headers.get("authorization", "")
+    if authorization[:7].lower() != "bearer ":
+        return ""
+    return authorization[7:].strip()
+
+
+def _resolve_voice_identity(
+    *,
+    handshake_token: str,
+    frame_token: str,
+    claimed_user_ids: list[Optional[str]],
+) -> tuple[str, str]:
+    """Return ``(user_id, auth_token)`` for a voice connection, or ``("", "")`` to refuse it.
+
+    The identity is the ``sub`` of the token on the upgrade, never a
+    ``user_id`` the client names. The config frame, the query string and the
+    ``user-id`` custom header are all client-supplied (anyone reaching the
+    Runtime's ``/ws`` directly can set them, custom headers included, as query
+    params), so a claimed id is only checked against the token, and a mismatch
+    refuses the connection rather than being quietly corrected.
+
+    The config frame's ``auth_token`` is not an identity source either. It is
+    decoded without a signature check (the Runtime's authorizer only ever saw
+    the upgrade's token), so any caller holding one valid token could mint an
+    unsigned one naming another user, or carrying chosen roles, and send it in
+    the frame. A frame token for a different ``sub`` refuses the connection.
+
+    No upgrade token is refused, except under ``SKIP_AUTH``, the local-dev
+    bypass the text route on this service already honours. There the frame
+    token's ``sub`` or a claimed id is accepted as given.
+    """
+    claims = [str(c) for c in claimed_user_ids if c]
+
+    if not handshake_token:
+        from apis.shared.auth.dependencies import _skip_auth_user
+
+        local_user = _skip_auth_user()
+        if local_user is None:
+            logger.warning("Rejected voice connection: no bearer token on the upgrade")
+            return "", ""
+        frame_info = _extract_user_from_token(frame_token) if frame_token else None
+        if frame_info:
+            return frame_info["user_id"], frame_token
+        return (claims[0] if claims else local_user.user_id), ""
+
+    user_info = _extract_user_from_token(handshake_token)
+    if not user_info:
+        logger.warning("Rejected voice connection: upgrade token carries no usable identity")
+        return "", ""
+    user_id = user_info["user_id"]
+
+    if frame_token and frame_token != handshake_token:
+        frame_info = _extract_user_from_token(frame_token)
+        if not frame_info or frame_info["user_id"] != user_id:
+            logger.warning("Rejected voice connection: config-frame token names a different user")
+            return "", ""
+
+    if any(claim != user_id for claim in claims):
+        logger.warning("Rejected voice connection: claimed user_id does not match the token")
+        return "", ""
+
+    return user_id, handshake_token
+
+
+async def _always_on_tool_ids_for_voice(
+    auth_token: str, user_id: str
+) -> list:
+    """The admin-pinned tool ids this voice connection is entitled to.
+
+    Voice is in scope for always-on (docs/specs/admin-always-on-tools.md §7
+    D5) but reaches the agent by its own path: a WebSocket that cannot use
+    `Depends()`, so there is no `User` in hand the way there is on
+    `/invocations`.
+
+    RBAC is resolved from the caller's roles, so one is rebuilt here from the
+    connection's token using the same claims `get_current_user_trusted` reads.
+
+    **Fails closed to today's behaviour.** With no token — or a token that
+    carries no `sub` — nothing is pinned, rather than guessing with an empty
+    role list: that would resolve the `default` role's grant, which is not the
+    caller's. Losing a pinned tool on a voice turn is a downgrade; pinning
+    against the wrong grant set would be a correctness bug.
+    """
+    if not auth_token:
+        logger.info("Voice connection has no token; not resolving always-on tools")
+        return []
+    user_info = _extract_user_from_token(auth_token)
+    if not user_info:
+        return []
+    from apis.shared.auth.models import User
+    from apis.shared.tools.always_on import (
+        resolve_always_on_tool_ids,
+        resolve_system_tool_ids,
+    )
+
+    user = User(
+        email=user_info.get("email", ""),
+        name="",
+        user_id=user_info.get("user_id") or user_id,
+        roles=user_info.get("roles") or [],
+        raw_token=auth_token,
+    )
+    always_on = await resolve_always_on_tool_ids(user)
+    system = await resolve_system_tool_ids(user)
+    # Union preserving order; system ids appended after always-on. Dedup keeps
+    # a byte-stable list for the cacheable toolConfig prefix.
+    seen = set(always_on)
+    return always_on + [tid for tid in system if tid not in seen]
 
 
 async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
@@ -235,7 +372,7 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
         cost = None
         if pricing and total_tokens > 0:
             try:
-                total_cost, breakdown = CostCalculator.calculate_message_cost(accumulated_usage, pricing)
+                total_cost, breakdown = CostCalculator.calculate_voice_cost(accumulated_usage, pricing)
                 cost = {
                     "total": total_cost,
                     "inputCost": breakdown.input_cost,
@@ -245,6 +382,18 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
                 }
             except Exception:
                 pass
+
+        # Voice prices from the catalog row for the Sonic model id; with no row
+        # the whole session is free against quota. Make that visible.
+        if cost is None and total_tokens > 0:
+            from apis.shared.observability.emf import emit_unmetered_model_call
+
+            reason = "calculation_failed" if pricing else "no_pricing"
+            logger.warning(
+                f"Unmetered voice session: model={_sanitize_log(model_id)} reason={reason} — "
+                "usage recorded with no cost; not counted against quota"
+            )
+            emit_unmetered_model_call(model_id, reason, surface="voice", session_id=session_id)
 
         message_metadata = MessageMetadata(
             token_usage=token_usage,
@@ -304,13 +453,17 @@ async def voice_stream(
 
     **AgentCore (deployed):** Browser connects via
     ``wss://bedrock-agentcore.<region>.amazonaws.com/runtimes/<ARN>/ws``.
-    Auth is handled by AgentCore's JWT Authorizer at the proxy layer.
-    The bearer token for user-claim extraction arrives in the first
-    ``config`` message sent by the client after connection opens.
+    Auth is handled by AgentCore's JWT Authorizer at the proxy layer,
+    on the upgrade's ``Authorization`` header, which the Runtime forwards.
+    The user is that token's ``sub``. A ``user_id`` or ``auth_token`` the
+    client sends anywhere else must agree with it, or the connection closes
+    with 4001.
 
     **Local dev:** Browser connects directly to
     ``ws://localhost:8001/voice/stream``. Session ID and token are
-    plain query params; the config message supplements them.
+    plain query params; the config message supplements them. With no
+    bearer on the upgrade, a ``user_id`` is accepted only under
+    ``SKIP_AUTH``.
     """
     # Accept immediately — AgentCore validates auth at the proxy layer;
     # user claims are extracted from the config message after accept.
@@ -321,6 +474,8 @@ async def voice_stream(
     user_id = _get_param_from_request(websocket, "user-id", user_id)
     enabled_tools_list = _get_enabled_tools_from_request(websocket, enabled_tools)
     auth_token = _get_param_from_request(websocket, "auth-token", token) or ""
+    requested_voice: Optional[str] = None
+    frame_user_id: Optional[str] = None
 
     # Always read config message from client (sent on WebSocket open).
     # Required for auth_token in AgentCore mode and supplements any
@@ -331,9 +486,13 @@ async def voice_stream(
         )
         if first_msg.get("type") == "config":
             session_id = first_msg.get("session_id") or session_id
-            user_id = first_msg.get("user_id") or user_id
+            frame_user_id = first_msg.get("user_id")
             enabled_tools_list = first_msg.get("enabled_tools") or enabled_tools_list
             auth_token = first_msg.get("auth_token") or auth_token
+            # The user's chosen Nova 2 Sonic voice. Validated in VoiceAgent
+            # (an unknown id falls back to the default rather than 4xx-ing a
+            # WebSocket the user has already heard connect).
+            requested_voice = first_msg.get("voice")
             logger.info(f"Voice config received from client message")
     except asyncio.TimeoutError:
         logger.warning("No config message received within 10s, using query params")
@@ -345,20 +504,47 @@ async def voice_stream(
         session_id = str(uuid.uuid4())
         logger.info(f"Generated new voice session ID: {_sanitize_log(session_id)}")
 
-    # Extract user from token (query param or config message)
-    if not user_id and auth_token:
-        user_info = _extract_user_from_token(auth_token)
-        if user_info:
-            user_id = user_info["user_id"]
+    # Identity is the token's `sub`. A `user_id` from the query, the custom
+    # header or the config frame is a claim to check, never a source.
+    user_id, auth_token = _resolve_voice_identity(
+        handshake_token=_handshake_bearer_token(websocket),
+        frame_token=auth_token,
+        claimed_user_ids=[user_id, frame_user_id],
+    )
 
     if not user_id:
         await websocket.send_json({"type": "bidi_error", "message": "Authentication required"})
         await websocket.close(code=4001, reason="Authentication required")
         return
 
+    # Refuse a session id another user already owns, before anything reads
+    # history or writes metadata. `_ensure_session_metadata` below would
+    # otherwise create a second META row on the owner's session id, and that
+    # row is what the text route's ownership guard reads as "this user's
+    # session" — so a voice connect re-opened the cross-user fork that guard
+    # closed. Same 404-shaped answer as the text route: nothing about whether
+    # the session exists. Fails open, like every caller of this check.
+    if await session_owned_by_other_user(session_id, user_id):
+        logger.warning(
+            f"Rejected voice session {_sanitize_log(session_id)} — owned by a different user"
+        )
+        await websocket.send_json({"type": "bidi_error", "message": "Session not found"})
+        await websocket.close(code=4004, reason="Session not found")
+        return
+
+    # Admin-pinned tools reach voice too (D5). Resolved BEFORE the connection
+    # log below, because that log is the first thing anyone reads when
+    # debugging a voice toolset — emitting it ahead of the union made it
+    # under-report by exactly the tools this feature adds.
+    always_on_ids = await _always_on_tool_ids_for_voice(auth_token, user_id)
+    enabled_tools_list = union_enabled_tools(enabled_tools_list, always_on_ids)
+    # Same rule as the text path (`get_agent`): a disabled tool never loads.
+    enabled_tools_list = await drop_disabled_tools(enabled_tools_list)
+
     logger.info(
         f"Voice WebSocket connected: session={_sanitize_log(session_id)}, "
         f"user={_sanitize_log(user_id)}, tools={len(enabled_tools_list or [])}, "
+        f"pinned={len(always_on_ids)}, "
         f"auth_token={'present' if auth_token else 'missing'}"
     )
 
@@ -372,15 +558,23 @@ async def voice_stream(
             user_id=user_id,
             auth_token=auth_token,
             enabled_tools=enabled_tools_list,
+            voice=requested_voice,
         )
+        if requested_voice and voice_agent.voice_id != str(requested_voice).strip().lower():
+            logger.warning(
+                f"Voice '{_sanitize_log(str(requested_voice))}' is not in the catalog; "
+                f"using '{voice_agent.voice_id}' for session={_sanitize_log(session_id)}"
+            )
 
         _active_sessions[session_id] = voice_agent
 
-        # Send connection confirmation
+        # Send connection confirmation. `voice` is the id actually in use, so
+        # a client whose request fell back can show the real one.
         await websocket.send_json({
             "type": "bidi_connection_start",
             "connection_id": session_id,
             "status": "connected",
+            "voice": voice_agent.voice_id,
         })
 
         # Start the voice agent

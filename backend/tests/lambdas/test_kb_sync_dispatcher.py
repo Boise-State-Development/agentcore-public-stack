@@ -323,3 +323,82 @@ class TestWorkerStub:
         updated = await get_sync_policy(assistant_id, policy.policy_id)
         assert updated.last_result == "skipped"
         assert updated.sync_run_started_at is None
+
+
+async def _make_due_folder_policy(assistant_id, source_ref="google-workspace:folder-1"):
+    policy = await create_sync_policy(
+        assistant_id=assistant_id,
+        source_type="drive_folder",
+        source_ref=source_ref,
+        interval="weekly",
+        created_by_user_id=USER_ID,
+        source_name="Readings",
+    )
+    await set_policy_state(assistant_id, policy.policy_id, "active", next_sync_at=PAST)
+    return await get_sync_policy(assistant_id, policy.policy_id)
+
+
+class TestDriveFolder:
+    """assistant-kb-sync.md §11.7: no source record to check, and a flag that
+    re-arms instead of running."""
+
+    async def test_dispatched_with_no_source_record(self, assistants_table, invoked_workers, monkeypatch):
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", "true")
+        assistant_id = await _make_assistant()
+        policy = await _make_due_folder_policy(assistant_id)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["Dispatched"] == 1
+        assert invoked_workers == [
+            {
+                "policyId": policy.policy_id,
+                "assistantId": assistant_id,
+                "sourceType": "drive_folder",
+                "sourceRef": "google-workspace:folder-1",
+            }
+        ]
+        stored = await get_sync_policy(assistant_id, policy.policy_id)
+        assert stored.sync_run_started_at is not None
+        assert stored.next_sync_at > PAST
+
+    async def test_assistant_gone_deletes_the_policy(self, assistants_table, invoked_workers, monkeypatch):
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", "true")
+        assistant_id = await _make_assistant()
+        policy = await _make_due_folder_policy(assistant_id)
+        assistants_table.delete_item(Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["OrphansDeleted"] == 1
+        assert invoked_workers == []
+        assert await get_sync_policy(assistant_id, policy.policy_id) is None
+
+    @pytest.mark.parametrize("value", ["false", " FALSE "])
+    async def test_flag_off_rearms_without_running(self, assistants_table, invoked_workers, monkeypatch, value):
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
+        assistant_id = await _make_assistant()
+        policy = await _make_due_folder_policy(assistant_id)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["FolderSyncDisabled"] == 1
+        assert counts["Dispatched"] == 0
+        assert invoked_workers == []
+        stored = await get_sync_policy(assistant_id, policy.policy_id)
+        assert stored.state == "active"
+        assert stored.sync_run_started_at is None
+        # Out of the due window, so it cannot starve the sweep.
+        assert stored.next_sync_at > datetime.now(timezone.utc).isoformat()
+
+    async def test_flag_off_leaves_other_policies_running(self, assistants_table, invoked_workers, monkeypatch):
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", "false")
+        assistant_id = await _make_assistant()
+        await _make_due_folder_policy(assistant_id)
+        await _make_document(assistant_id)
+        file_policy = await _make_due_policy(assistant_id)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["FolderSyncDisabled"] == 1
+        assert [p["policyId"] for p in invoked_workers] == [file_policy.policy_id]

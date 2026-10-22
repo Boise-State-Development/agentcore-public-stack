@@ -16,7 +16,9 @@ import {
   validateUiResourceEvent,
   validateToolInputPartialEvent,
   validateSessionTitleEvent,
+  validateSteeringAppliedEvent,
   validateOAuthRequiredEvent,
+  validateAgentNoticeEvent,
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
@@ -534,6 +536,41 @@ describe('stream-parser-core', () => {
     });
   });
 
+  describe('validateSteeringAppliedEvent', () => {
+    const valid = {
+      type: 'steering_applied',
+      sessionId: 'sess-1',
+      entryId: 'entry-1',
+      text: 'actually, check the other file',
+    };
+
+    it('should return true for a valid event', () => {
+      expect(validateSteeringAppliedEvent(valid)).toBe(true);
+    });
+
+    it('should return false for null/undefined or wrong type', () => {
+      expect(validateSteeringAppliedEvent(null)).toBe(false);
+      expect(validateSteeringAppliedEvent(undefined)).toBe(false);
+      expect(validateSteeringAppliedEvent({ ...valid, type: 'session_title' })).toBe(false);
+    });
+
+    it('should return false for an empty entryId', () => {
+      // entryId is what the SPA matches the queued composer entry on. Acking
+      // the wrong entry would either strand a duplicate or drop text that was
+      // never injected.
+      expect(validateSteeringAppliedEvent({ ...valid, entryId: '' })).toBe(false);
+    });
+
+    it('should return false for an empty sessionId', () => {
+      expect(validateSteeringAppliedEvent({ ...valid, sessionId: '' })).toBe(false);
+    });
+
+    it('should accept empty text but reject a missing one', () => {
+      expect(validateSteeringAppliedEvent({ ...valid, text: '' })).toBe(true);
+      expect(validateSteeringAppliedEvent({ ...valid, text: undefined })).toBe(false);
+    });
+  });
+
   describe('validateSessionTitleEvent', () => {
     const valid = {
       type: 'session_title',
@@ -562,6 +599,32 @@ describe('stream-parser-core', () => {
     });
   });
 
+  describe('validateAgentNoticeEvent', () => {
+    const valid = {
+      type: 'agent_notice',
+      sessionId: 'sess-1',
+      agentId: 'ast-1',
+      message: 'Running without your usual model.',
+      unavailableModelId: 'm-1',
+      unavailableTools: [],
+      unavailableSkills: [],
+    };
+
+    it('accepts the backend shape, with the optional fields omitted', () => {
+      expect(validateAgentNoticeEvent(valid)).toBe(true);
+      const { unavailableModelId: _omitted, ...withoutModel } = valid;
+      expect(validateAgentNoticeEvent(withoutModel)).toBe(true);
+    });
+
+    it('rejects a missing session, message or list', () => {
+      expect(validateAgentNoticeEvent({ ...valid, sessionId: '' })).toBe(false);
+      expect(validateAgentNoticeEvent({ ...valid, message: '' })).toBe(false);
+      expect(validateAgentNoticeEvent({ ...valid, unavailableTools: undefined })).toBe(false);
+      expect(validateAgentNoticeEvent({ ...valid, type: 'model_retry' })).toBe(false);
+      expect(validateAgentNoticeEvent(null)).toBe(false);
+    });
+  });
+
   describe('processStreamEvent', () => {
     let callbacks: StreamParserCallbacks;
 
@@ -582,12 +645,13 @@ describe('stream-parser-core', () => {
         onUiResource: vi.fn(),
         onToolInputPartial: vi.fn(),
         onSessionTitle: vi.fn(),
+        onSteeringApplied: vi.fn(),
+        onAgentNotice: vi.fn(),
         onParseError: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
         onMetadata: vi.fn(),
-        onReasoning: vi.fn(),
-        onToolProgress: vi.fn()
+        onReasoning: vi.fn()
       };
     });
 
@@ -608,21 +672,15 @@ describe('stream-parser-core', () => {
       expect(callbacks.onContentBlockDelta).toHaveBeenCalledWith(data);
     });
 
-    it('should call onToolUse and onToolProgress for valid tool_use', () => {
+    it('should call onToolUse for valid tool_use', () => {
       const data = { tool_use: { name: 'search', tool_use_id: 'id123' } };
       processStreamEvent('tool_use', data, callbacks);
       expect(callbacks.onToolUse).toHaveBeenCalledWith(data);
-      expect(callbacks.onToolProgress).toHaveBeenCalledWith({
-        visible: true,
-        toolName: 'search',
-        toolUseId: 'id123'
-      });
     });
 
-    it('should call onDone and hide tool progress for done event', () => {
+    it('should call onDone for done event', () => {
       processStreamEvent('done', null, callbacks);
       expect(callbacks.onDone).toHaveBeenCalled();
-      expect(callbacks.onToolProgress).toHaveBeenCalledWith({ visible: false });
     });
 
     it('should call onParseError for invalid event type', () => {
@@ -650,6 +708,53 @@ describe('stream-parser-core', () => {
       processStreamEvent('session_title', { type: 'session_title', title: '' }, callbacks);
       expect(callbacks.onSessionTitle).not.toHaveBeenCalled();
       expect(callbacks.onParseError).toHaveBeenCalledWith('session_title: invalid data structure');
+    });
+
+    it('should call onAgentNotice for a valid agent_notice event', () => {
+      const data = {
+        type: 'agent_notice',
+        sessionId: 'sess-1',
+        agentId: 'ast-1',
+        projectId: 'prj_1',
+        message: 'This task runs without Canvas, which you don’t have access to.',
+        unavailableTools: ['canvas'],
+        unavailableSkills: [],
+      };
+      processStreamEvent('agent_notice', data, callbacks);
+      expect(callbacks.onAgentNotice).toHaveBeenCalledWith(data);
+      expect(callbacks.onParseError).not.toHaveBeenCalled();
+    });
+
+    it('should call onParseError for an agent_notice with no message', () => {
+      processStreamEvent(
+        'agent_notice',
+        { type: 'agent_notice', sessionId: 'sess-1', agentId: 'ast-1', message: ' ', unavailableTools: [], unavailableSkills: [] },
+        callbacks,
+      );
+      expect(callbacks.onAgentNotice).not.toHaveBeenCalled();
+      expect(callbacks.onParseError).toHaveBeenCalledWith('agent_notice: invalid data structure');
+    });
+
+    it('should call onSteeringApplied for a valid steering_applied event', () => {
+      const data = {
+        type: 'steering_applied',
+        sessionId: 'sess-1',
+        entryId: 'entry-1',
+        text: 'use the other file',
+      };
+      processStreamEvent('steering_applied', data, callbacks);
+      expect(callbacks.onSteeringApplied).toHaveBeenCalledWith(data);
+      expect(callbacks.onParseError).not.toHaveBeenCalled();
+    });
+
+    it('should call onParseError for an invalid steering_applied event', () => {
+      processStreamEvent(
+        'steering_applied',
+        { type: 'steering_applied', sessionId: 'sess-1', entryId: '' },
+        callbacks,
+      );
+      expect(callbacks.onSteeringApplied).not.toHaveBeenCalled();
+      expect(callbacks.onParseError).toHaveBeenCalledWith('steering_applied: invalid data structure');
     });
 
     it('should call onArtifact for a valid artifact event', () => {

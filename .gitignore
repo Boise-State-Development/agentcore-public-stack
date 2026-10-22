@@ -93,6 +93,16 @@ tmp/
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 
+# Xcode / Swift (ios/)
+xcuserdata/
+*.xcuserstate
+DerivedData/
+.build/
+.swiftpm/
+*.xcresult
+# Signing team and bundle id for device builds (copy Local.xcconfig.example)
+ios/Config/Local.xcconfig
+
 # OS generated files
 ehthumbs.db
 Icon?
@@ -156,4 +166,7 @@ internal-docs/
 *-report-*.pdf
 audit-*.pdf
 audit-*.md
+# backend/scripts/audit_user_duplicates.py reports (contain email addresses)
+user-duplicates-*.json
+user-duplicates-*.md
 review-*.pdf

@@ -15,7 +15,7 @@ retired).
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, List, NamedTuple, Optional
 
 from strands import AgentSkills, Skill, tool
 
@@ -26,6 +26,7 @@ from apis.shared.skills.resource_store import (
     SkillResourceStoreError,
     get_skill_resource_store,
 )
+from apis.shared.skills.resource_types import is_text_content_type
 
 logger = logging.getLogger(__name__)
 
@@ -34,23 +35,11 @@ __all__ = [
     "record_to_strands_skill",
     "fetch_active_skill_records",
     "build_skills_plugin",
+    "SkillsRuntime",
     "build_skills_runtime",
     "make_read_skill_file_tool",
 ]
 
-# Text MIME types whose bytes ``read_skill_file`` returns inline. Anything else
-# (images, PDFs, archives) is described, never dumped as raw bytes.
-_TEXT_PREFIXES = ("text/",)
-_TEXT_EXACT = frozenset(
-    {
-        "application/json",
-        "application/xml",
-        "application/yaml",
-        "application/x-yaml",
-        "application/toml",
-        "application/javascript",
-    }
-)
 _INERT_SCRIPT_NOTICE = (
     "[This script is stored with the skill for reference only. It is NOT "
     "executable on this platform — read it to understand the approach, then "
@@ -125,6 +114,11 @@ def _is_active_status(status: Any) -> bool:
 def fetch_active_skill_records(skill_ids: List[str]) -> List[Any]:
     """Fetch ACTIVE skill records for ``skill_ids`` from the catalog repo.
 
+    An id may be pinned (``skill_id@3``, shared-projects 3.1): its record is the
+    live row with that version's content overlaid, and ``status`` stays the live
+    row's, so a disabled skill stops running whatever it is pinned to. Unpinned
+    ids cost the same single batch read as before; pins add one more, in parallel.
+
     Bridges the async repository call into the sync agent-build path the same
     way the other tool-materialization helpers do. Returns an empty list on any
     failure — the agent then simply runs without skills.
@@ -134,12 +128,10 @@ def fetch_active_skill_records(skill_ids: List[str]) -> List[Any]:
 
     import asyncio
 
-    from apis.shared.skills.repository import get_skill_catalog_repository
-
-    repo = get_skill_catalog_repository()
+    from apis.shared.skills.pinning import load_skill_records
 
     async def _go() -> List[Any]:
-        records = await repo.batch_get_skills(list(skill_ids))
+        records = await load_skill_records(list(skill_ids))
         return [r for r in records if _is_active_status(getattr(r, "status", "active"))]
 
     try:
@@ -158,12 +150,6 @@ def fetch_active_skill_records(skill_ids: List[str]) -> List[Any]:
         return []
 
 
-def _is_text_content(content_type: str) -> bool:
-    """True if the MIME type is one we return inline as text."""
-    ct = (content_type or "").split(";", 1)[0].strip().lower()
-    return ct.startswith(_TEXT_PREFIXES) or ct in _TEXT_EXACT
-
-
 def _resolve_resource(record: Any, path: str) -> Optional[Any]:
     """Resolve ``path`` against a skill's manifest (no filesystem, no traversal).
 
@@ -176,6 +162,26 @@ def _resolve_resource(record: Any, path: str) -> Optional[Any]:
         if wanted == ref.filename or wanted == _manifest_path(ref):
             return ref
     return None
+
+
+class SkillsRuntime(NamedTuple):
+    """What one turn's skills contribute to the agent.
+
+    A ``NamedTuple`` so callers can read ``.plugin`` / ``.read_skill_file`` /
+    ``.records`` by name instead of by position.
+
+    **Adding the third element is a breaking change for positional callers**,
+    and that is worth stating plainly rather than glossed: a three-element
+    tuple does not unpack into two names, so every
+    ``plugin, read_tool = build_skills_runtime(...)`` site had to be updated.
+    The alternative — returning a two-tuple and fetching the records again —
+    would have cost the turn a second DynamoDB read of rows it already held,
+    which is the thing this exists to avoid.
+    """
+
+    plugin: Optional[Any]
+    read_skill_file: Optional[Any]
+    records: List[Any]
 
 
 def make_read_skill_file_tool(records: List[Any]):
@@ -235,7 +241,7 @@ def make_read_skill_file_tool(records: List[Any]):
         kind = getattr(ref, "kind", "reference")
         if kind == "script":
             return f"{_INERT_SCRIPT_NOTICE}\n\n{raw.decode('utf-8', errors='replace')}"
-        if kind == "asset" or not _is_text_content(ref.content_type):
+        if kind == "asset" or not is_text_content_type(ref.content_type):
             return (
                 f"'{path}' is a binary {kind} ({ref.content_type or 'unknown type'}, "
                 f"{ref.size} bytes) and cannot be shown as text."
@@ -254,13 +260,21 @@ def build_skills_runtime(
     plugin and the ``read_skill_file`` tool bound to those records. Returns
     ``(None, None)`` when there are no accessible/active skills — the caller
     then wires neither and the agent behaves as a plain chat agent.
+
+    The records themselves are available on the returned tuple's
+    :attr:`SkillsRuntime.records`, because a second consumer needs them and
+    re-fetching would double the turn's DynamoDB reads. ``document_extract``
+    (docs/specs/structured-extraction.md §5.2) decides whether to mount from
+    the resource manifest those records already carry, which is why the gate
+    costs no I/O — and resolving a field set has to go through exactly the same
+    records, so access stays structural rather than re-checked.
     """
     if not accessible_skill_ids:
-        return None, None
+        return SkillsRuntime(None, None, [])
 
     records = fetch_active_skill_records(list(accessible_skill_ids))
     if not records:
-        return None, None
+        return SkillsRuntime(None, None, [])
 
     # Deterministic order regardless of fetch order: these records become the
     # <available_skills> system-prompt block, and any order flip between turns
@@ -271,7 +285,7 @@ def build_skills_runtime(
     plugin = AgentSkills(skills=skills)
     read_tool = make_read_skill_file_tool(records)
     logger.info("Built skills runtime: %d skill(s) + read_skill_file", len(skills))
-    return plugin, read_tool
+    return SkillsRuntime(plugin, read_tool, records)
 
 
 def build_skills_plugin(
@@ -282,5 +296,4 @@ def build_skills_plugin(
     Prefer :func:`build_skills_runtime`, which also returns the
     ``read_skill_file`` tool from the same single record fetch.
     """
-    plugin, _ = build_skills_runtime(accessible_skill_ids)
-    return plugin
+    return build_skills_runtime(accessible_skill_ids).plugin

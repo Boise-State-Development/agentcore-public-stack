@@ -1,5 +1,19 @@
 import * as cdk from 'aws-cdk-lib';
-import { loadConfig, AppConfig } from '../lib/config';
+import { loadConfig, buildCorsOrigins, AppConfig, MEMORY_SENSITIVE_PATTERNS_MAX_CHARS,
+  OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
+  OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+  OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
+  OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+  OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+  OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+  OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+  OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+} from '../lib/config';
 
 /**
  * Unit Tests for RAG Ingestion Configuration
@@ -38,6 +52,65 @@ function clearRagEnv(): void {
   }
 }
 
+/**
+ * The `CDK_MANAGED_KB_*` environment variables. Scrubbed before AND after every
+ * test for the same reason as the RAG keys, but the stakes are higher here: all
+ * three Managed_KB flags default to **false**, so a value leaking in from the
+ * ambient environment or a prior test would flip a flag ON and the
+ * "defaults to off" assertions would pass for the wrong reason — exactly the
+ * silent-arming failure Requirement 19.8 exists to prevent.
+ */
+const MANAGED_KB_ENV_KEYS = [
+  'CDK_MANAGED_KB_NEW_DEFAULT',
+  'CDK_MANAGED_KB_MIGRATION_ENABLED',
+  'CDK_MANAGED_KB_RECONCILER_ARMED',
+  'CDK_MANAGED_KB_PER_OWNER_BYTES',
+  'CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES',
+  'CDK_MANAGED_KB_PER_KB_CEILING_BYTES',
+  'CDK_MANAGED_KB_RETENTION_WINDOW_DAYS',
+] as const;
+
+function clearManagedKbEnv(): void {
+  for (const key of MANAGED_KB_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
+/**
+ * Scrubbed before AND after every test: these assert the defaults, so a leaked
+ * value would make a "defaults to X" assertion pass while reading an override.
+ */
+const OBSERVABILITY_ENV_KEYS = [
+  'CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED',
+  'CDK_OBSERVABILITY_LOG_RETENTION_DAYS',
+  'CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD',
+  'CDK_OBSERVABILITY_ALB_P99_LATENCY_MS',
+  'CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS',
+  'CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD',
+  'CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD',
+  'CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD',
+  'CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT',
+  'CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD',
+  'CDK_OBSERVABILITY_ECS_CPU_PERCENT',
+  'CDK_OBSERVABILITY_ECS_MEMORY_PERCENT',
+  'CDK_OBSERVABILITY_XRAY_SAMPLING_RATE',
+  'CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR',
+  'CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS',
+  'CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED',
+  'CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD',
+  'CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD',
+  'CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD',
+  'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT',
+  'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS',
+  'CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED',
+] as const;
+
+function clearObservabilityEnv(): void {
+  for (const key of OBSERVABILITY_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
 describe('RAG Ingestion Configuration', () => {
   let app: cdk.App;
   let originalEnv: NodeJS.ProcessEnv;
@@ -49,6 +122,8 @@ describe('RAG Ingestion Configuration', () => {
     process.env = { ...originalEnv };
     // Hermetic start: drop any RAG keys a prior test may have leaked.
     clearRagEnv();
+    clearManagedKbEnv();
+    clearObservabilityEnv();
 
     // Create a fresh CDK app for each test
     app = new cdk.App();
@@ -111,12 +186,73 @@ describe('RAG Ingestion Configuration', () => {
     // Drop any RAG keys this test set so they can't leak forward, then restore
     // the original environment object.
     clearRagEnv();
+    clearManagedKbEnv();
+    clearObservabilityEnv();
     process.env = originalEnv;
   });
 
   // ============================================================
   // Environment Variable Loading Tests
   // ============================================================
+
+  describe('Browser URL blocklist (spec D6)', () => {
+    // This list is a security control: it is what stops a human in a browser
+    // takeover navigating to a system the agent must not act inside. It is
+    // supplied entirely from outside the repo (the stack ships fork-neutral),
+    // so the cases below pin the three behaviours that matter — empty by
+    // default, an override populates it, and an unset GitHub Actions variable
+    // (which arrives as '') is NOT mistaken for a deliberate empty list.
+    const BLOCKLIST_KEY = 'CDK_BROWSER_URL_BLOCKLIST';
+
+    afterEach(() => {
+      delete process.env[BLOCKLIST_KEY];
+    });
+
+    test('is empty when unset — no institution-specific hosts are baked in', () => {
+      delete process.env[BLOCKLIST_KEY];
+
+      // The old build seeded `instructure.com` here. That is BSU's LMS policy,
+      // not a property of this stack, and a fork inherited it with no
+      // breadcrumb. It now lives in the per-environment variable.
+      expect(loadConfig(app).browser.urlBlocklist).toEqual([]);
+    });
+
+    test('an override populates it and is trimmed', () => {
+      process.env[BLOCKLIST_KEY] = 'one.example.com, two.example.com';
+
+      expect(loadConfig(app).browser.urlBlocklist).toEqual([
+        'one.example.com',
+        'two.example.com',
+      ]);
+    });
+
+    test('an empty variable falls through to context, not to an empty list', () => {
+      // An unset GitHub Actions variable is forwarded as ''. If that were read
+      // as an explicit "block nothing" it would silently override a configured
+      // context default — a forgotten variable would disable the control and
+      // look identical in the log to a deliberate opt-out.
+      app.node.setContext('browser', {
+        urlBlocklist: ['from.context.example.com'],
+      });
+      process.env[BLOCKLIST_KEY] = '';
+
+      expect(loadConfig(app).browser.urlBlocklist).toEqual([
+        'from.context.example.com',
+      ]);
+    });
+
+    test('a variable of only separators and spaces is treated as unset', () => {
+      app.node.setContext('browser', {
+        urlBlocklist: ['from.context.example.com'],
+      });
+      process.env[BLOCKLIST_KEY] = ' , , ';
+
+      expect(loadConfig(app).browser.urlBlocklist).toEqual([
+        'from.context.example.com',
+      ]);
+    });
+  });
+
 
   describe('Environment Variable Loading', () => {
     test('loads CORS origins from CDK_RAG_CORS_ORIGINS environment variable', () => {
@@ -350,6 +486,31 @@ describe('RAG Ingestion Configuration', () => {
   // (same ternary as kbSync; empty workflow var must not disable)
   // ============================================================
 
+  describe('Feedback eval sampling flag (opt-in)', () => {
+    test('defaults to DISABLED when CDK_FEEDBACK_EVAL_SAMPLING_ENABLED is unset', () => {
+      delete process.env.CDK_FEEDBACK_EVAL_SAMPLING_ENABLED;
+      expect(loadConfig(app).feedbackEvalSampling.enabled).toBe(false);
+    });
+
+    test('an empty string (unset workflow variable) stays disabled', () => {
+      process.env.CDK_FEEDBACK_EVAL_SAMPLING_ENABLED = '';
+      expect(loadConfig(app).feedbackEvalSampling.enabled).toBe(false);
+    });
+
+    test('only the literal "true" enables it', () => {
+      process.env.CDK_FEEDBACK_EVAL_SAMPLING_ENABLED = 'true';
+      expect(loadConfig(app).feedbackEvalSampling.enabled).toBe(true);
+      process.env.CDK_FEEDBACK_EVAL_SAMPLING_ENABLED = 'yes';
+      expect(loadConfig(app).feedbackEvalSampling.enabled).toBe(false);
+    });
+
+    test('cdk.json context feedbackEvalSampling.enabled=true enables when env is unset', () => {
+      delete process.env.CDK_FEEDBACK_EVAL_SAMPLING_ENABLED;
+      app.node.setContext('feedbackEvalSampling', { enabled: true });
+      expect(loadConfig(app).feedbackEvalSampling.enabled).toBe(true);
+    });
+  });
+
   describe('Scheduled Runs feature flag', () => {
     test('defaults to enabled when CDK_SCHEDULED_RUNS_ENABLED is unset', () => {
       delete process.env.CDK_SCHEDULED_RUNS_ENABLED;
@@ -381,6 +542,49 @@ describe('RAG Ingestion Configuration', () => {
       app.node.setContext('scheduledRuns', { enabled: false });
 
       expect(loadConfig(app).scheduledRuns.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Artifact share inbox feature flag — default ON with a kill switch
+  // (flipped from opt-in once the surface shipped; the empty workflow
+  //  var is the case that matters — see the 1.18.0 release notes)
+  // ============================================================
+
+  describe('Artifact share inbox feature flag', () => {
+    test('defaults to enabled when CDK_ARTIFACT_SHARE_INBOX_ENABLED is unset', () => {
+      delete process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED;
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      // `${{ vars.CDK_ARTIFACT_SHARE_INBOX_ENABLED }}` renders to "" when
+      // unset. Under the previous opt-in default this resolved to OFF; the
+      // whole point of the flip is that a fork which never sets the variable
+      // now gets the finished feature.
+      process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED = '';
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(true);
+    });
+
+    test('CDK_ARTIFACT_SHARE_INBOX_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED = 'false';
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(false);
+    });
+
+    test('CDK_ARTIFACT_SHARE_INBOX_ENABLED="true" stays enabled', () => {
+      process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED = 'true';
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(true);
+    });
+
+    test('cdk.json context artifacts.shareInboxEnabled=false disables when env is unset', () => {
+      delete process.env.CDK_ARTIFACT_SHARE_INBOX_ENABLED;
+      app.node.setContext('artifacts', { shareInboxEnabled: false });
+
+      expect(loadConfig(app).artifacts.shareInboxEnabled).toBe(false);
     });
   });
 
@@ -423,6 +627,387 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Shared Projects feature flag — default ON with a kill switch
+  // (unset / empty GitHub Actions variable means on)
+  // ============================================================
+
+  describe('Shared Projects feature flag', () => {
+    test('defaults to enabled when CDK_PROJECTS_ENABLED is unset', () => {
+      delete process.env.CDK_PROJECTS_ENABLED;
+
+      expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_PROJECTS_ENABLED = '';
+
+      expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+
+    test('CDK_PROJECTS_ENABLED="false" turns it off', () => {
+      process.env.CDK_PROJECTS_ENABLED = ' False ';
+
+      expect(loadConfig(app).projects.enabled).toBe(false);
+    });
+
+    test('anything but "false" leaves it on', () => {
+      process.env.CDK_PROJECTS_ENABLED = 'no';
+
+      expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+
+    test('cdk.json context projects.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_PROJECTS_ENABLED;
+      app.node.setContext('projects', { enabled: false });
+
+      expect(loadConfig(app).projects.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // TTFT probe — configuration, enabled by naming a probe user
+  // ============================================================
+
+  describe('TTFT probe configuration', () => {
+    afterEach(() => {
+      delete process.env.CDK_TTFT_PROBE_USER_ID;
+      delete process.env.CDK_TTFT_PROBE_MODEL_ID;
+    });
+
+    test('unset and "" (unset GitHub variable) leave it unconfigured', () => {
+      expect(loadConfig(app).ttftProbe).toEqual({ userId: '', modelId: '' });
+      process.env.CDK_TTFT_PROBE_USER_ID = '';
+      process.env.CDK_TTFT_PROBE_MODEL_ID = '';
+      expect(loadConfig(app).ttftProbe).toEqual({ userId: '', modelId: '' });
+    });
+
+    test('reads and trims the user and model', () => {
+      process.env.CDK_TTFT_PROBE_USER_ID = ' probe-sub ';
+      process.env.CDK_TTFT_PROBE_MODEL_ID = 'us.anthropic.claude-haiku-4-5 ';
+      expect(loadConfig(app).ttftProbe).toEqual({ userId: 'probe-sub', modelId: 'us.anthropic.claude-haiku-4-5' });
+    });
+  });
+
+  // ============================================================
+  // Folder sync and client turn timing — default ON with a kill switch
+  // ============================================================
+
+  describe('Folder sync feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_FOLDER_SYNC_ENABLED;
+    });
+
+    test('defaults to enabled, and "" (unset GitHub variable) is enabled', () => {
+      delete process.env.CDK_FOLDER_SYNC_ENABLED;
+      expect(loadConfig(app).folderSync.enabled).toBe(true);
+      process.env.CDK_FOLDER_SYNC_ENABLED = '';
+      expect(loadConfig(app).folderSync.enabled).toBe(true);
+    });
+
+    test('only "false" turns it off', () => {
+      process.env.CDK_FOLDER_SYNC_ENABLED = 'False';
+      expect(loadConfig(app).folderSync.enabled).toBe(false);
+      process.env.CDK_FOLDER_SYNC_ENABLED = 'no';
+      expect(loadConfig(app).folderSync.enabled).toBe(true);
+    });
+  });
+
+  // ============================================================
+  // Source provenance verification — in development, so only "true" enables
+  // ============================================================
+
+  describe('Source provenance feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SOURCE_PROVENANCE_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_SOURCE_PROVENANCE_ENABLED;
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+      process.env.CDK_SOURCE_PROVENANCE_ENABLED = '';
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_SOURCE_PROVENANCE_ENABLED = 'True';
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(true);
+      // Anything else a human might set is still off, because a half-built
+      // feature must not switch on for another deployment by accident.
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_SOURCE_PROVENANCE_ENABLED = value;
+        expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+      }
+    });
+  });
+
+  // ============================================================
+  // Structured extraction — in development, so only "true" enables
+  // ============================================================
+
+  describe('Document extract feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_ENABLED;
+      delete process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_ENABLED;
+      expect(loadConfig(app).documentExtract.enabled).toBe(false);
+      process.env.CDK_DOCUMENT_EXTRACT_ENABLED = '';
+      expect(loadConfig(app).documentExtract.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_ENABLED = 'True';
+      expect(loadConfig(app).documentExtract.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_DOCUMENT_EXTRACT_ENABLED = value;
+        expect(loadConfig(app).documentExtract.enabled).toBe(false);
+      }
+    });
+
+    // The model id gets a case of its own because getting it wrong is silent.
+    // An id with no catalog row prices the extraction call to null: it costs
+    // $0, counts against no quota, and only the UnmeteredModelCall metric
+    // says so (structured-extraction.md §9).
+    test('the extraction model id defaults to a real Bedrock-native id', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID;
+      const modelId = loadConfig(app).documentExtract.modelId;
+      expect(modelId).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+      // Structured outputs is per model AND per inference profile: the India
+      // profile is the one documented exclusion, and our own profiles are the
+      // only ones this stack ever sets.
+      expect(modelId.startsWith('in.')).toBe(false);
+      expect(modelId.startsWith('us.') || modelId.startsWith('global.')).toBe(true);
+    });
+
+    test('the model id is overridable per environment, and is trimmed', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID =
+        '  global.anthropic.claude-haiku-4-5-20251001-v1:0  ';
+      expect(loadConfig(app).documentExtract.modelId).toBe(
+        'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+      );
+    });
+
+    test('an unset GitHub variable ("") falls back to the default, not to empty', () => {
+      // The trap this exists for: `vars.X` forwards "" when unset, and
+      // `'' || default` is the default while `''.trim()` alone would have
+      // shipped an empty model id to the Runtime.
+      process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID = '';
+      expect(loadConfig(app).documentExtract.modelId).toBe(
+        'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      );
+    });
+
+    // Batch concurrency (structured-extraction.md §17.4). Left UNDEFINED
+    // unless a deployment sets it, so the Runtime's environment carries
+    // nothing for the default case and spends none of the V2 payload budget.
+    // The backend's own default is 4 and it clamps to 1..16.
+    test('concurrency is undefined unless a deployment sets it', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY;
+      expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+      process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = '';
+      expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+    });
+
+    test('a deployment can override the concurrency', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = '8';
+      expect(loadConfig(app).documentExtract.concurrency).toBe(8);
+    });
+
+    test('a non-numeric or non-positive concurrency is dropped, not forwarded', () => {
+      // The backend falls back anyway, and a bad string sitting in the
+      // Runtime's environment is harder to spot than an absent one.
+      for (const value of ['abc', '4.5', '0', '-2', 'true']) {
+        process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = value;
+        expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+      }
+    });
+  });
+
+  describe('Client turn timing feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;
+    });
+
+    test('defaults to enabled, and "" (unset GitHub variable) is enabled', () => {
+      delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(true);
+      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = '';
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(true);
+    });
+
+    test('only "false" turns it off', () => {
+      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = 'False';
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(false);
+      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = 'no';
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(true);
+    });
+  });
+
+  // ============================================================
+  // Session prewarm feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Session prewarm feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SESSION_PREWARM_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_SESSION_PREWARM_ENABLED is unset', () => {
+      delete process.env.CDK_SESSION_PREWARM_ENABLED;
+      expect(loadConfig(app).sessionPrewarm.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_SESSION_PREWARM_ENABLED = '';
+      expect(loadConfig(app).sessionPrewarm.enabled).toBe(false);
+    });
+
+    test('CDK_SESSION_PREWARM_ENABLED="true" turns it on', () => {
+      process.env.CDK_SESSION_PREWARM_ENABLED = ' TRUE ';
+      expect(loadConfig(app).sessionPrewarm.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_SESSION_PREWARM_ENABLED = 'yes';
+      expect(loadConfig(app).sessionPrewarm.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Direct user grants feature flag — default ON with a kill switch
+  // ============================================================
+
+  describe('Direct user grants feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_USER_GRANTS_ENABLED;
+    });
+
+    test('defaults to enabled when CDK_USER_GRANTS_ENABLED is unset', () => {
+      delete process.env.CDK_USER_GRANTS_ENABLED;
+
+      expect(loadConfig(app).userGrants.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_USER_GRANTS_ENABLED = '';
+
+      expect(loadConfig(app).userGrants.enabled).toBe(true);
+    });
+
+    test('CDK_USER_GRANTS_ENABLED="false" turns it off', () => {
+      process.env.CDK_USER_GRANTS_ENABLED = 'false';
+
+      expect(loadConfig(app).userGrants.enabled).toBe(false);
+    });
+
+    test('anything but "false" leaves it on', () => {
+      process.env.CDK_USER_GRANTS_ENABLED = 'no';
+
+      expect(loadConfig(app).userGrants.enabled).toBe(true);
+    });
+
+    test('cdk.json context userGrants.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_USER_GRANTS_ENABLED;
+      app.node.setContext('userGrants', { enabled: false });
+
+      expect(loadConfig(app).userGrants.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Project-memory content lint (Shared Projects 2.7): configuration,
+  // defaulting to warn with no deployment patterns
+  // ============================================================
+
+  describe('Project-memory content lint', () => {
+    afterEach(() => {
+      delete process.env.CDK_MEMORY_LINT_MODE;
+      delete process.env.CDK_MEMORY_SENSITIVE_PATTERNS;
+    });
+
+    test('defaults to warn with no patterns, unset or empty (an unset GitHub variable)', () => {
+      delete process.env.CDK_MEMORY_LINT_MODE;
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = '';
+
+      expect(loadConfig(app).memoryLint).toEqual({ mode: 'warn', sensitivePatterns: '' });
+    });
+
+    test('takes the mode and patterns from the environment', () => {
+      process.env.CDK_MEMORY_LINT_MODE = 'BLOCK';
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = '[{"pattern": "\\\\bS\\\\d{8}\\\\b", "label": "a student ID"}]';
+
+      const { memoryLint } = loadConfig(app);
+      expect(memoryLint.mode).toBe('block');
+      expect(JSON.parse(memoryLint.sensitivePatterns)[0].label).toBe('a student ID');
+    });
+
+    test('a cdk.json context may give the list as JSON', () => {
+      app.node.setContext('memoryLint', { mode: 'off', sensitivePatterns: ['a', 'b'] });
+
+      expect(loadConfig(app).memoryLint).toEqual({ mode: 'off', sensitivePatterns: '["a","b"]' });
+    });
+
+    test('an unknown mode fails the synth', () => {
+      process.env.CDK_MEMORY_LINT_MODE = 'strict';
+
+      expect(() => loadConfig(app)).toThrow(/off, warn or block/);
+    });
+
+    test('a list that is not JSON, or not a list of patterns, fails the synth', () => {
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = '["unterminated';
+      expect(() => loadConfig(app)).toThrow(/not valid JSON/);
+
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = '[1, 2]';
+      expect(() => loadConfig(app)).toThrow(/JSON list of pattern strings/);
+    });
+
+    test('one pattern per line is accepted as written, and the size is bounded', () => {
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = 'confidential\nS\\d{8}';
+      expect(loadConfig(app).memoryLint.sensitivePatterns).toBe('confidential\nS\\d{8}');
+
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = 'x'.repeat(MEMORY_SENSITIVE_PATTERNS_MAX_CHARS + 1);
+      expect(() => loadConfig(app)).toThrow(/fits a Lambda environment/);
+    });
+  });
+
+  // ============================================================
+  // SPA CloudFront access logs — default ON with a kill switch
+  // (empty GitHub Actions variable must not disable)
+  // ============================================================
+
+  describe('SPA access logs flag', () => {
+    test('defaults to enabled when CDK_FRONTEND_ACCESS_LOGS_ENABLED is unset', () => {
+      delete process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED;
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED = '';
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(true);
+    });
+
+    test('CDK_FRONTEND_ACCESS_LOGS_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED = 'false';
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(false);
+    });
+
+    test('cdk.json context frontend.accessLogsEnabled=false disables when env is unset', () => {
+      delete process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED;
+      app.node.setContext('frontend', {
+        cloudFrontPriceClass: 'PriceClass_100',
+        accessLogsEnabled: false,
+      });
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Agents API (Agent Designer) feature flag — default ON with a kill switch
   // (complete feature; ships enabled for forkers, empty var must not disable)
   // ============================================================
@@ -457,6 +1042,386 @@ describe('RAG Ingestion Configuration', () => {
       app.node.setContext('agents', { enabled: false });
 
       expect(loadConfig(app).agents.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Composer dictation — default ON with a kill switch; languages default en-US
+  // ============================================================
+
+  describe('Dictation config', () => {
+    // Per-key deletion, not the suite's `process.env` snapshot restore — see
+    // the RAG_ENV_KEYS note at the top of this file.
+    afterEach(() => {
+      delete process.env.CDK_DICTATION_ENABLED;
+      delete process.env.CDK_DICTATION_LANGUAGES;
+    });
+
+    test('defaults to enabled, English only', () => {
+      delete process.env.CDK_DICTATION_ENABLED;
+      delete process.env.CDK_DICTATION_LANGUAGES;
+
+      expect(loadConfig(app).dictation).toEqual({ enabled: true, languages: 'en-US' });
+    });
+
+    test('empty strings (unset GitHub Actions variables) keep the defaults', () => {
+      process.env.CDK_DICTATION_ENABLED = '';
+      process.env.CDK_DICTATION_LANGUAGES = '';
+
+      expect(loadConfig(app).dictation).toEqual({ enabled: true, languages: 'en-US' });
+    });
+
+    test('CDK_DICTATION_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_DICTATION_ENABLED = 'false';
+
+      expect(loadConfig(app).dictation.enabled).toBe(false);
+    });
+
+    test('CDK_DICTATION_LANGUAGES passes the list through', () => {
+      process.env.CDK_DICTATION_LANGUAGES = 'en-US,es-US';
+
+      expect(loadConfig(app).dictation.languages).toBe('en-US,es-US');
+    });
+  });
+
+  // ============================================================
+  // Managed_KB flags — default OFF, opt-in (the inverse posture of
+  // every kill-switch flag above, which is the whole point of these
+  // tests). Validates Requirements 19.1-19.5, 19.8, 12.2, 14.7, 15.11.
+  // ============================================================
+
+  describe('Managed_KB feature flags', () => {
+    // --- Requirement 19.5: all three default to off ---
+
+    test('newDefault defaults to false when CDK_MANAGED_KB_NEW_DEFAULT is unset', () => {
+      delete process.env.CDK_MANAGED_KB_NEW_DEFAULT;
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(false);
+    });
+
+    test('migrationEnabled defaults to false when CDK_MANAGED_KB_MIGRATION_ENABLED is unset', () => {
+      delete process.env.CDK_MANAGED_KB_MIGRATION_ENABLED;
+
+      expect(loadConfig(app).managedKb.migrationEnabled).toBe(false);
+    });
+
+    test('reconcilerArmed defaults to false when CDK_MANAGED_KB_RECONCILER_ARMED is unset', () => {
+      delete process.env.CDK_MANAGED_KB_RECONCILER_ARMED;
+
+      expect(loadConfig(app).managedKb.reconcilerArmed).toBe(false);
+    });
+
+    // --- Requirement 19.8: empty string is OFF, not ON ---
+    //
+    // This is the case that actually bites. `${{ vars.CDK_MANAGED_KB_* }}`
+    // renders to "" when the variable is unset, so every fork that never
+    // configures these gets an empty string, not an absent variable. The
+    // `X ? X !== 'false' : default` shape used by the default-ON flags would
+    // read "" as the default — harmless when the default is on, and a silent
+    // fleet migration when the default is off.
+
+    test('treats empty-string newDefault (unset GitHub Actions variable) as OFF', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = '';
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(false);
+    });
+
+    test('treats empty-string migrationEnabled (unset GitHub Actions variable) as OFF', () => {
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = '';
+
+      expect(loadConfig(app).managedKb.migrationEnabled).toBe(false);
+    });
+
+    test('treats empty-string reconcilerArmed (unset GitHub Actions variable) as OFF', () => {
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = '';
+
+      expect(loadConfig(app).managedKb.reconcilerArmed).toBe(false);
+    });
+
+    test('an empty string leaves all three flags off simultaneously', () => {
+      // The realistic deploy: a fork sets none of them, so the workflow
+      // forwards three empty strings at once.
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = '';
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = '';
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = '';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.newDefault).toBe(false);
+      expect(managedKb.migrationEnabled).toBe(false);
+      expect(managedKb.reconcilerArmed).toBe(false);
+    });
+
+    // --- Requirements 19.1-19.3: each flag can be turned on ---
+
+    test('CDK_MANAGED_KB_NEW_DEFAULT="true" turns newDefault on', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'true';
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(true);
+    });
+
+    test('CDK_MANAGED_KB_MIGRATION_ENABLED="true" turns migrationEnabled on', () => {
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = 'true';
+
+      expect(loadConfig(app).managedKb.migrationEnabled).toBe(true);
+    });
+
+    test('CDK_MANAGED_KB_RECONCILER_ARMED="true" arms the reconciler', () => {
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = 'true';
+
+      expect(loadConfig(app).managedKb.reconcilerArmed).toBe(true);
+    });
+
+    test('"1" and "0" are accepted as on and off', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = '1';
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = '0';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.newDefault).toBe(true);
+      expect(managedKb.migrationEnabled).toBe(false);
+    });
+
+    test('an explicit "false" stays off', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'false';
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = 'false';
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = 'false';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.newDefault).toBe(false);
+      expect(managedKb.migrationEnabled).toBe(false);
+      expect(managedKb.reconcilerArmed).toBe(false);
+    });
+
+    test('an unrecognised flag value fails fast rather than guessing', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'yes';
+
+      expect(() => loadConfig(app)).toThrow(/Invalid boolean value/);
+    });
+
+    // --- Requirement 19.4: the three flags are independently settable ---
+
+    test('arming migrationEnabled alone leaves the other two off', () => {
+      process.env.CDK_MANAGED_KB_MIGRATION_ENABLED = 'true';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.migrationEnabled).toBe(true);
+      expect(managedKb.newDefault).toBe(false);
+      expect(managedKb.reconcilerArmed).toBe(false);
+    });
+
+    test('arming newDefault alone leaves the other two off', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'true';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.newDefault).toBe(true);
+      expect(managedKb.migrationEnabled).toBe(false);
+      expect(managedKb.reconcilerArmed).toBe(false);
+    });
+
+    test('arming reconcilerArmed alone leaves the other two off', () => {
+      // Requirement 14.7: report-only is the initial deployed mode, so the
+      // reconciler is the one flag an operator flips WITHOUT any migration
+      // running. It must not drag the others on with it.
+      process.env.CDK_MANAGED_KB_RECONCILER_ARMED = 'true';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.reconcilerArmed).toBe(true);
+      expect(managedKb.newDefault).toBe(false);
+      expect(managedKb.migrationEnabled).toBe(false);
+    });
+
+    // --- The load-env.sh --context chain ---
+    //
+    // build_cdk_context_params emits `--context managedKb.<flag>=...`, which
+    // sets context["managedKb.<flag>"] — a FLAT dotted key, not a nested
+    // object. A section reading only tryGetContext('managedKb')?.flag would
+    // accept the CLI flag and silently ignore it.
+
+    test('the flat dotted context key from --context is honoured', () => {
+      delete process.env.CDK_MANAGED_KB_NEW_DEFAULT;
+      app.node.setContext('managedKb.newDefault', 'true');
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(true);
+    });
+
+    test('a nested cdk.context.json managedKb object is honoured', () => {
+      delete process.env.CDK_MANAGED_KB_MIGRATION_ENABLED;
+      app.node.setContext('managedKb', { migrationEnabled: true });
+
+      expect(loadConfig(app).managedKb.migrationEnabled).toBe(true);
+    });
+
+    test('the environment variable outranks the dotted context key', () => {
+      process.env.CDK_MANAGED_KB_NEW_DEFAULT = 'false';
+      app.node.setContext('managedKb.newDefault', 'true');
+
+      expect(loadConfig(app).managedKb.newDefault).toBe(false);
+    });
+
+    // --- Requirement 12.2: Byte_Cap defaults by role tier ---
+    //
+    // Asserted as literal byte counts on purpose. Comparing against the
+    // exported MANAGED_KB_* constants would be a tautology: the assertion
+    // would follow the constant wherever it moved, so silently halving a cap
+    // (or slipping a unit) would keep every test green.
+
+    test('the standard per-owner Byte_Cap defaults to 100 MB', () => {
+      expect(loadConfig(app).managedKb.perOwnerDefaultBytes).toBe(104857600);
+    });
+
+    test('the elevated per-owner Byte_Cap defaults to 1 GB', () => {
+      expect(loadConfig(app).managedKb.perOwnerElevatedBytes).toBe(1073741824);
+    });
+
+    test('the per-knowledge-base ceiling defaults to 500 MB', () => {
+      expect(loadConfig(app).managedKb.perKnowledgeBaseCeilingBytes).toBe(524288000);
+    });
+
+    test('the byte caps are expressed in bytes, not megabytes', () => {
+      // A unit slip is the likeliest way these go wrong, and a 100-vs-100 MB
+      // mixup is invisible to an equality check on the wrong constant. Every
+      // cap must be a whole number of MiB and far larger than its MB count.
+      const { managedKb } = loadConfig(app);
+
+      for (const bytes of [
+        managedKb.perOwnerDefaultBytes,
+        managedKb.perOwnerElevatedBytes,
+        managedKb.perKnowledgeBaseCeilingBytes,
+      ]) {
+        expect(bytes % (1024 * 1024)).toBe(0);
+        expect(bytes).toBeGreaterThan(1024 * 1024);
+      }
+    });
+
+    test('the tiers are ordered standard < per-KB ceiling < elevated', () => {
+      // The ceiling sits between the tiers deliberately: it must bound a
+      // single runaway corpus for an elevated owner, while still leaving a
+      // standard owner's whole allowance usable by one knowledge base.
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.perOwnerDefaultBytes).toBeLessThan(
+        managedKb.perKnowledgeBaseCeilingBytes,
+      );
+      expect(managedKb.perKnowledgeBaseCeilingBytes).toBeLessThan(
+        managedKb.perOwnerElevatedBytes,
+      );
+    });
+
+    test('each Byte_Cap is overridable, resolvable by role tier', () => {
+      // Requirement 12.2 requires all three to be configurable.
+      process.env.CDK_MANAGED_KB_PER_OWNER_BYTES = '52428800';
+      process.env.CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES = '2147483648';
+      process.env.CDK_MANAGED_KB_PER_KB_CEILING_BYTES = '262144000';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.perOwnerDefaultBytes).toBe(52428800);
+      expect(managedKb.perOwnerElevatedBytes).toBe(2147483648);
+      expect(managedKb.perKnowledgeBaseCeilingBytes).toBe(262144000);
+    });
+
+    test('a Byte_Cap override arrives via the flat dotted context key too', () => {
+      delete process.env.CDK_MANAGED_KB_PER_OWNER_BYTES;
+      app.node.setContext('managedKb.perOwnerDefaultBytes', '52428800');
+
+      expect(loadConfig(app).managedKb.perOwnerDefaultBytes).toBe(52428800);
+    });
+
+    // --- Requirement 15.11: rollback retention window ---
+
+    test('the retention window defaults to 30 days', () => {
+      expect(loadConfig(app).managedKb.retentionWindowDays).toBe(30);
+    });
+
+    test('the default retention window satisfies the 30-day floor', () => {
+      // Requirement 15.11 states "at least 30 days". Asserting the floor
+      // separately from the exact default keeps the requirement checked even
+      // if the shipped default is later raised.
+      expect(loadConfig(app).managedKb.retentionWindowDays).toBeGreaterThanOrEqual(30);
+    });
+
+    test('the retention window is overridable', () => {
+      process.env.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS = '45';
+
+      expect(loadConfig(app).managedKb.retentionWindowDays).toBe(45);
+    });
+
+    test('the retention window arrives via the flat dotted context key too', () => {
+      delete process.env.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS;
+      app.node.setContext('managedKb.retentionWindowDays', '60');
+
+      expect(loadConfig(app).managedKb.retentionWindowDays).toBe(60);
+    });
+
+    // --- Requirement 12.13: fleet-level alarm thresholds ---
+    //
+    // Per-owner Byte_Caps bound one user; only these two bound the account,
+    // and the gap they cover is ~$169/month expected versus ~$15,000/month
+    // permitted by the per-owner caps alone. Each is asserted through all
+    // three legs of the precedence chain because the dotted-context leg is
+    // the one that was missing: load-env.sh emits
+    // `--context managedKb.storageAlarmGb=...`, which sets the FLAT key
+    // context['managedKb.storageAlarmGb'], so a nested-only read accepts the
+    // flag and ignores it — an operator raises a threshold, the CLI takes the
+    // flag without complaint, and the alarm keeps firing at the old number.
+
+    test('the fleet alarm thresholds have documented defaults', () => {
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.storageAlarmGb).toBe(500);
+      expect(managedKb.dailyCostAlarmUsd).toBe(100);
+    });
+
+    test('the fleet alarm thresholds are overridable by environment variable', () => {
+      process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB = '750';
+      process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD = '250';
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.storageAlarmGb).toBe(750);
+      expect(managedKb.dailyCostAlarmUsd).toBe(250);
+    });
+
+    test('the storage alarm threshold arrives via the flat dotted context key', () => {
+      delete process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB;
+      app.node.setContext('managedKb.storageAlarmGb', '750');
+
+      expect(loadConfig(app).managedKb.storageAlarmGb).toBe(750);
+    });
+
+    test('the daily cost alarm threshold arrives via the flat dotted context key', () => {
+      delete process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD;
+      app.node.setContext('managedKb.dailyCostAlarmUsd', '250');
+
+      expect(loadConfig(app).managedKb.dailyCostAlarmUsd).toBe(250);
+    });
+
+    test('the environment variable outranks the dotted key for both thresholds', () => {
+      process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB = '900';
+      process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD = '300';
+      app.node.setContext('managedKb.storageAlarmGb', '750');
+      app.node.setContext('managedKb.dailyCostAlarmUsd', '250');
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.storageAlarmGb).toBe(900);
+      expect(managedKb.dailyCostAlarmUsd).toBe(300);
+    });
+
+    test('a nested managedKb object still supplies both thresholds', () => {
+      delete process.env.CDK_MANAGED_KB_STORAGE_ALARM_GB;
+      delete process.env.CDK_MANAGED_KB_DAILY_COST_ALARM_USD;
+      app.node.setContext('managedKb', { storageAlarmGb: 111, dailyCostAlarmUsd: 22 });
+
+      const { managedKb } = loadConfig(app);
+
+      expect(managedKb.storageAlarmGb).toBe(111);
+      expect(managedKb.dailyCostAlarmUsd).toBe(22);
     });
   });
 
@@ -727,6 +1692,109 @@ describe('RAG Ingestion Configuration', () => {
       const config = loadConfig(app);
 
       expect(config.ragIngestion.additionalCorsOrigins).toBe(' http://localhost:3000 , https://example.com ');
+    });
+  });
+
+  // ============================================================
+  // Uploads-bucket CORS guard
+  // ============================================================
+
+  describe('Top-level CORS origins guard', () => {
+    /**
+     * Without an origin the uploads bucket is created with no CORS rule and
+     * every browser upload fails at S3. This used to be a console.warn; a
+     * production-mirror environment shipped the bug that way
+     * (docs/specs/load-test-assessment-2026-09.md §1 fix 4).
+     */
+    beforeEach(() => {
+      // The shared beforeEach seeds domainName; remove it so the top-level
+      // origin list is genuinely empty.
+      app = new cdk.App();
+      app.node.setContext('projectPrefix', 'test-project');
+      app.node.setContext('awsRegion', 'us-east-1');
+      app.node.setContext('awsAccount', '123456789012');
+      app.node.setContext('vpcCidr', '10.0.0.0/16');
+      app.node.setContext('frontend', { cloudFrontPriceClass: 'PriceClass_100' });
+      app.node.setContext('appApi', { cpu: 256, memory: 512, desiredCount: 1, maxCapacity: 2 });
+      app.node.setContext('inferenceApi', {});
+      app.node.setContext('fineTuning', {});
+      app.node.setContext('artifacts', { retentionDays: 90, extraFrameAncestors: [] });
+      app.node.setContext('mcpSandbox', { extraFrameAncestors: [] });
+      app.node.setContext('ragIngestion', {
+        additionalCorsOrigins: '',
+        lambdaMemorySize: 10240,
+        lambdaTimeout: 900,
+        embeddingModel: 'amazon.titan-embed-text-v2',
+        vectorDimension: 1024,
+        vectorDistanceMetric: 'cosine',
+      });
+      delete process.env.CDK_DOMAIN_NAME;
+      delete process.env.CDK_CORS_ORIGINS;
+      delete process.env.CDK_ALLOW_NO_CORS_ORIGINS;
+    });
+
+    afterEach(() => {
+      delete process.env.CDK_ALLOW_NO_CORS_ORIGINS;
+      delete process.env.CDK_CORS_ORIGINS;
+      delete process.env.CDK_DOMAIN_NAME;
+    });
+
+    test('fails synth when neither a domain nor CORS origins is configured', () => {
+      expect(() => loadConfig(app)).toThrow(/uploads bucket would be created without a CORS rule/);
+    });
+
+    test('passes when CDK_DOMAIN_NAME supplies the origin', () => {
+      process.env.CDK_DOMAIN_NAME = 'ai.example.edu';
+
+      const config = loadConfig(app);
+
+      expect(config.corsOrigins).toBe('https://ai.example.edu');
+    });
+
+    test('passes when CDK_CORS_ORIGINS supplies an origin without a domain', () => {
+      process.env.CDK_CORS_ORIGINS = 'http://localhost:4200';
+
+      expect(loadConfig(app).corsOrigins).toBe('http://localhost:4200');
+    });
+
+    test('CDK_ALLOW_NO_CORS_ORIGINS=true is the explicit opt-out', () => {
+      process.env.CDK_ALLOW_NO_CORS_ORIGINS = 'true';
+
+      expect(loadConfig(app).corsOrigins).toBe('');
+    });
+
+    test('a non-true opt-out value does not disable the guard', () => {
+      process.env.CDK_ALLOW_NO_CORS_ORIGINS = 'false';
+
+      expect(() => loadConfig(app)).toThrow(/CDK_ALLOW_NO_CORS_ORIGINS=true/);
+    });
+
+    /**
+     * The guard must gate on the same value the uploads bucket consumes:
+     * FileUploadConstruct attaches CORS only when buildCorsOrigins(config)
+     * is non-empty, and that filters out blank entries. A raw string that is
+     * truthy but filters to nothing (a trailing comma from a templated list,
+     * a YAML value that quotes to a single space, an unset CI variable) would
+     * otherwise pass the guard and still ship a bucket with no CORS rule --
+     * the exact bug the guard exists to prevent.
+     */
+    test.each([
+      ['a lone separator', ','],
+      ['whitespace only', ' '],
+      ['separators only', ',,'],
+      ['padded separators', '  ,  '],
+    ])('fails synth when CDK_CORS_ORIGINS is %s and filters to no origins', (_label, value) => {
+      process.env.CDK_CORS_ORIGINS = value;
+
+      expect(() => loadConfig(app)).toThrow(/uploads bucket would be created without a CORS rule/);
+    });
+
+    test('a blank entry alongside a real origin still passes and yields the real origin', () => {
+      process.env.CDK_CORS_ORIGINS = ' , https://ok.edu';
+
+      const config = loadConfig(app);
+
+      expect(buildCorsOrigins(config)).toEqual(['https://ok.edu']);
     });
   });
 
@@ -1076,6 +2144,400 @@ describe('RAG Ingestion Configuration', () => {
       expect(loadConfig(app).mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({
         'ctx:claim': 'custom:from_context',
       });
+    });
+  });
+});
+
+// ============================================================
+// Observability Configuration
+// ============================================================
+
+/**
+ * Defaults are asserted against their exported constants, and every field is
+ * checked through the FLAT dotted context key — `--context observability.x=y`
+ * sets context['observability.x'] and does NOT build a nested object, a trap
+ * that has already cost this repo twice.
+ */
+describe('Observability Configuration', () => {
+  let app: cdk.App;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  /** Minimum context for loadConfig() to reach the observability section. */
+  function setRequiredContext(a: cdk.App): void {
+    a.node.setContext('projectPrefix', 'test-project');
+    a.node.setContext('awsRegion', 'us-east-1');
+    a.node.setContext('awsAccount', '123456789012');
+    a.node.setContext('vpcCidr', '10.0.0.0/16');
+    a.node.setContext('corsOrigins', 'http://localhost:4200');
+    a.node.setContext('frontend', { cloudFrontPriceClass: 'PriceClass_100' });
+    a.node.setContext('appApi', {
+      cpu: 256, memory: 512, desiredCount: 1, maxCapacity: 4,
+    });
+    a.node.setContext('ragIngestion', {
+      lambdaMemorySize: 10240,
+      lambdaTimeout: 900,
+      embeddingModel: 'amazon.titan-embed-text-v2',
+      vectorDimension: 1024,
+      vectorDistanceMetric: 'cosine',
+    });
+  }
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    process.env = { ...originalEnv };
+    clearObservabilityEnv();
+    app = new cdk.App();
+    setRequiredContext(app);
+  });
+
+  afterEach(() => {
+    clearObservabilityEnv();
+    process.env = originalEnv;
+  });
+
+  describe('cost-conscious defaults', () => {
+    test('log retention defaults to the exported constant', () => {
+      expect(loadConfig(app).observability.logRetentionDays).toBe(
+        OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+      );
+    });
+
+    // Was fixedRate 1.0 for any fork that never set `production`.
+    test('X-Ray sampling defaults to 1%, not 100%', () => {
+      const { xraySamplingRate } = loadConfig(app).observability;
+      expect(xraySamplingRate).toBe(OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE);
+      expect(xraySamplingRate).toBeLessThanOrEqual(0.05);
+    });
+
+    test('X-Ray reservoir defaults to 1 trace/sec', () => {
+      expect(loadConfig(app).observability.xraySamplingReservoir).toBe(
+        OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+      );
+    });
+
+    test('AgentCore APPLICATION_LOGS default to OFF', () => {
+      expect(loadConfig(app).observability.agentCoreApplicationLogsEnabled).toBe(false);
+    });
+
+    test('X-Ray Insights notifications default to OFF', () => {
+      expect(loadConfig(app).observability.xrayInsightsNotifications).toBe(false);
+    });
+
+    test('alarm topic defaults to ON', () => {
+      expect(loadConfig(app).observability.alarmTopicEnabled).toBe(true);
+    });
+
+    // Privacy, not just cost: runtime log groups carry conversation text.
+    test('runtime log retention sweep defaults to ON, even for a forwarded empty var', () => {
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(true);
+      process.env.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED = '';
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(true);
+    });
+
+    test('runtime log retention sweep turns off on an explicit false', () => {
+      process.env.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED = 'false';
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(false);
+    });
+
+    test('latency floors are streaming-aware, well above a normal agent turn', () => {
+      const obs = loadConfig(app).observability;
+      expect(obs.agentCoreLatencyMs).toBe(OBSERVABILITY_DEFAULT_P99_LATENCY_MS);
+      expect(obs.albP99LatencyMs).toBe(OBSERVABILITY_DEFAULT_P99_LATENCY_MS);
+      expect(obs.agentCoreLatencyMs).toBeGreaterThan(30_000);
+    });
+
+    test('threshold and percentage defaults match their constants', () => {
+      const obs = loadConfig(app).observability;
+      expect(obs.albTarget5xxThreshold).toBe(OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD);
+      expect(obs.agentCoreErrorThreshold).toBe(OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD);
+      expect(obs.agentCoreActiveSessionThreshold).toBe(
+        OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
+      );
+      expect(obs.lambdaErrorThreshold).toBe(OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD);
+      expect(obs.lambdaDurationPercentOfTimeout).toBe(
+        OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+      );
+      expect(obs.dynamoThrottleThreshold).toBe(OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD);
+      expect(obs.ecsCpuPercent).toBe(OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT);
+      expect(obs.ecsMemoryPercent).toBe(OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT);
+      expect(obs.bedrockTpmQuotaPercent).toBe(OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT);
+      // Empty on purpose: TPM quotas are per-account and adjustable, so no
+      // number is shippable. Empty means no quota alarm is created at all, and
+      // bedrock-invocation-throttles is the backstop. If this ever gains a
+      // default, every fork silently inherits a wrong threshold.
+      expect(obs.bedrockTpmQuotas).toEqual({});
+    });
+  });
+
+  describe('environment variable overrides', () => {
+    test('CDK_OBSERVABILITY_LOG_RETENTION_DAYS reaches config', () => {
+      process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '90';
+      expect(loadConfig(app).observability.logRetentionDays).toBe(90);
+    });
+
+    // parseInt('0.25') is 0, which would switch sampling off entirely.
+    test('fractional X-Ray sampling rate survives parsing', () => {
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '0.25';
+      expect(loadConfig(app).observability.xraySamplingRate).toBe(0.25);
+    });
+
+    test('CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT reaches config', () => {
+      process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT = '60';
+      expect(loadConfig(app).observability.bedrockTpmQuotaPercent).toBe(60);
+    });
+
+    // The quota map is the one non-scalar observability tunable, so it travels
+    // as a string. Model ids contain dots and colons, which must survive as
+    // literal key characters.
+    test('bedrock TPM quota map parses from a JSON env var', () => {
+      process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS = JSON.stringify({
+        'global.anthropic.claude-sonnet-5': 40000000,
+        'us.anthropic.claude-sonnet-4-20250514-v1:0': 200000,
+      });
+      expect(loadConfig(app).observability.bedrockTpmQuotas).toEqual({
+        'global.anthropic.claude-sonnet-5': 40000000,
+        'us.anthropic.claude-sonnet-4-20250514-v1:0': 200000,
+      });
+    });
+
+    // The form CI should use. deploy.sh runs `eval npx cdk synth ${params}` and
+    // eval strips quote characters, so a quote-free encoding is the only one that
+    // cannot be corrupted in transit. Note the colon inside the model id, which
+    // is why the key/value split is on the LAST '=' rather than the first.
+    test('bedrock TPM quota map parses from the eval-safe k=v form', () => {
+      process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS =
+        'global.anthropic.claude-sonnet-5=40000000,us.anthropic.claude-sonnet-4-20250514-v1:0=200000';
+      expect(loadConfig(app).observability.bedrockTpmQuotas).toEqual({
+        'global.anthropic.claude-sonnet-5': 40000000,
+        'us.anthropic.claude-sonnet-4-20250514-v1:0': 200000,
+      });
+    });
+
+    // Regression guard for the bug this shape caused: JSON passed through eval
+    // the way every other --context value is passed loses its quotes and becomes
+    // {model:40000000}. That is not JSON and not k=v, so it must fall through to
+    // the empty default rather than half-parsing into a NaN threshold.
+    test('eval-mangled JSON does not half-parse into a bad threshold', () => {
+      process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS =
+        '{global.anthropic.claude-sonnet-5:40000000}';
+      const quotas = loadConfig(app).observability.bedrockTpmQuotas;
+      expect(Object.values(quotas).every((v) => Number.isFinite(v))).toBe(true);
+    });
+
+    // A malformed value must fall through to the default, not abort synth. The
+    // failure mode to avoid is a half-parsed map producing a NaN threshold,
+    // which CloudFormation accepts and no metric can ever cross.
+    test('a malformed quota map falls back to the empty default', () => {
+      for (const bad of ['not json', '[]', '{"model":"not-a-number"}', '{"model":null}']) {
+        process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS = bad;
+        const quotas = loadConfig(app).observability.bedrockTpmQuotas;
+        expect(Object.values(quotas).every((v) => Number.isFinite(v))).toBe(true);
+      }
+    });
+
+    test('booleans parse from env', () => {
+      process.env.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED = 'false';
+      process.env.CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED = 'true';
+      const obs = loadConfig(app).observability;
+      expect(obs.alarmTopicEnabled).toBe(false);
+      expect(obs.agentCoreApplicationLogsEnabled).toBe(true);
+    });
+
+    test('every numeric field is settable from its env var', () => {
+      process.env.CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD = '1';
+      process.env.CDK_OBSERVABILITY_ALB_P99_LATENCY_MS = '2000';
+      process.env.CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS = '3000';
+      process.env.CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD = '4';
+      process.env.CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD = '250';
+      process.env.CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD = '5';
+      process.env.CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT = '60';
+      process.env.CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD = '7';
+      process.env.CDK_OBSERVABILITY_ECS_CPU_PERCENT = '65';
+      process.env.CDK_OBSERVABILITY_ECS_MEMORY_PERCENT = '70';
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR = '9';
+
+      const obs = loadConfig(app).observability;
+      expect(obs.albTarget5xxThreshold).toBe(1);
+      expect(obs.albP99LatencyMs).toBe(2000);
+      expect(obs.agentCoreLatencyMs).toBe(3000);
+      expect(obs.agentCoreErrorThreshold).toBe(4);
+      expect(obs.agentCoreActiveSessionThreshold).toBe(250);
+      expect(obs.lambdaErrorThreshold).toBe(5);
+      expect(obs.lambdaDurationPercentOfTimeout).toBe(60);
+      expect(obs.dynamoThrottleThreshold).toBe(7);
+      expect(obs.ecsCpuPercent).toBe(65);
+      expect(obs.ecsMemoryPercent).toBe(70);
+      expect(obs.xraySamplingReservoir).toBe(9);
+    });
+  });
+
+  describe('flat dotted context key (what --context actually sets)', () => {
+    test('flat dotted key is honoured for a number', () => {
+      app.node.setContext('observability.logRetentionDays', '90');
+      expect(loadConfig(app).observability.logRetentionDays).toBe(90);
+    });
+
+    test('flat dotted key is honoured for a fractional rate', () => {
+      app.node.setContext('observability.xraySamplingRate', '0.5');
+      expect(loadConfig(app).observability.xraySamplingRate).toBe(0.5);
+    });
+
+    test('flat dotted key is honoured for a boolean', () => {
+      app.node.setContext('observability.agentCoreApplicationLogsEnabled', 'true');
+      app.node.setContext('observability.promptCacheAvoidableMissThreshold', '22');
+      app.node.setContext('observability.promptCacheWastedUsdThreshold', '2.5');
+      app.node.setContext('observability.promptCacheSessionWastedUsdThreshold', '23');
+      expect(loadConfig(app).observability.agentCoreApplicationLogsEnabled).toBe(true);
+    });
+
+    test('every field is reachable via its flat dotted key', () => {
+      app.node.setContext('observability.alarmTopicEnabled', 'false');
+      app.node.setContext('observability.logRetentionDays', '7');
+      app.node.setContext('observability.albTarget5xxThreshold', '11');
+      app.node.setContext('observability.albP99LatencyMs', '12');
+      app.node.setContext('observability.agentCoreLatencyMs', '13');
+      app.node.setContext('observability.agentCoreErrorThreshold', '14');
+      app.node.setContext('observability.agentCoreActiveSessionThreshold', '140');
+      app.node.setContext('observability.lambdaErrorThreshold', '15');
+      app.node.setContext('observability.lambdaDurationPercentOfTimeout', '16');
+      app.node.setContext('observability.dynamoThrottleThreshold', '17');
+      app.node.setContext('observability.ecsCpuPercent', '18');
+      app.node.setContext('observability.ecsMemoryPercent', '19');
+      app.node.setContext('observability.xraySamplingRate', '0.2');
+      app.node.setContext('observability.xraySamplingReservoir', '21');
+      app.node.setContext('observability.xrayInsightsNotifications', 'true');
+      app.node.setContext('observability.agentCoreApplicationLogsEnabled', 'true');
+      app.node.setContext('observability.runtimeLogRetentionSweepEnabled', 'false');
+      app.node.setContext('observability.promptCacheAvoidableMissThreshold', '22');
+      app.node.setContext('observability.promptCacheWastedUsdThreshold', '2.5');
+      app.node.setContext('observability.promptCacheSessionWastedUsdThreshold', '23');
+
+      expect(loadConfig(app).observability).toEqual({
+        alarmTopicEnabled: false,
+        logRetentionDays: 7,
+        albTarget5xxThreshold: 11,
+        albP99LatencyMs: 12,
+        agentCoreLatencyMs: 13,
+        agentCoreErrorThreshold: 14,
+        agentCoreActiveSessionThreshold: 140,
+        lambdaErrorThreshold: 15,
+        lambdaDurationPercentOfTimeout: 16,
+        dynamoThrottleThreshold: 17,
+        ecsCpuPercent: 18,
+        ecsMemoryPercent: 19,
+        xraySamplingRate: 0.2,
+        xraySamplingReservoir: 21,
+        xrayInsightsNotifications: true,
+        agentCoreApplicationLogsEnabled: true,
+        runtimeLogRetentionSweepEnabled: false,
+        promptCacheAvoidableMissThreshold: 22,
+        promptCacheWastedUsdThreshold: 2.5,
+        promptCacheSessionWastedUsdThreshold: 23,
+        bedrockTpmQuotaPercent: OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
+        bedrockTpmQuotas: {},
+      });
+    });
+  });
+
+  describe('nested context object (cdk.context.json)', () => {
+    test('nested object is honoured', () => {
+      app.node.setContext('observability', {
+        logRetentionDays: 365,
+        xraySamplingRate: 0.1,
+        alarmTopicEnabled: false,
+      });
+      const obs = loadConfig(app).observability;
+      expect(obs.logRetentionDays).toBe(365);
+      expect(obs.xraySamplingRate).toBe(0.1);
+      expect(obs.alarmTopicEnabled).toBe(false);
+    });
+
+    test('unset fields in a nested object still take their defaults', () => {
+      app.node.setContext('observability', { logRetentionDays: 365 });
+      const obs = loadConfig(app).observability;
+      expect(obs.logRetentionDays).toBe(365);
+      expect(obs.xraySamplingRate).toBe(OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE);
+    });
+  });
+
+  describe('precedence: env > flat dotted context > nested context > default', () => {
+    test('env beats both context forms', () => {
+      process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '7';
+      app.node.setContext('observability.logRetentionDays', '90');
+      app.node.setContext('observability', { logRetentionDays: 365 });
+      expect(loadConfig(app).observability.logRetentionDays).toBe(7);
+    });
+
+    test('flat dotted context beats nested context', () => {
+      app.node.setContext('observability.logRetentionDays', '90');
+      app.node.setContext('observability', { logRetentionDays: 365 });
+      expect(loadConfig(app).observability.logRetentionDays).toBe(90);
+    });
+
+    // An unset GitHub Actions variable arrives as the empty string.
+    test('empty env var falls through to the default', () => {
+      process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '';
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '';
+      const obs = loadConfig(app).observability;
+      expect(obs.logRetentionDays).toBe(OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS);
+      expect(obs.xraySamplingRate).toBe(OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE);
+    });
+
+    // false is a legitimate value, not "absent".
+    test('an explicit false is not overwritten by the ON default', () => {
+      process.env.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED = 'false';
+      expect(loadConfig(app).observability.alarmTopicEnabled).toBe(false);
+    });
+  });
+
+  describe('validation', () => {
+    test('rejects a retention value CloudWatch does not accept', () => {
+      process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = '45';
+      expect(() => loadConfig(app)).toThrow(/logRetentionDays/);
+    });
+
+    test('accepts every documented CloudWatch retention value', () => {
+      for (const days of [1, 7, 30, 90, 365, 3653]) {
+        const freshApp = new cdk.App();
+        setRequiredContext(freshApp);
+        process.env.CDK_OBSERVABILITY_LOG_RETENTION_DAYS = String(days);
+        expect(loadConfig(freshApp).observability.logRetentionDays).toBe(days);
+      }
+    });
+
+    // 5 instead of 0.05 is a 100x cost error; reject rather than clamp.
+    test('rejects an X-Ray sampling rate given as a percentage', () => {
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '5';
+      expect(() => loadConfig(app)).toThrow(/xraySamplingRate/);
+    });
+
+    test('rejects a negative X-Ray sampling rate', () => {
+      process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = '-0.1';
+      expect(() => loadConfig(app)).toThrow(/xraySamplingRate/);
+    });
+
+    test('accepts the boundary sampling rates 0.0 and 1.0', () => {
+      for (const rate of ['0', '1']) {
+        const freshApp = new cdk.App();
+        setRequiredContext(freshApp);
+        process.env.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE = rate;
+        expect(() => loadConfig(freshApp)).not.toThrow();
+      }
+    });
+
+    test('rejects out-of-range percentages', () => {
+      const cases: Array<[string, string]> = [
+        ['CDK_OBSERVABILITY_ECS_CPU_PERCENT', '101'],
+        ['CDK_OBSERVABILITY_ECS_MEMORY_PERCENT', '0'],
+        ['CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT', '150'],
+      ];
+      for (const [key, value] of cases) {
+        const freshApp = new cdk.App();
+        setRequiredContext(freshApp);
+        clearObservabilityEnv();
+        process.env[key] = value;
+        expect(() => loadConfig(freshApp)).toThrow(/Expected a percentage/);
+      }
     });
   });
 });

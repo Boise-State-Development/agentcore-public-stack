@@ -1,0 +1,31 @@
+{
+  "$comment": "Runtime environment variables whose value is the stack prefix plus a fixed suffix (and the AWS account id, for the buckets that carry it). Read by apis/shared/config/runtime_environment.py at process start and by infrastructure/test/runtime-derived-environment-manifest.test.ts, which checks every entry against the synthesized CloudFormation template. Add a variable here only when CDK names its resource with getResourceName(config, suffix[, config.awsAccount]). See docs/specs/agentcore-runtime-v2.md section 7.",
+  "variables": [
+    {"name": "DYNAMODB_USERS_TABLE_NAME", "suffix": "users"},
+    {"name": "DYNAMODB_APP_ROLES_TABLE_NAME", "suffix": "app-roles"},
+    {"name": "DYNAMODB_OIDC_STATE_TABLE_NAME", "suffix": "oidc-state"},
+    {"name": "DYNAMODB_API_KEYS_TABLE_NAME", "suffix": "api-keys"},
+    {"name": "DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME", "suffix": "oauth-providers"},
+    {"name": "DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME", "suffix": "oauth-user-tokens"},
+    {"name": "DYNAMODB_ASSISTANTS_TABLE_NAME", "suffix": "rag-assistants"},
+    {"name": "DYNAMODB_QUOTA_TABLE", "suffix": "user-quotas"},
+    {"name": "DYNAMODB_QUOTA_EVENTS_TABLE", "suffix": "quota-events"},
+    {"name": "DYNAMODB_SESSIONS_METADATA_TABLE_NAME", "suffix": "sessions-metadata"},
+    {"name": "DYNAMODB_COST_SUMMARY_TABLE_NAME", "suffix": "user-cost-summary"},
+    {"name": "DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME", "suffix": "system-cost-rollup"},
+    {"name": "DYNAMODB_MANAGED_MODELS_TABLE_NAME", "suffix": "managed-models"},
+    {"name": "DYNAMODB_USER_SETTINGS_TABLE_NAME", "suffix": "user-settings"},
+    {"name": "DYNAMODB_USER_FILES_TABLE_NAME", "suffix": "user-file-uploads"},
+    {"name": "DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME", "suffix": "system-prompts"},
+    {"name": "DYNAMODB_AUTH_PROVIDERS_TABLE_NAME", "suffix": "auth-providers"},
+    {"name": "DYNAMODB_MEMORY_SPACES_TABLE_NAME", "suffix": "memory-spaces"},
+    {"name": "DYNAMODB_PROJECTS_TABLE_NAME", "suffix": "projects"},
+    {"name": "S3_USER_FILES_BUCKET_NAME", "suffix": "user-file-uploads", "accountScoped": true},
+    {"name": "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME", "suffix": "rag-documents", "accountScoped": true},
+    {"name": "S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME", "suffix": "rag-vector-store-v1", "accountScoped": true},
+    {"name": "S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME", "suffix": "rag-vector-index-v1"},
+    {"name": "S3_SKILL_RESOURCES_BUCKET_NAME", "suffix": "skill-resources"},
+    {"name": "S3_MEMORY_SPACES_BUCKET_NAME", "suffix": "memory-spaces"},
+    {"name": "AGENTCORE_RUNTIME_WORKLOAD_NAME", "suffix": "platform-workload"}
+  ]
+}

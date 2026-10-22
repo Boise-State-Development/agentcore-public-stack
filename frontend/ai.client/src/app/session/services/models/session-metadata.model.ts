@@ -17,9 +17,21 @@ export interface SessionPreferences {
   selectedPromptId?: string;
   customPromptText?: string;
   assistantId?: string;
+  /**
+   * Set when the session is a task in a shared project (stamped by the
+   * backend when a turn runs on the project's agent). Groups it under the
+   * project in the sidebar and enables "Project members" sharing.
+   */
+  projectId?: string;
   /** Display state for promoted visuals, keyed by tool_use_id */
   visualState?: Record<string, VisualDisplayState>;
 }
+
+/**
+ * What a conversation's paused turn is waiting on the user for. Matches the
+ * backend's `AwaitingInputKind` (`apis/shared/sessions/models.py`).
+ */
+export type AwaitingInputKind = 'oauth' | 'tool_approval' | 'user_question' | 'browser_login';
 
 export interface SessionMetadata {
   sessionId: string;
@@ -69,6 +81,15 @@ export interface SessionMetadata {
    *  unread state ChatStateService tracks for interactive background
    *  completions — the session list ORs the two. */
   unread?: boolean;
+  /** Which prompt this conversation's paused turn waits on, set only while
+   *  the pause can still be answered (a breadcrumb plus an unexpired
+   *  `pausedTurn` snapshot). Derived server-side on every sessions surface;
+   *  drives the amber "needs your input" dot in the session list, which also
+   *  reads the in-tab mark ChatStateService keeps from the live stream. */
+  awaitingInput?: AwaitingInputKind | null;
+  /** When the user pinned this conversation. Present only on entries of the
+   *  list response's `pinned` array (and on optimistic pins). */
+  pinnedAt?: string;
 }
 
 // Request model for updating session metadata

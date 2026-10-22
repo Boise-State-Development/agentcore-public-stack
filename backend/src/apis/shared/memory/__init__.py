@@ -11,6 +11,7 @@ system-prompt wiring (those land in later PRs). Gated per environment by the
 ``MEMORY_SPACES_ENABLED`` flag (default off; see ``apis.shared.feature_flags``).
 """
 
+from .format import MemoryFormatError
 from .models import (
     EntryType,
     MemoryEntryRef,
@@ -40,6 +41,7 @@ from .store import (
 from .templates import TEMPLATES, SpaceTemplate, get_template, is_valid_template
 
 __all__ = [
+    "MemoryFormatError",
     "EntryType",
     "MemoryEntryRef",
     "MemoryIndex",

@@ -552,3 +552,243 @@ class TestGetTopSessions:
         result = await service.get_top_sessions(period="2026-08")
 
         assert [s.session_id for s in result.sessions] == ["kept"]
+
+
+# ── get_platform_cost_summary ────────────────────────────────────────────────
+
+class TestGetPlatformCostSummary:
+    """All-in platform cost: our inference ledger + the AWS infrastructure bill.
+
+    Figures in these tests are prod's real September 1-21 numbers, so the
+    arithmetic is pinned against a bill that actually existed.
+    """
+
+    # Cost Explorer's own view of prod September: what the sync Lambda wrote.
+    CE_SUMMARY = {
+        "platformCost": 685.96,
+        "inferenceCost": 1081.44,
+        "excludedCost": 89.20,
+        "totalCost": 1856.60,
+        "partialMonth": True,
+        "coverageStart": "2026-09-01",
+        "coverageEnd": "2026-09-22",
+        "accountId": "897729136999",
+        "currency": "USD",
+        "syncedAt": "2026-09-21T07:10:00+00:00",
+    }
+
+    # Our own ledger for the same period (ROLLUP#MONTHLY 2026-09).
+    LEDGER = {"totalCost": 1076.03, "activeUsers": 1807}
+
+    @pytest.mark.asyncio
+    async def test_total_is_our_inference_plus_ce_platform(self, service, mock_storage):
+        """CE's inference figure must NOT be in the total.
+
+        Adding it would count every token twice — once from our ledger and
+        once from AWS. CE's number exists only to reconcile against ours.
+        """
+        mock_storage.get_platform_cost_summary.return_value = dict(self.CE_SUMMARY)
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.available is True
+        assert result.inference_cost == pytest.approx(1076.03, abs=0.01)
+        assert result.platform_cost == pytest.approx(685.96, abs=0.01)
+        assert result.total_cost == pytest.approx(1076.03 + 685.96, abs=0.01)
+        # The tell that CE's inference was not double-counted:
+        assert result.total_cost < self.CE_SUMMARY["totalCost"]
+
+    @pytest.mark.asyncio
+    async def test_per_user_figures_split_inference_and_platform(
+        self, service, mock_storage
+    ):
+        """The measured understatement: $0.60 inference-only vs $0.98 all-in."""
+        mock_storage.get_platform_cost_summary.return_value = dict(self.CE_SUMMARY)
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.active_users == 1807
+        # (1076.03 ledger inference + 685.96 CE platform) / 1807 — NOT
+        # CE's own grand total, which would double-count inference.
+        assert result.cost_per_user == pytest.approx(0.9751, abs=0.001)
+        assert result.inference_cost_per_user == pytest.approx(0.5955, abs=0.001)
+        assert result.platform_cost_per_user == pytest.approx(0.3796, abs=0.001)
+        # The two halves must add up to the headline, or the card's sub-line
+        # contradicts the number above it.
+        assert result.inference_cost_per_user + result.platform_cost_per_user == (
+            pytest.approx(result.cost_per_user, abs=0.001)
+        )
+
+    @pytest.mark.asyncio
+    async def test_reconciliation_compares_ledger_against_ce(
+        self, service, mock_storage
+    ):
+        """0.50% when this shipped. A widening gap means pricing drift."""
+        mock_storage.get_platform_cost_summary.return_value = dict(self.CE_SUMMARY)
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.ce_inference_cost == pytest.approx(1081.44, abs=0.01)
+        assert result.reconciliation_delta == pytest.approx(5.41, abs=0.01)
+        assert result.reconciliation_delta_percent == pytest.approx(0.50, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_unsynced_period_is_unavailable_not_zero(
+        self, service, mock_storage
+    ):
+        """The opt-in path. A $0.00 platform cost reads as 'infra is free'."""
+        mock_storage.get_platform_cost_summary.return_value = None
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.available is False
+        assert result.platform_cost == 0.0
+        # Inference still reported, so the UI can say what IS covered.
+        assert result.inference_cost == pytest.approx(1076.03, abs=0.01)
+        assert result.total_cost == pytest.approx(1076.03, abs=0.01)
+        assert result.cost_per_user == pytest.approx(0.5955, abs=0.001)
+        assert result.services == []
+
+    @pytest.mark.asyncio
+    async def test_zero_active_users_does_not_divide_by_zero(
+        self, service, mock_storage
+    ):
+        mock_storage.get_platform_cost_summary.return_value = dict(self.CE_SUMMARY)
+        mock_storage.get_system_summary.return_value = {
+            "totalCost": 0.0, "activeUsers": 0,
+        }
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.cost_per_user == 0.0
+        assert result.platform_cost_per_user == 0.0
+
+    @pytest.mark.asyncio
+    async def test_missing_ledger_row_still_reports_platform_cost(
+        self, service, mock_storage
+    ):
+        """A period with infra spend but no recorded inference is valid."""
+        mock_storage.get_platform_cost_summary.return_value = dict(self.CE_SUMMARY)
+        mock_storage.get_system_summary.return_value = None
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.available is True
+        assert result.inference_cost == 0.0
+        assert result.total_cost == pytest.approx(685.96, abs=0.01)
+        assert result.reconciliation_delta_percent == pytest.approx(100.0, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_service_shares_are_of_the_platform_subtotal(
+        self, service, mock_storage
+    ):
+        """Share of infrastructure, not of the grand total.
+
+        Against an inference-heavy total every infra line would round to a
+        couple of percent, which is the opposite of the question this table
+        answers ("which infrastructure line dominates?").
+        """
+        mock_storage.get_platform_cost_summary.return_value = dict(self.CE_SUMMARY)
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+        mock_storage.get_platform_service_costs.return_value = [
+            {"serviceName": "Amazon Bedrock AgentCore", "cost": 201.54, "category": "platform"},
+            {"serviceName": "Amazon Elastic Container Service", "cost": 117.95, "category": "platform"},
+            {"serviceName": "Claude Sonnet 5 (Amazon Bedrock Edition)", "cost": 913.52, "category": "inference"},
+            {"serviceName": "Amazon Relational Database Service", "cost": 31.55, "category": "excluded"},
+        ]
+
+        result = await service.get_platform_cost_summary("2026-09")
+        by_name = {s.service_name: s for s in result.services}
+
+        # 201.54 / 685.96 = 29.4% of infrastructure.
+        assert by_name["Amazon Bedrock AgentCore"].percentage_of_platform == (
+            pytest.approx(29.4, abs=0.1)
+        )
+        # Non-platform rows carry no share: they are not part of the subtotal
+        # the percentage is taken against.
+        assert by_name["Claude Sonnet 5 (Amazon Bedrock Edition)"].percentage_of_platform == 0.0
+        assert by_name["Amazon Relational Database Service"].percentage_of_platform == 0.0
+
+    @pytest.mark.asyncio
+    async def test_excluded_rows_are_returned_not_filtered(
+        self, service, mock_storage
+    ):
+        """An operator can only trust a total if they can see its exclusions."""
+        mock_storage.get_platform_cost_summary.return_value = dict(self.CE_SUMMARY)
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+        mock_storage.get_platform_service_costs.return_value = [
+            {"serviceName": "Amazon Relational Database Service", "cost": 31.55, "category": "excluded"},
+        ]
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert [s.category for s in result.services] == ["excluded"]
+        assert result.excluded_cost == pytest.approx(89.20, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_carries_the_partial_month_and_provenance_fields(
+        self, service, mock_storage
+    ):
+        mock_storage.get_platform_cost_summary.return_value = dict(self.CE_SUMMARY)
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.partial_month is True
+        assert result.coverage_start == "2026-09-01"
+        assert result.coverage_end == "2026-09-22"
+        assert result.account_id == "897729136999"
+        assert result.synced_at == "2026-09-21T07:10:00+00:00"
+        assert result.currency == "USD"
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_the_current_period(self, service, mock_storage):
+        mock_storage.get_platform_cost_summary.return_value = None
+        mock_storage.get_system_summary.return_value = None
+
+        result = await service.get_platform_cost_summary()
+
+        expected = datetime.now(timezone.utc).strftime("%Y-%m")
+        assert result.period == expected
+        mock_storage.get_platform_cost_summary.assert_awaited_once_with(expected)
+
+    @pytest.mark.asyncio
+    async def test_scope_round_trips_from_the_synced_row(
+        self, service, mock_storage
+    ):
+        """The UI must be able to say whether it is showing this deployment
+        or the whole account — an account is not an application."""
+        mock_storage.get_platform_cost_summary.return_value = {
+            **self.CE_SUMMARY, "scope": "deployment", "projectTag": "boisestateai-v2",
+        }
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.scope == "deployment"
+        assert result.project_tag == "boisestateai-v2"
+
+    @pytest.mark.asyncio
+    async def test_rows_written_before_scoping_default_to_account(
+        self, service, mock_storage
+    ):
+        """Backward compatibility, and it must fail SAFE.
+
+        Rows synced before deployment scoping existed carry no `scope`. The
+        default has to be "account" — the pessimistic reading — because
+        defaulting to "deployment" would relabel an account-wide figure as
+        this app's cost with nothing to reveal the error.
+        """
+        summary = dict(self.CE_SUMMARY)
+        assert "scope" not in summary
+        mock_storage.get_platform_cost_summary.return_value = summary
+        mock_storage.get_system_summary.return_value = dict(self.LEDGER)
+
+        result = await service.get_platform_cost_summary("2026-09")
+
+        assert result.scope == "account"
+        assert result.project_tag is None

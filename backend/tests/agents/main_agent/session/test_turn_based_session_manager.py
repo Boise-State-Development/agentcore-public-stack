@@ -388,6 +388,43 @@ class TestCompactionStatePersistence:
         # Should not raise
         mgr._save_compaction_state(CompactionState(checkpoint=5))
 
+    def test_record_event_bumps_a_monotonic_compaction_count(
+        self, make_session_manager, compaction_config, dynamodb_sessions_table, monkeypatch
+    ):
+        # The persisted `compaction` map is last-write-wins and cannot say how
+        # many times compaction fired; the top-level counter can, and only a
+        # save that *is* a compaction (record_event=True) moves it.
+        monkeypatch.setenv("DYNAMODB_SESSIONS_METADATA_TABLE_NAME", TABLE_NAME)
+        monkeypatch.delenv("COST_DIAGNOSTICS_ENABLED", raising=False)
+        mgr = make_session_manager(compaction_config=compaction_config)
+        from agents.main_agent.session.turn_based_session_manager import TurnBasedSessionManager
+        TurnBasedSessionManager._dynamodb_table = dynamodb_sessions_table
+        seed_session_record(dynamodb_sessions_table, TEST_SESSION_ID, TEST_USER_ID)
+
+        mgr._save_compaction_state(CompactionState(checkpoint=3), record_event=True)
+        mgr._save_compaction_state(CompactionState(checkpoint=3))  # bookkeeping save, no event
+        mgr._save_compaction_state(CompactionState(checkpoint=7), record_event=True)
+
+        row = mgr._get_session_via_gsi(dynamodb_sessions_table)
+        assert row["compactionCount"] == 2
+        assert row["compaction"]["checkpoint"] == 7
+
+    def test_record_event_respects_the_kill_switch(
+        self, make_session_manager, compaction_config, dynamodb_sessions_table, monkeypatch
+    ):
+        monkeypatch.setenv("DYNAMODB_SESSIONS_METADATA_TABLE_NAME", TABLE_NAME)
+        monkeypatch.setenv("COST_DIAGNOSTICS_ENABLED", "false")
+        mgr = make_session_manager(compaction_config=compaction_config)
+        from agents.main_agent.session.turn_based_session_manager import TurnBasedSessionManager
+        TurnBasedSessionManager._dynamodb_table = dynamodb_sessions_table
+        seed_session_record(dynamodb_sessions_table, TEST_SESSION_ID, TEST_USER_ID)
+
+        mgr._save_compaction_state(CompactionState(checkpoint=3), record_event=True)
+
+        row = mgr._get_session_via_gsi(dynamodb_sessions_table)
+        assert "compactionCount" not in row
+        assert row["compaction"]["checkpoint"] == 3  # the state itself still saves
+
 
 # ===========================================================================
 # Task 6 — LTM summary retrieval
@@ -1247,6 +1284,73 @@ class TestFilterEmptyText:
             result = mgr._filter_empty_text(msg)
         assert result["content"] == []
         assert any("Dropping unrecognized content block" in r.message for r in caplog.records)
+
+
+class TestSourcelessMediaRepair:
+    """Restore turns image/document blocks with no ``source`` into text.
+
+    Shared-conversation forks wrote the snapshot's display-shape document block
+    (``format``/``name``, no ``source``) into Converse history, and Bedrock
+    rejected every later turn: 'Missing required parameter in
+    messages[0].content[1].document: "source"'.
+    """
+
+    def test_sourceless_document_becomes_placeholder(self, make_session_manager):
+        mgr = make_session_manager()
+        messages = [{"role": "user", "content": [
+            {"text": "Summarize this"},
+            {"document": {"format": "pdf", "name": "report"}},
+        ]}]
+        result = mgr._sanitize_restored_content_blocks(messages)
+        assert result[0]["content"] == [
+            {"text": "Summarize this"},
+            {"text": '[Document "report" is not available in this conversation]'},
+        ]
+
+    def test_sourceless_image_becomes_placeholder(self, make_session_manager):
+        mgr = make_session_manager()
+        messages = [{"role": "user", "content": [{"image": {"format": "png", "data": "aGk="}}]}]
+        result = mgr._sanitize_restored_content_blocks(messages)
+        assert result[0]["content"] == [{"text": "[Image is not available in this conversation]"}]
+
+    def test_sourceless_media_nested_in_tool_result(self, make_session_manager):
+        mgr = make_session_manager()
+        messages = [{"role": "user", "content": [{"toolResult": {
+            "toolUseId": "t1",
+            "status": "success",
+            "content": [{"text": "shot"}, {"image": {"format": "png", "data": "aGk="}}],
+        }}]}]
+        result = mgr._sanitize_restored_content_blocks(messages)
+        tool_result = result[0]["content"][0]["toolResult"]
+        assert tool_result["toolUseId"] == "t1"
+        assert tool_result["content"] == [
+            {"text": "shot"},
+            {"text": "[Image is not available in this conversation]"},
+        ]
+
+    def test_healthy_history_is_untouched(self, make_session_manager):
+        """Blocks with a source pass through as the same objects: a healthy
+        session's restored prefix must not change by a byte."""
+        mgr = make_session_manager()
+        image = {"image": {"format": "png", "source": {"bytes": b"x"}}}
+        document = {"document": {"format": "pdf", "name": "f", "source": {"bytes": b"x"}}}
+        tool_result = {"toolResult": {"toolUseId": "t1", "content": [
+            {"image": {"format": "png", "source": {"bytes": b"x"}}},
+        ]}}
+        messages = [{"role": "user", "content": [{"text": "hi"}, image, document, tool_result]}]
+        result = mgr._sanitize_restored_content_blocks(messages)
+        assert result[0]["content"][1] is image
+        assert result[0]["content"][2] is document
+        assert result[0]["content"][3] is tool_result
+
+    def test_repair_is_deterministic_across_restores(self, make_session_manager):
+        mgr = make_session_manager()
+        messages = [{"role": "user", "content": [
+            {"text": "x"}, {"document": {"format": "pdf", "name": "report"}},
+        ]}]
+        first = mgr._sanitize_restored_content_blocks(copy.deepcopy(messages))
+        second = mgr._sanitize_restored_content_blocks(copy.deepcopy(messages))
+        assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
 
 
 # ===========================================================================

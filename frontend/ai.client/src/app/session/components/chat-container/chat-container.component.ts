@@ -6,16 +6,19 @@ import {
   input,
   output,
   computed,
+  signal,
   viewChild,
 } from '@angular/core';
-import { Message } from '../../services/models/message.model';
+import { NgTemplateOutlet } from '@angular/common';
+import { FolderAttachmentData, Message } from '../../services/models/message.model';
 import { MessageListComponent } from '../message-list/message-list.component';
-import { ChatInputComponent } from '../chat-input/chat-input.component';
+import { ChatInputComponent, ComposerProject } from '../chat-input/chat-input.component';
 import { AnimatedTextComponent } from '../../../components/animated-text';
 import { ParagraphSkeletonComponent } from '../../../components/paragraph-skeleton';
 import { Topnav } from '../../../components/topnav/topnav';
 import { SidenavService } from '../../../services/sidenav/sidenav.service';
-import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
+import { DockedPaneService } from '../../services/docked-pane/docked-pane.service';
+import { BrandingService } from '../../../../branding/branding.service';
 import { Assistant } from '../../../assistants/models/assistant.model';
 import { Agent, AgentRunnability } from '../../../agents/models/agent.model';
 import {
@@ -23,11 +26,18 @@ import {
   AgentLaunchCardView,
   agentLaunchCardView,
 } from '../../../agents/components/agent-launch-card.component';
-import { AssistantIndicatorComponent } from '../assistant-indicator/assistant-indicator.component';
-import { SessionCostBadgeComponent } from '../session-cost-badge/session-cost-badge.component';
+import {
+  AgentGovernance,
+  AgentIndicatorComponent,
+} from '../agent-indicator/agent-indicator.component';
+import { ModelService } from '../../services/model/model.service';
+import { ContextMeterComponent } from '../context-meter/context-meter.component';
 import { VoiceOverlayComponent } from '../voice-overlay';
 import { VoiceChatService } from '../../services/voice';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { ProjectsService } from '../../../projects/services/projects.service';
+import { MessageMapService } from '../../services/session/message-map.service';
+import { ExpiredSessionNoticeComponent } from '../expired-session-notice/expired-session-notice.component';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -45,7 +55,6 @@ export interface ChatContainerConfig {
   /** Show voice mode toggle in chat input */
   showVoiceControl: boolean;
   /** Show settings/tools button in chat input */
-  showSettingsControl: boolean;
   /** Custom greeting message (overrides default) */
   customGreeting?: string;
   /** Enable embedded mode (flex layout, no fixed positioning) */
@@ -63,15 +72,17 @@ export interface ChatContainerConfig {
   selector: 'app-chat-container',
   standalone: true,
   imports: [
+    NgTemplateOutlet,
     MessageListComponent,
     ChatInputComponent,
     AnimatedTextComponent,
     ParagraphSkeletonComponent,
     Topnav,
     AgentLaunchCardComponent,
-    AssistantIndicatorComponent,
-    SessionCostBadgeComponent,
+    AgentIndicatorComponent,
+    ContextMeterComponent,
     VoiceOverlayComponent,
+    ExpiredSessionNoticeComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-container.component.html',
@@ -80,14 +91,54 @@ export interface ChatContainerConfig {
 export class ChatContainerComponent {
   // Inject sidenav service for full-page mode positioning
   protected sidenavService = inject(SidenavService);
-  private artifactState = inject(ArtifactStateService);
+  private dockedPane = inject(DockedPaneService);
   private voiceChatService = inject(VoiceChatService);
   protected readonly isVoiceActive = this.voiceChatService.isVoiceActive;
+  protected branding = inject(BrandingService);
+
+  /** Whether the branding logo image failed to load (Requirement 2.8). */
+  protected logoLoadFailed = signal(false);
 
   // Child component reference for scroll functionality
   private messageListComponent = viewChild(MessageListComponent);
 
   private readonly chatState = inject(ChatStateService);
+  private readonly modelService = inject(ModelService);
+  private readonly projectsService = inject(ProjectsService);
+  private readonly messageMap = inject(MessageMapService);
+
+  /**
+   * What the bound Agent fixes for this conversation, for the indicator.
+   *
+   * Derived from the Agent record itself rather than from the picker locks,
+   * which live on root singletons and outlive the view that set them. It also
+   * makes the preview surfaces correct for free: the Designer preview and the
+   * marketplace test-drive render this component without passing `[agent]`, so
+   * they get null and the indicator says nothing — which is right, because a
+   * draft being previewed is not a conversation anyone's saved settings apply to.
+   */
+  protected readonly agentGovernance = computed<AgentGovernance | null>(() => {
+    const agent = this.agent();
+    if (!agent) return null;
+
+    const bindings = agent.bindings ?? [];
+    const toolCount = bindings.filter(b => b.kind === 'tool').length;
+    const skillCount = bindings.filter(b => b.kind === 'skill').length;
+
+    const modelId = agent.modelConfig?.modelId ?? null;
+    // Fall back to the raw id: the catalog may not have loaded yet, and naming
+    // the model badly beats dropping the row that says one is pinned at all.
+    const modelName = modelId
+      ? (this.modelService.availableModels().find(m => m.modelId === modelId)?.modelName ?? modelId)
+      : null;
+
+    if (!modelName && toolCount === 0 && skillCount === 0) return null;
+    return {
+      modelName,
+      toolCount: toolCount || null,
+      skillCount: skillCount || null,
+    };
+  });
 
   // Non-composer submit paths (e.g. an MCP App widget's ui/message) bump
   // ChatStateService.scrollToLastUserTick to get the same "scroll the new
@@ -105,9 +156,38 @@ export class ChatContainerComponent {
   // Required inputs
   messages = input.required<Message[]>();
   sessionId = input<string | null>(null);
+  /**
+   * Let the composer attach Drive folders (drive-folder spec §4.7). Off unless
+   * the parent sends folders with the turn: the session page does; the agent
+   * preview and the marketplace test drive do not, so they never offer one.
+   */
+  allowFolderAttachments = input<boolean>(false);
+  /**
+   * Offer "Project or folder" beneath the full-page empty state's composer
+   * (docs/specs/composer-project-folder-picker.md). Only the session page sets
+   * it; a thread and the embedded previews never show it.
+   */
+  showScopePicker = input<boolean>(false);
+  /**
+   * The Shared Project this conversation runs in, resolved by the session page
+   * (it resolves the URL's `?project=` before the harness Agent has loaded).
+   * The empty state then shows the greeting, with the composer's placeholder
+   * naming the project, instead of the harness Agent's launch card.
+   */
+  project = input<ComposerProject | null>(null);
 
   // Optional inputs
+
+  /**
+   * Conversation key for composer draft persistence, forwarded to
+   * `app-chat-input` untouched. Null (the default) means this placement
+   * remembers nothing — see the input's own note for why it is not
+   * `sessionId`.
+   */
+  draftKey = input<string | null>(null);
+
   assistant = input<Assistant | null>(null);
+
   /**
    * The governed Agent behind this conversation, when it resolves (`agentId ==
    * assistantId`). The launch card reads from this rather than `assistant` because
@@ -127,27 +207,31 @@ export class ChatContainerComponent {
   // Configuration with defaults
   config = input<Partial<ChatContainerConfig>>({});
 
+  /**
+   * The history on screen came from the conversation archive, so the
+   * composer gives way to a read-only notice (conversation-search §10 q4).
+   */
+  protected readonly isArchiveServed = computed(() => this.messageMap.isArchiveServed(this.sessionId()));
+
   protected readonly resolvedConfig = computed<ChatContainerConfig>(() => ({
     showTopnav: false,
     showEmptyState: true,
     allowCloseAssistant: true,
     showFileControls: true,
     showVoiceControl: true,
-    showSettingsControl: true,
     embeddedMode: false,
     fullPageMode: false,
     ...this.config(),
   }));
 
   // Output events
-  // `mentionAgentId` rides through untouched (Marketplace D11): the container is a
-  // layout shell, and dropping the field here would silently turn every `@`-mention
-  // back into a plain turn.
-  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string }>();
+  // `mentionAgentId` and `invokedSkillIds` ride through untouched: the container is a
+  // layout shell, and dropping either field here would silently turn every `@`-mention
+  // back into a plain turn, or every `/` skill command into ordinary prose.
+  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[] }>();
   continueRequested = output<void>();
   messageCancelled = output<void>();
   fileAttached = output<File>();
-  settingsToggled = output<void>();
   assistantClosed = output<void>();
   starterSelected = output<string>();
   assistantNewSession = output<void>();
@@ -201,6 +285,15 @@ export class ChatContainerComponent {
 
   // Computed signals
   protected readonly hasMessages = computed(() => this.messages().length > 0);
+  /**
+   * #111: whether the active agent permits source-document download from citations.
+   * Read from the Agent shape first (the Designer surface), falling back to the legacy
+   * Assistant shape, defaulting true so existing agents behave exactly as before.
+   * Passed to <app-message-list> → the citation card to hide its download button.
+   */
+  protected readonly citationsDownloadAllowed = computed(
+    () => this.agent()?.allowDocumentDownload ?? this.assistant()?.allowDocumentDownload ?? true,
+  );
   protected readonly showSkeleton = computed(
     () => this.isLoadingSession() && !this.hasMessages()
   );
@@ -217,6 +310,30 @@ export class ChatContainerComponent {
    * remounting — a remount restarts the fixed wrapper's `left` transition,
    * which reads as the whole bar sweeping across the screen.
    */
+  /**
+   * Whether a composer in this container may float an announcement.
+   *
+   * Off in embedded mode: an agent preview or a marketplace test-drive is
+   * exercising one specific agent, and a platform-wide notice inside that
+   * pane reads as a bug. The real chat is the only place it belongs.
+   */
+  protected readonly showAnnouncements = computed(
+    () => !this.resolvedConfig().embeddedMode,
+  );
+
+  /**
+   * Which side of the composer an announcement takes, following the composer.
+   *
+   * The empty state centres the composer with the greeting immediately above
+   * it, so a pill placed above would float over the greeting — visibly so at
+   * narrow widths, where the greeting wraps. A conversation pins the composer
+   * to the bottom, where below would be off the edge. Same `isEmptyState()`
+   * that picks the layout branch picks the side, so the two cannot drift.
+   */
+  protected readonly announcementPlacement = computed<'above' | 'below'>(
+    () => (this.isEmptyState() ? 'below' : 'above'),
+  );
+
   protected readonly showChatTopnav = computed(
     () =>
       this.resolvedConfig().fullPageMode &&
@@ -232,11 +349,22 @@ export class ChatContainerComponent {
   protected readonly isSidenavCollapsed = computed(() =>
     this.sidenavService.isCollapsed()
   );
-  /** True while the docked artifact pane is open — the fixed footer /
-   *  topnav reserve right-side space so the pane doesn't cover them. */
-  protected readonly artifactPanelOpen = computed(
-    () => this.artifactState.openArtifact() !== null
-  );
+  /** True while any pane is docked (artifact or .docx preview) — the
+   *  fixed footer / topnav reserve right-side space so the pane doesn't
+   *  cover them. */
+  protected readonly artifactPanelOpen = this.dockedPane.isOpen;
+  /**
+   * The crumb's name. A project's harness keeps the name the project was created
+   * with, so a renamed project reads from the project list when the sidebar has
+   * loaded it, and from the harness when it has not.
+   */
+  protected readonly indicatorName = computed(() => {
+    const a = this.assistant();
+    if (!a) return '';
+    if (!a.projectId) return a.name;
+    return this.projectsService.projects$().find(p => p.projectId === a.projectId)?.name ?? a.name;
+  });
+
   protected readonly isAssistantOwner = computed(() => {
     const a = this.assistant();
     if (!a) return false;
@@ -255,8 +383,16 @@ export class ChatContainerComponent {
     this.messageListComponent()?.scrollToLastUserMessage(behavior);
   }
 
+  /**
+   * Anchor one message at the top of the viewport (a search result's turn).
+   * True when the message was rendered and scrolled to.
+   */
+  scrollToMessage(messageId: string, behavior: ScrollBehavior = 'smooth'): boolean {
+    return this.messageListComponent()?.scrollToMessage(messageId, behavior) ?? false;
+  }
+
   // Event handlers
-  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string }) {
+  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[] }) {
     this.messageSubmitted.emit(event);
 
     // Wait for DOM to update (user message to be added) then scroll to it
@@ -271,10 +407,6 @@ export class ChatContainerComponent {
 
   onFileAttached(file: File) {
     this.fileAttached.emit(file);
-  }
-
-  onSettingsToggled() {
-    this.settingsToggled.emit();
   }
 
   onAssistantClosed() {
@@ -301,5 +433,16 @@ export class ChatContainerComponent {
 
   onVoiceClosed() {
     this.voiceClosed.emit();
+  }
+
+  /**
+   * Handles a branding logo `<img>` failing to load (missing/broken asset at
+   * its documented path). Sets `logoLoadFailed`, which the template uses to
+   * hide the broken `<img>` elements and reveal a same-dimension placeholder
+   * with a visible "logo failed to load" indication, without collapsing the
+   * layout (Requirement 2.8).
+   */
+  onLogoError(_event: Event): void {
+    this.logoLoadFailed.set(true);
   }
 }

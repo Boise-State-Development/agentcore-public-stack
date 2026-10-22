@@ -138,3 +138,39 @@ class TestGetModelsUnauthenticated:
         resp = client.get("/models")
 
         assert resp.status_code == 401
+
+
+class TestSpeechRowsAreNeverOffered:
+    """A speech-to-speech row prices voice sessions; it answers no chat API."""
+
+    def test_speech_model_is_dropped_before_access_filtering(self, app, make_user):
+        user = make_user()
+        mock_auth_user(app, user)
+
+        sonic = SAMPLE_MODEL.model_copy(
+            update={
+                "id": "model-sonic",
+                "model_id": "amazon.nova-2-sonic-v1:0",
+                "model_name": "Nova 2 Sonic",
+                "input_modalities": ["SPEECH", "TEXT"],
+                "output_modalities": ["SPEECH", "TEXT"],
+            }
+        )
+        mock_service = MagicMock(spec=ModelAccessService)
+        mock_service.filter_accessible_models = AsyncMock(side_effect=lambda _u, models: models)
+
+        # `Depends(get_model_access_service)` captured the function at import,
+        # so the dependency is overridden on the app rather than patched.
+        app.dependency_overrides[get_model_access_service] = lambda: mock_service
+        with patch(
+            f"{ROUTES_MODULE}.list_all_managed_models",
+            new_callable=AsyncMock,
+            return_value=[SAMPLE_MODEL, sonic],
+        ):
+            resp = TestClient(app).get("/models")
+
+        assert resp.status_code == 200
+        assert [m["modelId"] for m in resp.json()["models"]] == ["anthropic.claude-3-haiku"]
+        # The access service never even sees the speech row.
+        seen = mock_service.filter_accessible_models.await_args.args[1]
+        assert [m.model_id for m in seen] == ["anthropic.claude-3-haiku"]

@@ -144,7 +144,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
                 @if (v.publisher?.verified) {
                   <ng-icon
                     name="heroCheckBadge"
-                    class="size-4 shrink-0 text-blue-600 dark:text-blue-400"
+                    class="size-4 shrink-0 text-state-info-600 dark:text-state-info-400"
                     [appTooltip]="verifiedTooltip()"
                     appTooltipPosition="top"
                   />
@@ -164,9 +164,9 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
                     <span
                       [class]="
                         v.publisher?.verified
-                          ? 'font-semibold text-blue-600 dark:text-blue-400'
+                          ? 'font-semibold text-state-info-600 dark:text-state-info-400'
                           : 'font-medium text-gray-700 dark:text-gray-300'
-                      "
+                     "
                       >{{ who }}</span
                     >
                   }
@@ -204,12 +204,12 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
                     [appTooltip]="pinTooltip()"
                     appTooltipPosition="top"
                     [attr.aria-pressed]="isPinned()"
-                    class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm/6 font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-45"
+                    class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm/6 font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-45"
                     [class]="
                       isPinned()
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-300'
+                        ? 'border-state-success-200 bg-state-success-50 text-state-success-700 hover:bg-state-success-100 dark:border-state-success-900 dark:bg-state-success-900/20 dark:text-state-success-300'
                         : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700'
-                    "
+                   "
                   >
                     <ng-icon
                       [name]="isPinned() ? 'heroCheck' : 'heroPlus'"
@@ -225,7 +225,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
                 <button
                   type="button"
                   (click)="closed.emit()"
-                  class="grid size-8 place-items-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  class="grid size-8 place-items-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                   [attr.aria-label]="closeLabel()"
                 >
                   <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
@@ -247,7 +247,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
                     <button
                       type="button"
                       (click)="starterSelected.emit(starter)"
-                      class="group flex w-full items-center gap-2.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-2.5 text-left text-sm/6 text-gray-700 hover:border-gray-300 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-700"
+                      class="group flex w-full items-center gap-2.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-2.5 text-left text-sm/6 text-gray-700 hover:border-gray-300 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-700"
                     >
                       <span class="min-w-0 flex-1">{{ starter }}</span>
                       <ng-icon
@@ -269,7 +269,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
           >
             @if (blockedText(); as message) {
               <p
-                class="flex items-start gap-1.5 text-sm/6 font-medium text-rose-700 dark:text-rose-400"
+                class="flex items-start gap-1.5 text-sm/6 font-medium text-state-danger-700 dark:text-state-danger-400"
               >
                 <ng-icon name="heroNoSymbol" class="mt-1 size-4 shrink-0" aria-hidden="true" />
                 <span>{{ message }}</span>
@@ -281,7 +281,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
             @if (v.listed) {
               <a
                 [routerLink]="['/agents', v.agentId]"
-                class="shrink-0 text-sm/6 font-semibold text-blue-700 hover:text-blue-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:text-blue-400 dark:hover:text-blue-300"
+                class="shrink-0 text-sm/6 font-semibold text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
               >
                 Agent details
               </a>
@@ -292,7 +292,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
         @if (pinError()) {
           <p
             role="alert"
-            class="border-t border-gray-200 px-5 py-2.5 text-sm/6 text-rose-700 dark:border-gray-700 dark:text-rose-400"
+            class="border-t border-gray-200 px-5 py-2.5 text-sm/6 text-state-danger-700 dark:border-gray-700 dark:text-state-danger-400"
           >
             {{ pinError() }}
           </p>

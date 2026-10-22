@@ -1,6 +1,7 @@
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as cdk from 'aws-cdk-lib';
 import { CfnResource } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
@@ -20,7 +21,8 @@ export interface RagDataConstructProps {
  * RagDataConstruct — RAG documents bucket + vectors bucket + DDB
  * assistants table.
  *
- *   - S3 documents bucket (versioned, BLOCK_ALL public access, CORS
+ *   - S3 documents bucket (versioned with 35-day noncurrent expiry,
+ *     BLOCK_ALL public access, CORS
  *     configurable via `config.ragIngestion.additionalCorsOrigins`)
  *   - S3 Vectors bucket + index — `AWS::S3Vectors::*` (no L2 yet),
  *     dimension and distance metric driven by config; Titan V2
@@ -64,6 +66,30 @@ export class RagDataConstruct extends Construct {
       enforceSSL: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
+      // Every delete the app makes here (document cleanup, icon
+      // replace/remove, agent-delete icon cleanup, the orphaned-row
+      // cleanup script) only writes a delete marker on a versioned
+      // bucket, so without this rule the bytes were kept forever as
+      // noncurrent versions.
+      //
+      // 35 days is the recovery window for an accidental delete, and it
+      // matches the assistants table's point-in-time recovery window
+      // (the DynamoDB default, 35 days): any DOC# row that PITR can
+      // bring back still has its source bytes to re-ingest from. Nothing
+      // reads an object by VersionId — ingestion (legacy and managed KB)
+      // addresses current objects by key — so versioning is only a
+      // recovery net, and a bounded one is enough.
+      lifecycleRules: [
+        {
+          id: 'ExpireNoncurrentVersions',
+          enabled: true,
+          noncurrentVersionExpiration: cdk.Duration.days(35),
+          // Once its last noncurrent version expires, a delete marker is
+          // alone and just clutters listings; S3 removes it.
+          expiredObjectDeleteMarker: true,
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
+        },
+      ],
       removalPolicy: getRemovalPolicy(config),
       autoDeleteObjects: getAutoDeleteObjects(config),
       cors:
@@ -190,6 +216,26 @@ export class RagDataConstruct extends Construct {
       indexName: 'AgentReportsIndex',
       partitionKey: { name: 'GSI6_PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'GSI6_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Sparse work-discovery index for managed-KB migration
+    // (.kiro/specs/managed-kb-migration). Third use of the same physics as
+    // DueSyncIndex and AgentDirectoryIndex above: GSI7 keys are written only while
+    // a KB# record is actually eligible for background work, so a knowledge base
+    // that is pinned, terminal, or simply not enrolled is invisible to the
+    // dispatcher's query rather than being filtered out of it. That distinction
+    // matters here because the dispatcher drives creation and deletion of billed
+    // AWS resources — a filter bug would act on knowledge bases nobody asked to
+    // migrate, whereas a missing key can only ever mean "do nothing".
+    //   GSI7_PK = KBWORK#{state}   GSI7_SK = {dueAt ISO-8601}  (oldest-due first)
+    // Written exclusively by apis/shared/kb_backend/records.py; the generic
+    // assistant update lists GSI7_* as immutable, mirroring GSI5_*, so a routine
+    // author edit cannot resurrect a work key on a KB that has left the queue.
+    this.assistantsTable.addGlobalSecondaryIndex({
+      indexName: 'KbWorkIndex',
+      partitionKey: { name: 'GSI7_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI7_SK', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
 

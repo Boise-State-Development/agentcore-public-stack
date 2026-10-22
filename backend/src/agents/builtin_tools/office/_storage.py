@@ -5,7 +5,7 @@ toolsets build a binary Office file inside AWS Bedrock Code Interpreter and
 persist it to the existing user-files store (``apis.shared.files``): the file
 lands in ``S3_USER_FILES_BUCKET_NAME`` with a ``FileMetadata`` row (status
 READY) in ``DYNAMODB_USER_FILES_TABLE_NAME``, so it appears in the chat's Files
-panel and is downloadable via the app-api ``/files/{id}/preview-url`` route.
+panel and is downloadable via the app-api ``/files/{id}/download`` route.
 
 The two toolsets differ only in the document format (``.docx`` vs ``.xlsx``)
 and the library used inside the sandbox (python-docx vs openpyxl); everything
@@ -43,9 +43,6 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
-
-# Presigned download links are short-lived; long enough for the user to click.
-_DOWNLOAD_URL_TTL = 60 * 60  # 1 hour
 
 
 class _DocGenError(Exception):
@@ -277,11 +274,20 @@ async def _store_document(
     filename: str,
     file_bytes: bytes,
     mime_type: str,
-) -> Tuple[str, str, str]:
-    """Persist a generated file to the user-files store and mint a download URL.
+) -> Tuple[str, str]:
+    """Persist a generated file to the user-files store.
 
-    Returns ``(upload_id, download_url, size_kb)``. ``mime_type`` is stored on
-    the ``FileMetadata`` row and used for the download ``Content-Type``.
+    Returns ``(upload_id, size_kb)``. ``mime_type`` is stored on the
+    ``FileMetadata`` row and used for the download ``Content-Type``.
+
+    Deliberately does NOT mint a presigned URL. The tool result is the model's
+    context as well as the UI's payload, and a presigned S3 URL there was a
+    double defect: ~1,400 characters of signature sitting in the cacheable
+    prefix for the life of the session, and a URL the model would re-emit in
+    prose — truncated at the ``?``, so the link it wrote 404'd with S3
+    AccessDenied while the card's own button worked. The card now carries the
+    ``upload_id`` and the SPA resolves it through
+    ``GET /api/files/{uploadId}/download``, which mints a fresh URL per click.
     """
     from apis.shared.files import (
         FileMetadata,
@@ -317,23 +323,11 @@ async def _store_document(
     )
     await get_file_upload_repository().create_file(metadata)
 
-    download_url = await asyncio.to_thread(
-        _s3().generate_presigned_url,
-        "get_object",
-        Params={
-            "Bucket": bucket,
-            "Key": s3_key,
-            "ResponseContentType": mime_type,
-            "ResponseContentDisposition": f'attachment; filename="{filename}"',
-        },
-        ExpiresIn=_DOWNLOAD_URL_TTL,
-    )
-
     size_kb = f"{len(file_bytes) / 1024:.1f} KB"
-    return upload_id, download_url, size_kb
+    return upload_id, size_kb
 
 
-def _download_card(filename: str, download_url: str, size_kb: str, verb: str) -> str:
+def _download_card(filename: str, upload_id: str, size_kb: str, verb: str, details: str = "") -> str:
     """Build the promoted inline-download-card tool result (JSON string).
 
     The ``ui_type``/``ui_display: inline`` discriminators make the frontend
@@ -341,6 +335,13 @@ def _download_card(filename: str, download_url: str, size_kb: str, verb: str) ->
     ``file_download``) instead of burying the link in the collapsed tool card.
     The renderer picks its icon from the filename extension, so a single
     ``file_download`` ui_type serves Word, Excel, and any future office file.
+
+    ``upload_id`` — not a URL — is what the payload carries; the SPA composes
+    ``{appApiUrl}/files/{uploadId}/download`` from it. The summary tells the
+    model the card is already on screen, because the model reads this same
+    JSON and will otherwise helpfully write its own download link out of
+    whatever URL-shaped text it finds here. ``details`` follows the first
+    sentence, for a tool with more to report than the file itself.
     """
     return json.dumps(
         {
@@ -349,11 +350,15 @@ def _download_card(filename: str, download_url: str, size_kb: str, verb: str) ->
             "ui_display": "inline",
             "payload": {
                 "filename": filename,
-                "download_url": download_url,
+                "upload_id": upload_id,
                 "size_kb": size_kb,
             },
             "summary": (
-                f"{verb} {filename} ({size_kb}). Also saved to this chat's Files."
+                f"{verb} {filename} ({size_kb}). {details + ' ' if details else ''}"
+                "Also saved to this chat's Files. "
+                "A download card with a working Download button is already "
+                "displayed to the user — do not write a download link or URL "
+                "for this file in your reply."
             ),
         }
     )

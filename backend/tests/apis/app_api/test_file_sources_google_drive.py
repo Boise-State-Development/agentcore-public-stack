@@ -10,6 +10,7 @@ from apis.app_api.file_sources.adapters.google_drive import (
 from apis.app_api.file_sources.models import (
     FileEntryType,
     FileSourceAuthError,
+    FileSourceTooLargeError,
 )
 
 
@@ -151,3 +152,102 @@ class TestListRoots:
 
         # The two synthetic roots still come back even when /drives fails.
         assert [r.id for r in roots] == ["root", "sharedWithMe"]
+
+
+class TestDownloadCap:
+    """`max_bytes` bounds what the adapter buffers (the composer's import path)."""
+
+    @pytest.mark.asyncio
+    async def test_oversized_binary_is_refused_from_its_metadata_without_a_fetch(self):
+        fetched = {"media": False}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("alt") == "media":
+                fetched["media"] = True
+                return httpx.Response(200, content=b"x" * 100)
+            assert "size" in request.url.params.get("fields", "")
+            return httpx.Response(
+                200, json={"name": "big.pdf", "mimeType": "application/pdf", "size": "100"}
+            )
+
+        with pytest.raises(FileSourceTooLargeError):
+            await _adapter(handler).download("tok", "file1", max_bytes=99)
+
+        assert fetched["media"] is False
+
+    @pytest.mark.asyncio
+    async def test_binary_within_the_cap_downloads(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("alt") == "media":
+                return httpx.Response(200, content=b"x" * 100)
+            return httpx.Response(
+                200, json={"name": "ok.pdf", "mimeType": "application/pdf", "size": "100"}
+            )
+
+        result = await _adapter(handler).download("tok", "file1", max_bytes=100)
+
+        assert result.content == b"x" * 100
+
+    @pytest.mark.asyncio
+    async def test_export_of_unknown_size_stops_at_the_cap(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/export"):
+                return httpx.Response(200, content=b"d" * 1000)
+            return httpx.Response(
+                200, json={"name": "Notes", "mimeType": "application/vnd.google-apps.document"}
+            )
+
+        with pytest.raises(FileSourceTooLargeError):
+            await _adapter(handler).download("tok", "doc1", max_bytes=999)
+
+    @pytest.mark.asyncio
+    async def test_no_cap_means_no_limit(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("alt") == "media":
+                return httpx.Response(200, content=b"x" * 100)
+            return httpx.Response(
+                200, json={"name": "ok.pdf", "mimeType": "application/pdf", "size": "100"}
+            )
+
+        result = await _adapter(handler).download("tok", "file1")
+
+        assert len(result.content) == 100
+
+    @pytest.mark.asyncio
+    async def test_streamed_error_status_still_maps_to_the_adapter_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("alt") == "media":
+                return httpx.Response(403, text="forbidden")
+            return httpx.Response(200, json={"name": "x.pdf", "mimeType": "application/pdf"})
+
+        with pytest.raises(FileSourceAuthError):
+            await _adapter(handler).download("tok", "file1", max_bytes=10)
+
+
+class TestDownloadMimeType:
+    @pytest.mark.asyncio
+    async def test_native_docs_say_what_they_export_as(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {"id": "d", "name": "Doc", "mimeType": "application/vnd.google-apps.document"},
+                        {"id": "s", "name": "Sheet", "mimeType": "application/vnd.google-apps.spreadsheet"},
+                        {"id": "p", "name": "Deck", "mimeType": "application/vnd.google-apps.presentation"},
+                        {"id": "f", "name": "Form", "mimeType": "application/vnd.google-apps.form"},
+                        {"id": "b", "name": "b.pdf", "mimeType": "application/pdf", "size": "1"},
+                    ]
+                },
+            )
+
+        result = await _adapter(handler).browse("tok", ROOT_MY_DRIVE)
+
+        by_id = {e.id: e for e in result.entries}
+        assert by_id["d"].download_mime_type.endswith("wordprocessingml.document")
+        assert by_id["s"].download_mime_type.endswith("spreadsheetml.sheet")
+        assert by_id["p"].download_mime_type == "application/pdf"
+        assert by_id["f"].download_mime_type is None
+        assert by_id["b"].download_mime_type is None
+        # The wire name is camelCase like every other entry field.
+        assert "downloadMimeType" in by_id["d"].model_dump(by_alias=True)

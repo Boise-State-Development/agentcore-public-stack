@@ -8,6 +8,7 @@
  */
 
 import { AppConfig, buildCorsOrigins } from '../../config';
+import { managedKbMetricNamespace } from '../managed-kb/managed-kb-role-construct';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 
 /** All SSM-resolved values the App API construct needs. */
@@ -36,8 +37,6 @@ export interface AppApiSsmParams {
   oauthProvidersTableArn: string;
   oauthUserTokensTableName: string;
   oauthUserTokensTableArn: string;
-  oauthTokenEncryptionKeyArn: string;
-  oauthClientSecretsArn: string;
   userQuotasTableName: string;
   userQuotasTableArn: string;
   quotaEventsTableName: string;
@@ -54,8 +53,12 @@ export interface AppApiSsmParams {
   userSettingsTableArn: string;
   userMenuLinksTableName: string;
   userMenuLinksTableArn: string;
+  announcementsTableName: string;
+  announcementsTableArn: string;
   systemPromptsTableName: string;
   systemPromptsTableArn: string;
+  agentTemplatesTableName: string;
+  agentTemplatesTableArn: string;
   authProvidersTableName: string;
   authProvidersTableArn: string;
   authProviderSecretsArn: string;
@@ -78,11 +81,15 @@ export interface AppApiSsmParams {
   voiceTicketSigningSecretArn: string;
   // Inference
   inferenceApiRuntimeEndpointUrl: string;
+  /** AgentCore Runtime CloudWatch log group (spans + content log records) for eval sampling. */
+  agentCoreRuntimeLogGroupName: string;
   // File uploads
   userFilesBucketName: string;
   userFilesBucketArn: string;
   userFilesTableName: string;
   userFilesTableArn: string;
+  /** Large-document prepare queue URL; absent unless the feature is on. */
+  largeDocumentPrepareQueueUrl?: string;
   // RAG
   ragDocumentsBucketName: string;
   ragAssistantsTableName: string;
@@ -93,9 +100,11 @@ export interface AppApiSsmParams {
   sharedConversationsTableName: string;
   sharedConversationsTableArn: string;
   sharedConversationsBucketName: string;
+  conversationArchiveBucketName: string;
   memoryId: string;
   // Memory Spaces
   memorySpacesTableName: string;
+  projectsTableName: string;
   memorySpacesBucketName: string;
   // Workload identity
   workloadIdentityName: string;
@@ -114,6 +123,8 @@ export interface AppApiBackendOverrides {
   memoryId: string;
   /** AgentCore Runtime endpoint URL (from InferenceAgentCoreConstruct.runtimeEndpointUrl). */
   inferenceApiRuntimeEndpointUrl: string;
+  /** AgentCore Runtime log group name (from InferenceAgentCoreConstruct.runtimeLogGroupName). */
+  agentCoreRuntimeLogGroupName: string;
 }
 
 /** Resolve every value the App API construct needs.
@@ -153,8 +164,6 @@ export function resolveAppApiParams(
     oauthProvidersTableArn: refs.oauthProvidersTable.tableArn,
     oauthUserTokensTableName: refs.oauthUserTokensTable.tableName,
     oauthUserTokensTableArn: refs.oauthUserTokensTable.tableArn,
-    oauthTokenEncryptionKeyArn: refs.oauthTokenEncryptionKey.keyArn,
-    oauthClientSecretsArn: refs.oauthClientSecretsSecret.secretArn,
     userQuotasTableName: refs.userQuotasTable.tableName,
     userQuotasTableArn: refs.userQuotasTable.tableArn,
     quotaEventsTableName: refs.quotaEventsTable.tableName,
@@ -171,8 +180,12 @@ export function resolveAppApiParams(
     userSettingsTableArn: refs.userSettingsTable.tableArn,
     userMenuLinksTableName: refs.userMenuLinksTable.tableName,
     userMenuLinksTableArn: refs.userMenuLinksTable.tableArn,
+    announcementsTableName: refs.announcementsTable.tableName,
+    announcementsTableArn: refs.announcementsTable.tableArn,
     systemPromptsTableName: refs.systemPromptsTable.tableName,
     systemPromptsTableArn: refs.systemPromptsTable.tableArn,
+    agentTemplatesTableName: refs.agentTemplatesTable.tableName,
+    agentTemplatesTableArn: refs.agentTemplatesTable.tableArn,
     authProvidersTableName: refs.authProvidersTable.tableName,
     authProvidersTableArn: refs.authProvidersTable.tableArn,
     authProviderSecretsArn: refs.authProviderSecretsSecret.secretArn,
@@ -195,11 +208,13 @@ export function resolveAppApiParams(
     voiceTicketSigningSecretArn: refs.voiceTicketSigningSecret.secretArn,
     // Inference
     inferenceApiRuntimeEndpointUrl: overrides.inferenceApiRuntimeEndpointUrl,
+    agentCoreRuntimeLogGroupName: overrides.agentCoreRuntimeLogGroupName,
     // File uploads
     userFilesBucketName: refs.fileUploadBucket.bucketName,
     userFilesBucketArn: refs.fileUploadBucket.bucketArn,
     userFilesTableName: refs.fileUploadTable.tableName,
     userFilesTableArn: refs.fileUploadTable.tableArn,
+    largeDocumentPrepareQueueUrl: refs.largeDocumentPrepareQueue?.queueUrl,
     // RAG
     ragDocumentsBucketName: refs.ragDocumentsBucket.bucketName,
     ragAssistantsTableName: refs.ragAssistantsTable.tableName,
@@ -210,9 +225,11 @@ export function resolveAppApiParams(
     sharedConversationsTableName: refs.sharedConversationsTable.tableName,
     sharedConversationsTableArn: refs.sharedConversationsTable.tableArn,
     sharedConversationsBucketName: refs.sharedConversationsBucket.bucketName,
+    conversationArchiveBucketName: refs.conversationArchiveBucket.bucketName,
     memoryId: overrides.memoryId,
     // Memory Spaces
     memorySpacesTableName: refs.memorySpacesTable.tableName,
+    projectsTableName: refs.projectsTable.tableName,
     memorySpacesBucketName: refs.memorySpacesBucket.bucketName,
     // Workload identity
     workloadIdentityName: refs.platformWorkloadIdentity.name,
@@ -227,6 +244,37 @@ export function buildAppApiEnvironment(
   return {
     AWS_REGION: config.awsRegion,
     PROJECT_PREFIX: config.projectPrefix,
+    // Managed knowledge base byte caps (.kiro/specs/managed-kb-migration,
+    // Requirement 12.11). The cap must be enforced on EVERY byte-adding path, and
+    // interactive upload runs here — the migration worker has its own copy of
+    // these in kb-migration-construct.ts. Without them this service would fall
+    // back to the module defaults in byte_cap.py and silently ignore an operator's
+    // configured limits.
+    MANAGED_KB_PER_OWNER_DEFAULT_BYTES: String(config.managedKb.perOwnerDefaultBytes),
+    MANAGED_KB_PER_OWNER_ELEVATED_BYTES: String(config.managedKb.perOwnerElevatedBytes),
+    MANAGED_KB_PER_KB_CEILING_BYTES: String(config.managedKb.perKnowledgeBaseCeilingBytes),
+    // Gates the owner-facing upgrade offer (Requirement 23.1), which is served by
+    // THIS task — `apis/app_api/kb_upgrade/service.py` reads this exact variable.
+    //
+    // It is deliberately the same flag the dispatcher reads rather than a second
+    // one: offering an upgrade the worker cannot perform is a progress spinner
+    // with no engine behind it. One flag means the offer and the capability
+    // cannot disagree.
+    //
+    // Set explicitly to 'false' rather than omitted when off. The service reads
+    // it through an allow-list of affirmative spellings, so absent and 'false'
+    // behave identically — but an explicit value makes the shipped state visible
+    // in the task definition instead of having to be inferred from silence.
+    MANAGED_KB_MIGRATION_ENABLED: String(config.managedKb.migrationEnabled),
+    // Born-managed: when true, a newly finalized agent's knowledge base is
+    // provisioned on the managed backend from creation (skips the Upgrade step).
+    // The app-api reads this to enrol new agents; it depends on the migration
+    // worker running, so it only has effect alongside MANAGED_KB_MIGRATION_ENABLED.
+    // Explicit 'false' (not omitted) for the same visibility reason as above.
+    MANAGED_KB_NEW_DEFAULT: String(config.managedKb.newDefault),
+    // Kept in step with the IAM condition by deriving both from one helper; a
+    // mismatch would make every metric publish silently denied.
+    MANAGED_KB_METRIC_NAMESPACE: managedKbMetricNamespace(config),
     FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
     CORS_ORIGINS: buildCorsOrigins(config, config.appApi.additionalCorsOrigins).join(','),
     AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: config.domainName
@@ -259,8 +307,6 @@ export function buildAppApiEnvironment(
     AGENTCORE_MEMORY_TYPE: 'dynamodb',
     AGENTCORE_MEMORY_ID: params.memoryId,
     DYNAMODB_API_KEYS_TABLE_NAME: params.apiKeysTableName,
-    OAUTH_TOKEN_ENCRYPTION_KEY_ARN: params.oauthTokenEncryptionKeyArn,
-    OAUTH_CLIENT_SECRETS_ARN: params.oauthClientSecretsArn,
     DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: params.oauthProvidersTableName,
     DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME: params.oauthUserTokensTableName,
     AGENTCORE_RUNTIME_WORKLOAD_NAME: params.workloadIdentityName,
@@ -268,7 +314,9 @@ export function buildAppApiEnvironment(
     AUTH_PROVIDER_SECRETS_ARN: params.authProviderSecretsArn,
     DYNAMODB_USER_SETTINGS_TABLE_NAME: params.userSettingsTableName,
     DYNAMODB_USER_MENU_LINKS_TABLE_NAME: params.userMenuLinksTableName,
+    DYNAMODB_ANNOUNCEMENTS_TABLE_NAME: params.announcementsTableName,
     DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: params.systemPromptsTableName,
+    DYNAMODB_AGENT_TEMPLATES_TABLE_NAME: params.agentTemplatesTableName,
     COGNITO_USER_POOL_ID: params.cognitoUserPoolId,
     COGNITO_APP_CLIENT_ID: params.cognitoAppClientId,
     COGNITO_ISSUER_URL: params.cognitoIssuerUrl,
@@ -276,6 +324,20 @@ export function buildAppApiEnvironment(
     COGNITO_REGION: config.awsRegion,
     SHARED_CONVERSATIONS_TABLE_NAME: params.sharedConversationsTableName,
     SHARED_CONVERSATIONS_BUCKET_NAME: params.sharedConversationsBucketName,
+    // Conversation archive (docs/specs/conversation-search.md §4). The bucket is
+    // always wired so a session delete removes its archived turns even after a
+    // deployment turns indexing off; CONVERSATION_INDEX_ENABLED gates writes
+    // only (the fork copy path here, the after-`done` put on the runtime).
+    CONVERSATION_ARCHIVE_BUCKET_NAME: params.conversationArchiveBucketName,
+    CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
+    // Conversation search (§5): GET /sessions/search 404s while this is off. The
+    // retention setting is the search's read-path belt (§3): a turn older than
+    // this is dropped from results even before the reconciler deletes it.
+    CONVERSATION_SEARCH_ENABLED: config.conversationSearch.enabled ? 'true' : 'false',
+    CONVERSATION_RETENTION_DAYS: String(config.conversationRetentionDays),
+    // Per-task cap on concurrent api-converse Bedrock calls. Read by
+    // apis/app_api/chat/bedrock_offload.py, which sizes its worker pool from it.
+    API_CONVERSE_MAX_IN_FLIGHT: String(config.appApi.apiConverseMaxInFlight),
     BFF_SESSIONS_TABLE_NAME: params.bffSessionsTableName,
     BFF_COOKIE_SIGNING_KEY_ARN: params.bffCookieSigningKeyArn,
     BFF_COOKIE_DATA_KEY_SECRET_ARN: params.bffCookieDataKeySecretArn,
@@ -301,8 +363,68 @@ export function buildAppApiEnvironment(
     // every read 502s (ResourceNotFoundException). inference-api already sets
     // the identical trio — app-api owns the CRUD surface, so it needs them too.
     MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
+    // Feedback eval sampling (response-feedback spec §11 PR-4): OPT-IN per
+    // environment — the admin batch sends down-thumbed conversations' spans to
+    // an AWS-managed evaluator. The runtime log group is where those spans and
+    // the content-bearing log records live (evaluations spike §1); it is wired
+    // regardless so turning the flag on is a one-variable change.
+    FEEDBACK_EVAL_SAMPLING_ENABLED: config.feedbackEvalSampling.enabled ? 'true' : 'false',
+    AGENTCORE_RUNTIME_LOG_GROUP: params.agentCoreRuntimeLogGroupName,
     DYNAMODB_MEMORY_SPACES_TABLE_NAME: params.memorySpacesTableName,
     S3_MEMORY_SPACES_BUCKET_NAME: params.memorySpacesBucketName,
+    // Shared Projects (default ON with a kill switch per env). The table name
+    // is always wired; only PROJECTS_ENABLED gates whether the routes mount.
+    PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+    DYNAMODB_PROJECTS_TABLE_NAME: params.projectsTableName,
+    // Direct user grants (default on). app-api only: it gates
+    // the admin write surface; resolution reads grant rows everywhere without a
+    // switch, so the Runtime (at its env-var cap) deliberately gets no copy.
+    USER_GRANTS_ENABLED: config.userGrants.enabled ? 'true' : 'false',
+    // Session prewarm (opt-in while in development): gates POST /chat/prewarm.
+    // app-api only; the Runtime's warm action is a no-op behind this route.
+    SESSION_PREWARM_ENABLED: config.sessionPrewarm.enabled ? 'true' : 'false',
+    // Client-measured time to first token (default on): gates
+    // POST /telemetry/turn-timing, which records the SPA's own measurement.
+    CLIENT_TURN_TIMING_ENABLED: config.clientTurnTiming.enabled ? 'true' : 'false',
+    // Word tracked changes (default on). The upload digest is
+    // built here and numbers paragraphs the way the Runtime's document_read
+    // does, so this must match the Runtime's copy.
+    WORD_TRACKED_CHANGES_ENABLED: config.wordTrackedChanges.enabled ? 'true' : 'false',
+    // Large document attachments (default on). app-api only:
+    // complete_upload enqueues a reference-class upload for preparation. The
+    // Runtime reads a prepared file by its row and needs no copy.
+    LARGE_DOCUMENT_ATTACHMENTS_ENABLED: config.largeDocumentAttachments.enabled ? 'true' : 'false',
+    // The attachments knowledge base (opt-in while in development): opening a
+    // conversation re-queues its evicted large documents for indexing.
+    ATTACHMENT_KB_ENABLED: config.attachmentKb.enabled ? 'true' : 'false',
+    // Folder attachments (default on): the
+    // /sessions/{id}/folders routes and the expansion task. app-api only.
+    FOLDER_ATTACHMENTS_ENABLED: config.folderAttachments.enabled ? 'true' : 'false',
+    // Folder sync (default on): app-api accepts a
+    // `drive_folder` KB sync policy. The kb-sync Lambdas carry it too.
+    FOLDER_SYNC_ENABLED: config.folderSync.enabled ? 'true' : 'false',
+
+    // Source provenance verification (docs/specs/source-provenance-verification.md).
+    // app-api's share is the read side: `GET /messages` replays the stored
+    // `SRCV#` verdicts, which the SSE event does not re-stream. In development,
+    // so only "true" enables.
+    SOURCE_PROVENANCE_ENABLED: config.sourceProvenance.enabled ? 'true' : 'false',
+
+    // Typed structured extraction (docs/specs/structured-extraction.md).
+    // app-api's share is the read side: `GET /messages` replays the stored
+    // `EXTR#` rows, which the SSE event does not re-stream. In development, so
+    // only "true" enables. The model id is deliberately NOT set here — app-api
+    // never makes the extraction call.
+    DOCUMENT_EXTRACT_ENABLED: config.documentExtract.enabled ? 'true' : 'false',
+    ...(params.largeDocumentPrepareQueueUrl
+      ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
+      : {}),
+    // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
+    // proposals and restores, and the flags it shows on read.
+    MEMORY_LINT_MODE: config.memoryLint.mode,
+    ...(config.memoryLint.sensitivePatterns
+      ? { MEMORY_SENSITIVE_PATTERNS: config.memoryLint.sensitivePatterns }
+      : {}),
     // Skills v2 (default ON with a kill switch per env). Skills live in the
     // shared app-roles table, which is already wired, so this only gates route
     // mounting. Cohort access is the separate `skills` RBAC capability — this
@@ -317,6 +439,10 @@ export function buildAppApiEnvironment(
     // inference-api routes. It reads and writes the same assistants table the Agent
     // surface already uses, so there is no extra wiring beyond the flag.
     AGENT_MARKETPLACE_ENABLED: config.agentMarketplace.enabled ? 'true' : 'false',
+    // Composer dictation (Transcribe Streaming via the `/dictation` WS proxy).
+    // Rides the voice ticket signing secret + replay table wired below.
+    DICTATION_ENABLED: config.dictation.enabled ? 'true' : 'false',
+    DICTATION_LANGUAGES: config.dictation.languages,
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
   };

@@ -1,8 +1,10 @@
 """DynamoDB repository for user management."""
 
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 import boto3
 from botocore.exceptions import ClientError
+import asyncio
 import logging
 import os
 
@@ -23,6 +25,54 @@ def _heal_iso(value: str) -> str:
     return value.replace("+00:00Z", "Z") if value else value
 
 
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _login_instant(profile: UserProfile) -> datetime:
+    """``last_login_at`` as an aware datetime; unparseable sorts oldest.
+
+    Compared as instants, not strings: rows carry mixed precision
+    (``…:00Z`` vs ``…:00.123456Z``) and ``"."`` sorts before ``"Z"``.
+    """
+    value = profile.last_login_at or ""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return _EPOCH
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def live_profile_rank(profile: UserProfile) -> Tuple[datetime, bool, str]:
+    """Sort key (descending) that puts the live profile of an email first.
+
+    One email can own several PROFILE rows: the pre-Cognito login keyed users
+    by a numeric employee ID (``USER#<employee id>``), the current one by the
+    Cognito ``sub`` uuid, and nothing retired the old rows. Most recent login
+    wins; on a tie a non-numeric id beats a legacy numeric one; the id itself
+    breaks any remaining tie so the choice never depends on GSI order.
+
+    Public because ``scripts/audit_user_duplicates.py`` must pick the same
+    live row the API does before it retires the others.
+    """
+    return (_login_instant(profile), not profile.user_id.isdigit(), profile.user_id)
+
+
+def item_to_profile(item: dict) -> UserProfile:
+    """Convert a users-table PROFILE item to a UserProfile."""
+    created_at = _heal_iso(item.get("createdAt", ""))
+    return UserProfile(
+        user_id=item["userId"],
+        email=item["email"],
+        name=item.get("name", ""),
+        roles=item.get("roles", []),
+        picture=item.get("picture"),
+        email_domain=item.get("emailDomain", ""),
+        created_at=created_at,
+        last_login_at=_heal_iso(item.get("lastLoginAt", "")) or created_at,
+        status=item.get("status", "active")
+    )
+
+
 class UserRepository:
     """DynamoDB repository for user operations.
 
@@ -35,6 +85,13 @@ class UserRepository:
         EmailIndex: email (for exact email lookup)
         EmailDomainIndex: GSI2PK=DOMAIN#<domain>, GSI2SK=lastLoginAt
         StatusLoginIndex: GSI3PK=STATUS#<status>, GSI3SK=lastLoginAt
+
+    Every table call in an ``async`` method runs on a worker thread
+    (``asyncio.to_thread``): boto3 is synchronous, and app-api is one uvicorn
+    process, so a call made directly from a coroutine held the event loop for
+    the DynamoDB round trip — on the cookie-session path that is every
+    request. ``query_users_by_status`` stays synchronous for its synchronous
+    callers; ``list_users_by_status`` wraps it.
     """
 
     def __init__(self, table_name: str = None):
@@ -70,7 +127,8 @@ class UserRepository:
             return None
 
         try:
-            response = self.table.get_item(
+            response = await asyncio.to_thread(
+                self.table.get_item,
                 Key={
                     "PK": f"USER#{user_id}",
                     "SK": "PROFILE"
@@ -94,7 +152,8 @@ class UserRepository:
             return None
 
         try:
-            response = self.table.query(
+            response = await asyncio.to_thread(
+                self.table.query,
                 IndexName="UserIdIndex",
                 KeyConditionExpression="userId = :userId",
                 ExpressionAttributeValues={
@@ -112,29 +171,56 @@ class UserRepository:
             logger.error(f"Error getting user by userId {user_id}: {e}")
             return None
 
-    async def get_user_by_email(self, email: str) -> Optional[UserProfile]:
-        """Get user by email (case-insensitive lookup)."""
+    async def get_users_by_email(self, email: str) -> List[UserProfile]:
+        """Every PROFILE row for an email (case-insensitive), live one first.
+
+        ``EmailIndex`` has no sort key and email is not unique in this table
+        (see ``live_profile_rank``), so this reads every page and orders the
+        rows itself rather than trusting whichever one DynamoDB returns first.
+        """
         if not self._enabled:
-            return None
+            return []
 
         try:
-            response = self.table.query(
-                IndexName="EmailIndex",
-                KeyConditionExpression="email = :email",
-                ExpressionAttributeValues={
-                    ":email": email.lower()
-                },
-                Limit=1
-            )
-
-            items = response.get("Items", [])
-            if not items:
-                return None
-
-            return self._item_to_profile(items[0])
+            kwargs: dict = {
+                "IndexName": "EmailIndex",
+                "KeyConditionExpression": "email = :email",
+                "ExpressionAttributeValues": {":email": email.lower()},
+            }
+            items: List[dict] = []
+            while True:
+                response = await asyncio.to_thread(self.table.query, **kwargs)
+                items.extend(response.get("Items", []))
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key:
+                    break
+                kwargs["ExclusiveStartKey"] = last_key
         except ClientError as e:
-            logger.error(f"Error getting user by email {email}: {e}")
+            logger.error(f"Error getting users by email {email}: {e}")
+            return []
+
+        profiles = [self._item_to_profile(item) for item in items]
+        return sorted(profiles, key=live_profile_rank, reverse=True)
+
+    async def get_user_by_email(self, email: str) -> Optional[UserProfile]:
+        """The live profile for an email (case-insensitive lookup).
+
+        When several rows share the email, returns the one ``get_users_by_email``
+        ranks first and logs the rest, so the duplicates stay visible until
+        they are cleaned up.
+        """
+        profiles = await self.get_users_by_email(email)
+        if not profiles:
             return None
+
+        if len(profiles) > 1:
+            logger.warning(
+                "EmailIndex has %d profiles for one email; using %s, ignoring %s",
+                len(profiles),
+                profiles[0].user_id,
+                [p.user_id for p in profiles[1:]],
+            )
+        return profiles[0]
 
     async def create_user(self, profile: UserProfile) -> UserProfile:
         """Create a new user record."""
@@ -144,7 +230,8 @@ class UserRepository:
         item = self._profile_to_item(profile)
 
         try:
-            self.table.put_item(
+            await asyncio.to_thread(
+                self.table.put_item,
                 Item=item,
                 ConditionExpression="attribute_not_exists(PK)"
             )
@@ -164,7 +251,7 @@ class UserRepository:
         item = self._profile_to_item(profile)
 
         try:
-            self.table.put_item(Item=item)
+            await asyncio.to_thread(self.table.put_item, Item=item)
             logger.debug(f"Updated user: {profile.user_id}")
             return profile
         except ClientError as e:
@@ -191,7 +278,27 @@ class UserRepository:
             return profile, False
         else:
             await self.create_user(profile)
+            await self._warn_on_email_collision(profile)
             return profile, True
+
+    async def _warn_on_email_collision(self, profile: UserProfile) -> None:
+        """Log when a brand-new profile's email already belongs to another id.
+
+        That is how the legacy duplicates were born: the login changed which
+        claim becomes the user id, and the new id got a fresh row beside the
+        old one. Runs only on creation, so returning users pay nothing.
+        """
+        others = [
+            p.user_id
+            for p in await self.get_users_by_email(profile.email)
+            if p.user_id != profile.user_id
+        ]
+        if others:
+            logger.warning(
+                "New user %s shares its email with existing profile(s) %s",
+                profile.user_id,
+                others,
+            )
 
     # ========== List Operations ==========
 
@@ -222,7 +329,7 @@ class UserRepository:
             if last_evaluated_key:
                 kwargs["ExclusiveStartKey"] = last_evaluated_key
 
-            response = self.table.query(**kwargs)
+            response = await asyncio.to_thread(self.table.query, **kwargs)
             items = [self._item_to_list_item(item) for item in response.get("Items", [])]
             next_key = response.get("LastEvaluatedKey")
 
@@ -241,6 +348,15 @@ class UserRepository:
         List users by status, sorted by last login (descending).
         Uses StatusLoginIndex GSI.
         """
+        return await asyncio.to_thread(self.query_users_by_status, status, limit, last_evaluated_key)
+
+    def query_users_by_status(
+        self,
+        status: str = "active",
+        limit: int = 25,
+        last_evaluated_key: Optional[dict] = None
+    ) -> Tuple[List[UserListItem], Optional[dict]]:
+        """:meth:`list_users_by_status` for synchronous callers (it blocks on DynamoDB either way)."""
         if not self._enabled:
             return [], None
 
@@ -266,6 +382,41 @@ class UserRepository:
         except ClientError as e:
             logger.error(f"Error listing users by status {status}: {e}")
             return [], None
+
+    async def count_active_users(self) -> Optional[int]:
+        """How many users are active, via a COUNT query on StatusLoginIndex.
+
+        ``Select="COUNT"`` returns only a tally, so nothing is transferred per
+        user — but DynamoDB still pages, hence the loop. Callers use this as a
+        denominator for "roughly how many people is this aimed at"; it moves as
+        people join and sign in, so treat it as an estimate.
+
+        **Cannot be filtered by role.** That index is projected ``INCLUDE``
+        with userId/email/name/emailDomain and not ``roles``, so a filter on
+        roles has nothing to evaluate against. Returns None if the repository
+        is disabled or the query fails, which means "unknown", never zero.
+        """
+        if not self._enabled:
+            return None
+
+        try:
+            total = 0
+            kwargs: dict = {
+                "IndexName": "StatusLoginIndex",
+                "KeyConditionExpression": "GSI3PK = :pk",
+                "ExpressionAttributeValues": {":pk": "STATUS#active"},
+                "Select": "COUNT",
+            }
+            while True:
+                response = await asyncio.to_thread(self.table.query, **kwargs)
+                total += int(response.get("Count", 0))
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key:
+                    return total
+                kwargs["ExclusiveStartKey"] = last_key
+        except ClientError as e:
+            logger.error(f"Error counting active users: {e}")
+            return None
 
     # ========== Helper Methods ==========
 
@@ -301,18 +452,7 @@ class UserRepository:
 
     def _item_to_profile(self, item: dict) -> UserProfile:
         """Convert DynamoDB item to UserProfile."""
-        created_at = _heal_iso(item.get("createdAt", ""))
-        return UserProfile(
-            user_id=item["userId"],
-            email=item["email"],
-            name=item.get("name", ""),
-            roles=item.get("roles", []),
-            picture=item.get("picture"),
-            email_domain=item.get("emailDomain", ""),
-            created_at=created_at,
-            last_login_at=_heal_iso(item.get("lastLoginAt", "")) or created_at,
-            status=item.get("status", "active")
-        )
+        return item_to_profile(item)
 
     def _item_to_list_item(self, item: dict) -> UserListItem:
         """Convert DynamoDB item to UserListItem."""

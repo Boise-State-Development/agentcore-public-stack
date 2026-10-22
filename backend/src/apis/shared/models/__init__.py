@@ -14,6 +14,7 @@ from .managed_models import (
     get_managed_model,
     list_managed_models,
     list_all_managed_models,
+    get_default_managed_model,
     update_managed_model,
     delete_managed_model,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "get_managed_model",
     "list_managed_models",
     "list_all_managed_models",
+    "get_default_managed_model",
     "update_managed_model",
     "delete_managed_model",
 ]

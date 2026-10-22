@@ -1,0 +1,1491 @@
+"""Routing exclusivity for the managed-KB ingestion consumer.
+
+Feature: managed-kb-migration, task 9.2.
+
+The failure this file exists to prevent is **double indexing**. The legacy pipeline
+is driven by its own pre-existing S3 notification on the same bucket, so for a legacy
+document the correct behaviour of this consumer is to do nothing whatsoever. If it
+ingested as well, the same bytes would be embedded twice: two sets of vectors,
+doubled ingestion cost, and duplicate chunks competing inside one result list. None
+of that raises an error, which is exactly why it needs a test.
+
+The routing is therefore deliberately asymmetric, and both halves are asserted:
+legacy must ingest NOTHING here, managed must ingest here and NOT fall back.
+"""
+
+import logging
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import boto3
+import pytest
+from moto import mock_aws
+
+from apis.app_api.kb_migration import ingestion_consumer as ic
+
+REGION = "us-east-1"
+TABLE = "test-ingestion-consumer"
+ASSISTANT_ID = "ast-ing01"
+DOCUMENT_ID = "doc-ing01"
+BUCKET = "docs-bucket"
+KEY = f"assistants/{ASSISTANT_ID}/documents/{DOCUMENT_ID}/report.pdf"
+
+#: Size of the object the fixture stages in S3. The reconcile HEADs the real
+#: object, so a managed document that reaches `complete` must have real bytes to
+#: measure. The DOC# rows are seeded WITHOUT a declared sizeBytes (declared == 0),
+#: so the common managed path exercises the "client under-reported" reconcile
+#: branch: reserve the real size, then commit it — net-zero on reservedBytes.
+OBJECT_BYTES = 2048
+
+#: What ``document_service.soft_delete_document`` writes, as a literal: the
+#: consumer's own constant must agree with it, not define it.
+DELETING = "deleting"
+
+
+@pytest.fixture()
+def table(monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", REGION)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    monkeypatch.setenv("DYNAMODB_ASSISTANTS_TABLE_NAME", TABLE)
+
+    with mock_aws():
+        ddb = boto3.client("dynamodb", region_name=REGION)
+        ddb.create_table(
+            TableName=TABLE,
+            KeySchema=[
+                {"AttributeName": "PK", "KeyType": "HASH"},
+                {"AttributeName": "SK", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "PK", "AttributeType": "S"},
+                {"AttributeName": "SK", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        # The RAG documents bucket, with the uploaded object in place. The reconcile
+        # takes the authoritative size from an S3 HEAD, so the object must exist for
+        # a managed document to complete.
+        s3 = boto3.client("s3", region_name=REGION)
+        s3.create_bucket(Bucket=BUCKET)
+        s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"x" * OBJECT_BYTES)
+
+        t = boto3.resource("dynamodb", region_name=REGION).Table(TABLE)
+        t.put_item(
+            Item={
+                "PK": f"AST#{ASSISTANT_ID}",
+                "SK": f"DOC#{DOCUMENT_ID}",
+                "status": "uploading",
+            }
+        )
+        yield t
+
+
+def _seed_kb(table, **overrides):
+    """A KB_Record for this assistant. No retrievalEngine unless asked."""
+    item = {"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}", "appKbId": ASSISTANT_ID}
+    item.update(overrides)
+    table.put_item(Item=item)
+
+
+def _doc(table):
+    return table.get_item(
+        Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"}
+    )["Item"]
+
+
+def _eventbridge_event(key=KEY):
+    return {"detail": {"bucket": {"name": BUCKET}, "object": {"key": key}}}
+
+
+class _FakeAgentClient:
+    """The control-plane surface the consumer reads document status from."""
+
+    def __init__(self, owner):
+        self._owner = owner
+
+    def get_knowledge_base_documents(self, **kwargs):
+        self._owner.status_calls += 1
+        status = self._owner.next_status()
+        if status == "NOT_FOUND":
+            return {"documentDetails": []}
+        return {
+            "documentDetails": [
+                {
+                    "knowledgeBaseId": "KB123",
+                    "dataSourceId": "DS456",
+                    "status": status,
+                    "identifier": {
+                        "dataSourceType": "CUSTOM",
+                        "custom": {"id": DOCUMENT_ID},
+                    },
+                    "updatedAt": datetime(2026, 9, 1, 14, 53, 19, tzinfo=timezone.utc),
+                }
+            ]
+        }
+
+
+class _FakeBackend:
+    """Models the parts of ManagedKbBackend the consumer actually leans on.
+
+    Deliberately models Bedrock's document STATUS, not just the ingest call.
+    Ingestion is fire-and-forget: the API returns once the request is accepted and
+    says nothing about progress, so a fake that only recorded ingests could not
+    express the state the consumer now has to reason about — and a fake that
+    reported instant success is what let the 30 s poll window look adequate for
+    documents that take minutes.
+
+    ``statuses`` is the sequence returned by successive status probes. The default
+    models a small document: unknown, then indexed. Pass a longer sequence to model
+    a slow one; the last value repeats forever.
+    """
+
+    def __init__(self, statuses=None, other_documents=("DOC-someone-else",)):
+        self.ingested = []
+        self.status_calls = 0
+        self.search_filters = []
+        self._statuses = list(statuses or ["NOT_FOUND", "INDEXED"])
+        self._agent_client = _FakeAgentClient(self)
+        # Models a knowledge base that holds OTHER documents too. Without this a
+        # probe that ignores its filter still passes, because the only document
+        # present is the one being looked for — which is exactly why the
+        # query-by-document-id probe survived until a second document existed.
+        self._other_documents = list(other_documents)
+
+    def next_status(self):
+        if len(self._statuses) > 1:
+            return self._statuses.pop(0)
+        return self._statuses[0]
+
+    # -- the private surface `document_status` reuses --------------------------
+    def _agent(self):
+        return self._agent_client
+
+    def _locate(self, kb_ref):
+        return ("KB123", "DS456")
+
+    # -- the protocol surface --------------------------------------------------
+    async def ingest(self, kb_ref, source):
+        self.ingested.append(source.document_id)
+        return None
+
+    async def search(self, kb_ref, query, top_k=5, retrieval_filter=None):
+        """Honours an ``equals`` filter on ``document_id``; otherwise ranks badly.
+
+        The unfiltered branch returns the *other* documents, which is what the real
+        service did: a document id is meaningless to an embedding model, so an
+        unfiltered search returns whatever the reranker prefers. Measured in dev
+        with two documents, querying one id returned five chunks that all belonged
+        to the other.
+        """
+        self.search_filters.append(retrieval_filter)
+
+        wanted = None
+        if retrieval_filter:
+            equals = retrieval_filter.get("equals") or {}
+            if equals.get("key") == "document_id":
+                wanted = equals.get("value")
+
+        if wanted is not None:
+            doc_ids = [wanted] if wanted == DOCUMENT_ID else []
+        else:
+            doc_ids = list(self._other_documents)
+
+        chunks = []
+        for doc_id in doc_ids:
+            chunk = MagicMock()
+            chunk.metadata = {"document_id": doc_id}
+            chunk.document_id = doc_id
+            chunks.append(chunk)
+        return chunks
+
+
+@pytest.fixture(autouse=True)
+def _fast_polls(monkeypatch):
+    """Never wait production durations in a unit test.
+
+    The consumer's budgets are deliberately long — INDEXED_POLL_TIMEOUT_SECONDS is
+    600 s because Lambda's async retry is capped at 2 attempts, so the wait for
+    indexing has to happen inside one invocation. Left unpatched, the handful of
+    tests that exercise a document which never finishes indexing would hold this
+    file for over twenty minutes.
+
+    This is exactly why those constants are resolved at CALL time rather than bound
+    as default arguments: a default argument is evaluated once at import and cannot
+    be patched, which an earlier version of this module got wrong and which cost a
+    33-second test that silently ignored its own override.
+    """
+    monkeypatch.setattr(ic, "INDEXED_POLL_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(ic, "INDEXED_POLL_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr(ic, "RETRIEVABLE_POLL_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(ic, "RETRIEVABLE_POLL_INTERVAL_SECONDS", 0.001)
+
+
+# ---------------------------------------------------------------------------
+# Legacy must not be touched
+# ---------------------------------------------------------------------------
+class TestLegacyRouting:
+    def test_a_legacy_document_is_not_ingested_here(self, table):
+        """No retrievalEngine means legacy, and legacy is somebody else's job."""
+        _seed_kb(table)
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["routed"] == "legacy"
+        assert result["ingested"] is False
+        assert fake.ingested == [], "a legacy document was ingested into the managed backend"
+
+    def test_a_document_with_no_kb_record_at_all_is_legacy(self, table):
+        """The overwhelmingly common case today: no record has ever been written."""
+        result = ic.handle_object(BUCKET, KEY)
+        assert result["routed"] == "legacy"
+        assert result["ingested"] is False
+
+    def test_a_legacy_document_status_is_left_alone(self, table):
+        """The legacy pipeline owns the terminal transition for its documents.
+
+        Writing `complete` here would race the other Lambda and could mark a
+        document ready before its vectors exist.
+        """
+        _seed_kb(table)
+        ic.handle_object(BUCKET, KEY)
+        assert _doc(table)["status"] == "uploading"
+
+    @pytest.mark.parametrize("engine", ["s3vectors", "S3Vectors", "MANAGED", "managed ", "", "wat"])
+    def test_only_the_exact_managed_literal_routes_to_managed(self, table, engine):
+        """Exact-match, so a casing slip fails safe.
+
+        Failing safe matters asymmetrically: routing to legacy when it should be
+        managed leaves the existing pipeline handling it correctly, while routing to
+        managed when the record is not really migrated ingests into a knowledge base
+        that may not exist.
+        """
+        _seed_kb(table, retrievalEngine=engine)
+        fake = _FakeBackend()
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            result = ic.handle_object(BUCKET, KEY)
+        assert result["routed"] == "legacy"
+        assert fake.ingested == []
+
+
+# ---------------------------------------------------------------------------
+# Managed must be ingested here, exactly once
+# ---------------------------------------------------------------------------
+class TestManagedRouting:
+    def _seed_managed(self, table):
+        _seed_kb(
+            table,
+            retrievalEngine="managed",
+            awsKbId="KB123",
+            awsDataSourceId="DS456",
+        )
+
+    def test_a_managed_document_is_ingested_directly(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend()
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["routed"] == "managed"
+        assert result["ingested"] is True
+        assert fake.ingested == [DOCUMENT_ID]
+
+    def test_a_managed_document_is_ingested_exactly_once(self, table):
+        """One invocation, one ingest. Duplicate chunks would compete in retrieval."""
+        self._seed_managed(table)
+        fake = _FakeBackend()
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.lambda_handler(_eventbridge_event(), None)
+
+        assert fake.ingested == [DOCUMENT_ID]
+
+    def test_the_document_reaches_complete(self, table):
+        self._seed_managed(table)
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(),
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert _doc(table)["status"] == "complete"
+
+    def test_indexed_and_retrievable_are_recorded_separately(self, table):
+        """Two timestamps, not one.
+
+        Bedrock reports INDEXED up to a second before a document can actually be
+        retrieved (measured 0.75-1.03 s). Collapsing them would erase the only
+        evidence of that gap, which is what makes "my upload finished but the
+        assistant cannot see it" diagnosable.
+        """
+        self._seed_managed(table)
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(),
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        item = _doc(table)
+        assert "indexedAt" in item
+        assert "retrievableAt" in item
+        assert result["indexedAt"] and result["retrievableAt"]
+
+    def test_indexed_at_is_bedrocks_timestamp_not_our_clock(self, table):
+        """`indexedAt` must be the value Bedrock reports, not the local time.
+
+        The original code set `indexed_at = _now_iso()` immediately after the
+        ingest call returned. That call is fire-and-forget — it returns when the
+        request is accepted — so the field recorded "when we asked", presented as
+        "when indexing finished". For a 1.5 MB PDF in dev those were 5.5 minutes
+        apart, and because the field was always populated the error was invisible:
+        the pre-existing test asserted only that the key existed and was truthy,
+        which a fabricated value satisfies perfectly.
+        """
+        self._seed_managed(table)
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(),
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        # The fake reports 2026-09-01T14:53:19+00:00 from GetKnowledgeBaseDocuments.
+        assert result["indexedAt"].startswith("2026-09-01T14:53:19"), (
+            f"indexedAt is {result['indexedAt']!r}, which is not the timestamp "
+            f"Bedrock reported — it looks like a local clock reading"
+        )
+        assert _doc(table)["indexedAt"].startswith("2026-09-01T14:53:19")
+
+    def test_a_managed_document_never_falls_back_to_legacy(self, table):
+        """Managed engine but unprovisioned must FAIL, not silently degrade.
+
+        A quiet fallback would hand the document to the legacy pipeline as well,
+        producing the dual index this whole file guards against.
+        """
+        _seed_kb(table, retrievalEngine="managed")  # no awsKbId / awsDataSourceId
+
+        with pytest.raises(ic.IngestionRoutingError, match="not provisioned"):
+            ic.handle_object(BUCKET, KEY)
+
+    def test_a_failed_ingestion_marks_the_document_failed_and_raises(self, table):
+        """The record is the retry anchor, so a failure must be visible in both
+        places: on the document and to the event source."""
+        self._seed_managed(table)
+
+        class _Failing(_FakeBackend):
+            async def ingest(self, kb_ref, source):
+                raise RuntimeError("bedrock unavailable")
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=_Failing()
+        ):
+            with pytest.raises(RuntimeError):
+                ic.handle_object(BUCKET, KEY)
+
+        item = _doc(table)
+        assert item["status"] == "failed"
+        assert "bedrock unavailable" in item["ingestionError"]
+
+    def test_a_document_that_never_becomes_retrievable_is_not_marked_complete(self, table):
+        """Indexed is not retrievable. Claiming success here is the bug."""
+        self._seed_managed(table)
+
+        class _NeverRetrievable(_FakeBackend):
+            async def search(self, kb_ref, query, top_k=5):
+                return []
+
+        # Shrink the poll window: the real 30s default is correct in production
+        # (the observed gap is ~1s and waiting is cheap) but would add 30s to every
+        # run of this suite.
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_NeverRetrievable(),
+        ), patch.object(ic, "RETRIEVABLE_POLL_TIMEOUT_SECONDS", 0.05), patch.object(
+            ic, "RETRIEVABLE_POLL_INTERVAL_SECONDS", 0.01
+        ):
+            with pytest.raises(ic.IngestionRoutingError, match="not retrievable"):
+                ic.handle_object(BUCKET, KEY)
+
+        assert _doc(table)["status"] != "complete"
+
+
+# ---------------------------------------------------------------------------
+# Event parsing
+# ---------------------------------------------------------------------------
+class TestEventParsing:
+    def test_eventbridge_shape_is_understood(self):
+        records = ic.extract_records(_eventbridge_event())
+        assert records == [{"bucket": BUCKET, "key": KEY}]
+
+    def test_raw_s3_notification_shape_is_understood(self):
+        """Both shapes are accepted so a wiring change cannot silently stop
+        ingestion — the bucket carries two producers."""
+        event = {"Records": [{"s3": {"bucket": {"name": BUCKET}, "object": {"key": KEY}}}]}
+        assert ic.extract_records(event) == [{"bucket": BUCKET, "key": KEY}]
+
+    def test_an_empty_event_is_a_no_op(self):
+        assert ic.lambda_handler({}, None)["processed"] == 0
+
+    def test_a_url_encoded_key_is_decoded(self):
+        a, d, f = ic.parse_object_key(
+            "assistants/ast-1/documents/doc-2/my+report+%282024%29.pdf"
+        )
+        assert (a, d) == ("ast-1", "doc-2")
+        assert f == "my report (2024).pdf"
+
+    def test_a_filename_containing_slashes_is_preserved(self):
+        _, _, f = ic.parse_object_key("assistants/a/documents/d/sub/dir/file.pdf")
+        assert f == "sub/dir/file.pdf"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "wrong/ast-1/documents/doc-2/f.pdf",
+            "assistants/ast-1/wrong/doc-2/f.pdf",
+            "assistants/ast-1/documents/doc-2",
+            "assistants//documents/doc-2/f.pdf",
+            "assistants/ast-1/documents//f.pdf",
+            "assistants/ast-1/documents/doc-2/",
+            "",
+        ],
+    )
+    def test_a_malformed_key_is_refused(self, key):
+        """Guessing at a malformed key could ingest one assistant's document into
+        another's knowledge base."""
+        with pytest.raises(ic.IngestionRoutingError):
+            ic.parse_object_key(key)
+
+
+class TestNonDocumentKeysAreSkipped:
+    """Agent icons live in the same bucket, at ``assistants/{id}/icons/{digest}.png``.
+
+    The EventBridge rule is scoped to ``assistants/*/documents/*``, but the consumer
+    must not depend on that: a raise here is retried twice and then dead-lettered
+    for an object that was never a document.
+    """
+
+    ICON_KEY = f"assistants/{ASSISTANT_ID}/icons/0123456789abcdef.png"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            ICON_KEY,
+            f"assistants/{ASSISTANT_ID}/icons/0123456789abcdef.jpg",
+            f"assistants/{ASSISTANT_ID}/something-else",
+            "models/model-1/icons/0123456789abcdef.png",
+        ],
+    )
+    def test_a_non_document_key_is_not_a_document(self, key):
+        assert ic.is_document_key(key) is False
+
+    def test_a_document_key_is_a_document(self):
+        assert ic.is_document_key(KEY) is True
+
+    def test_an_icon_on_a_managed_kb_is_skipped_without_ingesting_or_writing(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="kb-1", awsDataSourceId="ds-1")
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            result = ic.handle_object(BUCKET, self.ICON_KEY)
+
+        assert result["routed"] == "skipped"
+        assert result["ingested"] is False
+        assert fake.ingested == []
+        assert "Item" not in table.get_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": "DOC#icons"})
+
+    def test_the_handler_returns_success_for_an_icon_event(self, table):
+        response = ic.lambda_handler(_eventbridge_event(self.ICON_KEY), None)
+        assert response["statusCode"] == 200
+        assert response["results"][0]["routed"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# Structural guarantees
+# ---------------------------------------------------------------------------
+class TestNoInProcessOrchestration:
+    def test_the_module_does_not_use_ensure_future(self):
+        """Requirement 10.8. A background task is killed when the Lambda handler
+        returns, converting a reported success into a half-finished ingestion."""
+        import ast
+        import inspect
+
+        # Parsed, not grepped. A substring check trips on this module's own
+        # docstring, which explains at length WHY it does not orchestrate in
+        # process — the first version of this test failed on the prose describing
+        # the very thing it was verifying the absence of.
+        tree = ast.parse(inspect.getsource(ic))
+        called = {
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert "ensure_future" not in called
+        assert "create_task" not in called
+
+
+# ---------------------------------------------------------------------------
+# A slow document must converge, not die
+# ---------------------------------------------------------------------------
+class TestSlowIndexingConverges:
+    """The defect a 1.5 MB PDF exposed in dev on 2026-09-01.
+
+    Ingestion succeeded, but the consumer polled a *retrieval* for 30 s starting
+    the instant the ingest call returned — before Bedrock had indexed anything.
+    That poll window was sized against the INDEXED -> retrievable gap
+    (0.75-1.03 s), while it actually had to cover ingest -> INDEXED -> retrievable,
+    which the §5.1 benchmark measured at 37-264 s for PDFs.
+
+    Each of the three redeliveries then RE-INGESTED, discarding progress and
+    restarting the clock. The document reached INDEXED 54 s after the final attempt
+    was dead-lettered, leaving a fully retrievable document parked at `uploading`
+    with nothing left to reconcile it — the legacy pipeline no longer writes status
+    for a promoted knowledge base, so there was no second writer to mask it.
+    """
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def test_a_document_already_being_indexed_is_not_re_ingested(self, table):
+        """The core fix. Re-submitting restarts the work we are waiting for."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["IN_PROGRESS"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError, match="IN_PROGRESS"):
+                ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [], (
+            "a document Bedrock was already indexing was submitted again; that "
+            "discards the progress this invocation is waiting on"
+        )
+
+    def test_a_document_still_indexing_is_left_non_terminal(self, table):
+        """Not complete and not failed — the next delivery decides."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["IN_PROGRESS"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        item = _doc(table)
+        assert item["status"] not in ("complete", "failed")
+        assert "indexedAt" not in item, "no timestamp may be invented before indexing"
+
+    def test_a_redelivery_completes_the_document_without_a_second_ingest(self, table):
+        """Delivery 1 submits and defers; delivery 2 finds it INDEXED and finishes.
+
+        This is the whole convergence property: the document ends up `complete`
+        having been handed to Bedrock exactly once.
+        """
+        self._seed_managed(table)
+
+        # Delivery 1: never seen, then still working for the whole in-invocation wait.
+        first = _FakeBackend(statuses=["NOT_FOUND", "IN_PROGRESS"])
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=first
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+        assert first.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] not in ("complete", "failed")
+
+        # Delivery 2: Bedrock has finished.
+        second = _FakeBackend(statuses=["INDEXED"])
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=second
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert second.ingested == [], "the second delivery must not re-ingest"
+        item = _doc(table)
+        assert item["status"] == "complete"
+        assert item["indexedAt"].startswith("2026-09-01T14:53:19")
+
+    def test_a_small_document_still_finishes_in_one_invocation(self, table):
+        """The fast path must not regress into waiting for a retry.
+
+        Deferring every document would add a minute of EventBridge backoff to the
+        common case, which is why the in-invocation wait exists at all.
+        """
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["NOT_FOUND", "INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["ingested"] is True
+        assert _doc(table)["status"] == "complete"
+        assert fake.ingested == [DOCUMENT_ID]
+
+    def test_a_failed_document_is_marked_failed_and_not_retried(self, table):
+        """Terminal on Bedrock's side. Redelivering cannot help."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["FAILED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            result = ic.handle_object(BUCKET, KEY)  # must NOT raise
+
+        assert fake.ingested == []
+        item = _doc(table)
+        assert item["status"] == "failed"
+        assert "FAILED" in item["ingestionError"]
+        assert result["status"] == "FAILED"
+
+    def test_a_partially_indexed_document_is_treated_as_usable(self, table):
+        """It IS retrievable, so failing it would hide content the user can see."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["PARTIALLY_INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [], "already indexed, even if partially"
+        assert _doc(table)["status"] == "complete"
+
+    def test_a_status_probe_failure_does_not_fail_the_document(self, table):
+        """An unreadable probe means "no evidence", so ingesting is correct."""
+        self._seed_managed(table)
+
+        class _ProbeBroken(_FakeBackend):
+            def _agent(self):
+                raise RuntimeError("bedrock control plane unavailable")
+
+        fake = _ProbeBroken(statuses=["NOT_FOUND"])
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [DOCUMENT_ID], "a probe failure must not block ingestion"
+        assert _doc(table)["status"] != "failed"
+
+
+# ---------------------------------------------------------------------------
+# The retrievability probe must ask an exact question
+# ---------------------------------------------------------------------------
+class TestTheRetrievabilityProbeIsFiltered:
+    """Found in dev on 2026-09-01, with two documents in the knowledge base.
+
+    The probe searched for the document *id as the query text* and checked whether
+    that document came back in the top 5. A document id means nothing to an
+    embedding model, so the search returned whatever the reranker preferred:
+    querying `DOC-40e985680a63` returned five chunks and every one belonged to a
+    different document. A perfectly retrievable document was reported as not
+    retrievable.
+
+    It scales the wrong way — the more documents a knowledge base holds, the less
+    likely the target appears in an unfiltered top-5 — so every upload to a mature
+    knowledge base would burn its poll budget and dead-letter. It only ever worked
+    while the knowledge base held exactly one document, where anything returned was
+    necessarily the right thing.
+    """
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def test_the_probe_filters_to_the_document_being_confirmed(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.search_filters, "the probe never searched"
+        assert all(f is not None for f in fake.search_filters), (
+            "the retrievability probe searched WITHOUT a filter; with other "
+            "documents present it can return five chunks that all belong to "
+            "something else and report a good document as not retrievable"
+        )
+        assert fake.search_filters[0] == {
+            "equals": {"key": "document_id", "value": DOCUMENT_ID}
+        }
+
+    def test_the_filter_uses_exact_match_not_a_prefix(self, table):
+        """`startsWith` would let DOC-1 confirm DOC-10 as retrievable."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        operators = {op for f in fake.search_filters for op in (f or {})}
+        assert operators == {"equals"}, f"unsafe filter operator(s): {operators}"
+
+    def test_a_document_confirms_even_when_others_rank_higher(self, table):
+        """The regression itself: other documents present must not hide this one."""
+        self._seed_managed(table)
+        fake = _FakeBackend(
+            statuses=["INDEXED"],
+            other_documents=("DOC-noise-1", "DOC-noise-2", "DOC-noise-3"),
+        )
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert _doc(table)["status"] == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Statuses the SDK does not declare
+# ---------------------------------------------------------------------------
+class TestUndeclaredStatusesAreWaitedOut:
+    """`TEXT_INDEXED` is returned by the live service and is NOT in the packaged
+    model's DocumentStatus enum. Observed in dev on a document with image
+    extraction enabled: TEXT_INDEXED first, INDEXED later."""
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def test_text_indexed_is_not_treated_as_done(self, table):
+        """Marking complete here would claim an image-only page is ready while the
+        vision model is still running — the exact report this module prevents."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["TEXT_INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        assert _doc(table)["status"] != "complete"
+
+    def test_text_indexed_does_not_cause_a_re_ingest(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["TEXT_INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == []
+
+    def test_text_indexed_becoming_indexed_completes_the_document(self, table):
+        """The observed real sequence. It must converge, not stall."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["TEXT_INDEXED", "TEXT_INDEXED", "INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert _doc(table)["status"] == "complete"
+        assert fake.ingested == [], "already submitted; must not re-ingest"
+
+    def test_a_status_nobody_has_seen_before_is_waited_out_not_failed(self, table):
+        """A future AWS status value must not dead-letter documents."""
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["SOME_FUTURE_STATUS"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        item = _doc(table)
+        assert item["status"] != "failed", (
+            "an unrecognised status failed the document; unknown values must be "
+            "waited out, because the service already returns one the SDK omits"
+        )
+
+    def test_text_indexed_is_a_classified_status_not_an_unknown_one(self, table, caplog):
+        """Recognition is the only thing that distinguishes it, so test that.
+
+        Dropping TEXT_INDEXED from DOC_STATUSES_IN_FLIGHT is behaviour-equivalent:
+        `_still_working` waits on unrecognised statuses too, so the document is
+        handled identically either way. A mutation removing it therefore survives
+        every behavioural assertion — which means the only honest thing left to
+        assert is that we have CLASSIFIED it, and are not merely falling through the
+        unknown-status branch and logging a warning on every poll for a state we
+        have already seen in production and understand.
+        """
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["TEXT_INDEXED"])
+
+        with caplog.at_level(logging.WARNING):
+            with patch(
+                "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+            ):
+                with pytest.raises(ic.IngestionRoutingError):
+                    ic.handle_object(BUCKET, KEY)
+
+        assert "TEXT_INDEXED" in ic.DOC_STATUSES_IN_FLIGHT
+        assert not any("unrecognised status" in r.message for r in caplog.records), (
+            "TEXT_INDEXED was handled by the unknown-status fallback; it is a state "
+            "we have observed in production and it should be classified explicitly"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The byte cap is settled against the AUTHORITATIVE S3 size (Req 12.3/12.4/12.6)
+# ---------------------------------------------------------------------------
+class TestByteCapReconcileAtIngestion:
+    """Enforcement of Requirement 12.11 on the ingestion side.
+
+    The request-time reservation used the client-declared size, which is not
+    trustworthy. When a managed document reaches ``complete`` the reservation is
+    reconciled against the real S3 size; on every terminal FAILURE the reservation
+    is returned so a failed upload never permanently shrinks the owner's allowance.
+    """
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def _reserve(self, table, declared):
+        """Model the request-time state: DOC# declares ``declared`` and the KB
+        record already holds that many reserved bytes."""
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"},
+            UpdateExpression="SET sizeBytes = :d",
+            ExpressionAttributeValues={":d": declared},
+        )
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"},
+            UpdateExpression="SET reservedBytes = :d, storedBytes = :z, totalBytes = :d",
+            ExpressionAttributeValues={":d": declared, ":z": 0},
+        )
+
+    def _put_object(self, size):
+        boto3.client("s3", region_name=REGION).put_object(
+            Bucket=BUCKET, Key=KEY, Body=b"x" * size
+        )
+
+    def _kb(self, table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        ).get("Item") or {}
+
+    def _run(self, table, statuses=("NOT_FOUND", "INDEXED"), backend_cls=_FakeBackend):
+        fake = backend_cls(statuses=list(statuses))
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            return fake, ic.handle_object(BUCKET, KEY)
+
+    def test_real_equals_declared_commits_the_reservation(self, table):
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+        self._put_object(2048)
+
+        self._run(table)
+
+        kb = self._kb(table)
+        assert int(kb["storedBytes"]) == 2048
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 2048
+        assert _doc(table)["status"] == "complete"
+
+    def test_real_smaller_than_declared_commits_real_and_releases_the_difference(self, table):
+        """Client over-reported: charge only what was stored, return the rest."""
+        self._seed_managed(table)
+        self._reserve(table, 4096)
+        self._put_object(2048)
+
+        self._run(table)
+
+        kb = self._kb(table)
+        assert int(kb["storedBytes"]) == 2048
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 2048  # 4096 reserved, 2048 released
+
+    def test_real_larger_than_declared_reserves_the_shortfall_then_commits(self, table):
+        """Client under-reported but still under the cap: reserve the extra, commit."""
+        self._seed_managed(table)
+        self._reserve(table, 1024)
+        self._put_object(2048)
+
+        self._run(table)
+
+        kb = self._kb(table)
+        assert int(kb["storedBytes"]) == 2048
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 2048
+        assert _doc(table)["status"] == "complete"
+
+    def test_real_over_cap_fails_the_document_deletes_object_and_releases(self, table, monkeypatch):
+        """Client under-reported AND the true size overshoots the cap.
+
+        The document must be failed, the orphaned S3 object deleted, and the
+        original reservation returned — no bytes charged, no stranded source.
+        """
+        monkeypatch.setenv("MANAGED_KB_PER_OWNER_DEFAULT_BYTES", "2048")
+        monkeypatch.setenv("MANAGED_KB_PER_KB_CEILING_BYTES", "2048")
+        self._seed_managed(table)
+        self._reserve(table, 1024)
+        self._put_object(4096)  # real; 1024 declared -> shortfall 3072 over the 2048 cap
+
+        _, result = self._run(table)
+
+        assert result["status"] == "failed"
+        assert result.get("note") == "byte-cap-exceeded"
+        assert _doc(table)["status"] == "failed"
+        # The reservation is returned in full.
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 0
+        assert int(kb.get("storedBytes") or 0) == 0
+        # The orphaned object is gone.
+        with pytest.raises(Exception):
+            boto3.client("s3", region_name=REGION).head_object(Bucket=BUCKET, Key=KEY)
+
+    def test_a_failed_ingestion_releases_the_reservation(self, table):
+        """NAMED mutation guard: dropping the release-on-failure in the Bedrock-
+        FAILED path must fail here. A failed upload may not permanently shrink the
+        owner's allowance (Requirement 12.6)."""
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+
+        self._run(table, statuses=["FAILED"])
+
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 0, (
+            "a Bedrock-FAILED document did not release its reservation; a failed "
+            "upload has permanently shrunk the owner's cap"
+        )
+        assert int(kb["totalBytes"]) == 0
+        assert _doc(table)["status"] == "failed"
+
+    def test_an_ingest_exception_releases_the_reservation(self, table):
+        """The submit itself raising is also terminal and must release."""
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+
+        class _Failing(_FakeBackend):
+            async def ingest(self, kb_ref, source):
+                raise RuntimeError("bedrock unavailable")
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_Failing(statuses=["NOT_FOUND"]),
+        ):
+            with pytest.raises(RuntimeError):
+                ic.handle_object(BUCKET, KEY)
+
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 0
+
+    def test_a_still_indexing_document_does_NOT_release(self, table):
+        """The non-terminal 'leave for redelivery' path must keep the bytes
+        reserved — the delivery that completes the document will settle them."""
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(statuses=["IN_PROGRESS"]),
+        ):
+            with pytest.raises(ic.IngestionRoutingError):
+                ic.handle_object(BUCKET, KEY)
+
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 2048, (
+            "a document still indexing released its reservation; the completing "
+            "delivery would then find nothing reserved"
+        )
+
+    def test_a_redelivery_does_not_double_commit(self, table):
+        """settle_once + the terminal early-exit make the byte accounting
+        idempotent: a second delivery of an already-complete document must not
+        drive reservedBytes negative."""
+        self._seed_managed(table)
+        self._reserve(table, 2048)
+        self._put_object(2048)
+
+        # Delivery 1 completes and commits.
+        self._run(table, statuses=["NOT_FOUND", "INDEXED"])
+        kb1 = self._kb(table)
+        assert int(kb1["storedBytes"]) == 2048
+        assert int(kb1["reservedBytes"]) == 0
+
+        # Delivery 2: Bedrock still reports INDEXED. Must be a no-op for accounting.
+        _, result = self._run(table, statuses=["INDEXED"])
+        assert result.get("note") == "already-settled"
+        kb2 = self._kb(table)
+        assert int(kb2["storedBytes"]) == 2048
+        assert int(kb2["reservedBytes"]) == 0, (
+            "a redelivery committed a second time and drove reservedBytes negative"
+        )
+
+    def test_a_legacy_document_is_never_byte_accounted(self, table):
+        """Legacy KBs stay uncapped: no reservation is created or touched."""
+        _seed_kb(table)  # no retrievalEngine -> legacy
+        ic.handle_object(BUCKET, KEY)
+        kb = self._kb(table)
+        assert "reservedBytes" not in kb and "storedBytes" not in kb
+
+
+# ---------------------------------------------------------------------------
+# A deleted document is not recreated by a late event
+# ---------------------------------------------------------------------------
+class TestADeletedDocumentIsNotRecreated:
+    """``UpdateItem`` is an upsert. Deleting a document, or its whole agent, removes
+    the ``DOC#`` row, and a late or redelivered ingestion event would otherwise
+    recreate it as a ghost row holding only a status and timestamps — the
+    orphaned rows ``scripts/cleanup_orphaned_agent_rows.py`` exists to remove."""
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def _delete_doc(self, table):
+        table.delete_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"})
+
+    def _doc_or_none(self, table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"}
+        ).get("Item")
+
+    def _kb(self, table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        ).get("Item") or {}
+
+    def test_a_status_write_to_a_removed_row_is_a_skip_not_a_failure(self, table, monkeypatch):
+        """No retry, no raise, no DLQ: retrying cannot bring a deleted row back."""
+        self._delete_doc(table)
+        sleeps = []
+        monkeypatch.setattr(ic.time, "sleep", sleeps.append)
+
+        assert ic.set_document_terminal(ASSISTANT_ID, DOCUMENT_ID, ic.STATUS_COMPLETE) is False
+
+        assert self._doc_or_none(table) is None
+        assert sleeps == [], "a rejected existence guard was retried as if transient"
+
+    def test_an_existing_row_is_still_driven_terminal(self, table):
+        assert ic.set_document_terminal(
+            ASSISTANT_ID, DOCUMENT_ID, ic.STATUS_COMPLETE,
+            indexed_at="2026-09-01T00:00:00Z", retrievable_at="2026-09-01T00:00:01Z",
+        ) is True
+        doc = _doc(table)
+        assert doc["status"] == "complete"
+        assert doc["indexedAt"] == "2026-09-01T00:00:00Z"
+
+    def test_a_transient_failure_is_still_retried_then_raised(self, table, monkeypatch):
+        """The guard narrows the retry to what it was for; it must not remove it."""
+        from botocore.exceptions import ClientError
+
+        monkeypatch.setattr(ic.time, "sleep", lambda _s: None)
+        calls = {"n": 0}
+
+        class _Throttled:
+            def update_item(self, **kwargs):
+                calls["n"] += 1
+                raise ClientError(
+                    {"Error": {"Code": "ProvisionedThroughputExceededException"}},
+                    "UpdateItem",
+                )
+
+        monkeypatch.setattr(ic, "_table", lambda: _Throttled())
+
+        with pytest.raises(ic.IngestionRoutingError):
+            ic.set_document_terminal(ASSISTANT_ID, DOCUMENT_ID, ic.STATUS_COMPLETE)
+        assert calls["n"] == ic.MAX_RECORD_UPDATE_ATTEMPTS
+
+    @pytest.mark.parametrize("bedrock", [["NOT_FOUND", "INDEXED"], ["INDEXED"], ["FAILED"]])
+    def test_a_late_event_for_a_deleted_document_recreates_nothing(self, table, bedrock):
+        """Late event after the delete released the reservation and removed the row.
+
+        Previously: ``settle_once`` recreated the row and claimed, the reconcile
+        reserved and committed the real size against the deleted document, and the
+        terminal write stamped the ghost ``complete``.
+        """
+        self._seed_managed(table)
+        self._delete_doc(table)
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(statuses=bedrock),
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["routed"] == "managed"
+        assert self._doc_or_none(table) is None
+        kb = self._kb(table)
+        assert int(kb.get("storedBytes") or 0) == 0, "bytes were committed for a deleted document"
+        assert int(kb.get("totalBytes") or 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# A deleted document is not ingested, and a deleting one is not revived
+# ---------------------------------------------------------------------------
+class TestADeletedDocumentIsNotIngested:
+    """The event can outlive the document. Two ways to act on a deleted one:
+
+    * **Ingesting it.** Cleanup removes the managed copy; an ingest that lands
+      after that puts the content back with no row pointing at it — billed per
+      GB-month and taking a ``top_k`` slot before the status filter drops it.
+    * **Reviving it.** A soft-deleted row stays ``deleting`` until cleanup
+      finishes (or for its whole TTL if cleanup fails). The retrieval filter joins
+      on that row, so ``complete`` over it serves a document its owner deleted.
+    """
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def _key(self):
+        return {"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"}
+
+    def _soft_delete(self, table):
+        """What ``document_service.soft_delete_document`` writes."""
+        table.update_item(
+            Key=self._key(),
+            UpdateExpression="SET #s = :d, #ttl = :ttl",
+            ExpressionAttributeNames={"#s": "status", "#ttl": "ttl"},
+            ExpressionAttributeValues={":d": DELETING, ":ttl": 1893456000},
+        )
+
+    def _doc_or_none(self, table):
+        return table.get_item(Key=self._key()).get("Item")
+
+    def _kb(self, table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        ).get("Item") or {}
+
+    def test_an_event_for_a_removed_document_never_reaches_bedrock(self, table):
+        self._seed_managed(table)
+        table.delete_item(Key=self._key())
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [], "a deleted document was ingested into the knowledge base"
+        assert fake.status_calls == 0
+        assert result["ingested"] is False
+        assert result["note"] == "document-deleted"
+        assert self._doc_or_none(table) is None
+
+    def test_an_event_for_a_deleting_document_never_reaches_bedrock(self, table):
+        self._seed_managed(table)
+        self._soft_delete(table)
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [], "a deleting document was ingested into the knowledge base"
+        assert fake.status_calls == 0
+        assert result["note"] == "document-deleted"
+        doc = self._doc_or_none(table)
+        assert doc["status"] == DELETING
+        assert "byteCapSettled" not in doc
+        kb = self._kb(table)
+        assert int(kb.get("storedBytes") or 0) == 0
+        assert int(kb.get("totalBytes") or 0) == 0
+
+    @pytest.mark.parametrize("status", ["complete", "failed", "uploading"])
+    def test_a_status_write_does_not_revive_a_deleting_row(self, table, monkeypatch, status):
+        """``uploading`` is the provisioner's write; the other two are terminal."""
+        self._soft_delete(table)
+        sleeps = []
+        monkeypatch.setattr(ic.time, "sleep", sleeps.append)
+
+        assert ic.set_document_terminal(ASSISTANT_ID, DOCUMENT_ID, status, error="x") is False
+
+        doc = self._doc_or_none(table)
+        assert doc["status"] == DELETING
+        assert int(doc["ttl"]) == 1893456000
+        assert "ingestionError" not in doc
+        assert sleeps == [], "a rejected guard was retried as if transient"
+
+    def test_a_delete_during_indexing_is_not_overwritten_by_complete(self, table):
+        """The document is soft-deleted while this invocation waits on Bedrock. The
+        start-of-invocation check passed, so the terminal write is the last line."""
+        self._seed_managed(table)
+        soft_delete = self._soft_delete
+
+        class _DeletedWhileIndexing(_FakeBackend):
+            async def ingest(self, kb_ref, source):
+                await super().ingest(kb_ref, source)
+                soft_delete(table)
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_DeletedWhileIndexing(),
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert self._doc_or_none(table)["status"] == DELETING
+
+    def test_the_row_is_read_strongly_consistent(self, table, monkeypatch):
+        """A missing row now means "do not ingest". Every producer writes the row
+        before the object, but an eventually consistent read could still miss one
+        written a moment ago and drop a real upload."""
+        reads = []
+
+        class _Spy:
+            def get_item(self, **kwargs):
+                reads.append(kwargs)
+                return table.get_item(**kwargs)
+
+        monkeypatch.setattr(ic, "_table", lambda: _Spy())
+
+        assert ic._get_doc_row(ASSISTANT_ID, DOCUMENT_ID)["status"] == "uploading"
+        assert reads[0].get("ConsistentRead") is True
+
+
+# ---------------------------------------------------------------------------
+# An upload whose PUT never reached S3
+# ---------------------------------------------------------------------------
+class TestAnUploadThatNeverLanded:
+    """The prod dead-letter of 2026-10-19.
+
+    A born-managed first upload writes its ``DOC#`` row before the browser
+    ``PUT``s, and the provisioning job hands every waiting row to this consumer
+    once the knowledge base is ready. One row's ``PUT`` never happened. The
+    consumer submitted an S3 URI with nothing behind it, Bedrock accepted the
+    call, the status probe read ``NOT_FOUND``, and three attempts later the event
+    dead-lettered with the row stuck at ``uploading``. Nothing was lost, but the
+    alarm stayed red until someone drained the queue by hand.
+    """
+
+    DECLARED = 2048
+
+    def _seed(self, table, created_at):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+        item = {
+            "PK": f"AST#{ASSISTANT_ID}",
+            "SK": f"DOC#{DOCUMENT_ID}",
+            "status": "uploading",
+            "sizeBytes": self.DECLARED,
+        }
+        if created_at:
+            item["createdAt"] = created_at
+        table.put_item(Item=item)
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"},
+            UpdateExpression="SET reservedBytes = :d, storedBytes = :z, totalBytes = :d",
+            ExpressionAttributeValues={":d": self.DECLARED, ":z": 0},
+        )
+        boto3.client("s3", region_name=REGION).delete_object(Bucket=BUCKET, Key=KEY)
+
+    @staticmethod
+    def _ago(seconds):
+        from datetime import timedelta
+
+        return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+    @staticmethod
+    def _kb(table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        )["Item"]
+
+    def _handoff(self, fake):
+        """The provisioning job's event, through the real entry point."""
+        event = {
+            "source": "kb-migration.born-managed",
+            "detail-type": "Object Created",
+            **_eventbridge_event(),
+        }
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            return ic.lambda_handler(event, None)["results"][0]
+
+    def test_an_expired_upload_fails_the_row_without_raising(self, table):
+        self._seed(table, created_at=self._ago(ic.UPLOAD_URL_TTL_SECONDS + 60))
+        fake = _FakeBackend(statuses=["NOT_FOUND"])
+
+        result = self._handoff(fake)
+
+        assert result["note"] == "upload-missing"
+        assert result["status"] == "failed"
+        assert fake.ingested == [], "a URI with no object behind it was submitted"
+        item = _doc(table)
+        assert item["status"] == "failed"
+        assert item["ingestionError"] == ic.UPLOAD_MISSING_MESSAGE
+        assert "upload the file again" in item["ingestionError"].lower()
+
+    def test_an_expired_upload_returns_its_reservation(self, table):
+        self._seed(table, created_at=self._ago(ic.UPLOAD_URL_TTL_SECONDS + 60))
+
+        self._handoff(_FakeBackend(statuses=["NOT_FOUND"]))
+
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 0
+        assert _doc(table).get("byteCapSettled") is True
+
+    def test_a_row_with_no_creation_time_is_treated_as_expired(self, table):
+        self._seed(table, created_at=None)
+
+        result = self._handoff(_FakeBackend(statuses=["NOT_FOUND"]))
+
+        assert result["note"] == "upload-missing"
+        assert _doc(table)["status"] == "failed"
+
+    def test_an_upload_still_within_its_url_window_is_left_for_its_own_event(self, table):
+        """The PUT may still be in flight. Failing the row would settle its bytes,
+        and the object's ObjectCreated event would then be skipped as already
+        settled, losing an upload that worked."""
+        self._seed(table, created_at=self._ago(90))
+        fake = _FakeBackend(statuses=["NOT_FOUND"])
+
+        result = self._handoff(fake)
+
+        assert result["note"] == "awaiting-upload"
+        assert fake.ingested == []
+        item = _doc(table)
+        assert item["status"] == "uploading"
+        assert "byteCapSettled" not in item
+        assert int(self._kb(table)["reservedBytes"]) == self.DECLARED
+
+    def test_the_late_put_then_completes_normally(self, table):
+        self._seed(table, created_at=self._ago(90))
+        self._handoff(_FakeBackend(statuses=["NOT_FOUND"]))
+
+        boto3.client("s3", region_name=REGION).put_object(
+            Bucket=BUCKET, Key=KEY, Body=b"x" * self.DECLARED
+        )
+        fake = _FakeBackend()
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] == "complete"
+        assert int(self._kb(table)["storedBytes"]) == self.DECLARED
+
+    def test_an_inconclusive_probe_ingests_as_before(self, table, monkeypatch):
+        """A HEAD that could not answer (throttled, refused) is not evidence the
+        upload is missing."""
+        self._seed(table, created_at=self._ago(ic.UPLOAD_URL_TTL_SECONDS + 60))
+        boto3.client("s3", region_name=REGION).put_object(
+            Bucket=BUCKET, Key=KEY, Body=b"x" * self.DECLARED
+        )
+        monkeypatch.setattr(ic, "_source_object_exists", lambda bucket, key: None)
+        fake = _FakeBackend()
+
+        self._handoff(fake)
+
+        assert fake.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] == "complete"
+
+    def test_the_existence_probe_reads_a_404_as_missing(self, table):
+        boto3.client("s3", region_name=REGION).delete_object(Bucket=BUCKET, Key=KEY)
+        assert ic._source_object_exists(BUCKET, KEY) is False
+
+    def test_the_existence_probe_reads_a_present_object(self, table):
+        assert ic._source_object_exists(BUCKET, KEY) is True
+
+    def test_the_existence_probe_is_inconclusive_on_other_errors(self, table):
+        assert ic._source_object_exists("no-such-bucket-here", KEY) is None
+
+    def test_the_upload_url_ttl_is_the_one_the_route_signs(self):
+        """The window is only right if it is the URL's real lifetime."""
+        from apis.app_api.documents import routes
+
+        assert routes.UPLOAD_URL_TTL_SECONDS is ic.UPLOAD_URL_TTL_SECONDS
+
+
+class TestARefusedIngestIsTerminal:
+    """A document Bedrock refuses in the ingest response itself is failed with
+    Bedrock's reason, not re-submitted until it dead-letters."""
+
+    def test_a_refusal_fails_the_row_with_the_reason_and_does_not_raise(self, table):
+        from apis.shared.kb_backend.managed_backend import ManagedKbDocumentRejected
+
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"},
+            UpdateExpression="SET sizeBytes = :d",
+            ExpressionAttributeValues={":d": 1024},
+        )
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"},
+            UpdateExpression="SET reservedBytes = :d, storedBytes = :z, totalBytes = :d",
+            ExpressionAttributeValues={":d": 1024, ":z": 0},
+        )
+
+        class _Refusing(_FakeBackend):
+            async def ingest(self, kb_ref, source):
+                raise ManagedKbDocumentRejected(
+                    {source.document_id: ("FAILED", "Unsupported file format")}
+                )
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_Refusing(statuses=["NOT_FOUND"]),
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["note"] == "ingest-rejected"
+        item = _doc(table)
+        assert item["status"] == "failed"
+        assert "Unsupported file format" in item["ingestionError"]
+        kb = table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        )["Item"]
+        assert int(kb["reservedBytes"]) == 0
+
+
+class TestNotFoundGraceAfterSubmit:
+    """A probe issued right behind the consumer's own submit can miss the
+    document. That read used to end the wait at once and spend a redelivery."""
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def test_a_document_that_appears_within_the_grace_completes(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["NOT_FOUND", "NOT_FOUND", "NOT_FOUND", "INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] == "complete"
+
+    def test_the_grace_is_bounded(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["NOT_FOUND"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError, match="NOT_FOUND"):
+                ic.handle_object(BUCKET, KEY)
+
+        # The pre-submit probe, the wait's first probe, then the grace.
+        assert fake.status_calls == 2 + ic.NOT_FOUND_GRACE_POLLS
+
+    def test_no_grace_unless_asked(self):
+        fake = _FakeBackend(statuses=["NOT_FOUND"])
+
+        status, _ = ic.wait_until_indexed(fake, ASSISTANT_ID, DOCUMENT_ID, sleep=lambda _s: None)
+
+        assert status == "NOT_FOUND"
+        assert fake.status_calls == 1

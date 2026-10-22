@@ -3,6 +3,12 @@ File Resolver Service
 
 Resolves file upload IDs to FileContent objects with base64-encoded bytes.
 Used by chat endpoints to fetch files from S3 before passing to agent.
+
+Metadata first: the row is read before the object, and a reference-class row
+(``is_reference_document``) comes back as its metadata alone, with no
+``get_object``. A 50 MB GET plus its base64 on the turn path would cost seconds
+before the first token, for bytes the turn never sends
+(``docs/specs/large-document-attachments.md`` §4B.1).
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from .repository import get_file_upload_repository
-from .models import FileStatus
+from .models import FileMetadata, FileStatus, is_reference_document
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +35,10 @@ class ResolvedFileContent:
     """
     filename: str
     content_type: str
-    bytes: str  # base64-encoded
+    bytes: str  # base64-encoded; empty for a reference
+    # The row of a reference-class upload, which is resolved without its bytes.
+    # ``None`` for every file whose bytes were fetched.
+    reference: Optional[FileMetadata] = None
 
 
 class FileResolverError(Exception):
@@ -53,7 +62,7 @@ class FileResolver:
         self,
         user_id: str,
         upload_ids: List[str],
-        max_files: int = 5
+        max_files: Optional[int] = 5
     ) -> List[ResolvedFileContent]:
         """
         Resolve upload IDs to file content objects.
@@ -61,7 +70,11 @@ class FileResolver:
         Args:
             user_id: Owner user ID (for authorization)
             upload_ids: List of upload IDs to resolve
-            max_files: Maximum files to process (Bedrock limit is 5)
+            max_files: Backstop on how many IDs are fetched. ``None`` fetches
+                every ID given. The chat route applies the per-message cap
+                *before* calling this so it can tell the user which files
+                were left out; this cap only exists so no caller can fan out
+                an unbounded number of S3 reads by accident.
 
         Returns:
             List of ResolvedFileContent objects with base64-encoded bytes
@@ -71,7 +84,15 @@ class FileResolver:
         """
         resolved_files = []
 
-        for upload_id in upload_ids[:max_files]:
+        if max_files is not None and len(upload_ids) > max_files:
+            logger.warning(
+                "resolve_files truncating %d upload ID(s) to %d",
+                len(upload_ids),
+                max_files,
+            )
+            upload_ids = upload_ids[:max_files]
+
+        for upload_id in upload_ids:
             try:
                 file_content = await self._resolve_single_file(user_id, upload_id)
                 if file_content:
@@ -100,6 +121,14 @@ class FileResolver:
         if file_meta.status != FileStatus.READY:
             logger.warning(f"File {upload_id} not ready: {file_meta.status}")
             return None
+
+        if is_reference_document(file_meta):
+            return ResolvedFileContent(
+                filename=file_meta.filename,
+                content_type=file_meta.mime_type,
+                bytes="",
+                reference=file_meta,
+            )
 
         # Fetch content from S3
         try:

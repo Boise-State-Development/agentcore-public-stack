@@ -8,6 +8,7 @@ import { ConnectorsService } from '../../connectors/services/connectors.service'
 import {
   detectAwsServiceFromUrl,
   extractAwsRegionFromUrl,
+  isReservedHeaderName,
 } from '../models/admin-tool.model';
 
 /**
@@ -73,7 +74,9 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
     expect(cfg.credentialType).toBe('none');
     expect(cfg.credentialProviderArn).toBeNull();
     expect(cfg.awsService).toBeNull();
-    expect(cfg.tools).toEqual([{ name: 'get_forecast', needsApproval: true, description: null }]);
+    expect(cfg.tools).toEqual([
+      { name: 'get_forecast', needsApproval: true, alwaysOn: false, description: null },
+    ]);
   });
 
   it('builds an IAM gateway config with aws service', async () => {
@@ -352,6 +355,57 @@ describe('ToolFormPage — external MCP OAuth discovery (protocol=mcp_external)'
     );
   });
 
+  it('removes the clicked (middle) MCP tool row, not the last one, in the rendered list', async () => {
+    makeComponent();
+    const fixture = TestBed.createComponent(ToolFormPage);
+    const cmp = fixture.componentInstance;
+    await cmp.ngOnInit();
+    cmp.form.patchValue({
+      toolId: 'x_mcp',
+      displayName: 'X',
+      description: 'A public MCP server',
+      protocol: 'mcp_external',
+      mcpServerUrl: 'https://mcp.example.com/mcp',
+      mcpAuthType: 'none',
+    });
+
+    // Populate rows the same way discovery does (merged into the FormArray).
+    adminToolService.discoverMCPTools.mockResolvedValueOnce({
+      tools: [{ name: 'alpha_tool' }, { name: 'beta_tool' }, { name: 'gamma_tool' }],
+    });
+    await cmp.discoverMcpTools();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el: HTMLElement = fixture.nativeElement;
+    const renderedNames = (): string[] =>
+      Array.from(el.querySelectorAll<HTMLInputElement>('input[aria-label^="Tool name "]')).map(
+        (i) => i.value,
+      );
+    expect(renderedNames()).toEqual(['alpha_tool', 'beta_tool', 'gamma_tool']);
+
+    const removeMiddle = el.querySelector<HTMLButtonElement>('button[aria-label="Remove tool 2"]');
+    expect(removeMiddle).not.toBeNull();
+    removeMiddle!.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(cmp.mcpToolsArray.controls.map((c) => c.get('name')?.value)).toEqual([
+      'alpha_tool',
+      'gamma_tool',
+    ]);
+    expect(renderedNames()).toEqual(['alpha_tool', 'gamma_tool']);
+
+    // Rendered inputs must stay bound to the surviving controls: editing the
+    // second input updates gamma's FormGroup, not a detached/stale one.
+    const inputs = el.querySelectorAll<HTMLInputElement>('input[aria-label^="Tool name "]');
+    inputs[1].value = 'gamma_edited';
+    inputs[1].dispatchEvent(new Event('input'));
+    expect(cmp.mcpToolsArray.at(1).get('name')?.value).toBe('gamma_edited');
+  });
+
   it('sends a null provider when none is selected', async () => {
     const cmp = makeComponent();
     await cmp.ngOnInit();
@@ -369,6 +423,175 @@ describe('ToolFormPage — external MCP OAuth discovery (protocol=mcp_external)'
     expect(adminToolService.discoverMCPTools).toHaveBeenCalledWith(
       expect.objectContaining({ requiresOauthProvider: null }),
     );
+  });
+});
+
+describe('ToolFormPage — external MCP custom headers (protocol=mcp_external)', () => {
+  let adminToolService: {
+    createTool: ReturnType<typeof vi.fn>;
+    updateTool: ReturnType<typeof vi.fn>;
+    fetchTool: ReturnType<typeof vi.fn>;
+    discoverMCPTools: ReturnType<typeof vi.fn>;
+  };
+
+  function makeComponent(): ToolFormPage {
+    adminToolService = {
+      createTool: vi.fn().mockResolvedValue({}),
+      updateTool: vi.fn().mockResolvedValue({}),
+      fetchTool: vi.fn(),
+      discoverMCPTools: vi.fn().mockResolvedValue({ tools: [] }),
+    };
+
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      imports: [ToolFormPage],
+      providers: [
+        provideRouter([]),
+        { provide: AdminToolService, useValue: adminToolService },
+        { provide: ConnectorsService, useValue: { getEnabledConnectors: () => [] } },
+      ],
+    });
+    const cmp = TestBed.createComponent(ToolFormPage).componentInstance;
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    return cmp;
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  function fillGithubForm(cmp: ToolFormPage): void {
+    cmp.form.patchValue({
+      toolId: 'github_issues',
+      displayName: 'GitHub Issues',
+      description: 'GitHub remote MCP server',
+      protocol: 'mcp_external',
+      mcpServerUrl: 'https://api.githubcopilot.com/mcp/',
+      mcpAuthType: 'none',
+    });
+  }
+
+  it('sends the header rows as customHeaders on save, trimmed', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillGithubForm(cmp);
+    cmp.addMcpHeader();
+    cmp.mcpHeadersArray.at(0).patchValue({ name: 'X-MCP-Toolsets', value: ' issues,context ' });
+
+    await cmp.onSubmit();
+
+    const cfg = adminToolService.createTool.mock.calls[0][0].mcpConfig;
+    expect(cfg.customHeaders).toEqual({ 'X-MCP-Toolsets': 'issues,context' });
+  });
+
+  it('sends an empty map when every row is removed, so an update clears them', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillGithubForm(cmp);
+
+    await cmp.onSubmit();
+
+    expect(adminToolService.createTool.mock.calls[0][0].mcpConfig.customHeaders).toEqual({});
+  });
+
+  it('discovers with the same headers the agent will send', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillGithubForm(cmp);
+    cmp.addMcpHeader();
+    cmp.mcpHeadersArray.at(0).patchValue({ name: 'X-MCP-Toolsets', value: 'issues,context' });
+
+    await cmp.discoverMcpTools();
+
+    expect(adminToolService.discoverMCPTools).toHaveBeenCalledWith(
+      expect.objectContaining({ customHeaders: { 'X-MCP-Toolsets': 'issues,context' } }),
+    );
+  });
+
+  it('loads saved headers into rows when editing', async () => {
+    const cmp = makeComponent();
+    adminToolService.fetchTool.mockResolvedValue({
+      toolId: 'github_issues',
+      displayName: 'GitHub Issues',
+      description: 'GitHub remote MCP server',
+      category: 'utility',
+      protocol: 'mcp_external',
+      status: 'active',
+      isPublic: false,
+      enabledByDefault: false,
+      mcpConfig: {
+        serverUrl: 'https://api.githubcopilot.com/mcp/',
+        transport: 'streamable-http',
+        authType: 'none',
+        customHeaders: { 'X-MCP-Toolsets': 'issues,context' },
+        tools: [],
+        healthCheckEnabled: false,
+        healthCheckIntervalSeconds: 300,
+      },
+    });
+
+    await cmp.loadTool('github_issues');
+
+    expect(cmp.mcpHeadersArray.getRawValue()).toEqual([
+      { name: 'X-MCP-Toolsets', value: 'issues,context' },
+    ]);
+  });
+
+  it('marks a reserved or malformed header name invalid, blocking save', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillGithubForm(cmp);
+    cmp.addMcpHeader();
+    const row = cmp.mcpHeadersArray.at(0);
+
+    row.patchValue({ name: 'Authorization', value: 'Bearer x' });
+    expect(row.get('name')?.hasError('reservedHeader')).toBe(true);
+    expect(cmp.reservedHeaderName('Authorization')).toBe('Authorization');
+
+    row.patchValue({ name: 'X Bad', value: 'v' });
+    expect(row.get('name')?.hasError('pattern')).toBe(true);
+
+    await cmp.onSubmit();
+    expect(adminToolService.createTool).not.toHaveBeenCalled();
+  });
+
+  it('renders a row per header and warns on a reserved name', async () => {
+    makeComponent();
+    const fixture = TestBed.createComponent(ToolFormPage);
+    const cmp = fixture.componentInstance;
+    await cmp.ngOnInit();
+    fillGithubForm(cmp);
+    cmp.addMcpHeader();
+    cmp.addMcpHeader();
+    cmp.mcpHeadersArray.at(0).patchValue({ name: 'X-MCP-Toolsets', value: 'issues,context' });
+    cmp.mcpHeadersArray.at(1).patchValue({ name: 'Cookie', value: 'a=b' });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el: HTMLElement = fixture.nativeElement;
+    const names = Array.from(
+      el.querySelectorAll<HTMLInputElement>('input[aria-label^="Header name "]'),
+    ).map((i) => i.value);
+    expect(names).toEqual(['X-MCP-Toolsets', 'Cookie']);
+    expect(el.textContent).toContain("Cookie is set by the connection's transport");
+
+    el.querySelector<HTMLButtonElement>('button[aria-label="Remove header 2"]')!.click();
+    fixture.detectChanges();
+    expect(cmp.mcpHeadersArray.length).toBe(1);
+  });
+
+  it('caps the editor at the backend limit', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    expect(cmp.maxCustomHeaders).toBe(10);
+  });
+});
+
+describe('isReservedHeaderName', () => {
+  it('matches transport/auth-owned names case-insensitively, and the SigV4 prefix', () => {
+    expect(isReservedHeaderName('authorization')).toBe(true);
+    expect(isReservedHeaderName('Mcp-Session-Id')).toBe(true);
+    expect(isReservedHeaderName('X-Amz-Security-Token')).toBe(true);
+    expect(isReservedHeaderName('X-MCP-Toolsets')).toBe(false);
   });
 });
 

@@ -10,6 +10,42 @@ import { AgentService } from '../services/agent.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ThemeService } from '../../components/topnav/components/theme-toggle/theme.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { ToolService } from '../../services/tool/tool.service';
+import { AGENT_TEMPLATE_DRAFT_KEY, TemplateDraft } from './agent-templates';
+
+/**
+ * A representative "finished" template draft, inlined here now that the hardcoded catalog
+ * has moved to the backend. This suite tests the FORM's prefill/reconcile behavior, not
+ * catalog content, so a local fixture is the right dependency — it exercises the same
+ * population path (name/emoji/description/instructions/starters/model/tool binding) the
+ * real templates flow through, without coupling the form test to any org's template data.
+ */
+const COURSE_HELPER_DRAFT: TemplateDraft = {
+  templateId: 'course-helper',
+  name: 'Course Helper',
+  description: 'A study assistant for a single course, grounded in your materials.',
+  emoji: '🎓',
+  instructions:
+    'You are a Course Helper.\n\n## Academic integrity\nDo not do graded work for the student; teach the concept instead.',
+  tags: [],
+  starters: ['What topics does this course cover?', 'When is the next assignment due?'],
+  modelConfig: { modelId: 'us.anthropic.claude-sonnet-5', params: {} },
+  bindings: [{ kind: 'tool', ref: 'gateway_search_boise_state', config: {} }],
+};
+
+/**
+ * A stand-in for the root {@link ToolService}. The real one loads `/tools/` from its
+ * constructor via HttpClient (not provided in this suite), and the create-mode form now
+ * injects it to reconcile a template's tool refs. `tools()` returns the catalog under
+ * test; `initialized()` short-circuits the form's lazy `loadTools()`.
+ */
+function makeToolService(catalog: { toolId: string; status: string }[] = []) {
+  return {
+    initialized: () => true,
+    tools: () => catalog,
+    loadTools: vi.fn().mockResolvedValue(undefined),
+  };
+}
 
 /**
  * Stand-ins for the two heavy children — this suite only exercises the form shell.
@@ -77,6 +113,7 @@ describe('AgentFormPage — invalid submit feedback', () => {
         // `provideRouter([])` makes that navigation reject with NG04002 as an
         // unhandled rejection after the test body, failing the whole run.
         provideRouter([{ path: 'agents', children: [] }]),
+        { provide: ToolService, useValue: makeToolService() },
         { provide: AgentService, useValue: mockAgentService },
         { provide: ToastService, useValue: mockToast },
         { provide: SidenavService, useValue: mockSidenav },
@@ -188,6 +225,7 @@ describe('AgentFormPage — loading state', () => {
       imports: [ReactiveFormsModule],
       providers: [
         provideRouter([{ path: 'agents', children: [] }]),
+        { provide: ToolService, useValue: makeToolService() },
         {
           provide: AgentService,
           useValue: {
@@ -285,7 +323,6 @@ describe('AgentFormPage — saved enum param on reopen', () => {
       name: 'Research Assistant',
       description: 'A short summary of the agent',
       instructions: 'You are a helpful assistant that answers questions.',
-      visibility: 'PRIVATE',
       userPermission: 'owner',
       modelConfig: {
         modelId: 'openai.gpt-5.4',
@@ -306,6 +343,7 @@ describe('AgentFormPage — saved enum param on reopen', () => {
       imports: [ReactiveFormsModule],
       providers: [
         provideRouter([{ path: 'agents', children: [] }]),
+        { provide: ToolService, useValue: makeToolService() },
         { provide: AgentService, useValue: mockAgentService },
         {
           provide: ToastService,
@@ -376,5 +414,295 @@ describe('AgentFormPage — saved enum param on reopen', () => {
 
     expect(component.paramValue('reasoning_effort')).toBe('');
     expect(effortSelect().value).toBe('');
+  });
+});
+
+/**
+ * Agent Template Prefill — Phase 2. In create mode the form reads a template draft from
+ * `localStorage[AGENT_TEMPLATE_DRAFT_KEY]`, reconciles its tool refs against the live tool
+ * catalog, populates every field through the same `applyAgentToForm` path edit mode uses,
+ * clears the key (one-shot), leaves the form dirty, and surfaces flagged/dropped notices.
+ */
+describe('AgentFormPage — template prefill (create mode)', () => {
+  let fixture: ComponentFixture<AgentFormPage>;
+  let component: AgentFormPage;
+
+  const mockToast = { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() };
+
+  /** Configure the module for create mode with the given tool catalog, then build+settle. */
+  async function bootstrap(
+    catalog: { toolId: string; status: string }[],
+  ): Promise<void> {
+    TestBed.resetTestingModule();
+    vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
+
+    TestBed.configureTestingModule({
+      imports: [ReactiveFormsModule],
+      providers: [
+        provideRouter([{ path: 'agents', children: [] }]),
+        { provide: ToolService, useValue: makeToolService(catalog) },
+        {
+          provide: AgentService,
+          useValue: {
+            loadBindable: vi.fn().mockResolvedValue([]),
+            createAgent: vi.fn().mockResolvedValue({ agentId: 'agt-1' }),
+            updateAgent: vi.fn().mockResolvedValue({ agentId: 'agt-1' }),
+            getAgent: vi.fn().mockResolvedValue(undefined),
+          },
+        },
+        { provide: ToastService, useValue: mockToast },
+        { provide: SidenavService, useValue: { hide: vi.fn(), show: vi.fn() } },
+        { provide: ThemeService, useValue: { isDark: () => false } },
+        // Create mode: no :id on the route.
+        { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: () => null } } } },
+      ],
+    });
+
+    TestBed.overrideComponent(AgentFormPage, {
+      remove: { imports: [AgentPreviewComponent, KnowledgeBaseSectionComponent] },
+      add: { imports: [StubPreviewComponent, StubKnowledgeBaseComponent] },
+    });
+
+    fixture = TestBed.createComponent(AgentFormPage);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+    await settle(fixture);
+    // The prefill runs after the palettes promise resolves; give that chain a beat.
+    await settle(fixture);
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('populates every field from a valid draft and clears the key (one-shot)', async () => {
+    const draft = COURSE_HELPER_DRAFT;
+    localStorage.setItem(AGENT_TEMPLATE_DRAFT_KEY, JSON.stringify(draft));
+
+    await bootstrap([{ toolId: 'gateway_search_boise_state', status: 'active' }]);
+
+    expect(component.form.get('name')?.value).toBe('Course Helper');
+    expect(component.form.get('description')?.value).toBe(draft.description);
+    expect(component.form.get('instructions')?.value).toContain('Academic integrity');
+    expect(component.form.get('visibility')?.value).toBe('PRIVATE');
+    expect(component.form.get('emoji')?.value).toBe('🎓');
+    expect(component.starters.length).toBe(draft.starters.length);
+    // The template's chosen model is selected (P1's applyAgentToForm sets selectedModelId).
+    expect(draft.modelConfig.modelId).toBeTruthy();
+    expect(component.selectedModelId()).toBe(draft.modelConfig.modelId);
+    // The single active tool binding is applied.
+    expect(component.selectedToolRefs().has('gateway_search_boise_state')).toBe(true);
+    // One-shot: the key is consumed.
+    expect(localStorage.getItem(AGENT_TEMPLATE_DRAFT_KEY)).toBeNull();
+    // Prefilled-but-unsaved reads as a dirty draft.
+    expect(component.isDirty()).toBe(true);
+    // A clean, fully-active draft raises no notice.
+    expect(component.hasTemplateNotice()).toBe(false);
+  });
+
+  it('applies a deprecated ref but flags it, and drops an unknown ref with a notice', async () => {
+    const draft: TemplateDraft = {
+      templateId: 'test-mixed',
+      name: 'Mixed Tools',
+      description: 'A template exercising reconcile outcomes.',
+      emoji: '🧪',
+      instructions: 'You are a test agent used to verify tool-ref reconciliation behavior.',
+      tags: [],
+      starters: [],
+      modelConfig: { modelId: null, params: {} },
+      bindings: [
+        { kind: 'tool', ref: 'gateway_search_boise_state', config: {} },
+        { kind: 'tool', ref: 'legacy_tool', config: {} },
+        { kind: 'tool', ref: 'ghost_tool', config: {} },
+      ],
+    };
+    localStorage.setItem(AGENT_TEMPLATE_DRAFT_KEY, JSON.stringify(draft));
+
+    await bootstrap([
+      { toolId: 'gateway_search_boise_state', status: 'active' },
+      { toolId: 'legacy_tool', status: 'deprecated' },
+    ]);
+
+    const refs = component.selectedToolRefs();
+    // Active + deprecated are applied; unknown is not.
+    expect(refs.has('gateway_search_boise_state')).toBe(true);
+    expect(refs.has('legacy_tool')).toBe(true);
+    expect(refs.has('ghost_tool')).toBe(false);
+    // Both notices surface.
+    expect(component.hasTemplateNotice()).toBe(true);
+    expect(component.templateFlaggedNotice()).toContain('legacy_tool');
+    expect(component.templateFlaggedNotice()).toContain('deprecated');
+    expect(component.templateDroppedNotice()).toContain('ghost_tool');
+    // Dismiss clears both.
+    component.dismissTemplateNotice();
+    expect(component.hasTemplateNotice()).toBe(false);
+  });
+
+  it('behaves as a blank create when no draft is present', async () => {
+    await bootstrap([{ toolId: 'gateway_search_boise_state', status: 'active' }]);
+
+    expect(component.form.get('name')?.value).toBe('');
+    expect(component.selectedToolRefs().size).toBe(0);
+    expect(component.hasTemplateNotice()).toBe(false);
+    // Nothing prefilled ⇒ the form is untouched/pristine.
+    expect(component.isDirty()).toBe(false);
+  });
+
+  it('clears the key and starts blank when the stored draft is malformed JSON', async () => {
+    localStorage.setItem(AGENT_TEMPLATE_DRAFT_KEY, '{ not valid json');
+
+    await bootstrap([]);
+
+    expect(component.form.get('name')?.value).toBe('');
+    expect(localStorage.getItem(AGENT_TEMPLATE_DRAFT_KEY)).toBeNull();
+    expect(mockToast.error).toHaveBeenCalled();
+  });
+});
+
+/**
+ * A share editor opening an agent whose owner bound a model, tool or skill the editor
+ * doesn't have. The palettes list only the editor's own capabilities, so those
+ * bindings are unlisted — but they must survive the save (the backend keeps bindings
+ * already on the record), the stored model provider must be kept, and the form says why
+ * they aren't shown.
+ */
+describe('AgentFormPage — share editor without the owner\u2019s bindings', () => {
+  let fixture: ComponentFixture<AgentFormPage>;
+  let component: AgentFormPage;
+
+  const EDITOR_MODEL = { kind: 'model', ref: 'm-editor', label: 'Editor model', description: '', meta: { provider: 'bedrock' } };
+  const EDITOR_TOOL = { kind: 'tool', ref: 'editor_tool', label: 'Editor tool', description: '', meta: {} };
+
+  function agentWith(overrides: Record<string, unknown> = {}) {
+    return {
+      agentId: 'agt-1',
+      name: 'Owner Agent',
+      description: 'An agent shared with an editor',
+      instructions: 'You are the owner\u2019s carefully written assistant.',
+      userPermission: 'editor',
+      modelConfig: { modelId: 'openai.gpt-5.4', provider: 'mantle' },
+      bindings: [
+        { kind: 'tool', ref: 'owner_tool', config: {} },
+        { kind: 'tool', ref: 'editor_tool', config: {} },
+        { kind: 'skill', ref: 'owner_skill', config: {} },
+      ],
+      ...overrides,
+    };
+  }
+
+  const mockAgentService = {
+    loadBindable: vi.fn(),
+    getAgent: vi.fn(),
+    updateAgent: vi.fn().mockResolvedValue({ agentId: 'agt-1' }),
+  };
+
+  async function bootstrap(agent: Record<string, unknown>): Promise<void> {
+    TestBed.resetTestingModule();
+    vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
+    mockAgentService.loadBindable.mockImplementation((kind: string) =>
+      Promise.resolve(kind === 'model' ? [EDITOR_MODEL] : kind === 'tool' ? [EDITOR_TOOL] : []),
+    );
+    mockAgentService.getAgent.mockResolvedValue(agent);
+    mockAgentService.updateAgent.mockResolvedValue({ agentId: 'agt-1' });
+
+    TestBed.configureTestingModule({
+      imports: [ReactiveFormsModule],
+      providers: [
+        provideRouter([{ path: 'agents', children: [] }]),
+        { provide: ToolService, useValue: makeToolService() },
+        { provide: AgentService, useValue: mockAgentService },
+        {
+          provide: ToastService,
+          useValue: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
+        },
+        { provide: SidenavService, useValue: { hide: vi.fn(), show: vi.fn() } },
+        { provide: ThemeService, useValue: { isDark: () => false } },
+        { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: () => 'agt-1' } } } },
+      ],
+    });
+    TestBed.overrideComponent(AgentFormPage, {
+      remove: { imports: [AgentPreviewComponent, KnowledgeBaseSectionComponent] },
+      add: { imports: [StubPreviewComponent, StubKnowledgeBaseComponent] },
+    });
+
+    fixture = TestBed.createComponent(AgentFormPage);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+    await fixture.whenStable();
+    await settle(fixture);
+  }
+
+  function noteText(): string {
+    return (fixture.nativeElement.querySelector('[role="status"]')?.textContent ?? '').trim();
+  }
+
+  it('loads as an editor with the instructions filled in', async () => {
+    await bootstrap(agentWith());
+    expect(component.isViewer()).toBe(false);
+    expect(component.form.get('instructions')!.value).toContain('carefully written');
+    expect(fixture.nativeElement.textContent).not.toContain('You have viewer access');
+  });
+
+  it('counts the model, tool and skill the editor cannot see and explains them', async () => {
+    await bootstrap(agentWith());
+    expect(component.unavailableBindingCount()).toBe(3);
+    expect(noteText()).toContain("3 models, tools or skills on this agent aren't available to your account");
+    expect(noteText()).toContain('They stay on the agent when you save');
+  });
+
+  it('uses the singular wording for one unavailable binding', async () => {
+    await bootstrap(
+      agentWith({
+        modelConfig: { modelId: 'm-editor', provider: 'bedrock' },
+        bindings: [{ kind: 'tool', ref: 'owner_tool::one_tool', config: {} }],
+      }),
+    );
+    expect(component.unavailableBindingCount()).toBe(1);
+    expect(noteText()).toContain("1 model, tool or skill on this agent isn't available");
+  });
+
+  it('shows no note when everything is in the palettes', async () => {
+    await bootstrap(
+      agentWith({
+        modelConfig: { modelId: 'm-editor', provider: 'bedrock' },
+        bindings: [{ kind: 'tool', ref: 'editor_tool', config: {} }],
+      }),
+    );
+    expect(component.unavailableBindingCount()).toBe(0);
+    expect(noteText()).toBe('');
+  });
+
+  it('shows no note to a viewer', async () => {
+    await bootstrap(agentWith({ userPermission: 'viewer' }));
+    expect(component.unavailableBindingCount()).toBe(0);
+  });
+
+  it('sends every binding back and keeps the stored provider on save', async () => {
+    await bootstrap(agentWith());
+    await component.onSubmit();
+    expect(mockAgentService.updateAgent).toHaveBeenCalledWith(
+      'agt-1',
+      expect.objectContaining({
+        modelConfig: { modelId: 'openai.gpt-5.4', provider: 'mantle' },
+        bindings: expect.arrayContaining([
+          { kind: 'tool', ref: 'owner_tool' },
+          { kind: 'tool', ref: 'editor_tool' },
+          { kind: 'skill', ref: 'owner_skill' },
+        ]),
+      }),
+    );
+  });
+
+  it('takes the palette provider once the editor picks one of their own models', async () => {
+    await bootstrap(agentWith());
+    component.selectModel('m-editor');
+    await component.onSubmit();
+    expect(mockAgentService.updateAgent).toHaveBeenCalledWith(
+      'agt-1',
+      expect.objectContaining({ modelConfig: { modelId: 'm-editor', provider: 'bedrock' } }),
+    );
   });
 });

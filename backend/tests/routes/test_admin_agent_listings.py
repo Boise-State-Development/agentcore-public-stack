@@ -321,6 +321,66 @@ class TestReview:
         assert resp.json()["state"] == "changes_requested"
         assert resp.json()["reviewNote"] == "Please add a tagline."
 
+    def test_reject_declines_the_submission(self, app, _no_writes):
+        """The third decision. Before it, an admin who judged a submission not a fit had to
+        publish it or say "fix this" — promising a review they did not intend to give."""
+        with _loaded(_make_assistant(listing=_listing("in_review"))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/review",
+                json={"decision": "reject", "note": "Duplicates the Registrar agent."},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "rejected"
+        assert resp.json()["reviewNote"] == "Duplicates the Registrar agent."
+        assert resp.json()["reviewedBy"] == "admin-001"
+
+    def test_reject_requires_a_reason(self, app, _no_writes):
+        """A decline with no reason is the one outcome an author cannot act on at all."""
+        with _loaded(_make_assistant(listing=_listing("in_review"))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/review", json={"decision": "reject"}
+            )
+
+        assert resp.status_code == 400
+        assert "reason" in resp.json()["detail"]
+        _no_writes.assert_not_called()
+
+    def test_reject_publishes_nothing(self, app, _no_writes):
+        """The load-bearing half: declining must not write a version or a store key."""
+        with _loaded(_make_assistant(listing=_listing("in_review"))):
+            TestClient(app).post(
+                "/admin/agents/ast-001/review",
+                json={"decision": "reject", "note": "Not a fit."},
+            )
+
+        listing = _no_writes.call_args.args[1]
+        assert listing.published_version is None
+        _no_writes.set_version_index.assert_not_called()
+
+    def test_reject_refuses_a_live_listing(self, app, _no_writes):
+        """A published Agent comes down via ``takedown``, which is a different act with a
+        different record. ``reject`` answers a *submission*."""
+        with _loaded(_make_assistant(listing=_listing("published", publishedVersion=4))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/review",
+                json={"decision": "reject", "note": "Not a fit."},
+            )
+
+        assert resp.status_code == 400
+        _no_writes.assert_not_called()
+
+    def test_an_unknown_decision_is_refused_rather_than_defaulted(self, app, _no_writes):
+        """Pydantic rejects it at the boundary; the service maps rather than branches so a
+        decision it does not know can never fall through to ``changes_requested``."""
+        with _loaded(_make_assistant(listing=_listing("in_review"))):
+            resp = TestClient(app).post(
+                "/admin/agents/ast-001/review", json={"decision": "delist", "note": "x"}
+            )
+
+        assert resp.status_code == 422
+        _no_writes.assert_not_called()
+
     def test_reviewer_may_recategorize_at_approval(self, app, _no_writes):
         with _loaded(_make_assistant(listing=_listing("in_review"))):
             resp = TestClient(app).post(
@@ -925,6 +985,217 @@ class TestReviewDiff:
     def test_diffing_an_unsubmitted_agent_is_404(self, app):
         with _loaded(_make_assistant(listing=None)):
             resp = TestClient(app).get("/admin/agents/ast-001/diff")
+        assert resp.status_code == 404
+
+
+class TestSubmissionReview:
+    """The reviewer's read of a submission — instructions, capabilities, model.
+
+    The gap: ``instructions`` is gated to owner/editor on ``GET /agents/{id}``, and that
+    read refuses a non-owner outright on a PRIVATE Agent. So the person deciding whether to
+    publish could not read the system prompt, and on a first submission the review diff —
+    their only other window onto it — is empty by construction.
+
+    The rule these tests hold in place is *which version* is read. Approval promotes
+    ``submittedVersion``; anything else shows an admin one configuration and publishes
+    another.
+    """
+
+    def _version(self, **overrides):
+        from apis.shared.assistants.models import AgentVersion
+
+        data = {
+            "agentId": "ast-001",
+            "version": 4,
+            "name": "Policy Lookup",
+            "description": "Find and cite university policy",
+            "instructions": "SNAPSHOT: answer only from the policy manual.",
+            "tagline": "Policy, cited",
+            "starters": ["What is the drop deadline?"],
+            "category": "Administration",
+            "publisherId": "pub-registrar",
+        }
+        data.update(overrides)
+        return AgentVersion.model_validate(data)
+
+    def _versions(self, **by_number):
+        # Patched on ``version_resolution``, not on the listing service: the which-version
+        # rule lives there so the reviewer's *test drive* on inference-api can share it
+        # (that service cannot import from app_api). Patching the old site would stub a
+        # call this path no longer makes.
+        lookup = {int(k.lstrip("v")): v for k, v in by_number.items()}
+        return patch(
+            "apis.shared.assistants.version_resolution.get_version",
+            new_callable=AsyncMock,
+            side_effect=lambda _agent_id, number: lookup.get(number),
+        )
+
+    def _capabilities(self, capabilities=None, model_label="Claude Opus"):
+        from apis.shared.assistants.models import AgentCapability
+
+        return patch(
+            "apis.app_api.agent_designer.services.agent_detail.resolve_capabilities",
+            new_callable=AsyncMock,
+            return_value=(
+                capabilities if capabilities is not None else [AgentCapability(label="Web search", kind="tool")],
+                model_label,
+            ),
+        )
+
+    def _display(self, category_label="Administration"):
+        return patch(
+            "apis.app_api.agent_designer.services.agent_detail.resolve_listing_display",
+            new_callable=AsyncMock,
+            return_value=(None, category_label),
+        )
+
+    def test_a_pending_submission_reads_the_submitted_snapshot(self, app):
+        """Not the live record. The author can edit their draft while the row sits in the
+        queue, and approval promotes ``submittedVersion`` — so reading anything else shows
+        the admin one configuration and publishes another."""
+        assistant = _make_assistant(
+            instructions="DRAFT: the author kept editing after submitting.",
+            listing=_listing("in_review", submittedVersion=4, publishedVersion=2),
+        )
+        with _loaded(assistant), self._versions(
+            v4=self._version(), v2=self._version(version=2, instructions="OLD")
+        ), _publisher(), self._capabilities(), self._display():
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["instructions"] == "SNAPSHOT: answer only from the policy manual."
+        assert body["reviewVersion"] == 4
+        assert body["publishedVersion"] == 2
+        assert body["snapshotUnavailable"] is False
+
+    def test_a_first_submission_still_has_content_to_read(self, app):
+        """The case the review diff cannot serve: nothing is published, so the diff is
+        empty by construction and this read is the only thing the reviewer has."""
+        with _loaded(
+            _make_assistant(listing=_listing("in_review", submittedVersion=4))
+        ), self._versions(v4=self._version()), _publisher(), self._capabilities(), self._display():
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
+
+        body = resp.json()
+        assert body["instructions"]
+        assert body["publishedVersion"] is None
+        assert body["reviewVersion"] == 4
+
+    def test_a_withdrawal_request_reads_what_the_store_is_serving(self, app):
+        """``submittedVersion`` is a high-water mark that survives a decision, so on a
+        withdrawal request it names a stale snapshot the store never served. The question
+        there is whether to pull what is *live*."""
+        with _loaded(
+            _make_assistant(
+                listing=_listing(
+                    "withdrawal_requested", submittedVersion=4, publishedVersion=2
+                )
+            )
+        ), self._versions(
+            v4=self._version(instructions="NEVER APPROVED"),
+            v2=self._version(version=2, instructions="LIVE: the approved answer."),
+        ), _publisher(), self._capabilities(), self._display():
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
+
+        body = resp.json()
+        assert body["instructions"] == "LIVE: the approved answer."
+        assert body["reviewVersion"] == 2
+
+    def test_capabilities_resolve_against_the_snapshot(self, app):
+        """A tool the author bound after submitting must not be attributed to the version
+        under review."""
+        captured = {}
+
+        async def _capture(assistant, _user, **_kw):
+            captured["instructions"] = assistant.instructions
+            return [], None
+
+        with _loaded(
+            _make_assistant(
+                instructions="DRAFT",
+                listing=_listing("in_review", submittedVersion=4),
+            )
+        ), self._versions(v4=self._version()), _publisher(), patch(
+            "apis.app_api.agent_designer.services.agent_detail.resolve_capabilities",
+            side_effect=_capture,
+        ), self._display():
+            TestClient(app).get("/admin/agents/ast-001/submission")
+
+        assert captured["instructions"] == "SNAPSHOT: answer only from the policy manual."
+
+    def test_a_pre_snapshot_submission_is_flagged_not_refused(self, app):
+        """``diff_pending_version`` 400s here because a diff of one thing is meaningless.
+        This read answers anyway and says the content is not frozen — refusing would leave
+        the reviewer exactly where the empty diff left them."""
+        with _loaded(
+            _make_assistant(
+                instructions="LIVE RECORD: still editable by the author.",
+                listing=_listing("in_review", submittedVersion=None),
+            )
+        ), self._versions(), _publisher(), self._capabilities(), self._display():
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert body["snapshotUnavailable"] is True
+        assert body["reviewVersion"] is None
+        assert body["instructions"] == "LIVE RECORD: still editable by the author."
+
+    def test_a_pointer_to_a_missing_snapshot_reads_as_not_frozen(self, app):
+        """Read the version back rather than trusting the number: a pointer to a snapshot
+        that is gone must not render as a version the page cannot show."""
+        with _loaded(
+            _make_assistant(listing=_listing("in_review", submittedVersion=4))
+        ), self._versions(), _publisher(), self._capabilities(), self._display():
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
+
+        assert resp.json()["snapshotUnavailable"] is True
+        assert resp.json()["reviewVersion"] is None
+
+    def test_reachability_comes_from_the_live_record(self, app):
+        """``visibility`` is deliberately absent from ``AgentVersion``, and the question is
+        "can people reach this right now?" — which a frozen artifact cannot answer."""
+        with _loaded(
+            _make_assistant(
+                visibility="PRIVATE", listing=_listing("in_review", submittedVersion=4)
+            )
+        ), self._versions(v4=self._version()), _publisher(), self._capabilities(), self._display():
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
+
+        assert resp.json()["reachability"] == "owner_only"
+
+    def test_a_private_agent_is_still_readable_by_the_reviewer(self, app):
+        """The 403 this endpoint exists to route around: ``get_assistant_with_access_check``
+        refuses a non-owner outright on a PRIVATE Agent, and a PRIVATE Agent absolutely can
+        be sitting in the review queue."""
+        with _loaded(
+            _make_assistant(
+                visibility="PRIVATE", listing=_listing("in_review", submittedVersion=4)
+            )
+        ), self._versions(v4=self._version()), _publisher(), self._capabilities(), self._display():
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
+
+        assert resp.status_code == 200
+        assert resp.json()["instructions"]
+
+    def test_a_catalog_hiccup_does_not_strand_the_queue(self, app):
+        """Capabilities are presentation, exactly as on the user-facing detail read."""
+        with _loaded(
+            _make_assistant(listing=_listing("in_review", submittedVersion=4))
+        ), self._versions(v4=self._version()), _publisher(), patch(
+            "apis.app_api.agent_designer.services.agent_detail.resolve_capabilities",
+            side_effect=RuntimeError("catalog down"),
+        ), self._display():
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
+
+        assert resp.status_code == 200
+        assert resp.json()["capabilities"] == []
+        assert resp.json()["instructions"]
+
+    def test_reading_an_unsubmitted_agent_is_404(self, app):
+        with _loaded(_make_assistant(listing=None)):
+            resp = TestClient(app).get("/admin/agents/ast-001/submission")
         assert resp.status_code == 404
 
 

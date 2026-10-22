@@ -5,6 +5,27 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 
+@pytest.fixture(autouse=True)
+def _no_live_tool_catalog():
+    """Stub the tool catalog the RBAC service consults.
+
+    ``can_access_tool`` falls through to ``tools.freshness._get_snapshot`` ->
+    ``get_tool_catalog_repository().list_tools()``, which builds a real
+    DynamoDB client. These tests mock the *role* repository only, so that call
+    used to leave the box; its ``except`` swallowed the failure and the
+    assertions passed anyway. See the off-box socket guard in conftest.
+    """
+    from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock, patch as _patch
+
+    repo = _MagicMock()
+    repo.list_tools = _AsyncMock(return_value=[])
+    with _patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        yield
+
+
 class TestAppRoleCache:
     @pytest.fixture(autouse=True)
     def _setup(self):

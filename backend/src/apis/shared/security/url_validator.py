@@ -15,6 +15,16 @@ DNS rebinding is mitigated by resolving every result and rejecting the URL if
 *any* resolved address is forbidden. Callers can additionally restrict to a
 set of allowed domains via ``domain_allowlist``.
 
+Validation resolves the host once and the HTTP client resolves it again when
+it connects, so a short-TTL record can still flip between the two lookups.
+Callers that hand the response body to a model should also check the address
+the client actually connected to with :func:`is_forbidden_address` (see
+``agents.local_tools.url_fetcher``).
+
+:func:`is_forbidden_ip_literal` covers callers that cannot resolve the host
+themselves because the request is made from another network, such as the
+AgentCore Browser sandbox.
+
 Raises :class:`UrlValidationError` for any disallowed input. The error message
 is intentionally generic so it's safe to surface to callers without leaking
 internal network topology.
@@ -60,8 +70,12 @@ def _normalize_host(host: str) -> str:
     return h
 
 
-def _is_forbidden_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+def is_forbidden_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return True if the resolved IP must not be contacted."""
+    # ``::ffff:169.254.169.254`` reaches the IPv4 target. Older Python
+    # versions don't apply the IPv4 range checks to mapped addresses.
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return is_forbidden_address(addr.ipv4_mapped)
     if addr.is_loopback or addr.is_link_local or addr.is_private or addr.is_multicast or addr.is_reserved or addr.is_unspecified:
         return True
     # ``is_private`` covers RFC1918 and ULA, but some address ranges (e.g.
@@ -79,6 +93,27 @@ def _is_forbidden_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -
     if str(addr) in _METADATA_ADDRESSES:
         return True
     return False
+
+
+def is_forbidden_ip_literal(host: str) -> bool:
+    """Return True if *host* is an IP literal in a forbidden range.
+
+    Browsers canonicalize the legacy IPv4 spellings that ``ipaddress``
+    rejects (``2852039166``, ``0xa9fea9fe``, ``0251.0376.0251.0376``,
+    ``169.254.43518``) to dotted quads, so these are parsed with
+    ``inet_aton``, which accepts the same forms. Hostnames that are not IP
+    literals return False; this function does no DNS resolution.
+    """
+    h = _normalize_host(host)
+    try:
+        return is_forbidden_address(ipaddress.ip_address(h))
+    except ValueError:
+        pass
+    try:
+        packed = socket.inet_aton(h)
+    except OSError:
+        return False
+    return is_forbidden_address(ipaddress.IPv4Address(packed))
 
 
 def _resolve_all(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
@@ -175,7 +210,7 @@ def validate_external_url(
         literal_addr = None
 
     if literal_addr is not None:
-        if _is_forbidden_address(literal_addr):
+        if is_forbidden_address(literal_addr):
             logger.warning("URL validation: rejected literal address=%s", literal_addr)
             raise UrlValidationError("URL host is not permitted.")
         return url
@@ -183,7 +218,7 @@ def validate_external_url(
     # Otherwise, resolve and check every result.
     addresses = _resolve_all(host)
     for addr in addresses:
-        if _is_forbidden_address(addr):
+        if is_forbidden_address(addr):
             logger.warning(
                 "URL validation: host=%r resolved to forbidden address=%s (one of %d results)",
                 host,

@@ -642,3 +642,69 @@ def test_non_rotation_persist_failure_does_not_invalidate() -> None:
     assert "Max-Age=0" not in cleared
 
 
+
+
+def test_refresher_handle_demands_more_lifetime_than_the_leeway() -> None:
+    """A route can ask for a token with more life than the leeway guarantees.
+
+    The chat proxy uses this after the AgentCore Runtime refuses a token the
+    middleware still considered fresh (dev, 2026-10-09: ~60s left against a
+    60s leeway). The ordinary resolve must leave the token alone; the handle
+    must refresh it.
+    """
+    record = _make_record(access_token_exp=int(time.time()) + 120)  # outside 60s
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.original",
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
+    )
+    app = _build_app(
+        config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
+    )
+
+    @app.get("/demand")
+    async def demand(request: Request):
+        before = request.state.bff_session.cognito_access_token
+        healed = await request.state.bff_refresh_session(300)
+        return {"before": before, "after": healed.cognito_access_token if healed else None}
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/demand", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    assert response.json() == {"before": "access.original", "after": "access.fresh"}
+    refresh.refresh.assert_awaited_once_with(
+        username="alice", refresh_token="refresh.original"
+    )
+
+
+def test_refresher_handle_adopts_a_token_that_already_has_the_lifetime() -> None:
+    """A token that already clears the demanded lifetime is returned as-is —
+    no Cognito call, so a peer task's fresh refresh is never repeated."""
+    record = _make_record()  # an hour left
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    refresh.refresh = AsyncMock()
+    app = _build_app(
+        config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
+    )
+
+    @app.get("/demand")
+    async def demand(request: Request):
+        healed = await request.state.bff_refresh_session(300)
+        return {"after": healed.cognito_access_token if healed else None}
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/demand", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.json() == {"after": "access.original"}
+    refresh.refresh.assert_not_awaited()

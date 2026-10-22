@@ -132,3 +132,118 @@ def test_maps_unreachable_inference_to_502(
 
     resp = TestClient(app).post("/mcp-apps/proxy-call", json=_BODY)
     assert resp.status_code == 502
+
+
+# --- AgentCore envelope translation ----------------------------------------
+#
+# inference-api can't use HTTP status to report an app-tool error: AgentCore
+# Runtime rewrites any non-2xx to a generic 424 and drops the message. It
+# answers 200 + `appToolError` instead, and app-api restores the real status
+# here. See `apis/shared/mcp_apps/error_envelope.py`.
+
+
+def test_restores_status_and_message_from_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The consent case that reached users as "check your CloudWatch logs"."""
+    consent = (
+        "Authorization required for 'google_tasks'. Connect the account, "
+        "then try again."
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"appToolError": {"code": 409, "message": consent}}
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(user_override=_user())
+
+    resp = TestClient(app).post("/mcp-apps/proxy-call", json=_BODY)
+    assert resp.status_code == 409
+    # `error` feeds the App bridge; `detail` is what the SPA's global
+    # ErrorService renders in the toast. Without `detail` the user gets
+    # the generic "The request conflicts with the current state."
+    assert resp.json()["error"] == consent
+    assert resp.json()["detail"] == consent
+
+
+def test_enveloped_error_never_relays_a_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 401 would trip the SPA interceptor and sign the user out."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"appToolError": {"code": 401, "message": "nope"}}
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(user_override=_user())
+
+    resp = TestClient(app).post("/mcp-apps/proxy-call", json=_BODY)
+    assert resp.status_code == 502
+
+
+def test_enveloped_error_persists_no_provenance_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An enveloped error is a failed call — it must not look like a success.
+
+    The card write is gated on the upstream's 200, and an envelope now
+    arrives *with* a 200, so this is the regression the ordering guards
+    against.
+    """
+    stored: list[dict] = []
+
+    class _Store:
+        def store(self, **kwargs: object) -> None:
+            stored.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        "apis.app_api.mcp_apps.routes.get_app_card_store", lambda: _Store()
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"appToolError": {"code": 409, "message": "connect"}}
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(user_override=_user())
+
+    resp = TestClient(app).post("/mcp-apps/proxy-call", json=_BODY)
+    assert resp.status_code == 409
+    assert stored == []
+
+
+def test_successful_call_still_persists_a_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control for the test above: the envelope check must not swallow success."""
+    stored: list[dict] = []
+
+    class _Store:
+        def store(self, **kwargs: object) -> None:
+            stored.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        "apis.app_api.mcp_apps.routes.get_app_card_store", lambda: _Store()
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "toolUseId": "tu-1",
+                "result": {"content": [{"text": "ok"}], "isError": False},
+            },
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(user_override=_user())
+
+    resp = TestClient(app).post("/mcp-apps/proxy-call", json=_BODY)
+    assert resp.status_code == 200
+    assert len(stored) == 1
+    assert stored[0]["tool_name"] == "widget_tool"

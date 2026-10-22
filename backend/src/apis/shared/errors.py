@@ -139,6 +139,95 @@ def http_status_to_error_code(status_code: int) -> ErrorCode:
     return mapping.get(status_code, ErrorCode.INTERNAL_ERROR)
 
 
+# Substrings that identify a transient "the provider is down right now" fault,
+# as opposed to a problem with the request. Matched against a LOWERCASED error
+# string. Kept as a shared predicate because two independent classifiers need
+# the same answer: this module's `build_conversational_error_event`, and the
+# force-stop classifier in the agent's stream_processor. They previously
+# disagreed by omission — neither recognized a 503 — and a user got "I ran into
+# a problem with the AI model" for an outage that had nothing to do with them.
+#
+# Deliberately narrow. "unavailable" alone would swallow unrelated copy such as
+# "the model or feature you're trying to use isn't available", so every entry
+# names a modeled Bedrock fault or an unambiguous service-level phrase.
+_SERVICE_UNAVAILABLE_MARKERS = (
+    "serviceunavailable",
+    "service unavailable",
+    "service is unavailable",
+    "internalserverexception",
+    "modelnotready",
+    "modeltimeout",
+    "503",
+    # The OpenAI Responses API's own wording (GPT-6 on bedrock-runtime). Seen
+    # in prod surfacing raw as "Agent force-stopped: ..." because neither
+    # matched the Bedrock-shaped entries above. "service is temporarily
+    # unavailable" does not contain "service is unavailable".
+    "temporarily unavailable",
+    "server had an error while processing your request",
+)
+
+
+def is_service_unavailable_error(error_lower: str) -> bool:
+    """Whether a lowercased error string names a transient provider outage.
+
+    Args:
+        error_lower: The error text, ALREADY lowercased by the caller.
+    """
+    return any(marker in error_lower for marker in _SERVICE_UNAVAILABLE_MARKERS)
+
+
+# Bedrock's wording when a model rejects a content block it has no modality
+# for. Measured 2026-10-06 against `zai.glm-5` (a TEXT-only Converse model):
+# "This model doesn't support documents." for pdf and txt document blocks, and
+# "This model doesn't support the image content block" for images — the second
+# has "the" between "support" and "image", so a bare "doesn't support image"
+# substring never matched it.
+_UNSUPPORTED_DOCUMENT_MARKERS = ("doesn't support document", "does not support document")
+_UNSUPPORTED_IMAGE_MARKERS = (
+    "doesn't support image",
+    "does not support image",
+    "doesn't support the image",
+    "does not support the image",
+)
+
+
+def unsupported_attachment_message(error_lower: str, raw: Optional[str] = None) -> Optional[str]:
+    """User-facing copy for a model that rejected an attached file's modality,
+    or ``None`` when the error is something else.
+
+    The turn path normally keeps documents and images away from a model whose
+    catalog row declares TEXT input only (``_adapt_attachments_for_model`` in
+    ``inference_api/chat/routes.py``). This is the backstop for a model whose
+    row is wrong or missing, and for history carried over from a model that
+    could read them. It is matched on both error paths — a Strands
+    ``force_stop`` and a raised exception — because which one a rejection
+    arrives on depends on where in the call stack Strands surfaces it.
+
+    Copy notes: deployment-agnostic — no brand names (model lineups change)
+    and no UI affordance names (they drift).
+
+    Args:
+        error_lower: The error text, ALREADY lowercased by the caller.
+        raw: The original error text, quoted under the headline when given.
+            The message is persisted as the assistant's turn, so the quote is
+            what tells the model on the next turn why this one failed.
+    """
+    if any(marker in error_lower for marker in _UNSUPPORTED_DOCUMENT_MARKERS):
+        headline, advice = (
+            "⚠️ The selected model can't read attached files.",
+            "To work with this file, switch to a model that supports documents.",
+        )
+    elif any(marker in error_lower for marker in _UNSUPPORTED_IMAGE_MARKERS):
+        headline, advice = (
+            "⚠️ The selected model can't read attached images.",
+            "To work with this image, switch to a model that supports images.",
+        )
+    else:
+        return None
+    quote = f"> {raw}\n\n" if raw else ""
+    return f"{headline}\n\n{quote}{advice}"
+
+
 def build_conversational_error_event(
     code: ErrorCode,
     error: Exception,
@@ -251,6 +340,24 @@ Please try again."""
     # Override with specific actionable messages for known Bedrock errors
     # that can arrive as raw exceptions (not force_stop events) depending
     # on where in the call stack Strands surfaces them.
+    #
+    # Service-unavailable is checked here rather than inside one code branch
+    # precisely because it arrives under several codes depending on where it
+    # surfaces (MODEL_ERROR, STREAM_ERROR, AGENT_ERROR). In prod session
+    # `5f34d2b0` it landed on the generic "I ran into a problem with the AI
+    # model" text, which told the user nothing about the failure being
+    # temporary. Reaching this point means the automatic retries were already
+    # spent (see TransientModelRetryStrategy), so the copy says so.
+    if is_service_unavailable_error(error_lower):
+        message = (
+            "⚠️ The model service is temporarily unavailable.\n\n"
+            f"> {error_str}\n\n"
+            "This is a problem on the AI provider's side, not with your "
+            "request — I already retried it a few times. Send your message "
+            "again in a moment, or switch models if it keeps happening."
+        )
+        recoverable = True
+
     if "duplicate document name" in error_lower or "can't contain duplicate document" in error_lower:
         message = (
             "⚠️ A file you attached has the same name as one already in this "
@@ -259,6 +366,15 @@ Please try again."""
             "conversation."
         )
         recoverable = True
+
+    # A model with no modality for an attached file. Without this the raised
+    # ValidationException reached the user as "I ran into a problem with the
+    # AI model" plus the raw AWS text. Not recoverable: the same request fails
+    # the same way until the model or the attachment changes.
+    unsupported = unsupported_attachment_message(error_lower, raw=error_str)
+    if unsupported:
+        message = unsupported
+        recoverable = False
 
     metadata: Dict[str, Any] = {}
     if session_id:

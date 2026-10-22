@@ -13,16 +13,24 @@ import { SessionService } from '../session/services/session/session.service';
 import { UserService } from '../auth/user.service';
 import { SidenavService } from '../services/sidenav/sidenav.service';
 import { Message } from '../session/services/models/message.model';
+import { matchToolResultsToToolUses } from '../session/services/session/tool-results';
+import { normalizeSteeringMessages } from '../session/services/chat/steering';
+import { ToolInsightService } from '../session/services/chat/tool-insight.service';
+import { SpinnerComponent } from '../components/spinner/spinner.component';
 
 @Component({
   selector: 'app-shared-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, DatePipe, MessageListComponent],
+  imports: [NgIcon, DatePipe, MessageListComponent, SpinnerComponent],
   providers: [provideIcons({ heroLockClosed, heroExclamationTriangle, heroChatBubbleLeftRight })],
   template: `
-    <div class="min-h-screen bg-white dark:bg-gray-900">
+    <!-- No surface of its own: the page sits on the shell's body background
+         like the conversation page does. The assistant bubble is drawn in
+         that same gray-50, so a white panel here turned every turn into a
+         gray card inside a white box framed by the shell's gray padding. -->
+    <div>
       <!-- Header banner -->
-      <div class="sticky top-0 z-10 border-b border-gray-200 bg-white/95 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95">
+      <div class="sticky top-0 z-10 border-b border-gray-200 bg-gray-50/95 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95">
         <div class="mx-auto flex max-w-4xl items-center justify-center px-4 py-3">
           <div class="flex items-center gap-2">
             <ng-icon name="heroLockClosed" class="size-4 text-gray-400" aria-hidden="true" />
@@ -39,7 +47,7 @@ import { Message } from '../session/services/models/message.model';
       @if (isLoading()) {
         <div class="flex items-center justify-center py-20">
           <div class="text-center">
-            <div class="mx-auto size-8 animate-spin rounded-full border-2 border-gray-300 border-t-primary-500"></div>
+            <app-spinner size="lg" label="Loading shared conversation" />
             <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">Loading shared conversation...</p>
           </div>
         </div>
@@ -51,8 +59,9 @@ import { Message } from '../session/services/models/message.model';
               <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">Access denied</h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">You don't have permission to view this conversation.</p>
             } @else if (errorStatus() === 404) {
-              <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">Conversation not found</h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">This share link may have been revoked.</p>
+              <!-- Also where a share notification lands once the share is revoked (2.5b). -->
+              <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">This is no longer shared</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">The person who shared it stopped sharing it, or the link is incomplete.</p>
             } @else {
               <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">Something went wrong</h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Failed to load the shared conversation.</p>
@@ -69,9 +78,17 @@ import { Message } from '../session/services/models/message.model';
 
         <!-- Messages -->
         <div class="mx-auto max-w-4xl px-4 pb-32">
+          <!-- Artifacts ride in on the conversation payload, pinned at
+               the versions the snapshot froze, and anchor under the same
+               turns the owner sees them under. They are passed in rather
+               than read from ArtifactStateService, which holds the
+               OWNER's live session state and has nothing to say here. -->
           <app-message-list
             [messages]="messages()"
             [embeddedMode]="true"
+            [sharedArtifacts]="conversation()!.artifacts"
+            [sharedArtifactShareId]="conversation()!.shareId"
+            [insightSessionId]="insightKey()"
           />
         </div>
 
@@ -81,10 +98,10 @@ import { Message } from '../session/services/models/message.model';
             type="button"
             (click)="onExport()"
             [disabled]="isExporting()"
-            class="pointer-events-auto inline-flex items-center gap-2 rounded-full bg-primary-500 px-6 py-3 text-sm font-semibold text-white shadow-lg ring-1 ring-primary-500 transition-all hover:bg-primary-400 hover:shadow-xl hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 dark:bg-primary-400 dark:ring-primary-400 dark:hover:bg-primary-300"
+            class="pointer-events-auto inline-flex items-center gap-2 rounded-full bg-primary-accessible px-6 py-3 text-sm font-semibold text-white shadow-lg ring-1 ring-primary-accessible transition-all hover:brightness-95 hover:shadow-xl hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
           >
             @if (isExporting()) {
-              <span class="size-5 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true"></span>
+              <app-spinner size="md" variant="on-solid" label="Exporting" />
               <span>Exporting...</span>
             } @else {
               <ng-icon name="heroChatBubbleLeftRight" class="size-5" aria-hidden="true" />
@@ -103,6 +120,7 @@ export class SharedViewPage implements OnInit {
   private sessionService = inject(SessionService);
   private userService = inject(UserService);
   private sidenavService = inject(SidenavService);
+  private toolInsight = inject(ToolInsightService);
 
   /** Left offset for the floating button so it centers over the content area, not the viewport */
   readonly buttonLeft = computed(() => {
@@ -112,6 +130,11 @@ export class SharedViewPage implements OnInit {
 
   protected conversation = signal<SharedConversationResponse | null>(null);
   protected messages = signal<Message[]>([]);
+  /** Where this snapshot's summaries are seeded; namespaced so it can't match a session id. */
+  protected insightKey = computed(() => {
+    const shareId = this.conversation()?.shareId;
+    return shareId ? `share:${shareId}` : null;
+  });
   protected isLoading = signal(true);
   protected isExporting = signal(false);
   protected errorStatus = signal<number | null>(null);
@@ -126,8 +149,12 @@ export class SharedViewPage implements OnInit {
 
     try {
       const data = await this.shareService.getSharedConversation(shareId);
+      this.toolInsight.seedFromHydration(`share:${data.shareId}`, data.toolSummaries ?? []);
       this.conversation.set(data);
-      this.messages.set(data.messages as Message[]);
+      // A snapshot is the same `get_messages` shape the session page loads, so
+      // it needs the same fold: without it every toolUse keeps its default
+      // `pending` status and a finished conversation's rail reads "Running …".
+      this.messages.set(normalizeSteeringMessages(matchToolResultsToToolUses(data.messages as Message[])));
     } catch (err: unknown) {
       const status = (err as any)?.status ?? (err as any)?.error?.status ?? 500;
       this.errorStatus.set(status);

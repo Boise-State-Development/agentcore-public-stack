@@ -223,8 +223,12 @@ class TestWriteWorkspaceFile:
         repo.increment_quota.assert_awaited_once_with(USER, len(b"# Hi"))
 
         assert result["filename"] == "report.md"
-        assert result["download_url"] == "https://signed.example/f"
         assert result["size_bytes"] == 4
+        assert result["upload_id"]
+        # No presigned URL in the write result — it would land in the model's
+        # context and be re-emitted, truncated, as a dead link.
+        assert "download_url" not in result
+        s3.generate_presigned_url.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_extension_appended_when_missing(self, repo, s3):

@@ -104,8 +104,7 @@ import {
     </div>
   `,
   styles: `
-    @import 'tailwindcss';
-    @custom-variant dark (&:where(.dark, .dark *));
+    @reference "../../../../../../styles/theme.css";
 
     :host {
       display: block;

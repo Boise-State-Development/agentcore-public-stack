@@ -42,6 +42,12 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./costs/pages/session-cost-anatomy.page').then(m => m.SessionCostAnatomyPage),
   },
   {
+    path: 'feedback',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.costs' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./feedback/fleet-feedback.page').then(m => m.FleetFeedbackPage),
+  },
+  {
     path: 'quota',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.quota' } satisfies AdminScopeRouteData,
@@ -148,6 +154,15 @@ export const adminRoutes: Routes = [
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.marketplace' } satisfies AdminScopeRouteData,
     loadComponent: () => import('./marketplace/pages/review-queue.page').then(m => m.ReviewQueuePage),
+  },
+  {
+    // One submission in full — instructions, capabilities, model, and a test drive.
+    // Declared after the literal `marketplace/review` path so it is not captured by it.
+    path: 'marketplace/review/:agentId',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.marketplace' } satisfies AdminScopeRouteData,
+    loadComponent: () =>
+      import('./marketplace/pages/submission-review.page').then(m => m.SubmissionReviewPage),
   },
   {
     path: 'marketplace/reports',
@@ -297,6 +312,24 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./manage-user-menu-links/user-menu-link-form.page').then(m => m.UserMenuLinkFormPage),
   },
   {
+    path: 'manage-announcements',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.announcements' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./manage-announcements/manage-announcements.page').then(m => m.ManageAnnouncementsPage),
+  },
+  {
+    path: 'manage-announcements/new',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.announcements' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./manage-announcements/announcement-form.page').then(m => m.AnnouncementFormPage),
+  },
+  {
+    path: 'manage-announcements/edit/:id',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.announcements' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./manage-announcements/announcement-form.page').then(m => m.AnnouncementFormPage),
+  },
+  {
     path: 'system-prompts',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.system_prompts' } satisfies AdminScopeRouteData,
@@ -313,5 +346,23 @@ export const adminRoutes: Routes = [
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.system_prompts' } satisfies AdminScopeRouteData,
     loadComponent: () => import('./system-prompts/system-prompt-form.page').then(m => m.SystemPromptFormPage),
+  },
+  {
+    path: 'agent-templates',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.agent_templates' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./agent-templates/manage-agent-templates.page').then(m => m.ManageAgentTemplatesPage),
+  },
+  {
+    path: 'agent-templates/new',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.agent_templates' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./agent-templates/agent-template-form.page').then(m => m.AgentTemplateFormPage),
+  },
+  {
+    path: 'agent-templates/edit/:id',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.agent_templates' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./agent-templates/agent-template-form.page').then(m => m.AgentTemplateFormPage),
   },
 ];

@@ -152,4 +152,56 @@ describe('AgentDetailPage — load path', () => {
     expect(page.error()).toBeNull();
     expect(loadBanner(harness)).toBeUndefined();
   });
+
+  describe('a retiring model (docs/specs/model-retirement.md)', () => {
+    function modelNote(harness: RouterTestingHarness): string | undefined {
+      const panel: HTMLElement | null | undefined = harness.routeNativeElement;
+      const dt = Array.from(panel?.querySelectorAll('dt') ?? []).find((el) => el.textContent?.trim() === 'Model');
+      const note = dt?.parentElement?.nextElementSibling;
+      return note?.tagName === 'P' ? note.textContent?.trim() : undefined;
+    }
+
+    it('adds no note for an active model', async () => {
+      api.getAgent.mockReturnValue(of({ ...AGENT, modelLabel: 'Claude Sonnet 5' }));
+      const { harness, page } = await open();
+      expect(page.modelRetirementNote()).toBeNull();
+      expect(modelNote(harness)).toBeUndefined();
+    });
+
+    it('says a retired model now runs as its successor', async () => {
+      api.getAgent.mockReturnValue(
+        of({
+          ...AGENT,
+          modelLabel: 'Claude Sonnet 4.6',
+          modelRetirement: { status: 'retired', successorLabel: 'Claude Sonnet 5' },
+        }),
+      );
+      const { harness } = await open();
+      expect(modelNote(harness)).toBe('Retired. Claude Sonnet 5 now answers in its place.');
+    });
+
+    it('says an agent on a retired model with no successor cannot run', async () => {
+      api.getAgent.mockReturnValue(
+        of({ ...AGENT, modelLabel: 'Claude Opus 4.1', modelRetirement: { status: 'retired' } }),
+      );
+      const { harness } = await open();
+      expect(modelNote(harness)).toBe(
+        'Retired. This agent can’t run until its owner chooses another model.',
+      );
+    });
+
+    it('gives the successor and date while deprecated', async () => {
+      api.getAgent.mockReturnValue(
+        of({
+          ...AGENT,
+          modelLabel: 'Claude Sonnet 4.6',
+          modelRetirement: { status: 'deprecated', successorLabel: 'Claude Sonnet 5', retiresOn: '2026-10-31' },
+        }),
+      );
+      const { page } = await open();
+      expect(page.modelRetirementNote()).toMatch(
+        /^Being retired\. From October 31, 2026, Claude Sonnet 5 answers in its place\.$/,
+      );
+    });
+  });
 });

@@ -50,10 +50,66 @@ def prompt_cache_observability_enabled() -> bool:
     """
     return os.environ.get(PROMPT_CACHE_OBSERVABILITY_ENABLED_ENV, "").lower() != "false"
 
-# Bedrock prompt-cache TTL (sliding, seconds). A gap between consecutive
-# model calls larger than this means the cache entry legitimately expired —
-# the re-write was unavoidable.
+# Prompt-cache TTL (sliding, seconds). A gap between consecutive model calls
+# larger than this means the cache entry legitimately expired — the re-write
+# was unavoidable.
+#
+# The TTL is a property of the MODEL, not of this module. Bedrock/Anthropic
+# prompt caching is a ~5-minute sliding window; the OpenAI Responses API on
+# `bedrock-runtime` holds entries for 30 minutes. Treating every model as
+# 5 minutes is wrong by 6x for GPT-5.6, and wrong in the direction that
+# HIDES waste: a gap inside the real TTL gets called `miss_ttl_expired`
+# (unavoidable) instead of `miss_avoidable`, and `partial_miss` — whose gate
+# is `gap <= ttl` — silently degrades to `hit`. Both suppress `wastedUsd`,
+# which is the metric that exists to catch exactly this.
+#
+# `CACHE_TTL_SECONDS` is retained as the default (and for importers) but
+# callers that know the model should pass `ttl_seconds` from
+# :func:`cache_ttl_seconds_for` instead.
 CACHE_TTL_SECONDS = 300
+DEFAULT_CACHE_TTL_SECONDS = CACHE_TTL_SECONDS
+
+# OpenAI Responses API on bedrock-runtime: entries live 30 minutes.
+# Corroborated by the Price List API's own SKU naming for these models —
+# the cache-write usage types are `...-cache-write-tokens-30m-...`.
+OPENAI_RESPONSES_CACHE_TTL_SECONDS = 1800
+
+# Providers whose models use the OpenAI Responses 30-minute TTL.
+#
+# Deliberately NOT the whole OpenAI family. `mantle` serves `openai.gpt-5.4`
+# with implicit-only caching whose retention AWS does not document as 30m,
+# and guessing there would re-introduce the same class of error in the other
+# direction (over-reporting waste). Only the model whose TTL is documented
+# gets the longer window.
+_OPENAI_RESPONSES_TTL_PROVIDERS = frozenset({"bedrock-responses"})
+
+
+def cache_ttl_seconds_for(
+    provider: Optional[str] = None,
+    model_id: Optional[str] = None,
+) -> int:
+    """Prompt-cache TTL in seconds for the model that served a call.
+
+    Args:
+        provider: The model's registered provider (``bedrock``, ``mantle``,
+            ``bedrock-responses``, ...). The authoritative signal.
+        model_id: Model id, used only as a fallback when the provider is
+            absent on older metadata rows written before the field existed.
+
+    Returns:
+        The TTL to measure this call's gap against. Falls back to
+        :data:`DEFAULT_CACHE_TTL_SECONDS` for anything unrecognized —
+        under-reporting waste rather than inventing it.
+    """
+    if provider and provider.lower() in _OPENAI_RESPONSES_TTL_PROVIDERS:
+        return OPENAI_RESPONSES_CACHE_TTL_SECONDS
+    if not provider and model_id:
+        # Historical rows: infer from the inference-profile-prefixed id the
+        # bedrock-runtime transport requires (us./global. + openai.gpt-5.6).
+        normalized = model_id.lower()
+        if "openai.gpt-5.6" in normalized:
+            return OPENAI_RESPONSES_CACHE_TTL_SECONDS
+    return DEFAULT_CACHE_TTL_SECONDS
 
 # How many times larger than the cache *read* a cache *write* has to be before
 # a nonzero read stops meaning "the prefix was cached" and starts meaning "a
@@ -125,6 +181,7 @@ def classify_cache_status(
     previous_call_exists: bool,
     gap_seconds: Optional[float],
     previous_cached_prefix_tokens: Optional[int] = None,
+    ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS,
 ) -> CacheStatus:
     """Classify one model call's cache outcome.
 
@@ -138,6 +195,11 @@ def classify_cache_status(
             token total, or None when unknown. Zero means the previous call
             was uncached (e.g. prompt below the model's minimum cacheable
             prefix), so no cache entry existed for this call to read.
+        ttl_seconds: The serving model's prompt-cache TTL. Defaults to the
+            Bedrock/Anthropic 5-minute window; callers that know the model
+            should pass :func:`cache_ttl_seconds_for`. A TTL shorter than the
+            model's real one silently suppresses both ``partial_miss`` and
+            ``miss_avoidable``, and with them ``wastedUsd``.
     """
     if cache_read_tokens > 0:
         # A read proves *something* was cached — but not that the prefix was.
@@ -155,7 +217,7 @@ def classify_cache_status(
             previous_call_exists
             and cache_write_tokens > PARTIAL_MISS_WRITE_READ_RATIO * cache_read_tokens
             and gap_seconds is not None
-            and gap_seconds <= CACHE_TTL_SECONDS
+            and gap_seconds <= ttl_seconds
         ):
             return CacheStatus.PARTIAL_MISS
         return CacheStatus.HIT
@@ -169,7 +231,7 @@ def classify_cache_status(
         # (typically the first prompt to cross the minimum cacheable length),
         # not a miss of any kind.
         return CacheStatus.FIRST_WRITE
-    if gap_seconds is None or gap_seconds > CACHE_TTL_SECONDS:
+    if gap_seconds is None or gap_seconds > ttl_seconds:
         return CacheStatus.MISS_TTL_EXPIRED
     return CacheStatus.MISS_AVOIDABLE
 

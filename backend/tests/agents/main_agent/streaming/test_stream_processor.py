@@ -94,6 +94,26 @@ class TestHandleLifecycleEvents:
         assert len(tr_events) == 1
         assert tr_events[0]["data"]["tool_result"]["toolUseId"] == "tu-1"
 
+    def test_tool_result_carries_structured_content_to_the_client(self):
+        """The SPA reads an MCP App's `awaiting_user_submission` marker off the
+        `tool_result` event, so the whole result (structuredContent included)
+        must ride it, not just content and status."""
+        result = {
+            "toolUseId": "tu-1",
+            "status": "error",
+            "isError": True,
+            "content": [{"text": "An interactive form has been shown to the user"}],
+            "structuredContent": {"status": "awaiting_user_submission"},
+        }
+        raw = {"message": {"role": "user", "content": [{"toolResult": result}]}}
+
+        (tr_event,) = [
+            e for e in _handle_lifecycle_events(raw) if e["type"] == "tool_result"
+        ]
+        assert tr_event["data"]["tool_result"]["structuredContent"] == {
+            "status": "awaiting_user_submission"
+        }
+
 
 # ---------------------------------------------------------------------------
 # 23.2  Content block start events
@@ -893,6 +913,18 @@ class TestFormatForceStopMessage:
         assert "Claude" not in message
         assert "Nova" not in message
         assert "remove the image" not in message
+        assert recoverable is True
+
+    def test_model_does_not_support_the_image_content_block(self):
+        # zai.glm-5's actual wording (measured 2026-10-06): "the" sits between
+        # "support" and "image", which the older substring check missed.
+        reason = (
+            "An error occurred (ValidationException) when calling the "
+            "ConverseStream operation: This model doesn't support the image content block"
+        )
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "can't read attached images" in message
         assert recoverable is True
 
     def test_document_size_limit_classic_message(self):

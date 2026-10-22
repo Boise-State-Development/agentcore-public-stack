@@ -1,0 +1,7 @@
+# large-document-prepare Lambda image dependencies (backend/Dockerfile.large-document-prepare).
+# Exact pins per repo policy; versions match backend/uv.lock. pypdfium2 ships a
+# manylinux aarch64 wheel, so the arm64 image needs no build toolchain.
+boto3==1.43.103
+botocore==1.43.103
+pydantic==2.12.5
+pypdfium2==4.30.0

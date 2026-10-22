@@ -26,10 +26,18 @@ if env_path.exists():
 else:
     _startup_logger.warning(".env file not found at %s", env_path)
 
+# Derive the resource names the Runtime does not have to send
+# (docs/specs/agentcore-runtime-v2.md §7). This MUST run before any other
+# `apis.*` import: several modules read DYNAMODB_*/S3_* names at import time
+# (bedrock_embeddings, module-level repositories), and a name set after that
+# would be too late. It writes only variables that are absent, so the explicit
+# values a deployment still sends win; the report is logged once logging is up.
+from apis.shared.config import hydrate_derived_environment, log_environment_report
+
+_derived_environment_report = hydrate_derived_environment()
+
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
@@ -42,6 +50,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+log_environment_report(_derived_environment_report, logger, service="inference-api")
 
 # Lifespan event handler (replaces on_event)
 @asynccontextmanager
@@ -56,25 +65,16 @@ async def lifespan(app: FastAPI):
     logger.info(f"AWS Region: {os.getenv('AWS_REGION', 'not set')}")
     
     # Log AgentCore Runtime environment variables
-    memory_arn = os.getenv('MEMORY_ARN')
     memory_id = os.getenv('AGENTCORE_MEMORY_ID')
     browser_id = os.getenv('BROWSER_ID')
     code_interpreter_id = os.getenv('AGENTCORE_CODE_INTERPRETER_ID')
 
-    if memory_arn:
-        logger.info(f"AgentCore Memory ARN: {memory_arn}")
     if memory_id:
         logger.info(f"AgentCore Memory ID: {memory_id}")
     if browser_id:
         logger.info(f"AgentCore Browser ID: {browser_id}")
     if code_interpreter_id:
         logger.info(f"AgentCore Code Interpreter ID: {code_interpreter_id}")
-    
-    # Log storage directories
-    upload_dir = os.getenv('UPLOAD_DIR', 'uploads')
-    output_dir_name = os.getenv('OUTPUT_DIR', 'output')
-    generated_images_dir_name = os.getenv('GENERATED_IMAGES_DIR', 'generated_images')
-    logger.info(f"Storage directories - Upload: {upload_dir}, Output: {output_dir_name}, Images: {generated_images_dir_name}")
     
     # Log API URLs (if configured)
     frontend_url = os.getenv('FRONTEND_URL')
@@ -86,16 +86,16 @@ async def lifespan(app: FastAPI):
     if cors_origins:
         logger.info(f"CORS Origins: {cors_origins}")
     
-    # Create output directories if they don't exist
-    base_dir = Path(__file__).parent.parent
-    output_dir = os.path.join(base_dir, "output")
-    uploads_dir = os.path.join(base_dir, "uploads")
-    generated_images_dir = os.path.join(base_dir, "generated_images")
+    # Pull the first turn's lazy imports and boto service-model loads forward
+    # to container start, and finish them BEFORE the server accepts a
+    # connection: uvicorn binds only after this hook returns, so /ping cannot
+    # report healthy mid-warm-up. On Runtime V2 the snapshot is taken on the
+    # first healthy /ping, so this is what puts warm-up into the snapshot
+    # instead of into every restored session's first turn. See
+    # apis/inference_api/warmup.py.
+    from apis.inference_api.warmup import warm_before_ready
 
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(uploads_dir, exist_ok=True)
-    os.makedirs(generated_images_dir, exist_ok=True)
-    logger.info("Output directories ready")
+    await warm_before_ready()
 
     yield  # Application is running
 
@@ -118,14 +118,31 @@ from apis.shared.security import register_aws_client_error_handler
 register_aws_client_error_handler(app)
 logger.info("Registered AWS ClientError handler")
 
-# Add GZip compression middleware for SSE streams
-# Compresses responses over 1KB, reducing bandwidth by 50-70%
+# Compress responses over 1KB. Despite what this block used to claim, it is
+# emphatically *not* "for SSE streams": Starlette excludes `text/event-stream`
+# from compression by content type, so on the one route this service exists to
+# serve — the `/invocations` SSE turn — it compresses nothing at all.
+#
+# What stock `GZipMiddleware` did do on that route is withhold
+# `http.response.start` until the first body chunk, because until then it can't
+# know whether it will need to set `Content-Encoding`. On an SSE turn the first
+# chunk is the model's first token, so the response headers were arriving behind
+# the agent's entire thinking time — measured locally at 2.0s of pure delay on a
+# turn that stalls 2.0s before its first event, with or without `Accept-Encoding:
+# gzip`. app-api's chat proxy reads this response's `content-type` before it can
+# open its own stream to the SPA, so that delay was propagating all the way to
+# the browser.
+#
+# `StreamSafeGZipMiddleware` keeps the compression and forwards an excluded
+# response's headers immediately; see its module docstring.
+from apis.shared.middleware.compression import StreamSafeGZipMiddleware
+
 app.add_middleware(
-    GZipMiddleware,
+    StreamSafeGZipMiddleware,
     minimum_size=1000,  # Only compress responses > 1KB
     compresslevel=6  # Balance between speed and compression ratio (1-9)
 )
-logger.info("Added GZip middleware for response compression")
+logger.info("Added gzip compression middleware (SSE and pre-encoded bodies excluded)")
 
 # Bridge AgentCore Runtime headers (WorkloadAccessToken, OAuth2CallbackUrl,
 # session ID) into BedrockAgentCoreContext so downstream code can look up
@@ -162,26 +179,6 @@ app.include_router(voice_router)  # WebSocket voice streaming endpoint
 # Connector consent flows live on app-api now: the AgentCore Runtime data plane
 # only proxies /invocations and /ping, so user-facing /connectors/* paths can't
 # be reached through this service. See apis/app_api/connectors/routes.py.
-
-# Mount static file directories for serving generated content
-# These are created by tools (visualization, code interpreter, etc.)
-# Use parent directory (src/) as base
-base_dir = Path(__file__).parent.parent
-output_dir = os.path.join(base_dir, "output")
-uploads_dir = os.path.join(base_dir, "uploads")
-generated_images_dir = os.path.join(base_dir, "generated_images")
-
-if os.path.exists(output_dir):
-    app.mount("/output", StaticFiles(directory=output_dir), name="output")
-    logger.info(f"Mounted static files: /output -> {output_dir}")
-
-if os.path.exists(uploads_dir):
-    app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
-    logger.info(f"Mounted static files: /uploads -> {uploads_dir}")
-
-if os.path.exists(generated_images_dir):
-    app.mount("/generated_images", StaticFiles(directory=generated_images_dir), name="generated_images")
-    logger.info(f"Mounted static files: /generated_images -> {generated_images_dir}")
 
 if __name__ == "__main__":
     import uvicorn

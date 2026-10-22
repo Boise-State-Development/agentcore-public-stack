@@ -30,8 +30,8 @@ export function reachabilityIsLimited(value: ListingReachability): boolean {
 /*
  * There was a `reachabilityAuthorMessage` here. It told the author to go "set Visibility
  * to Public first" — advice that is now wrong, because the submit dialog widens
- * visibility itself via its consent checkbox. The author-facing copy lives with that
- * control (`makePublicHelp`), where it can say what going public changes *from*.
+ * visibility itself as part of submitting. The author-facing copy lives there
+ * (`goingPublicNotice`), where it can say what going public changes *from*.
  */
 
 /**

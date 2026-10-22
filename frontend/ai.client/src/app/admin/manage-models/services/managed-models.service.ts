@@ -13,6 +13,18 @@ export interface ManagedModelsListResponse {
 }
 
 /**
+ * The result of uploading or clearing a model's icon.
+ *
+ * Both fields are absent after a remove, which is the signal the form needs to
+ * fall back to the model's `iconSlug` without re-reading the catalog.
+ */
+export interface ManagedModelIconResponse {
+  id: string;
+  iconKey?: string | null;
+  iconUrl?: string | null;
+}
+
+/**
  * A model on Bedrock Mantle's live roster (`GET /admin/mantle/models`).
  * Mirrors the OpenAI list-models shape the Mantle endpoint speaks.
  */
@@ -188,6 +200,106 @@ export class ManagedModelsService {
     } catch (error) {
       throw error;
     }
+  }
+
+
+  /** The latest order not yet sent — see `reorderModels`. */
+  private pendingOrder: string[] | null = null;
+  private orderSave: Promise<void> | null = null;
+
+  /**
+   * Set the catalog order — the order the chat model picker shows models in.
+   *
+   * Optimistic: the list reorders immediately so a dropped row stays where it
+   * was dropped instead of snapping back for the length of a round trip.
+   *
+   * Saves are serialized and coalesced. Moves made while a save is in flight
+   * (an admin holding an arrow key) collapse into one follow-up save of the
+   * latest order, so two PUTs never race on the server, and a response is
+   * never applied over a newer local order — the local order is already the
+   * truth, which is why a successful response isn't read back at all.
+   *
+   * On failure the list is reloaded, restoring whatever order actually stuck
+   * (a reorder that fails partway may have moved some rows).
+   *
+   * @param orderedIds - Every managed model's record id (the UUID), first to
+   *   last. The backend rejects a partial list with 409 — it means this copy of
+   *   the catalog is stale.
+   * @returns Resolves once every queued order has been saved.
+   */
+  reorderModels(orderedIds: string[]): Promise<void> {
+    const current = this.modelsResource.value();
+    if (current) {
+      const byId = new Map(current.models.map(m => [m.id, m]));
+      const models = orderedIds
+        .map(id => byId.get(id))
+        .filter((m): m is ManagedModel => m !== undefined);
+      this.modelsResource.set({ ...current, models });
+    }
+
+    this.pendingOrder = orderedIds;
+    this.orderSave ??= this.flushOrder().finally(() => (this.orderSave = null));
+    return this.orderSave;
+  }
+
+  private async flushOrder(): Promise<void> {
+    while (this.pendingOrder) {
+      const modelIds = this.pendingOrder;
+      this.pendingOrder = null;
+      try {
+        await firstValueFrom(this.http.put<void>(`${this.baseUrl()}/order`, { modelIds }));
+      } catch (error) {
+        this.pendingOrder = null;
+        this.modelsResource.reload();
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Upload a custom icon for a model.
+   *
+   * Multipart, not JSON: the bytes go straight to S3 and only the key lands on
+   * the record. The server validates and re-encodes to 512×512 — which is also
+   * what strips EXIF — so a rejection here carries an admin-facing reason and
+   * should be surfaced verbatim rather than replaced with "upload failed".
+   *
+   * @param modelId - Model record identifier (the UUID, not the Bedrock model id)
+   * @param file - A square PNG or JPEG, at least 256×256 and at most 400 KB
+   * @returns Promise resolving to the stored key and the path that serves it
+   */
+  async uploadIcon(modelId: string, file: File): Promise<ManagedModelIconResponse> {
+    const body = new FormData();
+    body.append('file', file);
+
+    const response = await firstValueFrom(
+      this.http.post<ManagedModelIconResponse>(`${this.baseUrl()}/${modelId}/icon`, body),
+    );
+
+    // The catalog's cached copy still carries the old iconUrl (or none).
+    this.modelsResource.reload();
+
+    return response;
+  }
+
+  /**
+   * Remove a model's uploaded icon, falling back to its `iconSlug`.
+   *
+   * Distinct from clearing `iconSlug` through the form: the two are independent,
+   * and an admin who uploaded the wrong file should get their built-in logo back
+   * rather than a blank tile.
+   *
+   * @param modelId - Model record identifier
+   * @returns Promise resolving to the cleared icon fields
+   */
+  async deleteIcon(modelId: string): Promise<ManagedModelIconResponse> {
+    const response = await firstValueFrom(
+      this.http.delete<ManagedModelIconResponse>(`${this.baseUrl()}/${modelId}/icon`),
+    );
+
+    this.modelsResource.reload();
+
+    return response;
   }
 
   /**

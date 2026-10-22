@@ -164,6 +164,48 @@ class TestImportDocuments:
         assert first.source_file_id == "drive-f1"
         assert first.imported_by_user_id == USER_ID
 
+    def test_an_import_can_found_a_born_managed_knowledge_base(self, app):
+        """An agent's first knowledge can come from an import, so it starts born-managed
+        provisioning, and every file waits on the knowledge base being built."""
+        provider = MagicMock()
+        provider.provider_id = "google"
+        adapter = MagicMock()
+        adapter.metadata.key = "google-drive"
+
+        with patch(
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_owner_resolve("owner-1"),
+        ), patch(
+            f"{ROUTES_MODULE}.resolve_file_source",
+            new_callable=AsyncMock,
+            return_value=(provider, adapter),
+        ), patch(
+            f"{ROUTES_MODULE}.require_file_source_token",
+            new_callable=AsyncMock,
+            return_value="vault-token",
+        ), patch(
+            f"{ROUTES_MODULE}.initial_document_status",
+            new_callable=AsyncMock,
+            return_value="provisioning",
+        ) as initial, patch(
+            f"{ROUTES_MODULE}.create_document",
+            new_callable=AsyncMock,
+            side_effect=[
+                _make_document("DOC-1", "report.pdf"),
+                _make_document("DOC-2", "notes.txt"),
+            ],
+        ) as mock_create, patch(
+            f"{ROUTES_MODULE}.run_import", new_callable=AsyncMock
+        ):
+            resp = TestClient(app).post(
+                f"/assistants/{ASSISTANT_ID}/documents/import", json=_import_body()
+            )
+
+        assert resp.status_code == 202
+        initial.assert_awaited_once_with(ASSISTANT_ID, owner_user_id="owner-1")
+        assert [c.kwargs["status"] for c in mock_create.call_args_list] == ["provisioning", "provisioning"]
+
     def test_404_when_assistant_not_owned(self, app):
         # Caller is neither owner nor editor — resolve returns (assistant, None)
         # which our _require_edit_permission helper maps to 403.

@@ -63,6 +63,8 @@ export type ToolStatus = 'active' | 'deprecated' | 'disabled' | 'coming_soon';
 export interface MCPToolEntry {
   name: string;
   needsApproval: boolean;
+  /** Pinned into every turn for users whose roles grant this server (§2.3). */
+  alwaysOn?: boolean;
   description?: string | null;
 }
 
@@ -76,9 +78,47 @@ export interface MCPServerConfig {
   awsRegion?: string | null;
   apiKeyHeader?: string | null;
   secretArn?: string | null;
+  /**
+   * Static headers sent on every request to the server, e.g.
+   * `{ 'X-MCP-Toolsets': 'issues,context' }`. Stored and shown in plain text,
+   * so never secrets (those go in `secretArn`). The backend refuses names the
+   * transport or its auth owns (Authorization, Cookie, Host, Mcp-Session-Id…).
+   */
+  customHeaders?: Record<string, string>;
   tools: MCPToolEntry[];
   healthCheckEnabled: boolean;
   healthCheckIntervalSeconds: number;
+}
+
+/** Mirrors `MAX_CUSTOM_HEADERS` in `apis/shared/tools/models.py`. */
+export const MAX_CUSTOM_HEADERS = 10;
+
+/** RFC 9110 field-name token — the same pattern the backend validates. */
+export const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Header names the backend refuses as custom headers, because the MCP
+ * transport or its auth already sets them. Mirrors
+ * `RESERVED_CUSTOM_HEADER_NAMES` / `_PREFIXES`; the backend is the gate, this
+ * only flags the row before save.
+ */
+const RESERVED_HEADER_NAMES = new Set([
+  'accept',
+  'authorization',
+  'connection',
+  'content-length',
+  'content-type',
+  'cookie',
+  'host',
+  'mcp-protocol-version',
+  'mcp-session-id',
+  'proxy-authorization',
+  'transfer-encoding',
+]);
+
+export function isReservedHeaderName(name: string): boolean {
+  const lowered = name.trim().toLowerCase();
+  return RESERVED_HEADER_NAMES.has(lowered) || lowered.startsWith('x-amz-');
 }
 
 /**
@@ -132,12 +172,26 @@ export interface AdminTool {
   category: ToolCategory;
   protocol: ToolProtocol;
   status: ToolStatus;
+  /**
+   * Shown to users wherever a non-`active` tool is surfaced: what to use
+   * instead, and the date it stops working. Optional on the wire so an older
+   * backend reads `undefined` and the surfaces say only that it is going away.
+   */
+  retirementNote?: string | null;
+  retiresOn?: string | null;
   requiresOauthProvider: string | null;
   forwardAuthToken: boolean;
   tokenExchangeAudience?: string | null;
   isPublic: boolean;
   allowedAppRoles: string[];
   enabledByDefault: boolean;
+  /**
+   * Pinned into every turn for users whose roles grant it; the user cannot turn
+   * it off. Optional on the wire so an older backend (which omits it) reads
+   * `undefined` -> falsy, i.e. today's behaviour — see
+   * docs/specs/admin-always-on-tools.md §10.1.
+   */
+  alwaysOn?: boolean;
   createdAt: string;
   updatedAt: string;
   createdBy: string | null;
@@ -185,14 +239,47 @@ export interface ToolCreateRequest {
   category?: ToolCategory;
   protocol?: ToolProtocol;
   status?: ToolStatus;
+  retirementNote?: string | null;
+  retiresOn?: string | null;
   requiresOauthProvider?: string | null;
   forwardAuthToken?: boolean;
   tokenExchangeAudience?: string | null;
   isPublic?: boolean;
   enabledByDefault?: boolean;
+  alwaysOn?: boolean;
   mcpConfig?: MCPServerConfig;
   a2aConfig?: A2AAgentConfig;
   mcpGatewayConfig?: MCPGatewayConfig;
+}
+
+/**
+ * How a tool's enablement is presented in admin. The stored shape is still two
+ * booleans (`enabledByDefault` + `alwaysOn`) for backward compatibility; this
+ * is the derived three-way the form binds to, which is what makes the invalid
+ * pair (`enabledByDefault: false` + `alwaysOn: true`) unreachable from the UI.
+ * See docs/specs/admin-always-on-tools.md §2.2 — the enum becomes the stored
+ * shape when §10.3's migration lands.
+ */
+export type ToolEnablement = 'user_choice' | 'default_on' | 'always_on';
+
+/** Derive the form's three-way from the two stored booleans. */
+export function toolEnablementOf(tool: {
+  enabledByDefault?: boolean;
+  alwaysOn?: boolean;
+}): ToolEnablement {
+  if (tool.alwaysOn) return 'always_on';
+  return tool.enabledByDefault ? 'default_on' : 'user_choice';
+}
+
+/** Project the form's three-way back onto the two stored booleans. */
+export function toolEnablementFlags(value: ToolEnablement): {
+  enabledByDefault: boolean;
+  alwaysOn: boolean;
+} {
+  return {
+    enabledByDefault: value !== 'user_choice',
+    alwaysOn: value === 'always_on',
+  };
 }
 
 /**
@@ -204,11 +291,14 @@ export interface ToolUpdateRequest {
   category?: ToolCategory;
   protocol?: ToolProtocol;
   status?: ToolStatus;
+  retirementNote?: string | null;
+  retiresOn?: string | null;
   requiresOauthProvider?: string | null;
   forwardAuthToken?: boolean;
   tokenExchangeAudience?: string | null;
   isPublic?: boolean;
   enabledByDefault?: boolean;
+  alwaysOn?: boolean;
   mcpConfig?: MCPServerConfig | null;
   a2aConfig?: A2AAgentConfig | null;
   mcpGatewayConfig?: MCPGatewayConfig | null;
@@ -231,6 +321,8 @@ export interface MCPDiscoverRequest {
   awsRegion?: string | null;
   apiKeyHeader?: string | null;
   secretArn?: string | null;
+  /** Same static headers as `MCPServerConfig.customHeaders`, so discovery sees what the agent will. */
+  customHeaders?: Record<string, string>;
   /**
    * When true, discovery is signed with the admin's own OIDC token (matching
    * the catalog `forwardAuthToken` flag) instead of SigV4 — for same-team MCP
@@ -310,6 +402,7 @@ export interface ToolFormData {
   tokenExchangeAudience?: string | null;
   isPublic: boolean;
   enabledByDefault: boolean;
+  alwaysOn: boolean;
   // MCP configuration (for mcp_external protocol)
   mcpServerUrl?: string;
   mcpTransport?: MCPTransport;

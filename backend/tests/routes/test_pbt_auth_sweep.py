@@ -149,6 +149,12 @@ non_admin_roles_strategy = st.lists(
 # Nothing about the property depends on a fresh app: the generated roles reach
 # the route only through the session dependency, so the override reads the
 # current user out of a holder that each example rewrites.
+#
+# Building it once removed the cost but not the flake: on 2026-10-13 the test
+# failed `DeadlineExceeded` again alongside ~780 other tests, then passed 3/3
+# in isolation. So the test also runs with `deadline=None`. Whether a role gets
+# a 403 does not depend on how long one example takes, and under CI load any
+# fixed per-example deadline measures the machine, not the property.
 _CURRENT_USER: dict = {}
 _ADMIN_CLIENT = None
 
@@ -181,6 +187,7 @@ class TestNonAdminRoleRejection:
     @given(roles=non_admin_roles_strategy)
     @settings(
         max_examples=100,
+        deadline=None,
         suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
     )
     def test_non_admin_roles_get_403(self, roles):

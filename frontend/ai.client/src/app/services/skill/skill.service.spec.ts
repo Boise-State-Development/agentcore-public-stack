@@ -91,6 +91,14 @@ describe('SkillService', () => {
       expect(service.visibleSkills().map(s => s.skillId)).toEqual(['web_research']);
     });
 
+    it('locks to no skills at all for a project that binds none', () => {
+      // A project never runs on the member's own skills, so an empty lock is a real lock.
+      service.lockToAgentSkills([]);
+      expect(service.agentLocked()).toBe(true);
+      expect(service.enabledSkillIds()).toEqual([]);
+      expect(service.visibleSkills()).toEqual([]);
+    });
+
     it('restores the user set when cleared', () => {
       service.lockToAgentSkills(['web_research']);
       service.clearAgentLock();
@@ -117,6 +125,101 @@ describe('SkillService', () => {
       });
       await promise;
       expect(service.error()).toBeTruthy();
+    });
+  });
+
+  // The first-turn race (#1160): a chat turn sent while `/skills/` is still in
+  // flight used to be assembled from an empty list, disclosing no skills, while
+  // the next turn disclosed the real ones — flipping the system prompt between
+  // turn 1 and turn 2 and re-writing the cacheable prefix at the cache-write
+  // premium.
+  describe('load gating', () => {
+    it('joins an in-flight load instead of resolving early', async () => {
+      configure();
+
+      const first = service.loadSkills();
+      // The old guard was `if (this._loading()) return;` — this second call
+      // resolved immediately, with `skills()` still empty.
+      let listWasEmptyOnResolve: boolean | null = null;
+      const second = service.loadSkills().then(() => {
+        listWasEmptyOnResolve = service.skills().length === 0;
+      });
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/skills/').flush(mockResponse);
+      });
+      await Promise.all([first, second]);
+
+      expect(listWasEmptyOnResolve).toBe(false);
+      expect(service.enabledSkillIds()).toEqual(['pdf_workflows']);
+    });
+
+    it('issues exactly one request for concurrent loads', async () => {
+      configure();
+
+      const both = Promise.all([service.loadSkills(), service.loadSkills()]);
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/skills/').flush(mockResponse);
+      });
+      await both;
+
+      httpMock.verify();
+    });
+
+    it('ensureLoaded starts the load when nothing has, and settles with the list', async () => {
+      configure();
+
+      const gate = service.ensureLoaded();
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/skills/').flush(mockResponse);
+      });
+      await gate;
+
+      expect(service.initialized()).toBe(true);
+      expect(service.enabledSkillIds()).toEqual(['pdf_workflows']);
+    });
+
+    it('ensureLoaded does not resolve while the load is still in flight', async () => {
+      configure();
+
+      let settled = false;
+      const gate = service.ensureLoaded().then(() => {
+        settled = true;
+      });
+      // Drain the microtask queue: the gate must still be pending, because the
+      // response has not been flushed.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/skills/').flush(mockResponse);
+      });
+      await gate;
+      expect(settled).toBe(true);
+    });
+
+    it('ensureLoaded is a no-op once loaded', async () => {
+      await setup();
+
+      await service.ensureLoaded();
+
+      httpMock.verify();
+      expect(service.enabledSkillIds()).toEqual(['pdf_workflows']);
+    });
+
+    it('ensureLoaded resolves rather than rejecting when the load fails', async () => {
+      configure();
+
+      const gate = service.ensureLoaded();
+      await vi.waitFor(() => {
+        httpMock
+          .expectOne('http://localhost:8000/skills/')
+          .error(new ProgressEvent('error'));
+      });
+
+      await expect(gate).resolves.toBeUndefined();
+      expect(service.enabledSkillIds()).toEqual([]);
     });
   });
 

@@ -26,6 +26,13 @@ from apis.shared.timestamps import from_iso, to_iso
 # Regex for a skill_id — identical shape to tool_id (see ToolCreateRequest).
 SKILL_ID_PATTERN = r"^[a-z][a-z0-9_]{2,49}$"
 
+# Max length of a skill ``description``. This is the Agent Skills spec limit for
+# the SKILL.md frontmatter ``description`` field, so a skill authored for Claude
+# imports here unchanged. It is a real bound, not a formality: the description is
+# the Level-1 catalog line injected into the cacheable system prompt for every
+# enabled skill, on every turn.
+SKILL_DESCRIPTION_MAX_LENGTH = 1024
+
 # ``owner_id`` of an admin-catalog skill. Anything else is a user-authored
 # skill (Skills v2 PR-3): governed by ownership, not by RBAC ``granted_skills``.
 SYSTEM_OWNER_ID = "system"
@@ -291,7 +298,7 @@ class SkillCreateRequest(BaseModel):
     display_name: str = Field(
         ..., min_length=1, max_length=100, alias="displayName"
     )
-    description: str = Field(..., max_length=500)
+    description: str = Field(..., max_length=SKILL_DESCRIPTION_MAX_LENGTH)
     # SKILL.md body — uncapped (instructions can be long); empty is allowed so
     # an admin can save a draft and fill it in later.
     instructions: str = Field(default="")
@@ -308,7 +315,9 @@ class SkillUpdateRequest(BaseModel):
     display_name: Optional[str] = Field(
         None, min_length=1, max_length=100, alias="displayName"
     )
-    description: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = Field(
+        None, max_length=SKILL_DESCRIPTION_MAX_LENGTH
+    )
     instructions: Optional[str] = None
     compose: Optional[List[str]] = None
     status: Optional[SkillStatus] = None

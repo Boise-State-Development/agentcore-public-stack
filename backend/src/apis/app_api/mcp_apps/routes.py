@@ -37,6 +37,10 @@ from apis.app_api.chat import proxy_routes
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.mcp_apps.card_store import get_app_card_store
+from apis.shared.mcp_apps.error_envelope import (
+    app_tool_error_body,
+    read_error_envelope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,7 @@ async def proxy_call(
             "Authorization": f"Bearer {current_user.raw_token}",
         },
         body.session_id,
+        current_user.user_id,
     )
 
     client = proxy_routes._build_upstream_client()
@@ -118,6 +123,16 @@ async def proxy_call(
     except Exception:  # noqa: BLE001 - upstream returned non-JSON
         raise HTTPException(status_code=502, detail="Bad upstream response")
 
+    # inference-api reports app-tool errors as 200 + an envelope, because
+    # AgentCore Runtime flattens any non-2xx it returns into a generic 424
+    # and discards the message. Restore the real status here, before the
+    # card write below — an enveloped error is a failed call and must not
+    # persist a provenance card.
+    enveloped = read_error_envelope(payload)
+    if enveloped is not None:
+        message, status = enveloped
+        return JSONResponse(app_tool_error_body(message), status_code=status)
+
     # Option A (PR #6): on success, persist a static provenance card so the
     # call survives a page reload (the broker is in-memory; the live thread
     # event is otherwise lost on refresh). Best-effort + provenance-only —
@@ -140,9 +155,11 @@ async def proxy_call(
                 "mcp-apps: failed to persist provenance card", exc_info=True
             )
 
-    # Relay inference-api's status verbatim (403 not-app-visible, 409 no
-    # live client, 502 tool failure, 200 success) so the bridge can answer
-    # the iframe's JSON-RPC with the right error.
+    # Relay inference-api's status verbatim so the bridge can answer the
+    # iframe's JSON-RPC with the right error. Reached only for a success
+    # (200) or for an error raised *before* the app-tool handler — anything
+    # that handler reports arrives as a 200 + envelope and returned above,
+    # because AgentCore Runtime would otherwise flatten its status to 424.
     return JSONResponse(payload, status_code=response.status_code)
 
 
@@ -176,9 +193,8 @@ async def update_context(
 ) -> JSONResponse:
     """Relay an app-pushed model-context update to inference-api.
 
-    Non-streaming, runs no model turn: inference-api stashes the payload on
-    the conversation agent's Strands state; the next real user turn merges
-    it. Mirrors `/proxy-call`'s auth + bearer hand-off — this boundary's
+    Non-streaming, runs no model turn: inference-api holds the payload for
+    this user's conversation; the next real user turn merges it. Mirrors `/proxy-call`'s auth + bearer hand-off — this boundary's
     only job is the session-cookie → bearer exchange.
     """
     invocation_body = {
@@ -201,6 +217,7 @@ async def update_context(
             "Authorization": f"Bearer {current_user.raw_token}",
         },
         body.session_id,
+        current_user.user_id,
     )
 
     client = proxy_routes._build_upstream_client()
@@ -224,6 +241,12 @@ async def update_context(
         payload = response.json()
     except Exception:  # noqa: BLE001 - upstream returned non-JSON
         raise HTTPException(status_code=502, detail="Bad upstream response")
+
+    # Same AgentCore flattening as proxy-call; restore the real status.
+    enveloped = read_error_envelope(payload)
+    if enveloped is not None:
+        message, status = enveloped
+        return JSONResponse(app_tool_error_body(message), status_code=status)
 
     return JSONResponse(payload, status_code=response.status_code)
 

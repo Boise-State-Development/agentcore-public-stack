@@ -5,6 +5,7 @@ import { CurrencyPipe } from '@angular/common';
 import { QuotaStateService } from '../../services/quota-state.service';
 import { QuotaAssignmentCreate, QuotaAssignmentType } from '../../models/quota.models';
 import { AppRolesService } from '../../../roles/services/app-roles.service';
+import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 interface AssignmentFormGroup {
   tierId: FormControl<string>;
@@ -19,7 +20,7 @@ interface AssignmentFormGroup {
 
 @Component({
   selector: 'app-assignment-detail',
-  imports: [ReactiveFormsModule, CurrencyPipe],
+  imports: [ReactiveFormsModule, CurrencyPipe, SpinnerComponent],
   templateUrl: './assignment-detail.component.html',
   styleUrl: './assignment-detail.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,

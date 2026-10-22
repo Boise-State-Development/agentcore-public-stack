@@ -1,9 +1,200 @@
-@import "tailwindcss";
-
-@custom-variant dark (&:where(.dark, .dark *));
+@reference "../../../../styles/theme.css";
 
 .input-wrapper {
   transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
 }
 
+/*
+ * The main input grid (see "Layout" in the component).
+ *
+ * Compact: one row — attach, text, controls — bottom-aligned so the buttons
+ * stay put while a single line is typed. Stacked: the text across the top and
+ * the controls in a bar beneath, which is the empty state's shape and what a
+ * compact draft unfolds into once it wraps.
+ */
+.composer-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'lead field tools';
+  align-items: end;
+  column-gap: 0.125rem;
+  padding: 0.5rem;
+}
 
+.composer-row--stacked {
+  grid-template-areas:
+    'field field field'
+    'lead . tools';
+  row-gap: 0.25rem;
+}
+
+/* The empty state's roomier frame: 24px from the shell to the text, as before. */
+.composer-row--full {
+  padding: 0 1rem 0.75rem;
+  row-gap: 0;
+}
+
+.composer-field {
+  grid-area: field;
+}
+
+/*
+ * One row means one line of placeholder. A long one ("Send a follow-up — it
+ * goes out when this response finishes", or the idle line at phone width)
+ * would otherwise wrap inside the 40px textarea and show a clipped second
+ * line beneath the first.
+ */
+.composer-row:not(.composer-row--stacked) textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-lead {
+  grid-area: lead;
+}
+
+.composer-tools {
+  grid-area: tools;
+}
+
+/*
+ * A live `@mention` or `/skill` in the highlight mirror. The ink is
+ * transparent — the textarea paints the real text on top — so only the tint
+ * shows. The spread shadow pads the tint without padding the text, which
+ * would push the mirror's wrapping out of step with the textarea's.
+ */
+.composer-token {
+  color: transparent;
+  background: color-mix(in srgb, var(--color-primary-500) 14%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary-500) 14%, transparent);
+  border-radius: 0.25rem;
+}
+
+:host-context(html.dark) .composer-token {
+  background: color-mix(in srgb, var(--color-primary-400) 30%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary-400) 30%, transparent);
+}
+
+/* On a phone the full 24-bar waveform would squeeze the text to a sliver; the newest half is enough. */
+@media (max-width: 480px) {
+  .composer-levels > :nth-child(-n + 12) {
+    display: none;
+  }
+}
+
+/*
+ * A rotating composer hint.
+ *
+ * The outgoing line rises out while the incoming one rises in — both nodes sit
+ * in the same absolute position, so the entry is delayed just past the exit or
+ * the two strings would overlap into mush mid-swap.
+ */
+.composer-hint-enter {
+  animation: composer-hint-enter 380ms cubic-bezier(0.22, 1, 0.36, 1) 140ms both;
+}
+
+.composer-hint-leave {
+  animation: composer-hint-leave 260ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes composer-hint-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes composer-hint-leave {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+/*
+ * Belt and braces. The rotation is already switched off in TypeScript when the
+ * user asks for reduced motion, so this only covers a preference that flips
+ * after the component was constructed.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .composer-hint-enter,
+  .composer-hint-leave {
+    animation: none;
+  }
+}
+
+/*
+ * Voice mode's waveform comes alive on hover.
+ *
+ * Each bar is its own <path> so it can move on its own beat: the outer bars
+ * swell the most and the centre the least, on a symmetric delay, so the icon
+ * reads as sound rather than a bar chart. `transform-box: fill-box` makes the
+ * scale run from each bar's own centre (an SVG element's default origin is the
+ * viewport's corner, which would slide the bars off the icon). The hover is on
+ * the whole split control — the chevron included — so the two halves read as
+ * one thing, and `focus-within` gives keyboard users the same cue.
+ *
+ * Idle only. A live session already animates its own state in the button.
+ */
+.voice-wave-bar {
+  transform-box: fill-box;
+  transform-origin: center;
+  --voice-amp: 1.5;
+  --voice-delay: 0ms;
+}
+
+.voice-wave-bar:nth-child(1),
+.voice-wave-bar:nth-child(5) {
+  --voice-amp: 2.2;
+}
+
+.voice-wave-bar:nth-child(2),
+.voice-wave-bar:nth-child(4) {
+  --voice-delay: 110ms;
+}
+
+.voice-wave-bar:nth-child(3) {
+  --voice-amp: 1.15;
+  --voice-delay: 220ms;
+}
+
+/*
+ * The delay rides a custom property because the `animation` shorthand below
+ * resets every longhand it does not name — a plain `animation-delay` on the
+ * nth-child rules was silently zeroed, and all five bars moved as one.
+ */
+.voice-control--idle:hover .voice-wave-bar,
+.voice-control--idle:focus-within .voice-wave-bar {
+  animation: voice-wave 900ms ease-in-out var(--voice-delay) infinite;
+}
+
+@keyframes voice-wave {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(var(--voice-amp));
+  }
+}
+
+/* The chevron sits flush against the waveform; the negative margin closes the gap without a new grid. */
+.voice-menu-trigger {
+  margin-left: -0.125rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-control--idle:hover .voice-wave-bar,
+  .voice-control--idle:focus-within .voice-wave-bar {
+    animation: none;
+  }
+}

@@ -1,4 +1,13 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  computed,
+  effect,
+  input,
+  output,
+  viewChild,
+} from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowRight } from '@ng-icons/heroicons/outline';
 import { AgentIconComponent } from '../../../agents/components/agent-icon.component';
@@ -31,6 +40,7 @@ import { MentionableAgent } from '../../../agents/services/agent-mention.service
       class="absolute bottom-full left-0 z-20 mb-2 w-full max-w-md overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800"
     >
       <ul
+        #listbox
         [id]="listboxId()"
         role="listbox"
         aria-label="Agents you can mention"
@@ -86,7 +96,7 @@ import { MentionableAgent } from '../../../agents/services/agent-mention.service
       <button
         type="button"
         (mousedown)="onBrowseAll($event)"
-        class="flex w-full items-center justify-between gap-2 border-t border-gray-200 px-4 py-2.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700/50"
+        class="flex w-full items-center justify-between gap-2 border-t border-gray-200 px-4 py-2.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700/50"
       >
         Browse all agents
         <ng-icon name="heroArrowRight" class="size-4" aria-hidden="true" />
@@ -101,6 +111,27 @@ export class AgentMentionMenuComponent {
 
   readonly picked = output<MentionableAgent>();
   readonly browseAll = output<void>();
+
+  private readonly listbox = viewChild<ElementRef<HTMLUListElement>>('listbox');
+
+  /**
+   * Keep the highlighted row visible.
+   *
+   * The list scrolls at eight rows (`max-h-72`), and the parent owns the keyboard, so
+   * nothing else would bring a row below the fold into view — arrowing down would move a
+   * highlight the user cannot see.
+   */
+  private readonly scrollActiveIntoView = effect(() => {
+    const index = this.activeIndex();
+    const list = this.listbox()?.nativeElement;
+    if (!list) {
+      return;
+    }
+    // Positional lookup rather than by id: group headings are `role="presentation"`, so
+    // the option elements line up one-to-one with the flat index the parent counts in.
+    const option = list.querySelectorAll<HTMLElement>('[role="option"]')[index];
+    option?.scrollIntoView?.({ block: 'nearest' });
+  });
 
   readonly listboxId = () => 'agent-mention-listbox';
 

@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from apis.app_api.auth.bff import cli_routes
 from apis.app_api.auth.bff import routes as bff_routes
 from apis.app_api.auth.bff.cli_routes import router as cli_router
+from apis.app_api.auth.bff.cookies import OAUTH_STATE_COOKIE_NAME
 from apis.app_api.auth.bff.routes import router as bff_router
 from apis.app_api.auth.bff.token_exchange import ExchangeResult
 from apis.shared.auth.device_grants.models import (
@@ -93,6 +94,36 @@ def _state_from_redirect(location: str) -> str:
     return query["state"][0]
 
 
+def _issued_binding_cookie(response) -> str | None:
+    for header in response.headers.get_list("set-cookie"):
+        if header.startswith(OAUTH_STATE_COOKIE_NAME):
+            value = header.split(";", 1)[0].split("=", 1)[1]
+            return value or None
+    return None
+
+
+def _verify(client: TestClient, user_code: str) -> tuple[str, str]:
+    """Open the verification URL the way a browser does; return (state, nonce).
+
+    The callback is the web app's and requires the browser-binding cookie and
+    an ID token echoing the nonce, so the CLI's verify leg must issue both.
+    TestClient's jar won't replay a `Secure` cookie over http, so re-seat it
+    the same way develop's own login tests do.
+    """
+    response = client.get(f"/auth/cli/verify?user_code={user_code}")
+    assert response.status_code == 302
+    binding = _issued_binding_cookie(response)
+    assert binding, "verify must issue the browser-binding cookie"
+    client.cookies.set(OAUTH_STATE_COOKIE_NAME, binding)
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(response.headers["location"]).query)
+    return query["state"][0], query["nonce"][0]
+
+
+def _non_binding_set_cookies(response) -> list[str]:
+    """Set-Cookie headers other than the binding cookie's clearing directive."""
+    return [h for h in response.headers.get_list("set-cookie") if not h.startswith(OAUTH_STATE_COOKIE_NAME)]
+
+
 # =====================================================================
 # POST /auth/cli/authorize
 # =====================================================================
@@ -152,6 +183,25 @@ class TestVerify:
         assert query["response_type"] == ["code"]
         assert "state" in query
 
+    def test_issues_the_same_authorize_contract_as_the_web_login(self, cli_app):
+        """PKCE, nonce and browser binding — the callback rejects anything less."""
+        client = TestClient(cli_app, follow_redirects=False)
+        user_code = client.post("/auth/cli/authorize").json()["user_code"]
+
+        response = client.get(f"/auth/cli/verify?user_code={user_code}")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(response.headers["location"]).query)
+
+        assert query["code_challenge_method"] == ["S256"]
+        assert query["code_challenge"][0]
+        assert query["nonce"][0]
+        binding = _issued_binding_cookie(response)
+        assert binding
+
+        ok, data = bff_routes._get_state_store().get_and_delete_state(query["state"][0])
+        assert ok
+        assert data.code_verifier and data.nonce == query["nonce"][0]
+        assert data.browser_binding_hash == bff_routes._browser_binding_digest(binding)
+
     def test_state_carries_the_device_code_not_the_url(self, cli_app):
         """The user code must not ride in the redirect the browser can see."""
         client = TestClient(cli_app, follow_redirects=False)
@@ -197,11 +247,9 @@ class TestVerify:
 
         # Now a real code that has already been answered.
         user_code = client.post("/auth/cli/authorize").json()["user_code"]
-        id_token = make_id_token()
-        _patch_token_exchange(monkeypatch, id_token)
-        loc = client.get(f"/auth/cli/verify?user_code={user_code}").headers["location"]
-        state = _state_from_redirect(loc)
-        client.get(f"/auth/callback?code=abc&state={state}")
+        state, nonce = _verify(client, user_code)
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
+        assert client.get(f"/auth/callback?code=abc&state={state}").status_code == 200
 
         used = client.get(f"/auth/cli/verify?user_code={user_code}")
 
@@ -280,11 +328,10 @@ class TestEndToEnd:
         auth = client.post("/auth/cli/authorize").json()
 
         # 2. Browser opens the verification URL and bounces to Cognito.
-        loc = client.get(f"/auth/cli/verify?user_code={auth['user_code']}").headers["location"]
-        state = _state_from_redirect(loc)
+        state, nonce = _verify(client, auth["user_code"])
 
         # 3. Cognito returns; the callback mints the CLI session.
-        _patch_token_exchange(monkeypatch, make_id_token())
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
         callback = client.get(f"/auth/callback?code=auth-code&state={state}")
         assert callback.status_code == 200
         assert "You're signed in" in callback.text
@@ -306,9 +353,9 @@ class TestEndToEnd:
     async def test_sealed_session_resolves_to_a_persisted_row(self, cli_app, monkeypatch, codec, repository):
         client = TestClient(cli_app, follow_redirects=False)
         auth = client.post("/auth/cli/authorize").json()
-        loc = client.get(f"/auth/cli/verify?user_code={auth['user_code']}").headers["location"]
-        _patch_token_exchange(monkeypatch, make_id_token())
-        client.get(f"/auth/callback?code=auth-code&state={_state_from_redirect(loc)}")
+        state, nonce = _verify(client, auth["user_code"])
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
+        client.get(f"/auth/callback?code=auth-code&state={state}")
         body = client.post("/auth/cli/token", json={"device_code": auth["device_code"]}).json()
 
         record = await repository.get(codec.unseal(body["session"]).session_id)
@@ -322,31 +369,29 @@ class TestEndToEnd:
         CLI sharing one session row — two holders of one refresh token."""
         client = TestClient(cli_app, follow_redirects=False)
         auth = client.post("/auth/cli/authorize").json()
-        loc = client.get(f"/auth/cli/verify?user_code={auth['user_code']}").headers["location"]
-        _patch_token_exchange(monkeypatch, make_id_token())
+        state, nonce = _verify(client, auth["user_code"])
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
 
-        callback = client.get(f"/auth/callback?code=auth-code&state={_state_from_redirect(loc)}")
+        callback = client.get(f"/auth/callback?code=auth-code&state={state}")
 
         assert callback.status_code == 200
-        assert not callback.headers.get_list("set-cookie")
+        # The only cookie touched is the binding cookie being cleared, exactly
+        # as the web-login path clears it. No session or CSRF cookie.
+        assert not _non_binding_set_cookies(callback)
+        for header in callback.headers.get_list("set-cookie"):
+            assert header.split(";", 1)[0] in {f"{OAUTH_STATE_COOKIE_NAME}=", f'{OAUTH_STATE_COOKIE_NAME}=""'}
         assert SESSION_COOKIE_NAME not in client.cookies
         assert CSRF_COOKIE_NAME not in client.cookies
 
     def test_normal_spa_callback_still_sets_cookies(self, cli_app, monkeypatch):
         """The device branch must not have changed the SPA's behaviour."""
-        from apis.shared.auth.state_store import OIDCStateData
-
-        from .conftest import CALLBACK_URL
-
-        bff_routes._get_state_store().store_state(
-            "spa-state",
-            OIDCStateData(redirect_uri=CALLBACK_URL, provider_id="cognito-bff"),
-            ttl_seconds=600,
-        )
-        _patch_token_exchange(monkeypatch, make_id_token())
-
         client = TestClient(cli_app, follow_redirects=False)
-        response = client.get("/auth/callback?code=abc&state=spa-state")
+        login = client.get("/auth/login")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(login.headers["location"]).query)
+        client.cookies.set(OAUTH_STATE_COOKIE_NAME, _issued_binding_cookie(login))
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=query["nonce"][0]))
+
+        response = client.get(f"/auth/callback?code=abc&state={query['state'][0]}")
 
         assert response.status_code == 302
         blob = " ".join(response.headers.get_list("set-cookie"))
@@ -356,9 +401,9 @@ class TestEndToEnd:
     def test_second_poll_after_claim_is_refused(self, cli_app, monkeypatch):
         client = TestClient(cli_app, follow_redirects=False)
         auth = client.post("/auth/cli/authorize").json()
-        loc = client.get(f"/auth/cli/verify?user_code={auth['user_code']}").headers["location"]
-        _patch_token_exchange(monkeypatch, make_id_token())
-        client.get(f"/auth/callback?code=auth-code&state={_state_from_redirect(loc)}")
+        state, nonce = _verify(client, auth["user_code"])
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
+        client.get(f"/auth/callback?code=auth-code&state={state}")
 
         first = client.post("/auth/cli/token", json={"device_code": auth["device_code"]})
         assert first.status_code == 200
@@ -376,18 +421,18 @@ class TestEndToEnd:
         """
         client = TestClient(cli_app, follow_redirects=False)
         auth = client.post("/auth/cli/authorize").json()
-        loc = client.get(f"/auth/cli/verify?user_code={auth['user_code']}").headers["location"]
+        state, nonce = _verify(client, auth["user_code"])
 
         # Expire the grant while the human is still at the IdP.
         stored = await grants.get_by_device_code_hash(hash_device_code(auth["device_code"]))
         await grants.delete(stored)
 
-        _patch_token_exchange(monkeypatch, make_id_token())
-        callback = client.get(f"/auth/callback?code=auth-code&state={_state_from_redirect(loc)}")
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
+        callback = client.get(f"/auth/callback?code=auth-code&state={state}")
 
         assert callback.status_code == 200
         assert "expired" in callback.text.lower()
-        assert not callback.headers.get_list("set-cookie")
+        assert not _non_binding_set_cookies(callback)
 
         # No orphaned session rows left behind.
         from boto3.dynamodb.conditions import Attr
@@ -402,9 +447,9 @@ class TestEndToEnd:
     async def test_grant_reaches_claimed_after_the_full_flow(self, cli_app, monkeypatch, grants):
         client = TestClient(cli_app, follow_redirects=False)
         auth = client.post("/auth/cli/authorize").json()
-        loc = client.get(f"/auth/cli/verify?user_code={auth['user_code']}").headers["location"]
-        _patch_token_exchange(monkeypatch, make_id_token())
-        client.get(f"/auth/callback?code=auth-code&state={_state_from_redirect(loc)}")
+        state, nonce = _verify(client, auth["user_code"])
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
+        client.get(f"/auth/callback?code=auth-code&state={state}")
         client.post("/auth/cli/token", json={"device_code": auth["device_code"]})
 
         stored = await grants.get_by_device_code_hash(hash_device_code(auth["device_code"]))
@@ -415,12 +460,16 @@ class TestEndToEnd:
         """Replaying the callback URL must not mint a second session."""
         client = TestClient(cli_app, follow_redirects=False)
         auth = client.post("/auth/cli/authorize").json()
-        loc = client.get(f"/auth/cli/verify?user_code={auth['user_code']}").headers["location"]
-        state = _state_from_redirect(loc)
-        _patch_token_exchange(monkeypatch, make_id_token())
+        state, nonce = _verify(client, auth["user_code"])
+        _patch_token_exchange(monkeypatch, make_id_token(nonce=nonce))
+        binding = next(c.value for c in client.cookies.jar if c.name == OAUTH_STATE_COOKIE_NAME)
 
         first = client.get(f"/auth/callback?code=abc&state={state}")
         assert first.status_code == 200
+
+        # Even a replay that still holds the binding is refused on state.
+        client.cookies.clear()
+        client.cookies.set(OAUTH_STATE_COOKIE_NAME, binding)
 
         replay = client.get(f"/auth/callback?code=abc&state={state}")
         assert replay.status_code == 302

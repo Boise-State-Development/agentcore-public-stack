@@ -6,6 +6,7 @@ import * as path from 'path';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
+import { logRetentionFor } from '../observability/log-retention';
 
 export interface TokenEnrichmentConstructProps {
   config: AppConfig;
@@ -62,7 +63,7 @@ export class TokenEnrichmentConstruct extends Construct {
     // orphan can't collide with a redeploy. Short retention — these logs are
     // only useful for diagnosing a misconfigured claim map.
     const logGroup = new logs.LogGroup(this, 'TokenEnrichmentLogGroup', {
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: logRetentionFor(config),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 

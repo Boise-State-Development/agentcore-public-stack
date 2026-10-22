@@ -60,6 +60,7 @@ from apis.shared.assistants.publishers import list_publishers
 from apis.shared.assistants.role_pins import list_pins_for_roles
 from apis.shared.assistants.service import (
     get_assistant_with_access_check,
+    is_project_harness,
     resolve_assistant_permission,
 )
 from apis.shared.auth.models import User
@@ -239,7 +240,7 @@ async def list_pins(user: User) -> List[PinnedAgentResponse]:
         # the response; the stored pin is left alone, because a read is not the place to
         # garbage-collect writes and both conditions are reversible. A role seed the
         # caller cannot reach drops here too — the pin never becomes a grant.
-        if assistant is None or permission is None:
+        if assistant is None or permission is None or is_project_harness(assistant):
             continue
 
         row = _pin_row(assistant, ref, publishers, seed)
@@ -261,6 +262,10 @@ async def pin_agent(user: User, agent_id: str) -> PinnedAgentResponse:
     assistant, permission = await get_assistant_with_access_check(
         agent_id, user.user_id, user.email
     )
+    if is_project_harness(assistant):
+        # A project member reaches the harness through the project; pinning would put a
+        # project's working agent in the personal agent menu, detached from its project.
+        raise PinError(400, "A project's agent can't be pinned. Open the project instead.")
     if assistant is None or permission is None:
         # Not-found and access-denied normally collapse: telling a stranger that an id
         # exists but is not theirs is a disclosure the store has no reason to make.

@@ -1,4 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { Dialog } from '@angular/cdk/dialog';
+import { firstValueFrom } from 'rxjs';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import {
   AbstractControl,
@@ -11,22 +14,44 @@ import {
   ReactiveFormsModule,
 } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowLeft, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
+import { heroArrowLeft, heroChevronDown, heroChevronRight, heroTrash } from '@ng-icons/heroicons/outline';
 import {
   AVAILABLE_PROVIDERS,
+  CACHING_CAPABLE_PROVIDERS,
+  CACHING_FORCED_PROVIDERS,
+  defaultSupportsCaching,
+  supportsCachingForProvider,
+  OPENAI_SURFACE_PROVIDERS,
+  PROVIDER_LABELS,
   KNOWN_PARAMS,
   KnownParamMeta,
   MANTLE_API_MODES,
   MANTLE_API_MODE_LABELS,
   ManagedModelFormData,
   MantleApiMode,
+  MODEL_STATUSES,
+  MODEL_STATUS_LABELS,
   ModelParamSpec,
   ModelProvider,
+  ModelStatus,
   SupportedParams,
 } from './models/managed-model.model';
+import {
+  BUILTIN_MODEL_ICONS,
+  BUILTIN_MODEL_ICON_LABELS,
+  BuiltinModelIcon,
+  resolveModelIcon,
+} from './models/model-icons';
+import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import { ManagedModelsService } from './services/managed-models.service';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
+import {
+  DeleteModelDialogComponent,
+  DeleteModelDialogData,
+  DeleteModelDialogResult,
+} from './components/delete-model-dialog.component';
 
 interface ParamRowGroup {
   /**
@@ -216,6 +241,8 @@ function knownParamKeyControl(fb: FormBuilder, key: string): FormControl<string>
 interface ModelFormGroup {
   modelId: FormControl<string>;
   modelName: FormControl<string>;
+  shortDescription: FormControl<string>;
+  iconSlug: FormControl<string>;
   provider: FormControl<ModelProvider>;
   providerName: FormControl<string>;
   inputModalities: FormControl<string[]>;
@@ -226,10 +253,17 @@ interface ModelFormGroup {
   availableToRoles: FormControl<string[]>;
   enabled: FormControl<boolean>;
   isDefault: FormControl<boolean>;
+  isFeatured: FormControl<boolean>;
+  status: FormControl<ModelStatus>;
+  replacedBy: FormControl<string>;
+  retiresOn: FormControl<string>;
+  retirementNote: FormControl<string>;
   inputPricePerMillionTokens: FormControl<number>;
   outputPricePerMillionTokens: FormControl<number>;
   cacheWritePricePerMillionTokens: FormControl<number | null>;
   cacheReadPricePerMillionTokens: FormControl<number | null>;
+  speechInputPricePerMillionTokens: FormControl<number | null>;
+  speechOutputPricePerMillionTokens: FormControl<number | null>;
   knowledgeCutoffDate: FormControl<string | null>;
   supportsCaching: FormControl<boolean>;
   mantleApiMode: FormControl<MantleApiMode>;
@@ -240,8 +274,8 @@ interface ModelFormGroup {
 
 @Component({
   selector: 'app-model-form-page',
-  imports: [ReactiveFormsModule, RouterLink, NgIcon],
-  providers: [provideIcons({ heroArrowLeft, heroChevronDown, heroChevronRight })],
+  imports: [ReactiveFormsModule, RouterLink, NgIcon, ModelIconComponent, SpinnerComponent],
+  providers: [provideIcons({ heroArrowLeft, heroChevronDown, heroChevronRight, heroTrash })],
   templateUrl: './model-form.page.html',
   styleUrl: './model-form.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -253,6 +287,7 @@ export class ModelFormPage implements OnInit {
   private managedModelsService = inject(ManagedModelsService);
   private prefillService = inject(CuratedModelPrefillService);
   private appRolesService = inject(AppRolesService);
+  private dialog = inject(Dialog);
 
   // Available options for multi-select fields
   readonly availableProviders = AVAILABLE_PROVIDERS;
@@ -262,12 +297,35 @@ export class ModelFormPage implements OnInit {
 
   /**
    * Tracks the selected provider as a signal so the template can show/hide
-   * the Mantle-only API-mode/region fields and suppress the caching controls
-   * (Mantle open-weight models never cache). Kept in sync with the form
-   * control in ngOnInit + its valueChanges subscription.
+   * the API-mode/region fields and the caching controls. Kept in sync with the
+   * form control in ngOnInit + its valueChanges subscription.
    */
   readonly selectedProvider = signal<ModelProvider>('bedrock');
   readonly isMantle = computed(() => this.selectedProvider() === 'mantle');
+  readonly isBedrockResponses = computed(() => this.selectedProvider() === 'bedrock-responses');
+  /**
+   * Either OpenAI-compatible Bedrock surface. Both carry a region override and
+   * a bearer-token transport; only the API surface differs, and only Mantle
+   * lets an admin choose it.
+   */
+  readonly isOpenAiSurface = computed(() =>
+    OPENAI_SURFACE_PROVIDERS.includes(this.selectedProvider()),
+  );
+  readonly providerLabels = PROVIDER_LABELS;
+  /** Providers whose models can prompt-cache — drives the caching form block. */
+  readonly supportsCachingControls = computed(() =>
+    CACHING_CAPABLE_PROVIDERS.includes(this.selectedProvider()),
+  );
+  /**
+   * Whether caching is a fact rather than a choice for the selected provider.
+   *
+   * When true the template states it instead of offering a checkbox: the
+   * service caches regardless, so the only thing unchecking would achieve is
+   * clearing the cache rates and pricing cached tokens at $0.
+   */
+  readonly cachingIsForced = computed(() =>
+    CACHING_FORCED_PROVIDERS.includes(this.selectedProvider()),
+  );
 
   /**
    * Model-id suggestions for the Mantle escape-hatch form, sourced from the
@@ -300,6 +358,7 @@ export class ModelFormPage implements OnInit {
   readonly isEditMode = signal<boolean>(false);
   readonly modelId = signal<string | null>(null);
   readonly isSubmitting = signal<boolean>(false);
+  readonly isDeleting = signal<boolean>(false);
   readonly isLoading = signal<boolean>(false);
 
   // Inference-param row metadata, parallel to the ``inferenceParams`` FormArray.
@@ -311,6 +370,14 @@ export class ModelFormPage implements OnInit {
   readonly modelForm: FormGroup<ModelFormGroup> = this.fb.group({
     modelId: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     modelName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
+    shortDescription: this.fb.control('', {
+      nonNullable: true,
+      validators: [Validators.maxLength(80)],
+    }),
+    // '' is a real value here, not "unset": the update path drops null fields
+    // (`exclude_none`), so null could never clear a slug once set. Same rule as
+    // `shortDescription`.
+    iconSlug: this.fb.control('', { nonNullable: true }),
     provider: this.fb.control<ModelProvider>('bedrock', { nonNullable: true, validators: [Validators.required] }),
     providerName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     inputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
@@ -324,12 +391,26 @@ export class ModelFormPage implements OnInit {
     availableToRoles: this.fb.control<string[]>([], { nonNullable: true }),
     enabled: this.fb.control(true, { nonNullable: true }),
     isDefault: this.fb.control(false, { nonNullable: true }),
+    isFeatured: this.fb.control(true, { nonNullable: true }),
+    // Lifecycle (docs/specs/model-retirement.md §7). Strings, not null, for the
+    // same reason as shortDescription: '' is how an update clears a field.
+    status: this.fb.control<ModelStatus>('active', { nonNullable: true }),
+    replacedBy: this.fb.control('', { nonNullable: true }),
+    retiresOn: this.fb.control('', { nonNullable: true }),
+    retirementNote: this.fb.control('', { nonNullable: true, validators: [Validators.maxLength(300)] }),
     inputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
+    speechInputPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
+    speechOutputPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
-    supportsCaching: this.fb.control(false, { nonNullable: true }),
+    // Seeded for the form's initial provider ('bedrock') and re-derived on
+    // every provider switch. A hardcoded `false` here disagreed with the
+    // `?? true` used when loading an existing model or a curated template,
+    // so the same model got a different answer depending on how you reached
+    // the form.
+    supportsCaching: this.fb.control(true, { nonNullable: true }),
     mantleApiMode: this.fb.control<MantleApiMode>('chat', { nonNullable: true }),
     mantleRegion: this.fb.control('', { nonNullable: true }),
     inferenceParams: this.fb.array<FormGroup<ParamRowGroup>>([], {
@@ -444,6 +525,18 @@ export class ModelFormPage implements OnInit {
       if (provider === 'mantle') {
         this.loadMantleModelIdOptions();
       }
+      if (provider === 'bedrock-responses') {
+        // Not admin-selectable on this transport; keep the control's value
+        // truthful so a later provider switch doesn't carry 'chat' back in.
+        this.modelForm.controls.mantleApiMode.setValue('responses');
+      }
+      // Caching support is a property of the provider, so re-derive it on a
+      // provider switch rather than carrying the previous provider's answer
+      // over. Without this the form's hardcoded `false` silently wins for
+      // every caching-capable model an admin adds.
+      this.modelForm.controls.supportsCaching.setValue(
+        defaultSupportsCaching(provider),
+      );
     });
 
     // Keep the max_tokens row pinned to the model's output ceiling: pre-fill
@@ -820,6 +913,10 @@ export class ModelFormPage implements OnInit {
     try {
       const model = await this.managedModelsService.getModel(id);
 
+      // The uploaded icon is not a form field — it is written by its own request
+      // against the saved record — so it is held beside the form rather than in it.
+      this.uploadedIconUrl.set(model.iconUrl ?? null);
+
       // Roles that reach this model via a wildcard grant or inheritance. Held
       // outside the form: they're server-derived and not editable here.
       this.inheritedAppRoles.set(model.inheritedAppRoles ?? []);
@@ -828,6 +925,8 @@ export class ModelFormPage implements OnInit {
       this.modelForm.patchValue({
         modelId: model.modelId,
         modelName: model.modelName,
+        shortDescription: model.shortDescription ?? '',
+        iconSlug: model.iconSlug ?? '',
         provider: model.provider as ModelProvider,
         providerName: model.providerName,
         inputModalities: model.inputModalities.map(m => m.toUpperCase()),
@@ -838,10 +937,19 @@ export class ModelFormPage implements OnInit {
         availableToRoles: model.availableToRoles ?? [],
         enabled: model.enabled,
         isDefault: model.isDefault ?? false,
+        // Absent on records written before the field existed, and those
+        // models are featured today — mirror the backend default.
+        isFeatured: model.isFeatured ?? true,
+        status: model.status ?? 'active',
+        replacedBy: model.replacedBy ?? '',
+        retiresOn: model.retiresOn ?? '',
+        retirementNote: model.retirementNote ?? '',
         inputPricePerMillionTokens: model.inputPricePerMillionTokens,
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: model.cacheWritePricePerMillionTokens ?? null,
         cacheReadPricePerMillionTokens: model.cacheReadPricePerMillionTokens ?? null,
+        speechInputPricePerMillionTokens: model.speechInputPricePerMillionTokens ?? null,
+        speechOutputPricePerMillionTokens: model.speechOutputPricePerMillionTokens ?? null,
         knowledgeCutoffDate: model.knowledgeCutoffDate,
         supportsCaching: model.supportsCaching ?? true,
         mantleApiMode: this.coerceMantleApiMode(model.apiMode),
@@ -871,6 +979,8 @@ export class ModelFormPage implements OnInit {
     this.modelForm.patchValue({
       modelId: template.modelId,
       modelName: template.modelName,
+      shortDescription: template.shortDescription ?? '',
+      iconSlug: template.iconSlug ?? '',
       provider: template.provider,
       providerName: template.providerName,
       inputModalities: template.inputModalities.map(m => m.toUpperCase()),
@@ -881,10 +991,13 @@ export class ModelFormPage implements OnInit {
       availableToRoles: template.availableToRoles ?? [],
       enabled: template.enabled,
       isDefault: template.isDefault,
+      isFeatured: template.isFeatured ?? true,
       inputPricePerMillionTokens: template.inputPricePerMillionTokens,
       outputPricePerMillionTokens: template.outputPricePerMillionTokens,
       cacheWritePricePerMillionTokens: template.cacheWritePricePerMillionTokens ?? null,
       cacheReadPricePerMillionTokens: template.cacheReadPricePerMillionTokens ?? null,
+      speechInputPricePerMillionTokens: template.speechInputPricePerMillionTokens ?? null,
+      speechOutputPricePerMillionTokens: template.speechOutputPricePerMillionTokens ?? null,
       knowledgeCutoffDate: template.knowledgeCutoffDate ?? null,
       supportsCaching: template.supportsCaching ?? true,
       mantleApiMode: this.coerceMantleApiMode(template.apiMode),
@@ -902,6 +1015,7 @@ export class ModelFormPage implements OnInit {
       this.modelForm.patchValue({
         modelId: params['modelId'] || '',
         modelName: params['modelName'] || '',
+        shortDescription: params['shortDescription'] || '',
         provider: params['provider'] || 'bedrock',
         providerName: params['providerName'] || '',
         inputModalities: params['inputModalities'] ? params['inputModalities'].split(',') : [],
@@ -952,6 +1066,152 @@ export class ModelFormPage implements OnInit {
     return control.value?.includes(value) ?? false;
   }
 
+  // ── icon ───────────────────────────────────────────────────────────────────
+  // Two independent controls that resolve to one avatar. The built-in slug is a
+  // plain form field saved with the rest of the model; the upload is its own
+  // request against an already-saved record, because the object key is derived
+  // from the record id. See `models/model-icons.ts` for the precedence.
+
+  readonly builtinIcons = BUILTIN_MODEL_ICONS;
+  readonly builtinIconLabels = BUILTIN_MODEL_ICON_LABELS;
+
+  /** The uploaded icon's serve path, or null when the model has none. */
+  readonly uploadedIconUrl = signal<string | null>(null);
+  readonly isUploadingIcon = signal<boolean>(false);
+  /** Surfaced verbatim: the server's rejections name the limit that was broken. */
+  readonly iconError = signal<string | null>(null);
+
+  // Mirrors the form control so the live preview and the radio group's checked
+  // state update as the admin clicks, without either of them reading
+  // `modelForm.value` during change detection.
+  private readonly iconSlugValue = toSignal(this.modelForm.controls.iconSlug.valueChanges, {
+    initialValue: this.modelForm.controls.iconSlug.value,
+  });
+
+  /**
+   * What the picker will actually draw for this model right now — the same
+   * resolution the chat picker runs, so the preview cannot promise one thing and
+   * the menu render another.
+   */
+  readonly iconPreviewModel = computed(() => ({
+    iconUrl: this.uploadedIconUrl(),
+    iconSlug: this.iconSlugValue(),
+    providerName: this.providerNameValue(),
+    modelName: this.modelNameValue(),
+    modelId: this.modelIdValue(),
+  }));
+
+  protected readonly modelStatuses = MODEL_STATUSES.map((value) => ({
+    value,
+    label: MODEL_STATUS_LABELS[value],
+  }));
+
+  readonly selectedStatus = toSignal(this.modelForm.controls.status.valueChanges, {
+    initialValue: this.modelForm.controls.status.value,
+  });
+
+  /**
+   * Models this one can be replaced by: every other active, enabled model. The
+   * backend enforces the same rule; offering only valid choices keeps the admin
+   * from finding that out from an error.
+   */
+  readonly successorOptions = computed(() => {
+    const self = this.modelIdValue();
+    return this.managedModelsService
+      .getManagedModels()
+      .filter((m) => (m.status ?? 'active') === 'active' && m.enabled && m.modelId !== self);
+  });
+
+  private readonly providerNameValue = toSignal(
+    this.modelForm.controls.providerName.valueChanges,
+    { initialValue: this.modelForm.controls.providerName.value },
+  );
+  private readonly modelNameValue = toSignal(this.modelForm.controls.modelName.valueChanges, {
+    initialValue: this.modelForm.controls.modelName.value,
+  });
+  private readonly modelIdValue = toSignal(this.modelForm.controls.modelId.valueChanges, {
+    initialValue: this.modelForm.controls.modelId.value,
+  });
+
+  /**
+   * Where the previewed icon actually came from.
+   *
+   * Read off the same resolution the picker runs, not off which control the
+   * admin last touched: with no slug and a provider we ship no logo for, "the
+   * provider name matched" is simply untrue, and the tile beside this caption
+   * is visibly a monogram.
+   */
+  readonly iconPreviewSource = computed(() => {
+    const icon = resolveModelIcon(this.iconPreviewModel());
+    if (icon.kind === 'upload') return 'Uploaded image';
+    if (icon.kind === 'none') return 'No icon — showing the model\'s initial';
+    if (icon.via === 'slug') return 'Built-in logo';
+    return icon.via === 'model' ? 'Matched from the model ID' : 'Matched from the provider name';
+  });
+
+  /** Pick a built-in logo, or clear the selection by picking the active one again. */
+  selectIconSlug(slug: BuiltinModelIcon | ''): void {
+    const control = this.modelForm.controls.iconSlug;
+    control.setValue(control.value === slug ? '' : slug);
+    control.markAsDirty();
+  }
+
+  isIconSlugSelected(slug: string): boolean {
+    return this.iconSlugValue() === slug;
+  }
+
+  /**
+   * Upload the picked file and point the record at it.
+   *
+   * Only reachable in edit mode: the object key is `models/{record id}/icons/…`,
+   * so there is nothing to attach to until the model has been saved once. The
+   * input is reset afterwards so re-picking the same file still fires `change`.
+   */
+  async onIconFileSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+
+    const id = this.modelId();
+    if (!id) return;
+
+    this.iconError.set(null);
+    this.isUploadingIcon.set(true);
+    try {
+      const response = await this.managedModelsService.uploadIcon(id, file);
+      this.uploadedIconUrl.set(response.iconUrl ?? null);
+    } catch (error: any) {
+      // The server's message names the limit and the supplied value ("Icons must
+      // be square (this one is 512×256)"), which is the whole point of showing it
+      // rather than a generic failure.
+      this.iconError.set(
+        error?.error?.detail || error?.message || 'Failed to upload the icon. Please try again.',
+      );
+    } finally {
+      this.isUploadingIcon.set(false);
+    }
+  }
+
+  /** Remove the uploaded icon, falling back to the built-in slug (or the monogram). */
+  async removeUploadedIcon(): Promise<void> {
+    const id = this.modelId();
+    if (!id) return;
+
+    this.iconError.set(null);
+    this.isUploadingIcon.set(true);
+    try {
+      await this.managedModelsService.deleteIcon(id);
+      this.uploadedIconUrl.set(null);
+    } catch (error: any) {
+      this.iconError.set(
+        error?.error?.detail || error?.message || 'Failed to remove the icon. Please try again.',
+      );
+    } finally {
+      this.isUploadingIcon.set(false);
+    }
+  }
+
   /**
    * Submit the form
    */
@@ -971,6 +1231,10 @@ export class ModelFormPage implements OnInit {
       const formData: ManagedModelFormData = {
         modelId: v.modelId,
         modelName: v.modelName,
+        // Empty string rather than null: the update path drops null fields
+        // (`exclude_none`), so null could never clear a description once set.
+        shortDescription: v.shortDescription.trim(),
+        iconSlug: v.iconSlug,
         provider: v.provider,
         providerName: v.providerName,
         inputModalities: v.inputModalities,
@@ -982,16 +1246,28 @@ export class ModelFormPage implements OnInit {
         availableToRoles: v.availableToRoles,
         enabled: v.enabled,
         isDefault: v.isDefault,
+        isFeatured: v.isFeatured,
+        status: v.status,
+        replacedBy: v.replacedBy,
+        retiresOn: v.retiresOn,
+        retirementNote: v.retirementNote.trim(),
         inputPricePerMillionTokens: v.inputPricePerMillionTokens,
         outputPricePerMillionTokens: v.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,
         cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
+        speechInputPricePerMillionTokens: v.speechInputPricePerMillionTokens,
+        speechOutputPricePerMillionTokens: v.speechOutputPricePerMillionTokens,
         knowledgeCutoffDate: v.knowledgeCutoffDate,
-        supportsCaching: v.supportsCaching,
-        // Only meaningful for Mantle; null elsewhere so the backend stores
-        // nothing for other providers. An empty region means "app's region".
-        apiMode: v.provider === 'mantle' ? v.mantleApiMode : null,
-        region: v.provider === 'mantle' ? (v.mantleRegion?.trim() || null) : null,
+        supportsCaching: supportsCachingForProvider(v.provider, v.supportsCaching),
+        // Only meaningful on an OpenAI-compatible Bedrock surface; null
+        // elsewhere so the backend stores nothing for other providers. An
+        // empty region means "app's region". The bedrock-runtime transport
+        // has no API-surface choice — it exists because GPT-5.6 caches only
+        // over Responses — so it is pinned rather than read from the form.
+        apiMode: this.apiModeForProvider(v.provider),
+        region: OPENAI_SURFACE_PROVIDERS.includes(v.provider)
+          ? (v.mantleRegion?.trim() || null)
+          : null,
         supportedParams: this.collectSupportedParams(),
       };
 
@@ -1017,6 +1293,21 @@ export class ModelFormPage implements OnInit {
   }
 
   /**
+   * The API surface to persist for a provider.
+   *
+   * Mantle is the only provider where this is a real choice. The
+   * bedrock-runtime transport is pinned to `responses` — the same
+   * normalization the backend applies when the record is written — because a
+   * model silently downgraded to Chat Completions there would lose prompt
+   * caching, which is the only reason to use that transport.
+   */
+  private apiModeForProvider(provider: ModelProvider): MantleApiMode | null {
+    if (provider === 'bedrock-responses') return 'responses';
+    if (provider === 'mantle') return this.modelForm.value.mantleApiMode ?? 'chat';
+    return null;
+  }
+
+  /**
    * Normalize a stored/templated Mantle API mode onto the known options,
    * falling back to the default `chat` for null/legacy/unknown values so the
    * select always has a valid selection.
@@ -1025,6 +1316,38 @@ export class ModelFormPage implements OnInit {
     return MANTLE_API_MODES.includes(value as MantleApiMode)
       ? (value as MantleApiMode)
       : 'chat';
+  }
+
+  /**
+   * Confirm, delete, and return to the list. On failure the admin stays on the
+   * form with their unsaved edits intact.
+   */
+  async deleteModel(): Promise<void> {
+    const id = this.modelId();
+    if (!id || this.isDeleting()) {
+      return;
+    }
+
+    const { modelId, modelName } = this.modelForm.getRawValue();
+    const dialogRef = this.dialog.open<DeleteModelDialogResult>(
+      DeleteModelDialogComponent,
+      { data: { modelId, modelName } as DeleteModelDialogData },
+    );
+    const confirmed = await firstValueFrom(dialogRef.closed);
+    if (!confirmed) {
+      return;
+    }
+
+    this.isDeleting.set(true);
+    try {
+      await this.managedModelsService.deleteModel(id);
+      this.router.navigate(['/admin/manage-models']);
+    } catch (error) {
+      console.error('Error deleting model:', error);
+      alert('Failed to delete model. Please try again.');
+    } finally {
+      this.isDeleting.set(false);
+    }
   }
 
   /**

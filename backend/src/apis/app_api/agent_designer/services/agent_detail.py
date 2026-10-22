@@ -13,6 +13,13 @@ Two reads over one Agent record, with one thing in common: **they speak in names
   Designer's picker makes, so "what you may bind" and "what will run for you" can never
   drift apart.
 
+  **Skills are the one exception**, and they diff against the run-time predicate
+  (``resolve_invocable_skill_ids``) instead of the palette. The palette is the viewer's own
+  skills, while the runtime also resolves skills that the *Agent's owner* wrote
+  (invoke-through, Skills v2 §6). Diffing a shared Agent against the palette marked every
+  owner-authored skill "missing", so viewers were blocked from Agents that would have run
+  for them.
+
 Two rules in here are load-bearing and easy to erode:
 
 **1. ``knowledge_base`` is never gated.** ``compat.effective_bindings`` synthesizes a
@@ -22,7 +29,7 @@ A naive diff therefore marks every legacy Agent *blocked*. The KB is excluded fr
 reads instead — it is not a capability the viewer can lack.
 
 **2. There are two states, not three.** ``agent_binding_resolver`` is block-with-message
-for *every* kind it resolves — a missing model, tool, skill or memory space raises rather
+for *every* kind it resolves — a missing model, tool or skill raises rather
 than degrading — which is the Designer spec's D5 rule: "No **downgrade** on missing
 capability (block-only v1)". The Marketplace spec's D6 originally sketched a middle
 ``limits`` state, gated on a binding declaring ``config.optional``; nothing ever wrote
@@ -32,12 +39,13 @@ preview offering an outcome the runtime cannot produce is a preview that lies. R
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from apis.shared.assistants.categories import get_category
 from apis.shared.assistants.compat import effective_bindings
 from apis.shared.assistants.models import (
     AgentCapability,
+    AgentModelRetirement,
     AgentRunnabilityResponse,
     Assistant,
     ListingPublisher,
@@ -46,9 +54,12 @@ from apis.shared.assistants.models import (
 from apis.shared.assistants.publishers import get_publisher
 from apis.shared.auth.models import User
 from apis.shared.models.managed_models import list_all_managed_models
+from apis.shared.models.models import ModelStatus
+from apis.shared.models.retirement import resolve_effective_model, resolve_from_catalog
+from apis.shared.feature_flags import skills_enabled
+from apis.shared.skills.access import resolve_invocable_skill_ids
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.tools.scoped_ids import base_tool_id
-from apis.shared.memory.service import MemorySpaceService
 
 from apis.app_api.agent_designer.services.bindable_catalog import list_bindable
 from apis.app_api.tools.service import ToolCatalogService, get_tool_catalog_service
@@ -58,14 +69,13 @@ logger = logging.getLogger(__name__)
 # Kinds a viewer can be denied, in the order the detail page lists them. ``knowledge_base``
 # is deliberately absent (rule 1 above) and so is any kind this deployment does not know —
 # the run-time resolver ignores unknown kinds, so previewing a block on one would be wrong.
-GATED_KINDS = ("tool", "skill", "memory_space")
+GATED_KINDS = ("tool", "skill")
 
 # Fallbacks for a ref whose primitive no longer resolves. Never fall back to the ref
 # itself: a capability label is rendered to every viewer, and refs are not display content.
 _KIND_FALLBACK_LABELS = {
     "tool": "A tool",
     "skill": "A skill",
-    "memory_space": "A memory space",
     "model": "A model",
 }
 
@@ -114,27 +124,6 @@ async def _skill_labels(refs: List[str]) -> Dict[str, str]:
     return {s.skill_id: s.display_name for s in skills}
 
 
-def _memory_labels(refs: List[str], user: User, svc: MemorySpaceService) -> Dict[str, str]:
-    """Memory-space names, resolved through the viewer.
-
-    Unlike tools and skills there is no unfiltered name lookup for a space, and there
-    should not be — a space is personal data. That is tolerable precisely because D7
-    blocks submission on a ``memory_space`` binding, so a *published* Agent never has
-    one; this path is reached by an author looking at their own Agent, where the lookup
-    resolves. Anything unresolved falls back to the generic kind label.
-    """
-    labels: Dict[str, str] = {}
-    for ref in refs:
-        try:
-            space, _role = svc.resolve_permission(ref, user.user_id, user.email)
-        except Exception:
-            logger.warning(f"Failed to resolve memory space label for '{ref}'", exc_info=True)
-            space = None
-        if space is not None:
-            labels[ref] = space.name
-    return labels
-
-
 async def _model_label(model_id: str) -> Optional[str]:
     """The managed model's display name, unfiltered by the viewer's access."""
     try:
@@ -145,12 +134,60 @@ async def _model_label(model_id: str) -> Optional[str]:
     return model.model_name if model else None
 
 
+async def _runnable_model_check(model_id: str) -> Tuple[Optional[str], Optional[MissingCapability]]:
+    """``(the model id that will actually run, a MissingCapability if none can)``.
+
+    Mirrors the run-time resolver (docs/specs/model-retirement.md §7): a retired model
+    runs as its successor, so the access question is asked of the successor; a retired
+    model with no successor is refused for everyone, so it is missing no matter what the
+    viewer or role is granted. Without this, "will it run?" answers *ready* for an Agent
+    the runtime now refuses.
+    """
+    effective = await resolve_effective_model(model_id)
+    if effective is not None and effective.denied:
+        name = effective.retired.model_name if effective.retired else None
+        label = f"{name} (retired)" if name else _fallback("model")
+        return None, MissingCapability(label=label, kind="model")
+    return (effective.model_id if effective else model_id), None
+
+
+async def resolve_model_retirement(model_id: str) -> Optional[AgentModelRetirement]:
+    """The pinned model's retirement, as the detail page shows it — ``None`` when active.
+
+    The successor is named only by display name: a successor with no catalog row gets no
+    label rather than its raw id, the same rule every other detail-page field follows.
+    """
+    try:
+        catalog = await list_all_managed_models()
+    except Exception:
+        logger.warning("Failed to resolve model retirement for detail read", exc_info=True)
+        return None
+    row = next((m for m in catalog if m.model_id == model_id), None)
+    if row is None or row.status == ModelStatus.ACTIVE:
+        return None
+
+    successor = None
+    if row.status == ModelStatus.RETIRED:
+        effective = resolve_from_catalog(model_id, catalog)
+        if effective.redirected and effective.record is not None:
+            successor = effective.record.model_name
+    elif row.replaced_by:
+        named = next((m for m in catalog if m.model_id == row.replaced_by), None)
+        successor = named.model_name if named else None
+
+    return AgentModelRetirement(
+        status=row.status.value,
+        successor_label=successor,
+        retires_on=row.retires_on,
+        retirement_note=row.retirement_note,
+    )
+
+
 async def _labels_by_kind(
     assistant: Assistant,
     user: User,
     *,
     tool_service: Optional[ToolCatalogService] = None,
-    memory_service: Optional[MemorySpaceService] = None,
 ) -> Dict[str, Dict[str, str]]:
     """``{kind: {ref: label}}`` for every gated binding on the Agent.
 
@@ -168,10 +205,6 @@ async def _labels_by_kind(
         labels["tool"] = await _tool_labels(by_kind["tool"], tool_service or get_tool_catalog_service())
     if by_kind["skill"]:
         labels["skill"] = await _skill_labels(by_kind["skill"])
-    if by_kind["memory_space"]:
-        labels["memory_space"] = _memory_labels(
-            by_kind["memory_space"], user, memory_service or MemorySpaceService()
-        )
     return labels
 
 
@@ -181,7 +214,6 @@ async def resolve_capabilities(
     user: User,
     *,
     tool_service: Optional[ToolCatalogService] = None,
-    memory_service: Optional[MemorySpaceService] = None,
 ) -> Tuple[List[AgentCapability], Optional[str]]:
     """Return ``(capabilities, model_label)`` for the detail read.
 
@@ -190,9 +222,7 @@ async def resolve_capabilities(
     ``None`` when the Agent pins no model, which means "resolve the model as today" —
     the detail page renders an em dash rather than inventing a name.
     """
-    labels = await _labels_by_kind(
-        assistant, user, tool_service=tool_service, memory_service=memory_service
-    )
+    labels = await _labels_by_kind(assistant, user, tool_service=tool_service)
 
     capabilities: List[AgentCapability] = []
     seen = set()
@@ -260,12 +290,25 @@ async def resolve_listing_display(
 
 
 # ---------------------------------------------------------------------- runnability
+async def _available_refs(kind: str, assistant: Assistant, user: User, refs: List[str]) -> Set[str]:
+    """The refs of ``kind`` that would resolve for ``user`` when this Agent runs.
+
+    Skills go through the run-time resolver's own predicate, so an Agent owner's skills
+    count as available to anyone who can open the Agent (see the module docstring). The
+    flag check matches ``_resolve_skills``, which blocks while Skills are disabled.
+    """
+    if kind != "skill":
+        return {item.ref for item in await list_bindable(kind, user)}
+    if not skills_enabled():
+        return set()
+    return await resolve_invocable_skill_ids(user, refs, assistant.owner_id)
+
+
 async def resolve_runnability(
     assistant: Assistant,
     user: User,
     *,
     tool_service: Optional[ToolCatalogService] = None,
-    memory_service: Optional[MemorySpaceService] = None,
 ) -> AgentRunnabilityResponse:
     """Diff the Agent's model + bindings against the viewer's own catalog (D6).
 
@@ -273,16 +316,15 @@ async def resolve_runnability(
     resolver would raise on is absent. There is no middle state — see note 2 above.
     """
     missing: List[MissingCapability] = []
-    labels = await _labels_by_kind(
-        assistant, user, tool_service=tool_service, memory_service=memory_service
-    )
+    labels = await _labels_by_kind(assistant, user, tool_service=tool_service)
 
     # The pinned model. Not a binding — ``agent_binding_resolver`` blocks the turn
     # outright when the invoker cannot access it, same as every other gated kind.
     if assistant.model_settings is not None:
-        model_id = assistant.model_settings.model_id
-        available_models = {item.ref for item in await list_bindable("model", user)}
-        if model_id not in available_models:
+        model_id, retired_missing = await _runnable_model_check(assistant.model_settings.model_id)
+        if retired_missing is not None:
+            missing.append(retired_missing)
+        elif model_id not in {item.ref for item in await list_bindable("model", user)}:
             missing.append(
                 MissingCapability(
                     label=await _model_label(model_id) or _fallback("model"),
@@ -299,7 +341,9 @@ async def resolve_runnability(
         # picker shows the viewer. An empty list is a legitimate answer (the primitive's
         # feature flag is off in this environment), and it correctly blocks, matching
         # the run-time resolver's behaviour in the same situation.
-        available = {item.ref for item in await list_bindable(kind, user)}
+        available = await _available_refs(
+            kind, assistant, user, [_binding_key(b) for b in of_kind]
+        )
         for binding in of_kind:
             key = _binding_key(binding)
             if key in available:

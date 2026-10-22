@@ -117,19 +117,19 @@ export interface OAuthCompleteMessage {
     }
 
     .success-icon {
-      color: var(--color-green-600);
+      color: var(--color-state-success-600);
     }
 
     :host-context(html.dark) .success-icon {
-      color: var(--color-green-400);
+      color: var(--color-state-success-400);
     }
 
     .error-icon {
-      color: var(--color-red-600);
+      color: var(--color-state-danger-600);
     }
 
     :host-context(html.dark) .error-icon {
-      color: var(--color-red-400);
+      color: var(--color-state-danger-400);
     }
 
     .title {

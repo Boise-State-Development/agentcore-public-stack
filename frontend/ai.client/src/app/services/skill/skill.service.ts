@@ -2,6 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
+import { ToggleOptions } from '../toggle-options';
 
 /**
  * One skill the user can reach (catalog-granted ∪ authored), as returned by
@@ -16,6 +17,17 @@ export interface UserSkill {
   category: string | null;
   userEnabled: boolean | null;
   isEnabled: boolean;
+  /**
+   * The runtime's activation key — the name the model sees in
+   * `<available_skills>` and the token the composer's `/` menu writes into a
+   * message. Served by the backend rather than derived here so the two can
+   * never disagree about the slug rule.
+   *
+   * Optional because the SPA and the backend deploy independently (and in no
+   * enforced order): a client that lands ahead of the backend that serves this
+   * field must degrade to "no slash commands", not to a menu of `/undefined`.
+   */
+  slug?: string;
 }
 
 /** Response from GET /skills/ */
@@ -33,8 +45,9 @@ export interface SkillsResponse {
  *
  * Unlike ToolService this does NOT load in its constructor. Skills are opt-in
  * and the feature is off in every deployed env until PR-5, so the load is
- * deferred to the first open of the model-settings panel (and to an
- * Agent-bound conversation, which needs the names to render locked rows).
+ * deferred to the first open of a Customize → Skills page or the composer's
+ * skill-command menu (and to an Agent-bound conversation, which needs the
+ * names to render locked rows).
  */
 @Injectable({
   providedIn: 'root'
@@ -50,6 +63,16 @@ export class SkillService {
   private _loading = signal(false);
   private _error = signal<string | null>(null);
   private _initialized = signal(false);
+
+  /**
+   * The load currently in flight, so a second caller *joins* it instead of
+   * being told "already loading" and continuing with an empty list. The old
+   * `if (this._loading()) return;` guard deduped the request but resolved
+   * immediately, which is exactly what let a chat turn sent moments after page
+   * load disclose no skills while the next turn disclosed three — a rewritten
+   * system prompt on turn 2, paid at the cache-write premium.
+   */
+  private _inflight: Promise<void> | null = null;
 
   // Agent Designer: when the active conversation is bound to an Agent that binds
   // skills, the picker is locked to exactly that set — the backend governs skills
@@ -132,8 +155,20 @@ export class SkillService {
    * call again after login or role changes.
    */
   async loadSkills(): Promise<void> {
-    if (this._loading()) return;
+    // Join an in-flight load rather than returning early: callers await this to
+    // know the list is settled.
+    if (this._inflight) return this._inflight;
 
+    const inflight = this.fetchSkills();
+    this._inflight = inflight;
+    try {
+      await inflight;
+    } finally {
+      this._inflight = null;
+    }
+  }
+
+  private async fetchSkills(): Promise<void> {
     this._loading.set(true);
     this._error.set(null);
 
@@ -164,10 +199,17 @@ export class SkillService {
     }
   }
 
-  /** Toggle a skill's enabled state (optimistic, reverts on save failure). */
-  async toggleSkill(skillId: string): Promise<void> {
+  /**
+   * Toggle a skill's enabled state (optimistic, reverts on save failure).
+   *
+   * `respectAgentLock` defaults to true — the conversation-scoped behaviour the
+   * composer drawer depends on. Global surfaces (Customize) pass `false`; see
+   * `services/toggle-options.ts` and `docs/specs/customize-surface.md`
+   * §"The agent-lock seam" for why.
+   */
+  async toggleSkill(skillId: string, options?: ToggleOptions): Promise<void> {
     // Agent-locked: the skill set is dictated by the Agent; ignore toggles.
-    if (this._agentLockedSkillIds() !== null) return;
+    if ((options?.respectAgentLock ?? true) && this._agentLockedSkillIds() !== null) return;
     const skill = this._skills().find(s => s.skillId === skillId);
     if (!skill) return;
 
@@ -208,6 +250,24 @@ export class SkillService {
   /** Get the list of enabled skill IDs (for non-signal contexts). */
   getEnabledSkillIds(): string[] {
     return this.enabledSkillIds();
+  }
+
+  /**
+   * Resolve once the skill list has settled, starting the load if nothing has.
+   *
+   * The chat send path awaits this so a turn sent before the (lazily triggered)
+   * `/skills/` fetch returns still discloses the same skills a later turn
+   * would. Identical disclosure on turn 1 and turn 2 is what keeps the
+   * cacheable system-prompt prefix stable across a session.
+   *
+   * Never rejects: a failed load leaves the picker empty, which is the state
+   * the send path already tolerates. It is a no-op once loaded, and joins the
+   * in-flight request when one is already running, so awaiting it on every turn
+   * costs nothing after the first.
+   */
+  async ensureLoaded(): Promise<void> {
+    if (this._initialized()) return;
+    await this.loadSkills().catch(() => undefined);
   }
 
   /** Reload skills from the server. */

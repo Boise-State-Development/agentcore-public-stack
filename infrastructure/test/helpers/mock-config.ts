@@ -4,9 +4,60 @@
  * Provides a complete, valid AppConfig and helpers to mock SSM
  * valueFromLookup context entries so stacks can be synthesized
  * without hitting AWS.
+ *
+ * ## Two ways a synth here differs from what a deployment gets
+ *
+ * Both were found by reading dev's live stack against a synth (2026-10-20),
+ * and both make a test's numbers smaller than reality, so they matter to any
+ * test that COUNTS something rather than asserting a shape:
+ *
+ * 1. **`Template.fromStack` never emits `AWS::CDK::Metadata`.** The CDK *CLI*
+ *    adds it to every deployed template (version reporting, on unless
+ *    `versionReporting: false`, which `cdk.json` does not set). So a resource
+ *    count taken from a unit test is **one lower than the deploy's**, always.
+ *    `platform-ceilings.test.ts` adds it back; anything else counting
+ *    resources should too.
+ * 2. **A config-gated block is absent until its value is present.** This
+ *    factory is deliberately an all-off baseline, which is neither the shipped
+ *    default (`loadConfig()`) nor anything a deployment runs, and a block that
+ *    only synthesizes when a value is set simply will not be there.
+ *    `tokenExchange` is the usual one: it is worth 3 env vars
+ *    (`runtime-env-var-limit.test.ts`: "without it this test counts 44 while
+ *    prod and dev deploy 47") and 1 resource (`platform-ceilings.test.ts`).
+ *    This has now been missed twice, in both of those files, by authors who
+ *    had read the other one's warning — so if your test measures against a
+ *    ceiling, start from the config a deployment actually has and work out
+ *    what is missing, rather than from this baseline and what you remember.
+ *
+ * A bare `new cdk.App()` also carries none of `cdk.json`'s CDK feature flags,
+ * which change what is synthesized; pass them when fidelity matters.
  */
 import * as cdk from 'aws-cdk-lib';
-import { AppConfig } from '../../lib/config';
+import { AppConfig,
+  AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT,
+  API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
+  CONVERSATION_RETENTION_DAYS_DEFAULT,
+  MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
+  MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
+  MANAGED_KB_PER_KB_CEILING_BYTES,
+  MANAGED_KB_RETENTION_WINDOW_DAYS,
+  OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
+  OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+  OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
+  OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+  OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+  OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+  OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+  OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+  OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+  OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+  OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+} from '../../lib/config';
 
 /** Default mock account and region used across all tests. */
 export const MOCK_ACCOUNT = '123456789012';
@@ -28,6 +79,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     vpcCidr: '10.0.0.0/16',
     corsOrigins: 'http://localhost:4200',
     appVersion: '1.0.0-test',
+    conversationRetentionDays: CONVERSATION_RETENTION_DAYS_DEFAULT,
+    conversationRetentionPrunesSessions: true,
+    conversationRetentionPruneArmed: false,
     frontend: {
       cloudFrontPriceClass: 'PriceClass_100',
     },
@@ -36,8 +90,51 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       memory: 512,
       desiredCount: 1,
       maxCapacity: 2,
+      apiConverseMaxInFlight: API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
     },
-    inferenceApi: {},
+    inferenceApi: { runtimePlatformVersion: AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT },
+    // Observability mirrors the shipped OSS defaults rather than hardcoded
+    // literals, so a change to a default is exercised by every existing test
+    // instead of silently diverging from what a fork actually deploys.
+    // alarmTopicEnabled is ON here because routing is the point of the feature:
+    // the "every alarm has an action" guard must run against the default shape.
+    observability: {
+      alarmTopicEnabled: true,
+      logRetentionDays: OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
+      albTarget5xxThreshold: OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
+      albP99LatencyMs: OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreLatencyMs: OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
+      agentCoreErrorThreshold: OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      agentCoreActiveSessionThreshold:
+        OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
+      lambdaErrorThreshold: OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
+      lambdaDurationPercentOfTimeout:
+        OBSERVABILITY_DEFAULT_LAMBDA_DURATION_PERCENT_OF_TIMEOUT,
+      dynamoThrottleThreshold: OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
+      ecsCpuPercent: OBSERVABILITY_DEFAULT_ECS_CPU_PERCENT,
+      ecsMemoryPercent: OBSERVABILITY_DEFAULT_ECS_MEMORY_PERCENT,
+      promptCacheAvoidableMissThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+      promptCacheWastedUsdThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
+      promptCacheSessionWastedUsdThreshold:
+        OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      bedrockTpmQuotaPercent: OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
+      // Deliberately NOT the empty default: two entries with deliberately
+      // different orders of magnitude, so the per-model alarms exist in test
+      // stacks and the routing guard covers them. The real default is empty and
+      // is asserted separately in config.test.ts. Illustrative values — quotas
+      // are per-account, so these are not canonical for any deployment.
+      bedrockTpmQuotas: {
+        'global.anthropic.claude-sonnet-5': 40_000_000,
+        'us.anthropic.claude-sonnet-4-20250514-v1:0': 200_000,
+      },
+      xraySamplingRate: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
+      xraySamplingReservoir: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
+      xrayInsightsNotifications: false,
+      agentCoreApplicationLogsEnabled: false,
+      runtimeLogRetentionSweepEnabled: true,
+    },
     ragIngestion: {
       lambdaMemorySize: 3008,
       lambdaTimeout: 900,
@@ -48,14 +145,93 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     kbSync: {
       enabled: false,
     },
+    // Managed_KB ships with all three flags OFF and the byte caps /
+    // alarm thresholds at their production defaults. Tests that need a
+    // flag on opt in explicitly via
+    // createMockConfig({ managedKb: { ...base.managedKb, migrationEnabled: true } }),
+    // which keeps "off" the thing a test has to work to escape rather
+    // than the thing it has to remember to assert.
+    managedKb: {
+      newDefault: false,
+      migrationEnabled: false,
+      reconcilerArmed: false,
+      docReconcilerArmed: false,
+      perOwnerDefaultBytes: MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
+      perOwnerElevatedBytes: MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
+      perKnowledgeBaseCeilingBytes: MANAGED_KB_PER_KB_CEILING_BYTES,
+      retentionWindowDays: MANAGED_KB_RETENTION_WINDOW_DAYS,
+      storageAlarmGb: 500,
+      dailyCostAlarmUsd: 100,
+    },
     scheduledRuns: {
+      enabled: false,
+    },
+    platformCosts: {
       enabled: false,
     },
     memorySpaces: {
       enabled: false,
     },
+    projects: {
+      enabled: false,
+    },
+    userGrants: {
+      enabled: false,
+    },
+    sessionPrewarm: {
+      enabled: false,
+    },
+    clientTurnTiming: {
+      enabled: false,
+    },
+    ttftProbe: {
+      userId: '',
+      modelId: '',
+    },
+    memoryLint: {
+      mode: 'warn',
+      sensitivePatterns: '',
+    },
+    conversationIndex: {
+      enabled: false,
+    },
+    conversationSearch: {
+      enabled: true,
+    },
+    platformSelfService: {
+      enabled: false,
+    },
+    feedbackEvalSampling: { enabled: false },
     skills: {
       enabled: false,
+    },
+    skillAuthoring: {
+      enabled: false,
+    },
+    wordTrackedChanges: {
+      enabled: false,
+    },
+    assistantKbFullContext: {
+      enabled: false,
+    },
+    largeDocumentAttachments: {
+      enabled: false,
+    },
+    attachmentKb: {
+      enabled: false,
+    },
+    folderAttachments: {
+      enabled: false,
+    },
+    folderSync: {
+      enabled: false,
+    },
+    sourceProvenance: {
+      enabled: false,
+    },
+    documentExtract: {
+      enabled: false,
+      modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
     },
     agents: {
       enabled: false,
@@ -63,13 +239,24 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     agentMarketplace: {
       enabled: false,
     },
-    fineTuning: {},
+    dictation: {
+      enabled: true,
+      languages: 'en-US',
+    },
+    fineTuning: {
+      enabled: true,
+      defaultQuotaHours: 0,
+    },
     artifacts: {
+      shareInboxEnabled: false,
       retentionDays: 90,
       extraFrameAncestors: [],
     },
     mcpSandbox: {
       extraFrameAncestors: [],
+    },
+    browser: {
+      urlBlocklist: ['blocked.example.com'],
     },
     mcpIdentity: {
       tokenEnrichment: {

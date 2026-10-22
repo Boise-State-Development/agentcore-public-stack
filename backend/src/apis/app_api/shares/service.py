@@ -11,13 +11,21 @@ import re
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from apis.shared.audit import TARGET_PROJECT, AuditAction, AuditService, get_audit_service
 from apis.shared.auth.models import User
+from apis.shared.feature_flags import projects_enabled
+from apis.shared.notifications.service import NotificationService
+from apis.shared.projects.access import resolve_project_role
+from apis.shared.projects.models import Project, normalize_email
+from apis.shared.projects.repository import ProjectRepository
+from apis.shared.projects.service import max_members
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
 
@@ -25,27 +33,105 @@ from .models import (
     CreateShareRequest,
     ShareListResponse,
     ShareResponse,
+    SharedConversationArtifact,
     SharedConversationResponse,
     UpdateShareRequest,
 )
-from .snapshot_store import (
+from apis.shared.shares.snapshots import SnapshotUnreadableError, convert_decimals_to_float, load_snapshot_raw
+from apis.shared.shares.snapshot_store import (
     ShareSnapshotStore,
-    ShareSnapshotStoreError,
     get_share_snapshot_store,
 )
-
-# Snapshot schema version stamped on the S3 body pointer, for forward
-# migration if the body shape ever changes.
-_SNAPSHOT_SCHEMA_VERSION = 1
+from apis.shared.shares.writer import ShareStorageError, project_pointer, write_share
 
 logger = logging.getLogger(__name__)
+
+# The ``[Attached files: …]`` marker ``PromptBuilder.build_prompt`` appends to
+# a user message that carried attachments. Same shape the SPA's
+# ``ATTACHED_FILES_PATTERN`` matches (end-anchored).
+_ATTACHED_FILES_MARKER = re.compile(r"\n*\[Attached files: ([^\]]+)\]\s*$")
+
+# Strands' default agent id — the runtime never passes one, so every session's
+# messages and its AGENT record live under it.
+_FORK_AGENT_ID = "default"
+
+
+def _attachments_not_copied_note(names: List[str]) -> str:
+    """Text that stands in for a fork's attachments.
+
+    A fork carries no session files. They are the owner's uploads, and copying
+    them would put another person's files in the forker's storage and quota —
+    more than sharing a conversation should do. Both the forker and the model
+    read this line, so neither expects to re-open them.
+    """
+    return f"[Attachments from the original conversation were not copied: {', '.join(names)}]"
+
+
+def _media_not_copied_text(key: str, media: Any) -> str:
+    """Placeholder for an image/document nested in a copied tool result."""
+    name = media.get("name") if isinstance(media, dict) else None
+    label = f'{key} "{name}"' if name else key
+    return f"[{label.capitalize()} from the original conversation was not copied]"
+
+
+def _strip_media_from_tool_result(tool_result: Any) -> Any:
+    """Replace images/documents inside a tool result with text placeholders.
+
+    A snapshot carries them in the display shape (``format``/``data``, no
+    ``source``), which Bedrock rejects as a Converse block.
+    """
+    if not isinstance(tool_result, dict) or not isinstance(tool_result.get("content"), list):
+        return tool_result
+    content = []
+    for item in tool_result["content"]:
+        if isinstance(item, dict) and ("image" in item or "document" in item):
+            key = "image" if "image" in item else "document"
+            content.append({"text": _media_not_copied_text(key, item[key])})
+        else:
+            content.append(item)
+    return {**tool_result, "content": content}
+
+
+def _skip_long_term_extraction(mgr: Any) -> None:
+    """Make every event ``mgr`` writes skip long-term memory extraction.
+
+    ``AgentCoreMemorySessionManager.create_message`` has no extraction-mode
+    argument, but all of its writes (conversational events via
+    ``MemoryClient.create_event`` and oversized blob events) end in the data
+    plane client's ``create_event``. Wrapping that one call on this manager's
+    own client sets ``extractionMode="SKIP"`` without copying the SDK's
+    message conversion. The manager is built per fork, so nothing else shares
+    the wrapped client.
+    """
+    gmdp = mgr.memory_client.gmdp_client
+    original = gmdp.create_event
+
+    def create_event(**kwargs: Any) -> Any:
+        kwargs.setdefault("extractionMode", "SKIP")
+        return original(**kwargs)
+
+    gmdp.create_event = create_event
+
+
+def _run_now(fn: Callable[..., Any], *args: Any) -> None:
+    fn(*args)
 
 
 class ShareService:
     """Handles share CRUD operations against the shared-conversations DynamoDB table."""
 
-    def __init__(self, snapshot_store: Optional[ShareSnapshotStore] = None) -> None:
+    def __init__(
+        self,
+        snapshot_store: Optional[ShareSnapshotStore] = None,
+        project_repository: Optional[ProjectRepository] = None,
+        audit: Optional[AuditService] = None,
+        notifications: Optional[NotificationService] = None,
+    ) -> None:
         table_name = os.environ.get("SHARED_CONVERSATIONS_TABLE_NAME", "")
+        # Built on first use: most shares never touch a project.
+        self._project_repository = project_repository
+        self._audit = audit
+        self._notifications = notifications
         self._table_name = table_name
         self._enabled = bool(table_name)
         # S3-backed snapshot body store. Injectable for tests; otherwise the
@@ -70,10 +156,15 @@ class ShareService:
         session_id: str,
         user: User,
         request: CreateShareRequest,
+        schedule: Optional[Callable[..., Any]] = None,
     ) -> ShareResponse:
         """Create a new share snapshot for a session.
 
         Multiple shares can exist per session (e.g. after continuing a conversation).
+
+        A project share's ``notify`` fan-out is handed to ``schedule`` (the route's
+        ``BackgroundTasks.add_task``) so the inbox writes never delay the response;
+        without one it runs inline.
         """
         self._ensure_enabled()
 
@@ -81,6 +172,17 @@ class ShareService:
         metadata = await get_session_metadata(session_id=session_id, user_id=user.user_id)
         if not metadata:
             raise SessionNotFoundError(session_id)
+
+        project: Optional[Project] = None
+        project_id = None
+        recipients: List[str] = []
+        if request.access_level == "public":
+            self._require_public_share_allowed(metadata, user)
+        if request.access_level == "project":
+            project = self._require_shareable_project(metadata, user)
+            project_id = project.project_id
+            # Before anything is written: a bad recipient is a 400 with no share made.
+            recipients = self._notify_recipients(project, request, user)
 
         # Snapshot messages
         messages_response = await get_messages(session_id=session_id, user_id=user.user_id)
@@ -90,52 +192,50 @@ class ShareService:
         ]
 
         metadata_snapshot = metadata.model_dump(by_alias=True, exclude_none=True)
-
-        share_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
         allowed_emails = self._resolve_allowed_emails(
             request.access_level, request.allowed_emails, user.email
         )
-
-        # Offload the snapshot BODY (messages + metadata) to S3 — a long
-        # conversation exceeds DynamoDB's 400 KB item limit if inlined. The
-        # DynamoDB row keeps only the small control fields plus a pointer.
-        # The body is opaque JSON bytes in S3, so we serialize the raw
-        # model_dump directly and skip the float→Decimal dance (that only
-        # exists to satisfy DynamoDB's boto3 resource, which rejects floats).
         if not self._snapshot_store.enabled:
             raise ShareStorageUnavailableError()
 
-        body_bytes = json.dumps(
-            {"metadata": metadata_snapshot, "messages": messages_snapshot}
-        ).encode("utf-8")
-
+        # The body is stored in S3 and the row points at it; a project share's
+        # pointer lands with the row or the share is rolled back (``write_share``).
+        # Artifacts are pinned at the version each stood at right now, which also
+        # makes the snapshot the allowlist the render-token route checks.
         try:
-            bucket_key = self._snapshot_store.put(share_id=share_id, body=body_bytes)
-        except ShareSnapshotStoreError as e:
+            item = write_share(
+                table=self._table,
+                snapshot_store=self._snapshot_store,
+                projects=self._projects() if project_id else None,
+                session_id=session_id,
+                owner_id=user.user_id,
+                owner_email=user.email,
+                access_level=request.access_level,
+                metadata=metadata_snapshot,
+                messages=messages_snapshot,
+                artifacts=self._snapshot_artifacts(session_id, user),
+                # The model's one-line tool-batch summaries live in TSUM# rows, not
+                # on the messages; without them a snapshot falls back to the
+                # client-side wording ("Ran memory read").
+                tool_summaries=messages_response.tool_summaries,
+                allowed_emails=allowed_emails,
+                project_id=project_id,
+                note=request.note,
+            )
+        except ShareStorageError as e:
             logger.error(
-                f"Failed to store snapshot body for share {self._sanitize_id(share_id)}: {e}"
+                "Failed to store snapshot body for session %s: %s",
+                scrub_log(self._sanitize_id(session_id)),
+                scrub_log(e),
             )
             raise ShareStorageUnavailableError() from e
-
-        item = {
-            "share_id": share_id,
-            "session_id": session_id,
-            "owner_id": user.user_id,
-            "owner_email": user.email,
-            "access_level": request.access_level,
-            "created_at": now,
-            "body_ref": {
-                "bucket_key": bucket_key,
-                "format": "json",
-                "schema_version": _SNAPSHOT_SCHEMA_VERSION,
-                "byte_size": len(body_bytes),
-            },
-        }
-        if allowed_emails is not None:
-            item["allowed_emails"] = allowed_emails
-
-        self._table.put_item(Item=item)
+        share_id = item["share_id"]
+        if project_id:
+            self._record_task_share(
+                AuditAction.PROJECT_TASK_SHARED, user, item, notified=len(recipients), hasNote=bool(request.note)
+            )
+            if recipients:
+                (schedule or _run_now)(self._notify_task_shared, recipients, user, project, item)
         logger.info(f"Created share {self._sanitize_id(share_id)} for session {self._sanitize_id(session_id)}")
 
         return self._build_share_response(item)
@@ -176,11 +276,30 @@ class ShareService:
         attr_values: dict = {}
         remove_parts: list[str] = []
 
-        new_access = request.access_level or item.get("access_level")
+        old_access = item.get("access_level")
+        old_project_id = item.get("project_id")
+        new_access = request.access_level or old_access
 
         if request.access_level is not None:
             update_expr_parts.append("access_level = :al")
             attr_values[":al"] = request.access_level
+
+        if request.access_level == "public":
+            metadata = await get_session_metadata(session_id=item["session_id"], user_id=user.user_id)
+            if not metadata:
+                raise SessionNotFoundError(item["session_id"])
+            self._require_public_share_allowed(metadata, user)
+
+        if new_access == "project" and old_access != "project":
+            metadata = await get_session_metadata(session_id=item["session_id"], user_id=user.user_id)
+            if not metadata:
+                raise SessionNotFoundError(item["session_id"])
+            update_expr_parts.append("project_id = :pid")
+            attr_values[":pid"] = self._require_shareable_project(metadata, user).project_id
+        elif new_access != "project" and old_project_id:
+            remove_parts.append("project_id")
+            if "note" in item:
+                remove_parts.append("note")
 
         # Resolve allowed_emails
         if new_access == "specific":
@@ -213,6 +332,15 @@ class ShareService:
         updated = result.get("Attributes", item)
         logger.info(f"Updated share {item['share_id']}")
 
+        for project_id in {old_project_id, updated.get("project_id")} - {None}:
+            self._sync_project_pointer(item["session_id"], project_id)
+        new_project_id = updated.get("project_id")
+        if old_project_id != new_project_id:
+            if old_project_id:
+                self._record_task_share(AuditAction.PROJECT_TASK_UNSHARED, user, {**item, "project_id": old_project_id})
+            if new_project_id:
+                self._record_task_share(AuditAction.PROJECT_TASK_SHARED, user, updated)
+
         return self._build_share_response(updated)
 
     async def revoke_share(self, share_id: str, user: User) -> None:
@@ -228,6 +356,9 @@ class ShareService:
 
         self._table.delete_item(Key={"share_id": item["share_id"]})
         self._delete_snapshot_body(item)
+        if item.get("project_id"):
+            self._sync_project_pointer(item["session_id"], item["project_id"])
+            self._record_task_share(AuditAction.PROJECT_TASK_UNSHARED, user, item)
         logger.info(f"Revoked share {item['share_id']}")
 
     async def delete_shares_for_session(self, session_id: str) -> int:
@@ -259,6 +390,9 @@ class ShareService:
             # an S3 miss here only leaves an orphan object, never a live share.
             for item in items:
                 self._delete_snapshot_body(item)
+
+            for project_id in {i.get("project_id") for i in items} - {None}:
+                self._sync_project_pointer(session_id, project_id)
 
             logger.info(
                 f"Deleted {len(items)} share(s) for session "
@@ -312,8 +446,9 @@ class ShareService:
         now = datetime.now(timezone.utc).isoformat()
 
         # Copy snapshot messages into AgentCore Memory for the new session
+        copied: List[dict] = []
         message_count = await self._copy_messages_to_memory(
-            new_session_id, requester.user_id, snapshot_messages
+            new_session_id, requester.user_id, snapshot_messages, written=copied
         )
 
         from apis.shared.sessions.models import SessionMetadata
@@ -326,6 +461,7 @@ class ShareService:
             created_at=now,
             last_message_at=now,
             message_count=message_count,
+            preferences=self._forked_project_preferences(metadata, requester),
         )
 
         await store_session_metadata(
@@ -333,6 +469,8 @@ class ShareService:
             user_id=requester.user_id,
             session_metadata=session_meta,
         )
+
+        self._archive_forked_turns(new_session_id, requester.user_id, copied, session_meta.preferences)
 
         logger.info(
             f"Exported share {self._sanitize_id(share_id)} to new session {self._sanitize_id(new_session_id)} "
@@ -348,16 +486,73 @@ class ShareService:
     # ------------------------------------------------------------------
     # Message copying helpers
 
+    @staticmethod
+    def _archive_forked_turns(
+        session_id: str,
+        user_id: str,
+        copied: List[dict],
+        preferences: Any,
+    ) -> None:
+        """Queue the fork's turns for the conversation archive (search index).
+
+        A fork never runs a turn, so the runtime's after-``done`` archive write
+        never sees these messages; without this the forker could not find the
+        conversation they now own. Indexed under the forker's id and the new
+        session id, from the messages as copied (``displayText`` already
+        substituted, attachments already reduced to a note), positioned exactly
+        as the new session's message ids count them, and attributed to the
+        fork's own project and agent (``preferences``), not the snapshot's.
+        Background, best-effort, and only while ``CONVERSATION_INDEX_ENABLED``
+        is on.
+        """
+        from apis.shared.feature_flags import conversation_index_enabled
+
+        if not copied or not conversation_index_enabled():
+            return
+        try:
+            from apis.shared.conversation_archive import schedule, split_turns, write_turns
+
+            turns = split_turns(
+                copied,
+                user_id=user_id,
+                session_id=session_id,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                project_id=getattr(preferences, "project_id", None),
+                assistant_id=getattr(preferences, "assistant_id", None),
+            )
+            if turns:
+                schedule(lambda: write_turns(turns))
+        except Exception:  # noqa: BLE001 — never fail the fork over its index
+            logger.warning("Failed to queue forked conversation for the archive", exc_info=True)
+
     async def _copy_messages_to_memory(
         self,
         session_id: str,
         user_id: str,
         snapshot_messages: list,
+        written: Optional[List[dict]] = None,
     ) -> int:
         """Write snapshot messages into AgentCore Memory for a new session.
 
         Converts each MessageResponse dict to SessionMessage format and
-        persists via create_message to the "default" namespace.
+        persists each via create_message under the default agent id.
+
+        The messages were written by someone else (the share's owner), but
+        they land under the forking user's actor. Every event is therefore
+        written with ``extractionMode="SKIP"``: it stays in short-term memory,
+        so the fork's history loads, but it never feeds long-term extraction,
+        so another person's content does not become the forker's "memories".
+
+        The session's AGENT record is written first. Strands'
+        ``RepositorySessionManager.initialize`` loads a session's messages only
+        when it finds that record; without it the fork's first turn took the
+        new-agent branch and ran on an empty history ("Restore @init: 0
+        messages") even though the copied conversation was on screen.
+
+        ``written``, when given, receives each Converse message that landed, in
+        order, so its position in the list is its message index in the new
+        session (a message that failed to convert or write is absent, exactly
+        as ``list_messages`` will not return it).
 
         Returns:
             Number of messages successfully written.
@@ -374,7 +569,8 @@ class ShareService:
             from bedrock_agentcore.memory.integrations.strands.session_manager import (
                 AgentCoreMemorySessionManager,
             )
-            from strands.types.session import SessionMessage
+            from strands.agent.conversation_manager import SlidingWindowConversationManager
+            from strands.types.session import SessionAgent, SessionMessage
         except ImportError:
             logger.error("AgentCore Memory SDK not available — cannot copy messages")
             return 0
@@ -394,6 +590,19 @@ class ShareService:
         mgr = AgentCoreMemorySessionManager(
             agentcore_memory_config=config, region_name=aws_region
         )
+        _skip_long_term_extraction(mgr)
+
+        # What ``SessionAgent.from_agent`` records for a fresh agent. The
+        # conversation-manager state must name the class the runtime builds
+        # (``AgentFactory.build_conversation_manager``): restore raises on a
+        # mismatch. ``test_fork_agent_record_restores_into_the_runtime_manager``
+        # pins the two together.
+        session_agent = SessionAgent(
+            agent_id=_FORK_AGENT_ID,
+            state={},
+            conversation_manager_state=SlidingWindowConversationManager().get_state(),
+        )
+        await asyncio.to_thread(mgr.create_agent, session_id, session_agent)
 
         count = 0
         for idx, msg_dict in enumerate(snapshot_messages):
@@ -403,9 +612,10 @@ class ShareService:
             try:
                 # Create SessionMessage with proper index for ordering
                 session_msg = SessionMessage.from_message(converse_msg, index=idx)
-                # Use create_message with "default" namespace (same as list_messages uses)
-                await asyncio.to_thread(mgr.create_message, session_id, "default", session_msg)
+                await asyncio.to_thread(mgr.create_message, session_id, _FORK_AGENT_ID, session_msg)
                 count += 1
+                if written is not None:
+                    written.append(converse_msg)
             except Exception as e:
                 logger.warning(f"Failed to copy message {idx}: {e}")
 
@@ -417,33 +627,89 @@ class ShareService:
         """Convert a snapshot MessageResponse dict to Bedrock Converse format.
 
         Snapshot format (MessageResponse):
-            {"id": "...", "role": "user", "content": [{"type": "text", "text": "hi"}, ...], ...}
+            {"id": "...", "role": "user", "content": [{"type": "text", "text": "hi"}, ...],
+             "metadata": {"displayText": "hi"}, ...}
 
         Converse format (Strands/Bedrock):
             {"role": "user", "content": [{"text": "hi"}, ...]}
+
+        The snapshot is the *display* shape of a conversation, not the model's,
+        so three things are rewritten rather than copied:
+
+        - A user message's text is its ``displayText`` when it has one — what
+          the author typed, not the prompt the model saw (RAG context, notes,
+          the attachments marker). The fork shows exactly what the share showed,
+          and the owner's retrieved knowledge-base excerpts stay behind.
+        - Attachments (document/image blocks and the ``[Attached files: …]``
+          marker) become one line saying they were not copied. The snapshot's
+          blocks have no ``source`` — Bedrock rejects them, which failed every
+          turn of a fork once its agent was rebuilt — and the fork has no
+          session files for the model to re-read.
+        - Images/documents inside tool results become text placeholders, for
+          the same reason.
         """
         role = msg.get("role")
         if role not in ("user", "assistant"):
             return None
 
-        raw_content = msg.get("content", [])
-        converse_content = []
+        metadata = msg.get("metadata")
+        display_text = metadata.get("displayText") if isinstance(metadata, dict) else None
+        use_display_text = role == "user" and isinstance(display_text, str) and bool(display_text.strip())
 
-        for block in raw_content:
+        converse_content: List[dict] = []
+        # Index of the message's first text block: where displayText and the
+        # attachments note go. Block order is otherwise kept — Claude requires a
+        # user message's toolResult blocks to come before its text.
+        text_at: Optional[int] = None
+        marker_names: List[str] = []
+        block_names: List[str] = []
+        unnamed_attachments = 0
+
+        for block in msg.get("content", []):
             block_type = block.get("type") if isinstance(block, dict) else None
             if block_type == "text" and block.get("text"):
-                converse_content.append({"text": block["text"]})
+                text = block["text"]
+                marker = _ATTACHED_FILES_MARKER.search(text)
+                if marker:
+                    marker_names.extend(n.strip() for n in marker.group(1).split(",") if n.strip())
+                    text = text[: marker.start()]
+                if use_display_text:
+                    if text_at is None:
+                        text_at = len(converse_content)
+                        converse_content.append({"text": display_text})
+                    continue
+                if text.strip():
+                    if text_at is None:
+                        text_at = len(converse_content)
+                    converse_content.append({"text": text})
             elif block_type == "toolUse" and block.get("toolUse"):
                 converse_content.append({"toolUse": block["toolUse"]})
             elif block_type == "toolResult" and block.get("toolResult"):
-                converse_content.append({"toolResult": block["toolResult"]})
-            elif block_type == "image" and block.get("image"):
-                converse_content.append({"image": block["image"]})
+                converse_content.append({"toolResult": _strip_media_from_tool_result(block["toolResult"])})
             elif block_type == "document" and block.get("document"):
-                converse_content.append({"document": block["document"]})
+                name = block["document"].get("name") if isinstance(block["document"], dict) else None
+                if name:
+                    block_names.append(str(name))
+                else:
+                    unnamed_attachments += 1
+            elif block_type == "image" and block.get("image"):
+                unnamed_attachments += 1
             elif block_type == "reasoningContent" and block.get("reasoningContent"):
                 converse_content.append({"reasoningContent": block["reasoningContent"]})
             # Skip unknown/empty blocks
+
+        if use_display_text and text_at is None:
+            text_at = 0
+            converse_content.insert(0, {"text": display_text})
+
+        # The marker names every attachment (inline and diverted, unsanitized),
+        # so the blocks' own names are only a fallback for a message without one.
+        names = list(dict.fromkeys(marker_names or block_names))
+        if not names and unnamed_attachments:
+            names = [f"{unnamed_attachments} file(s)"]
+        if names:
+            note = {"text": _attachments_not_copied_note(names)}
+            converse_content.insert(text_at + 1 if text_at is not None else len(converse_content), note)
 
         if not converse_content:
             return None
@@ -468,20 +734,7 @@ class ShareService:
 
     @staticmethod
     def _convert_decimals_to_float(obj: Any) -> Any:
-        """Recursively convert DynamoDB ``Decimal`` values back to native types.
-
-        Legacy inline shares were written with ``_convert_floats_to_decimal``,
-        so their bodies come back off DynamoDB as ``Decimal``. Convert them
-        back — to ``int`` when integral, else ``float`` — so the legacy read
-        path yields the same plain-JSON shape as the S3-backed path.
-        """
-        if isinstance(obj, Decimal):
-            return int(obj) if obj % 1 == 0 else float(obj)
-        elif isinstance(obj, dict):
-            return {k: ShareService._convert_decimals_to_float(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [ShareService._convert_decimals_to_float(item) for item in obj]
-        return obj
+        return convert_decimals_to_float(obj)
 
     @staticmethod
     def _sanitize_id(value: str, max_length: int = 128) -> str:
@@ -493,6 +746,170 @@ class ShareService:
         """
         sanitized = re.sub(r"[^a-zA-Z0-9\-_]", "", value)
         return sanitized[:max_length]
+
+    # ------------------------------------------------------------------
+    # Project shares
+
+    def _projects(self) -> ProjectRepository:
+        if self._project_repository is None:
+            self._project_repository = ProjectRepository()
+        return self._project_repository
+
+    def _project_role(self, project_id: str, user: User):
+        """``(project, role)`` for ``user``; ``(None, None)`` while Projects is switched off."""
+        if not projects_enabled():
+            return None, None
+        return resolve_project_role(project_id, user.user_id, user.email, repository=self._projects())
+
+    def _require_shareable_project(self, metadata: Any, user: User) -> Project:
+        """The project a task may be shared to, or a ``ProjectShareError`` saying why not.
+
+        The task must belong to a project (``preferences.projectId``), and its owner
+        must still be a member of that project, which must be active: sharing adds
+        to the project, and an archived project is read-only.
+        """
+        if not projects_enabled():
+            raise ProjectShareError(400, "Projects are not available")
+        prefs = getattr(metadata, "preferences", None)
+        project_id = getattr(prefs, "project_id", None) if prefs else None
+        if not project_id:
+            raise ProjectShareError(400, "Only a conversation in a project can be shared with a project")
+        project, role = self._project_role(project_id, user)
+        if project is None or role is None:
+            raise ProjectShareError(403, "You are not a member of this conversation's project")
+        if project.status != "active":
+            raise ProjectShareError(409, "This project is archived. Restore it to share conversations with it.")
+        return project
+
+    def _require_public_share_allowed(self, metadata: Any, user: User) -> None:
+        """Raise a ``ProjectShareError`` unless ``user`` may make this conversation public.
+
+        A conversation in a project can carry what the project gave it (files,
+        knowledge, memory), so only the project's owner and editors may publish
+        it; viewers keep private, specific-people and project sharing. A former
+        member is refused like a viewer. A project that no longer exists binds
+        nothing. While Projects is switched off the roles cannot be checked, so
+        a project conversation cannot be made public at all: the kill switch
+        must never be the way around this rule.
+        """
+        prefs = getattr(metadata, "preferences", None)
+        project_id = getattr(prefs, "project_id", None) if prefs else None
+        if not project_id:
+            return
+        if not projects_enabled():
+            raise ProjectShareError(403, "A conversation in a project cannot be shared publicly while Projects is unavailable")
+        project, role = self._project_role(project_id, user)
+        if project is None:
+            return
+        if role not in ("owner", "editor"):
+            raise ProjectShareError(
+                403, "Only the project's owner and editors can share its conversations publicly"
+            )
+
+    def _notify_recipients(self, project: Project, request: CreateShareRequest, user: User) -> List[str]:
+        """The inboxes a project share's ``notify`` reaches, never including the sharer.
+
+        Members means the owner plus every member row, pending invitees included.
+        Naming anyone else is a 400 that names them, so a typo is caught rather
+        than silently notifying nobody.
+        """
+        if request.notify is None:
+            return []
+        members = {normalize_email(m.email) for m in self._projects().list_members(project.project_id)}
+        members.add(normalize_email(project.owner_email))
+        if request.notify.all:
+            chosen = members
+        else:
+            chosen = {normalize_email(e) for e in request.notify.emails or []} - {""}
+            strangers = sorted(chosen - members)
+            if strangers:
+                raise ProjectShareError(400, f"Not members of this project: {', '.join(strangers)}")
+        chosen.discard(normalize_email(user.email))
+        return sorted(chosen)[: max_members()]
+
+    def _notify_task_shared(self, recipients: List[str], user: User, project: Project, item: dict) -> None:
+        payload = {"shareId": item["share_id"], "title": self._share_title(item)}
+        if item.get("note"):
+            payload["note"] = item["note"]
+        notifications = self._notifications or NotificationService()
+        notifications.notify_many(
+            recipients,
+            kind="project_task_shared",
+            actor=user,
+            project_id=project.project_id,
+            project_name=project.name,
+            payload=payload,
+        )
+
+    def _record_task_share(self, action: str, user: User, item: dict, **details: Any) -> None:
+        """Audit a task entering or leaving a project, on the project's trail.
+
+        ``details`` add to ``after``: a share records ``notified`` (a count, never
+        the list) and ``hasNote``.
+        """
+        (self._audit or get_audit_service()).record(
+            action=action,
+            actor=user,
+            target_type=TARGET_PROJECT,
+            target_id=item["project_id"],
+            after={"shareId": item["share_id"], "title": self._share_title(item), **details},
+        )
+
+    def _put_project_pointer(self, item: dict) -> None:
+        self._projects().put_shared_task(project_pointer({**item, "title": self._share_title(item)}))
+
+    def _sync_project_pointer(self, session_id: str, project_id: str) -> None:
+        """Point ``SHARED_TASK#{session_id}`` at the task's newest share with the project.
+
+        Rebuilt from the share rows rather than patched, so revoking the newest of
+        several project shares falls back to the next, and revoking the last one
+        removes the pointer. Best-effort: the share row is the grant and has
+        already changed; a stale pointer only lists a share that now 404s.
+        """
+        try:
+            remaining = [
+                i for i in self._find_shares_by_session(session_id)
+                if i.get("access_level") == "project" and i.get("project_id") == project_id
+            ]
+            if remaining:
+                self._put_project_pointer(max(remaining, key=lambda i: i["created_at"]))
+            else:
+                self._projects().delete_shared_task(project_id, session_id)
+        except Exception:
+            logger.warning(
+                f"Could not sync project pointer for session {self._sanitize_id(session_id)} "
+                f"in project {self._sanitize_id(project_id)}",
+                exc_info=True,
+            )
+
+    def _share_title(self, item: dict) -> str:
+        """The row's title; shares created before it was denormalized read the snapshot."""
+        if item.get("title") is not None:
+            return str(item["title"])
+        try:
+            metadata, _ = self._load_snapshot_body(item)
+            return str(metadata.get("title") or "")
+        except Exception:
+            return ""
+
+    def _forked_project_preferences(self, snapshot_metadata: dict, requester: User):
+        """A fork stays in its project when the requester can work in that project.
+
+        The fork is a new task, so it needs what a task started in the project
+        has: ``projectId`` and the project's harness as ``assistantId`` (current,
+        not the snapshot's, which could be stale). A requester who is not a
+        member, or a project that is archived or gone, gets a plain session.
+        """
+        from apis.shared.sessions.models import SessionPreferences
+
+        prefs = snapshot_metadata.get("preferences") or {}
+        project_id = prefs.get("projectId") if isinstance(prefs, dict) else None
+        if not project_id:
+            return None
+        project, role = self._project_role(project_id, requester)
+        if project is None or role is None or project.status != "active":
+            return None
+        return SessionPreferences(project_id=project_id, assistant_id=project.harness_agent_id)
 
     def _ensure_enabled(self) -> None:
         if not self._enabled:
@@ -550,6 +967,12 @@ class ShareService:
             if requester.email.lower() in allowed:
                 return
 
+        if access_level == "project" and item.get("project_id"):
+            # Any role, on an active or archived project: members may read both.
+            _, role = self._project_role(item["project_id"], requester)
+            if role is not None:
+                return
+
         raise AccessDeniedError()
 
     def _build_share_response(self, item: dict) -> ShareResponse:
@@ -559,6 +982,7 @@ class ShareService:
             owner_id=item["owner_id"],
             access_level=item["access_level"],
             allowed_emails=item.get("allowed_emails"),
+            project_id=item.get("project_id"),
             created_at=item["created_at"],
             share_url=f"/shared/{item['share_id']}",
         )
@@ -566,42 +990,27 @@ class ShareService:
     def _load_snapshot_body(self, item: dict) -> Tuple[dict, list]:
         """Return ``(metadata, messages)`` for a share item.
 
-        Handles three item shapes for backward compatibility:
-
-          - **New** (``body_ref`` present): fetch the JSON body from S3.
-          - **Legacy inline** (``messages`` present, no ``body_ref``): read the
-            body straight off the DynamoDB item, exactly as before the S3
-            offload. Existing shares predate the offload and stay readable
-            with no migration.
-          - **Malformed** (neither): unreadable → ``ShareNotFoundError``.
+        A narrowing of :meth:`_load_snapshot_raw` kept because it is what
+        every existing caller wants; anything needing another key of the
+        body (the pinned artifact list) reads the raw dict instead.
         """
-        body_ref = item.get("body_ref")
-        if body_ref:
-            key = body_ref.get("bucket_key")
-            try:
-                raw = self._snapshot_store.get(key)
-                body = json.loads(raw)
-            except (ShareSnapshotStoreError, ValueError) as e:
-                logger.error(
-                    f"Failed to load snapshot body for share "
-                    f"{self._sanitize_id(str(item.get('share_id', '')))} "
-                    f"key={key}: {e}"
-                )
-                raise ShareNotFoundError() from e
-            return body.get("metadata", {}) or {}, body.get("messages", []) or []
+        body = self._load_snapshot_raw(item)
+        return body.get("metadata", {}) or {}, body.get("messages", []) or []
 
-        if item.get("messages") is not None:
-            # Legacy inline share — DynamoDB stored floats as Decimal; convert
-            # back so downstream JSON/Pydantic handling matches the S3 path.
-            metadata = self._convert_decimals_to_float(item.get("metadata", {}) or {})
-            messages = self._convert_decimals_to_float(item.get("messages", []))
-            return metadata, messages
+    def _load_snapshot_raw(self, item: dict) -> dict:
+        """Return the whole snapshot body for a share item (``load_snapshot_raw``).
 
-        logger.warning(
-            f"Share {self._sanitize_id(str(item.get('share_id', '')))} has neither "
-            "body_ref nor inline messages — treating as unreadable"
-        )
-        raise ShareNotFoundError()
+        An unreadable body is a ``ShareNotFoundError``: a share whose snapshot
+        is gone cannot be shown.
+        """
+        try:
+            return load_snapshot_raw(item, self._snapshot_store)
+        except SnapshotUnreadableError as e:
+            logger.error(
+                f"Failed to load snapshot body for share "
+                f"{self._sanitize_id(str(item.get('share_id', '')))}: {e}"
+            )
+            raise ShareNotFoundError() from e
 
     def _delete_snapshot_body(self, item: dict) -> None:
         """Best-effort delete of a share's S3 snapshot body.
@@ -617,10 +1026,107 @@ class ShareService:
         if key:
             self._snapshot_store.delete(key)
 
+    @staticmethod
+    def _snapshot_artifacts(session_id: str, user: User) -> list[dict]:
+        """The session's artifacts at HEAD, for the snapshot body.
+
+        Best-effort and never raising. Sharing a conversation must not
+        fail because the artifacts feature is off in this environment,
+        or because its table hiccuped — a share with no artifacts is the
+        behaviour every share had before this existed, and it degrades
+        to exactly that. The alternative, failing the share, would trade
+        a missing picture for a missing conversation.
+        """
+        try:
+            from apis.app_api.artifacts.service import (
+                get_artifact_list_service,
+            )
+
+            return get_artifact_list_service().heads_for_session(
+                user_id=user.user_id, session_id=session_id
+            )
+        except Exception:
+            logger.warning(
+                "could not snapshot artifacts for session %s — sharing "
+                "the conversation without them",
+                ShareService._sanitize_id(session_id),
+                exc_info=True,
+            )
+            return []
+
+    def resolve_shared_artifact(
+        self, *, share_id: str, artifact_id: str, requester: User
+    ) -> tuple[str, int]:
+        """Authorize one artifact inside a shared conversation.
+
+        Returns (owner_id, pinned_version) for a caller that is about to
+        mint. Raises ShareNotFoundError when the share is gone or does
+        not carry that artifact, and AccessDeniedError when the viewer
+        may not open the share.
+
+        ############################################################
+        # This is the access-control boundary for artifacts in shared
+        # conversations, and it is the whole of it — the mint it feeds
+        # (`mint_for_conversation_share`) performs no checks of its
+        # own, by design and by the comment on it.
+        #
+        # Two things have to hold, and both are here:
+        #   1. the viewer may open this conversation share, and
+        #   2. the artifact is one the SNAPSHOT pinned.
+        #
+        # (2) is what stops a recipient swapping in another artifact id
+        # belonging to the same owner. `sub` on the minted token is a
+        # partition address, so without it any valid share id would be
+        # a read primitive over the owner's whole artifact partition.
+        # An unknown artifact is a 404 rather than a 403, so it also
+        # reveals nothing about what the owner has.
+        ############################################################
+        """
+        self._ensure_enabled()
+
+        item = self._get_share_item(share_id)
+        if not item:
+            raise ShareNotFoundError()
+
+        self._check_access(item, requester)
+
+        for entry in self._load_snapshot_artifacts(item):
+            if str(entry.get("artifact_id", "")) == artifact_id:
+                return str(item["owner_id"]), int(entry.get("version", 0))
+
+        raise ShareNotFoundError()
+
+    def _load_snapshot_artifacts(self, item: dict, body: Optional[dict] = None) -> list[dict]:
+        """The pinned artifact list from a share's snapshot body.
+
+        Absent on every share created before this feature, and on any
+        share whose owner had no artifacts — both are a normal empty
+        list, not an error. Conversation sharing is already in
+        production, so this MUST stay tolerant of a body with no
+        `artifacts` key; there is no migration and none is needed.
+        """
+        if body is None:
+            try:
+                body = self._load_snapshot_raw(item)
+            except ShareNotFoundError:
+                raise
+            except Exception:
+                logger.warning(
+                    "could not read snapshot artifacts for share %s",
+                    self._sanitize_id(str(item.get("share_id", ""))),
+                    exc_info=True,
+                )
+                return []
+        raw = body.get("artifacts")
+        return raw if isinstance(raw, list) else []
+
     def _build_shared_conversation_response(self, item: dict) -> SharedConversationResponse:
         from apis.shared.sessions.models import MessageResponse
 
-        metadata, raw_messages = self._load_snapshot_body(item)
+        # One read serves the messages, the artifacts and the summaries.
+        body = self._load_snapshot_raw(item)
+        metadata = body.get("metadata", {}) or {}
+        raw_messages = body.get("messages", []) or []
 
         messages = []
         for msg_data in raw_messages:
@@ -629,6 +1135,20 @@ class ShareService:
             except Exception as e:
                 logger.warning(f"Skipping malformed message in share {item['share_id']}: {e}")
 
+        artifacts = []
+        for entry in self._load_snapshot_artifacts(item, body):
+            try:
+                artifacts.append(
+                    SharedConversationArtifact.model_validate(entry)
+                )
+            except Exception as e:
+                # One malformed entry must not cost the recipient the
+                # conversation, the same way a malformed message does not.
+                logger.warning(
+                    f"Skipping malformed artifact in share "
+                    f"{self._sanitize_id(str(item.get('share_id', '')))}: {e}"
+                )
+
         return SharedConversationResponse(
             share_id=item["share_id"],
             title=metadata.get("title", "Untitled Conversation"),
@@ -636,7 +1156,25 @@ class ShareService:
             created_at=item["created_at"],
             owner_id=item["owner_id"],
             messages=messages,
+            artifacts=artifacts,
+            tool_summaries=self._snapshot_tool_summaries(body),
         )
+
+    @staticmethod
+    def _snapshot_tool_summaries(body: dict) -> list[dict]:
+        """The summaries frozen with the snapshot; ``[]`` on shares made before they were."""
+        raw = body.get("toolSummaries")
+        if not isinstance(raw, list):
+            return []
+        return [
+            {
+                "batchId": str(row.get("batchId") or ""),
+                "toolUseIds": [str(t) for t in row.get("toolUseIds") or []],
+                "summary": str(row["summary"]),
+            }
+            for row in raw
+            if isinstance(row, dict) and row.get("summary")
+        ]
 
 
 # ------------------------------------------------------------------
@@ -664,6 +1202,14 @@ class AccessDeniedError(Exception):
 class ShareTableNotFoundError(Exception):
     """Raised when the DynamoDB table does not exist (CDK not deployed)."""
     pass
+
+
+class ProjectShareError(Exception):
+    """A project share the caller may not create; carries the HTTP status to return."""
+
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        super().__init__(message)
 
 
 class ShareStorageUnavailableError(Exception):

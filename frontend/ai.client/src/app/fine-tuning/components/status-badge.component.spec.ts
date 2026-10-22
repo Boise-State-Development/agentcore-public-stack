@@ -24,33 +24,33 @@ describe('StatusBadgeComponent', () => {
     expect(component.status()).toBe('PENDING');
   });
 
-  it('should return yellow classes for PENDING', () => {
+  it('should return warning classes for PENDING', () => {
     const component = createComponent('PENDING');
-    expect(component.badgeClasses()).toContain('bg-yellow-100');
-    expect(component.badgeClasses()).toContain('text-yellow-800');
+    expect(component.badgeClasses()).toContain('bg-state-warning-100');
+    expect(component.badgeClasses()).toContain('text-state-warning-800');
   });
 
-  it('should return blue classes for TRAINING', () => {
+  it('should return info classes for TRAINING', () => {
     const component = createComponent('TRAINING');
-    expect(component.badgeClasses()).toContain('bg-blue-100');
-    expect(component.badgeClasses()).toContain('text-blue-800');
+    expect(component.badgeClasses()).toContain('bg-state-info-100');
+    expect(component.badgeClasses()).toContain('text-state-info-800');
   });
 
-  it('should return blue classes for TRANSFORMING', () => {
+  it('should return info classes for TRANSFORMING', () => {
     const component = createComponent('TRANSFORMING');
-    expect(component.badgeClasses()).toContain('bg-blue-100');
+    expect(component.badgeClasses()).toContain('bg-state-info-100');
   });
 
-  it('should return green classes for COMPLETED', () => {
+  it('should return success classes for COMPLETED', () => {
     const component = createComponent('COMPLETED');
-    expect(component.badgeClasses()).toContain('bg-green-100');
-    expect(component.badgeClasses()).toContain('text-green-800');
+    expect(component.badgeClasses()).toContain('bg-state-success-100');
+    expect(component.badgeClasses()).toContain('text-state-success-800');
   });
 
-  it('should return red classes for FAILED', () => {
+  it('should return danger classes for FAILED', () => {
     const component = createComponent('FAILED');
-    expect(component.badgeClasses()).toContain('bg-red-100');
-    expect(component.badgeClasses()).toContain('text-red-800');
+    expect(component.badgeClasses()).toContain('bg-state-danger-100');
+    expect(component.badgeClasses()).toContain('text-state-danger-800');
   });
 
   it('should return gray classes for STOPPED', () => {

@@ -22,6 +22,7 @@ Environment variables:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -30,6 +31,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Optional
 
 import boto3
@@ -403,6 +405,61 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        "toolId": "ask_user_question",
+        "displayName": "Clarifying Questions",
+        "description": (
+            "Pause and ask the user multiple-choice questions when a request "
+            "is ambiguous, then continue with their answer."
+        ),
+        "category": "utility",
+        # On by default. The picker ships, survives a refresh, and the turn
+        # resumes into the same tool call; and the model only reaches for it on
+        # genuinely ambiguous requests — measured 24/24 on ambiguous prompts
+        # and 0/18 on clear ones, so it does not turn direct questions into
+        # interrogations. Its spec is ~630 tokens in the cacheable prefix.
+        "enabledByDefault": True,
+        "protocol": "local",
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "browse_web",
+        "displayName": "Web Browser",
+        "description": (
+            "Browse the web in a real Chrome browser: navigate pages, read "
+            "JavaScript-rendered content, fill forms, and click through "
+            "multi-step flows."
+        ),
+        "category": "browser",
+        # Deliberately off by default. Each session bills an AgentCore Browser
+        # session on top of model tokens, and a browsing transcript is a large
+        # per-turn payload — this is opt-in per user, granted per role.
+        "enabledByDefault": False,
+        "protocol": "local",
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "request_user_login",
+        "displayName": "Browser Sign-In",
+        "description": (
+            "Hand the browser to the user so they can sign in to a site the "
+            "agent cannot reach, then continue browsing the authenticated "
+            "session."
+        ),
+        "category": "browser",
+        # Deliberately off by default, and the most restrictive default in this
+        # file. While a takeover is live the user has a fully interactive
+        # Chromium running inside our AWS account with our egress — that is a
+        # capability to grant to named staff/evaluator roles, never a default.
+        # RBAC granularity is one tool_id, which is exactly why this is its own
+        # entry rather than an action on browse_web.
+        "enabledByDefault": False,
+        "protocol": "local",
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
         "toolId": "generate_diagram_and_validate",
         "displayName": "Code Interpreter",
         "description": "Generate diagrams, charts, and visualizations using Python code in a sandboxed environment.",
@@ -458,6 +515,62 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Single catalog entry / toggle that provisions the seven my_skill_*
+        # tools (list/read/read_file/create/update/write_file/delete_file) —
+        # see SKILL_AUTHORING_TOOL_IDS and _build_skill_authoring_tools in
+        # apis/inference_api/chat/routes.py, and docs/specs/skill-creator.md.
+        # Keep the toolId as "my_skill_create": it is the gate key. Off by
+        # default and not public: it is granted to a pilot role, and the
+        # runtime must not set SKILL_AUTHORING_ENABLED=false. Every write pauses
+        # for the user's approval.
+        "toolId": "my_skill_create",
+        "displayName": "Skill Authoring",
+        "description": "Create and edit your own skills from the conversation: list and read your skills, create one, change its instructions, and add, replace or remove its text files. Every change asks for your approval first.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        # Spreadsheet ANALYSIS (read an uploaded .xlsx/.csv and answer questions
+        # about it via Code Interpreter) — distinct from the spreadsheet
+        # *authoring* tool below. Both ids are context-bound: enabling them
+        # injects the tools at runtime, see SPREADSHEET_TOOL_IDS and
+        # _build_spreadsheet_tools in apis/inference_api/chat/routes.py.
+        #
+        # These two rows were missing from this file until 1.23.0 while the
+        # Python TOOL_CATALOG carried them, so a freshly bootstrapped
+        # deployment got no catalog row and the tools could not be granted to
+        # any role — the live environments only have them because the rows
+        # were created by hand. test_seed_matches_tool_catalog now pins the
+        # two lists together so they cannot drift again.
+        #
+        # enabledByDefault mirrors the live deployments (True). Safe against
+        # the injected-tool cost trap because SPREADSHEET_TOOL_IDS is in
+        # KEY_DESCRIBED_INJECTED_TOOL_IDS: the factory closes over
+        # (session_id, user_id, assistant_id), all cache-key elements, so a
+        # default-on injected tool does NOT bypass the agent cache here.
+        "toolId": "list_spreadsheets",
+        "displayName": "List Spreadsheet Files",
+        "description": "List spreadsheet files available for analysis from the assistant's knowledge base or conversation attachments.",
+        "category": "data",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "analyze_spreadsheet",
+        "displayName": "Analyze Spreadsheet",
+        "description": "Analyze spreadsheet data with Python in a sandboxed Code Interpreter session: filter, aggregate, compute statistics and answer questions about the contents.",
+        "category": "data",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
+    {
         # Single catalog entry / toggle that provisions the whole Excel
         # spreadsheet toolset. Enabling this one id injects create/modify/list/
         # read at runtime — see EXCEL_SPREADSHEET_TOOL_IDS and
@@ -488,6 +601,62 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "enabledByDefault": False,
         "isPublic": True,
         "forwardAuthToken": False,
+    },
+    # --- Platform self-service (Account & Usage) system tools ---
+    # .kiro/specs/platform-self-service/. `system: True` force-injects the tool
+    # on every granted turn (bypassing the user picker); an admin's runtime
+    # off-switch is this row's status (set it to `disabled` in the Tools panel —
+    # no redeploy). `hidden: True` keeps it out of the user picker list while
+    # still showing it in the transcript when invoked. isPublic so every
+    # authenticated user has it (they only ever read their OWN account); the
+    # runtime tool objects are closure-bound (agents/local_tools/account_tools.py).
+    {
+        "toolId": "whoami",
+        "displayName": "Account Lookup",
+        "description": "Look up who the signed-in user is on this platform (name, roles, plan).",
+        "category": "account",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+        "system": True,
+        "hidden": True,
+    },
+    {
+        "toolId": "get_my_quota",
+        "displayName": "Usage & Quota",
+        "description": "Report how much of the signed-in user's usage quota is left.",
+        "category": "account",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+        "system": True,
+        "hidden": False,
+    },
+    {
+        "toolId": "get_my_settings",
+        "displayName": "My Settings",
+        "description": "Report the signed-in user's account settings, such as their default model.",
+        "category": "account",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+        "system": True,
+        "hidden": False,
+    },
+    {
+        "toolId": "set_default_model",
+        "displayName": "Change My Default Model",
+        "description": "Change the signed-in user's default model, to one they are allowed to use. Confirmation-gated write.",
+        "category": "account",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+        "system": True,
+        "hidden": False,
     },
 ]
 
@@ -789,6 +958,14 @@ def seed_default_tools(
             "SK": sk,
             "GSI1PK": f"CATEGORY#{tool_def['category']}",
             "GSI1SK": pk,
+            # EntityTypeIndex (GSI5) — mirrors ToolDefinition.to_dynamo_item.
+            # This seeder hand-builds the item rather than going through the
+            # model, so a new index key has to be added in BOTH places. Miss it
+            # here and a freshly bootstrapped deployment lists zero tools once
+            # the catalog read moves to the index — with no error, because a
+            # sparse index answers "nothing matched", not "something is wrong".
+            "GSI5PK": "ENTITY#TOOL",
+            "GSI5SK": pk,
             "toolId": tool_id,
             "displayName": tool_def["displayName"],
             "description": tool_def["description"],
@@ -798,6 +975,12 @@ def seed_default_tools(
             "enabledByDefault": tool_def["enabledByDefault"],
             "isPublic": tool_def["isPublic"],
             "forwardAuthToken": tool_def["forwardAuthToken"],
+            # Platform self-service tier (.kiro/specs/platform-self-service/).
+            # Default false so every existing entry is unchanged; the account
+            # tools set them true. `system` makes the tool force-injected on
+            # granted turns; `hidden` keeps it out of the user picker list.
+            "system": tool_def.get("system", False),
+            "hidden": tool_def.get("hidden", False),
             "createdAt": now,
             "updatedAt": now,
             "createdBy": "bootstrap-seed",
@@ -891,8 +1074,25 @@ def _skill_slug(skill_id: str) -> str:
     return slug[:64].strip("-") or "skill"
 
 
+def _frontmatter_value(value: str) -> str:
+    """A YAML scalar for one frontmatter line.
+
+    Plain when that is unambiguous, else a double-quoted string (a JSON string is
+    a valid YAML double-quoted scalar). A description such as "Review: grants"
+    written plain would make the whole frontmatter unparseable.
+    """
+    text = str(value)
+    if not text or ": " in text or " #" in text or text[0] in "!&*-?{}[]|>'\"%@`#,":
+        return json.dumps(text, ensure_ascii=False)
+    return text
+
+
 def _write_skill_md(
-    skill_id: str, description: str, instructions: str, region: str
+    skill_id: str,
+    description: str,
+    instructions: str,
+    region: str,
+    metadata: Optional[dict[str, str]] = None,
 ) -> None:
     """Write the skill's ``SKILL.md`` projection so the prefix is a real bundle.
 
@@ -906,10 +1106,14 @@ def _write_skill_md(
     if not bucket:
         return
 
+    extra = "".join(
+        f"{key}: {_frontmatter_value(value)}\n" for key, value in (metadata or {}).items()
+    )
     content = (
         "---\n"
         f"name: {_skill_slug(skill_id)}\n"
-        f"description: {description}\n"
+        f"description: {_frontmatter_value(description)}\n"
+        f"{extra}"
         "---\n"
         "\n"
         f"{instructions.strip()}\n"
@@ -1140,6 +1344,169 @@ def seed_example_skills(
     return result
 
 
+# =============================================================================
+# Skill Creator (docs/specs/skill-creator.md, PR-C)
+# =============================================================================
+#
+# A platform skill that helps users author their own skills. Its content lives
+# as a real bundle under ``scripts/seed_skills/skill_creator/`` (SKILL.md plus
+# reference files), so it is reviewed as Markdown rather than as Python
+# strings, and it is adapted from Anthropic's Apache-2.0 skill-creator (see the
+# bundle's NOTICE.md).
+#
+# Deliberately NOT granted to any role. The spec pilots it with one role first
+# and widens later (PR-D); which role is the pilot is a deployment's choice, made
+# in the admin roles UI. Until then only roles holding the skills wildcard
+# (system_admin) can reach it, and skills are opt-in per user even then.
+#
+# It works with or without the skill authoring tools: with ``my_skill_create``
+# granted it saves skills directly, and without it the user copies the draft
+# into Customize -> Skills -> Add.
+
+SEED_SKILLS_DIR = Path(__file__).resolve().parent / "seed_skills"
+
+SKILL_CREATOR_ID = "skill_creator"
+SKILL_CREATOR_DISPLAY_NAME = "Skill Creator"
+SKILL_CREATOR_CATEGORY = "Utility"
+
+_REFERENCE_CONTENT_TYPES = {".md": "text/markdown", ".txt": "text/plain"}
+
+
+@dataclass
+class SeedSkillBundle:
+    """A skill bundle read from ``seed_skills/<dir>/``."""
+
+    frontmatter: dict[str, str]
+    instructions: str
+    references: list[tuple[str, bytes, str]]  # (filename, bytes, content type)
+
+
+def load_seed_skill_bundle(directory: Path) -> SeedSkillBundle:
+    """Read a ``SKILL.md`` and its ``references/`` files.
+
+    The frontmatter is read as flat ``key: value`` lines (the subset the SPA's
+    importer also reads), so this standalone script needs no YAML dependency.
+    A double-quoted value is decoded as JSON.
+    """
+    text = (directory / "SKILL.md").read_text(encoding="utf-8")
+    match = re.match(r"\A---\n(.*?)\n---\n(.*)\Z", text, re.S)
+    if not match:
+        raise ValueError(f"{directory}/SKILL.md has no frontmatter block")
+    frontmatter: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        key, sep, value = line.partition(":")
+        if not sep or not key.strip():
+            raise ValueError(f"{directory}/SKILL.md: unreadable frontmatter line {line!r}")
+        value = value.strip()
+        frontmatter[key.strip()] = json.loads(value) if value.startswith('"') else value
+    references = []
+    ref_dir = directory / "references"
+    for path in sorted(ref_dir.iterdir()) if ref_dir.is_dir() else []:
+        content_type = _REFERENCE_CONTENT_TYPES.get(path.suffix.lower())
+        if content_type is None:
+            raise ValueError(f"{path}: only .md and .txt reference files are seeded")
+        references.append((path.name, path.read_bytes(), content_type))
+    return SeedSkillBundle(frontmatter, match.group(2).strip() + "\n", references)
+
+
+def seed_skill_creator(
+    table_name: str,
+    region: str,
+    bundle_dir: Optional[Path] = None,
+) -> SeedResult:
+    """Seed the Skill Creator as an admin-catalog skill, granted to no role.
+
+    Idempotent: an existing catalog row is left alone, so an admin's edits
+    survive a re-seed. If a USER owns the id (ids are global across the two
+    tiers), nothing is written and the run reports a failure rather than
+    overwriting someone's skill.
+    """
+    result = SeedResult(category="skill_creator")
+    bundle = load_seed_skill_bundle(bundle_dir or SEED_SKILLS_DIR / SKILL_CREATOR_ID)
+    table = boto3.Session(region_name=region).resource("dynamodb").Table(table_name)
+
+    skill_id = SKILL_CREATOR_ID
+    pk = f"SKILL#{skill_id}"
+    try:
+        existing = table.get_item(Key={"PK": pk, "SK": "METADATA"}).get("Item")
+    except ClientError as e:
+        msg = f"Failed to check existing skill '{skill_id}': {e}"
+        logger.error(msg)
+        result.failed += 1
+        result.details.append(msg)
+        return result
+    if existing:
+        if existing.get("ownerId") == "system":
+            msg = f"Skill '{skill_id}' already exists — skipped"
+            logger.info(msg)
+            result.skipped += 1
+        else:
+            msg = (
+                f"Skill id '{skill_id}' belongs to a user's own skill — not seeded. "
+                "Rename that skill or seed the Skill Creator under another id."
+            )
+            logger.error(msg)
+            result.failed += 1
+        result.details.append(msg)
+        return result
+
+    resources = []
+    for filename, content, content_type in bundle.references:
+        ref = _upload_skill_reference(skill_id, filename, content, content_type, region)
+        if ref:
+            resources.append(ref)
+
+    description = bundle.frontmatter["description"]
+    metadata = {
+        key: value
+        for key, value in bundle.frontmatter.items()
+        if key not in ("name", "description")
+    }
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    item: dict[str, Any] = {
+        "PK": pk,
+        "SK": "METADATA",
+        # SkillOwnerIndex (GSI4) — mirrors SkillDefinition.to_dynamo_item.
+        "GSI4PK": "OWNER#system",
+        "GSI4SK": pk,
+        "skillId": skill_id,
+        "displayName": SKILL_CREATOR_DISPLAY_NAME,
+        "description": description,
+        "instructions": bundle.instructions,
+        "category": SKILL_CREATOR_CATEGORY,
+        "skillMetadata": metadata,
+        "allowedTools": [],
+        "compose": [],
+        "resources": resources,
+        "status": "active",
+        "ownerId": "system",
+        "visibility": "admin",
+        "createdAt": now,
+        "updatedAt": now,
+        "createdBy": "bootstrap-seed",
+        "updatedBy": "bootstrap-seed",
+    }
+    try:
+        # Conditional, so a row created between the read and this write wins.
+        table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
+    except ClientError as e:
+        msg = f"Failed to write skill '{skill_id}': {e}"
+        logger.error(msg)
+        result.failed += 1
+        result.details.append(msg)
+        return result
+
+    _write_skill_md(skill_id, description, bundle.instructions, region, metadata)
+    msg = (
+        f"Skill '{skill_id}' created ({len(resources)} reference file(s)); "
+        "not granted to any role — grant it to a pilot role in Admin → Roles"
+    )
+    logger.info(msg)
+    result.created += 1
+    result.details.append(msg)
+    return result
+
+
 def _serialize(item: dict[str, Any]) -> dict[str, Any]:
     """Convert a high-level DynamoDB item dict to low-level client format."""
     from boto3.dynamodb.types import TypeSerializer
@@ -1202,6 +1569,9 @@ def main() -> None:
 
     # --- Example bundled skill (PR-6b) ---
     results.append(seed_example_skills(table_name=app_roles_table, region=region))
+
+    # --- Skill Creator (skill-creator spec PR-C); granted to no role ---
+    results.append(seed_skill_creator(table_name=app_roles_table, region=region))
 
     # --- Summary ---
     print_summary(results)

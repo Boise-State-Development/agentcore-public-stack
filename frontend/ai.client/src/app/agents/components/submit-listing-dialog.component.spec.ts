@@ -1,15 +1,25 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 
-import { SubmitListingDialogComponent } from './submit-listing-dialog.component';
+import {
+  SubmitListingDialogComponent,
+  SubmitListingDialogData,
+  SubmitListingDialogResult,
+} from './submit-listing-dialog.component';
 import { AgentListingService } from '../services/agent-listing.service';
 import { ListingPreflight, SubmitListingRequest } from '../models/store.model';
 
 /**
- * The dialog owns the *consent* rule, and getting it wrong has two bad shapes: an author
- * blocked from publishing at all (the dead end this control exists to remove), or an
- * agent's visibility widened without the author having said so.
+ * The dialog owns the *disclosure* rule, and getting it wrong has two bad shapes: an
+ * author blocked from publishing at all (the dead end this replaced a checkbox to
+ * remove), or an agent's visibility widened with nothing on screen having said so.
+ *
+ * Note what is deliberately NOT asserted any more: that Submit is held until the author
+ * ticks something. The store is public-only, so that box had one valid answer and gated
+ * nothing — the guarantee worth testing is that the notice renders whenever widening will
+ * happen, and that `makePublic` is sent only then.
  *
  * DI tokens rather than vi.mock, per project convention — a shared worker pool makes
  * module mocks leak across specs.
@@ -56,43 +66,45 @@ describe('SubmitListingDialogComponent — going public', () => {
       component.category.set('Administration');
     });
 
-    it('asks for consent instead of dead-ending the author', () => {
-      // The whole point: no blockReason, so the form renders and the author can act here
-      // rather than being sent to the agent editor and back.
+    it('discloses instead of dead-ending the author', () => {
+      // The whole point: no blockReason, so the form renders and submitting resolves the
+      // visibility rather than sending the author to the agent editor and back.
       expect(component.requiresPublic()).toBe(true);
       expect(component.blockReason()).toBeNull();
     });
 
-    it('starts unticked — going public is a decision, not a default', () => {
-      expect(component.makePublic()).toBe(false);
-    });
-
-    it('holds Submit until the author consents', () => {
-      expect(component.canSubmit()).toBe(false);
-      component.makePublic.set(true);
+    it('does not hold Submit — the notice is the disclosure, not a gate', () => {
+      // Regression guard for the checkbox this replaced. There is no second answer for
+      // the author to give, so nothing here may keep Submit disabled.
       expect(component.canSubmit()).toBe(true);
     });
 
-    it('sends the consent so the backend widens in the same write', async () => {
-      component.makePublic.set(true);
+    it('sends the widening so the backend does it in the same write', async () => {
       await component.onSubmit();
 
       expect(submitted).toHaveLength(1);
       expect(submitted[0].request.makePublic).toBe(true);
     });
 
+    it('says the submission itself is what publishes it', () => {
+      // The load-bearing half of the notice: widening happens now, not at approval, so an
+      // author who withdraws tomorrow has still been public today.
+      expect(component.goingPublicNotice()).toMatch(/submitting/i);
+      expect(component.goingPublicNotice()).toMatch(/approves/i);
+    });
+
     it('says what going public changes from, per starting state', async () => {
-      expect(component.makePublicHelp()).toMatch(/only you can open it/i);
+      expect(component.goingPublicNotice()).toMatch(/only you can open it/i);
 
       const shared = build({ requiresPublic: true, reachability: 'shared_only' });
       await shared.ngOnInit();
-      expect(shared.makePublicHelp()).toMatch(/shared/i);
-      expect(shared.makePublicHelp()).not.toBe(component.makePublicHelp());
+      expect(shared.goingPublicNotice()).toMatch(/shared/i);
+      expect(shared.goingPublicNotice()).not.toBe(component.goingPublicNotice());
     });
   });
 
   describe('when the agent is already public', () => {
-    it('asks nothing and does not send a consent it never sought', async () => {
+    it('says nothing and does not send a widening it never needed', async () => {
       const component = build({ requiresPublic: false, reachability: 'everyone' });
       await component.ngOnInit();
       component.category.set('Administration');
@@ -106,15 +118,14 @@ describe('SubmitListingDialogComponent — going public', () => {
   });
 
   describe('when something really does block submission', () => {
-    it('stays a dead end — the consent checkbox must not wave it through', async () => {
+    it('stays a dead end — the going-public notice must not wave it through', async () => {
       const component = build({
-        blockReason: 'This agent cannot be published while it is bound to a memory space.',
+        blockReason: 'This agent cannot be published while it belongs to a project.',
         requiresPublic: true,
         reachability: 'owner_only',
       });
       await component.ngOnInit();
       component.category.set('Administration');
-      component.makePublic.set(true);
 
       expect(component.canSubmit()).toBe(false);
     });
@@ -268,5 +279,63 @@ describe('SubmitListingDialogComponent — category preselection', () => {
     expect(select.value).toBe('Student Support');
     expect(select.options[select.selectedIndex].text.trim()).toBe('Student Support');
     expect(fixture.componentInstance.category()).toBe('Student Support');
+  });
+});
+
+/**
+ * The accessible name is the title, which changes with what the submission is — so it is
+ * checked for both wordings through a real CDK dialog, whose container is what assistive
+ * tech meets.
+ */
+describe('SubmitListingDialogComponent — opened through a real CDK dialog', () => {
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: AgentListingService,
+          useValue: {
+            loadCategories: async () => [{ id: 'Administration', label: 'Administration' }],
+            preflight: async (): Promise<ListingPreflight> => ({
+              agentId: 'ast-001',
+              exposedSkills: [],
+              blockReason: null,
+              requiresPublic: false,
+              reachability: 'everyone',
+            }),
+            submit: async () => ({ listing: { state: 'in_review' } }),
+          },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.inject(Dialog).closeAll());
+
+  function open(data: SubmitListingDialogData) {
+    return openInCdkDialog<SubmitListingDialogComponent, SubmitListingDialogData, SubmitListingDialogResult>(
+      SubmitListingDialogComponent,
+      { data },
+    );
+  }
+
+  it('is named for a first submission and described by what review means', async () => {
+    const { container } = await open({ agentId: 'ast-001', agentName: 'Policy Lookup' });
+    expectNamedDialog(container, {
+      name: 'Submit to the marketplace',
+      description: /^An admin reviews Policy Lookup before it appears in the store/,
+    });
+  });
+
+  it('is named for an update when the listing is already in the store', async () => {
+    const { container } = await open({
+      agentId: 'ast-001',
+      agentName: 'Policy Lookup',
+      listing: { state: 'published', category: 'Administration', publishedVersion: 2 } as SubmitListingDialogData['listing'],
+    });
+    expectNamedDialog(container, {
+      name: 'Submit an update',
+      description: /stays live and unchanged until they approve/,
+    });
   });
 });

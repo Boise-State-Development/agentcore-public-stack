@@ -20,9 +20,12 @@ import {
   heroHome,
   heroLink,
   heroMagnifyingGlass,
+  heroPaperClip,
   heroXMark,
 } from '@ng-icons/heroicons/outline';
 import { FileSourceService, FileSourceError } from '../services/file-source.service';
+import { FEATURES } from '../../services/features';
+import { isAttachableSourceFile } from '../../services/file-upload';
 import {
   Breadcrumb,
   FileEntry,
@@ -34,20 +37,25 @@ import { Document } from '../models/document.model';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { KnowledgeTarget } from '../models/knowledge-target.model';
 import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { DialogTitleDirective } from '../../components/dialog/dialog-title.directive';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 /**
  * What the dialog is for. `import` (default) multi-selects files to ingest
  * into an assistant; `pick-folder` walks the same folder tree but selects a
  * single destination folder (the conversation-export folder picker) and never
- * imports anything.
+ * imports anything; `attach` multi-selects files to attach to a conversation
+ * (the composer's "Add from Google Drive") and hands the selection back for
+ * the composer to import one file at a time, so each gets its own card.
  */
-export type FileSourceBrowserMode = 'import' | 'pick-folder';
+export type FileSourceBrowserMode = 'import' | 'pick-folder' | 'attach';
 
 /** Data passed in when a caller opens the browser. */
 export interface FileSourceBrowserDialogData {
-  /** Required in `import` mode — the assistant the files are imported into. */
-  assistantId?: string;
+  /** Required in `import` mode — the agent (by id) or project the files are imported into. */
+  target?: KnowledgeTarget;
   /**
    * When set, the dialog opens straight into this connector — its folder
    * browser if already connected, or an inline Connect prompt if not — and
@@ -58,6 +66,18 @@ export interface FileSourceBrowserDialogData {
   connector?: FileSourceConnector;
   /** Defaults to `import`. */
   mode?: FileSourceBrowserMode;
+  /**
+   * `attach` mode only: how many more files the message can take. The
+   * composer allows five per message, less what is already attached.
+   */
+  maxFiles?: number;
+  /**
+   * `attach` mode only: offer "Attach this folder" beside Attach, so the whole
+   * folder the user is in becomes one attachment (drive-folder spec §4.1). The
+   * composer sets it only while folder attachments are on and the message has
+   * room for another folder.
+   */
+  allowFolder?: boolean;
 }
 
 /** A destination folder chosen in `pick-folder` mode. */
@@ -68,11 +88,40 @@ export interface FolderSelection {
   folderName: string;
 }
 
+/** Files chosen in `attach` mode, with the connector to fetch them through. */
+export interface AttachSelection {
+  connector: FileSourceConnector;
+  files: ImportFileRef[];
+}
+
+/** A whole folder chosen in `attach` mode ("Attach this folder"). */
+export interface FolderAttachSelection {
+  connector: FileSourceConnector;
+  folder: {
+    folderId: string;
+    folderName: string;
+    /** The breadcrumb path to it, for display only. */
+    folderPath: string;
+  };
+}
+
+/** Whether an `attach`-mode result is a folder rather than files. */
+export function isFolderAttachSelection(
+  result: FileSourceBrowserDialogResult | undefined,
+): result is FolderAttachSelection {
+  return !!result && !Array.isArray(result) && 'folder' in result;
+}
+
 /**
  * Closed value: the imported {@link Document} records in `import` mode, a
- * {@link FolderSelection} in `pick-folder` mode, or `undefined` if cancelled.
+ * {@link FolderSelection} in `pick-folder` mode, an {@link AttachSelection}
+ * in `attach` mode, or `undefined` if cancelled.
  */
-export type FileSourceBrowserDialogResult = Document[] | FolderSelection;
+export type FileSourceBrowserDialogResult =
+  | Document[]
+  | FolderSelection
+  | AttachSelection
+  | FolderAttachSelection;
 
 type DialogView = 'sources' | 'browser';
 type ConnectPhase = 'initiating' | 'awaiting';
@@ -90,11 +139,16 @@ type ConnectPhase = 'initiating' | 'awaiting';
  * files and import, or select the current folder. Closes with the created
  * {@link Document} records, a {@link FolderSelection}, or `undefined` if
  * cancelled.
+ *
+ * Drawn by hand rather than with `<app-dialog-shell>`: the browser view pins
+ * its search and breadcrumb bars above a list that scrolls on its own, and the
+ * footer exists only in that view. `appDialogTitle` on the heading names CDK's
+ * container.
  */
 @Component({
   selector: 'app-file-source-browser-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
+  imports: [DialogDismissDirective, DialogTitleDirective, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -108,6 +162,7 @@ type ConnectPhase = 'initiating' | 'awaiting';
       heroHome,
       heroLink,
       heroMagnifyingGlass,
+      heroPaperClip,
       heroXMark,
     }),
   ],
@@ -117,9 +172,8 @@ type ConnectPhase = 'initiating' | 'awaiting';
   },
   templateUrl: './file-source-browser-dialog.component.html',
   styles: `
-    @import 'tailwindcss';
+    @reference "../../../styles/theme.css";
 
-    @custom-variant dark (&:where(.dark, .dark *));
 
     .dialog-backdrop {
       animation: backdrop-fade-in 200ms ease-out;
@@ -158,11 +212,18 @@ export class FileSourceBrowserDialogComponent {
   private readonly connectorsService = inject(UserConnectorsService);
   private readonly consentService = inject(OAuthConsentService);
   private readonly toast = inject(ToastService);
+  private readonly features = inject(FEATURES);
 
-  /** `import` (default) or `pick-folder` for the export destination picker. */
+  /** `import` (default), `pick-folder` for the export destination picker, or `attach`. */
   protected readonly mode: FileSourceBrowserMode = this.data.mode ?? 'import';
   /** True when choosing a destination folder rather than importing files. */
   protected readonly isPicker = this.mode === 'pick-folder';
+  /** True when choosing files to attach to a conversation. */
+  protected readonly isAttach = this.mode === 'attach';
+  /** `attach` mode: the most files the composer will take from this pick. */
+  protected readonly maxFiles: number | null = this.isAttach ? (this.data.maxFiles ?? null) : null;
+  /** `attach` mode: whether the folder the user is in can be attached whole. */
+  protected readonly allowFolder = this.isAttach && this.data.allowFolder === true;
 
   /** True when the dialog was opened targeting a single connector. */
   protected readonly lockedToConnector = !!this.data.connector;
@@ -231,14 +292,38 @@ export class FileSourceBrowserDialogComponent {
     if (this.isPicker) {
       return this.entries().filter((entry) => entry.type === 'folder');
     }
+    // A conversation takes fewer types than a knowledge base does (no Docling
+    // here: the model reads the bytes), so attach mode greys out what the
+    // chat cannot take instead of letting the import fail after the download.
+    if (this.isAttach) {
+      return this.entries().map((entry) =>
+        entry.type === 'file' && entry.selectable && !isAttachableSourceFile(entry, this.features)
+          ? { ...entry, selectable: false }
+          : entry,
+      );
+    }
     return this.entries();
   });
 
   protected readonly selectedCount = computed(() => this.selected().size);
 
+  /** `attach` mode: whether the list is showing a greyed-out file. */
+  protected readonly hasUnattachableEntries = computed(() =>
+    this.displayedEntries().some((entry) => entry.type === 'file' && !entry.selectable),
+  );
+
   /** True once the user has drilled into a folder/root they can select. */
   protected readonly canPickCurrentFolder = computed(
     () => this.currentFolderId() !== null && !this.browserLoading(),
+  );
+
+  /**
+   * `attach` mode: the folder the user is in can go as one attachment. Not
+   * from search results (there is no "current folder" there), and not while
+   * files are ticked, so the two actions never compete for one click.
+   */
+  protected readonly canAttachCurrentFolder = computed(
+    () => this.allowFolder && this.canPickCurrentFolder() && this.activeSearch() === null,
   );
 
   constructor() {
@@ -343,8 +428,7 @@ export class FileSourceBrowserDialogComponent {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(connector.providerId, result.authorizationUrl);
-      void this.consentService.openConsentPopup(connector.providerId);
+      void this.consentService.startUserConsent(connector.providerId, result.authorizationUrl);
       this.connectPhase.set('awaiting');
     } catch (err) {
       this.connectingId.set(null);
@@ -455,10 +539,57 @@ export class FileSourceBrowserDialogComponent {
       if (next.has(entry.id)) {
         next.delete(entry.id);
       } else {
+        if (this.maxFiles !== null && next.size >= this.maxFiles) {
+          this.toast.info(
+            'File limit',
+            `You can attach ${this.maxFiles} more ${this.maxFiles === 1 ? 'file' : 'files'} to this message.`,
+          );
+          return map;
+        }
         next.set(entry.id, { fileId: entry.id, name: entry.name });
       }
       return next;
     });
+  }
+
+  /**
+   * `attach` mode: hand the whole current folder to the composer, which
+   * attaches it as one item (app-api expands it into files in the background).
+   */
+  protected attachCurrentFolder(): void {
+    const connector = this.connector();
+    const folderId = this.currentFolderId();
+    if (!connector || folderId === null || !this.canAttachCurrentFolder()) {
+      return;
+    }
+    const folderName = this.currentFolderName() || 'Folder';
+    const names = this.breadcrumbs().map((crumb) => crumb.name);
+    if (names[names.length - 1] !== folderName) {
+      names.push(folderName);
+    }
+    this.dialogRef.close({
+      connector,
+      folder: { folderId, folderName, folderPath: names.join('/') },
+    });
+  }
+
+  /** `attach` mode: hand the selection to the composer, which imports it. */
+  protected attachSelected(): void {
+    const connector = this.connector();
+    const files = [...this.selected().values()];
+    if (!connector || files.length === 0) {
+      return;
+    }
+    this.dialogRef.close({ connector, files });
+  }
+
+  /** The footer's primary action for the current mode. */
+  protected confirmSelection(): void {
+    if (this.isAttach) {
+      this.attachSelected();
+    } else {
+      void this.importSelected();
+    }
   }
 
   protected isSelected(entryId: string): boolean {
@@ -533,15 +664,15 @@ export class FileSourceBrowserDialogComponent {
 
   protected async importSelected(): Promise<void> {
     const connector = this.connector();
-    const assistantId = this.data.assistantId;
+    const target = this.data.target;
     const files = [...this.selected().values()];
-    if (!connector || !assistantId || files.length === 0 || this.importing()) {
+    if (!connector || !target || files.length === 0 || this.importing()) {
       return;
     }
     this.importing.set(true);
     try {
       const response = await this.fileSourceService.importDocuments(
-        assistantId,
+        target,
         connector.providerId,
         files,
       );

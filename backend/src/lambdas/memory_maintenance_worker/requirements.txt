@@ -1,0 +1,7 @@
+# memory-maintenance Lambda image dependencies (backend/Dockerfile.memory-maintenance).
+# Exact pins per repo policy; versions match backend/uv.lock. The boto3 pin is
+# load-bearing: the Lambda base image's bundled boto3 predates Bedrock
+# CountTokens, which the save checks call on every proposed file.
+boto3==1.43.103
+botocore==1.43.103
+pydantic==2.12.5

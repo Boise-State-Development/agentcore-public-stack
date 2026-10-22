@@ -4,10 +4,11 @@ The browser's WebSocket sees only ``wss://<frontend>/api/voice/stream`` (the
 BFF endpoint). The upstream WebSocket talks to either:
 
 * **Cloud:** ``wss://bedrock-agentcore.<region>.amazonaws.com/runtimes/<arn>/ws``
-  with the Cognito access token in ``Sec-WebSocket-Protocol`` so the
-  AgentCore Runtime's JWT Authorizer accepts the upgrade.
+  with the Cognito access token in an ``Authorization`` header, which the
+  AgentCore Runtime's JWT Authorizer checks and then forwards to the
+  container, where it is the voice connection's identity.
 * **Local dev:** ``ws://localhost:8001/voice/stream`` — a plain FastAPI
-  WebSocket on inference-api with no upstream auth gate.
+  WebSocket on inference-api with no upstream auth gate, sent the same header.
 
 The relay is symmetric and fully duplex: client→upstream and upstream→client
 run as concurrent tasks; the first to complete cancels the other so the
@@ -64,19 +65,6 @@ def build_upstream_ws_url(base_url: str) -> str:
     return f"{scheme}://{parts.netloc}/voice/stream"
 
 
-def _bearer_subprotocol(access_token: str) -> str:
-    """Pack a Cognito access token into AgentCore's accepted subprotocol form.
-
-    The runtime's JWT Authorizer reads ``base64UrlBearerAuthorization.<b64url>``
-    from ``Sec-WebSocket-Protocol`` on the upgrade. Standard base64url with
-    padding stripped — same shape the legacy SPA used pre-BFF cutover.
-    """
-    import base64
-
-    b64 = base64.urlsafe_b64encode(access_token.encode("utf-8")).decode("ascii")
-    return f"base64UrlBearerAuthorization.{b64.rstrip('=')}"
-
-
 async def relay_voice_stream(
     *,
     client_ws: WebSocket,
@@ -92,19 +80,15 @@ async def relay_voice_stream(
     """
     upstream_url = build_upstream_ws_url(_inference_api_url())
 
-    parts = urlsplit(upstream_url)
-    use_subprotocol = parts.netloc.startswith("bedrock-agentcore.")
-    protocols: list[str] = []
-    headers: dict[str, str] = {}
-
-    if use_subprotocol:
-        # Cloud: AgentCore proxy auths via Sec-WebSocket-Protocol.
-        protocols = [_bearer_subprotocol(cognito_access_token), "base64UrlBearerAuthorization"]
-    else:
-        # Local dev: inference-api accepts a plain Authorization header on
-        # the upgrade, and reads the auth_token from the first config
-        # message. We forward the bearer header here so dev parity holds.
-        headers["Authorization"] = f"Bearer {cognito_access_token}"
+    # The bearer goes in an `Authorization` header, cloud and local alike.
+    # The Runtime's JWT authorizer accepts it there for non-browser clients
+    # (the `base64UrlBearerAuthorization` subprotocol exists only because a
+    # browser cannot set headers), and `Authorization` is on the Runtime's
+    # `requestHeaderAllowlist`, so inference-api sees the very token the
+    # authorizer validated and takes the voice identity from it. A token in
+    # the subprotocol may never reach the container, which would leave it
+    # with only the config frame's unverified copy.
+    headers = {"Authorization": f"Bearer {cognito_access_token}"}
 
     timeout = aiohttp.ClientTimeout(total=None, connect=_UPSTREAM_CONNECT_TIMEOUT)
     session = aiohttp.ClientSession(timeout=timeout)
@@ -113,7 +97,6 @@ async def relay_voice_stream(
         try:
             upstream_ws = await session.ws_connect(
                 upstream_url,
-                protocols=protocols or (),
                 headers=headers,
                 heartbeat=_UPSTREAM_HEARTBEAT,
                 max_msg_size=0,  # unbounded — voice frames can be large

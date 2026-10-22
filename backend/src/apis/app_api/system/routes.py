@@ -42,7 +42,11 @@ async def first_boot(request: FirstBootRequest) -> FirstBootResponse:
     2. Create user in Cognito via AdminCreateUser + AdminSetUserPassword
     3. Create user record in Users DynamoDB table with system_admin role
     4. Mark first-boot completed in DynamoDB
-    5. Disable self-signup on the Cognito User Pool
+
+    Self-signup on the User Pool is NOT touched here. It is declared by
+    `config.cognito.selfSignUpEnabled` in `infrastructure/lib/config.ts`
+    (default: closed) and rendered into `AdminCreateUserConfig`, so CDK
+    re-asserts it on every deploy — a runtime toggle would only be undone.
     """
     settings_repo = get_system_settings_repository()
     cognito = get_cognito_service()
@@ -149,16 +153,6 @@ async def first_boot(request: FirstBootRequest) -> FirstBootResponse:
         raise HTTPException(
             status_code=500,
             detail="Failed to mark first-boot completed.",
-        )
-
-    # 5. Disable self-signup on the Cognito User Pool
-    try:
-        cognito.disable_self_signup()
-    except Exception:
-        # Non-fatal: first-boot succeeded, admin can disable manually
-        logger.exception(
-            "Failed to disable self-signup after first-boot. "
-            "Admin should disable it manually via AWS console."
         )
 
     return FirstBootResponse(

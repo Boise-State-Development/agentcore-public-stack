@@ -8,14 +8,17 @@ import {
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt } from '@ng-icons/heroicons/outline';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ModelService } from '../../../session/services/model/model.service';
-import { UserSettingsService } from '../../../services/user-settings.service';
+import { MAX_PERSONAL_INSTRUCTIONS, UserSettingsService } from '../../../services/user-settings.service';
 import { LocalSettingsService } from '../../../services/local-settings.service';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { isRetiring } from '../../../shared/utils/retirement';
 
 @Component({
   selector: 'app-chat-preferences-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink],
+  imports: [NgIcon, RouterLink, SpinnerComponent],
   providers: [
     provideIcons({ heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt }),
   ],
@@ -41,12 +44,12 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
           <div class="mt-4">
             @if (modelService.modelsLoading()) {
               <div class="flex items-center gap-2 text-sm/6 text-gray-500 dark:text-gray-400">
-                <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-t-blue-400"></div>
+                <app-spinner size="sm" label="Loading models" />
                 Loading models...
               </div>
             } @else {
               <select
-                class="block w-full rounded-sm border-0 bg-white py-1.5 pl-3 pr-10 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 focus:ring-2 focus:ring-blue-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-blue-500"
+                class="block w-full rounded-sm border-0 bg-white py-1.5 pl-3 pr-10 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 focus:ring-2 focus:ring-primary-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-primary-500"
                 aria-label="Default model"
                 (change)="onModelChange($event)"
               >
@@ -64,21 +67,72 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
                 -->
                 <option value="" [selected]="currentDefaultModelId() === ''">No default (use first available)</option>
                 @for (model of modelService.availableModels(); track model.id) {
+                  <!-- A model being retired can stay the default but can't become
+                       it (docs/specs/model-retirement.md §7). -->
                   <option
                     [value]="model.modelId"
                     [selected]="model.modelId === currentDefaultModelId()"
-                  >{{ model.modelName }} ({{ model.providerName }})</option>
+                    [disabled]="isRetiring(model) && model.modelId !== currentDefaultModelId()"
+                  >{{ model.modelName }} ({{ model.providerName }}){{ isRetiring(model) ? ' — being retired' : '' }}</option>
                 }
               </select>
+              @if (retiredDefaultNotice(); as notice) {
+                <p class="mt-2 text-xs/5 text-state-warning-700 dark:text-state-warning-300">{{ notice }}</p>
+              }
             }
             @if (saving()) {
               <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">Saving...</p>
             }
             @if (saveError()) {
-              <p class="mt-2 text-xs text-red-600 dark:text-red-400">{{ saveError() }}</p>
+              <p class="mt-2 text-xs text-state-danger-600 dark:text-state-danger-400">{{ saveError() }}</p>
             }
           </div>
         </div>
+      </div>
+
+      <!-- Personal instructions -->
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
+        <form class="p-6" (submit)="$event.preventDefault(); savePersonalInstructions()">
+          <label for="personal-instructions" class="text-sm/6 font-medium text-gray-900 dark:text-white">
+            Personal instructions
+          </label>
+          <p id="personal-instructions-help" class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+            How you’d like the assistant to work with you, in every conversation, including in agents and projects.
+            Where an agent’s or a project’s own instructions disagree, theirs win.
+          </p>
+          <textarea
+            id="personal-instructions"
+            rows="5"
+            [value]="personalValue()"
+            (input)="personalDraft.set($any($event.target).value)"
+            [disabled]="!settingsLoaded()"
+            [attr.maxlength]="personalMax"
+            aria-describedby="personal-instructions-help personal-instructions-count"
+            placeholder="For example: I teach undergraduate chemistry. Keep answers brief and use SI units."
+            class="mt-3 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-2 focus:ring-primary-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-400"
+          ></textarea>
+          <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
+            <p id="personal-instructions-count" class="text-xs/5 text-gray-600 dark:text-gray-400">
+              {{ personalValue().length.toLocaleString() }} / {{ personalMax.toLocaleString() }} characters
+            </p>
+            <div class="flex items-center gap-3">
+              @if (personalStatus(); as status) {
+                <p
+                  role="status"
+                  class="text-xs/5"
+                  [class]="status.error ? 'text-state-danger-600 dark:text-state-danger-400' : 'text-state-success-700 dark:text-state-success-400'"
+                >{{ status.text }}</p>
+              }
+              <button
+                type="submit"
+                [disabled]="!personalDirty() || personalSaving()"
+                class="rounded-2xl bg-primary-accessible px-3.5 py-1.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {{ personalSaving() ? 'Saving…' : 'Save' }}
+              </button>
+            </div>
+          </div>
+        </form>
       </div>
 
       <!-- Show Token Count toggle -->
@@ -99,7 +153,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
           </div>
 
           <!-- Toggle -->
-          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-blue-600 transition-colors duration-200 ease-in-out has-checked:bg-blue-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-blue-500 dark:has-checked:bg-blue-500">
+          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-primary-600 transition-colors duration-200 ease-in-out has-checked:bg-primary-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-primary-500 dark:has-checked:bg-primary-500">
             <span class="size-5 rounded-full bg-white shadow-xs ring-1 ring-gray-900/5 transition-transform duration-200 ease-in-out group-has-checked:translate-x-5"></span>
             <input
               id="show-token-count"
@@ -131,7 +185,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
           </div>
 
           <!-- Toggle -->
-          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-blue-600 transition-colors duration-200 ease-in-out has-checked:bg-blue-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-blue-500 dark:has-checked:bg-blue-500">
+          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-primary-600 transition-colors duration-200 ease-in-out has-checked:bg-primary-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-primary-500 dark:has-checked:bg-primary-500">
             <span class="size-5 rounded-full bg-white shadow-xs ring-1 ring-gray-900/5 transition-transform duration-200 ease-in-out group-has-checked:translate-x-5"></span>
             <input
               id="show-debug-output"
@@ -197,6 +251,20 @@ export class ChatPreferencesSettingsPage {
   readonly saving = signal(false);
   readonly saveError = signal<string | null>(null);
 
+  protected readonly isRetiring = isRetiring;
+
+  /**
+   * A saved default on a model that has since been retired no longer matches
+   * any option, so the select reads "No default" — say what actually happens.
+   */
+  readonly retiredDefaultNotice = computed(() => {
+    const id = this.currentDefaultModelId();
+    const successor = this.modelService.successorFor(id);
+    if (!successor) return null;
+    const name = this.modelService.modelNameFor(id) ?? 'Your default model';
+    return `${name} has been retired, so ${successor.modelName} answers in its place. Choose a new default to stop seeing this.`;
+  });
+
   readonly currentDefaultModelId = computed(() => {
     const settings = this.userSettingsService.settingsResource.value();
     const models = this.modelService.availableModels();
@@ -217,10 +285,57 @@ export class ChatPreferencesSettingsPage {
 
     try {
       await this.userSettingsService.updateSettings({ defaultModelId: modelId });
+      // Reflect the new default in this tab's selection so the next new chat
+      // uses it without a reload (#1585).
+      this.modelService.applyUserDefault(modelId);
     } catch {
       this.saveError.set('Failed to save default model. Please try again.');
     } finally {
       this.saving.set(false);
+    }
+  }
+
+  // ── Personal instructions ─────────────────────────────────────────────
+
+  protected readonly personalMax = MAX_PERSONAL_INSTRUCTIONS;
+  /** What the user has typed since the last save; null = showing the saved value. */
+  readonly personalDraft = signal<string | null>(null);
+  readonly personalSaving = signal(false);
+  readonly personalStatus = signal<{ text: string; error: boolean } | null>(null);
+
+  /** The saved settings, or undefined while loading or after a failed read (reading `value()` then would throw). */
+  private readonly savedSettings = computed(() => {
+    const settings = this.userSettingsService.settingsResource;
+    return settings.error?.() ? undefined : settings.value();
+  });
+  readonly settingsLoaded = computed(() => this.savedSettings() !== undefined);
+  private readonly personalSaved = computed(() => this.savedSettings()?.personalInstructions ?? '');
+  readonly personalValue = computed(() => this.personalDraft() ?? this.personalSaved());
+  readonly personalDirty = computed(() => {
+    const draft = this.personalDraft();
+    return draft !== null && draft.trim() !== this.personalSaved().trim();
+  });
+
+  async savePersonalInstructions(): Promise<void> {
+    if (!this.personalDirty()) return;
+    this.personalSaving.set(true);
+    this.personalStatus.set(null);
+    try {
+      // Silent: the result is said right beside the button.
+      const saved = await this.userSettingsService.updateSettings(
+        { personalInstructions: this.personalValue() },
+        { silent: true },
+      );
+      this.personalDraft.set(null);
+      this.personalStatus.set({
+        text: saved.personalInstructions ? 'Saved' : 'Cleared',
+        error: false,
+      });
+    } catch (err) {
+      const detail = err instanceof HttpErrorResponse && typeof err.error?.detail === 'string' ? err.error.detail : null;
+      this.personalStatus.set({ text: detail ?? 'Couldn’t save. Please try again.', error: true });
+    } finally {
+      this.personalSaving.set(false);
     }
   }
 

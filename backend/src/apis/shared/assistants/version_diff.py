@@ -85,8 +85,16 @@ def changed_fields(
     return changes
 
 
-def instructions_diff(before: Optional[AgentVersion], after: AgentVersion) -> List[str]:
+def instructions_diff(
+    before: Optional[AgentVersion],
+    after: AgentVersion,
+    *,
+    fromfile: str = "approved",
+    tofile: str = "submitted",
+) -> List[str]:
     """A unified line diff of the instructions, or ``[]`` when they are unchanged.
+
+    The header labels default to the marketplace review's; other histories name their own.
 
     Empty on a first submission too: there is nothing to compare against, and rendering the
     entire prompt as "added" would be noise where the reviewer is going to read the whole
@@ -104,8 +112,8 @@ def instructions_diff(before: Optional[AgentVersion], after: AgentVersion) -> Li
         difflib.unified_diff(
             old.splitlines(),
             new.splitlines(),
-            fromfile="approved",
-            tofile="submitted",
+            fromfile=fromfile,
+            tofile=tofile,
             lineterm="",
             n=_DIFF_CONTEXT_LINES,
         )
@@ -124,3 +132,24 @@ def behavior_changed(before: Optional[AgentVersion], after: AgentVersion) -> boo
         field_changed(before, after, field)
         for field in ("instructions", "bindings", "model_settings")
     )
+
+
+# Snapshot attribute names whose wire (camelCase) spelling differs from the Python one.
+_WIRE_FIELD_NAMES = {
+    "model_settings": "modelConfig",
+    "icon_key": "iconKey",
+    "publisher_id": "publisherId",
+}
+
+
+def wire_field_name(field: str) -> str:
+    """A snapshot field's name as the SPA knows it."""
+    return _WIRE_FIELD_NAMES.get(field, field)
+
+
+def wire_value(value: Any) -> Any:
+    """Serialize a snapshot value for a diff payload, keeping ``None`` distinct from ``[]``."""
+    if isinstance(value, list):
+        return [wire_value(item) for item in value]
+    dump = getattr(value, "model_dump", None)
+    return dump(by_alias=True) if dump else value

@@ -277,6 +277,28 @@ def make_create_excel_spreadsheet_tool(session_id: str, user_id: str):
                     ws.append(['Q1', 100])
                     ws.append(['Q2', 120])
                     ws['B4'] = '=SUM(B2:B3)'
+                    # Freeze the header so it stays visible while
+                    # scrolling -- do this on EVERY sheet that has a
+                    # header row ('A2' freezes row 1, 'B2' also freezes
+                    # column A):
+                    ws.freeze_panes = 'A2'
+                    # Give every number a format. Without one, Excel
+                    # shows raw values -- 1234567.891 instead of
+                    # $1,234,568, and 0.1834 instead of 18.3%:
+                    for cell in ws['B'][1:]:
+                        cell.number_format = '#,##0'
+                    # Common formats: '#,##0.00' (2dp), '$#,##0'
+                    # (currency), '0.0%' (percent -- store 0.183, not
+                    # 18.3), 'yyyy-mm-dd' (date).
+
+                Formulas are written WITHOUT a cached result, because
+                openpyxl does not evaluate them. Excel fills them in on
+                open, but until then the cell reads as empty to
+                everything else -- including read_excel_spreadsheet and
+                the in-app preview. So when a total is meant to be read
+                back or shown, compute it in Python and write the value
+                (optionally alongside the formula on another cell):
+                    ws['B4'] = sum(r[1] for r in rows)
 
                 Example (add a second sheet + a bar chart):
                     ws2 = wb.create_sheet('Chart')
@@ -328,14 +350,14 @@ def make_create_excel_spreadsheet_tool(session_id: str, user_id: str):
             return _error(f"❌ Failed to create '{filename}': {exc}")
 
         try:
-            _id, download_url, size_kb = await _store_document(
+            upload_id, size_kb = await _store_document(
                 user_id, session_id, filename, file_bytes, _XLSX_MIME
             )
         except Exception as exc:  # noqa: BLE001 - storage failure is terminal
             logger.error(f"create_excel_spreadsheet storage error: {exc}")
             return _error(f"❌ Created '{filename}' but failed to save it: {exc}")
 
-        return _download_card(filename, download_url, size_kb, "Created")
+        return _download_card(filename, upload_id, size_kb, "Created")
 
     return create_excel_spreadsheet
 
@@ -424,7 +446,7 @@ def make_modify_excel_spreadsheet_tool(session_id: str, user_id: str):
             return _error(f"❌ Failed to modify '{source.filename}': {exc}")
 
         try:
-            _id, download_url, size_kb = await _store_document(
+            upload_id, size_kb = await _store_document(
                 user_id, session_id, output_filename, file_bytes, _XLSX_MIME
             )
         except Exception as exc:  # noqa: BLE001 - storage failure is terminal
@@ -433,7 +455,7 @@ def make_modify_excel_spreadsheet_tool(session_id: str, user_id: str):
                 f"❌ Modified '{source.filename}' but failed to save it: {exc}"
             )
 
-        return _download_card(output_filename, download_url, size_kb, "Updated")
+        return _download_card(output_filename, upload_id, size_kb, "Updated")
 
     return modify_excel_spreadsheet
 

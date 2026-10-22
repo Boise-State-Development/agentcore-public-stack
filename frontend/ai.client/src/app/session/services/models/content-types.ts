@@ -245,13 +245,17 @@ export interface CostBreakdown {
 }
 
 /** One partition of the per-turn context-token attribution. The list is
- *  open-ended (system / tools / messages today; skills, per-server detail, and
- *  cache splits are future additive partitions), so consumers render whatever
- *  partitions arrive rather than reading fixed fields. */
+ *  open-ended (system / skills / memory / tools / messages today; cache splits
+ *  are a future additive partition), so consumers render whatever partitions
+ *  arrive rather than reading fixed fields. */
 export interface ContextPartition {
   key: string;
   label: string;
   tokens: number;
+  /** Itemization within the partition — e.g. Tools by origin (built-in, each
+   *  MCP server). Apportioned from the partition's measured total, so the
+   *  children sum to `tokens` but each one is an estimate. */
+  children?: ContextPartition[];
 }
 
 /** Per-turn breakdown of what is filling the context window. `partitions` sum
@@ -274,6 +278,17 @@ export interface MetadataEvent {
   contextWindow?: number;
   /** Per-turn system / tools / messages token breakdown. */
   contextBreakdown?: ContextBreakdown;
+  /**
+   * How long the whole turn took, server-measured from the invocation
+   * arriving to the stream ending.
+   *
+   * Deliberately its own field rather than reusing `metrics.latencyMs`: that
+   * one IS the turn duration on the live stream, but the persisted
+   * `latency.endToEndLatency` it maps to prefers the provider's own API-call
+   * time — so a reloaded conversation would quietly show a smaller number for
+   * what looks like the same thing.
+   */
+  turnDurationMs?: number;
 }
 
 export interface ExceptionEvent {

@@ -1,13 +1,41 @@
-import { Injectable, signal, computed, inject } from '@angular/core';
+import { Injectable, signal, computed, effect, inject, untracked } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
+import {
+  EffortControl,
+  ManagedModel,
+  resolveEffortControl,
+  EFFORT_PARAM_KEYS,
+} from '../../../admin/manage-models/models/managed-model.model';
 import { UserSettingsService } from '../../../services/user-settings.service';
+import { ToastService } from '../../../services/toast/toast.service';
+import { isRetiring } from '../../../shared/utils/retirement';
 
 interface ManagedModelsListResponse {
   models: ManagedModel[];
   totalCount: number;
+}
+
+/** A speech-to-speech row: voice mode's model, never a chat one. */
+export function isSpeechModel(model: { outputModalities?: string[] }): boolean {
+  return (model.outputModalities ?? []).some((m) => m.toUpperCase() === 'SPEECH');
+}
+
+/**
+ * A row that declares TEXT input and nothing else: the backend converts its
+ * documents to text and drops its images (`is_text_only_model` in
+ * `inference_api/chat/routes.py` — keep the two in step).
+ *
+ * Keyed on TEXT-*only*, never on a missing entry: Claude rows declare
+ * `['TEXT', 'IMAGE']` with no DOCUMENT and read PDFs natively. An empty or
+ * absent list is not text-only either.
+ */
+export function isTextOnlyModel(model: { inputModalities?: string[] } | null | undefined): boolean {
+  const declared = new Set(
+    (model?.inputModalities ?? []).map((m) => m.trim().toUpperCase()).filter(Boolean),
+  );
+  return declared.size === 1 && declared.has('TEXT');
 }
 
 @Injectable({
@@ -17,10 +45,14 @@ export class ModelService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
   private userSettings = inject(UserSettingsService);
+  private toast = inject(ToastService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/models`);
 
   // Session storage key for persisting model selection
   private readonly SELECTED_MODEL_KEY = 'selectedModelId';
+  // Retired model ids whose redirect this tab has already announced, so a saved
+  // default on a retired model toasts once per tab rather than on every load.
+  private readonly RETIRED_NOTICE_KEY = 'retiredModelNoticesShown';
   // Session storage key for persisting per-model inference param overrides.
   // Keyed by modelId so switching models doesn't bleed values across.
   private readonly INFERENCE_OVERRIDES_KEY = 'inferenceParamOverrides';
@@ -32,7 +64,9 @@ export class ModelService {
     modelName: 'System Default',
     provider: 'bedrock',
     providerName: 'Anthropic',
-    inputModalities: ['TEXT'],
+    // Haiku 4.5 reads images (and PDFs natively). A bare ['TEXT'] would mark the
+    // fallback text-only and warn about attachments it handles fine.
+    inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     maxInputTokens: 200000,
     maxOutputTokens: 4096,
@@ -46,8 +80,12 @@ export class ModelService {
     isDefault: false,
   };
 
-  // Models fetched from API
+  // Models fetched from API — every enabled model a user may select, which
+  // excludes `retired` rows (docs/specs/model-retirement.md §7).
   private readonly models = signal<ManagedModel[]>([]);
+  // Retired rows from the last load. Never offered; kept only to follow a
+  // stale selection to the model that now runs in its place.
+  private readonly retiredModels = signal<ManagedModel[]>([]);
   private readonly isLoading = signal<boolean>(false);
   private readonly error = signal<string | null>(null);
   private readonly usingDefaultModel = signal<boolean>(false);
@@ -95,10 +133,110 @@ export class ModelService {
     return this._inferenceOverrides()[model.modelId] ?? {};
   });
 
+  /**
+   * Models shown at the top level of the chat model picker.
+   *
+   * `isFeatured !== false` rather than `=== true` on purpose: a record written
+   * before the field existed has it absent, and those models must keep showing
+   * where they always have. Only an explicit `false` demotes one.
+   *
+   * The selected model is always included even when demoted — a picker whose
+   * trigger names a model you can't find in the open menu (and that shows no
+   * check mark) reads as broken.
+   */
+  readonly featuredModels = computed<ManagedModel[]>(() => {
+    const selectedId = this.selectedModel()?.modelId;
+    return this.pickableModels().filter(m => m.isFeatured !== false || m.modelId === selectedId);
+  });
+
+  /** Models collapsed behind the picker's "More models" submenu. */
+  readonly moreModels = computed<ManagedModel[]>(() => {
+    const selectedId = this.selectedModel()?.modelId;
+    return this.pickableModels().filter(m => m.isFeatured === false && m.modelId !== selectedId);
+  });
+
+  /**
+   * What the chat picker may offer: every active model, plus the selected one
+   * even when it is being retired. A deprecated model can be kept but not newly
+   * chosen — and it is hidden rather than shown disabled, because its successor
+   * is the obvious alternative and a dead menu row is noise.
+   */
+  private readonly pickableModels = computed<ManagedModel[]>(() => {
+    const selectedId = this.selectedModel()?.modelId;
+    return this.models().filter(m => !isRetiring(m) || m.modelId === selectedId);
+  });
+
+  /**
+   * The effort control the selected model offers, or null when it offers none.
+   * Null is the common case — only models whose admin enumerated the `allowed`
+   * effort levels get a control (see `resolveEffortControl`).
+   */
+  readonly effortControl = computed<EffortControl | null>(() =>
+    resolveEffortControl(this.selectedModel()),
+  );
+
+  /**
+   * The effort level in force for the selected model: the user's override when
+   * they've set one, otherwise the admin's default. Null when the model has no
+   * effort control, or has one with no admin default and no user choice yet —
+   * in which case the provider's own default applies and we don't claim to
+   * know what it is.
+   */
+  readonly selectedEffort = computed<string | null>(() => this.effortFor(this.selectedModel()));
+
+  /**
+   * The effort level a message on `model` would be sent with, by the same
+   * rule as `selectedEffort`. Effort overrides are kept per model, so a
+   * switch to another model sends that model's own level, not the current one.
+   */
+  effortFor(model: ManagedModel | null | undefined): string | null {
+    const control = resolveEffortControl(model);
+    if (!control || !model) return null;
+    const override = this._inferenceOverrides()[model.modelId]?.[control.key];
+    if (typeof override === 'string' && control.levels.includes(override)) {
+      return override;
+    }
+    return control.defaultLevel;
+  }
+
   constructor() {
     // Load models on initialization
     this.loadModels().catch(err => {
       console.error('Failed to load models on initialization:', err);
+    });
+
+    // Re-apply a pending agent model lock once the model list arrives.
+    //
+    // WHY: `lockToAgentModel` resolves the pinned id against `models()`, which
+    // is loaded asynchronously. A lock applied before that request lands set the
+    // lock FLAG (disabling the picker) while `setSelectedModelById` returned
+    // false and left the selection alone — so the picker sat disabled, showing
+    // the user's default, claiming an agent runs on a model it does not. The
+    // boolean said so and every caller discarded it. Nothing re-ran when the
+    // models turned up, because the callers' effects track the agent's model id,
+    // not the model list.
+    //
+    // Fixing it here rather than in the Designer preview: the session page locks
+    // the same way for an agent-bound conversation, so the race belongs to the
+    // lock, not to one of its callers.
+    //
+    // ⚠️ The reads below are deliberately split. `_agentLockedModelId` and
+    // `models` are tracked — those are the inputs this should re-run on. The
+    // current selection is read via `untracked`, and the write goes through
+    // `untracked` too: `setSelectedModelById` writes `_selectedModel`, and
+    // tracking that read would make this effect retrigger itself forever.
+    effect(() => {
+      const lockedId = this._agentLockedModelId();
+      const models = this.models();
+      if (!lockedId || models.length === 0) {
+        return;
+      }
+      untracked(() => {
+        if (this._selectedModel()?.modelId === lockedId) {
+          return; // already showing the pinned model
+        }
+        this.setSelectedModelById(lockedId);
+      });
     });
   }
 
@@ -118,8 +256,14 @@ export class ModelService {
         )
       );
 
-      // Filter to only enabled models
-      const enabledModels = response.models.filter(model => model.enabled);
+      // Filter to enabled models a user may select. Retired rows are held apart:
+      // never offered, only followed to their successor. Speech-to-speech rows
+      // (Nova 2 Sonic) are catalogued so voice sessions price, but they answer
+      // no chat API — the backend already omits them; this is the belt.
+      const enabledModels = response.models.filter(
+        model => model.enabled && model.status !== 'retired' && !isSpeechModel(model),
+      );
+      this.retiredModels.set(response.models.filter(model => model.status === 'retired'));
 
       // Preserve selected model if it still exists in the new list
       const currentSelected = this._selectedModel();
@@ -135,6 +279,13 @@ export class ModelService {
       // 3. Select the admin-configured default model (isDefault: true)
       // 4. Otherwise, select first model if available
       // 5. If no models available, use system default
+      // A selection on a model that has since been retired follows it to its
+      // successor, and says so — rather than today's silent fallback.
+      const currentSuccessor =
+        currentSelected && !selectedStillExists && !wasUsingDefault
+          ? this.resolveSelectable(currentSelected.modelId, enabledModels)
+          : null;
+
       if (selectedStillExists && currentSelected && !wasUsingDefault) {
         // Find and set the matching model (in case other fields changed)
         const matchingModel = enabledModels.find(m => m.modelId === currentSelected.modelId);
@@ -142,15 +293,16 @@ export class ModelService {
           this._selectedModel.set(matchingModel);
           this.usingDefaultModel.set(false);
         }
+      } else if (currentSuccessor) {
+        this.setSelectedModel(currentSuccessor);
       } else if (enabledModels.length > 0) {
         // Try to restore from sessionStorage first
         const savedModelId = this.getSavedModelId();
-        const savedModel = savedModelId ? enabledModels.find(m => m.modelId === savedModelId) : null;
+        const savedModel = savedModelId ? this.resolveSelectable(savedModelId, enabledModels) : null;
 
         if (savedModel) {
           // Restore previously selected model from session
-          this._selectedModel.set(savedModel);
-          this.usingDefaultModel.set(false);
+          this.setSelectedModel(savedModel);
         } else {
           // Check the user's persisted default from settings API before
           // falling back to the admin-configured default. Settings live in
@@ -161,9 +313,12 @@ export class ModelService {
             this._selectedModel.set(userDefaultModel);
             this.usingDefaultModel.set(false);
           } else {
-            // Find admin-configured default model, or fall back to first available
+            // Find admin-configured default model, or fall back to the first
+            // model that isn't being retired.
             const defaultModel = enabledModels.find(m => m.isDefault);
-            this._selectedModel.set(defaultModel || enabledModels[0]);
+            this._selectedModel.set(
+              defaultModel || enabledModels.find(m => !isRetiring(m)) || enabledModels[0],
+            );
             this.usingDefaultModel.set(false);
           }
         }
@@ -228,9 +383,8 @@ export class ModelService {
    * @param modelId - The modelId string to find and select
    * @returns true if the model was found and selected, false otherwise
    */
-  setSelectedModelById(modelId: string): boolean {
-    const models = this.models();
-    const model = models.find(m => m.modelId === modelId);
+  setSelectedModelById(modelId: string, options: { announceRetirement?: boolean } = {}): boolean {
+    const model = this.resolveSelectable(modelId, this.models(), options.announceRetirement ?? true);
 
     if (model) {
       this._selectedModel.set(model);
@@ -244,6 +398,19 @@ export class ModelService {
   }
 
   /**
+   * Apply a newly saved user default to this tab's selection (#1585).
+   * `loadModels()` only reads the user default on a fresh tab, so without this
+   * new chats kept the old pick until reload. `null` falls back to the admin
+   * default. Skipped while an Agent lock is active.
+   */
+  applyUserDefault(modelId: string | null): void {
+    if (this._agentLockedModelId() !== null) return;
+    if (modelId && this.setSelectedModelById(modelId, { announceRetirement: false })) return;
+    const adminDefault = this.models().find(m => m.isDefault);
+    if (adminDefault) this.setSelectedModel(adminDefault);
+  }
+
+  /**
    * Lock the picker to an Agent's pinned model (Agent Designer). Selects the
    * model by its modelId and marks it agent-locked so the dropdown disables.
    * If the pinned model isn't in the user's available set, the lock is still
@@ -253,12 +420,78 @@ export class ModelService {
    */
   lockToAgentModel(modelId: string): void {
     this._agentLockedModelId.set(modelId);
-    this.setSelectedModelById(modelId);
+    // A retired pin shows the successor the backend will actually run — without
+    // a notice: the Agent's owner chose the model, not this user.
+    this.setSelectedModelById(modelId, { announceRetirement: false });
   }
 
   /** Release an Agent model lock (e.g. navigating away from an agent conversation). */
   clearAgentModelLock(): void {
     this._agentLockedModelId.set(null);
+  }
+
+  /**
+   * The model that runs in place of a retired `modelId`, or null when it isn't
+   * retired (or has no selectable successor). Never announces — callers that
+   * surface it say so in their own words.
+   */
+  successorFor(modelId: string | null | undefined): ManagedModel | null {
+    if (!modelId || !this.retiredModels().some(m => m.modelId === modelId)) return null;
+    return this.resolveSelectable(modelId, this.models(), false);
+  }
+
+  /** Display name for a modelId, including a retired one; null when unknown. */
+  modelNameFor(modelId: string | null | undefined): string | null {
+    if (!modelId) return null;
+    const model =
+      this.models().find(m => m.modelId === modelId) ??
+      this.retiredModels().find(m => m.modelId === modelId);
+    return model?.modelName ?? null;
+  }
+
+  /**
+   * `modelId` from `models`, or — when it has been retired — the model that
+   * runs in its place, following a chain of retirements. Null when neither
+   * exists, which leaves the caller's own fallback in charge.
+   */
+  private resolveSelectable(
+    modelId: string,
+    models: ManagedModel[],
+    announce = true,
+  ): ManagedModel | null {
+    const direct = models.find(m => m.modelId === modelId);
+    if (direct) return direct;
+
+    const retired = new Map(this.retiredModels().map(m => [m.modelId, m]));
+    const seen = new Set([modelId]);
+    let current = retired.get(modelId);
+    while (current?.replacedBy && !seen.has(current.replacedBy)) {
+      const successorId: string = current.replacedBy;
+      seen.add(successorId);
+      const successor = models.find(m => m.modelId === successorId);
+      if (successor) {
+        if (announce) this.announceRetirement(retired.get(modelId)!, successor);
+        return successor;
+      }
+      current = retired.get(successorId);
+    }
+    return null;
+  }
+
+  private announceRetirement(from: ManagedModel, to: ManagedModel): void {
+    let shown: string[] = [];
+    try {
+      shown = JSON.parse(sessionStorage.getItem(this.RETIRED_NOTICE_KEY) ?? '[]');
+    } catch {
+      shown = [];
+    }
+    if (shown.includes(from.modelId)) return;
+    this.toast.info(`${from.modelName} has been retired`, `Switched to ${to.modelName}.`);
+    try {
+      sessionStorage.setItem(this.RETIRED_NOTICE_KEY, JSON.stringify([...shown, from.modelId]));
+    } catch {
+      // Unavailable storage just means the notice may repeat on reload.
+    }
   }
 
   /**
@@ -295,10 +528,10 @@ export class ModelService {
    */
   private async findUserDefaultModel(enabledModels: ManagedModel[]): Promise<ManagedModel | null> {
     try {
-      const settings = await this.userSettings.fetchSettings();
+      const settings = await this.userSettings.getSettings();
       const id = settings?.defaultModelId;
       if (!id) return null;
-      return enabledModels.find(m => m.modelId === id) ?? null;
+      return this.resolveSelectable(id, enabledModels);
     } catch (e) {
       console.warn('Could not load user settings to apply default model:', e);
       return null;
@@ -329,6 +562,21 @@ export class ModelService {
     this.persistOverrides(next);
   }
 
+  /**
+   * Set the effort level for the selected model. Writes through the same
+   * per-model override store as every other inference param, so it rides the
+   * existing `inference_params` request path with no special casing.
+   *
+   * A level the model doesn't declare is ignored rather than stored — the
+   * backend would drop it anyway, and a stored value that never takes effect
+   * would keep showing as the active level in the picker.
+   */
+  setEffort(level: string): void {
+    const control = this.effortControl();
+    if (!control || !control.levels.includes(level)) return;
+    this.setInferenceParamOverride(control.key, level);
+  }
+
   /** Clear all inference param overrides for the currently selected model. */
   clearInferenceParamOverrides(): void {
     const model = this.selectedModel();
@@ -351,11 +599,57 @@ export class ModelService {
       const raw = sessionStorage.getItem(this.INFERENCE_OVERRIDES_KEY);
       if (!raw) return {};
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
+      if (!parsed || typeof parsed !== 'object') return {};
+      return this.dropRetiredOverrides(parsed as Record<string, Record<string, unknown>>);
     } catch (e) {
       console.warn('Could not read inference overrides from sessionStorage:', e);
       return {};
     }
+  }
+
+  /**
+   * Strip overrides for params that no longer have a user-facing control.
+   *
+   * The drawer's Advanced form is gone: effort (in the model picker) is the one
+   * knob a user sets, and the rest are the admin's to govern. But this store is
+   * `sessionStorage`, so a tab open across that change still holds whatever the
+   * user last typed — a temperature or max_tokens that would keep riding every
+   * request with nothing in the UI to show it or reset it. Invisible state that
+   * changes model behaviour is worse than either keeping the form or having
+   * never had it.
+   *
+   * Effort is deliberately preserved: it writes through this same store
+   * (`setEffort` → `setInferenceParamOverride`), so a blanket purge would clear
+   * a control the user can still see and is still using.
+   */
+  private dropRetiredOverrides(
+    stored: Record<string, Record<string, unknown>>,
+  ): Record<string, Record<string, unknown>> {
+    const keep = new Set<string>(EFFORT_PARAM_KEYS);
+    const next: Record<string, Record<string, unknown>> = {};
+    let changed = false;
+
+    for (const [modelId, params] of Object.entries(stored)) {
+      if (!params || typeof params !== 'object') {
+        changed = true;
+        continue;
+      }
+      const kept = Object.fromEntries(
+        Object.entries(params).filter(([key]) => keep.has(key)),
+      );
+      if (Object.keys(kept).length !== Object.keys(params).length) {
+        changed = true;
+      }
+      if (Object.keys(kept).length > 0) {
+        next[modelId] = kept;
+      }
+    }
+
+    // Rewrite storage so the strip happens once rather than on every read.
+    if (changed) {
+      this.persistOverrides(next);
+    }
+    return next;
   }
 
   private persistOverrides(value: Record<string, Record<string, unknown>>): void {

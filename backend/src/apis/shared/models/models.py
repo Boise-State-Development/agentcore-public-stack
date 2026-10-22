@@ -4,9 +4,12 @@ These models define the structure for managed models used across
 app API and inference API deployments.
 """
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, computed_field, field_validator, model_validator
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from enum import Enum
+
+from apis.shared.models.model_icons import model_icon_url, normalize_icon_slug
 
 
 class ModelParamSpec(BaseModel):
@@ -145,12 +148,80 @@ def _max_tokens_within_ceiling(
         raise ValueError("max_tokens default must be <= maxOutputTokens")
 
 
+class ModelStatus(str, Enum):
+    """Lifecycle of a managed model — docs/specs/model-retirement.md §7.
+
+    Deliberately separate from ``enabled``. ``enabled`` is an on/off switch that
+    already means other things (a voice-only row is off in chat), and flipping it
+    403s every Designer save of an Agent that keeps the model (§3). ``status``
+    is read by the pickers (``deprecated``: no *new* selection) and by the
+    runtime (``retired``: redirect to ``replacedBy``, or deny when there is none).
+    """
+
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
+    RETIRED = "retired"
+
+
+RETIREMENT_NOTE_MAX_LENGTH = 300
+
+
+def _blank_to_none(value: object) -> object:
+    """An empty or whitespace-only string is "unset" — the admin form posts ``""``
+    for an untouched optional input, and a stored ``""`` would render an empty
+    reason line rather than none at all."""
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return value
+
+
+def _check_retires_on(value: Optional[str]) -> Optional[str]:
+    """Reject anything that is not a plain ISO date.
+
+    Stored as a string because it is displayed, never computed with — which is
+    exactly why it is guarded on the way in: "soon" or "9/30/26" would otherwise
+    persist and reach the SPA as-is. ``""`` passes: it is the update path's
+    "clear it" sentinel.
+    """
+    if not value:
+        return value
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"retiresOn must be an ISO date (YYYY-MM-DD), got '{value}'")
+    return value
+
+
 class ManagedModelCreate(BaseModel):
     """Request model for creating a managed model."""
     model_config = ConfigDict(populate_by_name=True)
 
     model_id: str = Field(..., alias="modelId", min_length=1)
     model_name: str = Field(..., alias="modelName", min_length=1)
+    short_description: Optional[str] = Field(
+        None,
+        alias="shortDescription",
+        max_length=80,
+        description="One-line reason a user would pick this model, shown under its name "
+                    "in the chat model picker. Keep it short — the picker truncates.",
+    )
+    icon_slug: Optional[str] = Field(
+        None,
+        alias="iconSlug",
+        description="Built-in vendor logo to show beside this model in the chat "
+                    "picker (e.g. 'anthropic'). A crisp, theme-aware SVG the SPA "
+                    "already ships — prefer it over an upload when we have one. "
+                    "Send '' to clear it; an uploaded icon takes precedence.",
+    )
+
+    @field_validator("icon_slug")
+    @classmethod
+    def _validate_icon_slug(cls, value: Optional[str]) -> Optional[str]:
+        # Normalizes case/whitespace and rejects a slug we ship no asset for,
+        # which would otherwise render an invisible tile for every user.
+        return normalize_icon_slug(value)
+
     provider: str = Field(..., min_length=1)
     provider_name: str = Field(..., alias="providerName", min_length=1)
     input_modalities: List[str] = Field(..., alias="inputModalities", min_length=1)
@@ -190,6 +261,22 @@ class ManagedModelCreate(BaseModel):
         ge=0,
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
+    # Speech-to-speech models (Nova 2 Sonic) bill speech tokens on their own
+    # rate card, an order of magnitude above their text rates. `input`/`output`
+    # above are the TEXT rates for such a model; these two carry the speech
+    # rates. Absent on every text model.
+    speech_input_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechInputPricePerMillionTokens",
+        ge=0,
+        description="Price per million SPEECH input tokens (speech-to-speech models only)"
+    )
+    speech_output_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechOutputPricePerMillionTokens",
+        ge=0,
+        description="Price per million SPEECH output tokens (speech-to-speech models only)"
+    )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -201,21 +288,33 @@ class ManagedModelCreate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
     )
+    is_featured: bool = Field(
+        True,
+        alias="isFeatured",
+        description="Whether the model appears at the top level of the chat model "
+                    "picker. False collapses it into the picker's 'More models' "
+                    "submenu. Defaults to True so an uncurated catalog keeps showing "
+                    "every model where it always has."
+    )
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
-        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
-                    "(OpenAI Chat Completions, the default) or 'responses' (OpenAI "
-                    "Responses API — required by models that don't serve Chat "
-                    "Completions, e.g. openai.gpt-5.x). Ignored for other providers."
+        description="OpenAI-compatible API surface: 'chat' (OpenAI Chat "
+                    "Completions, the default) or 'responses' (OpenAI Responses "
+                    "API — required by models that don't serve Chat Completions, "
+                    "e.g. openai.gpt-5.x). Selectable for provider='mantle'; "
+                    "forced to 'responses' for provider='bedrock-responses', "
+                    "which exists because GPT-5.6 caches only over that API. "
+                    "Ignored for other providers."
     )
     mantle_region: Optional[str] = Field(
         None,
         alias="region",
-        description="Bedrock Mantle region override (provider='mantle' only): pins "
-                    "inference to the region hosting the model (e.g. 'us-east-1'), "
-                    "independent of where the app runs. Empty -> the app's region. "
-                    "Ignored for other providers."
+        description="Region override for an OpenAI-compatible Bedrock surface "
+                    "(provider='mantle' or 'bedrock-responses'): pins inference to "
+                    "the region hosting the model (e.g. 'us-east-1'), independent "
+                    "of where the app runs, and signs the bearer token for it. "
+                    "Empty -> the app's region. Ignored for other providers."
     )
     mantle_endpoint_path: Optional[str] = Field(
         None,
@@ -231,6 +330,40 @@ class ManagedModelCreate(BaseModel):
                     "When None, the runtime sends no inference params."
     )
 
+    status: ModelStatus = Field(
+        ModelStatus.ACTIVE,
+        description="Lifecycle: 'active', 'deprecated' (pickers refuse new selections) or "
+                    "'retired' (the runtime invokes replacedBy instead, or denies the turn "
+                    "when there is none). See docs/specs/model-retirement.md.",
+    )
+    replaced_by: Optional[str] = Field(
+        None,
+        alias="replacedBy",
+        description="modelId of the successor. A retired model with one is redirected to "
+                    "it on every runtime path; must name an existing, active model.",
+    )
+    retires_on: Optional[str] = Field(
+        None,
+        alias="retiresOn",
+        description="ISO date (YYYY-MM-DD) of the cutover (Stage 3). Display only.",
+    )
+    retirement_note: Optional[str] = Field(
+        None,
+        alias="retirementNote",
+        max_length=RETIREMENT_NOTE_MAX_LENGTH,
+        description="Free text shown wherever a non-active model is surfaced. Display only.",
+    )
+
+    @field_validator("replaced_by", "retires_on", "retirement_note", mode="before")
+    @classmethod
+    def _blank_lifecycle_to_none(cls, value: object) -> object:
+        return _blank_to_none(value)
+
+    @field_validator("retires_on")
+    @classmethod
+    def _validate_retires_on(cls, value: Optional[str]) -> Optional[str]:
+        return _check_retires_on(value)
+
     @model_validator(mode="after")
     def _check_max_tokens_within_ceiling(self) -> "ManagedModelCreate":
         _max_tokens_within_ceiling(self.max_output_tokens, self.supported_params)
@@ -243,6 +376,29 @@ class ManagedModelUpdate(BaseModel):
 
     model_id: Optional[str] = Field(None, alias="modelId", min_length=1)
     model_name: Optional[str] = Field(None, alias="modelName")
+    short_description: Optional[str] = Field(
+        None,
+        alias="shortDescription",
+        max_length=80,
+        description="One-line reason a user would pick this model, shown under its name "
+                    "in the chat model picker. Keep it short — the picker truncates.",
+    )
+    icon_slug: Optional[str] = Field(
+        None,
+        alias="iconSlug",
+        description="Built-in vendor logo to show beside this model in the chat "
+                    "picker (e.g. 'anthropic'). A crisp, theme-aware SVG the SPA "
+                    "already ships — prefer it over an upload when we have one. "
+                    "Send '' to clear it; an uploaded icon takes precedence.",
+    )
+
+    @field_validator("icon_slug")
+    @classmethod
+    def _validate_icon_slug(cls, value: Optional[str]) -> Optional[str]:
+        # Same validation as create, except '' survives as '': on a PATCH it is
+        # the only way to say "remove the slug", since None means "don't touch".
+        return normalize_icon_slug(value, keep_clear_sentinel=True)
+
     provider: Optional[str] = None
     provider_name: Optional[str] = Field(None, alias="providerName")
     input_modalities: Optional[List[str]] = Field(None, alias="inputModalities")
@@ -278,6 +434,22 @@ class ManagedModelUpdate(BaseModel):
         ge=0,
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
+    # Speech-to-speech models (Nova 2 Sonic) bill speech tokens on their own
+    # rate card, an order of magnitude above their text rates. `input`/`output`
+    # above are the TEXT rates for such a model; these two carry the speech
+    # rates. Absent on every text model.
+    speech_input_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechInputPricePerMillionTokens",
+        ge=0,
+        description="Price per million SPEECH input tokens (speech-to-speech models only)"
+    )
+    speech_output_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechOutputPricePerMillionTokens",
+        ge=0,
+        description="Price per million SPEECH output tokens (speech-to-speech models only)"
+    )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -289,17 +461,27 @@ class ManagedModelUpdate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions."
     )
+    is_featured: Optional[bool] = Field(
+        None,
+        alias="isFeatured",
+        description="Whether the model appears at the top level of the chat model "
+                    "picker. False collapses it into the picker's 'More models' "
+                    "submenu. Defaults to True so an uncurated catalog keeps showing "
+                    "every model where it always has."
+    )
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
-        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
-                    "or 'responses'. Ignored for other providers."
+        description="OpenAI-compatible API surface: 'chat' or 'responses'. "
+                    "Selectable for provider='mantle'; forced to 'responses' for "
+                    "provider='bedrock-responses'. Ignored for other providers."
     )
     mantle_region: Optional[str] = Field(
         None,
         alias="region",
-        description="Bedrock Mantle region override (provider='mantle' only). "
-                    "Empty -> the app's region. Ignored for other providers."
+        description="Region override for an OpenAI-compatible Bedrock surface "
+                    "(provider='mantle' or 'bedrock-responses'). Empty -> the "
+                    "app's region. Ignored for other providers."
     )
     mantle_endpoint_path: Optional[str] = Field(
         None,
@@ -312,6 +494,27 @@ class ManagedModelUpdate(BaseModel):
         alias="supportedParams",
         description="Per-model inference parameter capabilities."
     )
+
+    # Lifecycle. Same partial-update contract as iconSlug: None (absent) leaves
+    # the stored value alone, and '' clears it — the only way to say "remove",
+    # because the update dump drops None.
+    status: Optional[ModelStatus] = None
+    replaced_by: Optional[str] = Field(None, alias="replacedBy")
+    retires_on: Optional[str] = Field(None, alias="retiresOn")
+    retirement_note: Optional[str] = Field(
+        None, alias="retirementNote", max_length=RETIREMENT_NOTE_MAX_LENGTH
+    )
+
+    @field_validator("replaced_by", "retires_on", "retirement_note", mode="before")
+    @classmethod
+    def _strip_lifecycle(cls, value: object) -> object:
+        # Whitespace-only collapses to '' (clear), never to None (leave alone).
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("retires_on")
+    @classmethod
+    def _validate_retires_on(cls, value: Optional[str]) -> Optional[str]:
+        return _check_retires_on(value)
 
     @model_validator(mode="after")
     def _check_max_tokens_within_ceiling(self) -> "ManagedModelUpdate":
@@ -326,6 +529,32 @@ class ManagedModel(BaseModel):
     id: str
     model_id: str = Field(..., alias="modelId")
     model_name: str = Field(..., alias="modelName")
+    short_description: Optional[str] = Field(
+        None,
+        alias="shortDescription",
+        # Deliberately NOT length-capped here, unlike the create/update models.
+        # This is the READ model: a stored value longer than the write-path cap
+        # (hand-edited record, or a future cap that shrinks) would fail
+        # validation and take the whole /models listing down with it. Bound the
+        # input, be permissive about what is already persisted; the picker
+        # truncates visually anyway.
+        description="One-line reason a user would pick this model, shown under its name "
+                    "in the chat model picker.",
+    )
+    icon_slug: Optional[str] = Field(
+        None,
+        alias="iconSlug",
+        description="Built-in vendor logo slug (e.g. 'anthropic'). The SPA resolves "
+                    "it to its shipped light/dark SVG pair. Superseded by iconUrl "
+                    "when an icon has been uploaded.",
+    )
+    icon_key: Optional[str] = Field(
+        None,
+        alias="iconKey",
+        description="S3 object key for an uploaded icon. Internal — clients read "
+                    "iconUrl, which is derived from this.",
+    )
+
     provider: str
     provider_name: str = Field(..., alias="providerName")
     input_modalities: List[str] = Field(..., alias="inputModalities")
@@ -368,6 +597,16 @@ class ManagedModel(BaseModel):
         alias="cacheReadPricePerMillionTokens",
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
+    speech_input_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechInputPricePerMillionTokens",
+        description="Price per million SPEECH input tokens (speech-to-speech models only)"
+    )
+    speech_output_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechOutputPricePerMillionTokens",
+        description="Price per million SPEECH output tokens (speech-to-speech models only)"
+    )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: bool = Field(
         True,
@@ -379,17 +618,38 @@ class ManagedModel(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
     )
+    is_featured: bool = Field(
+        True,
+        alias="isFeatured",
+        description="Whether the model appears at the top level of the chat model "
+                    "picker. False collapses it into the picker's 'More models' "
+                    "submenu. Defaults to True so an uncurated catalog keeps showing "
+                    "every model where it always has."
+    )
+    sort_order: Optional[int] = Field(
+        None,
+        alias="sortOrder",
+        description="Position in the catalog, lowest first — the order the admin "
+                    "list and the chat model picker show models in. Set only by "
+                    "the admin reorder endpoint, never by create/update, so a "
+                    "model form save can't collide with a drag. None (never "
+                    "ordered, or created since the last reorder) sorts after "
+                    "every ordered model, newest first."
+    )
     mantle_api_mode: Optional[str] = Field(
         None,
         alias="apiMode",
-        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
-                    "(default) or 'responses'. Ignored for other providers."
+        description="OpenAI-compatible API surface: 'chat' (default) or "
+                    "'responses'. Selectable for provider='mantle'; forced to "
+                    "'responses' for provider='bedrock-responses'. Ignored for "
+                    "other providers."
     )
     mantle_region: Optional[str] = Field(
         None,
         alias="region",
-        description="Bedrock Mantle region override (provider='mantle' only). "
-                    "Empty -> the app's region. Ignored for other providers."
+        description="Region override for an OpenAI-compatible Bedrock surface "
+                    "(provider='mantle' or 'bedrock-responses'). Empty -> the "
+                    "app's region. Ignored for other providers."
     )
     mantle_endpoint_path: Optional[str] = Field(
         None,
@@ -402,6 +662,45 @@ class ManagedModel(BaseModel):
         alias="supportedParams",
         description="Per-model inference parameter capabilities."
     )
+    status: ModelStatus = Field(
+        ModelStatus.ACTIVE,
+        description="Lifecycle — see ModelStatus. Absent on every row written before "
+                    "retirement shipped, which reads as active.",
+    )
+    replaced_by: Optional[str] = Field(None, alias="replacedBy")
+    retires_on: Optional[str] = Field(None, alias="retiresOn")
+    # Not length-capped on read, for the same reason as shortDescription: a
+    # stored value over the write cap must not take the /models listing down.
+    retirement_note: Optional[str] = Field(None, alias="retirementNote")
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _tolerate_unknown_status(cls, value: object) -> object:
+        # A hand-edited or future status must not fail validation: a row that
+        # fails to parse drops out of the catalog entirely, and a model with no
+        # row runs unmetered (docs/specs/model-retirement.md §2).
+        if value in (None, ""):
+            return ModelStatus.ACTIVE
+        if isinstance(value, str) and value not in {s.value for s in ModelStatus}:
+            return ModelStatus.ACTIVE
+        return value
+
+    @field_validator("replaced_by", "retires_on", "retirement_note", mode="before")
+    @classmethod
+    def _blank_lifecycle_to_none(cls, value: object) -> object:
+        return _blank_to_none(value)
+
+    @computed_field(alias="iconUrl", return_type=Optional[str])  # type: ignore[prop-decorator]
+    @property
+    def icon_url(self) -> Optional[str]:
+        """Path that serves the uploaded icon, or ``None`` when there isn't one.
+
+        Derived rather than stored so the ``?v=`` cache-buster can never disagree
+        with the key it is meant to describe. Clients choose: ``iconUrl`` first,
+        then ``iconSlug``, then their own provider-name fallback.
+        """
+        return model_icon_url(self.id, self.icon_key)
+
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
 

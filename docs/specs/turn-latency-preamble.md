@@ -1,0 +1,927 @@
+# Turn latency: inside the preamble
+
+**Continued by:** `docs/specs/turn-path-ttft.md` (2026-09-29), which maps the whole path from send to first token, assesses PR #1377, and orders what is left — including this spec's unstarted PR-5.
+
+**Status:** COMPLETE for the warm path. Five PRs shipped, merged, deployed and
+validated on dev (#1184, #1191, #1193, #1198, #1201):
+
+| | Baseline | Now |
+|---|---:|---:|
+| Warm preamble | 455ms | **22-37ms** (-95%) |
+| Warm pre-stream window | 591-656ms | **128-189ms** (-75%) |
+| Cold `agent_build` | ~2950ms, opaque | 3286ms, **fully attributed** |
+
+The cold path is untouched by design and is where everything left lives. The
+decomposition in PR-4 found its owner, and it is not what this spec assumed —
+see **PR-5** for the one thing worth doing next.
+**Follow-up to:** `docs/specs/agent-state-feedback.md` — its PR-3 measured the
+pre-stream window into four stages and then declined to narrate three of them.
+This spec opens the one that was left closed.
+**Related:** CLAUDE.md § Token cost effectiveness (the "don't guess — verify"
+tenet this spec is an application of), `agent-cache-extra-tools-bypass.md` §8
+(runtime session affinity, the other latency-not-cost fix).
+
+## Problem
+
+`agent-state-feedback.md` PR-3 instrumented the window between the user's click
+and the first SSE byte, and recorded four turns on dev:
+
+| Turn | total | preamble | rag | tools | agent_build |
+|------|------:|---------:|----:|------:|------------:|
+| cold agent cache | 2542 | 802 | 0 | 261 | **1478** |
+| warm | 641 | 494 | 0 | 146 | 0 |
+| warm | 644 | 460 | 0 | 149 | 34 |
+| warm | 678 | 484 | 0 | 154 | 38 |
+
+`agent_build` got a fix (PR-3 deferred it into the stream generator and narrates
+it). `rag` and `tools` are small. **`preamble` was never opened.** On a warm
+turn it is the single largest stage — 460–494ms of the 641–678ms handler total,
+and the spec's own summary put its range at 450–900ms across the sample.
+
+That is now the largest avoidable wait in the product, and unlike `agent_build`
+it is not a status problem: no label makes it shorter, and the loading indicator
+already covers the window. It is a latency problem.
+
+## What `preamble` covers
+
+One `prelude.mark()` spanning ~500 lines of `inference_api/chat/routes.py`, from
+handler entry to the quota round trip. The mark's own comment — "request
+validation, model/settings resolution, file handling and the quota round trip" —
+undersells it. Read from the code, a plain warm turn (non-resume,
+non-continuation, no attachments) performs this sequence, entirely serially:
+
+| # | Call | DynamoDB work |
+|---|------|---------------|
+| 1 | `session_owned_by_other_user` | `SessionLookupIndex` Query |
+| 2 | `_resolve_accessible_skill_ids` | RBAC (cached) + `SkillOwnerIndex` Query — only when `enabled_skills` is non-empty |
+| 3 | `pop_pending_attachments` | `_get_session_by_gsi` |
+| 4 | `ensure_session_metadata_exists` | `_get_session_by_gsi` |
+| 5 | `clear_paused_turn` | `_get_session_by_gsi` |
+| 6 | `clear_pending_interrupts` | `_get_session_by_gsi` |
+| 7 | `clear_truncated_turn` | `_get_session_by_gsi` |
+| 8 | `clear_interrupted_turn` | `_get_session_by_gsi` |
+| 9 | `check_quota` → `_resolve_session_notice` → `get_session_metadata` | GSI Query (+ a lazy cost-aggregate backfill on legacy rows) |
+
+**Rows 1, 3, 4, 5, 6, 7, 8 and 9 all read the same item** — the session's `META`
+row — eight times in one turn, each on its own round trip. Rows 5–8 then
+short-circuit on the happy path (`if "pausedTurn" not in existing: return`), so
+four of the eight reads exist only to discover there is nothing to clear.
+
+Three things multiply that.
+
+**They are synchronous boto3 calls inside `async def`.** `_get_session_by_gsi`
+calls `table.query(...)` directly, with no `asyncio.to_thread`. Each one blocks
+the runtime's event loop for its whole round trip. This is the same shape as the
+starved-timer bug PR-3 already paid for — a synchronous `create_agent` occupying
+the loop so `asyncio.wait` never fired its timeout. Here the consequence is
+throughput as well as latency: the runtime-session affinity header deliberately
+packs a conversation onto a warm microVM, so these blocking hops serialize
+against *other users' turns on the same container*.
+
+**A fresh client per call.** `metadata.py` constructs `boto3.resource("dynamodb")`
+in 28 separate function bodies; the repo has 89 such sites across `apis/` and
+`agents/`, and no cached-client helper anywhere in `apis/shared/`. Measured
+locally: ~327ms for the first construction in a process, **~1.5ms** each
+thereafter. So this is ~12ms per turn — real, but not the story. Worth fixing
+for the cold-container case and for tidiness, not for the warm number.
+
+**No VPC endpoints.** `network-construct.ts` provisions one NAT Gateway and zero
+interface or gateway endpoints. This does *not* affect the preamble —
+inference-api runs inside an AgentCore Runtime container on AWS-managed network,
+not our VPC — but every app-api DynamoDB and S3 call egresses through NAT. A
+DynamoDB gateway endpoint is free and reduces both latency and NAT
+data-processing spend. Tracked here because it was found on the same sweep; it
+belongs to app-api's latency, not the preamble's.
+
+### What is already fine
+
+Named so nobody re-audits them: RBAC permission resolution, the quota tier
+resolver, and the user cost summary are all TTL-cached in-process. Feature flags
+are pure `os.environ` reads with no IO. Skill resolution short-circuits to `[]`
+when the turn selects no skills, so it costs nothing on a plain turn. Title
+generation is already an `asyncio.create_task` off the critical path.
+
+## The honest status of the attribution
+
+**The eight-read count is read off the code. The attribution of 450–900ms to it
+is a hypothesis.** The mechanism is strong and the arithmetic is plausible — 8
+serialized GSI queries at an in-region p50 of 10–15ms, p90 of 25–40ms, plus
+event-loop blocking under concurrency — but `preamble` has no sub-marks, so
+nothing here is measured.
+
+This is exactly the trap CLAUDE.md's cost-effectiveness tenet names for prompt
+tokens, and it applies identically to milliseconds: *don't guess — verify*. The
+repo has been burned by the inverse before (`agent_status`'s "and N more" was
+dead code for a pinned sequential executor; PR-3's first two suppression attempts
+each looked right and each failed on dev for a reason the unit tests could not
+see). A refactor justified by an unmeasured hypothesis is how that happens again.
+
+So PR-1 measures, and nothing else.
+
+## PR-1 — sub-stage marks (BUILT)
+
+Decompose the single `preamble` mark into five ordered sub-stages, named with a
+dotted prefix:
+
+| Stage | Covers |
+|-------|--------|
+| `preamble.ownership` | the cross-user session guard (read #1) |
+| `preamble.skills` | effective-skill resolution (read #2, absent on a turn with no skills) |
+| `preamble.files` | attachment recovery + upload-id resolution + inline partitioning (read #3, plus S3) |
+| `preamble.session_state` | metadata pre-create and the four stale-marker clears (reads #4–#8) |
+| `preamble.quota` | the quota round trip (read #9) |
+
+**`preamble` itself survives as a number.** `emit()` gains a `groups` field that
+sums stages sharing a dotted prefix, so `groups.preamble` reproduces exactly what
+the old single mark reported and the four-turn baseline above stays comparable.
+Without that, decomposing the stage would have silently discarded the only
+measurement anyone has.
+
+**Cost.** Four extra `perf_counter()` calls and one extra log field per turn.
+Nothing reaches the model, the conversation, or the cacheable prefix — the same
+standing `turn_timing.py` has had since it shipped.
+
+**Not gated behind a flag.** `TurnPrelude` is already best-effort in every
+direction (`mark` swallows, `emit` swallows) and a flag would be a second thing
+to get wrong for a measurement that cannot break a turn. The precedent is the
+existing four marks, which shipped ungated for the same reason.
+
+**How to read it.** Unchanged from `turn_timing.py`'s own docstring — one
+structured line per turn on the inference-api runtime log group, via
+`filter-log-events --filter-pattern turn_prelude`. What PR-1 changes is that
+`stages` now names *which* sub-stage owns the time instead of reporting one
+opaque number.
+
+### What would falsify the hypothesis
+
+Stated in advance, so the measurement cannot be read to agree with whatever we
+already believe:
+
+- **Hypothesis confirmed** if `preamble.session_state` dominates — it holds five
+  of the eight reads and does no other work.
+- **Hypothesis wrong, and PR-2 must not be built as written**, if
+  `preamble.quota` or `preamble.files` dominates instead. Those are different
+  bugs with different fixes: quota is one cached GetItem plus a session read, and
+  files is S3 plus extraction, neither of which the single-read refactor touches.
+- **Something unmodelled is going on** if the five sub-stages sum to visibly less
+  than `groups.preamble`. The stages are contiguous by construction, so a gap
+  means time is being spent between them — in code this spec has not accounted
+  for.
+
+## PR-1b — make the improvement provable (BUILT)
+
+PR-1 makes the preamble *attributable*. It does not make a fix *provable*, and
+those are different problems: attribution needs one turn, proof needs a
+population.
+
+### The field that would lie to us
+
+There is already a persisted field called `time_to_first_token`
+(`apis/app_api/messages/models.py`, computed in `stream_coordinator.py`). It is
+the obvious instrument and it is the wrong one. It measures
+`first_token_time - stream_start_time`, and `stream_start_time` is set *inside*
+the coordinator's generator — which, since `agent-state-feedback.md` PR-3
+deferred the build, runs after the preamble **and** after the agent build. So it
+is structurally blind to:
+
+| Excluded from `time_to_first_token` | Size |
+|---|---|
+| app-api hop + auth + Runtime routing | ~478ms warm, ~1.5s cold |
+| the whole preamble | 450–900ms |
+| the agent build | 0–2728ms |
+
+**A successful PR-2 moves that field by exactly zero.** Anyone validating with
+it concludes the work was pointless. This is the same trap this repo already
+documented once for `latency.endToEndLatency` vs `turnDurationMs` — a field
+whose name describes what you want and whose definition does not. Do not use it
+here; it is a *model* TTFT, and it is correct at that job.
+
+### Server side: percentiles, not grepped lines
+
+`TurnPrelude.emit` now also writes one EMF record per turn into
+`AgentCoreStack/TurnLatency`, through the existing
+`apis/shared/observability/emf.py` helper — no new infrastructure, no new IAM.
+Metric names are *derived* from the stage names (`preamble.session_state` →
+`PreambleSessionStateMs`) rather than listed, so a new mark cannot silently go
+unmeasured; the price is that a new mark quietly creates a metric stream
+(~$0.30/month), which is the cheaper mistake.
+
+Dimension-less, like every other EMF caller here. `isResume`, `deferredBuild`
+and `sessionId` ride as queryable log properties and the dashboard's Logs
+Insights widgets do the slicing. That is not only metric-stream cost: a
+dimension invites reading a p99 off a slice too thin to have one.
+
+`TurnLatencyObservabilityConstruct` graphs p50/p90/p99 per stage on **its own
+dashboard** — the fourth, which costs $3/month.
+
+That cost was argued, not absorbed. `observability-platform-dashboard.test.ts`
+pins the dashboard count precisely so crossing CloudWatch's free three stays a
+deliberate trade; the first attempt therefore folded the widgets onto the
+AgentCore Runtime board to stay inside it. That version worked and was still
+worse: this board is read *while shipping a latency change*, side by side with
+load-test output, and burying the stage breakdown under runtime-health widgets
+answering an unrelated question made it harder to use for its one job.
+$3/month against a 450–900ms wait on every turn is not a close call. **The next
+dashboard should have to make the same argument** — the pinned count now reads
+"three free + one bought" rather than being raised to whatever is convenient.
+
+The AgentCore Runtime board stays the natural companion: it graphs AWS's own
+`Latency` p50/p90/p99 measured at the **data plane**, so the gap between it and
+`PreludeTotalMs` is another read on the routing overhead no server-side stage
+can see. Both dashboards' headers point at each other, and the platform health
+dashboard links to all three drill-downs.
+
+Alongside the percentile graphs are two widgets that exist to catch our own
+errors: a split by turn shape (a resume skips most of the preamble, so a
+traffic-mix shift toward resumes would look exactly like a latency win) and an
+**unaccounted-time** widget
+(`PreludeTotalMs − (PreambleMs + RagMs + ToolsMs + AgentBuildMs)`), which is how
+we find out the decomposition is incomplete.
+
+**No alarms.** A threshold needs a baseline and there is none yet. Inventing one
+is the guessing this spec exists to prevent; add them once the dashboard has run
+long enough to say what normal is.
+
+**Kill switch:** `TURN_LATENCY_METRICS_ENABLED` (default on). Note this differs
+from PR-1's marks, which are deliberately ungated — a `perf_counter()` call
+costs nothing, while an EMF line costs log ingestion and custom-metric charges.
+Same reasoning that gave `PROMPT_CACHE_OBSERVABILITY_ENABLED` its switch. Like
+every other flag of its kind here it is not threaded through CDK.
+
+### Client side: the part the server structurally cannot see
+
+No metric in `AgentCoreStack/TurnLatency` sees the app-api hop, auth or Runtime
+routing, because they all start at handler entry. That is up to 20% of the turn,
+and it is where a fix can be real on the server and invisible to the user.
+
+`tests/load` already covers it. The Locust harness measures **true client-side
+TTFT** — dispatch of `POST /chat/stream` → first `content_block_delta` — through
+CloudFront → ALB → app-api → AgentCore Runtime (`agentcore_load/users.py`).
+
+And the architecture hands us a clean decomposition for free. Because PR-3
+deferred the agent build into the stream generator, inference-api returns its
+`StreamingResponse` **after the preamble but before the build**, so response
+headers arrive at exactly the boundary between the two fixes:
+
+| Measure | Covers | Which fix it judges |
+|---|---|---|
+| **TTFB** (Locust's built-in `POST /chat/stream` time — headers) | fixed hop + **preamble** | PR-2 |
+| **TTFT − TTFB** | **agent build** + model | the MCP pre-flight fix |
+
+**Verify this before trusting it.** It depends on headers flushing through the
+AgentCore data plane ahead of the first body byte. The proxy's own half has a
+regression test (`test_ttfb_under_200ms_with_x_accel_buffering`) but that test
+mocks the upstream, so it proves the *proxy* does not buffer — not the data
+plane. The check: run turns and compare Locust TTFB against `groups.preamble`
+from the same turns. If TTFB tracks preamble, the channel is clean. If TTFB
+tracks TTFT instead, the data plane is buffering and TTFB is useless as a
+preamble proxy — fall back to comparing the EMF percentiles and accept that the
+client-side half is only measurable end to end.
+
+### Design the comparison as A/B, not before/after
+
+Before/after across a deploy confounds with the two largest variance terms on
+this path — container warmth and traffic mix — either of which can swamp the
+effect being measured. The template already exists:
+`scripts/probe_runtime_session_affinity.py` is a two-arm probe differing by
+exactly one header, and its docstring makes the point that it deliberately
+bypasses shared code rather than "building the fix to test the hypothesis."
+
+### Acceptance criteria, stated before the data
+
+| Claim | Passes if | Fails if |
+|---|---|---|
+| The eight reads are real cost | `PreambleSessionStateMs` p50 ≥ 100ms | < 40ms — the reads are cheap; drop PR-2 |
+| PR-2 removes them | `PreambleMs` p50 falls ≥ 50ms | < 20ms — the reads were not the cost |
+| It reaches the user | Locust TTFB p50 falls by the same amount | TTFB flat while `PreambleMs` falls — something downstream absorbs it |
+| The decomposition is complete | unaccounted-time widget ≈ 0 | a visible gap — time is going somewhere unmodelled |
+
+### The arithmetic that does not close
+
+Stated plainly because it is the strongest argument against this spec's own
+hypothesis. Eight serialized GSI queries at an in-region p50 of 10–15ms is
+~100–150ms. The preamble is 460–494ms on a warm turn. **So even if the read
+count is entirely right, PR-2 recovers roughly a quarter of the stage** — and
+~300ms is unexplained by anything here.
+
+Two readings, and PR-1's sub-marks separate them: either DynamoDB latency from
+an AgentCore Runtime container is much worse than in-region typical (in which
+case `session_state` is larger than modelled and PR-2 is worth more), or a large
+part of the preamble is something not yet identified (in which case PR-2 is a
+rounding error and the real win is elsewhere). Either way the answer arrives
+before the refactor is written, which is the entire point of sequencing it this
+way.
+
+## THE MEASUREMENT (dev, 2026-09-19) — hypothesis confirmed, magnitude wrong
+
+Three turns on dev immediately after deploy: one cold, two warm. All times ms.
+
+| Turn | total | own | skills | files | **sess_state** | quota | **=preamble** | rag | tools | build | unacct |
+|------|------:|----:|-------:|------:|---------------:|------:|--------------:|----:|------:|------:|-------:|
+| cold | 4110 | 53 | 171 | 56 | **357** | 265 | **902** | 0 | 252 | 2951 | 5 |
+| warm | 656 | 55 | 17 | 53 | **272** | 62 | **459** | 0 | 147 | 47 | 3 |
+| warm | 591 | 53 | 5 | 53 | **278** | 62 | **451** | 0 | 136 | 1 | 3 |
+
+Every acceptance criterion stated in advance passes:
+
+| Claim | Threshold | Measured | Verdict |
+|---|---|---|---|
+| The eight reads are real cost | `session_state` p50 >= 100ms | **272-278ms** | **CONFIRMED** |
+| The decomposition is complete | sub-stages ~= group | unaccounted **3ms** | **CONFIRMED** |
+| The split preserved the baseline | ~= the old flat 494ms | **451-459ms** | **CONFIRMED** |
+
+`session_state` is ~60% of the warm preamble, exactly as predicted.
+
+### What was wrong: the per-read cost, by 4-5x
+
+This spec estimated an in-region GSI query at 10-15ms and concluded PR-2 would
+"recover roughly a quarter of the stage". **That was wrong, conservatively.**
+
+`preamble.ownership` is exactly one GSI query and nothing else. It measures
+**53-55ms**, dead stable across all three turns. `preamble.files` on a turn with
+*no attachments* is also exactly one read (`pop_pending_attachments`) and also
+measures **53ms**. So a DynamoDB GSI query from inside an AgentCore Runtime
+container costs **~53ms**, not 10-15ms — 4-5x the in-region figure assumed here.
+
+That single number closes the arithmetic that previously did not:
+
+| Sub-stage | Reads of the META row | Measured | Implied per read |
+|---|---:|---:|---:|
+| `ownership` | 1 | 53 | 53 |
+| `files` | 1 | 53 | 53 |
+| `session_state` | 5 | 272-278 | ~55 |
+| `quota` (session notice) | 1 | 62 | 62 |
+| **total** | **8** | **~445 of the 451-459ms preamble** | |
+
+**The warm preamble is almost entirely DynamoDB round trips reading one item
+eight times.** The "~300ms unexplained" this spec worried about does not exist;
+it was the per-read cost being four times higher than assumed. The spec offered
+two readings and said the sub-marks would decide between them — the first
+("DynamoDB latency from an AgentCore Runtime container is much worse than
+in-region typical, in which case `session_state` is larger than modelled and
+PR-2 is worth more") is correct.
+
+### What this does to PR-2
+
+Originally scoped as "collapse reads #3-#8". The measurement says go further:
+**one read at the top of the handler can answer all four consumers**, because
+`ownership`, `files`, `session_state` and the quota session-notice all read the
+same item.
+
+| | Now | After | Saved |
+|---|---:|---:|---:|
+| `ownership` | 53 | ~53 (the one read) | 0 |
+| `files` | 53 | ~0 | 53 |
+| `session_state` | 275 | ~0 | 275 |
+| `quota` notice | 62 | ~0 | 62 |
+| `skills` | ~10 | ~10 | 0 |
+| **preamble** | **~455** | **~65** | **~390** |
+
+A ~455ms stage becomes ~65ms, against an original estimate of 50-90ms saved.
+**Still to be proven, not assumed** — the rule that produced this table applies
+to the next one just as much.
+
+### Caveats on this measurement
+
+- **n=3, one session, one container.** Enough to size a 275ms effect against a
+  +/-5ms spread; not enough for a distribution. The EMF percentiles are what
+  make the post-PR-2 comparison sound, and they now have a baseline accruing.
+- `skills` is 171ms cold vs 5-17ms warm — the RBAC/catalog caches working. Not
+  a PR-2 target.
+- `agent_build` 2951ms cold, then 47ms and 1ms warm. The cache works; the cold
+  build remains the largest single number in the table and is the MCP pre-flight
+  item below, untouched by PR-2.
+- `StreamSetupMs` appeared as a metric nobody listed, because metric names are
+  derived from marks rather than hand-kept. A listed table would have omitted it
+  silently.
+
+## PR-2 — read the session row once (SHIPPED #1191, VALIDATED on dev)
+
+**Result: the warm preamble fell 455ms -> 163ms (-64%), and the whole
+pre-stream window 591-656ms -> 349-350ms (-46%).** Three turns on dev
+2026-09-19, immediately after the image landed:
+
+| Sub-stage | Before | Predicted | **Measured** |
+|---|---:|---:|---:|
+| `ownership` | 53-55 | ~53 | **59-60** |
+| `skills` | 5-17 | ~10 | **17** |
+| `files` | 53 | ~0 | **4-5** |
+| `session_state` | 272-278 | ~0 | **17-21** |
+| `quota` | 62 | 62 (PR-2b) | **61-65** |
+| **`groups.preamble`** | **451-459** | **~125** | **162-164** |
+| **`totalMs`** | **591-656** | — | **349-350** |
+
+Regression checks, all passing: turns stream normally; a **brand-new session**
+creates its row and generates its title, which is the `is_new_session=True`
+path and therefore direct evidence that a snapshot with `row=None` is read as
+"no row" rather than "nothing prefetched"; the conversation list resolves.
+
+### Where the remaining 163ms is, and the 38ms the prediction missed
+
+Predicted ~125ms, measured ~163ms. The gap is accounted for, not mysterious:
+
+- `session_state` is 17-21ms rather than ~0. Every helper still constructs
+  `boto3.resource("dynamodb")` + `.Table()` before reaching its snapshot
+  short-circuit — six of them, at the **~1.5ms per construction measured
+  independently earlier in this spec**. That is ~9ms, plus dict work. The
+  earlier client-construction measurement reproduces here, which is a small
+  confirmation that both numbers are real.
+- `ownership` drifted 53-55 -> 59-60ms. Same single query, ordinary variance.
+
+So the warm preamble now decomposes as: one GSI read (~59) + the quota read
+(~62) + skills (~17) + ~20ms of repeated boto3 client construction + change.
+
+**The floor is ~80ms**, reachable by PR-2b (removes the quota read) and a
+cached-client helper (removes the ~20ms). The single remaining `ownership`
+read is irreducible — it is the read.
+
+### A note on reading the dashboard across a deploy
+
+The 15-minute CloudWatch window covering this deploy reports
+`PreambleMs` min 162 / avg 457 / max 934 — because it spans two populations,
+the old code and the new. The minimum is the new code; the average is
+meaningless here. This is exactly why the widgets are percentiles over a
+period rather than a single number, and it is worth remembering before reading
+the first window after any future deploy.
+
+
+
+**As built.** `load_session_meta()` performs one `SessionLookupIndex` query and
+returns a `SessionMetaSnapshot` carrying two answers: the caller's own `META`
+row, and whether the session belongs to someone else. Both were always in that
+one response — `_get_session_by_gsi` simply discarded the half the ownership
+probe needed, which is why the probe was a second query of the same index for
+the same key.
+
+The route reads once and threads the snapshot into `pop_pending_attachments`,
+`ensure_session_metadata_exists` and the four `clear_*` helpers. Each takes
+`snapshot: Optional[SessionMetaSnapshot] = None`; `None` keeps the original
+per-call read, which is what every non-preamble caller still gets.
+
+**Why the snapshot object and not the row dict.** `row is None` is a real
+answer — "this user has no `META` row yet" — not "nothing was prefetched". Had
+the helpers taken the row alone, a brand-new session would be indistinguishable
+from an absent prefetch and would silently fall back to re-reading, so the first
+turn of every conversation would keep the old cost. Pinned by
+`test_a_snapshot_with_no_row_is_an_answer_not_a_cache_miss`.
+
+**Why explicit and not a per-request memo.** Memoising inside
+`_get_session_by_gsi` would be a smaller diff and the wrong shape. CLAUDE.md's
+"never cache session state; re-read per turn; never move backwards" rule exists
+because this repo shipped that bug twice (#741 conversation history, #751
+compaction state). A snapshot a caller opts into cannot leak into a caller that
+needs a fresh read; a request-scoped memo can, and the failure is silent.
+
+**Scope.** `ownership`, `files` and `session_state` — the three sub-stages that
+read this item. The quota session-notice read is deliberately NOT included; see
+PR-2b.
+
+Expected effect on the warm preamble, from the measured per-read cost:
+
+| Sub-stage | Before | After |
+|---|---:|---:|
+| `ownership` | 53 | ~53 (now the only read) |
+| `files` | 53 | ~0 |
+| `session_state` | 275 | ~0 |
+| `quota` (PR-2b) | 62 | 62 |
+| `skills` | ~10 | ~10 |
+| **preamble** | **~455** | **~125** |
+
+Why it is safe: every one of those helpers is already best-effort and fail-open,
+and the GSI is eventually consistent, so re-reading was never buying consistency
+— two reads 50ms apart see the same stale-or-not row. The session's single-flight
+lease already excludes a concurrent turn on the same session. The `SK` is static
+(`S#{session_id}`), so the key the conditional writes target cannot drift between
+the read and the write. And the atomic parts stay atomic: `pop_pending_attachments`
+and `clear_interrupted_turn` still do their `ReturnValues=UPDATED_OLD` update, so
+the snapshot only replaces the *gate* read, never the write.
+
+The ownership guard keeps its 404, now answered from the same snapshot instead
+of its own query.
+
+**That gate is now passed.** `session_state` is where the time is (272-278ms of
+a 451-459ms preamble), so the refactor of the marker helpers — load-bearing for
+interrupt resume, the truncation "Continue" path and unconsumed-attachment
+recovery — is paid for by a measured 275ms rather than by a guess. Scope widens
+to include `ownership`, `files` and the quota session-notice, which read the
+same item.
+
+## PR-2b — the quota session-notice read (SHIPPED #1193, VALIDATED on dev)
+
+**`preamble.quota` 61-65ms -> 4ms. Warm preamble 163ms -> 95ms; the whole
+pre-stream window 349ms -> 263ms.** Measured on dev 2026-09-19:
+
+| Sub-stage | Baseline | After PR-2 | **After PR-2b** |
+|---|---:|---:|---:|
+| `ownership` | 53-55 | 59 | **54** |
+| `skills` | 5-17 | 17 | **15** |
+| `files` | 53 | 4 | **4** |
+| `session_state` | 272-278 | 17-21 | **18** |
+| `quota` | 62 | 61-65 | **4** |
+| **`groups.preamble`** | **451-459** | **163** | **95** |
+| **`totalMs`** | **591-656** | **349** | **263** |
+
+**The warm preamble is 79% below where this spec started**, and the whole
+pre-stream window is down 57%.
+
+Regression: new session created, title generated, turns stream, recap footer
+renders (6.8s then 2.2s).
+
+The COLD turn still shows `quota` at 237ms, and that is not a miss. On a fresh
+container the quota **tier resolver** and the **user cost summary** are both
+uncached, so their own reads dominate; only the session-notice read was ever in
+scope here. On the warm path, where those caches are hot, it is the whole of
+what remains.
+
+
+
+The eighth read, worth a measured **62ms**. Left out of PR-2 because it is not
+the same shape as the others.
+
+`QuotaChecker._resolve_session_notice` calls `get_session_metadata`, which
+returns a `SessionMetadata` model and performs a **lazy backfill** of the
+cost aggregates when `totalCost` is missing from a legacy row. Handing it the
+raw snapshot row would skip that backfill, and a legacy row without `totalCost`
+would silently stop producing a session notice — turning a latency fix into a
+quiet regression of the feature that exists to catch a conversation eating a
+user's month.
+
+**As built.** `check_quota` and `_resolve_session_notice` take
+`session_total_cost: Optional[float] = None`. The route supplies it **only when
+the snapshot row actually carries `totalCost`**; `None` routes the checker back
+through `get_session_metadata`, backfill and all.
+
+`None` means "not known" and never "zero" — the distinction is the whole safety
+of this path, and it is pinned two ways:
+`test_none_falls_back_to_the_read_and_its_lazy_backfill` and
+`test_a_supplied_zero_is_honoured_as_zero_not_as_unknown`. The second exists
+because a genuinely free session reports `0.0`, which is falsy: a truthiness
+check would send it back to the very read this PR removes, and the bug would be
+invisible — a correct answer, arrived at expensively.
+
+app-api's converse route calls `check_quota` without the kwarg and keeps its
+read, pinned by `test_default_call_is_unchanged_for_callers_that_pass_nothing`.
+
+Expected: `preamble.quota` 62ms -> ~0, warm preamble ~163ms -> ~100ms.
+
+## PR-3 — cache the boto3 clients (SHIPPED #1198, VALIDATED — and it corrects this spec)
+
+**Warm preamble 95ms -> 22-37ms. Whole pre-stream window 263ms -> 128-189ms.**
+Cumulatively the preamble is **down 95%** from the 455ms this spec opened with,
+and the pre-stream window is down ~75%.
+
+| Stage | Baseline | PR-2 | PR-2b | **PR-3** |
+|---|---:|---:|---:|---:|
+| `ownership` | 53-55 | 59 | 54 | **6-7** |
+| `skills` | 5-17 | 17 | 15 | 6-21 |
+| `files` | 53 | 4 | 4 | **1** |
+| `session_state` | 272-278 | 17-21 | 18 | **3-4** |
+| `quota` | 62 | 61-65 | 4 | 5 |
+| **`groups.preamble`** | **451-459** | **163** | **95** | **22-37** |
+| **`totalMs`** | **591-656** | **349** | **263** | **128-189** |
+
+### THE CORRECTION: the 53ms was never the network
+
+This spec asserted, in bold, after PR-1:
+
+> a DynamoDB GSI query from inside an AgentCore Runtime container costs **~53ms**,
+> not 10-15ms — 4-5x the in-region figure this spec assumed.
+
+**That was wrong.** `preamble.ownership` is exactly one GSI query and nothing
+else. It measured 53-55ms across every run. With a cached client it measures
+**6-7ms**. So the 53ms decomposes as:
+
+| | |
+|---|---:|
+| boto3 resource construction (throttled container CPU) | **~47ms** |
+| the actual DynamoDB round trip | **~6ms** — entirely normal in-region |
+
+The local measurement recorded at the top of this spec — ~1.5ms per
+construction — is a laptop number. On the container it is ~47ms, **thirty times
+higher**, and this spec anchored on the laptop figure and then found a story
+that fit it. The container numbers appeared to corroborate "DynamoDB is slow
+here", and nothing challenged that until a fix aimed at something else moved
+the wrong metric.
+
+**So PR-2 was the right fix for the wrong stated reason.** Collapsing eight
+reads into one removed eight *client constructions*, not eight slow network
+calls. The villain was always client construction — which is why PR-3, scoped
+here as a modest ~15ms cleanup, produced a larger proportional win than the PR
+written specifically to fix the problem.
+
+The reusable lesson is not about boto3. It is that **a number measured on a
+laptop is not a measurement of production**, and that a hypothesis which keeps
+fitting the data can still be wrong about mechanism while being right about
+remedy. The sub-stage marks are what made the error visible at all: a single
+`preamble` number would have shown the same total improvement and hidden the
+fact that the explanation was wrong.
+
+### The new largest warm stage
+
+`tools` is now **98-102ms warm** (196-244ms cold) — larger than the entire
+preamble. It covers system-prompt assembly, the single-flight lease, skill
+resolution and every tool builder, and it has never been decomposed. On the
+evidence above, the right move is to measure it before proposing a fix.
+
+
+
+PR-2 made this measurable. With the preamble's eight reads collapsed to one,
+`preamble.session_state` still measured **17-21ms on dev while doing no IO at
+all** — six helpers each constructing `boto3.resource("dynamodb")` before
+reaching their snapshot short-circuit, at the ~1.5ms per construction measured
+at the top of this spec. That residual is now ~25% of the remaining preamble.
+
+`apis/shared/aws_clients.py` caches resources and clients per
+`(service, region)` and exposes `get_dynamodb_table()`. All **29** construction
+sites in `sessions/metadata.py` are converted and 23 now-dead `import boto3`
+lines removed.
+
+**Seven of those sites used single quotes** (`boto3.resource('dynamodb')`) and
+the first pass silently missed them. Worth recording: a partial conversion
+would have left the residual half-present and read on the dashboard as "the
+cache underperforms" rather than "the cache was not applied", which is a much
+harder thing to notice.
+
+### The moto trap
+
+`moto.mock_aws()` is entered **per test**. A client cached under one test's
+mock keeps pointing at a backend that is torn down when that test ends, so the
+next test silently talks to a dead backend — or to a live AWS endpoint. The
+failure is order-dependent, which is the same shape as the static-memo leak
+this repo already paid for across SPA spec files.
+
+So the cache is explicitly resettable, and all three `aws` fixtures
+(`tests/shared`, `tests/lambdas`, `tests/fine_tuning`) reset it on entry **and**
+on exit. `test_the_aws_fixture_leaves_no_client_behind` pins the teardown half,
+because an entry-only reset would still let the last test in a file leak into a
+file that never uses the fixture.
+
+Expected: `session_state` 17-21ms -> ~2-5ms, with smaller shavings on
+`ownership` and `quota`. Combined with PR-2b the warm preamble should reach
+**~80ms, from the 455ms this spec started at**.
+
+## PR-4 — decompose the agent build (SHIPPED #1201, VALIDATED on dev)
+
+With the warm preamble at 22-37ms, `agent_build` became the largest number in
+the prelude by an order of magnitude: **~3300ms cold** against 1-49ms warm, and
+nothing said which part of it that was. Seven sub-stages — `prompt`,
+`registry`, `session_mgr`, `tools`, `hooks`, `plugins`, `finalize` — plus
+`agent_build.rest`, grouped by the same mechanism PR-1 built so
+`groups.agent_build` reproduces the pre-split series.
+
+### The answer, measured on a cold turn (2026-09-19)
+
+`agent_build` = 3286ms of a 4131ms prelude:
+
+| Sub-stage | ms | share |
+|---|---:|---:|
+| **`tools`** | **2039** | **62%** |
+| `session_mgr` | 830 | 25% |
+| `finalize` | 194 | 6% |
+| `prompt` | 160 | 5% |
+| `registry` | 50 | 2% |
+| `plugins` | 13 | — |
+| `hooks` | 0 | — |
+
+**`agent_build.tools` is the single largest number in the whole turn** — four
+times what the preamble cost at its worst, and larger than everything this spec
+has fixed so far, combined.
+
+`session_mgr` at 830ms is the other real number. That is
+`SessionFactory.create_session_manager`, i.e. conversation restore from
+AgentCore Memory, which had never been timed at all.
+
+### What it does and does NOT vindicate
+
+This spec's standing hypothesis was the serial MCP `tools/list` pre-flight, and
+the pre-flight does live inside `agent_build.tools`. But the hypothesis cannot
+be right about the **fix**, for a reason the measurement makes plain:
+
+**dev loads exactly one external MCP server, and this stage still costs
+2039ms.** Parallelising across servers cannot help when there is one server. So
+the proposed `asyncio.gather` was wrong twice over — wrong mechanism (see
+below) *and* wrong target shape.
+
+`_build_filtered_tools()` also does registry filtering, gateway integration and
+local tool assembly, so how the 2039ms splits between the MCP round trip and
+everything else is **not yet known**. Given the correction recorded under PR-3,
+that gap is not something to fill by reasoning.
+
+### The `gather` fix would have been a no-op
+
+Recorded because it nearly got built. `MCPClient.load_tools()` is `async def`
+with **no await in its hot path**: `start()` blocks on
+`_init_future.result()`, and `_list_all_tools_sync()` blocks on
+`_invoke_on_background_thread(...).result()`. Every coroutine blocks the loop
+before it yields, so `asyncio.gather` over the servers runs them strictly
+sequentially. Same shape as the starved-timer bug `agent-state-feedback` PR-3
+already paid for. A real fix needs `asyncio.to_thread` per server *then*
+gather — and the **merge** must stay deterministic even when the fetch is not,
+because tool order reaches `toolConfig`, which is the prompt-cache prefix.
+
+### A contextvar, deliberately unlike PR-2
+
+PR-2 threaded its snapshot explicitly and rejected an implicit memo; this does
+the opposite. The asymmetry is the point: there, implicit state going wrong
+meant stale session data in production (the bug CLAUDE.md names, shipped twice
+here); here it means a timing number is mis-attributed — nothing the user sees,
+nothing persisted, nothing reaching the model. Against that, the explicit route
+costs a kwarg threaded through a type registry and three agent classes with
+mismatched constructor signatures. See
+`apis/shared/observability/build_stages.py`.
+
+Noted there too: contextvars do not cross into a `ThreadPoolExecutor`, and the
+MCP load path crosses one, so a future caller marking from inside it would
+silently record nothing.
+
+## PR-5 — split `agent_build.tools` (SHIPPED #1396 — 62ms on dev with P2 in; see `turn-path-ttft.md` P1a)
+
+2039ms, 62% of the cold build, and undifferentiated. Split it into the MCP
+pre-flight, gateway integration, and local tool assembly, exactly as PR-1 split
+the preamble and PR-4 split the build.
+
+This is the third time the pattern would be applied and the first two both
+overturned an assumption, so the ordering is not negotiable: **measure, then
+decide whether a fix is worth building.** Specifically, do not assume the 2s is
+the MCP network round trip — on a one-server session it may equally be a
+synchronous SDK handshake, TLS setup, or tool-registry work nobody has looked
+at.
+
+Second target after that: `agent_build.session_mgr` at 830ms (AgentCore Memory
+restore, never timed). Now PR-6.
+
+## PR-6 — one shared boto3 session for the agent build, built at warm-up (SHIPPED)
+
+The second target named above, `agent_build.session_mgr`, measured **616-738ms**
+on dev first turns (2026-09-28) — more than half the 1.0-1.2s build.
+
+**What it does.** The AgentCore SDK's `AgentCoreMemorySessionManager.__init__`
+builds a `MemoryClient` (a fresh `boto3.Session` plus two clients), then a second
+fresh session plus two more clients that **replace** the first pair, then calls
+`read_session`. For a new session that is two sequential `list_events` (the
+second is a legacy-format fallback) and a `create_event`, each on a cold
+connection pool. A fresh session re-parses every service model it touches, and
+the parse is the cost. Two more fresh sessions sat next to it on the same first
+turn: `_discover_strategy_ids` built its own `MemoryClient`, and Strands'
+`BedrockModel` built its own `boto3.Session`.
+
+**Every first turn is a fresh process.** Each conversation's turns run in their
+own Runtime process (`service.instance.id` differs per session in the runtime
+logs). So a first turn always pays cold construction, and process-wide caching
+helps it only if the shared work is done **before** the turn arrives. That is why
+the session lives in `apis.shared.aws_clients` (`shared_boto_session`, a
+`ClientReusingSession` whose `client()` returns one client per configuration)
+and is built at container warm-up (`apis/inference_api/warmup.py`, on the
+startup daemon thread): its `bedrock-agentcore`, `bedrock-agentcore-control`
+and `bedrock-runtime` clients are constructed there, and `_discover_strategy_ids`
+is called once so the strategy ids are cached before any turn. That discovery is
+a control-plane read of static configuration, and it opens the one connection
+warm-up otherwise avoids; `docs/specs/turn-path-ttft.md` §5 P2 accepts that
+(botocore retries a connection error on this idempotent call) and names it as
+the thing to watch on the Runtime V2 restore.
+
+**Who gets the session.** The factory hands it to the SDK session manager
+(`boto_session=`) and rebinds the SDK module's `MemoryClient` so the discarded
+pair is built from it too (the only seam the pinned bedrock-agentcore offers for
+a one-line upstream bug; a test fails if an upgrade stops going through it);
+`_discover_strategy_ids` builds its `MemoryClient` on it; and
+`ModelConfig.to_bedrock_config` passes it to `BedrockModel` as `boto_session`
+(and then no `region_name`, which Strands rejects alongside a session).
+
+**The A/B that decided it** (dev, 2026-09-30, `AGENT_BUILD_EXPERIMENT=ab` set on
+the Runtime out of band, 15 first turns per arm interleaved in rotating order,
+every turn a cold process, all 30 ok, arms verified server-side, sessions
+soft-deleted afterwards). Median / p75 in ms:
+
+| Stage | control | shared session |
+|---|---|---|
+| `agent_build.session_mgr_clients` | 446 / 497 | 8 / 9 |
+| `agent_build.session_mgr` (network) | 197 / 217 | 207 / 237 |
+| `agent_build.strands_agent` | 55 / 72 | 5 / 5 |
+| `agent_build.finalize` (restore) | 100 / 109 | 99 / 103 |
+| `agent_build` (group) | 869 / 955 | 372 / 408 |
+| prelude total | 1497 / 1655 | 1003 / 1049 |
+| client: first token | 4211 / 4632 | 3564 / 3902 |
+
+Decision metric (`session_mgr_clients` + `session_mgr`): control ranged 601 to
+813, the shared arm 171 to 289 — the distributions do not overlap, and no stage
+regressed (`session_mgr`'s +10 is inside its own spread). The `strands_agent`
+drop is `BedrockModel`'s fresh session going away. Warm-up did its part on the
+Runtime: logs show every fresh container building the three shared clients in
+15-53ms and reading the strategy ids at warm-up (median 193ms, one outlier at
+3.2s, all ok). The rule written before the data — ship if the decision metric
+beats control by more than the run-to-run spread with no regression — was met,
+so the experiment flag and its arms were replaced by one kill switch:
+
+- **`AGENT_BUILD_SHARED_SESSION_ENABLED`** — default ON; only the literal
+  `false` disables (house style). Off, every SDK builds its own session exactly
+  as before and warm-up skips the shared step. No CDK entry (the Runtime is at
+  48 of its 50 environment variables and unset means on); a deployment that
+  needs it off sets the variable on the Runtime out of band. `turn_prelude`
+  carries `sharedSession` (a property) and `processBuilds` (1 on a first turn).
+
+**Withdrawn before the A/B: the off-loop arm.** The PR as opened had a third
+arm, `shared_clients_off_loop`, which ran `create_agent` under
+`asyncio.to_thread` so the route could emit a first-turn title mid-build. It
+came with hardening the frozen loop used to provide for free: process-wide
+build serialization, locks on `ExternalMCPIntegration`'s maps and singleton,
+and a consumer pin on every external MCP client handed to a build. It was
+dropped, and the hardening with it, on the assessment in
+`docs/specs/turn-path-ttft.md` §4: moving a synchronous build to a thread does
+not make it faster (CPU-bound parts contend on the GIL, network-bound parts take
+the same time), so the arm could not reduce time to first token and its A/B
+would have read as noise; and the concurrency it would have bought — running
+the build's independent IO at the same time — is reachable inside the
+constructor itself (§5 P3a, two threads of one executor for `session_mgr` and
+`tools`) without any of the hardening. A title that lands before `prepared` is
+not worth shipping locks for.
+
+**Sub-stages that stay.** `agent_build.session_mgr_clients` (everything before
+the SDK's `read_session`, i.e. client setup) precedes `agent_build.session_mgr`
+(the session read/create network). `agent_build.strands_agent` (Strands' own
+`Agent` construction, including MCP `load_tools`) precedes `agent_build.finalize`
+(the session restore).
+
+**Next target after this:** the two `list_events` in `session_mgr` (~200ms) and
+the restore's `ListEvents` in `finalize` (~100ms), which are now the whole of
+the build's network — see `turn-path-ttft.md` §5 P3 for overlapping them with
+`tools`.
+
+## Declined / overtaken — `asyncio.to_thread` for the DynamoDB calls
+
+Originally PR-3 in this spec, then PR-4, now **not recommended without new
+evidence**. Two measurements removed its rationale:
+
+- PR-2 took seven of the eight blocking reads off the hot path, so the
+  remaining event-loop exposure is one query; and
+- PR-3 showed the dominant cost was never IO wait at all — it was **CPU**
+  (boto3 client construction). Moving a 6ms query to a thread buys close to
+  nothing, and the thread hop is not free.
+
+It also remains unmeasurable without a load test, since its win is throughput
+under concurrency and dev has effectively none. If it is revisited, it needs
+the `tests/load` harness and its own justification, not this spec's.
+
+### The original argument, kept for the record
+
+Independent of PR-2 and independent of the measurement: whatever the reads cost,
+doing them on the event loop is wrong under concurrency, and the codebase already
+uses `asyncio.to_thread` for exactly this in ~20 places. The session-metadata
+layer never got it.
+
+Worth its own PR rather than riding PR-2, because its win is throughput under
+load and would be invisible in a single-user latency measurement — the two need
+different evidence.
+
+## Beyond the preamble
+
+Found on the same sweep. Recorded so they are not re-derived; none is committed to.
+
+- **The agent build scales linearly with MCP servers.** `load_external_tools`
+  iterates enabled servers in a serial `for` loop, each doing a
+  `repository.get_tool` plus a blocking `list_tools_sync()` round trip to an
+  external MCP server — N cross-internet hops, one after another, inside the
+  1478–2728ms cold build. Concurrent fetch plus a short-TTL cache of each
+  server's listing is the largest cold-turn win available. **Constraint:** the
+  merged tool order reaches `toolConfig`, which is the prompt-cache prefix, so
+  the *merge* must stay deterministic even when the fetch is not. See CLAUDE.md
+  § Prompt-cache stability.
+- **A new `httpx.AsyncClient` per turn** in the BFF proxy — fresh DNS, TCP and
+  TLS to `bedrock-agentcore.<region>` on every message, never pooled. Measured
+  76–135ms from a laptop; in-region it is smaller but nonzero, and it sits inside
+  the ~478ms the recap already knows it cannot see. The catch is the lifecycle
+  comment already in `proxy_routes.py`: the client is deliberately closed in the
+  generator's `finally` because closing it via `async with` buffers the whole SSE
+  stream. A pooled module-level client has to outlive the request without
+  reintroducing that.
+- **A shared cached-boto3-client module.** Promoted out of this list into
+  PR-3 below, once PR-2 made the cost visible.
+
+## The other two open items from `agent-state-feedback.md`
+
+Both were left open there. Neither is a bug, and neither needs a fix of its own:
+
+- **The recap's ~1.5s shortfall** *is* the pre-container window — app-api hop,
+  auth, Runtime routing. It is not a measurement error to correct but a real cost
+  to remove: the pooled-client item above and the cold-start path are what shrink
+  it. Measuring it instead would mean measuring on the client, which the
+  "always on / survives reload" trade already declined.
+- **The missing footer on older conversations** is the deliberate "no number
+  beats a number nobody measured" rule, consistent with the tool-rail durations
+  and with `agent_status`'s non-persisted timings. Backfilling it would mean
+  inventing the number.
+
+## Non-goals
+
+- **Narrating the preamble.** `agent-state-feedback.md` PR-3 settled this: on a
+  warm turn no stage dominates and 41% of the wait is not even in the handler, so
+  there is no honest phase label. Making it shorter is the only lever.
+- **Restructuring the handler wholesale.** The measurement is what decides how
+  much structure has to move; deciding that first is how PR-3's original plan
+  turned out to be unbuildable.
+- **Deferring the preamble into the stream generator** (the structural version of
+  this fix, which would take TTFB to near zero). Genuinely attractive, and
+  explicitly out of scope until PR-1 says how much is left to win after the cheap
+  fixes. It would require converting the remaining HTTP-status guards to SSE
+  errors — which is the house rule anyway — but it is a much larger change than
+  anything above and should not ride a measurement PR.

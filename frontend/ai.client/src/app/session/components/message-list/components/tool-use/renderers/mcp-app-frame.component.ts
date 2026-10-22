@@ -22,8 +22,12 @@ import { McpAppBridge } from '../../../../../services/mcp-apps/mcp-app-bridge';
 import { McpAppProxyService } from '../../../../../services/mcp-apps/mcp-app-proxy.service';
 import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-message.service';
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
+import { McpAppTeardownService } from '../../../../../services/mcp-apps/mcp-app-teardown.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
+import { isAwaitingUserSubmission } from '../../../../../services/mcp-apps/awaiting-submission';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
+import { McpAppActionsComponent } from '../../mcp-app-actions/mcp-app-actions.component';
+import { McpAppCardStateService } from '../../../../../services/mcp-apps/mcp-app-card-state.service';
 import { JsonSyntaxHighlightPipe } from '../json-syntax-highlight.pipe';
 import type { DisplayMode } from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
@@ -43,14 +47,25 @@ import { SessionService } from '../../../../../services/session/session.service'
  *
  * The whole surface is dark until the backend host flag is flipped (PR #7),
  * so in practice no `ui_resource` arrives and the registry never resolves
- * here. When it has no resource for its `toolUseId` (e.g. after a reload —
- * the inline event doesn't re-hydrate) it renders nothing and the tool-use
- * card falls back to the default renderer path.
+ * here. When it has no resource for its `toolUseId` it renders nothing and
+ * the tool-use card falls back to the default renderer path — in practice
+ * that means an environment with no mcp-sandbox origin, since resources
+ * themselves DO survive a reload via the `GET /messages` `uiResources`
+ * sidecar (`McpAppStateService.seedFromHydration`).
+ *
+ * Because the frame comes back on reload, it also owns the record of what
+ * the App ran while it was up: the header's actions chip discloses the
+ * persisted provenance cards for this `toolUseId` (see
+ * `McpAppActionsComponent`).
  */
 @Component({
   selector: 'app-mcp-app-frame',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [McpAppConsentPromptComponent, JsonSyntaxHighlightPipe],
+  imports: [
+    McpAppConsentPromptComponent,
+    McpAppActionsComponent,
+    JsonSyntaxHighlightPipe,
+  ],
   styles: `
     :host {
       display: block;
@@ -201,9 +216,13 @@ import { SessionService } from '../../../../../services/session/session.service'
             >{{ displayToolName() }}</span
           >
 
-          @if (isError()) {
+          @if (isAwaitingUser()) {
+            <span class="shrink-0 text-xs font-medium text-gray-600 dark:text-gray-300"
+              >Waiting for you</span
+            >
+          } @else if (isError()) {
             <span
-              class="shrink-0 text-xs font-medium text-red-600 dark:text-red-400"
+              class="shrink-0 text-xs font-medium text-state-danger-600 dark:text-state-danger-400"
               >Failed</span
             >
           }
@@ -211,7 +230,7 @@ import { SessionService } from '../../../../../services/session/session.service'
           @if (displayMode() === 'fullscreen') {
             <button
               type="button"
-              class="ml-auto flex shrink-0 items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+              class="ml-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-2.5 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
               (click)="exitFullscreen()"
             >
               <svg
@@ -231,32 +250,66 @@ import { SessionService } from '../../../../../services/session/session.service'
               Exit fullscreen
             </button>
           } @else {
-            <button
-              type="button"
-              class="ml-auto shrink-0 rounded-sm p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              [attr.aria-expanded]="detailsExpanded()"
-              [attr.aria-label]="
-                detailsExpanded() ? 'Hide request and response' : 'Show request and response'
-              "
-              (click)="toggleDetails()"
-            >
-              <svg
-                class="size-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                aria-hidden="true"
+            <div class="ml-auto flex shrink-0 items-center gap-1">
+              <!--
+                Actions this App ran on the user's behalf (PR #6 provenance
+                cards). A count chip rather than a card apiece: an
+                interactive App runs a tool on nearly every gesture, so the
+                per-call history belongs behind a disclosure, not stacked in
+                the thread. Hidden entirely when the App ran nothing.
+              -->
+              @if (appActions().length) {
+                <button
+                  type="button"
+                  class="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs hover:bg-gray-200 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:hover:bg-gray-700"
+                  [class]="appActionsChipClasses()"
+                  [attr.aria-expanded]="actionsExpanded()"
+                  [attr.aria-label]="appActionsLabel()"
+                  (click)="toggleActions()"
+                >
+                  {{ appActionsChipText() }}
+                </button>
+              }
+              <button
+                type="button"
+                class="shrink-0 rounded-sm p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                [attr.aria-expanded]="detailsExpanded()"
+                [attr.aria-label]="
+                  detailsExpanded() ? 'Hide request and response' : 'Show request and response'
+                "
+                (click)="toggleDetails()"
               >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M8 9l-4 3 4 3m8-6l4 3-4 3"
-                />
-              </svg>
-            </button>
+                <svg
+                  class="size-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M8 9l-4 3 4 3m8-6l4 3-4 3"
+                  />
+                </svg>
+              </button>
+            </div>
           }
         </div>
+
+        @if (
+          displayMode() !== 'fullscreen' && actionsExpanded() && appActions().length
+        ) {
+          <div
+            class="border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+          >
+            <div class="mb-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+              Run by this app
+            </div>
+            <app-mcp-app-actions [cards]="appActions()" />
+          </div>
+        }
 
         @if (displayMode() !== 'fullscreen' && detailsExpanded()) {
           <div
@@ -276,8 +329,10 @@ import { SessionService } from '../../../../../services/session/session.service'
                   class="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300"
                 >
                   <span>Response</span>
-                  @if (isError()) {
-                    <span class="text-red-600 dark:text-red-400">(Error)</span>
+                  @if (isAwaitingUser()) {
+                    <span class="text-gray-600 dark:text-gray-300">(Waiting for you)</span>
+                  } @else if (isError()) {
+                    <span class="text-state-danger-600 dark:text-state-danger-400">(Error)</span>
                   }
                 </div>
                 <pre
@@ -372,9 +427,11 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   readonly toolName = input<string>('');
 
   private readonly mcpAppState = inject(McpAppStateService);
+  private readonly appCardState = inject(McpAppCardStateService);
   private readonly mcpAppProxy = inject(McpAppProxyService);
   private readonly mcpAppMessage = inject(McpAppMessageService);
   private readonly mcpAppConsent = inject(McpAppConsentService);
+  private readonly mcpAppTeardown = inject(McpAppTeardownService);
   private readonly chatRequest = inject(ChatRequestService);
   private readonly chatState = inject(ChatStateService);
   private readonly conversation = inject(SessionService);
@@ -434,13 +491,17 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   );
 
   private bridge: McpAppBridge | null = null;
+  /** Deregisters this frame's bridge from the navigation teardown registry. */
+  private unregisterBridge: (() => void) | null = null;
   private readonly nonce =
     this.win?.crypto?.randomUUID?.() ?? `n-${Math.random().toString(36).slice(2)}`;
 
   /** The UI resource for this tool invocation (undefined ⇒ render nothing). */
   protected readonly resource = computed(() => {
     const id = this.toolUseId();
-    return id ? this.mcpAppState.get(id) : undefined;
+    return id
+      ? this.mcpAppState.get(this.chatState.viewedSessionId(), id)
+      : undefined;
   });
 
   /** Whether the header's server icon `<img>` failed to load (→ glyph). */
@@ -448,6 +509,44 @@ export class McpAppFrameComponent implements ToolResultRenderer {
 
   /** Whether the request/response details strip is expanded (the `</>` toggle). */
   protected readonly detailsExpanded = signal(false);
+
+  /** Whether the app-run actions strip is expanded (the count chip). */
+  protected readonly actionsExpanded = signal(false);
+
+  /**
+   * Tool calls this App ran on the user's behalf, persisted by PR #6's
+   * card store and keyed by the *originating* tool-use id — i.e. this
+   * frame. Only ever populated after a reload: live app-initiated calls
+   * already surface through the in-memory broker as ordinary tool rows,
+   * and the store isn't re-read mid-conversation.
+   */
+  protected readonly appActions = computed(() =>
+    this.appCardState.cardsFor(this.toolUseId()),
+  );
+
+  private readonly appActionFailures = computed(
+    () => this.appActions().filter((card) => card.isError).length,
+  );
+
+  /** `3 actions` / `3 actions · 1 failed` — the chip's glanceable summary. */
+  protected readonly appActionsChipText = computed(() => {
+    const total = this.appActions().length;
+    const failed = this.appActionFailures();
+    const base = `${total} ${total === 1 ? 'action' : 'actions'}`;
+    return failed ? `${base} · ${failed} failed` : base;
+  });
+
+  protected readonly appActionsLabel = computed(() => {
+    const verb = this.actionsExpanded() ? 'Hide' : 'Show';
+    return `${verb} the ${this.appActionsChipText()} run by this app`;
+  });
+
+  /** Danger tint only when something failed; otherwise a quiet chip. */
+  protected readonly appActionsChipClasses = computed(() =>
+    this.appActionFailures()
+      ? 'text-state-danger-600 dark:text-state-danger-400'
+      : 'text-gray-500 dark:text-gray-400',
+  );
 
   /**
    * Server display name for the header. Prefers the backend-resolved
@@ -475,19 +574,28 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     () => this.resource()?.toolName || this.toolName(),
   );
 
-  /** The tool produced an error result (drives the header's "Failed" badge). */
+  /**
+   * The App's form is open and waiting for the user: the tool reported an
+   * error on purpose so the agent stops, but nothing has failed. Shown as a
+   * neutral "Waiting for you" in place of "Failed".
+   */
+  protected readonly isAwaitingUser = computed(() =>
+    isAwaitingUserSubmission(this.result()),
+  );
+
+  /** The tool failed (drives the header's "Failed" badge). */
   protected readonly isError = computed(
-    () => this.result()?.status === 'error',
+    () => this.result()?.status === 'error' && !this.isAwaitingUser(),
   );
 
   /**
    * Whether the tool is still running — drives the tool-name shimmer. True
    * from mount until the real result lands (`inputComplete`), covering both
    * the argument-streaming and tool-execution windows. Never shimmers a
-   * failed call.
+   * failed call, or one waiting on the user.
    */
   protected readonly isRunning = computed(
-    () => !this.inputComplete() && !this.isError(),
+    () => !this.inputComplete() && !this.isError() && !this.isAwaitingUser(),
   );
 
   /** Pretty-printed request arguments for the expanded details strip. */
@@ -509,6 +617,10 @@ export class McpAppFrameComponent implements ToolResultRenderer {
 
   protected toggleDetails(): void {
     this.detailsExpanded.update((v) => !v);
+  }
+
+  protected toggleActions(): void {
+    this.actionsExpanded.update((v) => !v);
   }
 
   /**
@@ -534,7 +646,9 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    */
   protected readonly partialInput = computed(() => {
     const id = this.toolUseId();
-    return id ? this.mcpAppState.getPartialInput(id) : undefined;
+    return id
+      ? this.mcpAppState.getPartialInput(this.chatState.viewedSessionId(), id)
+      : undefined;
   });
 
   /**
@@ -789,7 +903,12 @@ export class McpAppFrameComponent implements ToolResultRenderer {
         this.doc.body.style.overflow = this.lockedBodyOverflow;
         this.lockedBodyOverflow = null;
       }
-      this.bridge?.dispose('component-destroyed');
+      // Deregister first: a navigation-driven teardownAll() already fired
+      // the notification while this iframe was alive, and re-firing here
+      // would only reset a grace window whose View is already gone.
+      this.unregisterBridge?.();
+      this.unregisterBridge = null;
+      void this.bridge?.dispose('component-destroyed');
     });
   }
 
@@ -859,6 +978,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
         return resulting;
       },
     });
+    this.unregisterBridge = this.mcpAppTeardown.register(this.bridge);
     this.bridge.onSizeChanged((_w, h) => {
       if (h > 0) this.frameHeight.set(Math.ceil(h));
     });

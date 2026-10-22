@@ -40,6 +40,11 @@ async def get_model_by_model_id(model_id: str) -> Optional[Dict[str, any]]:
     return None
 
 
+def _is_rate(value: object) -> bool:
+    """A real published rate — not None, not a bool, not a test double."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 async def get_model_pricing(model_id: str) -> Optional[Dict[str, float]]:
     """
     Get pricing information for a model from managed models database
@@ -76,6 +81,15 @@ async def get_model_pricing(model_id: str) -> Optional[Dict[str, float]]:
         pricing["cacheWritePricePerMtok"] = model.cache_write_price_per_million_tokens
     if model.cache_read_price_per_million_tokens is not None:
         pricing["cacheReadPricePerMtok"] = model.cache_read_price_per_million_tokens
+
+    # Speech-to-speech models carry a second rate card for speech tokens;
+    # `CostCalculator.calculate_voice_cost` reads these two.
+    speech_in = getattr(model, "speech_input_price_per_million_tokens", None)
+    speech_out = getattr(model, "speech_output_price_per_million_tokens", None)
+    if _is_rate(speech_in):
+        pricing["speechInputPricePerMtok"] = float(speech_in)
+    if _is_rate(speech_out):
+        pricing["speechOutputPricePerMtok"] = float(speech_out)
 
     return pricing
 

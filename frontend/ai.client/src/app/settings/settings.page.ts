@@ -10,7 +10,6 @@ import {
   heroUser,
   heroPaintBrush,
   heroChatBubbleLeftRight,
-  heroLink,
   heroKey,
   heroChartBar,
   heroCog6Tooth,
@@ -33,7 +32,6 @@ interface NavItem {
       heroUser,
       heroPaintBrush,
       heroChatBubbleLeftRight,
-      heroLink,
       heroKey,
       heroChartBar,
       heroCog6Tooth,
@@ -69,7 +67,7 @@ interface NavItem {
               <label for="settings-nav" class="sr-only">Settings section</label>
               <select
                 id="settings-nav"
-                class="block w-full rounded-sm border-gray-300 bg-white py-2 pl-3 pr-10 text-base text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                class="block w-full rounded-sm border-gray-300 bg-white py-2 pl-3 pr-10 text-base text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                 (change)="onMobileNavChange($event)"
               >
                 @for (item of navItems; track item.route) {
@@ -114,7 +112,6 @@ export class SettingsPage {
     { label: 'Profile', icon: 'heroUser', route: '/settings/profile', description: 'Your personal information' },
     { label: 'Appearance', icon: 'heroPaintBrush', route: '/settings/appearance', description: 'Theme and display' },
     { label: 'Chat', icon: 'heroChatBubbleLeftRight', route: '/settings/chat', description: 'Chat preferences' },
-    { label: 'Connectors', icon: 'heroLink', route: '/settings/connectors', description: 'Connected accounts' },
     { label: 'API Keys', icon: 'heroKey', route: '/settings/api-keys', description: 'API key management' },
     { label: 'Usage', icon: 'heroChartBar', route: '/settings/usage', description: 'Usage and billing' },
   ];

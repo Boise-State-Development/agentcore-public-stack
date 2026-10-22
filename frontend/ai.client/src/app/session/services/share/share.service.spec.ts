@@ -99,6 +99,7 @@ describe('ShareService', () => {
   describe('getSharedConversation', () => {
     it('should GET /shared/{shareId}', async () => {
       const mockResponse: SharedConversationResponse = {
+    artifacts: [],
         shareId: 'share-001',
         title: 'Test Conversation',
         accessLevel: 'public',

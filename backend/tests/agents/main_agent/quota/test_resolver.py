@@ -14,6 +14,25 @@ from agents.main_agent.quota.models import (
 from apis.shared.auth.models import User
 
 
+@pytest.fixture(autouse=True)
+def _no_live_app_role_service():
+    """Skip the AppRole quota branch, which builds a real RBAC service.
+
+    ``QuotaResolver.resolve`` step 3 calls ``_get_app_role_service()`` and then
+    ``resolve_user_permissions`` -> DynamoDB. No test in this file exercises
+    that branch, and its ``except`` swallowed the failure — so these passed
+    while issuing a live AWS call. See the off-box socket guard in
+    ``tests/conftest.py``.
+    """
+    from unittest.mock import patch as _patch
+
+    with _patch(
+        "agents.main_agent.quota.resolver._get_app_role_service",
+        return_value=None,
+    ):
+        yield
+
+
 @pytest.fixture
 def mock_repository():
     """Create a mock quota repository"""

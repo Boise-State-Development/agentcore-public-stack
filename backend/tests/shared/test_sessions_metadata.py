@@ -1113,6 +1113,116 @@ class TestPausedTurnSnapshot:
         assert interrupts[0].interrupt_id == "i1"
 
 
+class TestClearPendingInterrupts:
+    """The "supersede" clear: a fresh turn abandons a paused one.
+
+    Separate from ``remove_pending_interrupts`` (drop resolved ids) because a
+    breadcrumb that outlives its ``pausedTurn`` snapshot re-renders a prompt
+    the user can no longer answer — the resume route 400s on an interrupt id
+    the rebuilt agent has never heard of.
+    """
+
+    @pytest.mark.asyncio
+    async def test_clears_every_breadcrumb(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, add_pending_interrupt,
+            get_pending_interrupts, clear_pending_interrupts,
+        )
+        from apis.shared.sessions.models import PendingInterrupt
+
+        await ensure_session_metadata_exists("s1", "u1")
+        for n in ("i1", "i2"):
+            await add_pending_interrupt(
+                "s1", "u1",
+                PendingInterrupt(
+                    interruptId=n, providerId="calendar",
+                    createdAt="2026-04-25T00:00:00Z",
+                ),
+            )
+        assert len(await get_pending_interrupts("s1", "u1")) == 2
+
+        await clear_pending_interrupts("s1", "u1")
+
+        assert await get_pending_interrupts("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_clears_a_user_question_breadcrumb(self, sessions_metadata_table):
+        """The flavor this shipped for: the picker's primary action is Submit,
+        so a stale prompt hands the user a guaranteed error rather than a
+        dismissible notice."""
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, add_pending_interrupt,
+            get_pending_interrupts, clear_pending_interrupts,
+        )
+        from apis.shared.sessions.models import PendingInterrupt
+
+        await ensure_session_metadata_exists("s1", "u1")
+        await add_pending_interrupt(
+            "s1", "u1",
+            PendingInterrupt(
+                interruptId="v1:tool_call:tu-1:abc", kind="user_question",
+                toolUseId="tu-1", toolName="ask_user_question",
+                questions='[{"header":"Scope","question":"Which?","options":[{"label":"a"}]}]',
+                createdAt="2026-04-25T00:00:00Z",
+            ),
+        )
+
+        await clear_pending_interrupts("s1", "u1")
+
+        assert await get_pending_interrupts("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_noop_when_already_clear(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, clear_pending_interrupts,
+            get_pending_interrupts,
+        )
+
+        await ensure_session_metadata_exists("s1", "u1")
+        await clear_pending_interrupts("s1", "u1")
+        assert await get_pending_interrupts("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_noop_when_session_missing(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import clear_pending_interrupts
+
+        await clear_pending_interrupts("never-created", "u1")
+
+    @pytest.mark.asyncio
+    async def test_leaves_the_paused_turn_snapshot_alone(self, sessions_metadata_table):
+        """The inverse of ``test_paused_turn_independent_of_pending_interrupts``.
+
+        Each clear stays in its own lane; the routes layer calls both when a
+        fresh turn supersedes a paused one, and that ordering is its policy to
+        own — not something either function should assume.
+        """
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, set_paused_turn, get_paused_turn,
+            add_pending_interrupt, clear_pending_interrupts,
+        )
+        from apis.shared.sessions.models import PausedTurnSnapshot, PendingInterrupt
+
+        await ensure_session_metadata_exists("s1", "u1")
+        await set_paused_turn(
+            "s1", "u1",
+            PausedTurnSnapshot(
+                enabledTools=["calendar"], capturedAt="2026-04-25T00:00:00Z",
+                expiresAt="2026-04-25T01:00:00Z",
+            ),
+        )
+        await add_pending_interrupt(
+            "s1", "u1",
+            PendingInterrupt(
+                interruptId="i1", providerId="calendar",
+                createdAt="2026-04-25T00:00:00Z",
+            ),
+        )
+
+        await clear_pending_interrupts("s1", "u1")
+
+        assert await get_paused_turn("s1", "u1") is not None
+
+
 class TestCoerceCostTotal:
     """Normalize ``MessageMetadata.cost`` (float | dict | None) to a finite float total.
 
@@ -1359,3 +1469,197 @@ class TestListContractOnMarker:
 
         sessions, _ = await md.list_user_sessions("u1")
         assert [s.session_id for s in sessions] == ["leg"]  # fell back to legacy, not blank
+
+
+class TestPendingAttachmentsMarker:
+    """Write-ahead marker that lets a failed turn's attachments be re-sent.
+
+    Regression cover for prod session `5f34d2b0` (2026-08-31): a ConverseStream
+    carrying two PDFs failed with ServiceUnavailableException, the inline bytes
+    were stripped from restored history, and the user had to re-upload by hand.
+    """
+
+    @pytest.mark.asyncio
+    async def test_set_then_pop_returns_ids_and_clears(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            set_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+
+        await set_pending_attachments("s1", "u1", ["up-1", "up-2"])
+        assert await pop_pending_attachments("s1", "u1") == ["up-1", "up-2"]
+
+        # The pop cleared it — a second turn must not recover them again.
+        assert await pop_pending_attachments("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_pop_with_no_marker_returns_empty(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import store_session_metadata, pop_pending_attachments
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        assert await pop_pending_attachments("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_clear_prevents_recovery_after_a_successful_turn(self, sessions_metadata_table):
+        """The success path clears the marker, so the next turn re-sends nothing."""
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            set_pending_attachments,
+            clear_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+
+        await set_pending_attachments("s1", "u1", ["up-1"])
+        await clear_pending_attachments("s1", "u1")
+        assert await pop_pending_attachments("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_stale_marker_is_discarded_but_still_cleared(self, sessions_metadata_table):
+        """A session abandoned for hours must not silently re-send documents
+        onto an unrelated follow-up question."""
+        from datetime import datetime, timedelta, timezone
+
+        from apis.shared.sessions.metadata import (
+            PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS,
+            store_session_metadata,
+            set_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        await set_pending_attachments("s1", "u1", ["up-1"])
+
+        stale = datetime.now(timezone.utc) - timedelta(
+            seconds=PENDING_ATTACHMENT_RECOVERY_TTL_SECONDS + 60
+        )
+        sessions_metadata_table.update_item(
+            Key={"PK": "USER#u1", "SK": "S#s1"},
+            UpdateExpression="SET pendingAttachmentsAt = :t",
+            ExpressionAttributeValues={":t": stale.isoformat()},
+        )
+
+        assert await pop_pending_attachments("s1", "u1") == []
+        # Still cleared, so it can't linger and fire later.
+        assert "pendingAttachmentUploadIds" not in sessions_metadata_table.get_item(
+            Key={"PK": "USER#u1", "SK": "S#s1"}
+        )["Item"]
+
+    @pytest.mark.asyncio
+    async def test_empty_upload_ids_writes_nothing(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            set_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        await set_pending_attachments("s1", "u1", [])
+        assert await pop_pending_attachments("s1", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_missing_session_is_a_noop(self, sessions_metadata_table):
+        """Best-effort contract: no session row → no write, no raise."""
+        from apis.shared.sessions.metadata import set_pending_attachments, pop_pending_attachments
+        await set_pending_attachments("nope", "u1", ["up-1"])
+        assert await pop_pending_attachments("nope", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_marker_is_scoped_to_its_own_session(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            set_pending_attachments,
+            pop_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        await store_session_metadata(session_id="s2", user_id="u1", session_metadata=_make_session_metadata(session_id="s2"))
+
+        await set_pending_attachments("s1", "u1", ["up-1"])
+        assert await pop_pending_attachments("s2", "u1") == []
+        assert await pop_pending_attachments("s1", "u1") == ["up-1"]
+
+    @pytest.mark.asyncio
+    async def test_marker_survives_the_metadata_read_model(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_pending_attachments,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+        await set_pending_attachments("s1", "u1", ["up-1", "up-2"])
+
+        meta = await get_session_metadata("s1", "u1")
+        assert meta.pending_attachment_upload_ids == ["up-1", "up-2"]
+        assert meta.pending_attachments_at is not None
+
+
+class TestUpdateSessionTitle:
+    """One round trip on the born-static row; the GSI only for legacy SKs."""
+
+    @pytest.mark.asyncio
+    async def test_writes_a_born_static_row(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists,
+            get_session_metadata,
+            update_session_title,
+        )
+        await ensure_session_metadata_exists("s1", "u1")
+
+        await update_session_title("s1", "u1", "Biology Syllabus")
+
+        assert (await get_session_metadata("s1", "u1")).title == "Biology Syllabus"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_the_gsi_for_a_legacy_row(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import update_session_title
+
+        _put_legacy_row(sessions_metadata_table, "s1", "2026-01-01T00:00:00Z")
+
+        await update_session_title("s1", "u1", "Biology Syllabus")
+
+        items = sessions_metadata_table.scan()["Items"]
+        assert [(i["SK"], i["title"]) for i in items] == [
+            ("S#ACTIVE#2026-01-01T00:00:00Z#s1", "Biology Syllabus")
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_missing_row_is_not_created(self, sessions_metadata_table):
+        """The guard is what keeps the keyed write from upserting a ghost row."""
+        from apis.shared.sessions.metadata import update_session_title
+
+        await update_session_title("s1", "u1", "Biology Syllabus")
+
+        assert sessions_metadata_table.scan()["Items"] == []
+
+
+class TestSessionPinning:
+    """Issue #711: pinned conversations live in the sparse PinnedSessionIndex."""
+
+    @pytest.mark.asyncio
+    async def test_pin_lists_session_as_pinned(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists,
+            list_pinned_sessions,
+            set_session_pinned,
+        )
+        await ensure_session_metadata_exists("s1", "u1")
+        await ensure_session_metadata_exists("s2", "u1")
+
+        assert await set_session_pinned("s1", "u1", pinned=True) == "ok"
+
+        pinned = await list_pinned_sessions("u1")
+        assert [s.session_id for s, _ in pinned] == ["s1"]
+        assert pinned[0][1]  # pinnedAt timestamp
+
+    @pytest.mark.asyncio
+    async def test_unpin_removes_session_from_pinned(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists,
+            list_pinned_sessions,
+            set_session_pinned,
+        )
+        await ensure_session_metadata_exists("s1", "u1")
+        await set_session_pinned("s1", "u1", pinned=True)
+
+        assert await set_session_pinned("s1", "u1", pinned=False) == "ok"
+
+        assert await list_pinned_sessions("u1") == []

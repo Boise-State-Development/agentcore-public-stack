@@ -1,7 +1,8 @@
-import { Injectable, inject, resource, computed } from '@angular/core';
+import { Injectable, inject, resource, computed, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
+import { SessionService } from '../../../auth/session.service';
 import {
   ConnectorStatusResponse,
   InitiateConsentResponse,
@@ -29,10 +30,24 @@ function toCamelCase<T>(obj: Record<string, unknown>): T {
 export class UserConnectorsService {
   private readonly http = inject(HttpClient);
   private readonly config = inject(ConfigService);
+  private readonly session = inject(SessionService);
 
   private readonly appApiUrl = computed(() => `${this.config.appApiUrl()}/connectors`);
 
-  readonly connectorsResource = resource<UserConnector[], void>({
+  /** Flipped by the first surface that actually shows connectors. */
+  private readonly loadRequested = signal(false);
+
+  /**
+   * Idle until a surface asks for the list (`ensureLoaded`) **and** the session
+   * bootstrap has a user. `OAuthConsentService` injects this service, and
+   * `AnnouncementModalService` injects that one from an app initializer, so
+   * the resource is constructed on every page load — and a `resource` fetches
+   * on construction. Ungated, every page load paid a `/connectors/` round trip
+   * whose answer only two surfaces ever read, and `/auth/login` got a 401 for it.
+   */
+  readonly connectorsResource = resource<UserConnector[], object | undefined>({
+    params: () =>
+      this.loadRequested() && this.session.isAuthenticated() ? {} : undefined,
     loader: async () => {
       await Promise.resolve();
       const response = await firstValueFrom(
@@ -41,6 +56,11 @@ export class UserConnectorsService {
       return response.connectors.map((c) => toCamelCase<UserConnector>(c));
     },
   });
+
+  /** Start loading the connector list. Idempotent; call from any surface that reads it. */
+  ensureLoaded(): void {
+    this.loadRequested.set(true);
+  }
 
   /**
    * Side-effect-free check of whether AgentCore's vault has a usable token

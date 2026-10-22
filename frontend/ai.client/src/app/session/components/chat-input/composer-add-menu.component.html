@@ -1,0 +1,319 @@
+<!--
+  The open/closed events are the TRIGGER's (`cdkMenuOpened` / `cdkMenuClosed`);
+  `cdkMenu` itself has only `closed`. The trigger owns `aria-haspopup` and
+  `aria-expanded`. Same shape as the voice options menu beside it.
+-->
+<button
+  type="button"
+  [cdkMenuTriggerFor]="addMenu"
+  [cdkMenuPosition]="menuPositions"
+  (cdkMenuOpened)="onOpened()"
+  (cdkMenuClosed)="onClosed()"
+  [disabled]="disabled()"
+  class="composer-add-trigger flex size-10 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+  [class.bg-gray-100]="open()"
+  [class.dark:bg-white/5]="open()"
+  aria-label="Add files, skills and tools"
+  appTooltip="Add"
+  appTooltipPosition="top"
+  data-testid="composer-add-trigger"
+>
+  <ng-icon
+    name="heroPlus"
+    class="size-5 transition-transform duration-150"
+    [class.rotate-45]="open()"
+    aria-hidden="true"
+  />
+</button>
+
+<ng-template #addMenu>
+  <div
+    cdkMenu
+    class="composer-add-menu w-72 rounded-xl bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+    aria-label="Add to this message"
+    data-testid="composer-add-menu"
+  >
+    <!-- Files -->
+    <button
+      cdkMenuItem
+      type="button"
+      (cdkMenuItemTriggered)="pickDevice()"
+      class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+      data-testid="composer-add-device"
+    >
+      <ng-icon name="heroPaperClip" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      <span class="flex-1 text-left">Add files or photos</span>
+    </button>
+
+    @for (source of fileSources(); track source.providerId) {
+      <button
+        cdkMenuItem
+        type="button"
+        (cdkMenuItemTriggered)="openSource(source)"
+        class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+        [attr.title]="'Add from ' + source.displayName"
+        [attr.data-testid]="'composer-add-source-' + source.providerId"
+      >
+        @if (source.iconData) {
+          <img [src]="source.iconData" alt="" class="size-4 shrink-0 object-contain" />
+        } @else {
+          <ng-icon name="heroCloud" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+        }
+        <span class="flex-1 truncate text-left">Add from {{ source.displayName }}</span>
+      </button>
+    }
+
+    <div class="my-1.5 border-t border-gray-200 dark:border-gray-700" role="separator"></div>
+
+    <!-- The three Customize tabs, as submenus -->
+    @if (showSkills()) {
+      <button
+        cdkMenuItem
+        type="button"
+        [cdkMenuTriggerFor]="skillsMenu"
+        [cdkMenuPosition]="submenuPositions"
+        class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+        data-testid="composer-add-skills"
+      >
+        <ng-icon name="heroSparkles" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+        <span class="flex-1 text-left">Skills</span>
+        <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+      </button>
+    }
+
+    <button
+      cdkMenuItem
+      type="button"
+      [cdkMenuTriggerFor]="toolsMenu"
+      [cdkMenuPosition]="submenuPositions"
+      class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+      data-testid="composer-add-tools"
+    >
+      <ng-icon name="heroWrenchScrewdriver" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      <span class="flex-1 text-left">Tools</span>
+      <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+    </button>
+
+    <button
+      cdkMenuItem
+      type="button"
+      [cdkMenuTriggerFor]="connectorsMenu"
+      [cdkMenuPosition]="submenuPositions"
+      class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+      data-testid="composer-add-connectors"
+    >
+      <ng-icon name="heroLink" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      <span class="flex-1 text-left">Connectors</span>
+      <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+    </button>
+  </div>
+</ng-template>
+
+<!-- Skills: the ones turned on, which are exactly what the turn discloses to the model -->
+<ng-template #skillsMenu>
+  <div
+    cdkMenu
+    class="composer-add-submenu w-64 rounded-xl bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+    aria-label="Skills"
+    data-testid="composer-skills-menu"
+  >
+    <div class="max-h-72 overflow-y-auto">
+      @if (skills().length === 0) {
+        <p class="px-2.5 py-2 text-sm/5 text-gray-500 dark:text-gray-400">
+          {{ skillsLocked() ? "This agent doesn't use skills." : 'No skills are turned on.' }}
+        </p>
+      }
+      @for (command of skills(); track command.skillId) {
+        <button
+          cdkMenuItem
+          type="button"
+          (cdkMenuItemTriggered)="pickSkill(command)"
+          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+          [attr.data-skill-id]="command.skillId"
+        >
+          <ng-icon name="heroSparkles" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+          <span class="flex min-w-0 flex-1 flex-col text-left">
+            <span class="truncate">{{ command.name }}</span>
+            <span class="truncate text-xs/4 text-gray-500 dark:text-gray-400">/{{ command.slug }}</span>
+          </span>
+        </button>
+      }
+    </div>
+    <div class="my-1.5 border-t border-gray-200 dark:border-gray-700" role="separator"></div>
+    <button
+      cdkMenuItem
+      type="button"
+      (cdkMenuItemTriggered)="go('/customize/skills')"
+      class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+      data-testid="composer-manage-skills"
+    >
+      <ng-icon name="heroCog6Tooth" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      <span class="flex-1 text-left">Manage skills</span>
+    </button>
+  </div>
+</ng-template>
+
+<!-- Tools: switches, kept open while flipping (see MenuToggleItemDirective) -->
+<ng-template #toolsMenu>
+  <div
+    cdkMenu
+    class="composer-add-submenu w-64 rounded-xl bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+    aria-label="Tools"
+    data-testid="composer-tools-menu"
+  >
+    @if (toolsLocked()) {
+      <p class="px-2.5 pb-1 pt-1.5 text-xs/4 text-gray-500 dark:text-gray-400">
+        This conversation's agent chooses its tools.
+      </p>
+    }
+    <div class="max-h-72 overflow-y-auto">
+      @if (tools().length === 0) {
+        <p class="px-2.5 py-2 text-sm/5 text-gray-500 dark:text-gray-400">
+          {{ toolsLocked() ? "This agent doesn't use tools." : 'No tools available.' }}
+        </p>
+      }
+      @for (tool of tools(); track tool.toolId) {
+        <button
+          appMenuToggleItem
+          type="button"
+          [cdkMenuItemChecked]="isToolOn(tool)"
+          [cdkMenuItemDisabled]="toolDisabled(tool)"
+          (cdkMenuItemTriggered)="toggleTool(tool)"
+          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+          [attr.data-tool-id]="tool.toolId"
+        >
+          <span class="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
+            @if (isToolOn(tool)) {
+              <ng-icon name="heroCheck" class="size-4 text-primary-accessible dark:text-primary-accessible-dark" />
+            }
+          </span>
+          <span class="flex-1 truncate text-left">{{ tool.displayName }}</span>
+        </button>
+      }
+    </div>
+    <div class="my-1.5 border-t border-gray-200 dark:border-gray-700" role="separator"></div>
+    <button
+      cdkMenuItem
+      type="button"
+      (cdkMenuItemTriggered)="go('/customize/tools')"
+      class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+      data-testid="composer-manage-tools"
+    >
+      <ng-icon name="heroCog6Tooth" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      <span class="flex-1 text-left">Manage tools</span>
+    </button>
+  </div>
+</ng-template>
+
+<!-- Connectors: the accounts tools and file sources sign in with, as switches -->
+<ng-template #connectorsMenu>
+  <div
+    cdkMenu
+    class="composer-add-submenu w-64 rounded-xl bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+    aria-label="Connectors"
+    data-testid="composer-connectors-menu"
+  >
+    <div class="max-h-72 overflow-y-auto">
+      @if (connectorsLoading()) {
+        <div role="status" data-testid="composer-connectors-loading">
+          <span class="sr-only">Loading connectors…</span>
+          @for (row of [1, 2, 3]; track row) {
+            <div class="flex items-center gap-2.5 px-2.5 py-1.5" aria-hidden="true">
+              <span class="size-4 shrink-0 animate-pulse rounded-sm bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"></span>
+              <span class="flex flex-1 flex-col gap-1.5 py-0.5">
+                <span class="h-3 w-24 animate-pulse rounded-sm bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"></span>
+                <span class="h-2.5 w-16 animate-pulse rounded-sm bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"></span>
+              </span>
+              <span class="h-5 w-9 shrink-0 animate-pulse rounded-full bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"></span>
+            </div>
+          }
+        </div>
+      } @else if (connectors().length === 0) {
+        <p class="px-2.5 py-2 text-sm/5 text-gray-500 dark:text-gray-400">No connectors available.</p>
+      }
+      @for (connector of connectors(); track connector.providerId) {
+        @let on = isConnected(connector);
+        @let busy = connectorBusy(connector);
+        @let probing = connectorProbing(connector);
+        <button
+          appMenuToggleItem
+          type="button"
+          [cdkMenuItemChecked]="on"
+          [cdkMenuItemDisabled]="busy || probing"
+          [attr.aria-busy]="probing || null"
+          (cdkMenuItemTriggered)="toggleConnector(connector)"
+          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 aria-disabled:cursor-wait dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+          [attr.data-connector-id]="connector.providerId"
+        >
+          @if (connector.iconData) {
+            <img [src]="connector.iconData" alt="" class="size-4 shrink-0 object-contain" />
+          } @else {
+            <ng-icon name="heroLink" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+          }
+          <span class="flex min-w-0 flex-1 flex-col text-left">
+            <span class="truncate">{{ connector.displayName }}</span>
+            @if (probing) {
+              <span class="sr-only">Checking connection…</span>
+              <span
+                class="mt-1 mb-0.5 h-2.5 w-16 animate-pulse rounded-sm bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"
+                aria-hidden="true"
+                data-testid="connector-state-skeleton"
+              ></span>
+            } @else if (connectorStateLabel(connector); as state) {
+              <span
+                class="truncate text-xs/4"
+                [class]="on && !busy ? 'text-state-success-700 dark:text-state-success-400' : 'text-gray-500 dark:text-gray-400'"
+              >
+                {{ state }}
+              </span>
+            }
+          </span>
+          <!-- The switch; `aria-checked` on the row carries its state. -->
+          @if (probing) {
+            <span
+              class="h-5 w-9 shrink-0 animate-pulse rounded-full bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"
+              aria-hidden="true"
+            ></span>
+          } @else {
+            <span
+              class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors"
+              [class]="on ? 'bg-primary-accessible' : 'bg-gray-300 dark:bg-gray-600'"
+              [class.opacity-50]="busy"
+              aria-hidden="true"
+            >
+              <span
+                class="inline-block size-4 rounded-full bg-white shadow-sm transition-transform"
+                [class]="on ? 'translate-x-4' : 'translate-x-0.5'"
+              ></span>
+            </span>
+          }
+        </button>
+        @if (connectorBlocked(connector)) {
+          <!-- The browser refused the popup; open it again from this click. -->
+          <button
+            appMenuKeepOpenItem
+            type="button"
+            (cdkMenuItemTriggered)="retrySignIn(connector)"
+            [attr.aria-label]="'Open sign-in for ' + connector.displayName"
+            class="flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-2.5 pl-9 text-left text-xs/4 font-medium text-primary-accessible outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+            [attr.data-retry-connector-id]="connector.providerId"
+          >
+            <ng-icon name="heroArrowTopRightOnSquare" class="size-3.5 shrink-0" aria-hidden="true" />
+            Open sign-in
+          </button>
+        }
+      }
+    </div>
+    <div class="my-1.5 border-t border-gray-200 dark:border-gray-700" role="separator"></div>
+    <button
+      cdkMenuItem
+      type="button"
+      (cdkMenuItemTriggered)="go('/customize/connectors')"
+      class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+      data-testid="composer-manage-connectors"
+    >
+      <ng-icon name="heroCog6Tooth" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      <span class="flex-1 text-left">Manage connectors</span>
+    </button>
+  </div>
+</ng-template>

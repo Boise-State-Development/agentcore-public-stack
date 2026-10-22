@@ -7,11 +7,19 @@ JWT that authenticates the upstream hop is held server-side in the BFF
 session and forwarded by app-api — see ``app_api/voice/proxy.py``.
 """
 
-from .codec import VoiceTicketClaims, VoiceTicketCodec, VoiceTicketError
+from .codec import (
+    PURPOSE_DICTATION,
+    PURPOSE_VOICE,
+    VoiceTicketClaims,
+    VoiceTicketCodec,
+    VoiceTicketError,
+)
 from .replay import VoiceTicketReplayStore
 from .service import VoiceTicketService, get_default_service
 
 __all__ = [
+    "PURPOSE_DICTATION",
+    "PURPOSE_VOICE",
     "VoiceTicketClaims",
     "VoiceTicketCodec",
     "VoiceTicketError",

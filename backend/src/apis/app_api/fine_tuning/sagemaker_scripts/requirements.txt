@@ -1,2 +1,13 @@
+# Installed by the SageMaker DLC into both the training container and, via
+# code/ inside model.tar.gz, the Batch Transform container.
+#
+# One file serves two containers on different Python versions — the text tasks
+# run py3.10 (PyTorch 2.1 DLC), the vision tasks py3.12 (PyTorch 2.8 DLC) — so
+# anything added here has to install on both. pillow 12.x requires >=3.10 and
+# therefore does.
+#
+# torch, transformers, datasets and evaluate are supplied by the DLC itself
+# and are deliberately not listed: pinning them here would fight the image.
 pandas
 scikit-learn
+pillow==12.3.0

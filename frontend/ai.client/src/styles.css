@@ -1,8 +1,10 @@
 /* You can add global styles to this file, and also import other style files */
 
-@import "tailwindcss";
+/* Tailwind + the brand/surface theme overrides live in one shared entry
+   (styles/theme.css) so component stylesheets can @reference the exact
+   same theme this global sheet emits. See styles/theme.css header. */
+@import './styles/theme.css';
 @import '@ctrl/ngx-emoji-mart/picker';
-@custom-variant dark (&:where(.dark, .dark *));
 
 @font-face {
     font-family: 'InterVariable';
@@ -78,7 +80,7 @@
     }
 
     tr:nth-child(odd) td {
-        background-color: white;
+        background-color: var(--color-white);
     }
 
     tr:nth-child(even) td {
@@ -261,8 +263,66 @@ html.dark .message-block {
     a:hover {
         color: var(--color-primary-300);
     }
+
+    /* Weight alone barely separates bold from body text on a dark surface,
+       and the assistant bubble's gray-200 body sits too close to white to
+       leave room above it. So response prose steps down to gray-300 while
+       headings and bold step up to white. Inside a link, bold keeps the
+       link's color. */
+    &.text-block {
+        color: var(--color-gray-300);
+    }
+
+    h1, h2, h3, h4, h5, h6,
+    strong {
+        color: var(--color-white);
+    }
+
+    a strong {
+        color: inherit;
+    }
 }
   
+
+/*
+ * Sidebar body entry motion.
+ *
+ * Global rather than component-scoped, and that is the whole point: the chat
+ * navigation and the admin console's navigation swap into the same slot in the
+ * sidebar, so they have to arrive the same way or the swap reads as two
+ * different sidebars. Angular scopes keyframe NAMES per component, so a copy of
+ * this rule in each component would compile to two separately-named animations
+ * that look identical today and drift the first time one is tuned.
+ *
+ * Sections stagger by applying `animation-delay` at the usage site — 0ms for
+ * the first beat, then a 40ms ladder. Deliberately short: the admin nav's six
+ * sections finish at 500ms, and anything longer stops reading as one gesture
+ * and starts reading as a queue.
+ *
+ * `both` fill so a delayed section is invisible until its turn rather than
+ * flashing at full opacity first.
+ */
+.sidenav-body-enter {
+    animation: sidenav-body-enter 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes sidenav-body-enter {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sidenav-body-enter {
+        animation: none;
+    }
+}
 
 /* Ensure body has proper background for dark mode */
 body {
@@ -276,43 +336,4 @@ html.dark body {
 @theme {
     --font-sans: 'InterVariable', sans-serif;
     --font-sans--font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-
-    /* Primary color scale - #0033a0 */
-    --color-primary-50: oklch(from #0033a0 calc(l + 0.4) c h);
-    --color-primary-100: oklch(from #0033a0 calc(l + 0.35) c h);
-    --color-primary-200: oklch(from #0033a0 calc(l + 0.3) c h);
-    --color-primary-300: oklch(from #0033a0 calc(l + 0.2) c h);
-    --color-primary-400: oklch(from #0033a0 calc(l + 0.1) c h);
-    --color-primary-500: #0033a0;
-    --color-primary-600: oklch(from #0033a0 calc(l - 0.1) c h);
-    --color-primary-700: oklch(from #0033a0 calc(l - 0.15) c h);
-    --color-primary-800: oklch(from #0033a0 calc(l - 0.2) c h);
-    --color-primary-900: oklch(from #0033a0 calc(l - 0.25) c h);
-    --color-primary-950: oklch(from #0033a0 calc(l - 0.3) c h);
-
-    /* Secondary color scale - #d64309 */
-    --color-secondary-50: oklch(from #d64309 calc(l + 0.4) c h);
-    --color-secondary-100: oklch(from #d64309 calc(l + 0.35) c h);
-    --color-secondary-200: oklch(from #d64309 calc(l + 0.3) c h);
-    --color-secondary-300: oklch(from #d64309 calc(l + 0.2) c h);
-    --color-secondary-400: oklch(from #d64309 calc(l + 0.1) c h);
-    --color-secondary-500: #d64309;
-    --color-secondary-600: oklch(from #d64309 calc(l - 0.1) c h);
-    --color-secondary-700: oklch(from #d64309 calc(l - 0.15) c h);
-    --color-secondary-800: oklch(from #d64309 calc(l - 0.2) c h);
-    --color-secondary-900: oklch(from #d64309 calc(l - 0.25) c h);
-    --color-secondary-950: oklch(from #d64309 calc(l - 0.3) c h);
-
-    /* Tertiary color scale - #0072ce */
-    --color-tertiary-50: oklch(from #0072ce calc(l + 0.4) c h);
-    --color-tertiary-100: oklch(from #0072ce calc(l + 0.35) c h);
-    --color-tertiary-200: oklch(from #0072ce calc(l + 0.3) c h);
-    --color-tertiary-300: oklch(from #0072ce calc(l + 0.2) c h);
-    --color-tertiary-400: oklch(from #0072ce calc(l + 0.1) c h);
-    --color-tertiary-500: #0072ce;
-    --color-tertiary-600: oklch(from #0072ce calc(l - 0.1) c h);
-    --color-tertiary-700: oklch(from #0072ce calc(l - 0.15) c h);
-    --color-tertiary-800: oklch(from #0072ce calc(l - 0.2) c h);
-    --color-tertiary-900: oklch(from #0072ce calc(l - 0.25) c h);
-    --color-tertiary-950: oklch(from #0072ce calc(l - 0.3) c h);
 }

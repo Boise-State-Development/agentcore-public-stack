@@ -50,6 +50,20 @@ jobs:
         with:
           node-version: '22'
 
+      # Node 22 bundles npm 10.x, but lockfiles are authored by the dev
+      # container's pinned npm. package-lock.json output is not guaranteed
+      # byte-identical across npm majors, so validating with a different npm
+      # than authored with would make the check below fail on a correct
+      # lockfile. Read the version from the same "packageManager" field the
+      # dev container pins against, so there is one source of truth.
+      - name: Pin npm to the declared packageManager version
+        run: |
+          set -euo pipefail
+          NPM_SPEC=$(node -p "require('./frontend/ai.client/package.json').packageManager")
+          echo "Declared package manager: ${NPM_SPEC}"
+          npm install -g "${NPM_SPEC}"
+          npm --version
+
       - name: Check package-lock.json files are in sync
         id: lockfiles-synced
         continue-on-error: true
@@ -58,7 +72,15 @@ jobs:
 
           for dir in frontend/ai.client infrastructure; do
             echo "Checking ${dir}/package-lock.json..."
-            npm install --package-lock-only --prefix "${dir}" 2>/dev/null
+            # Do not suppress stderr: npm can fail outright while resolving
+            # (arborist has crashed on this repo's graph before). Swallowing
+            # that left the lockfile untouched, so the git diff below came back
+            # clean and the check passed vacuously.
+            if ! npm install --package-lock-only --prefix "${dir}"; then
+              echo "::error::npm failed to resolve ${dir}/package-lock.json — cannot verify it is in sync"
+              FAILED=1
+              continue
+            fi
             if ! git diff --exit-code "${dir}/package-lock.json" > /dev/null 2>&1; then
               echo "::error::${dir}/package-lock.json is out of sync with ${dir}/package.json"
               FAILED=1

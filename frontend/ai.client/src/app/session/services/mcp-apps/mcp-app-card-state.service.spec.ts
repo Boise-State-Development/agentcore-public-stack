@@ -54,4 +54,24 @@ describe('McpAppCardStateService', () => {
     expect(svc.hasCards()).toBe(false);
     expect(svc.cards()).toEqual([]);
   });
+
+  describe('grouping by originating tool use', () => {
+    it('groups cards under the App frame that ran them, oldest-first', () => {
+      svc.seedFromHydration([
+        card({ cardId: 'b', toolUseId: 'tu1', createdAt: '2026-01-02T00:00:00Z' }),
+        card({ cardId: 'c', toolUseId: 'tu2', createdAt: '2026-01-03T00:00:00Z' }),
+        card({ cardId: 'a', toolUseId: 'tu1', createdAt: '2026-01-01T00:00:00Z' }),
+      ]);
+      expect(svc.cardsFor('tu1').map((c) => c.cardId)).toEqual(['a', 'b']);
+      expect(svc.cardsFor('tu2').map((c) => c.cardId)).toEqual(['c']);
+    });
+
+    it('returns the same empty array for a miss or a missing id', () => {
+      svc.seedFromHydration([card({ toolUseId: 'tu1' })]);
+      // Stable reference — a fresh array each call would churn the frame's
+      // computed on every change-detection pass.
+      expect(svc.cardsFor('nope')).toBe(svc.cardsFor('other'));
+      expect(svc.cardsFor(undefined)).toEqual([]);
+    });
+  });
 });

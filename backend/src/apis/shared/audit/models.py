@@ -62,6 +62,48 @@ class AuditAction:
     # interesting than all of them.
     ROLE_MUTATION_DENIED = "app_role.mutation_denied"
 
+    # Shared Projects (shared-projects §9.4), target ``project``. Only actions
+    # something records are listed; each phase adds the actions it emits.
+    # ``tools_updated``/``skills_updated`` are a project's own bindings, not role
+    # grants, so the note above does not apply.
+    PROJECT_CREATED = "project.created"
+    PROJECT_UPDATED = "project.updated"
+    PROJECT_ARCHIVED = "project.archived"
+    PROJECT_RESTORED = "project.restored"
+    PROJECT_DELETED = "project.deleted"
+    PROJECT_TRANSFERRED = "project.transferred"
+    PROJECT_MEMBER_ADDED = "project.member_added"
+    PROJECT_MEMBER_ROLE_CHANGED = "project.member_role_changed"
+    PROJECT_MEMBER_REMOVED = "project.member_removed"
+    PROJECT_INSTRUCTIONS_UPDATED = "project.instructions_updated"
+    PROJECT_MODEL_UPDATED = "project.model_updated"
+    PROJECT_TOOLS_UPDATED = "project.tools_updated"
+    PROJECT_SKILLS_UPDATED = "project.skills_updated"
+    PROJECT_KNOWLEDGE_ADDED = "project.knowledge_added"
+    PROJECT_KNOWLEDGE_REMOVED = "project.knowledge_removed"
+    PROJECT_TASK_SHARED = "project.task_shared"
+    PROJECT_TASK_UNSHARED = "project.task_unshared"
+    PROJECT_MEMORY_PROPOSED = "project.memory_proposed"
+    PROJECT_MEMORY_PROPOSAL_APPROVED = "project.memory_proposal_approved"
+    PROJECT_MEMORY_PROPOSAL_REJECTED = "project.memory_proposal_rejected"
+    PROJECT_MEMORY_EDITED = "project.memory_edited"
+    PROJECT_MEMORY_DELETED = "project.memory_deleted"
+    PROJECT_OUTPUT_SHARED = "project.output_shared"
+    PROJECT_OUTPUT_REMOVED = "project.output_removed"
+    PROJECT_MEMORY_MAINTENANCE_STARTED = "project.memory_maintenance_started"
+    PROJECT_SCHEDULE_CREATED = "project.schedule_created"
+    PROJECT_SCHEDULE_UPDATED = "project.schedule_updated"
+    PROJECT_SCHEDULE_PAUSED = "project.schedule_paused"
+    PROJECT_SCHEDULE_RESUMED = "project.schedule_resumed"
+    PROJECT_SCHEDULE_DELETED = "project.schedule_deleted"
+
+    # Direct user grants (``apis/shared/rbac/user_grant_admin_service.py``),
+    # target ``user_grant`` keyed by the user id. One record per PUT with the
+    # three lists' before/after, one per DELETE — the grant is its own record,
+    # not a role edit, so the no-double-count note above does not apply.
+    USER_GRANT_UPDATED = "user_grant.updated"
+    USER_GRANT_DELETED = "user_grant.deleted"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -74,6 +116,8 @@ class AuditOutcome:
 
 
 TARGET_APP_ROLE = "app_role"
+TARGET_PROJECT = "project"
+TARGET_USER_GRANT = "user_grant"
 
 
 @dataclass

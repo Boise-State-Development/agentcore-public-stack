@@ -37,6 +37,8 @@ class FileUploadRepository:
     Key Patterns:
     - File: PK=USER#{userId}, SK=FILE#{uploadId}
     - Quota: PK=USER#{userId}, SK=QUOTA
+    - Folder attachment: PK=USER#{userId}, SK=FOLDER#{folderAttachId}
+      (``folder_repository.py``; the file listings key on ``FILE#``)
 
     GSI (SessionIndex):
     - GSI1PK=CONV#{sessionId}, GSI1SK=FILE#{uploadId}
@@ -137,6 +139,140 @@ class FileUploadRepository:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 return None
             logger.error(f"Error updating file status {upload_id}: {e}")
+            raise
+
+    async def update_file_digest(
+        self, user_id: str, upload_id: str, digest: dict
+    ) -> Optional[FileMetadata]:
+        """Store a ``DocumentDigest`` map on the file row (``SET digest``).
+
+        Idempotent last-write-wins; ``None`` when the row no longer exists
+        (the file was deleted while the digest was being built).
+        """
+        return self.update_file_digest_sync(user_id, upload_id, digest)
+
+    def update_file_digest_sync(
+        self, user_id: str, upload_id: str, digest: dict
+    ) -> Optional[FileMetadata]:
+        """Synchronous body of :meth:`update_file_digest` — the restore path
+        persists a lazily built digest from synchronous code (see
+        :meth:`list_session_files_sync`)."""
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET digest = :digest, updatedAt = :now",
+                ExpressionAttributeValues={
+                    ":digest": self._convert_floats_to_decimals(dict(digest)),
+                    ":now": utc_now_iso(),
+                },
+                ConditionExpression="attribute_exists(PK)",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating file digest {upload_id}: {e}")
+            raise
+
+    async def update_file_preparation(
+        self, user_id: str, upload_id: str, preparation: dict, digest: Optional[dict] = None
+    ) -> Optional[FileMetadata]:
+        """Store a large-document ``preparation`` map (and, with it, the
+        digest) on a READY file row, in one write.
+
+        ``None`` when the row no longer exists or is no longer READY: the file
+        was deleted while it was being prepared, and the caller must clean up
+        whatever it wrote for it.
+        """
+        return self.update_file_preparation_sync(user_id, upload_id, preparation, digest)
+
+    def update_file_preparation_sync(
+        self, user_id: str, upload_id: str, preparation: dict, digest: Optional[dict] = None
+    ) -> Optional[FileMetadata]:
+        """Synchronous body of :meth:`update_file_preparation`."""
+        expression = "SET preparation = :preparation, updatedAt = :now"
+        values = {
+            ":preparation": self._convert_floats_to_decimals(dict(preparation)),
+            ":now": utc_now_iso(),
+            ":ready": FileStatus.READY.value,
+        }
+        if digest is not None:
+            expression += ", digest = :digest"
+            values[":digest"] = self._convert_floats_to_decimals(dict(digest))
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression=expression,
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues=values,
+                ConditionExpression="attribute_exists(PK) AND #status = :ready",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating file preparation {upload_id}: {e}")
+            raise
+
+    async def replace_file_content_fields(
+        self, user_id: str, upload_id: str, size_bytes: int
+    ) -> Optional[FileMetadata]:
+        """A READY file's bytes were replaced at the same key: record the new
+        size and drop what described the old bytes (``digest``, ``preparation``).
+
+        The upload id, key, name and ``kbIndex`` stay: the id is what earlier
+        turns cite, and the next preparation re-ingests under the same KB
+        document id. ``None`` when the row is gone or not READY.
+        """
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET sizeBytes = :size, updatedAt = :now REMOVE digest, preparation",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={":size": size_bytes, ":now": utc_now_iso(), ":ready": FileStatus.READY.value},
+                ConditionExpression="attribute_exists(PK) AND #status = :ready",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error replacing file content fields {upload_id}: {e}")
+            raise
+
+    async def update_file_kb_index(
+        self, user_id: str, upload_id: str, kb_index: dict
+    ) -> Optional[FileMetadata]:
+        """Store the attachments-KB ``kbIndex`` map on an existing file row.
+
+        ``None`` when the row no longer exists: the file was deleted, and the
+        caller's delete path (not this write) owns what happens to its index.
+        Never recreates a deleted row.
+        """
+        return self.update_file_kb_index_sync(user_id, upload_id, kb_index)
+
+    def update_file_kb_index_sync(
+        self, user_id: str, upload_id: str, kb_index: dict
+    ) -> Optional[FileMetadata]:
+        """Synchronous body of :meth:`update_file_kb_index`."""
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET kbIndex = :kb, updatedAt = :now",
+                ExpressionAttributeValues={
+                    ":kb": self._convert_floats_to_decimals(dict(kb_index)),
+                    ":now": utc_now_iso(),
+                },
+                ConditionExpression="attribute_exists(PK)",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating file kbIndex {upload_id}: {e}")
             raise
 
     async def delete_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
@@ -257,11 +393,28 @@ class FileUploadRepository:
         Returns:
             List of FileMetadata
         """
+        return self.list_session_files_sync(session_id, status)
+
+    def list_session_files_sync(
+        self, session_id: str, status: Optional[FileStatus] = None
+    ) -> List[FileMetadata]:
+        """Synchronous body of :meth:`list_session_files`.
+
+        The session manager's restore path (``TurnBasedSessionManager.initialize``)
+        runs synchronously inside the Strands agent constructor, under a
+        running event loop it cannot re-enter, and needs the session's upload
+        rows to rehydrate stripped documents. boto3 is synchronous anyway; the
+        async method is a thin wrapper over this.
+
+        Keyed to the ``FILE#`` sort prefix: a folder attachment's row shares
+        the session partition (``GSI1SK=FOLDER#…``, ``folder_repository``) and
+        is not a file.
+        """
         try:
             query_params = {
                 "IndexName": "SessionIndex",
-                "KeyConditionExpression": "GSI1PK = :pk",
-                "ExpressionAttributeValues": {":pk": f"CONV#{session_id}"},
+                "KeyConditionExpression": "GSI1PK = :pk AND begins_with(GSI1SK, :sk_prefix)",
+                "ExpressionAttributeValues": {":pk": f"CONV#{session_id}", ":sk_prefix": "FILE#"},
                 "ScanIndexForward": False,
             }
 
@@ -285,6 +438,51 @@ class FileUploadRepository:
 
         except ClientError as e:
             logger.error(f"Error listing files for session {session_id}: {e}")
+            raise
+
+    async def list_session_file_stats(self, session_id: str) -> List[dict]:
+        """Content-free upload stats for one session — admin diagnostics.
+
+        Same ``SessionIndex`` query as :meth:`list_session_files`, but projects
+        only ``uploadId, sessionId, sizeBytes, mimeType, source, status,
+        createdAt``. ``filename``, ``s3Key`` and ``s3Uri`` carry the user's
+        chosen file name and never leave DynamoDB on this path. Returns plain
+        dicts (``sizeBytes`` as ``int``), not ``FileMetadata``, because that
+        model requires the very fields this read refuses to fetch.
+        """
+        from apis.shared.observability.content_policy import (
+            FILE_ROW_PROJECTION,
+            build_projection,
+            strip_content,
+        )
+
+        projection, names = build_projection(FILE_ROW_PROJECTION)
+        try:
+            query_params = {
+                "IndexName": "SessionIndex",
+                "KeyConditionExpression": "GSI1PK = :pk AND begins_with(GSI1SK, :sk_prefix)",
+                "ExpressionAttributeValues": {":pk": f"CONV#{session_id}", ":sk_prefix": "FILE#"},
+                "ProjectionExpression": projection,
+                "ExpressionAttributeNames": names,
+            }
+            response = self._table.query(**query_params)
+            items = response.get("Items", [])
+            while "LastEvaluatedKey" in response:
+                query_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+                response = self._table.query(**query_params)
+                items.extend(response.get("Items", []))
+
+            stats: List[dict] = []
+            for item in items:
+                row = strip_content(dict(item))
+                size = row.get("sizeBytes")
+                if isinstance(size, Decimal):
+                    row["sizeBytes"] = int(size)
+                stats.append(row)
+            return stats
+
+        except ClientError as e:
+            logger.error(f"Error listing file stats for session {session_id}: {e}")
             raise
 
     # =========================================================================
@@ -342,6 +540,22 @@ class FileUploadRepository:
             return UserFileQuota.from_dynamo_item(response["Attributes"])
         except ClientError as e:
             logger.error(f"Error incrementing quota for user {user_id}: {e}")
+            raise
+
+    async def adjust_quota_bytes(self, user_id: str, delta_bytes: int) -> UserFileQuota:
+        """Add ``delta_bytes`` (negative to release) to the quota's byte total
+        without counting a file: a file's bytes replaced in place
+        (``FileUploadService.replace_file_content``) is still one file."""
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": "QUOTA"},
+                UpdateExpression="SET userId = :userId, updatedAt = :now ADD totalBytes :delta",
+                ExpressionAttributeValues={":userId": user_id, ":now": utc_now_iso(), ":delta": delta_bytes},
+                ReturnValues="ALL_NEW",
+            )
+            return UserFileQuota.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            logger.error(f"Error adjusting quota for user {user_id}: {e}")
             raise
 
     async def decrement_quota(self, user_id: str, size_bytes: int) -> UserFileQuota:

@@ -9,9 +9,20 @@ on:
       - 'infrastructure/lib/platform-stack.ts'
       - 'infrastructure/lib/constructs/**'
       - 'infrastructure/lib/config.ts'
+      - 'infrastructure/cdk.context.json'
       - 'infrastructure/bin/infrastructure.ts'
       - 'infrastructure/bootstrap-assets/**'
+      # Staged into the mcp-sandbox bucket at synth (mcp-sandbox-bucket-construct).
+      # Without this a viewer change deploys NOWHERE: frontend-deploy.yml does not
+      # ship it, so the push goes green and the old asset stays live.
+      - 'infrastructure/assets/**'
       - 'scripts/platform/**'
+      # fetch-dcv-sdk.sh runs in THIS workflow, before synth.
+      - 'scripts/build/**'
+      # recover-evicted-deploy.sh runs in THIS workflow. A change to the
+      # guard that re-dispatches an evicted peer deploy must itself be
+      # exercised by a real run.
+      - 'scripts/ci/**'
       - '.github/workflows/platform.yml'
 
 permissions:
@@ -23,15 +34,68 @@ env:
 
 # Shared "deploy-<ref>" group with backend.yml so a CFN deploy and the
 # API-driven backend code deploys never mutate the same ECS service /
-# AgentCore Runtime / Lambda concurrently — they queue instead.
+# AgentCore Runtime / Lambda concurrently.
 # cancel-in-progress: false avoids leaving CloudFormation in
 # ROLLBACK_IN_PROGRESS / UPDATE_ROLLBACK_FAILED after a mid-deploy cancel.
-# Enforced by tests/supply_chain/test_concurrency_config.py.
+#
+# ⚠️ This group does NOT queue. It is a latch with a queue depth of one:
+# "any existing pending job or workflow in the same concurrency group will
+# be canceled and the new queued job or workflow will take its place." A
+# third run entering an occupied group therefore KILLS the run that was
+# waiting, with zero jobs executed and a `cancelled` conclusion that looks
+# exactly like a human cancel. One merge is enough — a commit touching both
+# infrastructure/ and backend/ starts two runs that compete with each other
+# and with the previous merge's still-running deploy.
+#
+# Losing a pending run is harmless when a LATER run of the SAME workflow
+# supersedes it, and silently skips a CDK deploy when the evictor is
+# backend.yml. The `recover-evicted-peer` job below closes that gap; do not
+# remove it while this group is shared.
+# Enforced by backend/tests/supply_chain/test_concurrency_config.py.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # Recover a peer deploy that GitHub silently evicted from the shared
+  # "deploy-<ref>" concurrency group when THIS run claimed the pending slot.
+  # A concurrency group is a latch with a queue depth of ONE, not a queue:
+  # "any existing pending job or workflow in the same concurrency group will
+  # be canceled and the new queued job or workflow will take its place." So a
+  # third run entering an occupied group kills whichever run was waiting,
+  # before it executes a single job, leaving a `cancelled` conclusion that is
+  # indistinguishable from a human pressing Cancel.
+  #
+  # That is harmless when the evicted run is superseded by a LATER run of the
+  # SAME workflow (both deploy the tree at HEAD, and git is cumulative). It is
+  # destructive across workflows: a Backend Deploy run does not run
+  # `cdk deploy`, so when it evicts a pending Platform Stack run the
+  # infrastructure change is simply never applied and CI stays green.
+  #
+  # No `needs`, so the recovery dispatch goes out at the top of the run rather
+  # than behind the deploy it is unrelated to. The re-dispatched run queues
+  # behind this one, so the concurrency guarantee is preserved.
+  # See scripts/ci/recover-evicted-deploy.sh.
+  # Enforced by backend/tests/supply_chain/test_concurrency_config.py.
+  recover-evicted-peer:
+    name: Recover evicted peer deploy
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+      # `gh workflow run` re-dispatches the peer workflow.
+      actions: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Detect and recover an evicted Backend Deploy run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/recover-evicted-deploy.sh backend.yml
+
   test-infra:
     name: Test infrastructure (jest)
     permissions:
@@ -57,7 +121,42 @@ jobs:
       CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
       CDK_DOMAIN_NAME: ${{ vars.CDK_DOMAIN_NAME }}
       CDK_CORS_ORIGINS: ${{ vars.CDK_CORS_ORIGINS }}
+      # The Environment tag value. Not cosmetic: it is the filter the managed-KB
+      # reconciler and scripts/teardown/managed-kb.sh match knowledge bases on, so
+      # an unset value here made a dev deploy tag its knowledge bases 'prod' while
+      # teardown looked for 'dev' — matching nothing and reporting success.
+      CDK_TAG_ENVIRONMENT: ${{ vars.CDK_TAG_ENVIRONMENT }}
       CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
+      # App API Fargate sizing. Per-environment because dev and prod have
+      # nothing in common here: prod must hold a resident burst (a 250-student
+      # section opening the app at once is ~5k requests in 30s, and a 60s
+      # scale-out cooldown cannot answer that — the headroom has to already be
+      # running), while dev only has to be correct.
+      #
+      # Leave a var unset to inherit the committed default in
+      # infrastructure/cdk.context.json — an unset var arrives as '' and
+      # parseIntEnv maps '' to undefined, so it falls through cleanly.
+      #
+      # cpu/memory must be a valid Fargate pair (1024 -> 2048..8192,
+      # 2048 -> 4096..16384). CFN rejects an invalid combination at deploy.
+      # Keep desiredCount >= 2 in every environment that matters: the shared
+      # BFF cookie key path (bff-cookie-key-construct.ts) only gets exercised
+      # with more than one task, and that is where a 'bad seal' 401 storm hid.
+      CDK_APP_API_CPU: ${{ vars.CDK_APP_API_CPU }}
+      CDK_APP_API_MEMORY: ${{ vars.CDK_APP_API_MEMORY }}
+      CDK_APP_API_DESIRED_COUNT: ${{ vars.CDK_APP_API_DESIRED_COUNT }}
+      CDK_APP_API_MAX_CAPACITY: ${{ vars.CDK_APP_API_MAX_CAPACITY }}
+      # Per-task cap on concurrent /chat/api-converse Bedrock calls (default 16).
+      CDK_APP_API_CONVERSE_MAX_IN_FLIGHT: ${{ vars.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT }}
+      # AgentCore Runtime platform version: V1 (default) or V2. An in-place
+      # update; the runtime id is unchanged. Unset means V1, so a V2 stack
+      # reverts to V1 if this variable is deleted. See
+      # docs/specs/agentcore-runtime-v2.md.
+      CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
+      # Escape hatch for scripts/platform/check-runtime-env-contract.sh: set to
+      # `true` only after confirming the live inference-api image derives its
+      # resource names (docs/specs/agentcore-runtime-v2.md §8).
+      SKIP_RUNTIME_ENV_CONTRACT_CHECK: ${{ vars.SKIP_RUNTIME_ENV_CONTRACT_CHECK }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).
@@ -88,13 +187,46 @@ jobs:
       CDK_COGNITO_CALLBACK_URLS: ${{ vars.CDK_COGNITO_CALLBACK_URLS }}
       CDK_COGNITO_LOGOUT_URLS: ${{ vars.CDK_COGNITO_LOGOUT_URLS }}
       CDK_COGNITO_SUPPORTED_IDPS: ${{ vars.CDK_COGNITO_SUPPORTED_IDPS }}
+      # Public "Sign up" link on the Cognito Hosted UI. Unset/empty means
+      # CLOSED — users arrive via a federated IdP or an administrator creates
+      # them. Set to "true" only for an environment that wants open public
+      # registration. Federated sign-in works either way.
+      CDK_COGNITO_SELF_SIGNUP_ENABLED: ${{ vars.CDK_COGNITO_SELF_SIGNUP_ENABLED }}
       CDK_ARTIFACTS_CERTIFICATE_ARN: ${{ vars.CDK_ARTIFACTS_CERTIFICATE_ARN }}
       # Extra origins allowed to frame the artifacts iframe via CSP
       # frame-ancestors (beyond the deployed SPA origin) — e.g.
       # http://localhost:4200 for a local SPA pointed at this deployment.
       # Empty on prod. Mirrors CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS below.
       CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS: ${{ vars.CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS }}
+      # "Shared with you" inbox on the artifact library. Default ON with a
+      # kill switch, like the flags above: unset resolves to an empty string,
+      # which config.ts treats as "use the default (on)". Set the
+      # `CDK_ARTIFACT_SHARE_INBOX_ENABLED` variable to "false" in an
+      # environment to keep it dark there. The fan-out rows the inbox reads
+      # are written regardless of this flag, so toggling it never needs a
+      # backfill.
+      CDK_ARTIFACT_SHARE_INBOX_ENABLED: ${{ vars.CDK_ARTIFACT_SHARE_INBOX_ENABLED }}
       CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
+      # CloudFront access logs for the SPA distribution (S3, 90-day expiry,
+      # cookies excluded). Default ON with a kill switch: unset resolves to an
+      # empty string, which config.ts treats as the default (on). Set the
+      # `CDK_FRONTEND_ACCESS_LOGS_ENABLED` variable to "false" to stop logging
+      # in an environment; the log bucket stays either way.
+      CDK_FRONTEND_ACCESS_LOGS_ENABLED: ${{ vars.CDK_FRONTEND_ACCESS_LOGS_ENABLED }}
+      # Hostnames Chromium refuses to navigate to during a browser session —
+      # the control that stops a human in a browser takeover reaching a system
+      # the agent must not act inside. Comma-separated, e.g.
+      # "instructure.com,vendor.example.com".
+      #
+      # ⚠️ There is NO built-in default: unset resolves to an empty string,
+      # which config.ts treats as "not configured" and leaves the list EMPTY,
+      # so browser sessions can reach any host and RBAC on browse_web /
+      # request_user_login becomes the only control. The stack ships
+      # fork-neutral on purpose (the hosts that matter are a per-institution
+      # policy call), so every environment that needs a blocklist must set
+      # this variable. The synth log prints the list, or warns when it is
+      # empty — check it after a deploy.
+      CDK_BROWSER_URL_BLOCKLIST: ${{ vars.CDK_BROWSER_URL_BLOCKLIST }}
       # MCP Apps sandbox-proxy origin (mcp-sandbox.{domain}). Without the
       # cert ARN the construct silently falls back to the CloudFront default
       # domain and creates no Route53 ALIAS — the SPA then frames a
@@ -119,6 +251,52 @@ jobs:
       # config.ts treats as the default (on). Set the `CDK_MEMORY_SPACES_ENABLED`
       # variable to "false" in an environment only to dark-stop the feature there.
       CDK_MEMORY_SPACES_ENABLED: ${{ vars.CDK_MEMORY_SPACES_ENABLED }}
+      # Shared Projects (project workspace, membership, harness, project memory).
+      # Default ON with a kill switch (CLAUDE.md "Feature flags"): unset (empty
+      # string) means on; set the `CDK_PROJECTS_ENABLED` variable to "false" in an
+      # environment to turn it off there. The SPA's matching switch is
+      # `features.projects` in src/environments/*.ts.
+      CDK_PROJECTS_ENABLED: ${{ vars.CDK_PROJECTS_ENABLED }}
+      # Direct user grants (tools/models/skills granted to one user beside their
+      # roles; the admin surface at /admin/user-grants). Default ON with a kill
+      # switch: set `CDK_USER_GRANTS_ENABLED` to "false" in an environment to
+      # turn it off there. app-api only. The SPA's matching switch is
+      # `features.userGrants` in src/environments/*.ts.
+      CDK_USER_GRANTS_ENABLED: ${{ vars.CDK_USER_GRANTS_ENABLED }}
+      # Session prewarm: POST /chat/prewarm starts a conversation's AgentCore
+      # Runtime microVM before its first send (docs/specs/agentcore-runtime-v2.md
+      # §5a). Opt-in while in development: set `CDK_SESSION_PREWARM_ENABLED` to
+      # "true" in an environment to turn it on there. app-api only. The SPA's
+      # matching switch is `features.sessionPrewarm` in src/environments/*.ts.
+      CDK_SESSION_PREWARM_ENABLED: ${{ vars.CDK_SESSION_PREWARM_ENABLED }}
+      # Client-measured time to first token: POST /telemetry/turn-timing records the
+      # SPA's own send-to-first-token in AgentCoreStack/TurnLatency
+      # (docs/specs/turn-path-ttft.md §6). Default ON with a kill switch: set
+      # `CDK_CLIENT_TURN_TIMING_ENABLED` to "false" in an environment to turn it
+      # off there. app-api only. The SPA's matching switch is `features.clientTurnTiming`.
+      CDK_CLIENT_TURN_TIMING_ENABLED: ${{ vars.CDK_CLIENT_TURN_TIMING_ENABLED }}
+      # Scheduled time-to-first-token probe (docs/specs/turn-path-ttft.md §6E).
+      # Configuration, not a flag: set `CDK_TTFT_PROBE_USER_ID` to the Cognito sub
+      # of a user with an active headless grant to run a fixed turn hourly as that
+      # user; unset leaves the schedule disabled. `CDK_TTFT_PROBE_MODEL_ID` pins the
+      # model (recommended); unset uses that user's default.
+      CDK_TTFT_PROBE_USER_ID: ${{ vars.CDK_TTFT_PROBE_USER_ID }}
+      CDK_TTFT_PROBE_MODEL_ID: ${{ vars.CDK_TTFT_PROBE_MODEL_ID }}
+      # Project-memory content lint (Shared Projects 2.7). Configuration, not a
+      # flag: it applies only inside Projects. Unset (empty string) means the
+      # defaults: `warn`, and no deployment patterns. `CDK_MEMORY_LINT_MODE` is
+      # off | warn | block; `CDK_MEMORY_SENSITIVE_PATTERNS` is a JSON list of
+      # Python regexes (strings or {"pattern", "label"}) or one per line.
+      CDK_MEMORY_LINT_MODE: ${{ vars.CDK_MEMORY_LINT_MODE }}
+      CDK_MEMORY_SENSITIVE_PATTERNS: ${{ vars.CDK_MEMORY_SENSITIVE_PATTERNS }}
+      # Platform self-service (account tools: whoami / quota / settings reads +
+      # the confirmed set_default_model write). Opt-in while in development: set
+      # the `CDK_PLATFORM_SELF_SERVICE_ENABLED` variable to "true" in an
+      # environment to turn it on there. Unset (empty string) or anything else
+      # means off, so prod stays dark unless its own variable is set. The tool
+      # catalog rows must also be seeded in that environment before the tools
+      # appear (Seed Bootstrap Data workflow).
+      CDK_PLATFORM_SELF_SERVICE_ENABLED: ${{ vars.CDK_PLATFORM_SELF_SERVICE_ENABLED }}
       # Skills v2 (knowledge bundles: admin catalog, My Skills authoring, and
       # skill resolution on the invocation path). Default ON with a kill switch:
       # unset resolves to empty string, which config.ts treats as the default
@@ -128,11 +306,99 @@ jobs:
       # and see the ones their role grants. Which skills a cohort gets is a
       # role's `grantedSkills`, managed in the admin roles UI.
       CDK_SKILLS_ENABLED: ${{ vars.CDK_SKILLS_ENABLED }}
+      # Skill authoring tools: the seven `my_skill_*` agent tools that create
+      # and edit the invoking user's own skills (docs/specs/skill-creator.md
+      # D12). Default ON with a kill switch: unset (empty string) means on; set
+      # the `CDK_SKILL_AUTHORING_ENABLED` variable to "false" in an environment
+      # to turn it off there. Nobody gets the tools until the `my_skill_create`
+      # catalog row is seeded and granted to a role.
+      CDK_SKILL_AUTHORING_ENABLED: ${{ vars.CDK_SKILL_AUTHORING_ENABLED }}
+      # Word tracked changes: a .docx's tracked changes reach the model written
+      # out as [deleted: …] / [inserted: …], and the Word tools gain
+      # redline_word_document (docs/specs/word-tracked-changes.md). Default ON
+      # with a kill switch: unset (empty string) means on; set the
+      # `CDK_WORD_TRACKED_CHANGES_ENABLED` variable to "false" in an environment
+      # to turn it off there. Sets the flag on both app-api and the Runtime.
+      CDK_WORD_TRACKED_CHANGES_ENABLED: ${{ vars.CDK_WORD_TRACKED_CHANGES_ENABLED }}
+      # Assistant KB full-context mode: an assistant whose whole knowledge base
+      # fits 50,000 tokens gets it in the system prompt instead of retrieved
+      # chunks. Opt-in while in development: set the
+      # `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` variable to "true" in an
+      # environment to turn it on there. Unset (empty string) or anything else
+      # means off. Sets the flag on the Runtime only.
+      CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED: ${{ vars.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED }}
+      # Large document attachments: documents over the 4 MB inline limit are
+      # attached by reference and read from sidecars a preparation Lambda
+      # builds (docs/specs/large-document-attachments.md). Default ON with a
+      # kill switch: unset (empty string) means on; set the
+      # `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` variable to "false" in an
+      # environment to turn it off there, and the prepare queue and Lambda are
+      # not deployed at all. Sets the flag on app-api only.
+      CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED: ${{ vars.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED }}
+      # The shared `attachments` managed knowledge base for large documents
+      # (docs/specs/large-document-attachments.md §4E). Opt-in while in
+      # development, and only together with CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+      # (synth fails otherwise). Adds two EventBridge rules and the user-files
+      # bucket's EventBridge notification; the knowledge base is created on
+      # first ingest and billed at $5/GB-month of indexed source bytes.
+      CDK_ATTACHMENT_KB_ENABLED: ${{ vars.CDK_ATTACHMENT_KB_ENABLED }}
+      # Folder attachments: a conversation can attach a Google Drive folder
+      # (docs/specs/drive-folder-attachments.md). Default ON with a kill switch;
+      # unset follows CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED, and "true" without
+      # it fails synth. Sets the flag on app-api and the Runtime; no resources.
+      CDK_FOLDER_ATTACHMENTS_ENABLED: ${{ vars.CDK_FOLDER_ATTACHMENTS_ENABLED }}
+      # Folder sync: a project saved from a Drive folder can keep its Files in
+      # step with the folder (docs/specs/assistant-kb-sync.md §11). Default ON
+      # with a kill switch ("false" turns it off). Sets the flag on app-api and
+      # both kb-sync Lambdas; no resources. The SPA's matching switch is `features.folderSync`.
+      CDK_FOLDER_SYNC_ENABLED: ${{ vars.CDK_FOLDER_SYNC_ENABLED }}
+      # Source provenance verification: `verify_sources` checks whether a cited
+      # passage is in the document and whether the asserted value appears in it
+      # (docs/specs/source-provenance-verification.md). In development, so only
+      # "true" enables. Sets the flag on the AgentCore Runtime and app-api; no
+      # resources. The SPA's matching switch is `features.sourceProvenance`.
+      CDK_SOURCE_PROVENANCE_ENABLED: ${{ vars.CDK_SOURCE_PROVENANCE_ENABLED }}
+      CDK_DOCUMENT_EXTRACT_ENABLED: ${{ vars.CDK_DOCUMENT_EXTRACT_ENABLED }}
+      CDK_DOCUMENT_EXTRACT_MODEL_ID: ${{ vars.CDK_DOCUMENT_EXTRACT_MODEL_ID }}
+      CDK_DOCUMENT_EXTRACT_CONCURRENCY: ${{ vars.CDK_DOCUMENT_EXTRACT_CONCURRENCY }}
+      # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
+      # grants deploy unconditionally, but these two decide whether the feature
+      # is reachable and how it is rationed, and neither was forwarded before —
+      # so every deployed environment served 404s from `/fine-tuning/*` while
+      # the repo variable `CDK_FINE_TUNING_ENABLED` read "true".
+      #
+      # ENABLED is default ON with a kill switch: unset resolves to empty
+      # string, which config.ts treats as the default (on). Set it to "false"
+      # to dark-stop the routes; storage is untouched either way, so no dataset
+      # or trained model is orphaned.
+      #
+      # DEFAULT_QUOTA_HOURS picks the access model: `0` (the default) is
+      # whitelist-only, where an admin grants each user explicitly; a positive
+      # value auto-grants that monthly GPU-hour budget to any signed-in user.
+      CDK_FINE_TUNING_ENABLED: ${{ vars.CDK_FINE_TUNING_ENABLED }}
+      CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS: ${{ vars.CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS }}
+      # Extra CORS origins for the fine-tuning data bucket, beyond the global
+      # CDK_CORS_ORIGINS above. Also never forwarded until now.
+      CDK_FINE_TUNING_CORS_ORIGINS: ${{ vars.CDK_FINE_TUNING_CORS_ORIGINS }}
       # Agent Designer /agents surface. Default OFF (opt-in) until the Phase-4
       # Designer UI ships — a headless API helps no forker. Set the
       # `CDK_AGENTS_API_ENABLED` variable to "true" in an environment (e.g. dev)
       # to enable it there for dogfooding.
       CDK_AGENTS_API_ENABLED: ${{ vars.CDK_AGENTS_API_ENABLED }}
+      # Composer dictation (Amazon Transcribe Streaming). Default ON with a kill
+      # switch: unset resolves to empty string, which config.ts treats as on.
+      # LANGUAGES is a comma-separated Transcribe code list; unset means en-US.
+      # Two or more codes (e.g. "en-US,es-US") turn on automatic language
+      # identification with the first as the preferred language.
+      CDK_DICTATION_ENABLED: ${{ vars.CDK_DICTATION_ENABLED }}
+      CDK_DICTATION_LANGUAGES: ${{ vars.CDK_DICTATION_LANGUAGES }}
+      # Platform cost sync from AWS Cost Explorer (docs/specs/platform-cost-visibility.md).
+      # Default OFF (opt-in): only the literal "true" enables it. Unset resolves
+      # to empty string, which config.ts treats as "not set" and falls back to
+      # the `platformCosts.enabled` cdk.json context (itself default off). Set
+      # the `CDK_PLATFORM_COSTS_ENABLED` variable to "true" in an environment to
+      # deploy the daily sync Lambda there.
+      CDK_PLATFORM_COSTS_ENABLED: ${{ vars.CDK_PLATFORM_COSTS_ENABLED }}
       # MCP user-identity forwarding — optional Cognito Pre-Token-Generation v2
       # Lambda that copies user attributes into access-token claims so
       # personalized MCP tools can identify the caller
@@ -146,6 +412,107 @@ jobs:
       # cdk.context.json stay inert.
       CDK_MCP_TOKEN_ENRICHMENT_ENABLED: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_ENABLED }}
       CDK_MCP_TOKEN_ENRICHMENT_CLAIMS: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_CLAIMS }}
+      # Managed knowledge bases (.kiro/specs/managed-kb-migration). FOUR
+      # INDEPENDENT OPT-IN flags, all defaulting to OFF — the inverse of the
+      # kill-switch flags above, and the difference matters here. An unset
+      # GitHub Actions variable renders as an EMPTY STRING, not as absent, so
+      # a `!== 'false'` reading of an unset variable would resolve to TRUE and
+      # arm the feature on every fork. config.ts reads these with
+      # parseBooleanEnv, which maps both unset and empty to undefined and falls
+      # through to `false` (Requirement 19.8). Leave all four unset to deploy
+      # the managed backend without starting a fleet migration.
+      #
+      #   CDK_MANAGED_KB_NEW_DEFAULT           new KBs are created managed
+      #   CDK_MANAGED_KB_MIGRATION_ENABLED     the background migrator runs at all
+      #   CDK_MANAGED_KB_RECONCILER_ARMED      the daily reconciler DELETES orphans
+      #                                        rather than only reporting them
+      #   CDK_MANAGED_KB_DOC_RECONCILER_ARMED  the nightly document reconciler
+      #                                        CORRECTS stranded DOC# rows (marks
+      #                                        retrievable-but-stranded docs complete,
+      #                                        re-ingests missing ones) rather than
+      #                                        only reporting them (task 16.5, §5.37)
+      #
+      # The two ARMED flags are the inverted ones: both reconcilers are deployed
+      # and running from day one but DISARMED, so their judgement can be reviewed
+      # against real data before they delete/correct anything (Requirements 14.7,
+      # 19.7). Report-only is read-only, so their schedules run regardless.
+      CDK_MANAGED_KB_NEW_DEFAULT: ${{ vars.CDK_MANAGED_KB_NEW_DEFAULT }}
+      CDK_MANAGED_KB_MIGRATION_ENABLED: ${{ vars.CDK_MANAGED_KB_MIGRATION_ENABLED }}
+      CDK_MANAGED_KB_RECONCILER_ARMED: ${{ vars.CDK_MANAGED_KB_RECONCILER_ARMED }}
+      CDK_MANAGED_KB_DOC_RECONCILER_ARMED: ${{ vars.CDK_MANAGED_KB_DOC_RECONCILER_ARMED }}
+      # Storage cost controls. Byte_Caps are in BYTES (Requirement 12.2),
+      # defaulting to 100 MB standard / 1 GB elevated / 500 MB per knowledge
+      # base; the retention window is in DAYS and must stay >= 30
+      # (Requirement 15.11). Leave unset to take those defaults — these exist
+      # so an environment can tune them without a code change.
+      CDK_MANAGED_KB_PER_OWNER_BYTES: ${{ vars.CDK_MANAGED_KB_PER_OWNER_BYTES }}
+      CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES: ${{ vars.CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES }}
+      CDK_MANAGED_KB_PER_KB_CEILING_BYTES: ${{ vars.CDK_MANAGED_KB_PER_KB_CEILING_BYTES }}
+      CDK_MANAGED_KB_RETENTION_WINDOW_DAYS: ${{ vars.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS }}
+      # Fleet-level alarm thresholds (Requirement 12.13). The Byte_Caps above
+      # bound ONE owner; these two bound the whole account, which is the gap
+      # between ~$169/month expected and ~$15,000/month that per-owner caps
+      # alone permit. Storage is in GB (default 500), daily cost in USD
+      # (default 100). Leave unset to take those defaults.
+      CDK_MANAGED_KB_STORAGE_ALARM_GB: ${{ vars.CDK_MANAGED_KB_STORAGE_ALARM_GB }}
+      CDK_MANAGED_KB_DAILY_COST_ALARM_USD: ${{ vars.CDK_MANAGED_KB_DAILY_COST_ALARM_USD }}
+      # Days a conversation's content is kept after each turn, wherever it is
+      # stored (docs/specs/conversation-search.md §3). Unset means 365. Memory
+      # events stop at 365 even if this is higher; minimum 3.
+      CDK_CONVERSATION_RETENTION_DAYS: ${{ vars.CDK_CONVERSATION_RETENTION_DAYS }}
+      # Session rows follow the retention setting too: a daily task deletes
+      # sessions whose last turn is past it, through the same cascade as a
+      # user's delete (docs/specs/conversation-search.md §3).
+      #   CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS  unset means ON; "false"
+      #                                               keeps rows as title-only
+      #                                               shells and stops the task
+      #   CDK_CONVERSATION_RETENTION_PRUNE_ARMED      unset means REPORT-ONLY;
+      #                                               "true" lets the task delete.
+      #                                               Even armed, the first run in
+      #                                               an environment is a dry run.
+      CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS: ${{ vars.CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS }}
+      CDK_CONVERSATION_RETENTION_PRUNE_ARMED: ${{ vars.CDK_CONVERSATION_RETENTION_PRUNE_ARMED }}
+      # Conversation index write path: the per-turn transcript archive that
+      # conversation search is built from (docs/specs/conversation-search.md
+      # §4). Opt-in while in development: set the
+      # `CDK_CONVERSATION_INDEX_ENABLED` variable to "true" in an environment
+      # to turn it on there. Unset (empty string) or anything else means off.
+      CDK_CONVERSATION_INDEX_ENABLED: ${{ vars.CDK_CONVERSATION_INDEX_ENABLED }}
+      # Conversation search read path: GET /sessions/search on app-api
+      # (docs/specs/conversation-search.md §5). Default on: set the
+      # `CDK_CONVERSATION_SEARCH_ENABLED` variable to "false" in an environment
+      # to turn it off there, and set `features.conversationSearch` to false in
+      # the matching environment file to match. Unset or anything else is on.
+      CDK_CONVERSATION_SEARCH_ENABLED: ${{ vars.CDK_CONVERSATION_SEARCH_ENABLED }}
+      # Observability. All optional — unset means the default in config.ts.
+      # XRAY_SAMPLING_RATE is a rate (0.0-1.0), not a percentage.
+      CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED: ${{ vars.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED }}
+      CDK_OBSERVABILITY_LOG_RETENTION_DAYS: ${{ vars.CDK_OBSERVABILITY_LOG_RETENTION_DAYS }}
+      CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_ALB_TARGET_5XX_THRESHOLD }}
+      CDK_OBSERVABILITY_ALB_P99_LATENCY_MS: ${{ vars.CDK_OBSERVABILITY_ALB_P99_LATENCY_MS }}
+      CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS: ${{ vars.CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS }}
+      CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD }}
+      # Concurrent AgentCore Runtime sessions. A cost signal — Runtime bills
+      # memory for the whole session lifetime — not a quota one.
+      CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD }}
+      CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD }}
+      CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT: ${{ vars.CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT }}
+      CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_DYNAMO_THROTTLE_THRESHOLD }}
+      CDK_OBSERVABILITY_ECS_CPU_PERCENT: ${{ vars.CDK_OBSERVABILITY_ECS_CPU_PERCENT }}
+      CDK_OBSERVABILITY_ECS_MEMORY_PERCENT: ${{ vars.CDK_OBSERVABILITY_ECS_MEMORY_PERCENT }}
+      CDK_OBSERVABILITY_XRAY_SAMPLING_RATE: ${{ vars.CDK_OBSERVABILITY_XRAY_SAMPLING_RATE }}
+      CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR: ${{ vars.CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR }}
+      CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS: ${{ vars.CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS }}
+      CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED: ${{ vars.CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED }}
+      CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED: ${{ vars.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED }}
+      CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD }}
+      CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD }}
+      CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD }}
+      CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT: ${{ vars.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT }}
+      # JSON object: Bedrock ModelId -> that model's TPM quota. Unset means no
+      # per-model quota alarms. Read the live values with
+      #   aws service-quotas list-service-quotas --service-code bedrock
+      CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS: ${{ vars.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS }}
       # Secrets
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -170,6 +537,23 @@ jobs:
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      # The browser sign-in live view is served from the mcp-sandbox origin and
+      # needs the Amazon DCV Web Client SDK deployed alongside it. The SDK is a
+      # EULA-licensed AWS download and this repo is PUBLIC, so it is fetched and
+      # verified here rather than committed. Must run BEFORE the deploy: CDK
+      # stages assets/mcp-sandbox at synth time, so an absent SDK silently ships
+      # a viewer that cannot load. See docs/specs/authenticated-web-assessment.md.
+      - name: Fetch Amazon DCV Web Client SDK
+        run: bash scripts/build/fetch-dcv-sdk.sh
+
+      # CDK builds the infrastructure/bootstrap-assets/* stub images when
+      # their asset hash is new, and every stub's base image comes from
+      # public.ecr.aws. Authenticate so that pull is not subject to ECR
+      # Public's anonymous per-IP data limit on this shared x86 runner.
+      # Best-effort; see the script header.
+      - name: Log in to ECR Public
+        run: bash scripts/build/ecr-public-login.sh
 
       - name: Deploy PlatformStack
         run: bash scripts/platform/deploy.sh

@@ -1,302 +1,148 @@
-import {
-  Component,
-  ChangeDetectionStrategy,
-  computed,
-  inject,
-  OnInit,
-  Signal,
-} from '@angular/core';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { AdminMarketplaceService } from './marketplace/services/admin-marketplace.service';
-import { UserService } from '../auth/user.service';
-import { AdminScopeId } from './admin-scope.model';
+import { Component, ChangeDetectionStrategy, computed, inject } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { NavigationEnd, Router, RouterOutlet } from '@angular/router';
+import { filter, scan } from 'rxjs/operators';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import {
-  heroArrowLeft,
-  heroShieldCheck,
-  heroCurrencyDollar,
-  heroScale,
-  heroAcademicCap,
-  heroPencilSquare,
-  heroWrenchScrewdriver,
-  heroLink,
-  heroUsers,
-  heroKey,
-  heroFingerPrint,
-  heroClipboardDocumentList,
-  heroBars3,
-  heroSparkles,
-  heroInbox,
-  heroFlag,
-  heroRectangleStack,
-  heroStar,
-  heroBuildingLibrary,
-  heroTag,
-  heroBookmark,
-} from '@ng-icons/heroicons/outline';
+import { heroBars3, heroShieldCheck } from '@ng-icons/heroicons/outline';
+import { SidenavService } from '../services/sidenav/sidenav.service';
 
-interface NavItem {
-  label: string;
-  icon: string;
-  route: string;
-  /**
-   * The admin scope that grants this entry. Must match the `data.scope` on the
-   * corresponding route in `admin.routes.ts` — an entry linking somewhere the
-   * scope guard will refuse is worse than no entry at all.
-   */
-  scope: AdminScopeId;
-  /**
-   * A count that badges this entry (D10). A signal rather than a number so the badge is
-   * live — triaging the last report has to empty the badge without a reload, or the nav
-   * starts lying about work that is already done.
-   */
-  badge?: Signal<number>;
-}
-
-interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
-
+/**
+ * The admin console shell.
+ *
+ * Deliberately thin. The console's navigation lives in `AdminNav`, which the
+ * app sidenav renders in place of the chat nav for any route under `/admin`
+ * (see `ADMIN_CHROME` in `shared/utils/route-chrome.ts`), so this layout is
+ * only responsible for giving the active page the whole content area — no
+ * second nav column, and no `max-w-7xl` reading-width cap, which `app.html`
+ * also drops for admin chrome.
+ *
+ * `max-w-[100rem]` is a sprawl guard, not that cap: it is wider than any
+ * laptop the console is used on, so it changes nothing there, and only stops
+ * a 20-column cost table from stretching to 3000px on an ultrawide, where a
+ * row's rank and its dollars end up a head-turn apart. Anything narrower
+ * would be the reading-width cap this shell exists to drop.
+ *
+ * The one piece of chrome left is the small-screen bar below: on desktop the
+ * sidenav is always present, but on mobile it is an overlay, and the shell's
+ * floating hamburger is conditioned on `HeaderService.showContent()` — state
+ * the *session page* owns and admin pages never set. Relying on it would make
+ * the admin nav reachable or not depending on what the user did before they
+ * came here, so the console carries its own opener.
+ */
 @Component({
   selector: 'app-admin-layout',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, RouterLinkActive, RouterOutlet, NgIcon],
-  providers: [
-    provideIcons({
-      heroArrowLeft,
-      heroShieldCheck,
-      heroCurrencyDollar,
-      heroScale,
-      heroAcademicCap,
-      heroPencilSquare,
-      heroWrenchScrewdriver,
-      heroLink,
-      heroUsers,
-      heroKey,
-      heroFingerPrint,
-      heroClipboardDocumentList,
-      heroBars3,
-      heroSparkles,
-      heroInbox,
-      heroFlag,
-      heroRectangleStack,
-      heroStar,
-      heroBuildingLibrary,
-      heroTag,
-      heroBookmark,
-    }),
-  ],
+  imports: [RouterOutlet, NgIcon],
+  providers: [provideIcons({ heroBars3, heroShieldCheck })],
   host: { class: 'block' },
+  styles: [
+    `
+    /*
+     * Page-entry motion, replayed on every navigation inside the console.
+     *
+     * Two names for one gesture, and the duplication is the point: a CSS
+     * animation restarts only when its animation-name changes, so re-applying
+     * the same class to a element that never leaves the DOM does nothing at
+     * all. Alternating between two identical keyframe sets makes every
+     * navigation a new animation, with no class-off/reflow/class-on dance and
+     * no dependence on change-detection ordering.
+     *
+     * The alternative — keying the router-outlet's wrapper so the DOM node is
+     * recreated — would tear down and re-activate the outlet itself, which is
+     * a real cost (and a real risk) to pay for a fade.
+     *
+     * Kept to a 6px rise: the content area is the full width of the shell now,
+     * and a large translate on a surface that size reads as the page sliding
+     * rather than settling.
+     */
+    .page-enter-a {
+      animation: page-enter-a 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+
+    .page-enter-b {
+      animation: page-enter-b 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+
+    @keyframes page-enter-a {
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes page-enter-b {
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .page-enter-a,
+      .page-enter-b {
+        animation: none;
+      }
+    }
+  `,
+  ],
   template: `
-    <div class="min-h-dvh">
-      <!-- Top bar -->
-      <div class="sticky top-0 z-10 border-b border-gray-200 bg-gray-50/80 backdrop-blur-sm dark:border-white/10 dark:bg-gray-900/50">
-        <div class="flex h-14 items-center gap-4 px-4 sm:px-6 lg:px-8">
-          <a
-            routerLink="/"
-            class="flex items-center gap-2 text-sm/6 font-medium text-gray-500 transition-colors hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-          >
-            <ng-icon name="heroArrowLeft" class="size-4" />
-            <span class="hidden sm:inline">Back to Chat</span>
-          </a>
-          <div class="h-5 w-px bg-gray-200 dark:bg-white/10"></div>
-          <div class="flex items-center gap-2">
-            <ng-icon name="heroShieldCheck" class="size-5 text-gray-400 dark:text-gray-500" />
-            <h1 class="text-base/7 font-semibold text-gray-900 dark:text-white">Admin</h1>
-          </div>
+    <div class="flex min-h-dvh flex-col">
+      <!-- Small-screen bar: the only way to the admin nav when the sidenav is
+           an overlay. Hidden from lg up, where the sidenav is always on. -->
+      <div
+        class="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-3 border-b border-gray-200 bg-gray-50/80 px-4 backdrop-blur-sm lg:hidden dark:border-white/10 dark:bg-gray-900/50"
+      >
+        <button
+          type="button"
+          (click)="sidenavService.open()"
+          class="-ml-2 flex size-9 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
+          aria-label="Open admin navigation"
+        >
+          <ng-icon name="heroBars3" class="size-6" />
+        </button>
+        <div class="flex items-center gap-2">
+          <ng-icon name="heroShieldCheck" class="size-5 text-gray-400 dark:text-gray-500" />
+          <h1 class="text-base/7 font-semibold text-gray-900 dark:text-white">Admin</h1>
         </div>
       </div>
 
-      <div class="mx-auto max-w-[96rem] px-4 py-8 sm:px-6 lg:px-8">
-        <div class="lg:flex lg:gap-x-8">
-          <!-- Sidebar Navigation -->
-          <aside class="lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:w-60 lg:shrink-0 lg:self-start lg:overflow-y-auto">
-            <!-- Mobile dropdown (shown on small screens) -->
-            <div class="lg:hidden">
-              <label for="admin-nav" class="sr-only">Admin section</label>
-              <select
-                id="admin-nav"
-                class="block w-full rounded-sm border-gray-300 bg-white py-2 pl-3 pr-10 text-base text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                (change)="onMobileNavChange($event)"
-              >
-                @for (group of navGroups(); track group.label) {
-                  <optgroup [label]="group.label">
-                    @for (item of group.items; track item.route) {
-                      <!-- No badge element on mobile: an <option> renders text only, so
-                           the count goes inline or it is invisible here. -->
-                      <option [value]="item.route">
-                        {{ item.label }}{{ item.badge && item.badge() > 0 ? ' (' + item.badge() + ')' : '' }}
-                      </option>
-                    }
-                  </optgroup>
-                }
-              </select>
-            </div>
-
-            <!-- Desktop sidebar -->
-            <nav class="hidden lg:block" aria-label="Admin navigation">
-              <div class="flex flex-col gap-6">
-                @for (group of navGroups(); track group.label) {
-                  <div>
-                    <h2 class="px-3 text-xs/5 font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      {{ group.label }}
-                    </h2>
-                    <ul role="list" class="mt-2 flex flex-col gap-1">
-                      @for (item of group.items; track item.route) {
-                        <li>
-                          <a
-                            [routerLink]="item.route"
-                            routerLinkActive="bg-gray-100 text-gray-900 dark:bg-white/10 dark:text-white"
-                            class="group flex items-center gap-x-3 whitespace-nowrap rounded-md px-3 py-2 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
-                          >
-                            <ng-icon [name]="item.icon" class="size-5 shrink-0 text-gray-400 group-hover:text-gray-500 dark:text-gray-500 dark:group-hover:text-gray-300" />
-                            <span class="min-w-0 flex-1">{{ item.label }}</span>
-                            @if (item.badge; as badge) {
-                              @if (badge() > 0) {
-                                <span
-                                  class="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs/5 font-semibold text-white dark:bg-blue-500"
-                                  [attr.aria-label]="badge() + ' waiting'"
-                                >
-                                  {{ badge() }}
-                                </span>
-                              }
-                            }
-                          </a>
-                        </li>
-                      }
-                    </ul>
-                  </div>
-                }
-              </div>
-            </nav>
-          </aside>
-
-          <!-- Content area -->
-          <main class="mt-8 min-w-0 lg:mt-0 lg:flex-1">
-            <router-outlet />
-          </main>
-        </div>
-      </div>
+      <main
+        class="mx-auto w-full min-w-0 max-w-[100rem] flex-1 px-4 py-8 sm:px-6 lg:px-8"
+        [class.page-enter-a]="contentEnterOnA()"
+        [class.page-enter-b]="!contentEnterOnA()"
+      >
+        <router-outlet />
+      </main>
     </div>
   `,
 })
-export class AdminLayout implements OnInit {
+export class AdminLayout {
+  protected sidenavService = inject(SidenavService);
   private router = inject(Router);
-  private marketplace = inject(AdminMarketplaceService);
-  private userService = inject(UserService);
-
-  private readonly allNavGroups: NavGroup[] = [
-    {
-      label: 'Usage & Spend',
-      items: [
-        { label: 'Cost Analytics', icon: 'heroCurrencyDollar', route: '/admin/costs', scope: 'admin.costs' },
-        { label: 'Quotas', icon: 'heroScale', route: '/admin/quota', scope: 'admin.quota' },
-        { label: 'Fine-Tuning', icon: 'heroAcademicCap', route: '/admin/fine-tuning', scope: 'admin.fine_tuning' },
-      ],
-    },
-    {
-      label: 'AI Configuration',
-      items: [
-        { label: 'Models', icon: 'heroPencilSquare', route: '/admin/manage-models', scope: 'admin.models' },
-        { label: 'Tools', icon: 'heroWrenchScrewdriver', route: '/admin/tools', scope: 'admin.tools' },
-        { label: 'Skills', icon: 'heroSparkles', route: '/admin/skills', scope: 'admin.skills' },
-        { label: 'Connectors', icon: 'heroLink', route: '/admin/connectors', scope: 'admin.connectors' },
-      ],
-    },
-    {
-      // Agent Marketplace. Six of D10's seven surfaces; Default Pins is the seventh and
-      // is listed here even though its route lives under Roles, because the AppRole
-      // record is the source of truth for a seed.
-      //
-      // Two entries carry counts (D10): work waiting should be *visible* rather than
-      // discovered by clicking into a queue to see whether it is empty.
-      label: 'Agent Marketplace',
-      items: [
-        {
-          label: 'Review Queue',
-          icon: 'heroInbox',
-          route: '/admin/marketplace/review',
-          scope: 'admin.marketplace',
-          badge: this.marketplace.pendingCount,
-        },
-        {
-          label: 'Reports',
-          icon: 'heroFlag',
-          route: '/admin/marketplace/reports',
-          scope: 'admin.marketplace',
-          badge: this.marketplace.openReportCount,
-        },
-        { label: 'Listings', icon: 'heroRectangleStack', route: '/admin/marketplace/listings', scope: 'admin.marketplace' },
-        { label: 'Store Front', icon: 'heroStar', route: '/admin/marketplace/store-front', scope: 'admin.marketplace' },
-        { label: 'Categories', icon: 'heroTag', route: '/admin/marketplace/categories', scope: 'admin.marketplace' },
-        { label: 'Publishers', icon: 'heroBuildingLibrary', route: '/admin/marketplace/publishers', scope: 'admin.marketplace' },
-        { label: 'Default Pins', icon: 'heroBookmark', route: '/admin/marketplace/default-pins', scope: 'admin.marketplace' },
-      ],
-    },
-    {
-      label: 'Identity & Access',
-      items: [
-        { label: 'Users', icon: 'heroUsers', route: '/admin/users', scope: 'admin.users' },
-        { label: 'Roles', icon: 'heroKey', route: '/admin/roles', scope: 'admin.roles' },
-        { label: 'Auth Providers', icon: 'heroFingerPrint', route: '/admin/auth-providers', scope: 'admin.auth_providers' },
-        { label: 'Audit Log', icon: 'heroClipboardDocumentList', route: '/admin/audit', scope: 'admin.audit' },
-      ],
-    },
-    {
-      label: 'Customization',
-      items: [
-        { label: 'User Menu Links', icon: 'heroBars3', route: '/admin/manage-user-menu-links', scope: 'admin.user_menu_links' },
-        { label: 'Conversation Modes', icon: 'heroSparkles', route: '/admin/system-prompts', scope: 'admin.system_prompts' },
-      ],
-    },
-  ];
 
   /**
-   * Nav groups the current admin can actually open.
+   * Which of the two entry animations the content area is wearing.
    *
-   * Filtered by delegated admin scope: `system_admin` sees everything (
-   * `hasAdminScope` short-circuits for it), so this is a no-op for a full
-   * admin. A group whose items are all filtered out is dropped entirely rather
-   * than left as an empty heading.
-   *
-   * Linking to a page the scope guard would bounce is worse than not linking
-   * it, which is why `NavItem.scope` is required rather than optional.
-   *
-   * Note this is presentation only. The guard is the client-side gate and the
-   * server is the actual boundary; hiding the link just means a delegated
-   * admin never clicks into a bounce.
+   * Flips on every completed navigation, including the one that opened the
+   * console — `scan` starts at 0 and the initial value is 0, so the first
+   * paint already carries a class and the animation plays on arrival rather
+   * than only from the second page onwards.
    */
-  readonly navGroups = computed<NavGroup[]>(() =>
-    this.allNavGroups
-      .map(group => ({
-        ...group,
-        items: group.items.filter(item => this.userService.hasAdminScope(item.scope)),
-      }))
-      .filter(group => group.items.length > 0)
+  private readonly navigationCount = toSignal(
+    this.router.events.pipe(
+      filter(e => e instanceof NavigationEnd),
+      scan(n => n + 1, 0),
+    ),
+    { initialValue: 0 },
   );
 
-  /**
-   * One small call for both badges, on every admin page.
-   *
-   * The counts have to be right wherever the admin is standing, not only once they open
-   * a queue — that is what makes the badge a prompt rather than a confirmation. It is a
-   * dedicated endpoint rather than two queue loads so this does not put a table scan and
-   * a full row projection behind every click in the console, and it swallows failures:
-   * a badge is orientation, and an unreachable count must not break the shell.
-   */
-  ngOnInit(): void {
-    // Gated on the scope: the counts endpoint is guarded by `admin.marketplace`,
-    // so firing it unconditionally would mean a guaranteed 403 on every single
-    // navigation for an admin who does not hold that scope — a console full of
-    // console-errors for a badge they cannot see anyway.
-    if (this.userService.hasAdminScope('admin.marketplace')) {
-      void this.marketplace.refreshQueueCounts();
-    }
-  }
-
-  onMobileNavChange(event: Event): void {
-    const select = event.target as HTMLSelectElement;
-    this.router.navigateByUrl(select.value);
-  }
+  protected readonly contentEnterOnA = computed(() => this.navigationCount() % 2 === 0);
 }

@@ -6,12 +6,15 @@ import { KbSyncConstruct } from '../lib/constructs/kb-sync/kb-sync-construct';
 import { RagDataConstruct } from '../lib/constructs/rag/rag-data-construct';
 import { createMockConfig, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
 
-function synth(kbSyncEnabled: boolean): Template {
+function synth(kbSyncEnabled: boolean, folderSyncEnabled = false): Template {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'Test', {
     env: { account: MOCK_ACCOUNT, region: MOCK_REGION },
   });
-  const config = createMockConfig({ kbSync: { enabled: kbSyncEnabled } });
+  const config = createMockConfig({
+    kbSync: { enabled: kbSyncEnabled },
+    folderSync: { enabled: folderSyncEnabled },
+  });
   const ragData = new RagDataConstruct(stack, 'RagData', { config });
   const oauthProvidersTable = new dynamodb.Table(stack, 'OAuthProviders', {
     partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
@@ -86,6 +89,37 @@ describe('KbSyncConstruct', () => {
     });
   });
 
+  it('worker may delete documents from a promoted managed knowledge base', () => {
+    // `kb_sync/worker.py` soft-deletes a document whose upstream source has
+    // vanished, then calls `cleanup_service.cleanup_document_resources`, which
+    // removes it from the managed knowledge base when the assistant has been
+    // promoted. Without the grant that delete fails, the DOC# row is kept on
+    // purpose so the fail-closed status filter keeps hiding the chunks, and the
+    // managed corpus grows forever at $5.00/GB-month.
+    //
+    // This assertion exists because the same class of gap has shipped twice on
+    // this feature: code that reads correctly with no IAM behind it.
+    t.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'ManagedKbDocumentDeletion',
+            Action: Match.arrayWith(['bedrock:DeleteKnowledgeBaseDocuments']),
+          }),
+        ]),
+      },
+    });
+  });
+
+  it('worker may not ingest into a managed knowledge base', () => {
+    // The sync worker removes documents; writing a corpus belongs to the
+    // migration worker and the ingestion consumer alone.
+    const policies = t.findResources('AWS::IAM::Policy');
+    const json = JSON.stringify(policies);
+    expect(json).not.toContain('IngestKnowledgeBaseDocuments');
+    expect(json).not.toContain('CreateKnowledgeBase');
+  });
+
   it('custom metrics are namespace-conditioned', () => {
     t.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
@@ -123,6 +157,30 @@ describe('KbSyncConstruct', () => {
           S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: Match.anyValue(),
         }),
       },
+    });
+  });
+
+  describe('folder sync (drive_folder policies, assistant-kb-sync.md §11)', () => {
+    const handlers = ['apis.app_api.kb_sync.dispatcher.lambda_handler', 'apis.app_api.kb_sync.worker.lambda_handler'];
+
+    it.each(handlers)('FOLDER_SYNC_ENABLED is "false" on %s by default (in development, opt-in)', (handler) => {
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        ImageConfig: { Command: [handler] },
+        Environment: { Variables: Match.objectLike({ FOLDER_SYNC_ENABLED: 'false' }) },
+      });
+    });
+
+    it.each(handlers)('FOLDER_SYNC_ENABLED is "true" on %s when folderSync.enabled', (handler) => {
+      synth(true, true).hasResourceProperties('AWS::Lambda::Function', {
+        ImageConfig: { Command: [handler] },
+        Environment: { Variables: Match.objectLike({ FOLDER_SYNC_ENABLED: 'true' }) },
+      });
+    });
+
+    it('adds no resources: the worker already holds every grant a folder run uses', () => {
+      const off = synth(true, false).toJSON().Resources as Record<string, { Type: string }>;
+      const on = synth(true, true).toJSON().Resources as Record<string, { Type: string }>;
+      expect(Object.keys(on).sort()).toEqual(Object.keys(off).sort());
     });
   });
 

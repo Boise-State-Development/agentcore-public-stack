@@ -28,6 +28,7 @@ import {
   RoleAgentPinRow,
 } from '../models/marketplace.model';
 import { AgentTileComponent } from '../components/agent-tile.component';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import {
   RolePinSaveDialogComponent,
   RolePinSaveDialogResult,
@@ -70,7 +71,7 @@ interface StagedPin {
 @Component({
   selector: 'app-marketplace-default-pins',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentTileComponent, TooltipDirective],
+  imports: [NgIcon, AgentTileComponent, TooltipDirective, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowDown,
@@ -105,7 +106,7 @@ interface StagedPin {
             id="role-picker"
             [value]="roleId()"
             (change)="onRoleChange($event)"
-            class="mt-2 block w-full max-w-sm rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+            class="mt-2 block w-full max-w-sm rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
           >
             @for (role of roles(); track role.roleId) {
               <option [value]="role.roleId">
@@ -118,7 +119,7 @@ interface StagedPin {
         @if (error()) {
           <div
             role="alert"
-            class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm/6 text-rose-800 dark:border-rose-900 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mb-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
           >
             {{ error() }}
           </div>
@@ -128,7 +129,7 @@ interface StagedPin {
         @if (fallbackOnly()) {
           <div
             role="status"
-            class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+            class="mb-4 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-900 dark:border-state-warning-900 dark:bg-state-warning-900/20 dark:text-state-warning-200"
           >
             <span class="font-semibold">Fallback only.</span>
             The <code class="font-mono">default</code> role applies to users who match no
@@ -139,7 +140,7 @@ interface StagedPin {
         } @else if (unmapped()) {
           <div
             role="status"
-            class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+            class="mb-4 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-900 dark:border-state-warning-900 dark:bg-state-warning-900/20 dark:text-state-warning-200"
           >
             <span class="font-semibold">No members.</span>
             This role has no identity-provider mappings, so nobody currently matches it.
@@ -158,7 +159,7 @@ interface StagedPin {
             class="mb-4 rounded-2xl border px-4 py-3 text-sm/6"
             [class]="
               lockWarning()
-                ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200'
+                ? 'border-state-warning-200 bg-state-warning-50 text-state-warning-900 dark:border-state-warning-900 dark:bg-state-warning-900/20 dark:text-state-warning-200'
                 : 'border-gray-200 bg-gray-50 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'
             "
           >
@@ -186,7 +187,7 @@ interface StagedPin {
         @if (unavailable().length) {
           <div
             role="status"
-            class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+            class="mb-4 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-900 dark:border-state-warning-900 dark:bg-state-warning-900/20 dark:text-state-warning-200"
           >
             {{ unavailable().length }}
             seeded
@@ -198,10 +199,7 @@ interface StagedPin {
 
         @if (loading()) {
           <div class="flex items-center justify-center py-16">
-            <div
-              class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
-            ></div>
-            <span class="sr-only">Loading default pins</span>
+            <app-spinner size="lg" label="Loading default pins" />
           </div>
         } @else {
           <!-- The seed list -->
@@ -221,7 +219,7 @@ interface StagedPin {
                     type="button"
                     (click)="reloadPins()"
                     [disabled]="busy()"
-                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                   >
                     Discard
                   </button>
@@ -230,7 +228,7 @@ interface StagedPin {
                   type="button"
                   (click)="save()"
                   [disabled]="!dirty() || busy()"
-                  class="rounded-2xl bg-blue-600 px-4 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  class="rounded-2xl bg-primary-accessible px-4 py-1.5 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {{ dirty() ? 'Save pins' : 'Saved' }}
                 </button>
@@ -294,10 +292,10 @@ interface StagedPin {
                           "
                           appTooltipPosition="top"
                           [attr.aria-pressed]="pin.locked"
-                          class="rounded-2xl p-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          class="rounded-2xl p-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                           [class]="
                             pin.locked
-                              ? 'text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20'
+                              ? 'text-state-warning-600 hover:bg-state-warning-50 dark:text-state-warning-400 dark:hover:bg-state-warning-900/20'
                               : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white'
                           "
                         >
@@ -316,7 +314,7 @@ interface StagedPin {
                           [disabled]="i === 0 || busy()"
                           [appTooltip]="'Move up'"
                           appTooltipPosition="top"
-                          class="rounded-2xl p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                          class="rounded-2xl p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
                         >
                           <ng-icon name="heroArrowUp" class="size-5" aria-hidden="true" />
                           <span class="sr-only">Move {{ pin.name }} up</span>
@@ -327,7 +325,7 @@ interface StagedPin {
                           [disabled]="i === staged().length - 1 || busy()"
                           [appTooltip]="'Move down'"
                           appTooltipPosition="top"
-                          class="rounded-2xl p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                          class="rounded-2xl p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
                         >
                           <ng-icon name="heroArrowDown" class="size-5" aria-hidden="true" />
                           <span class="sr-only">Move {{ pin.name }} down</span>
@@ -338,7 +336,7 @@ interface StagedPin {
                           [disabled]="busy()"
                           [appTooltip]="'Remove from this role'"
                           appTooltipPosition="top"
-                          class="rounded-2xl p-2 text-gray-500 hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-rose-900/20 dark:hover:text-rose-400"
+                          class="rounded-2xl p-2 text-gray-500 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                         >
                           <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
                           <span class="sr-only">Remove {{ pin.name }}</span>
@@ -349,7 +347,7 @@ interface StagedPin {
                     <!-- D9.5, and the reachability check beside it. Two different fixes. -->
                     @if (pin.row && !pin.row.reachable) {
                       <p
-                        class="mt-2 ml-9 text-xs text-amber-700 dark:text-amber-300"
+                        class="mt-2 ml-9 text-xs text-state-warning-700 dark:text-state-warning-300"
                         role="status"
                       >
                         Not visible to this role — it is
@@ -360,7 +358,7 @@ interface StagedPin {
                     }
                     @if (pin.row && pin.row.missing.length) {
                       <p
-                        class="mt-2 ml-9 text-xs text-rose-700 dark:text-rose-300"
+                        class="mt-2 ml-9 text-xs text-state-danger-700 dark:text-state-danger-300"
                         role="status"
                       >
                         Won't run for this role — it does not grant
@@ -423,7 +421,7 @@ interface StagedPin {
                           : 'Seed this agent to the role'
                       "
                       appTooltipPosition="top"
-                      class="shrink-0 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                      class="shrink-0 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     >
                       Add
                     </button>

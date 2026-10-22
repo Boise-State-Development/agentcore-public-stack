@@ -24,7 +24,7 @@ interface QuotaTab {
         @for (tab of tabs; track tab.route) {
           <a
             [routerLink]="tab.route"
-            routerLinkActive="border-blue-500 text-blue-600 dark:border-blue-400 dark:text-blue-400"
+            routerLinkActive="border-primary-500 text-primary-accessible dark:border-primary-400 dark:text-primary-accessible-dark"
             #rla="routerLinkActive"
             [attr.aria-current]="rla.isActive ? 'page' : null"
             class="whitespace-nowrap border-b-2 border-transparent px-1 py-3 text-sm/6 font-medium text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:border-white/20 dark:hover:text-gray-200"

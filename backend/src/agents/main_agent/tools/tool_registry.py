@@ -92,6 +92,12 @@ def create_default_registry() -> ToolRegistry:
     """
     from strands_tools.calculator import calculator
     from agents import local_tools, builtin_tools
+    from agents.builtin_tools.ask_user_question import ask_user_question
+    from agents.builtin_tools.browser import request_user_login
+    from apis.shared.feature_flags import (
+        ask_user_question_enabled,
+        browser_takeover_enabled,
+    )
 
     registry = ToolRegistry()
 
@@ -103,6 +109,20 @@ def create_default_registry() -> ToolRegistry:
 
     # Register builtin tools (AWS SDK tools)
     registry.register_module_tools(builtin_tools)
+
+    # Registered explicitly rather than via `builtin_tools.__all__` so the kill
+    # switch can withhold it: an unregistered tool never reaches `toolConfig`,
+    # so with the flag off the model cannot pause a turn behind a prompt the
+    # client has no renderer for.
+    if ask_user_question_enabled():
+        registry.register_tool("ask_user_question", ask_user_question)
+
+    # Same reasoning, and one more: this one hands a human an interactive
+    # browser inside our AWS account, so it has both a kill switch here and its
+    # own catalog entry granted per role (spec D1). Registration only makes it
+    # *grantable*; a role that has not been granted it still never sees it.
+    if browser_takeover_enabled():
+        registry.register_tool("request_user_login", request_user_login)
 
     logger.info(f"Default registry created with {registry.get_tool_count()} tools")
     return registry

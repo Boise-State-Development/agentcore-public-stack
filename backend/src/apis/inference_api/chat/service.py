@@ -8,7 +8,8 @@ import json
 import logging
 import hashlib
 import os
-from typing import Any, Dict, Optional, List, Tuple
+import threading
+from typing import Any, Callable, Dict, Optional, List, Tuple
 
 import boto3
 
@@ -61,10 +62,50 @@ def _create_cache_key(
     freshness_hash: str,
     agent_type: Optional[str],
     skills_hash: str = "",
+    document_tools: bool = False,
+    assistant_id: Optional[str] = None,
+    memory_binding: str = "",
+    memory_context: Optional[str] = None,
+    knowledge_context: Optional[str] = None,
     client_surface: Optional[str] = None,
 ) -> Tuple:
     """
     Create a cache key for agent instances.
+
+    `memory_binding` is ``memory_binding_digest`` of what the turn's memory
+    tools close over, or "" when there are none. For an Agent's binding that is
+    the space id, name and access: the write tool exists only for
+    ``readwrite``, and the name is in the tools' result messages (their specs
+    are constant). For a project harness it is the project and its two space
+    ids (Shared Projects 2.4b). Either way the tools read the spaces live on
+    every call, so they are described once the key carries this. Empty string
+    without memory tools, so those turns key exactly as before apart from the
+    constant extra element.
+
+    `memory_context` is the rendered Memory-Space block sent after the system
+    prompt (Shared Projects 2.2). It used to be part of `system_prompt`, so it
+    is folded into the same prompt hash rather than adding an element; a turn
+    without memory hashes exactly as before.
+
+    `knowledge_context` is the assistant's whole knowledge base when it runs in
+    full-context mode (``kb_full_context``), sent at the end of the system
+    prompt. Folded into the same prompt hash as `memory_context`, for the same
+    reason: a turn without it hashes exactly as before.
+
+    `assistant_id` is the assistant (RAG corpus) the turn ran against. The
+    spreadsheet-analysis builders close over it, so without it in the key a
+    cached agent could answer a later turn against the wrong corpus — which
+    is why that family bypassed the cache until the key carried it. Empty
+    string when no assistant is attached, so keys for assistant-less turns are
+    byte-identical to the pre-field ones.
+
+    `document_tools` is whether the turn built the session-state-gated
+    ``document_read`` tool (the session has a readable attachment). It is not
+    in `enabled_tools`, so without this element an agent cached before the
+    first upload would be served — without the tool — to every turn after it.
+    The gate is monotonic in practice (files stay once uploaded), so the key
+    flips at most once per session, on the attach turn, when restored history
+    carries no document yet to lose.
 
     `freshness_hash` is a short digest of the enabled tools' current
     `updated_at` values (see `freshness.get_freshness_hash`). When an
@@ -78,24 +119,29 @@ def _create_cache_key(
     edit to a granted skill (or a role grant change) would serve a stale agent.
     Empty for chat turns with no skills, so the default path is unaffected.
 
-    `client_surface` is a key dimension because it changes the *built* system
-    prompt while leaving the raw `system_prompt` argument untouched — which is
-    `None` on the default path, so `prompt_hash` cannot distinguish surfaces.
-    The key starts with `session_id`, and a conversation can now be opened from
-    both the web app and the terminal (the TUI lists and resumes web
-    conversations), so omitting this would serve the second client an agent
-    built with the first client's interface guidance.
+    `client_surface` changes the *built* system prompt while leaving the raw
+    `system_prompt` argument untouched, and one conversation can be opened from
+    both the web app and the terminal, so it must separate keys. It is folded
+    into the prompt hash only for a non-web surface: a web turn (surface None
+    or "web") keys byte-identically to a key built without the field.
     """
     tools_hash = _hash_tools(enabled_tools)
 
     # Hash system prompt if provided (can be very long)
     prompt_hash = None
-    if system_prompt:
-        prompt_hash = hashlib.md5(system_prompt.encode()).hexdigest()[:8]
+    non_web_surface = client_surface if client_surface and client_surface != "web" else None
+    if system_prompt or memory_context or knowledge_context or non_web_surface:
+        prompt_material = system_prompt or ""
+        if memory_context:
+            prompt_material += "\x00memory\x00" + memory_context
+        if knowledge_context:
+            prompt_material += "\x00knowledge\x00" + knowledge_context
+        if non_web_surface:
+            prompt_material += "\x00surface\x00" + non_web_surface
+        prompt_hash = hashlib.md5(prompt_material.encode()).hexdigest()[:8]
 
     return (
-        session_id,
-        user_id or session_id,
+        *_conversation_owner_key(session_id, user_id),  # [0], [1]: whose conversation
         tools_hash,
         model_id or "default",
         _hash_inference_params(inference_params),
@@ -104,11 +150,60 @@ def _create_cache_key(
         provider or "bedrock",
         freshness_hash,
         agent_type or "chat",
-        # Before `skills_hash` so that stays the trailing element, which an
-        # existing test documents.
-        client_surface or "web",
-        skills_hash,
+        memory_binding,  # ahead of the rest so their positions ([-1]..[-3]) stay put
+        bool(document_tools),
+        assistant_id or "",
+        skills_hash,  # stays the trailing element; tests index it as [-1]
     )
+
+
+def _conversation_owner_key(session_id: str, user_id: Optional[str]) -> Tuple[str, str]:
+    """The ``(session, user)`` pair that opens every agent cache key.
+
+    A session id alone does not name a conversation. AgentCore Memory scopes
+    history by actor id, so two users can hold separate threads under one
+    session id. Anything here that finds "this conversation's" live state must
+    match on this pair. Runtime affinity (``runtime_session_id_for``) now pins
+    per user too, so two users should never share this process. Do not rely on
+    that: the cache must be safe on its own. When affinity hashed the session
+    id alone, ``_adopt_session_conversation`` matched on it alone and handed one
+    user's live history to another (dev, 2026-08-31).
+    """
+    return (session_id, user_id or session_id)
+
+
+def memory_binding_digest(binding: Optional[Dict[str, Any]]) -> str:
+    """Short digest of a turn's memory tools' closure for the agent cache key.
+
+    ``binding`` is the shape stamped on the construction snapshot and replayed
+    from ``PausedTurnSnapshot``, or None:
+
+    - an Agent's binding, ``{"spaceId", "spaceName", "access"}``;
+    - a project harness's scopes, ``{"projectId", "sharedSpaceId",
+      "personalSpaceId"}`` (Shared Projects 2.4b). Its payload starts with a
+      ``"project"`` tag, so it can never collide with a binding's.
+
+    Returns "" for None so keys without memory do not change. The binding
+    digest is unchanged from 2.1, so ordinary Agents keep their keys.
+    """
+    if not binding:
+        return ""
+    if "projectId" in binding:
+        payload = json.dumps(
+            [
+                "project",
+                binding.get("projectId"),
+                binding.get("sharedSpaceId"),
+                binding.get("personalSpaceId"),
+            ],
+            default=str,
+        )
+        return hashlib.md5(payload.encode()).hexdigest()[:8]
+    payload = json.dumps(
+        [binding.get("spaceId"), binding.get("spaceName"), binding.get("access")],
+        default=str,
+    )
+    return hashlib.md5(payload.encode()).hexdigest()[:8]
 
 
 # LRU cache for agent instances
@@ -142,7 +237,48 @@ def _is_paused_on_interrupt(agent: BaseAgent) -> bool:
     return bool(state is not None and getattr(state, "activated", False))
 
 
-def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
+async def _consent_landed_since_build(agent: BaseAgent, user_id: Optional[str]) -> bool:
+    """Whether a cached agent built without some OAuth-gated server can now have it.
+
+    Only agents whose build dropped a server for missing consent ask, so every
+    other cache hit pays nothing. Those pay one AgentCore Identity round trip
+    per unconnected provider, concurrently: ~200 ms on prod (workload token
+    mint plus the token lookup, 2026-10-16), in exchange for the tools coming
+    back on the first turn after the user connects. A provider still waiting
+    on consent is re-recorded, so the turn re-emits ``oauth_required``.
+    """
+    gated = getattr(agent, "consent_gated_tools", None)
+    if not gated or not user_id:
+        return False
+
+    from agents.main_agent.integrations.external_mcp_client import (
+        get_external_mcp_integration,
+    )
+
+    try:
+        return await get_external_mcp_integration().recheck_consent(
+            user_id, [g.provider_id for g in gated]
+        )
+    except Exception:
+        logger.exception("Consent re-check failed; serving the cached agent")
+        return False
+
+
+def live_conversation_agents(session_id: str, user_id: Optional[str]) -> List[BaseAgent]:
+    """The agents this process has cached for one conversation, newest first.
+
+    Matches on ``(session, user)`` (``_conversation_owner_key``), never on the
+    session id alone, for the reason ``_adopt_session_conversation`` gives.
+    Newest is insertion order: a dict keeps it, and a rebuild into an existing
+    slot keeps that slot's place.
+    """
+    owner = _conversation_owner_key(session_id, user_id)
+    return [cached for key, cached in reversed(list(_agent_cache.items())) if key[:2] == owner]
+
+
+def _adopt_session_conversation(
+    agent: BaseAgent, session_id: str, user_id: Optional[str]
+) -> None:
     """Point a newly built agent at the conversation its session is already having.
 
     The cache key varies with an agent's *configuration* — system prompt, tools,
@@ -165,7 +301,9 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
     ``agent.messages`` lives inside ``TurnBasedSessionManager.initialize()``
     (document stripping, content-block sanitizing, compaction slicing, pairing
     repair) and so runs before we get here; after construction the list is only
-    appended to. A future compaction that rebinds mid-life would silently break
+    appended to — or, for the pending-cut apply at the head of a turn, sliced
+    **in place** by slice assignment (``messages[:] = ...``), which keeps the
+    alias. A future compaction that rebinds mid-life would silently break
     the alias — ``test_second_cache_key_for_a_session_shares_the_conversation``
     is what catches that.
 
@@ -174,6 +312,19 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
     not, so the same conversation can serialize differently depending on the path
     that produced it — a prefix-byte change on an arbitrary turn, which is exactly
     what the prompt-cache contract forbids. Aliasing never re-serializes anything.
+
+    ⚠️ The match is on ``(session, user)``, never the session id alone. The
+    same session id can belong to two users (AgentCore Memory scopes history by
+    actor; a pre-#906 fork created exactly that), and runtime affinity sends
+    both users to the same container. Matching on session alone made a second
+    user's freshly built agent, which restored an empty thread from its own
+    actor, alias the first user's live list, so the model answered from another
+    person's conversation (dev, 2026-08-31: a probe user got the owner's
+    earlier message read back to them). The invocations route now 404s that
+    case before it gets here.
+    This match is what keeps the cache safe without depending on that guard,
+    which fails open. ``test_adoption_never_crosses_users_on_one_session_id``
+    pins it.
 
     Safe against concurrent turns because the single-flight session lease admits
     one turn per session at a time. Cross-replica divergence is not our problem
@@ -186,12 +337,13 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
         return
 
     live = None
-    for key, cached in _agent_cache.items():
-        if key[0] != session_id:
-            continue
+    live_wrapper = None
+    for cached in live_conversation_agents(session_id, user_id):
         cached_inner = getattr(cached, "agent", None)
         if isinstance(getattr(cached_inner, "messages", None), list):
-            live = cached_inner  # newest wins — dict preserves insertion order
+            live = cached_inner
+            live_wrapper = cached
+            break
 
     if live is None or live.messages is inner.messages:
         return
@@ -215,6 +367,28 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
     )
     inner.messages = live.messages
 
+    # The list's coordinate system travels with it. Compaction expresses its
+    # checkpoint as ``_live_offset + index into this list`` and the pending-cut
+    # apply slices the list in place at that offset, so an instance that adopts
+    # the list must adopt the offset too or it would slice at the wrong place.
+    try:
+        src_sm = getattr(live_wrapper, "session_manager", None)
+        dst_sm = getattr(agent, "session_manager", None)
+        if src_sm is not None and dst_sm is not None and hasattr(src_sm, "_live_offset"):
+            dst_sm._live_offset = src_sm._live_offset
+    except Exception:  # noqa: BLE001 - never let bookkeeping break a turn
+        logger.debug("Session %s: could not sync compaction live offset", scrub_log(session_id), exc_info=True)
+
+
+# Agent builds (cache misses) this process has run. Every conversation's first
+# turn runs in a fresh Runtime process, so 1 marks exactly the cold-process
+# build the agent-build experiment is about (stamped on `turn_prelude`).
+_process_build_count = 0
+
+
+def process_build_count() -> int:
+    return _process_build_count
+
 
 async def get_agent(
     session_id: str,
@@ -236,6 +410,14 @@ async def get_agent(
     accessible_skill_ids: Optional[List[str]] = None,
     extra_tools_key_described: bool = False,
     cache_write: bool = True,
+    has_document_tools: bool = False,
+    assistant_id: Optional[str] = None,
+    build_stage_recorder: Optional[Callable[[str], None]] = None,
+    build_detail_recorder: Optional[Callable[[str, Any], None]] = None,
+    memory_binding: Optional[Dict[str, Any]] = None,
+    memory_context: Optional[str] = None,
+    text_only_model: bool = False,
+    knowledge_context: Optional[str] = None,
     client_surface: Optional[str] = None,
 ) -> BaseAgent:
     """
@@ -265,8 +447,28 @@ async def get_agent(
             derive it with ``injected_tools_are_key_described``; the default
             (False) keeps the historical bypass, so any caller that has not
             reasoned about its closures gets the safe behavior.
+        memory_binding: The Agent's resolved Memory-Space binding as
+            ``{"spaceId", "spaceName", "access"}``, a project harness's
+            scopes as ``{"projectId", "sharedSpaceId", "personalSpaceId"}``,
+            or None. A key element (see ``memory_binding_digest``) and stamped
+            on the construction snapshot so a paused turn resumes into the
+            same slot.
+        memory_context: The rendered Memory-Space block, sent after the system
+            prompt behind its own cache point. Hashed with the prompt in the
+            key and snapshotted by ``BaseAgent`` for resume.
+        knowledge_context: The assistant's whole knowledge base in full-context
+            mode, appended to the system prompt. Hashed with the prompt in the
+            key. Deliberately NOT on the construction snapshot: it can be ~200 KB
+            and the snapshot is written into the session's metadata row, so a
+            resume re-loads it (deterministic, so the same bytes hit the same
+            slot) rather than replaying it.
+        text_only_model: The model's catalog row declares TEXT input only
+            (``is_text_only_model``), so the agent's model sees history with
+            image, document and video blocks replaced by text. Not a key
+            element: it follows from ``model_id``, which already is one.
         client_surface: Which client the user is on ("web", "terminal").
-            Selects the agent's interface guidance, and is part of the cache key.
+            Selects the agent's interface guidance; part of the key only when
+            not web, so web turns key exactly as before.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -276,7 +478,12 @@ async def get_agent(
     Returns:
         BaseAgent subclass instance (cached or newly created)
     """
-    from apis.shared.tools.freshness import get_freshness_hash
+    from apis.shared.tools.freshness import drop_disabled_tools, get_freshness_hash
+
+    # A tool an admin has disabled never loads, whatever the request carries
+    # (a user's saved toggle, an Agent binding, an admin pin). Before the cache
+    # key, so the key describes the toolset that is actually built.
+    enabled_tools = await drop_disabled_tools(enabled_tools)
 
     # Merge legacy temperature/max_tokens into inference_params so the cache
     # key and BaseAgent see the same canonical dict.
@@ -313,6 +520,11 @@ async def get_agent(
         freshness_hash=freshness_hash,
         agent_type=agent_type,
         skills_hash=skills_hash,
+        document_tools=has_document_tools,
+        assistant_id=assistant_id,
+        memory_binding=memory_binding_digest(memory_binding),
+        memory_context=memory_context,
+        knowledge_context=knowledge_context,
         client_surface=client_surface,
     )
 
@@ -341,6 +553,14 @@ async def get_agent(
                 scrub_log(session_id), scrub_log(user_id),
             )
             del _agent_cache[cache_key]
+        elif not is_resume and await _consent_landed_since_build(cached, user_id):
+            # Built without a server the user has since connected. Rebuild
+            # rather than serve the agent without its tools. The stale entry
+            # stays in the slot until the rebuild overwrites it, so the new
+            # agent adopts its live conversation instead of re-restoring it.
+            logger.info(
+                "agent_cache outcome=consent_landed session=%s", scrub_log(session_id)
+            )
         else:
             logger.debug("✅ Agent cache hit")
             # Experiment instrument (spec §6): "initialize() invocations per
@@ -380,21 +600,52 @@ async def get_agent(
         inference_params=merged_params,
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
-        client_surface=client_surface,
     )
+    if client_surface:
+        create_kwargs["client_surface"] = client_surface
+    if memory_context:
+        create_kwargs["memory_context"] = memory_context
+    if knowledge_context:
+        create_kwargs["knowledge_context"] = knowledge_context
+    if text_only_model:
+        create_kwargs["text_only_model"] = True
+    # An Agent conversation is isolated from the user's long-term memory, both
+    # ways: memory is keyed to the user alone, so it carried one Agent's
+    # knowledge base into the next. `assistant_id` is already a key element and
+    # on the snapshot, so this needs neither.
+    if assistant_id:
+        create_kwargs["long_term_memory"] = False
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills
     # plugin. Pass it through whenever resolved — VoiceAgent does not take the
     # kwarg, so keep it off that path.
     if resolved_agent_type != "voice":
         create_kwargs["accessible_skill_ids"] = accessible_skill_ids
-    agent = create_agent(**create_kwargs)
+    # Decompose the build into sub-stages, same move that opened the preamble
+    # (docs/specs/turn-latency-preamble.md). A contextvar rather than a kwarg:
+    # the explicit alternative threads a parameter through a type registry and
+    # three agent classes that do not share constructor signatures, and a
+    # mis-set timing mark costs a wrong number, not wrong behaviour. See
+    # `apis/shared/observability/build_stages.py` for why that asymmetry with
+    # PR-2's explicit snapshot is deliberate.
+    from apis.shared.observability.build_stages import (
+        reset_stage_recorder,
+        set_stage_recorder,
+    )
+
+    global _process_build_count
+    _process_build_count += 1
+    _stage_token = set_stage_recorder(build_stage_recorder, build_detail_recorder)
+    try:
+        agent = create_agent(**create_kwargs)
+    finally:
+        reset_stage_recorder(_stage_token)
 
     # One session is one conversation, even when a turn runs under a different
     # configuration (an `@`-mention, a different toolset). Runs before the
     # extra_tools early return below, because an uncached agent still takes a
     # turn in the thread and must not fork it. See #741.
-    _adopt_session_conversation(agent, session_id)
+    _adopt_session_conversation(agent, session_id, user_id)
 
     # Stamp the type onto the construction snapshot so a paused turn can
     # resume on the same factory variant after cache eviction. A turn carrying
@@ -409,6 +660,11 @@ async def get_agent(
         agent._construction_snapshot["agent_type"] = resolved_agent_type
         if resolved_agent_type != "voice" and accessible_skill_ids is not None:
             agent._construction_snapshot["enabled_skills"] = list(accessible_skill_ids)
+        # The assistant is a key element (spreadsheet tools close over it), so
+        # resume must replay it verbatim or the paused agent is orphaned.
+        agent._construction_snapshot["assistant_id"] = assistant_id
+        # Same for the memory binding (memory tools close over it).
+        agent._construction_snapshot["memory_binding"] = dict(memory_binding) if memory_binding else None
 
     # Don't cache agents whose context-bound extra_tools captured anything the
     # key doesn't describe — a cached agent holds the *old* closures, so reuse
@@ -426,8 +682,9 @@ async def get_agent(
         logger.debug("⏭️ Not populating cache from a partial-toolset caller")
         return agent
 
-    # Add to cache with LRU eviction
-    if len(_agent_cache) >= _CACHE_MAX_SIZE:
+    # Add to cache with LRU eviction. A rebuild into an occupied slot replaces
+    # it, so it needs no room.
+    if cache_key not in _agent_cache and len(_agent_cache) >= _CACHE_MAX_SIZE:
         # Remove oldest entry (first inserted)
         oldest_key = next(iter(_agent_cache))
         del _agent_cache[oldest_key]
@@ -482,6 +739,44 @@ Output: Debug TypeError Map Error
 
 Focus on being informative and scannable. The title should allow users to quickly identify this conversation in a list."""
 
+# One Bedrock client for every title, built on first use. A client per call
+# cost ~250ms the first time in a process (botocore loads the service model)
+# and, every time, a fresh connection pool — a new TCP+TLS handshake to
+# bedrock-runtime on the path of a title the user is watching for. boto3
+# clients are thread-safe, so the worker threads below can share it.
+_title_bedrock_client: Any = None
+# Guards the first build: boto3's default session is not thread-safe, and two
+# first-turn titles can reach it from separate worker threads at once.
+_title_client_lock = threading.Lock()
+
+# Strong references to in-flight title writes. The event loop only holds weak
+# references to tasks, so a fire-and-forget write could otherwise be
+# garbage-collected before it lands.
+_pending_title_writes: set = set()
+
+
+def _get_title_bedrock_client() -> Any:
+    global _title_bedrock_client
+    if _title_bedrock_client is None:
+        with _title_client_lock:
+            if _title_bedrock_client is None:
+                bedrock_region = os.environ.get('AWS_REGION', 'us-east-1')
+                _title_bedrock_client = boto3.client('bedrock-runtime', region_name=bedrock_region)
+    return _title_bedrock_client
+
+
+def _converse_for_title(**kwargs: Any) -> Dict[str, Any]:
+    """Run in a worker thread, so a first-use client build stays off the event loop."""
+    return _get_title_bedrock_client().converse(**kwargs)
+
+
+def _schedule_title_write(session_id: str, user_id: str, title: str, first_prompt: Optional[str] = None) -> None:
+    task = asyncio.create_task(
+        update_session_title(session_id=session_id, user_id=user_id, title=title, first_prompt=first_prompt)
+    )
+    _pending_title_writes.add(task)
+    task.add_done_callback(_pending_title_writes.discard)
+
 
 async def generate_conversation_title(
     session_id: str,
@@ -494,8 +789,8 @@ async def generate_conversation_title(
     This function:
     1. Truncates user input to ~500 tokens (2000 chars as rough approximation)
     2. Calls Nova Micro with optimized system prompt
-    3. Updates session metadata both locally and in cloud
-    4. Returns generated title or fallback on error
+    3. Returns the title as soon as Nova does, persisting it in the background
+    4. Returns fallback on error
 
     Args:
         session_id: Session identifier
@@ -514,10 +809,6 @@ async def generate_conversation_title(
         logger.debug(f"Truncated input from {len(user_input)} to {MAX_INPUT_LENGTH} chars")
 
     try:
-        # Initialize Bedrock Runtime client
-        bedrock_region = os.environ.get('AWS_REGION', 'us-east-1')
-        bedrock_client = boto3.client('bedrock-runtime', region_name=bedrock_region)
-
         # Prepare request for Nova Micro
         # us.amazon.nova-micro-v1:0 is the fastest, most cost-effective model
         request_body = {
@@ -528,10 +819,11 @@ async def generate_conversation_title(
                 }
             ],
             "system": [{"text": TITLE_GENERATION_SYSTEM_PROMPT}],
+            # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
+            # together, so sending both would break titles on a model swap.
             "inferenceConfig": {
                 "temperature": 0.3,  # Low temperature for consistent, focused output
                 "maxTokens": 50,      # Title should be very short
-                "topP": 0.9
             }
         }
 
@@ -542,12 +834,20 @@ async def generate_conversation_title(
         # whole Nova round-trip, stalling the agent stream this task runs
         # concurrently with.
         response = await asyncio.to_thread(
-            bedrock_client.converse,
+            _converse_for_title,
             modelId="us.amazon.nova-micro-v1:0",
             messages=request_body["messages"],
             system=request_body["system"],
             inferenceConfig=request_body["inferenceConfig"],
         )
+
+        # A guardrail or content-filter stop may carry the refusal as its
+        # text, which must not become the sidebar title. `max_tokens` is
+        # still accepted: the 50-char clip below already handles an overrun.
+        stop_reason = response.get("stopReason")
+        if stop_reason not in ("end_turn", "max_tokens"):
+            logger.warning("Title generation stopped with stopReason=%s; keeping the placeholder", stop_reason)
+            return "New Conversation"
 
         # Extract generated title from response
         title = response["output"]["message"]["content"][0]["text"].strip()
@@ -559,10 +859,15 @@ async def generate_conversation_title(
 
         logger.info("✅ Generated title successfully")
 
-        # Targeted update — only writes the title attribute. The post-stream
-        # update_session_activity write is also targeted and disjoint, so the
-        # two cannot clobber each other on overlapping turns.
-        await update_session_title(session_id=session_id, user_id=user_id, title=title)
+        # Persist without holding the title back. This task finishing is what
+        # lets the stream push `session_title`, so awaiting the DynamoDB write
+        # here would put its round trips between Nova answering and the user
+        # seeing the name. Targeted update — only writes the title attribute.
+        # The post-stream update_session_activity write is also targeted and
+        # disjoint, so the two cannot clobber each other on overlapping turns.
+        # The same write carries the opening prompt's search form (firstPrompt,
+        # conversation search's lexical leg), so it costs no round trip of its own.
+        _schedule_title_write(session_id, user_id, title, first_prompt=user_input)
 
         return title
 

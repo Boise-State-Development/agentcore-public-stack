@@ -129,12 +129,19 @@ def mock_store_metadata():
         yield m
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_pricing():
     """Patch create_pricing_snapshot to return canned pricing (avoids DynamoDB).
 
     The fixed converse_routes.py calls create_pricing_snapshot inside
     _record_cost; without this mock the call hits DynamoDB and fails.
+
+    ``autouse`` since 2026-09-18: it was opt-in, and the tests that did not
+    request it were issuing live DynamoDB calls — ``_record_cost`` is fail-open,
+    so the failure was logged and swallowed and the assertions passed anyway.
+    Tests that want the canned values still take it as an argument; this only
+    guarantees no test reaches the real table. See the off-box socket guard in
+    ``tests/conftest.py``.
     """
     pricing = {
         "inputPricePerMtok": 1.0,

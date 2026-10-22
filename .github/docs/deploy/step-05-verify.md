@@ -102,6 +102,67 @@ In order of likelihood:
 
 ---
 
+### 6. Subscribe to Platform Alarms (required — not automated)
+
+The deploy creates one SNS topic that **every** CloudWatch alarm in the stack
+publishes to. It has no subscribers until you add them, so until you do this step
+the alarms change colour in the console and tell nobody.
+
+This is deliberately not infrastructure-as-code. Several teams usually need to
+hear about failures, and their membership changes far more often than the
+infrastructure does — requiring a pull request, a review, and a CloudFormation
+deploy to add one email address is how a notification list goes stale and stops
+being trusted. Subscribing is a one-line command that touches no code.
+
+Find the topic and subscribe:
+
+```bash
+PREFIX="your-project-prefix"   # the same CDK_PROJECT_PREFIX you deployed with
+
+TOPIC=$(aws ssm get-parameter \
+  --name "/${PREFIX}/observability/alarm-topic-arn" \
+  --query Parameter.Value --output text)
+
+aws sns subscribe \
+  --topic-arn "$TOPIC" \
+  --protocol email \
+  --notification-endpoint platform-team@example.edu
+```
+
+AWS sends a confirmation email; the subscription is inactive until the recipient
+clicks the link. Repeat for each address or distribution list.
+
+Other useful protocols:
+
+| Protocol | Use for |
+|---|---|
+| `email` | A team distribution list. Simplest, and enough for most forks. |
+| `https` | PagerDuty, Opsgenie, ServiceNow, or any webhook receiver. |
+| `sms` | Genuine paging. Costs per message. |
+| `lambda` | Custom routing, e.g. severity-based fan-out or Slack formatting. |
+
+Verify it took:
+
+```bash
+aws sns list-subscriptions-by-topic --topic-arn "$TOPIC" \
+  --query 'Subscriptions[].[Protocol,Endpoint,SubscriptionArn]' --output table
+```
+
+A `SubscriptionArn` of `PendingConfirmation` means the email has not been
+confirmed yet.
+
+Then open the health dashboard — `{PREFIX}-platform-health` in the CloudWatch
+console — and confirm the alarm-status row is populated and green. Row 1 tells
+you whether traffic is being served, row 2 tells you why, and row 3 lists every
+alarm's current state.
+
+> **Note on latency alarms:** the chat path uses server-sent events, so response
+> times of tens of seconds are normal for a healthy agent turn. Latency alarms are
+> deliberately set at 120 seconds. A *drop* in latency can actually mean turns are
+> failing early.
+
+---
+
 ## You're Done!
 
 Your AgentCore Public Stack is deployed and running. Here's what you have:

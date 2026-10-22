@@ -76,7 +76,7 @@ class TestCacheSavingsCalculation:
             'apis.shared.storage.get_metadata_storage',
             return_value=mock_storage
         ):
-            from apis.app_api.sessions.services.metadata import _update_cost_summary_async
+            from apis.shared.sessions.metadata import _update_cost_summary_async
 
             # Call the function
             await _update_cost_summary_async(
@@ -141,7 +141,7 @@ class TestCacheSavingsCalculation:
             'apis.shared.storage.get_metadata_storage',
             return_value=mock_storage
         ):
-            from apis.app_api.sessions.services.metadata import _update_cost_summary_async
+            from apis.shared.sessions.metadata import _update_cost_summary_async
 
             await _update_cost_summary_async(
                 user_id="test_user",
@@ -183,7 +183,7 @@ class TestCacheSavingsCalculation:
             'apis.shared.storage.get_metadata_storage',
             return_value=mock_storage
         ):
-            from apis.app_api.sessions.services.metadata import _update_cost_summary_async
+            from apis.shared.sessions.metadata import _update_cost_summary_async
 
             await _update_cost_summary_async(
                 user_id="test_user",
@@ -233,7 +233,7 @@ class TestCacheSavingsCalculation:
             'apis.shared.storage.get_metadata_storage',
             return_value=mock_storage
         ):
-            from apis.app_api.sessions.services.metadata import _update_cost_summary_async
+            from apis.shared.sessions.metadata import _update_cost_summary_async
 
             await _update_cost_summary_async(
                 user_id="test_user",
@@ -290,7 +290,7 @@ class TestCacheSavingsCalculation:
             'apis.shared.storage.get_metadata_storage',
             return_value=mock_storage
         ):
-            from apis.app_api.sessions.services.metadata import _update_cost_summary_async
+            from apis.shared.sessions.metadata import _update_cost_summary_async
 
             await _update_cost_summary_async(
                 user_id="test_user",

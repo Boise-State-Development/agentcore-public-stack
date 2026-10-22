@@ -219,9 +219,10 @@ models. It keeps the name because the record is still an Assistant *on the wire*
 folder would drag the API contract's vocabulary with it. Its `README.md` says so, with the
 consumer map. Anything new and user-facing goes under `agents/`.
 
-**The backend `/assistants/*` surface is unchanged and not deprecated.** `test-chat` and the
-document sub-routes deliberately live there and are called by the Designer's own preview pane and
-knowledge-base section.
+**The backend `/assistants/*` surface is unchanged and not deprecated.** The document sub-routes
+deliberately live there and are called by the Designer's knowledge-base section. (The Designer's
+preview pane streams through the main chat's `/invocations` path; the old
+`POST /assistants/{id}/test-chat` endpoint had no caller and was removed.)
 
 ---
 
@@ -270,6 +271,9 @@ resolution. The memory epic's §B1 "extend the Assistant" line is superseded by 
 - **Skill vs. Agent reconciliation** — Skills are a second proto-canvas (instructions + reference
   files + bound tools). Do Skills become a *reusable binding bundle* you drop onto an Agent, or fold
   into the Agent entity entirely? Deferred, but the Designer forces the question.
+- **Composing Agents** — an Agent bound to an Agent (`Binding.kind: 'agent'`), and patterns such as
+  Swarm and Graph as palette blocks on a drag-and-drop canvas. Brainstormed in
+  [`multi-agent-patterns.md`](multi-agent-patterns.md) §6; nothing is scheduled.
 - **Per-invoker capability preview** — should a sharee see *why* an Agent is (or isn't) fully runnable
   for them before invoking (a "you lack: Opus, space X" surface), per D5?
 - **Model params governance** — `modelConfig.params` (temperature, max tokens, reasoning effort) are

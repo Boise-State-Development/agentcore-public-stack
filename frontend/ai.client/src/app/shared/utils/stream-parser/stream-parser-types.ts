@@ -1,8 +1,16 @@
 /**
  * Stream Parser Types
  *
- * Shared type definitions for SSE stream parsing used by both the main
- * StreamParserService and the PreviewChatService.
+ * Shared type definitions for SSE stream parsing, consumed by StreamParserService.
+ *
+ * Every callback on `StreamParserCallbacks` is optional and `processStreamEvent`
+ * invokes them with `?.`, so an unimplemented handler drops its event silently —
+ * no error, no `onParseError`. That is survivable for one consumer that
+ * implements them all, and was not survivable for the second consumer that did
+ * not: the preview pane implemented 9 of them and silently dropped
+ * `tool_approval_required` / `oauth_required`, so approval-gated tool calls were
+ * never surfaced and never dispatched. There is deliberately only ONE consumer
+ * of this contract now; see `shared/preview/preview-session.service.ts`.
  */
 
 import type {
@@ -147,6 +155,96 @@ export interface ToolApprovalRequiredEvent {
   message: string;
 }
 
+/** One selectable answer in a {@link UserQuestion}. */
+export interface QuestionOption {
+  label: string;
+  /** Optional one-line explanation of what the choice means. */
+  description?: string;
+}
+
+/**
+ * One question in an {@link UserQuestionRequiredEvent}.
+ *
+ * `header` is both the short chip label shown above the question AND the key
+ * the answer is correlated by on resume — the backend de-duplicates colliding
+ * headers before emitting, so it is safe to use as a map key.
+ */
+export interface UserQuestion {
+  header: string;
+  question: string;
+  /** More than one option may be chosen. */
+  multiSelect: boolean;
+  options: QuestionOption[];
+}
+
+/**
+ * The agent paused to ask the user structured clarifying questions.
+ *
+ * Sibling of {@link ToolApprovalRequiredEvent}, with one difference worth
+ * knowing: that interrupt is raised by a `BeforeToolCall` hook gating someone
+ * else's tool, while this one is raised by the `ask_user_question` tool itself
+ * — so `toolUseId` identifies the prompt's own tool card in the transcript.
+ *
+ * The picker owns the "Other" free-text field and the "Skip" control; the
+ * backend strips any model-supplied lookalike, so `options` never contains
+ * them and the UI must always add them itself.
+ */
+export interface UserQuestionRequiredEvent {
+  type: 'user_question_required';
+  interruptId: string;
+  toolUseId: string;
+  questions: UserQuestion[];
+}
+
+/**
+ * The agent paused so the *user* can sign in to a site it cannot reach.
+ *
+ * Sibling of {@link UserQuestionRequiredEvent} — same tool-raised interrupt
+ * machinery, same resume contract — with one thing that is easy to get wrong:
+ *
+ * **There is no URL on this event, and there must never be one.** A Live View
+ * URL is SigV4 *query*-signed and expires in at most 300 seconds, so one put
+ * here would be dead before the user reacted and dead again on every reload of
+ * the thread. The client POSTs `sessionId` to
+ * `/sessions/{id}/browser/live-view` for a fresh URL instead, and re-requests
+ * against that response's `expiresAt`.
+ *
+ * `sessionId` is the **conversation** id, as on every other event here.
+ * `browserSessionId` is the AgentCore browser session, and the client never
+ * sends it anywhere — the live-view route resolves it server-side from the
+ * conversation, which is what stops one user streaming another's browser.
+ *
+ * `viewport` must be passed to the viewer as DCV's `remoteWidth`/
+ * `remoteHeight`. A mismatch crops the stream or letterboxes it, which is why
+ * it rides the event rather than being re-declared as a constant here.
+ *
+ * `deadlineAt` is when the backend stops waiting: past it the browser is
+ * released and made reapable, so the UI should show the time remaining and
+ * stop offering the viewer once it passes.
+ */
+export interface BrowserLoginRequiredEvent {
+  type: 'browser_login_required';
+  interruptId: string;
+  toolUseId: string;
+  /** Conversation id — NOT the browser session. */
+  sessionId: string;
+  browserSessionId: string;
+  browserId: string;
+  viewport: { width: number; height: number };
+  /** ISO 8601; the sign-in window closes here. */
+  deadlineAt?: string;
+  /** The page the browser is parked on, so the user knows what they sign into. */
+  targetUrl?: string;
+  /** The agent's one-line explanation of what it needs signed into. */
+  reason?: string;
+  /**
+   * Origin to frame the live-view page from — the same mcp-sandbox origin
+   * MCP Apps use. Empty when it is not deployed, in which case the prompt
+   * renders without a viewer rather than framing nothing.
+   */
+  sandboxOrigin?: string;
+}
+
 /**
  * Compaction event — emitted after the final `metadata` event (so the badge
  * updates first) and before `done` when the backend rolls older turns into
@@ -169,6 +267,19 @@ export interface CompactionEvent {
   newCheckpoint: number;
   summarizedTurns: number;
   inputTokens: number;
+  /**
+   * Model-relative policy the cut was made under (additive, optional —
+   * docs/specs/compaction-model-relative-thresholds.md). `contextWindow` is
+   * the catalog's `maxInputTokens`; `ceiling` is the trigger, `floor` the
+   * target size after the cut, `hardCeiling` the level that forces a cut
+   * while the trigger is disarmed; `forced` says this cut was one of those.
+   */
+  contextWindow?: number | null;
+  ceiling?: number | null;
+  floor?: number | null;
+  hardCeiling?: number | null;
+  forced?: boolean;
+  retainedTokensEstimate?: number | null;
 }
 
 /**
@@ -212,13 +323,216 @@ export interface ArtifactEvent {
  *
  * Best-effort by design: a stream that finishes before generation does
  * never emits this event, and the SPA's post-close metadata refresh
- * (ChatHttpService.refreshTitleFromServer) remains the fallback. Never
+ * (ChatHttpService.refreshNewSessionFromServer) remains the fallback. Never
  * carries the "New Conversation" placeholder.
  */
 export interface SessionTitleEvent {
   type: 'session_title';
   sessionId: string;
   title: string;
+}
+
+/**
+ * Steering applied event — a follow-up the user typed while this turn was
+ * still streaming has been injected into the running turn at a tool boundary
+ * and committed to conversation history (see docs/specs/mid-turn-steering.md).
+ *
+ * Emitted after the batch's `tool_result` events so the thread renders in the
+ * order the model will see, and never after `done`. It is the client's signal
+ * that the text is genuinely in the conversation: on receipt the SPA drops the
+ * matching entry from the composer queue (by `entryId`) and renders it as a
+ * user message inside the still-streaming turn.
+ *
+ * The absence of this event is the fallback, not an error. A turn that calls
+ * no tools has no boundary to inject at, and a steer can lose the race with
+ * the turn's end — in both cases the entry stays queued and PR #916's
+ * end-of-turn flush sends it as a normal turn.
+ */
+export interface SteeringAppliedEvent {
+  type: 'steering_applied';
+  sessionId: string;
+  entryId: string;
+  text: string;
+}
+
+/**
+ * Model retry event — emitted each time the backend retries a failed model
+ * call instead of surfacing the failure. Turns an unexplained silence into a
+ * visible "still working" state.
+ *
+ * TIMING: Strands sleeps for the backoff delay before this event is yielded,
+ * so it arrives as the NEXT attempt begins, not when the wait starts. Treat
+ * `delaySeconds` as "how long the gap you just sat through was", not as a
+ * countdown to render. It does not cover the failing model call itself, which
+ * is indistinguishable from a slow but healthy one.
+ *
+ * `attempt` is 1-based and counts retries within the current turn (the first
+ * retry is 1). Purely advisory: the turn continues either way, and the event
+ * never appears if the first attempt succeeds.
+ */
+export interface ModelRetryEvent {
+  type: 'model_retry';
+  attempt: number;
+  delaySeconds: number;
+}
+
+/**
+ * A project's agent is running this turn without part of its setup, because
+ * the member lacks access to it (shared-projects §9.6, degrade-with-notice).
+ *
+ * Emitted before `message_start`. `message` is the ready-made sentence to
+ * show; the structured fields say what was dropped. Not persisted — it
+ * describes this turn's resolution, so it shows on the live turn only.
+ * `projectId` and `unavailableModelId` are omitted when null.
+ */
+export interface AgentNoticeEvent {
+  type: 'agent_notice';
+  sessionId: string;
+  agentId: string;
+  projectId?: string;
+  message: string;
+  unavailableModelId?: string;
+  unavailableTools: string[];
+  unavailableSkills: string[];
+}
+
+/**
+ * What the agent is doing right now, emitted from the runtime's
+ * `AgentStatusHook` at each model-call and tool-call boundary.
+ *
+ * The point is honesty. Before this, a turn that was waiting 9 seconds on a
+ * Canvas round trip looked exactly like a turn that was hung: cycling phrases
+ * either way. Each transition here names something that actually happened.
+ *
+ * PHASES
+ * - `preparing`   the agent is being BUILT — tool registry, MCP pre-flight,
+ *                 session restore. Emitted by the chat route rather than the
+ *                 status hook, because it happens before the event loop (and
+ *                 before `message_start`) exists. Measured at 1478ms on a cold
+ *                 agent-cache miss and 0-38ms warm, so in practice it appears
+ *                 only when it is worth appearing. Carries no `cycle`.
+ * - `prepared`    that build FINISHED, carrying its measured `durationMs`.
+ *                 Its whole job is to end `preparing`. Without it the SPA
+ *                 could only infer the end from `thinking`, which does not
+ *                 arrive until the head-of-turn work and the event loop's
+ *                 startup have run too — so a 1ms cache-hit build still
+ *                 rendered "Getting ready…". A phase that is only ever the
+ *                 "latest event" cannot express a wait that ended.
+ * - `thinking`    the model is generating (one per event-loop cycle, so a
+ *                 three-tool turn reports it four times — that IS the turn's
+ *                 shape, and `cycle` distinguishes them)
+ * - `tool_start`  a specific tool began executing
+ * - `tool_end`    it finished; carries the Strands-measured `durationMs` and
+ *                 whether it succeeded
+ *
+ * There is deliberately no "responding" phase: the SPA already knows text is
+ * streaming because the deltas are arriving. A backend-derived duplicate of a
+ * fact the client holds first-hand would only disagree at the edges.
+ *
+ * Gated by `AGENT_STATUS_ENABLED` (default on with a kill switch); `preparing`
+ * rides its own `AGENT_PREPARING_PHASE_ENABLED`, since deferring the build
+ * into the stream is a change to the turn path rather than to narration.
+ * Absence is the pre-feature behaviour — cycling phrases and no durations —
+ * never an error.
+ */
+export interface AgentStatusEvent {
+  type: 'agent_status';
+  sessionId: string;
+  phase: 'preparing' | 'prepared' | 'thinking' | 'tool_start' | 'tool_end';
+  /**
+   * 1-based event-loop cycle this transition belongs to.
+   *
+   * Absent on `preparing`, which precedes the event loop — there is no cycle
+   * to number yet.
+   */
+  cycle?: number;
+  toolName?: string;
+  toolUseId?: string;
+  /** Present on `tool_end`: measured by the event loop, not the client. */
+  durationMs?: number | null;
+  /** Present on `tool_end`: false for a raised error OR an error result. */
+  ok?: boolean;
+}
+
+/**
+ * A model-generated one-line summary of a finished batch of tool calls —
+ * "Found the Syllabus Acknowledgment assignment in BIO 101".
+ *
+ * Produced by a Nova Micro side-channel task (see
+ * `apis/shared/tool_summaries/summarizer.py`), so it lands mid-turn, *after*
+ * the tools it describes and out of band with the content stream. The SPA
+ * shows its own deterministic formatter line until this arrives, then swaps.
+ *
+ * `toolUseIds` is what the SPA keys on: the rail groups by tool-use id, so it
+ * must be able to find this summary from any call in the group. `batchId` is
+ * the first of those ids and exists for the persistence row's identity.
+ *
+ * Gated by `TOOL_SUMMARIES_ENABLED`. Absence means the deterministic line
+ * stands — a downgrade in specificity, never a blank.
+ */
+/**
+ * Where in a document a cited passage was located
+ * (`docs/specs/source-provenance-verification.md` §5).
+ *
+ * `kind` is the unit the document actually HAS, so a Word document cites a
+ * paragraph and never invents a page. `precision` is always present: an
+ * optional flag whose absence reads as exact is how an estimated position gets
+ * rendered as a confident `p. 234`, so an `estimated` locator is hedged.
+ */
+export interface SourceLocator {
+  kind: 'page' | 'paragraph' | 'line';
+  value: number;
+  precision: 'measured' | 'estimated';
+}
+
+/**
+ * The verdict for one asserted value: is its quoted passage in the document,
+ * and does the value actually appear in that passage?
+ *
+ * The two questions are answered separately on the backend and collapsed into
+ * `state` in exactly one place, so no consumer re-derives it. Treat `state` as
+ * the whole answer — in particular `quote_unsupported` means the passage is
+ * real and the value is NOT in it, which is the hallucination signal and must
+ * never render like a located citation.
+ */
+export interface SourceProvenanceClaim {
+  id: string;
+  state: 'supported' | 'quote_unsupported' | 'unassessed' | 'unverified';
+  /** How the state was reached (`literal`, `no_match`, `enum_field`, …). Measurement, not a verdict. */
+  method: string;
+  /**
+   * The value as the model stated it. Optional: a backend older than the
+   * field sends none, and the renderer falls back to the claim's own label
+   * rather than inventing one.
+   */
+  value?: string;
+  quote: string;
+  locator: SourceLocator | null;
+  uploadId: string;
+  filename: string;
+}
+
+/**
+ * Verdicts for one `verify_sources` call, emitted mid-turn and never
+ * re-streamed — `GET /messages` replays them under `sourceProvenance`.
+ *
+ * Gated by `SOURCE_PROVENANCE_ENABLED` on the backend and
+ * `features.sourceProvenance` here. Absence means no provenance is shown at
+ * all, which is the honest fallback: the SPA must never infer a citation.
+ */
+export interface SourceProvenanceEvent {
+  type: 'source_provenance';
+  sessionId: string;
+  toolUseId: string;
+  claims: SourceProvenanceClaim[];
+}
+
+export interface ToolGroupSummaryEvent {
+  type: 'tool_group_summary';
+  sessionId: string;
+  batchId: string;
+  toolUseIds: string[];
+  summary: string;
 }
 
 /**
@@ -330,6 +644,8 @@ export interface ToolResultEventData {
       };
     }>;
     status?: 'success' | 'error';
+    /** The tool's MCP `structuredContent`, when it returned one. */
+    structuredContent?: unknown;
   };
 }
 
@@ -358,7 +674,13 @@ export type StreamEventType =
   | 'artifact'
   | 'ui_resource'
   | 'ui_tool_input_partial'
-  | 'session_title';
+  | 'session_title'
+  | 'steering_applied'
+  | 'model_retry'
+  | 'agent_notice'
+  | 'agent_status'
+  | 'tool_group_summary'
+  | 'source_provenance';
 
 /**
  * Union type of all possible event data types
@@ -385,6 +707,12 @@ export type StreamEventData =
   | UiResourceEvent
   | ToolInputPartialEvent
   | SessionTitleEvent
+  | SteeringAppliedEvent
+  | ModelRetryEvent
+  | AgentNoticeEvent
+  | AgentStatusEvent
+  | ToolGroupSummaryEvent
+  | SourceProvenanceEvent
   | null
   | undefined;
 
@@ -425,9 +753,29 @@ export interface ContentBlockBuilder {
   result?: {
     content: ToolResultContent[];
     status: 'success' | 'error';
+    structuredContent?: unknown;
   };
   status?: 'pending' | 'complete' | 'error';
   isComplete: boolean;
+  /**
+   * Epoch ms of the first reasoning delta in this block.
+   *
+   * Client-observed, unlike the tool durations on the rail, which Strands
+   * measures inside its own event loop and ships over `agent_status`. The
+   * parser has no server-side measurement of thinking time, so this is the
+   * arrival of the first reasoning byte — see docs/specs/agent-state-feedback.md
+   * PR-1 for why that span is sound (a reasoning block never spans a tool
+   * call, because the agent loop starts a new message at every round trip).
+   */
+  reasoningStartedAt?: number;
+  /**
+   * Epoch ms the model demonstrably stopped reasoning: the first non-reasoning
+   * content in the same message, or that message's end.
+   *
+   * Absent while the model is still thinking, which is what lets the header
+   * stay on the live "Thinking" label until there is a real number to show.
+   */
+  reasoningEndedAt?: number;
 }
 
 /**
@@ -439,15 +787,4 @@ export interface MessageBuilder {
   contentBlocks: Map<number, ContentBlockBuilder>;
   createdAt: string;
   isComplete: boolean;
-}
-
-/**
- * Tool progress state for UI feedback
- */
-export interface ToolProgress {
-  visible: boolean;
-  message?: string;
-  toolName?: string;
-  toolUseId?: string;
-  startTime?: number;
 }

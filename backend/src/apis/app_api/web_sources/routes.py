@@ -119,7 +119,7 @@ async def start_crawl(
     threading through — and `imported_by_user_id`/`started_by_user_id` stay
     the *acting* user, which is the point of recording them.
     """
-    await _require_edit_permission(assistant_id, current_user)
+    owner_id = await _require_edit_permission(assistant_id, current_user)
 
     try:
         normalized = assert_url_is_public(request.url)
@@ -129,6 +129,31 @@ async def start_crawl(
         )
 
     settings = request.settings or CrawlSettings()
+
+    # Concurrency guard (DoS amplification defense). A crawl runs as a
+    # background task on the shared event loop; without this check a user
+    # (or a script, or a double-click on a slow connection) could fire this
+    # endpoint repeatedly and launch unbounded simultaneous crawls, starving
+    # every other request on the container. `list_active_crawls` queries
+    # DynamoDB — so the guard is cross-container, unlike the process-local
+    # `_BACKGROUND_CRAWLS` set — and it self-heals stale `running` rows
+    # (a crawl whose owning process died is auto-failed and does NOT block a
+    # new one). Checked before any write so a rejected request leaves no
+    # orphan document/job rows behind.
+    active = await list_active_crawls(assistant_id)
+    if active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A crawl is already running for this assistant. "
+                "Wait for it to finish before starting another."
+            ),
+        )
+
+    # A crawl can be an agent's first knowledge, so it starts born-managed
+    # provisioning like a first upload does. Imported here: the kb-sync image
+    # carries this package but not kb_upgrade.
+    from apis.app_api.kb_upgrade.born_managed import initial_document_status
 
     document_id = _generate_document_id()
     provisional_filename = f"{_sanitize_filename(url_extension_hint(normalized))}.html"
@@ -140,6 +165,7 @@ async def start_crawl(
         size_bytes=0,
         s3_key=s3_key,
         document_id=document_id,
+        status=await initial_document_status(assistant_id, owner_user_id=owner_id),
         provenance=DocumentProvenance(
             source_connector_id="web",
             source_adapter_key="http",

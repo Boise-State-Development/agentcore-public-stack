@@ -123,3 +123,41 @@ def test_maps_unreachable_inference_to_502(
 
     resp = TestClient(app).post("/mcp-apps/update-context", json=_BODY)
     assert resp.status_code == 502
+
+
+def test_restores_status_and_message_from_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same AgentCore 424 flattening as proxy-call.
+
+    See `apis/shared/mcp_apps/error_envelope.py`.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"appToolError": {"code": 400, "message": "needs content"}},
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(user_override=_user())
+
+    resp = TestClient(app).post("/mcp-apps/update-context", json=_BODY)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "needs content"
+    assert resp.json()["detail"] == "needs content"
+
+
+def test_enveloped_error_never_relays_a_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"appToolError": {"code": 401, "message": "nope"}}
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(user_override=_user())
+
+    resp = TestClient(app).post("/mcp-apps/update-context", json=_BODY)
+    assert resp.status_code == 502

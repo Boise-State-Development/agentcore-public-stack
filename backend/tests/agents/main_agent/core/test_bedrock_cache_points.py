@@ -8,7 +8,7 @@ cacheRead=0, cacheWrite=134k mid-turn). Dedicated cachePoints on toolConfig and
 the system prompt keep the stable prefix readable from cache on those turns.
 
 Contract under test (see ModelConfig.to_bedrock_config comment):
-  1. toolConfig.tools tail  — via cache_tools="default"
+  1. toolConfig.tools tail  — via CacheConfig(tools_ttl=True)
   2. system tail            — via SystemContentBlock list from AgentFactory
   3. last user message tail — via CacheConfig(strategy="auto")
 Bedrock allows max 4 cachePoints per request; nothing else may add one, so the
@@ -37,22 +37,41 @@ def _count_cache_points(node) -> int:
 
 
 # ---------------------------------------------------------------------------
-# ModelConfig: cache_tools + support predicate
+# ModelConfig: tools caching + support predicate
 # ---------------------------------------------------------------------------
 class TestCacheToolsConfig:
-    def test_cache_tools_set_for_claude_with_caching(self):
+    def test_tools_ttl_set_for_claude_with_caching(self):
         config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True)
-        assert config.to_bedrock_config()["cache_tools"] == "default"
+        bedrock_config = config.to_bedrock_config()
+        assert bedrock_config["cache_config"].tools_ttl is True
+        # The model-level key was deprecated in strands-agents 1.55.0
+        # (_warn_on_deprecated_cache_tools); tools_ttl supersedes it.
+        assert "cache_tools" not in bedrock_config
 
-    def test_no_cache_tools_when_caching_disabled(self):
+    def test_no_cache_config_when_caching_disabled(self):
         config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=False)
-        assert "cache_tools" not in config.to_bedrock_config()
+        bedrock_config = config.to_bedrock_config()
+        assert "cache_config" not in bedrock_config
+        assert "cache_tools" not in bedrock_config
 
-    def test_no_cache_tools_for_non_anthropic_bedrock_model(self):
+    def test_tools_ttl_off_for_non_anthropic_bedrock_model(self):
         """A model Strands' auto strategy would no-op on must not get explicit
         cachePoints either — Bedrock would reject them with ValidationException."""
         config = ModelConfig(model_id="amazon.nova-pro-v1:0", caching_enabled=True)
-        assert "cache_tools" not in config.to_bedrock_config()
+        bedrock_config = config.to_bedrock_config()
+        assert bedrock_config["cache_config"].tools_ttl is False
+        assert "cache_tools" not in bedrock_config
+
+    def test_no_ttl_configured_so_the_emitted_points_carry_none(self):
+        """cache_config.ttl must stay unset.
+
+        It is what makes tools_ttl=True emit a bare ``{"type": "default"}``
+        (byte-identical to the old cache_tools="default"), and what keeps
+        _apply_system_cache_ttl from rewriting the TTL on the cache point
+        AgentFactory places. Both sit inside the cached prefix.
+        """
+        config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True)
+        assert config.to_bedrock_config()["cache_config"].ttl is None
 
     def test_support_predicate_false_for_non_bedrock_provider(self):
         config = ModelConfig(
@@ -187,6 +206,32 @@ class TestFormattedRequestCachePoints:
         # system point must survive.
         assert request_parts["system"][0] == {"text": "You are a helpful assistant."}
 
+    def test_system_blocks_hold_exactly_one_cache_point(self, request_parts):
+        """1.55's _should_cache_system must not double the point we placed.
+
+        Its guard is ``not any("cachePoint" in block ...)``, so a second point
+        can only appear if AgentFactory stops placing ours — which would move
+        the system boundary and rewrite the cached prefix. A count of 2 would
+        also be a ValidationException (adjacent cache points).
+        """
+        assert _count_cache_points(request_parts["system"]) == 1
+
+    def test_system_prompt_without_our_point_gets_exactly_one(self, model):
+        """The 1.55 safety net, for any path that bypasses AgentFactory.
+
+        Pinned deliberately: cache_config.system_prompt_ttl stays at its
+        default True, so a system prompt reaching Bedrock without our
+        trailing cachePoint still ends the static prefix at the same place
+        rather than at the tools tail.
+        """
+        request = model.format_request(
+            [{"role": "user", "content": [{"text": "hi"}]}],
+            None,
+            system_prompt_content=[{"text": "You are a helpful assistant."}],
+        )
+        assert _count_cache_points(request["system"]) == 1
+        assert request["system"][-1] == {"cachePoint": {"type": "default"}}
+
     def test_last_user_message_tail_is_cache_point(self, request_parts):
         last_user = [m for m in request_parts["messages"] if m["role"] == "user"][-1]
         assert last_user["content"][-1] == {"cachePoint": {"type": "default"}}
@@ -215,3 +260,247 @@ class TestFormattedRequestCachePoints:
             system_prompt_content=[{"text": "You are a helpful assistant."}],
         )
         assert _count_cache_points(request) == 0
+
+
+class TestSteeringInjectionDoesNotDisturbCachePoints:
+    """A mid-turn steering injection rides the tool-result message.
+
+    Mid-turn steering (docs/specs/mid-turn-steering.md) appends the user's
+    words as a ``{"text": ...}`` block to the same user-role message that
+    carries the tool results, so a steered turn's history ends on a *mixed*
+    ``toolResult`` + ``text`` message. The cost claim in the spec rests on that
+    injection being append-only against the cached prefix: it must land inside
+    the segment the ``strategy="auto"`` message point already covers, behind
+    both static points, so the next call still reads the stable prefix from
+    cache rather than rewriting it.
+
+    These lock the placement. A regression here is a prompt-cache **cost** bug
+    — the class this repo's cost tenet exists to catch — not a correctness one,
+    so it would not surface in any behavioural test.
+    """
+
+    @pytest.fixture
+    def model(self, monkeypatch):
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
+
+        config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True)
+        return CountTokensBedrockModel(**config.to_bedrock_config())
+
+    @staticmethod
+    def _messages(steered: bool):
+        result_content = [
+            {
+                "toolResult": {
+                    "toolUseId": "t1",
+                    "content": [{"text": "thread body"}],
+                    "status": "success",
+                }
+            }
+        ]
+        if steered:
+            result_content.append(
+                {"text": "<user_message_during_turn>\nuse the other file\n</user_message_during_turn>"}
+            )
+        return [
+            {"role": "user", "content": [{"text": "first turn"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"toolUse": {"toolUseId": "t1", "name": "get_thread", "input": {}}}
+                ],
+            },
+            {"role": "user", "content": result_content},
+        ]
+
+    def _format(self, model, steered: bool):
+        return model.format_request(
+            self._messages(steered),
+            [
+                {
+                    "name": "get_thread",
+                    "description": "Fetch a thread",
+                    "inputSchema": {"json": {"type": "object", "properties": {}}},
+                }
+            ],
+            system_prompt_content=[
+                {"text": "You are a helpful assistant."},
+                {"cachePoint": {"type": "default"}},
+            ],
+        )
+
+    def test_still_exactly_three_cache_points(self, model):
+        request = self._format(model, steered=True)
+        assert _count_cache_points(request) == 3, json.dumps(
+            request, default=str, indent=2
+        )
+
+    def test_the_injection_sits_behind_the_message_cache_point(self, model):
+        """Append-only: the text lands before the trailing point, so every
+        block ahead of that point is byte-identical to the unsteered turn."""
+        request = self._format(model, steered=True)
+        last_user = [m for m in request["messages"] if m["role"] == "user"][-1]
+
+        assert last_user["content"][-1] == {"cachePoint": {"type": "default"}}
+        assert "toolResult" in last_user["content"][0]
+        assert last_user["content"][1]["text"].startswith("<user_message_during_turn>")
+
+    def test_the_static_points_are_untouched(self, model):
+        """The tools and system points are what the ~28k-token prefix rides on.
+
+        A steering injection that shifted either would rewrite that prefix at
+        the cache-write premium on every steered turn.
+        """
+        steered = self._format(model, steered=True)
+        plain = self._format(model, steered=False)
+
+        assert steered["toolConfig"] == plain["toolConfig"]
+        assert steered["system"] == plain["system"]
+        # Everything before the mixed message is identical too.
+        assert steered["messages"][:-1] == plain["messages"][:-1]
+
+
+# ---------------------------------------------------------------------------
+# PR-5: selective 1h TTL on the STATIC prefix (thresholds spec §3.6)
+# ---------------------------------------------------------------------------
+
+class TestStaticPrefixLongTtl:
+    """AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL=1h puts a 1h TTL on the tools
+    and system points only; the message point stays at the 5m default, and
+    the flag off emits exactly today's bytes."""
+
+    def _model(self, monkeypatch, value):
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        if value is None:
+            monkeypatch.delenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", raising=False)
+        else:
+            monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", value)
+        from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
+
+        config = ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True)
+        return config, CountTokensBedrockModel(**config.to_bedrock_config())
+
+    def _request(self, model):
+        return model.format_request(
+            [{"role": "user", "content": [{"text": "hi"}]}],
+            [{"name": "t", "description": "d", "inputSchema": {"json": {"type": "object", "properties": {}}}}],
+            system_prompt_content=[{"text": "sys"}, {"cachePoint": {"type": "default"}}],
+        )
+
+    def test_flag_on_sets_1h_on_tools_and_system_only(self, monkeypatch):
+        config, model = self._model(monkeypatch, "1h")
+        cc = config.to_bedrock_config()["cache_config"]
+        assert cc.tools_ttl == "1h" and cc.system_prompt_ttl == "1h" and cc.ttl is None
+        assert config.long_ttl_static_prefix() is True
+        req = self._request(model)
+        assert req["toolConfig"]["tools"][-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+        assert req["system"][-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+        assert req["messages"][-1]["content"][-1] == {"cachePoint": {"type": "default"}}
+        assert _count_cache_points(req) == 3
+
+    @pytest.mark.parametrize("value", [None, "", "5m", "2h", "true"])
+    def test_anything_but_1h_is_todays_bytes(self, monkeypatch, value):
+        config, model = self._model(monkeypatch, value)
+        cc = config.to_bedrock_config()["cache_config"]
+        assert cc.tools_ttl is True and cc.system_prompt_ttl is True
+        assert config.long_ttl_static_prefix() is False
+        req = self._request(model)
+        assert req["toolConfig"]["tools"][-1] == {"cachePoint": {"type": "default"}}
+        assert req["system"][-1] == {"cachePoint": {"type": "default"}}
+        assert _count_cache_points(req) == 3
+
+    def test_non_anthropic_model_is_unaffected(self, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", "1h")
+        config = ModelConfig(model_id="us.amazon.nova-micro-v1:0", caching_enabled=True)
+        cc = config.to_bedrock_config()["cache_config"]
+        assert cc.tools_ttl is False
+        assert config.long_ttl_static_prefix() is False
+
+    def test_caching_disabled_means_no_long_ttl(self, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", "1h")
+        assert ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=False).long_ttl_static_prefix() is False
+
+
+# ---------------------------------------------------------------------------
+# Shared Projects 2.2: a bound Memory-Space block takes the fourth point
+# ---------------------------------------------------------------------------
+MEMORY_BLOCK = '<memory_space scope="agent" name="Notes" note="...">\n\n### MEMORY.md\n- [[a]]\n\n</memory_space>'
+
+
+class TestMemoryBlockCachePoint:
+    """Budget with memory: tools, system, memory, auto message = 4, Bedrock's max.
+
+    The system point stays where it was, so the static prefix survives memory
+    edits; turns without memory are unchanged (3 points, today's bytes).
+    """
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_factory_puts_memory_after_the_system_point_behind_its_own(self, _m, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        AgentFactory.create_agent(
+            model_config=ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True),
+            system_prompt="You are a helpful assistant.",
+            tools=[], session_manager=MagicMock(), memory_context=MEMORY_BLOCK,
+        )
+        assert mock_agent_cls.call_args.kwargs["system_prompt"] == [
+            {"text": "You are a helpful assistant."},
+            {"cachePoint": {"type": "default"}},
+            {"text": MEMORY_BLOCK},
+            {"cachePoint": {"type": "default"}},
+        ]
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_without_cache_points_memory_is_appended_as_text(self, _m, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        AgentFactory.create_agent(
+            model_config=ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=False),
+            system_prompt="You are a helpful assistant.",
+            tools=[], session_manager=MagicMock(), memory_context=MEMORY_BLOCK,
+        )
+        assert mock_agent_cls.call_args.kwargs["system_prompt"] == (
+            "You are a helpful assistant.\n\n" + MEMORY_BLOCK
+        )
+
+    def _format(self, monkeypatch, ttl_flag=None):
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        if ttl_flag is None:
+            monkeypatch.delenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", raising=False)
+        else:
+            monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", ttl_flag)
+        from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
+
+        model = CountTokensBedrockModel(
+            **ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True).to_bedrock_config()
+        )
+        return model.format_request(
+            [{"role": "user", "content": [{"text": "hi"}]}],
+            [{"name": "t", "description": "d", "inputSchema": {"json": {"type": "object", "properties": {}}}}],
+            system_prompt_content=[
+                {"text": "sys"}, {"cachePoint": {"type": "default"}},
+                {"text": MEMORY_BLOCK}, {"cachePoint": {"type": "default"}},
+            ],
+        )
+
+    def test_formatted_request_carries_exactly_four_points_in_order(self, monkeypatch):
+        req = self._format(monkeypatch)
+        assert _count_cache_points(req) == 4, json.dumps(req, default=str, indent=2)
+        assert req["toolConfig"]["tools"][-1] == {"cachePoint": {"type": "default"}}
+        assert req["system"] == [
+            {"text": "sys"}, {"cachePoint": {"type": "default"}},
+            {"text": MEMORY_BLOCK}, {"cachePoint": {"type": "default"}},
+        ]
+        assert req["messages"][-1]["content"][-1] == {"cachePoint": {"type": "default"}}
+
+    def test_long_ttl_flag_gives_both_system_points_1h_keeping_ttl_order_valid(self, monkeypatch):
+        """Bedrock rejects a TTL longer than an earlier point's. With the flag on,
+        upstream fills every TTL-less system point with 1h, so the order is
+        1h (tools), 1h, 1h, 5m (message): non-increasing, valid."""
+        req = self._format(monkeypatch, "1h")
+        system_points = [b["cachePoint"] for b in req["system"] if "cachePoint" in b]
+        assert system_points == [{"type": "default", "ttl": "1h"}, {"type": "default", "ttl": "1h"}]
+        assert req["messages"][-1]["content"][-1] == {"cachePoint": {"type": "default"}}
+        assert _count_cache_points(req) == 4

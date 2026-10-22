@@ -2,6 +2,7 @@ import { Injectable, inject, resource, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
+import { ToolCapabilities } from '../../../services/tool-capability/tool-capability.service';
 import {
   AdminTool,
   AdminToolListResponse,
@@ -244,6 +245,26 @@ export class AdminToolService {
     return firstValueFrom(
       this.http.get<GatewayTargetStatus>(
         `${this.baseUrl()}/${toolId}/gateway-status`
+      )
+    );
+  }
+
+  /**
+   * Ask a protocol='mcp_external' server what prompts and resources it exposes,
+   * and store the answer as that tool's capability snapshot.
+   *
+   * The snapshot is what the tool detail drawer reads; nothing else writes it
+   * and nothing re-runs on its own, so a server that gains a prompt after its
+   * last probe keeps showing the old, empty answer until someone calls this.
+   *
+   * Probing opens a live MCP session against the server, which is why it is an
+   * admin action rather than something the drawer does per view.
+   */
+  async refreshToolCapabilities(toolId: string): Promise<ToolCapabilities> {
+    return firstValueFrom(
+      this.http.post<ToolCapabilities>(
+        `${this.baseUrl()}/${encodeURIComponent(toolId)}/capabilities/refresh`,
+        {}
       )
     );
   }

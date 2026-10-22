@@ -19,8 +19,7 @@ function stubParams(overrides: Partial<AppApiSsmParams> = {}): AppApiSsmParams {
   } as AppApiSsmParams;
 }
 
-describe('buildAppApiEnvironment — Memory Spaces', () => {
-  it('wires the table and bucket names the service reads', () => {
+describe('buildAppApiEnvironment — Memory Spaces', () => {  it('wires the table and bucket names the service reads', () => {
     const env = buildAppApiEnvironment(createMockConfig(), stubParams());
 
     expect(env.DYNAMODB_MEMORY_SPACES_TABLE_NAME).toBe('test-project-memory-spaces');
@@ -52,5 +51,183 @@ describe('buildAppApiEnvironment — Memory Spaces', () => {
       stubParams(),
     );
     expect(on.AGENTS_API_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — Shared Projects', () => {
+  it('always wires the table name and gates only feature existence on the flag', () => {
+    const params = stubParams({ projectsTableName: 'test-project-projects' });
+
+    const off = buildAppApiEnvironment(createMockConfig(), params);
+    expect(off.PROJECTS_ENABLED).toBe('false');
+    expect(off.DYNAMODB_PROJECTS_TABLE_NAME).toBe('test-project-projects');
+
+    const on = buildAppApiEnvironment(createMockConfig({ projects: { enabled: true } }), params);
+    expect(on.PROJECTS_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — direct user grants', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.USER_GRANTS_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ userGrants: { enabled: true } }), stubParams());
+    expect(on.USER_GRANTS_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — session prewarm', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.SESSION_PREWARM_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ sessionPrewarm: { enabled: true } }), stubParams());
+    expect(on.SESSION_PREWARM_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — folder sync', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).FOLDER_SYNC_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ folderSync: { enabled: true } }), stubParams());
+    expect(on.FOLDER_SYNC_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — source provenance', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SOURCE_PROVENANCE_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(
+      createMockConfig({ sourceProvenance: { enabled: true } }),
+      stubParams(),
+    );
+    expect(on.SOURCE_PROVENANCE_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — client turn timing', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).CLIENT_TURN_TIMING_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ clientTurnTiming: { enabled: true } }), stubParams());
+    expect(on.CLIENT_TURN_TIMING_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — project-memory content lint (2.7)', () => {
+  it('always sets the mode and sets the patterns only when there are some', () => {
+    const plain = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(plain.MEMORY_LINT_MODE).toBe('warn');
+    expect(plain).not.toHaveProperty('MEMORY_SENSITIVE_PATTERNS');
+
+    const patterns = '["\\\\bS\\\\d{8}\\\\b"]';
+    const set = buildAppApiEnvironment(
+      createMockConfig({ memoryLint: { mode: 'block', sensitivePatterns: patterns } }),
+      stubParams(),
+    );
+    expect(set.MEMORY_LINT_MODE).toBe('block');
+    expect(set.MEMORY_SENSITIVE_PATTERNS).toBe(patterns);
+  });
+});
+
+describe('buildAppApiEnvironment — dictation', () => {
+  it('threads the kill switch and the language list', () => {
+    const env = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(env.DICTATION_ENABLED).toBe('true');
+    expect(env.DICTATION_LANGUAGES).toBe('en-US');
+
+    const off = buildAppApiEnvironment(
+      createMockConfig({ dictation: { enabled: false, languages: 'en-US,es-US' } }),
+      stubParams(),
+    );
+    expect(off.DICTATION_ENABLED).toBe('false');
+    expect(off.DICTATION_LANGUAGES).toBe('en-US,es-US');
+  });
+});
+
+/**
+ * Agent Templates: the admin CRUD routes and the public `/templates` picker
+ * feed read the table name from `DYNAMODB_AGENT_TEMPLATES_TABLE_NAME`. Mirrors
+ * the system-prompts wiring. Read by app-api only — inference-api never sets it.
+ */
+describe('buildAppApiEnvironment — Agent Templates', () => {
+  it('wires DYNAMODB_AGENT_TEMPLATES_TABLE_NAME from the resolved table name', () => {
+    const env = buildAppApiEnvironment(
+      createMockConfig(),
+      stubParams({ agentTemplatesTableName: 'test-project-agent-templates' }),
+    );
+    expect(env.DYNAMODB_AGENT_TEMPLATES_TABLE_NAME).toBe('test-project-agent-templates');
+  });
+});
+
+/**
+ * Guards the owner-facing upgrade offer's flag wiring.
+ *
+ * `apis/app_api/kb_upgrade/service.py` reads `MANAGED_KB_MIGRATION_ENABLED` from
+ * THIS task's environment to decide whether to offer the upgrade at all. The
+ * migration Lambdas get their own copy from `kb-migration-construct.ts`; app-api
+ * was originally missed, and the failure mode is the reason this test exists:
+ * the card renders `phase: "none"` for every user, forever, no matter what the
+ * environment's flag is set to. It deploys clean, logs nothing, and the feature
+ * is simply unreachable — the same shape as the unregistered-backend and
+ * no-enrolment-surface defects before it.
+ */
+describe('buildAppApiEnvironment — managed KB upgrade offer', () => {
+  /** The helper's own documented pattern: start from off, opt in explicitly. */
+  const managedKbDefaults = () => createMockConfig().managedKb;
+
+  it('threads config.managedKb.migrationEnabled into the env the service reads', () => {
+    const on = buildAppApiEnvironment(
+      createMockConfig({ managedKb: { ...managedKbDefaults(), migrationEnabled: true } }),
+      stubParams(),
+    );
+    expect(on.MANAGED_KB_MIGRATION_ENABLED).toBe('true');
+  });
+
+  it("ships 'false' explicitly rather than omitting the variable", () => {
+    // Absent and 'false' behave identically in the service (it uses an
+    // allow-list of affirmative spellings), but an explicit value makes the
+    // shipped state readable in the task definition rather than inferred from
+    // an absence that could equally mean "someone forgot".
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.MANAGED_KB_MIGRATION_ENABLED).toBe('false');
+    expect(Object.keys(off)).toContain('MANAGED_KB_MIGRATION_ENABLED');
+  });
+
+  it('uses the same flag as the migration worker, not a second one', () => {
+    // Two independent flags would let the offer and the capability disagree —
+    // a user could enrol a knowledge base that nothing will ever migrate.
+    const env = buildAppApiEnvironment(
+      createMockConfig({ managedKb: { ...managedKbDefaults(), migrationEnabled: true } }),
+      stubParams(),
+    );
+    const strays = Object.keys(env).filter(
+      (key) => key.startsWith('MANAGED_KB_') && key.includes('OFFER'),
+    );
+    expect(strays).toEqual([]);
+  });
+});
+
+/**
+ * Born-managed: `apis/app_api/kb_upgrade/service.py` reads `MANAGED_KB_NEW_DEFAULT`
+ * to enrol newly finalized agents onto the managed backend. The migration Lambdas
+ * already receive it; before this it never reached the API, so flipping the flag
+ * was a no-op. These pin the wiring.
+ */
+describe('buildAppApiEnvironment — born-managed (NEW_DEFAULT)', () => {
+  const managedKbDefaults = () => createMockConfig().managedKb;
+
+  it('threads config.managedKb.newDefault into MANAGED_KB_NEW_DEFAULT', () => {
+    const on = buildAppApiEnvironment(
+      createMockConfig({ managedKb: { ...managedKbDefaults(), newDefault: true } }),
+      stubParams(),
+    );
+    expect(on.MANAGED_KB_NEW_DEFAULT).toBe('true');
+  });
+
+  it("ships 'false' explicitly rather than omitting the variable", () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.MANAGED_KB_NEW_DEFAULT).toBe('false');
+    expect(Object.keys(off)).toContain('MANAGED_KB_NEW_DEFAULT');
   });
 });

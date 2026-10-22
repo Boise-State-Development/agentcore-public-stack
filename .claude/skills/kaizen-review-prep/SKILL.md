@@ -1,11 +1,11 @@
 ---
 name: kaizen-review-prep
-description: Friday late-morning synthesis. Runs ~2 hours after `kaizen-research` the same morning. Consumes this week's research doc, open items in `docs/kaizen/review-queue.md`, last weekend's POC findings (from comments on the previous week's research PR), and recent merges/reverts/CI signal — produces a ranked, decision-oriented agenda. Every item has a Ship / Decline / Defer recommendation. Opens a PR into `develop`. Triggers: "kaizen review prep", "weekly review prep", "friday review", "rank kaizen ideas".
+description: Friday late-morning synthesis. Runs ~4 hours after `kaizen-research` the same morning. Consumes this week's research doc, open items in `docs/kaizen/review-queue.md`, the outcomes of the prior review's proposals (read from merged PRs and from open PR branches), and recent merges/reverts/CI signal — produces a ranked, decision-oriented agenda. Every item has a Ship / Decline / Defer recommendation. Opens a PR into `develop`. Triggers: "kaizen review prep", "weekly review prep", "friday review", "rank kaizen ideas".
 ---
 
 # Kaizen Review Prep
 
-Friday late morning, after `kaizen-research` ran earlier the same morning. This skill consolidates this week's research + open queue items + last weekend's POC findings (lifted from PR comments on the previous week's research PR) + recent repo state into a ranked decision agenda. Phil reviews Friday morning, marks ✅/❌/⏸ on each item, ships 1–3 the following week, and POCs the next batch over the weekend.
+Friday late morning, after `kaizen-research` ran earlier the same morning. This skill consolidates this week's research + open queue items + the outcomes of the *prior* review's proposals + recent repo state into a ranked decision agenda. Phil reviews Friday morning, marks ✅/❌/⏸ on each item, and ships 1–3 the following week. What those 1–3 did is the feedback signal the next run opens with.
 
 ## Philosophy
 
@@ -13,26 +13,30 @@ Friday late morning, after `kaizen-research` ran earlier the same morning. This 
 - **Subtraction first.** Every proposal ranks against "do nothing" and "retire something instead." If a proposal adds anything, it must explain what existing thing it either replaces or simplifies.
 - **Dual lens — impact + capability-unlock.** Rank proposals through *two* lenses, not one: (a) **impact on existing code** (does this change, simplify, or obsolete something we already have?) and (b) **capability unlock** (what *new* product capability or UX enhancement does this enable that we couldn't easily build before?). Subtraction-first applies to lens (a). But proposals that genuinely unlock new product surface — code-interpreter sandboxes, persistent agent state, multi-agent UI attribution, new SSE event types that enable inline UI, etc. — must be evaluated on their strategic merit, *not* auto-deferred because they don't intersect existing code. A proposal with no `Subtracts` value but a substantive `Unlocks` value can rank above a low-impact dep-bump. Don't penalize net-new capability for not being a cleanup.
 - **Multiple cycles.** Kaizen is small changes, weekly, compounding. If this week's review touches 3 things, next week's will touch 3 different things. Phil doesn't need a grand plan — he needs a reliable weekly cadence.
-- **One-week feedback lag is intentional.** Phil reviews Friday → POCs over the weekend → those POC findings surface in the *next* Friday's review-prep as Carried Over items. Don't try to fold same-day POC findings in — they don't exist yet.
+- **Outcomes are the feedback channel, not comments.** Open every run with a scorecard of the prior review's proposals: which shipped, which didn't, and what the merged PRs found. Shipping a proposal is the only reaction that has ever been recorded — see `decisions.md` [2026-09-21]. Do not ask for, wait on, or rank by PR comments.
+- **Read open PR branches, not just `develop`.** This repo's deepest analysis is written as `docs/kaizen/review-queue.md` entries *inside the feature PR that produced it*. A review that reads only `develop` misses them, re-derives them worse, and gets corrected by a branch that was sitting there the whole time. Before ranking, `gh pr list --state open` and diff each against `develop` for `docs/kaizen/` and any spec the review cites. Those entries are authoritative over anything re-derived; cite them rather than restating them, and flag the merge order when two PRs touch the top of `## Open`.
 - **No edits outside `docs/kaizen/`.** This skill writes one Markdown file under `docs/kaizen/reviews/` and updates `docs/kaizen/review-queue.md` (moves Open → Resolved post-review). It never touches source code, `CLAUDE.md`, or skill files. Those changes happen in separate PRs after the review.
 
 ## When to run
 
-Friday late morning (~8am MT), ~2 hours after `kaizen-research` runs. Phil reviews both docs Friday morning, picks 1–3 to ship over the coming week, and POCs additional items over the weekend. POC findings from last weekend's POC session surface here as Carried Over items (lifted from PR comments on the *previous* week's research PR — not this week's, which Phil hasn't seen yet).
+Friday late morning (~10am MT), ~4 hours after `kaizen-research` runs. Phil reviews both docs Friday, picks 1–3 to ship over the coming week; what those picks did is the scorecard this skill opens with the following Friday.
+
+**Preflight — check that this morning's research doc exists before doing anything else.** The gap is sized to the scan's runtime (2h18m on 2026-09-11), not guaranteed by it. If `docs/kaizen/research/<today>.md` is absent or the `kaizen-research` run is still in flight, say so **in the review doc's header** and proceed queue-first — the `## Open` entries are the primary source and research is one input. Degrading is fine; degrading silently is not. This failed on 2026-09-18, when prep ran 18 minutes after the scan started.
 
 ## Inputs
 
 1. **Most recent `docs/kaizen/research/YYYY-MM-DD.md`** — Friday's scan. Its Top 5 ideas are the primary candidate list.
 2. **`docs/kaizen/review-queue.md`** — `## Open` entries. Includes both this week's ideas (just appended by `kaizen-research`) and any prior-week items that weren't resolved.
 3. **Last 1–2 `docs/kaizen/reviews/*.md`** — what was proposed before, what was decided, anything deferred to "revisit by [date]".
-4. **PR comments on the *previous* week's kaizen-research PR.** `gh pr view <n> --comments` — Phil's reactions and weekend POC findings are first-class signal. The PR opened *this* morning by `kaizen-research` is too fresh; comments accumulate over the week as Phil POCs ideas. Pick the research PR from one week ago (or the most recent merged/closed kaizen-research PR), not today's.
+4. **Outcomes of the prior review's proposals.** For each proposal in the most recent `docs/kaizen/reviews/*.md`, establish on disk or in git what happened: shipped (name the commit/PR), not started, or superseded. This is the feedback channel — see the Philosophy bullet. Include **open PR branches**, which routinely carry queue entries that refute or narrow what `develop` alone would suggest.
 5. **`docs/kaizen/decisions.md`** (if it exists) — declined items with reasons. Don't re-propose without materially new context.
 6. **Recent activity since last review:**
-   - `git log develop --since="<last review date>" --oneline --no-merges` — what shipped.
+   - `git log origin/develop --since="<last review date>" --oneline --no-merges` — what shipped.
    - `gh pr list --base develop --state merged --search "merged:>$(date -v-7d +%Y-%m-%d)"` — what landed.
    - `gh run list --status=failure --limit 30` — fresh CI failures.
 7. **`CLAUDE.md` + skill inventory** — surface concerns only; never propose unilateral edits to these.
 8. **`CHANGELOG.md` / `RELEASE_NOTES.md`** — most recent ~14 days, for the "what shipped this week" celebration block + the don't-re-propose filter.
+9. **Spec sync rows** — the research doc's "Spec sync" table (kaizen-research source 2b) and the matching `Spec sync:` queue entries. They keep the multi-agent living specs (`docs/specs/multi-agent-patterns.md`, `docs/specs/agent-handoffs-and-consults.md`) true to upstream and to our own code. If the research doc has no Spec sync table, or no "no drift found" line, say the watch didn't run; don't treat it as a clean week.
 
 ## Output
 
@@ -78,13 +82,25 @@ check before decisions.]
 - **Unlocks** (if applicable): [net-new product capability, UX pattern, or enhancement this enables — bulleted if multiple. Required for proposals where `Subtracts: no — addition only`; the unlock is the justification. Omit when purely a cleanup/dep-bump and not applicable.]
 - **Effort**: Low / Med / High
 - **Impact**: Low / Med / High
-- **POC findings (if Phil tried it)**: [summary or "not POCed"]
+- **Evidence**: [measured — cite the number and where it came from | verified on disk — cite file:line | asserted — say so plainly]
 - **Ship means**: [specific action — "open PR updating X to do Y" or "retire skill Z"]
 - **Decline means**: [what happens instead — usually "keep current behavior, revisit in N weeks"]
 - **Recommendation**: Ship / Decline / Defer N weeks — [one-sentence why]
 
 ### 2. [Next proposal]
 …
+
+## Living Spec Sync — multi-agent
+<!-- From the research doc's Spec sync table. Kept apart from Proposals so they
+     never crowd out the ranked ideas, and so drift never waits for a slow week.
+     Default recommendation is Ship when the evidence is verified (a release note,
+     a merged PR, a file:line): it's a small docs PR. Recommend Decline only when
+     the evidence is asserted rather than verified, and say which. A sync that
+     changes a decision in the spec (a gate, a phase order, a non-goal) is not a
+     sync — promote it to Proposals instead. -->
+
+- **[Doc §]** — "[stale claim]" → "[proposed text]" — *evidence*: [URL / SHA / file:line] — recommendation: Ship / Decline — [why]
+- Or: "No drift found this week (watch ran)." / "Watch did not run — [reason]."
 
 ## Carried Over From Prior Reviews
 <!-- Items deferred in earlier review docs that have hit their revisit date.
@@ -158,15 +174,15 @@ After Phil reviews and the decisions are logged in the review doc, this skill (o
    - Last ~14 days of `CHANGELOG.md` and `RELEASE_NOTES.md`
    - `CLAUDE.md` (read-only — for context, not edits)
 
-3. **Pull PR comments on the latest research PR** (parallel with step 4):
+3. **Score the prior review's proposals, and read open PR branches** (parallel with step 4):
    ```
-   gh pr list --base develop --state all --search "kaizen/research" --limit 1 --json number,url
-   gh pr view <number> --comments
+   gh pr list --state open --json number,title,headRefName
+   git fetch origin && git diff origin/develop...origin/<branch> -- docs/kaizen/
    ```
-   Capture Phil's reactions. POC findings he mentions get folded into proposal entries.
+   For each proposal in the last review doc, resolve shipped / not started / superseded against git and disk — that scorecard opens the new review. Queue entries found on open branches are authoritative over anything re-derived here.
 
 4. **Pull recent activity** (parallel Bash):
-   - `git log develop --since="<last review date>" --oneline --no-merges`
+   - `git log origin/develop --since="<last review date>" --oneline --no-merges`
    - `gh pr list --base develop --state merged --search "merged:>$(date -v-7d +%Y-%m-%d)" --limit 30`
    - `gh run list --status=failure --limit 30`
    - `gh issue list --state open --search "created:>$(date -v-7d +%Y-%m-%d)"`
@@ -183,7 +199,7 @@ After Phil reviews and the decisions are logged in the review doc, this skill (o
    - Low-effort × High-impact first.
    - **Retirement candidates** get a +1 boost (subtraction bias).
    - **Capability-unlock items** (proposals with a substantive `Unlocks` field — new product capability, UX surface, or platform primitive adoption) rank on their strategic merit. Do not auto-defer just because `Subtracts: no`. A High-impact unlock can rank above a Low-impact subtraction.
-   - Items with **POC findings** rank above untested items at the same effort/impact.
+   - Items with **measured evidence** rank above asserted ones at the same effort/impact.
 
 8. **Cap the proposal count at 10.** If more than 10 candidates, defer the lowest-ranked to next week with a note. The review is supposed to take 10-15 minutes, not be exhaustive.
 
@@ -195,7 +211,11 @@ After Phil reviews and the decisions are logged in the review doc, this skill (o
 DATE=$(TZ=America/Denver date +'%Y-%m-%d')
 BRANCH="kaizen/review-${DATE}"
 
-git checkout -b "$BRANCH" develop
+# Branch from the remote tip, never local `develop`: the main checkout often
+# sits detached or on another branch, and local `develop` is usually checked
+# out in some other worktree and weeks behind.
+git fetch origin develop
+git checkout -b "$BRANCH" origin/develop
 git add docs/kaizen/
 git commit -m "$(cat <<EOF
 chore(kaizen): weekly review prep ${DATE}
@@ -213,7 +233,7 @@ gh pr create --base develop --head "$BRANCH" \
 - N proposals ranked Effort × Impact (retirement candidates boosted).
 - Friction patterns from the week's commits, PRs, and CI surfaced.
 - Carried-over deferred items now due for re-decision.
-- POC findings (from kaizen-research PR comments) folded into proposals where Phil tried something.
+- Scorecard of the prior review's proposals: what shipped, what didn't, and what the merged PRs found.
 
 ## Review
 1. Read Friction (2 min).

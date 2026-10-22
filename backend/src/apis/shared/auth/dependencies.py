@@ -4,6 +4,7 @@ import asyncio
 import jwt
 import logging
 import os
+import time
 from typing import Optional
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -62,6 +63,84 @@ def invalidate_user_profile_cache(user_id: str) -> None:
     """
     _user_profile_cache.pop(user_id, None)
 
+
+# ─── Background User-Sync Throttle ─────────────────────────────────────
+# `sync_user_from_jwt` is an upsert: a GetItem followed by a PutItem that
+# rewrites the whole profile row and its GSI projections. Firing it on every
+# authenticated request meant one SPA first load — 12 API calls — issued 24
+# DynamoDB operations against a single item, writing identical values except
+# `last_login_at`. A classroom signing in together multiplied that by the
+# class size, against one hot partition per student.
+#
+# Throttling is safe because this is not the authoritative write. The BFF
+# callback's `_sync_user_from_id_token` syncs on every login off the ID token
+# (which is the only place the full claim set exists), and `POST /users/me/sync`
+# writes through the repository directly. What remains here is a periodic
+# refresh, so it only needs to run periodically. The cost is that
+# `last_login_at` is accurate to within the window rather than to the request.
+#
+# A brand-new user is unaffected: with no entry recorded, the first request
+# always claims the sync, so row creation still happens immediately.
+
+_USER_SYNC_THROTTLE_SECONDS = int(os.environ.get("USER_SYNC_THROTTLE_SECONDS", "300"))
+_USER_SYNC_TRACKER_MAX = 10_000
+
+_user_sync_last_run: dict[str, float] = {}
+
+# Strong references to in-flight sync tasks. The event loop only holds a weak
+# reference to a bare `asyncio.create_task(...)`, so without keeping one here
+# the GC can collect the task mid-await — the same hazard
+# `SessionRefreshMiddleware` guards its slide writes against.
+_user_sync_tasks: set[asyncio.Task] = set()
+
+
+def _claim_user_sync(user_id: str) -> bool:
+    """Return True if this request should run the background user sync.
+
+    The claim is recorded BEFORE the sync runs, not after it completes. The
+    12 requests of a single page load overlap, so a marker written on
+    completion would let most of them through before the first one landed —
+    which is the exact pileup this exists to prevent.
+    """
+    now = time.monotonic()
+    last = _user_sync_last_run.get(user_id)
+    if last is not None and now - last < _USER_SYNC_THROTTLE_SECONDS:
+        return False
+
+    _user_sync_last_run[user_id] = now
+    if len(_user_sync_last_run) > _USER_SYNC_TRACKER_MAX:
+        _prune_user_sync_tracker(now)
+    return True
+
+
+def _prune_user_sync_tracker(now: float) -> None:
+    """Drop entries older than the throttle window.
+
+    Bounds the dict on a long-lived container that has served many distinct
+    users. An entry past the window is already a no-op for `_claim_user_sync`,
+    so dropping it changes no behaviour.
+    """
+    stale = [
+        uid
+        for uid, ts in _user_sync_last_run.items()
+        if now - ts >= _USER_SYNC_THROTTLE_SECONDS
+    ]
+    for uid in stale:
+        _user_sync_last_run.pop(uid, None)
+
+
+def reset_user_sync_throttle(user_id: Optional[str] = None) -> None:
+    """Let the next request re-sync `user_id` (or every user when None).
+
+    Exposed for tests and for any caller that has just invalidated profile
+    state and wants the refresh to happen now rather than at the next window.
+    """
+    if user_id is None:
+        _user_sync_last_run.clear()
+    else:
+        _user_sync_last_run.pop(user_id, None)
+
+
 _user_repository = None
 
 
@@ -95,8 +174,6 @@ async def _enrich_user_from_store(user: User) -> None:
 
     Results are cached in-memory to avoid per-request DynamoDB lookups.
     """
-    import time
-
     from apis.shared.rbac.version import get_roles_version
 
     current_version = get_roles_version()
@@ -144,6 +221,24 @@ async def _sync_user_background(sync_service, user: User) -> None:
     except Exception as e:
         # Log but don't fail - sync should never break authentication
         logger.warning(f"Failed to sync user {user.user_id}: {e}")
+
+
+def _schedule_user_sync(user: User) -> None:
+    """Dispatch the throttled background profile sync for `user`.
+
+    No-op when sync is unconfigured or the user was already synced inside the
+    throttle window. Never raises: a sync problem must not break auth.
+    """
+    sync_service = _get_user_sync_service()
+    if not (sync_service and sync_service.enabled):
+        return
+    if not _claim_user_sync(user.user_id):
+        return
+
+    task = asyncio.create_task(_sync_user_background(sync_service, user))
+    _user_sync_tasks.add(task)
+    task.add_done_callback(_user_sync_tasks.discard)
+
 
 # Cognito JWT validator for tokens minted by the BFF confidential client.
 # The SPA-public PKCE client was decommissioned in Phase 7; all browser-facing
@@ -277,9 +372,7 @@ async def get_current_user_from_session(request: Request) -> User:
     user.raw_token = record.cognito_access_token
     await _enrich_user_from_store(user)
 
-    sync_service = _get_user_sync_service()
-    if sync_service and sync_service.enabled:
-        asyncio.create_task(_sync_user_background(sync_service, user))
+    _schedule_user_sync(user)
 
     return user
 
@@ -380,9 +473,7 @@ async def get_current_user_trusted(
         await _enrich_user_from_store(user)
 
         # Fire-and-forget sync to Users table
-        sync_service = _get_user_sync_service()
-        if sync_service and sync_service.enabled:
-            asyncio.create_task(_sync_user_background(sync_service, user))
+        _schedule_user_sync(user)
 
         return user
 

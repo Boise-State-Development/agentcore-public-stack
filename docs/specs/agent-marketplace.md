@@ -79,9 +79,11 @@ The lifecycle is a state machine on the listing:
 
 ```
 draft ──▶ private ──▶ in_review ──▶ published ──▶ taken_down
-                          │              │             │
-                          └─▶ changes_requested ◀──────┘
-                                     └──▶ in_review (resubmit)
+                        │ │             │              │
+                        │ └─▶ changes_requested ◀──────┘
+                        │            └──▶ in_review (resubmit)
+                        └───▶ rejected ──▶ in_review (revise and resubmit)
+                                       └─▶ private (shelve, so it can be deleted)
 ```
 
 - **Submit** (author) captures a category, an optional note to the reviewer, and runs the D7
@@ -89,9 +91,79 @@ draft ──▶ private ──▶ in_review ──▶ published ──▶ taken_
 - **Approve** (admin) writes the sparse index key and the Agent appears in the store immediately.
 - **Request changes** (admin) returns it with a reason that renders on the author's own card, so the
   author never has to ask what happened.
+- **Decline** (admin) answers a submission that should not be in the store *at all*, also with a
+  required reason. See D2.2 — it is a third decision, not a harsher request-changes.
 - **Take down** (admin) clears the index key and notifies the author with a reason. It is a
   **delisting, not a revocation** — existing pins keep working, conversations underway keep running,
   and the Agent stays reachable by direct link because `visibility` is a separate axis (D3).
+
+### D2.1 — The reviewer reads and test-drives the submission
+
+The queue could name a submission but not show one, and the three access rules that produced
+that were each individually correct:
+
+- `instructions` is gated to owner/editor on `GET /agents/{id}` — an admin is a `viewer` at best.
+- `get_assistant_with_access_check` refuses a non-owner outright on a PRIVATE Agent, and a
+  PRIVATE Agent absolutely can sit in the queue (approval refuses one; submission does not).
+- The review diff (§6.1) is the only other window onto the content, and on a **first** submission
+  it is empty by construction — there is nothing published to diff against.
+
+Net effect: on the most consequential review in the system, the reviewer saw a name, an author,
+a category and nothing else. So:
+
+**`GET /admin/agents/{id}/submission`** returns the full reviewer read — instructions, bound
+capabilities by name, model, starters, publisher, reachability — and **`review_preview` on the
+invocation path** lets them test-drive it.
+
+Three rules hold this together and are each load-bearing:
+
+1. **It reads the frozen snapshot, never the live record.** The live record is the author's draft
+   and they can keep editing it while the row sits in the queue; approval promotes
+   `submittedVersion`. Reading anything else shows an admin one configuration and publishes
+   another — the exact window `AgentVersion` was introduced to close, one level up. The rule lives
+   in `version_resolution.resolve_review_agent` so the page and the test drive cannot disagree
+   about what is under review; `in_review` reads `submittedVersion`, everything else reads
+   `publishedVersion` (on a withdrawal request nothing is pending, and `submittedVersion` is a
+   high-water mark that would name a snapshot the store never served).
+2. **It is a separate endpoint, not a widened `GET /agents/{id}`.** That route is the store's detail
+   read *and* the Agent Designer's form loader — teaching it an admin bypass would put an access
+   exception on the busiest read in the feature, to serve the wrong version anyway. Reading a
+   snapshot through an admin surface also sidesteps the PRIVATE 403 without loosening anyone's
+   access gate.
+3. **Instructions reach a marketplace admin, deliberately.** You cannot review what you cannot
+   read, and the diff already discloses them on every update. What changes is that a first
+   submission is no longer the one case where the reviewer approves prose nobody showed them.
+
+The test drive streams the real invocation path with a `preview-` session id, so nothing lands in
+the author's history, and the path skips its bookkeeping writes (`lastUsedAt`, share interaction) —
+a reviewer poking a submission is not use. It runs under the **reviewer's own identity**, so binding
+resolution is RBAC-filtered for them and not for the eventual users; the panel says so rather than
+letting a clean test drive read as proof it will run for everyone. The `admin.marketplace` scope is
+re-resolved against the caller's roles inside the invocation path, and a caller without it is
+**refused rather than quietly downgraded** — a silent downgrade would run the published snapshot and
+report it as the version under review.
+
+### D2.2 — Declining is a third decision, not a harsher request-changes
+
+Approve and request-changes were the only exits, so an admin who judged a submission not a fit had
+to publish it or say "fix this". The second promises a review they do not intend to give, leaves the
+author revising toward an approval that is not coming, and puts the same submission back in the
+queue every round.
+
+`rejected` is admin-only, entered from `in_review`, and carries a **required reason** for the same
+reason request-changes does: a decline the author cannot read is one they cannot act on.
+
+**The difference from `changes_requested` is intent, not mechanics.** Both let the author come back.
+Making rejection terminal was the alternative and is a much bigger hammer — it needs an appeal path,
+an admin escape hatch, and a policy about who may grant one. None of that is worth building before
+someone needs it, and an honest "no" the author can answer is worth having now.
+
+Two properties keep it safe. It is **not a door into the store**: the only way back is `in_review`,
+so approval remains the single edge that publishes. And it is **never on the shelf** — `is_on_shelf`
+hardcodes it False alongside `private` and `taken_down`, so a rejected listing cannot route a
+withdrawal into an admin queue for something no user can see. `rejected → private` exists for the
+same reason `taken_down → private` does: delete accepts only `private`, so without it a declined
+author holds an agent they can neither shelve nor delete.
 
 **Who owns the queue:** `system_admin`, via the existing `require_admin` dependency. A more granular
 admin permission set (a "marketplace curator" who can review without holding full system admin) is a
@@ -343,8 +415,42 @@ a fixed partition, per-item records with an explicit `order: int`, sorted on rea
 ## D11 — `@`-mention is scoped to your own and pinned Agents
 
 Typing `@` in the composer offers the user's own Agents plus everything pinned (including role-seeded
-pins), grouped, with the publisher as secondary text. Mentioning one hands that turn to the Agent's
-model, tools and skills without leaving the thread.
+pins), grouped, with the publisher as secondary text. Mentioning one starts a conversation with that
+Agent's model, tools and skills.
+
+> **Revised 2026-09-14 — a mention binds; it is no longer a one-turn borrow.** This paragraph
+> originally read "hands **that turn** to the Agent … without leaving the thread", and the phase-7
+> notes below record how much that one sentence cost to implement. It was also wrong about how the
+> feature would be used, and the per-turn reading had an invisible failure mode:
+>
+> - **It broke silently.** The mentioned turn ran as the Agent; the next one did not. The thread
+>   still looked like the Agent's while its tools, skills and model were gone. Nothing surfaced the
+>   change — not the UI, and not the model, which has no way to know its own toolset shrank. Asked
+>   to use a tool it had used a moment earlier, it got `Unknown tool: create_rubric` and told the
+>   user to toggle the tool in the picker, sending them to fix a setting that was already correct.
+> - **Nobody used what it was protecting.** Of **247 mentions in prod, 247 started the
+>   conversation**; zero were mid-thread consults, and zero mentioned a second Agent inside a thread
+>   bound to a first. (Dev: 60 of 61 started the conversation.) The borrow was paying that failure
+>   mode for a case that has never occurred.
+>
+> So an `@`-mention now means "talk to this Agent", with exactly two outcomes and no third:
+>
+> | Thread state | Behaviour |
+> |---|---|
+> | No messages yet | The Agent **binds** the conversation, exactly as launching it from its card does. Safe because there is no history for the binding to misrepresent. |
+> | Already has messages | The message opens a **new** conversation with that Agent, and the SPA says so. The Agent cannot be bound to history written under other instructions, and must not be borrowed either. |
+>
+> The SPA no longer sends `agent_mention` at all — a mention sets the `assistantId` query param, so
+> the Agent rides every following turn like any bound Agent. The backend still honours the flag for
+> clients that predate the change, and now binds when such a client mentions into an **empty**
+> thread, which is the case that actually happens. Client rule in
+> `session/services/chat/mention-routing.ts`, server rule in `chat/agent_binding_policy.py`; they
+> mirror each other and their tests say so.
+>
+> **This also retires two known costs.** The prefix re-write measured below (~$0.12 per mention) was
+> the price of swapping the Agent in and back out; a bound conversation swaps once and stays. And
+> the history fork — the mention agent and the plain agent being two cached instances that never saw
+> each other's turns — cannot arise when one Agent runs every turn.
 
 Scope is deliberately narrow. Making the `@` menu search the whole store turns an autocomplete into a
 directory query, which is what the store page is for, and it exposes every user to every Agent's name
@@ -676,7 +782,8 @@ auth rule; admin routes `Depends(require_admin)` (= `require_app_roles("system_a
 | `GET /agents/pins` · `POST`/`DELETE /agents/{id}/pin` | The user's effective pin list; pin / dismiss (D9). Pinning is gated on the caller being able to *reach* the Agent, not on it being published. |
 | `POST /agents/{id}/report` | Feedback on a published Agent (D15) — from the foot of a conversation or the detail page. One open report per reporter. Optional `sessionId` attaches the conversation; verified against the caller and dropped if it does not check out. |
 | `GET /admin/agents/reports` · `POST /admin/agents/{id}/reports/{reportId}/resolve` | Report queue; resolve or dismiss, reporter visible (D15). Also `GET /admin/agents/{id}/reports` for one Agent's history and `GET /admin/agents/queues` for the two nav counts. |
-| `GET /admin/agents/submissions` · `POST /admin/agents/{id}/review` | Review queue; approve / request changes (D2). |
+| `GET /admin/agents/submissions` · `POST /admin/agents/{id}/review` | Review queue; approve / request changes / decline (D2, D2.2). |
+| `GET /admin/agents/{id}/submission` | The reviewer's full read of one submission, from the frozen snapshot (D2.1). |
 | `GET /admin/agents/listings` · `POST /admin/agents/{id}/takedown` | Listings table; delist with a reason. |
 | `PATCH /admin/agents/{id}/listing` | Edit presentation only — `name`, `tagline`, `iconKey`, `category`, `publisherId` (D13). Rejects any behavior field. |
 | `GET`/`POST`/`PATCH`/`DELETE /admin/agents/publishers` · `PUT .../{id}/eligibility` | Publisher profiles, `verified`, and who may propose each (D12). |
@@ -843,6 +950,24 @@ thread" in one sentence, and that sentence turned out to be the whole phase:
   "Continue" after a max_tokens truncation runs without the Agent — true for bound Agent
   conversations before this phase, and unchanged by it.
 
+  **Fixed 2026-09-14**, alongside the D11 revision above, because it is the same invisible
+  capability loss on the path users are *told* to use: a properly launched Agent finished its
+  reply with none of its tools, skills, model or instructions. The SPA was already resending
+  `rag_assistant_id` on a continuation for exactly this reason (`continueTruncatedTurn` passes
+  it, and its comment says "so the backend rebuilds the same model/tools/assistant agent");
+  only the `not is_continuation` guard on the block discarded it. The block now runs for a
+  continuation, with binding **validation** and **persistence** still skipped (a continuation
+  binds nothing new) and **RAG** still skipped (the turn carries an empty message, so a
+  knowledge-base search would spend a query on `""` and augment nothing — the original turn's
+  context is already in the history being continued).
+
+  ⚠️ **A resume is a different animal and still skips the block.** It rebuilds from its
+  `PausedTurnSnapshot`, replaying the original turn's exact `enabled_tools` / `system_prompt` /
+  `enabled_skills` so the prompt-cache key is reconstructed and the paused agent is not
+  orphaned. Tool-approval, OAuth and `ask_user_question` resumes therefore never lost their
+  tools — worth stating because `turnAgentId` is *not* stamped on those rows, so a census of
+  "turns with no Agent" reads them as losses and overcounts badly.
+
 **Phase 8 notes (as built).** Six, the first of which is a contradiction inside this spec
 and the fourth of which was a live trap:
 
@@ -925,7 +1050,7 @@ rather than restating the checks.
   ([`chat/routes.py:1319`](../../backend/src/apis/inference_api/chat/routes.py)) resolves against the
   caller, and there is no author-side lookup anywhere on the invocation path. Cost rows land on the
   same person: `PK = USER#{user_id}`
-  ([`sessions/services/metadata.py:157`](../../backend/src/apis/app_api/sessions/services/metadata.py)).
+  ([`shared/sessions/metadata.py:269`](../../backend/src/apis/shared/sessions/metadata.py)).
   So spend and quota agree, and a published Agent does not bill its author for a stranger's run.
 - **Review SLA** — committed, and split by queue. See the table in D2: two business days for
   submissions, same day for an `inappropriate` report, weekly for the rest.

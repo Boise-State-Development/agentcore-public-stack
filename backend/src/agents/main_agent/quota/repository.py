@@ -1,6 +1,7 @@
 """DynamoDB repository for quota management (Phase 1)."""
 
 from typing import Optional, List
+from apis.shared.timestamps import to_iso, utc_now_iso
 from datetime import datetime, timezone
 import boto3
 from botocore.exceptions import ClientError
@@ -8,6 +9,7 @@ import logging
 import os
 from .models import QuotaTier, QuotaAssignment, QuotaEvent, QuotaAssignmentType, QuotaOverride
 from agents.main_agent.config.constants import EnvVars, Defaults
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,7 @@ class QuotaRepository:
 
             return QuotaTier(**item)
         except ClientError as e:
-            logger.error(f"Error getting tier {tier_id}: {e}")
+            logger.error(f"Error getting tier {scrub_log(tier_id)}: {scrub_log(e)}")
             return None
 
     async def list_tiers(self, enabled_only: bool = False) -> List[QuotaTier]:
@@ -118,7 +120,7 @@ class QuotaRepository:
                 expr_attr_values[f":{key}"] = value
 
             # Add updatedAt timestamp (always use current time from repository)
-            now = datetime.now(timezone.utc).isoformat() + 'Z'
+            now = utc_now_iso()
             update_parts.append("#updatedAt = :updatedAt")
             expr_attr_names["#updatedAt"] = "updatedAt"
             expr_attr_values[":updatedAt"] = now
@@ -140,7 +142,7 @@ class QuotaRepository:
 
             return QuotaTier(**item)
         except ClientError as e:
-            logger.error(f"Error updating tier {tier_id}: {e}")
+            logger.error(f"Error updating tier {scrub_log(tier_id)}: {scrub_log(e)}")
             return None
 
     async def delete_tier(self, tier_id: str) -> bool:
@@ -154,7 +156,7 @@ class QuotaRepository:
             )
             return True
         except ClientError as e:
-            logger.error(f"Error deleting tier {tier_id}: {e}")
+            logger.error(f"Error deleting tier {scrub_log(tier_id)}: {scrub_log(e)}")
             return False
 
     # ========== Quota Assignments ==========
@@ -179,7 +181,7 @@ class QuotaRepository:
 
             return QuotaAssignment(**item)
         except ClientError as e:
-            logger.error(f"Error getting assignment {assignment_id}: {e}")
+            logger.error(f"Error getting assignment {scrub_log(assignment_id)}: {scrub_log(e)}")
             return None
 
     async def query_user_assignment(self, user_id: str) -> Optional[QuotaAssignment]:
@@ -208,7 +210,7 @@ class QuotaRepository:
 
             return QuotaAssignment(**item)
         except ClientError as e:
-            logger.error(f"Error querying user assignment for {user_id}: {e}")
+            logger.error(f"Error querying user assignment for {scrub_log(user_id)}: {scrub_log(e)}")
             return None
 
     async def query_app_role_assignments(self, app_role_id: str) -> List[QuotaAssignment]:
@@ -235,7 +237,7 @@ class QuotaRepository:
 
             return assignments
         except ClientError as e:
-            logger.error(f"Error querying app role assignments for {app_role_id}: {e}")
+            logger.error(f"Error querying app role assignments for {scrub_log(app_role_id)}: {scrub_log(e)}")
             return []
 
     async def query_role_assignments(self, role: str) -> List[QuotaAssignment]:
@@ -298,7 +300,7 @@ class QuotaRepository:
 
             return assignments
         except ClientError as e:
-            logger.error(f"Error listing assignments for type {assignment_type}: {e}")
+            logger.error(f"Error listing assignments for type {scrub_log(assignment_type)}: {scrub_log(e)}")
             return []
 
     async def list_all_assignments(self, enabled_only: bool = False) -> List[QuotaAssignment]:
@@ -338,35 +340,64 @@ class QuotaRepository:
             raise
 
     async def update_assignment(self, assignment_id: str, updates: dict) -> Optional[QuotaAssignment]:
-        """Update quota assignment (partial update)"""
+        """Update quota assignment (partial update).
+
+        ``updates`` keys may be model field names (``tier_id``) or their
+        camelCase aliases (``tierId``) — callers dump the request either way.
+        The two uses of a key are incompatible and must stay separate (#718):
+
+        * ``setattr`` on the ``QuotaAssignment`` model requires the **field
+          name** (``tier_id``); Pydantic v2 raises ``"QuotaAssignment" object
+          has no field "tierId"`` for an alias key.
+        * The DynamoDB ``UpdateExpression`` must use the **stored attribute
+          name**, which is the **alias** (``tierId``) — items are written with
+          ``model_dump(by_alias=True)`` in create/update.
+
+        So we normalize each incoming key to its field name for ``setattr`` and
+        to its alias for the DynamoDB expression, rather than reusing one dict
+        for both.
+        """
         try:
             # Get current assignment to rebuild GSI keys if needed
             current = await self.get_assignment(assignment_id)
             if not current:
                 return None
 
+            # Map every accepted key (field name OR alias) to both forms.
+            alias_to_field = {}
+            field_to_alias = {}
+            for field_name, field in QuotaAssignment.model_fields.items():
+                alias = field.alias or field_name
+                field_to_alias[field_name] = alias
+                alias_to_field[alias] = field_name
+                alias_to_field[field_name] = field_name  # tolerate field-name input
+
             # Build update expression
             update_parts = []
             expr_attr_names = {}
             expr_attr_values = {}
 
-            # Apply updates to current assignment
+            # Apply updates to current assignment (field name) and collect the
+            # aliased attribute names for the DynamoDB expression.
+            aliased_updates = {}
             for key, value in updates.items():
-                setattr(current, key, value)
+                field_name = alias_to_field.get(key, key)
+                setattr(current, field_name, value)
+                aliased_updates[field_to_alias.get(field_name, field_name)] = value
 
-            # Rebuild GSI keys with updated values
+            # Rebuild GSI keys with updated values (already stored-attr names)
             gsi_keys = self._build_gsi_keys(current)
             for key, value in gsi_keys.items():
-                updates[key] = value
+                aliased_updates[key] = value
 
-            # Build update expression
-            for key, value in updates.items():
+            # Build update expression from aliased (stored) attribute names
+            for key, value in aliased_updates.items():
                 update_parts.append(f"#{key} = :{key}")
                 expr_attr_names[f"#{key}"] = key
                 expr_attr_values[f":{key}"] = value
 
             # Add updatedAt timestamp
-            now = datetime.now(timezone.utc).isoformat() + 'Z'
+            now = utc_now_iso()
             update_parts.append("#updatedAt = :updatedAt")
             expr_attr_names["#updatedAt"] = "updatedAt"
             expr_attr_values[":updatedAt"] = now
@@ -388,7 +419,7 @@ class QuotaRepository:
 
             return QuotaAssignment(**item)
         except ClientError as e:
-            logger.error(f"Error updating assignment {assignment_id}: {e}")
+            logger.error(f"Error updating assignment {scrub_log(assignment_id)}: {scrub_log(e)}")
             return None
 
     async def delete_assignment(self, assignment_id: str) -> bool:
@@ -402,7 +433,7 @@ class QuotaRepository:
             )
             return True
         except ClientError as e:
-            logger.error(f"Error deleting assignment {assignment_id}: {e}")
+            logger.error(f"Error deleting assignment {scrub_log(assignment_id)}: {scrub_log(e)}")
             return False
 
     def _build_gsi_keys(self, assignment: QuotaAssignment) -> dict:
@@ -478,7 +509,7 @@ class QuotaRepository:
 
             return events
         except ClientError as e:
-            logger.error(f"Error getting events for user {user_id}: {e}")
+            logger.error(f"Error getting events for user {scrub_log(user_id)}: {scrub_log(e)}")
             return []
 
     async def get_tier_events(
@@ -512,7 +543,7 @@ class QuotaRepository:
 
             return events
         except ClientError as e:
-            logger.error(f"Error getting events for tier {tier_id}: {e}")
+            logger.error(f"Error getting events for tier {scrub_log(tier_id)}: {scrub_log(e)}")
             return []
 
     async def get_recent_event(
@@ -524,7 +555,7 @@ class QuotaRepository:
         """Get most recent event of a specific type within time window (for deduplication)"""
         try:
             from datetime import timedelta
-            cutoff_time = (datetime.now(timezone.utc) - timedelta(minutes=within_minutes)).isoformat() + 'Z'
+            cutoff_time = to_iso(datetime.now(timezone.utc) - timedelta(minutes=within_minutes))
 
             response = self.events_table.query(
                 KeyConditionExpression="PK = :pk AND SK >= :cutoff",
@@ -587,12 +618,12 @@ class QuotaRepository:
 
             return QuotaOverride(**item)
         except ClientError as e:
-            logger.error(f"Error getting override {override_id}: {e}")
+            logger.error(f"Error getting override {scrub_log(override_id)}: {scrub_log(e)}")
             return None
 
     async def get_active_override(self, user_id: str) -> Optional[QuotaOverride]:
         """Get active override for user (valid and enabled)"""
-        now = datetime.now(timezone.utc).isoformat() + 'Z'
+        now = utc_now_iso()
 
         try:
             response = self.table.query(
@@ -653,7 +684,7 @@ class QuotaRepository:
                 )
 
             overrides = []
-            now = datetime.now(timezone.utc).isoformat() + 'Z'
+            now = utc_now_iso()
 
             for item in response.get('Items', []):
                 for key in ['PK', 'SK', 'GSI4PK', 'GSI4SK']:
@@ -709,7 +740,7 @@ class QuotaRepository:
 
             return QuotaOverride(**item)
         except ClientError as e:
-            logger.error(f"Error updating override {override_id}: {e}")
+            logger.error(f"Error updating override {scrub_log(override_id)}: {scrub_log(e)}")
             return None
 
     async def delete_override(self, override_id: str) -> bool:
@@ -723,5 +754,5 @@ class QuotaRepository:
             )
             return True
         except ClientError as e:
-            logger.error(f"Error deleting override {override_id}: {e}")
+            logger.error(f"Error deleting override {scrub_log(override_id)}: {scrub_log(e)}")
             return False

@@ -22,6 +22,7 @@ import {
   AddCuratedModelDialogData,
   AddCuratedModelDialogResult,
 } from './components/add-curated-model-dialog.component';
+import { BuiltinModelIcon, resolveModelIcon } from './models/model-icons';
 
 interface ProviderTab {
   id: ModelProvider;
@@ -31,16 +32,14 @@ interface ProviderTab {
 const PROVIDER_TABS: ProviderTab[] = [
   { id: 'bedrock', label: 'Bedrock' },
   { id: 'mantle', label: 'Bedrock Mantle' },
+  // The OpenAI Responses API on bedrock-runtime. A separate tab from 'openai'
+  // (which is direct-to-OpenAI and unpopulated) because the transport, not the
+  // vendor, is what differs — and it is the only surface where GPT-5.6 caches.
+  { id: 'bedrock-responses', label: 'Bedrock Responses' },
   { id: 'openai', label: 'OpenAI' },
   { id: 'gemini', label: 'Gemini' },
 ];
 
-const PROVIDER_LOGO_DIR: Record<string, string> = {
-  Anthropic: 'anthropic',
-  Amazon: 'amazon',
-  Meta: 'meta',
-  OpenAI: 'openai',
-};
 
 @Component({
   selector: 'app-model-catalog-page',
@@ -93,8 +92,20 @@ export class ModelCatalogPage {
     return this.errors()[key] ?? null;
   }
 
-  logoDirFor(providerName: string): string | null {
-    return PROVIDER_LOGO_DIR[providerName] ?? null;
+  /**
+   * The built-in logo for a curated card, via the same resolver the model picker
+   * and the admin form run. Deliberately not a lookup table of its own: a second
+   * answer to "which logo does this vendor get?" is one that drifts the first
+   * time a slug is added, and the card would disagree with the model it creates.
+   */
+  logoDirFor(model: CuratedModel): BuiltinModelIcon | null {
+    const icon = resolveModelIcon({
+      iconUrl: null,
+      iconSlug: model.template.iconSlug ?? null,
+      providerName: model.template.providerName,
+      modelId: model.template.modelId,
+    });
+    return icon.kind === 'builtin' ? icon.slug : null;
   }
 
   /**

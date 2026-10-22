@@ -49,6 +49,19 @@ away from a reap.
 The net effect is that the reaper is armed exactly when the container is
 genuinely idle and disarmed exactly while it is genuinely working.
 
+Snapshot restore (AgentCore Runtime V2). V2 starts a session by restoring a
+snapshot of an already-booted container, so the idle origin stamped at import
+(or at the last poll before the snapshot) is restored into every session,
+possibly hours old. Reported as-is, a just-restored microVM would look idle
+past ``idleRuntimeSessionTimeout`` on its first poll. A process that is
+running sees a poll every ~2s, so a gap longer than
+``RESTORE_GAP_SECONDS`` between polls means it was not running in between;
+the first poll after such a gap restarts the idle clock from now. It does so
+at most once per process, because a restore happens at most once per process
+and an unbounded rule would let irregular polling on V1 re-arm the
+immortal-microVM bug above; the worst case there is one extra idle period.
+See docs/specs/agentcore-runtime-v2.md §3 B2.1.
+
 `InvocationActivityMiddleware` is what marks work in flight. It is pure ASGI
 rather than `BaseHTTPMiddleware` because the unit of work is the *streamed
 response body*, not the handler call: `BaseHTTPMiddleware` hands back control
@@ -61,12 +74,20 @@ and cannot leak the counter on disconnect or error.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any, Awaitable, Callable, MutableMapping
 
 STATUS_HEALTHY = "Healthy"
 STATUS_HEALTHY_BUSY = "HealthyBusy"
+
+# Polls normally arrive every ~2s, so a minute of silence is far outside
+# jitter. A restore that lands sooner than this leaves the idle origin at most
+# this stale, which the 900s timeout absorbs.
+RESTORE_GAP_SECONDS = 60.0
+
+logger = logging.getLogger(__name__)
 
 # `/ping` is the reaper's own poll and must never count as activity — it is
 # the one request that arrives continuously on a completely idle container.
@@ -87,7 +108,12 @@ class RuntimeActivityTracker:
         # Process start is the correct origin: a microVM that boots and never
         # receives a turn should be reaped `idleRuntimeSessionTimeout` after
         # it came up, not held open indefinitely.
-        self._status_since = time.time()
+        now = time.time()
+        self._status_since = now
+        # Starts at construction, so a snapshot taken before the first poll
+        # is caught by the first poll after its restore.
+        self._last_poll = now
+        self._restore_handled = False
 
     @property
     def in_flight(self) -> int:
@@ -116,13 +142,22 @@ class RuntimeActivityTracker:
 
     def snapshot(self) -> tuple[str, int]:
         """Return `(status, time_of_last_update)` for a `/ping` response."""
+        now = time.time()
         status = STATUS_HEALTHY_BUSY if self._in_flight else STATUS_HEALTHY
         self._status = status
         # Keep advancing while busy so a long turn cannot be reaped
         # mid-stream. While `Healthy` the timestamp stays put — frozen at the
         # `exit()` above — so idle time accrues and the reaper can fire.
         if status == STATUS_HEALTHY_BUSY:
-            self._status_since = time.time()
+            self._status_since = now
+        elif not self._restore_handled and now - self._last_poll > RESTORE_GAP_SECONDS:
+            self._restore_handled = True
+            logger.info(
+                "No /ping for %.0fs; treating this as a snapshot restore and restarting the idle clock",
+                now - self._last_poll,
+            )
+            self._status_since = now
+        self._last_poll = now
         return status, int(self._status_since)
 
 

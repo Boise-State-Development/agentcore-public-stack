@@ -26,15 +26,22 @@ import {
   SKILL_CATEGORIES,
   SKILL_ID_PATTERN,
 } from '../models/admin-skill.model';
+import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { SKILL_DESCRIPTION_MAX_LENGTH } from '../../../shared/skills/skill-field-limits';
 import {
   parseSkillMarkdown,
   slugifySkillId,
 } from '../models/skill-import.util';
+import {
+  DISALLOWED_RESOURCE_MESSAGE,
+  RESOURCE_ACCEPT_ATTR,
+  isAllowedResourceFilename,
+} from '../../../shared/skills/skill-resource-types';
 
 @Component({
   selector: 'app-skill-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReactiveFormsModule, NgIcon],
+  imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -91,16 +98,16 @@ import {
 
         @if (loading()) {
           <div class="flex h-64 items-center justify-center">
-            <div class="size-10 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-700 dark:border-t-blue-500"></div>
+            <app-spinner size="lg" label="Loading" />
           </div>
         } @else {
           @if (importNotice()) {
-            <div class="mb-6 rounded-2xl border border-blue-200 bg-blue-50 p-3 text-sm/6 text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-200">
+            <div class="mb-6 rounded-lg border border-state-info-200 bg-state-info-50 p-3 text-sm/6 text-state-info-800 dark:border-state-info-800 dark:bg-state-info-900/20 dark:text-state-info-200">
               {{ importNotice() }}
             </div>
           }
           @if (error()) {
-            <div class="mb-6 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm/6 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+            <div class="mb-6 rounded-lg border border-state-danger-200 bg-state-danger-50 p-3 text-sm/6 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
               {{ error() }}
             </div>
           }
@@ -113,18 +120,18 @@ import {
               @if (!isEditMode()) {
                 <div>
                   <label for="skillId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Skill ID <span class="text-red-600">*</span>
+                    Skill ID <span class="text-state-danger-600">*</span>
                   </label>
                   <input
                     id="skillId"
                     type="text"
                     formControlName="skillId"
                     placeholder="e.g., pdf_workflows"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-red-500]="form.get('skillId')?.invalid && form.get('skillId')?.touched"
+                    class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="form.get('skillId')?.invalid && form.get('skillId')?.touched"
                   />
                   @if (form.get('skillId')?.invalid && form.get('skillId')?.touched) {
-                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">
+                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
                       Skill ID must be 3-50 characters: lowercase letters, numbers and underscores, starting with a letter.
                     </p>
                   }
@@ -133,35 +140,35 @@ import {
 
               <div>
                 <label for="displayName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                  Display Name <span class="text-red-600">*</span>
+                  Display Name <span class="text-state-danger-600">*</span>
                 </label>
                 <input
                   id="displayName"
                   type="text"
                   formControlName="displayName"
                   placeholder="e.g., PDF Workflows"
-                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                  [class.border-red-500]="form.get('displayName')?.invalid && form.get('displayName')?.touched"
+                  class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="form.get('displayName')?.invalid && form.get('displayName')?.touched"
                 />
                 @if (form.get('displayName')?.invalid && form.get('displayName')?.touched) {
-                  <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Display name is required (1-100 characters).</p>
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Display name is required (1-100 characters).</p>
                 }
               </div>
 
               <div>
                 <label for="description" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                  Description <span class="text-red-600">*</span>
+                  Description <span class="text-state-danger-600">*</span>
                 </label>
                 <textarea
                   id="description"
                   formControlName="description"
                   rows="2"
                   placeholder="One-line catalog summary the agent sees (token-cheap)…"
-                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                  [class.border-red-500]="form.get('description')?.invalid && form.get('description')?.touched"
+                  class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="form.get('description')?.invalid && form.get('description')?.touched"
                 ></textarea>
                 @if (form.get('description')?.invalid && form.get('description')?.touched) {
-                  <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Description is required (max 500 characters).</p>
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Description is required (max {{ SKILL_DESCRIPTION_MAX_LENGTH }} characters).</p>
                 }
               </div>
 
@@ -171,7 +178,7 @@ import {
                   <select
                     id="status"
                     formControlName="status"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   >
                     @for (status of statuses; track status.value) {
                       <option [value]="status.value">{{ status.label }}</option>
@@ -183,7 +190,7 @@ import {
                   <select
                     id="category"
                     formControlName="category"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   >
                     <option value="">— None —</option>
                     @for (cat of categories; track cat.value) {
@@ -207,7 +214,7 @@ import {
                 formControlName="instructions"
                 rows="12"
                 placeholder="# How to use these tools&#10;&#10;Describe the procedure the agent should follow…"
-                class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
               ></textarea>
             </section>
 
@@ -233,7 +240,7 @@ import {
                   id="refUpload"
                   type="file"
                   multiple
-                  accept=".md,.markdown,.txt,text/markdown,text/plain"
+                  [attr.accept]="acceptedFileTypes"
                   class="sr-only"
                   [disabled]="resourceBusy()"
                   (change)="onRefFilesSelected($event)"
@@ -250,26 +257,26 @@ import {
 
               <!-- Inline new-file authoring -->
               @if (showNewFile()) {
-                <div class="space-y-2 rounded-2xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+                <div class="space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/40">
                   <input
                     type="text"
                     [value]="newFileName()"
                     (input)="newFileName.set(asValue($event))"
                     placeholder="filename.md"
-                    class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   />
                   <textarea
                     [value]="newFileContent()"
                     (input)="newFileContent.set(asValue($event))"
                     rows="6"
                     placeholder="# Reference content…"
-                    class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   ></textarea>
                   <div class="flex justify-end gap-2">
                     <button
                       type="button"
                       (click)="toggleNewFile()"
-                      class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                      class="rounded-lg px-3 py-1.5 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
                     >
                       Cancel
                     </button>
@@ -277,7 +284,7 @@ import {
                       type="button"
                       (click)="addNewFile()"
                       [disabled]="resourceBusy() || !newFileName().trim() || !newFileContent()"
-                      class="rounded-2xl bg-blue-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+                      class="rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm/6 font-medium text-white hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
                     >
                       Add file
                     </button>
@@ -288,7 +295,7 @@ import {
               <!-- Live manifest (edit mode) -->
               @if (isEditMode()) {
                 @if (resources().length > 0) {
-                  <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
+                  <ul class="divide-y divide-gray-200 overflow-hidden rounded-lg border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
                     @for (res of resources(); track res.filename) {
                       <li class="flex items-center gap-3 px-3 py-2">
                         <ng-icon name="heroDocumentText" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
@@ -300,7 +307,7 @@ import {
                           type="button"
                           (click)="viewResource(res)"
                           [attr.aria-label]="'View ' + res.filename"
-                          class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                          class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                         >
                           <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
                         </button>
@@ -309,7 +316,7 @@ import {
                           (click)="deleteResource(res)"
                           [disabled]="resourceBusy()"
                           [attr.aria-label]="'Delete ' + res.filename"
-                          class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                          class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                         >
                           <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                         </button>
@@ -321,14 +328,14 @@ import {
                 }
 
                 @if (viewing(); as v) {
-                  <div class="rounded-2xl border border-gray-200 dark:border-gray-700">
+                  <div class="rounded-lg border border-gray-200 dark:border-gray-700">
                     <div class="flex items-center justify-between border-b border-gray-200 px-3 py-2 dark:border-gray-700">
                       <span class="font-mono text-sm/6 text-gray-900 dark:text-white">{{ v.filename }}</span>
                       <button
                         type="button"
                         (click)="viewing.set(null)"
                         aria-label="Close preview"
-                        class="flex size-7 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        class="flex size-7 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                       >
                         <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
                       </button>
@@ -339,7 +346,7 @@ import {
               } @else {
                 <!-- Staged files (create mode) -->
                 @if (pendingFiles().length > 0) {
-                  <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
+                  <ul class="divide-y divide-gray-200 overflow-hidden rounded-lg border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
                     @for (file of pendingFiles(); track file.name) {
                       <li class="flex items-center gap-3 px-3 py-2">
                         <ng-icon name="heroDocumentText" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
@@ -351,7 +358,7 @@ import {
                           type="button"
                           (click)="removePendingFile(file.name)"
                           [attr.aria-label]="'Remove ' + file.name"
-                          class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                          class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                         >
                           <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                         </button>
@@ -368,14 +375,14 @@ import {
             <div class="flex items-center justify-end gap-3 border-t border-gray-200 pt-6 dark:border-gray-700">
               <a
                 routerLink="/admin/skills"
-                class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                class="rounded-lg px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 Cancel
               </a>
               <button
                 type="submit"
                 [disabled]="saving() || form.invalid"
-                class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+                class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
               >
                 {{ saving() ? 'Saving…' : (isEditMode() ? 'Update Skill' : 'Create Skill') }}
               </button>
@@ -407,7 +414,12 @@ export class SkillFormPage implements OnInit {
   readonly resources = signal<SkillResourceRef[]>([]);
   readonly pendingFiles = signal<File[]>([]);
   readonly resourceBusy = signal(false);
+  /** `accept` filter for the file picker — mirrors the server allowlist. */
+  readonly acceptedFileTypes = RESOURCE_ACCEPT_ATTR;
   readonly viewing = signal<{ filename: string; content: string } | null>(null);
+
+  /** Exposed for the template's max-length hint. */
+  readonly SKILL_DESCRIPTION_MAX_LENGTH = SKILL_DESCRIPTION_MAX_LENGTH;
 
   // Inline new-file authoring.
   readonly showNewFile = signal(false);
@@ -417,7 +429,7 @@ export class SkillFormPage implements OnInit {
   form: FormGroup = this.fb.group({
     skillId: ['', [Validators.required, Validators.pattern(SKILL_ID_PATTERN)]],
     displayName: ['', [Validators.required, Validators.minLength(1), Validators.maxLength(100)]],
-    description: ['', [Validators.required, Validators.maxLength(500)]],
+    description: ['', [Validators.required, Validators.maxLength(SKILL_DESCRIPTION_MAX_LENGTH)]],
     instructions: [''],
     status: ['active' as SkillStatus],
     category: [''],
@@ -530,6 +542,16 @@ export class SkillFormPage implements OnInit {
    * after the skill is created, since uploads need a skill_id).
    */
   private async acceptFiles(files: File[]): Promise<void> {
+    // Mirror of the backend type allowlist (see `resource_types.py`). The
+    // server rejects these with a 400 regardless; refusing here gives the
+    // admin a specific message instead of a failed round-trip.
+    const disallowed = files.filter((f) => !isAllowedResourceFilename(f.name));
+    if (disallowed.length > 0) {
+      this.error.set(
+        `${disallowed.map((f) => f.name).join(', ')} ${DISALLOWED_RESOURCE_MESSAGE}`,
+      );
+      return;
+    }
     if (this.isEditMode()) {
       const id = this.skillId()!;
       this.resourceBusy.set(true);

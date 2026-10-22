@@ -91,6 +91,11 @@ case "$SERVICE" in
         SOURCE_DIRS=(
             "backend/src/apis/app_api/documents/ingestion"
             "backend/src/apis/shared/embeddings"
+            # handler.py reads records.resolve_engine to skip documents whose
+            # knowledge base is promoted to the managed engine. Without this
+            # entry a change to that gate would not move the content hash, and
+            # the Lambda would keep running the previous image.
+            "backend/src/apis/shared/kb_backend"
         )
         # shared/__init__.py and shared/timestamps.py are single files,
         # hashed as manifests. The requirements.lock lives inside the
@@ -98,6 +103,7 @@ case "$SERVICE" in
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
             "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
         )
         # The RAG ingestion Lambda is arm64 (see the rag-ingestion CDK
         # construct), and the Dockerfile installs arm64 torch wheels.
@@ -116,13 +122,27 @@ case "$SERVICE" in
         # would ship stale code under an unchanged content-hash tag.
         SOURCE_DIRS=(
             "backend/src/apis/app_api/kb_sync"
+            # cleanup_service.py reads records.resolve_engine and calls
+            # ManagedKbBackend to delete from a promoted knowledge base.
+            "backend/src/apis/shared/kb_backend"
+            # observability/ — reached via kb_backend/metrics.py when
+            # document_service releases a managed-KB byte reservation.
+            "backend/src/apis/shared/observability"
             "backend/src/apis/app_api/file_sources"
+            # files/ — the drive_folder path's walk caps and type allowlist.
+            "backend/src/apis/shared/files"
             "backend/src/apis/app_api/documents"
             "backend/src/apis/app_api/web_sources"
             "backend/src/apis/shared/sync_policies"
             "backend/src/apis/shared/oauth"
             "backend/src/apis/shared/embeddings"
             "backend/src/apis/shared/assistants"
+            # projects/ — assistants/service.py imports projects/access.py
+            # (lazily) for a project harness's access check.
+            "backend/src/apis/shared/projects"
+            # caching/ — oauth/provider_repository.py memoizes its provider
+            # list in the process-wide config cache.
+            "backend/src/apis/shared/caching"
         )
         # Single-file COPYs hashed as manifests (same as rag-ingestion);
         # kb_sync/requirements.txt lives inside the first source dir.
@@ -130,14 +150,77 @@ case "$SERVICE" in
             "backend/src/apis/shared/__init__.py"
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/dynamo_errors.py"
+            "backend/src/apis/shared/feature_flags.py"
+            "backend/src/apis/shared/aws_clients.py"
         )
         # Both kb-sync Lambdas are arm64 (see the kb-sync CDK construct).
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/kb-sync/image-tag"
         ;;
+    kb-migration)
+        DOCKERFILE="backend/Dockerfile.kb-migration"
+        # ONE image, FOUR Lambdas (dispatcher + worker + reconciler +
+        # ingestion consumer, selected per function by ImageConfig
+        # command overrides). Keep SOURCE_DIRS in lockstep with the
+        # Dockerfile's COPY list — a path copied but not hashed here
+        # would ship stale code under an unchanged content-hash tag,
+        # making the deploy a silent no-op.
+        #
+        # Deliberately short: the handlers' whole import closure is 16
+        # first-party modules, because kb_backend is its own package with
+        # stdlib-only module scope. If this list ever needs
+        # apis/shared/assistants, something has broken the boundary that
+        # test_kb_backend_boundary.py guards.
+        SOURCE_DIRS=(
+            "backend/src/apis/app_api/kb_migration"
+            "backend/src/apis/shared/kb_backend"
+            "backend/src/apis/shared/observability"
+        )
+        # Single-file COPYs hashed as manifests (same as kb-sync);
+        # kb_migration/requirements.txt lives inside the first source dir.
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
+        )
+        # All four kb-migration Lambdas are arm64 (see the managed-kb
+        # CDK construct).
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/kb-migration/image-tag"
+        ;;
+    conversation-index)
+        DOCKERFILE="backend/Dockerfile.conversation-index"
+        # One image, two Lambdas (the conversation-search index consumer and
+        # its daily reconciler, via ImageConfig command overrides).
+        # Keep SOURCE_DIRS/MANIFESTS in lockstep with the Dockerfile's COPY
+        # list — a path copied but not hashed here would ship stale code
+        # under an unchanged content-hash tag.
+        SOURCE_DIRS=(
+            "backend/src/apis/app_api/conversation_index"
+            "backend/src/apis/shared/kb_backend"
+            "backend/src/apis/shared/observability"
+        )
+        # Single files. conversation_archive/ is copied file by file (its
+        # live.py is not in the image), so its files are hashed one by one.
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
+            "backend/src/apis/shared/feature_flags.py"
+            "backend/src/apis/shared/conversation_archive/__init__.py"
+            "backend/src/apis/shared/conversation_archive/documents.py"
+            "backend/src/apis/shared/conversation_archive/store.py"
+            "backend/src/apis/shared/conversation_archive/index_documents.py"
+            "backend/src/apis/shared/conversation_archive/retention.py"
+            "backend/src/apis/app_api/kb_migration/__init__.py"
+            "backend/src/apis/app_api/kb_migration/ingestion_consumer.py"
+        )
+        # Both Lambdas are arm64 (see the conversation-index construct).
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/conversation-index/image-tag"
+        ;;
     scheduled-runs)
-        DOCKERFILE="backend/Dockerfile.scheduled-runs"
-        # One image, two Lambdas (dispatcher + worker via ImageConfig
+        DOCKERFILE="backend/Dockerfile.scheduled-runs"        # One image, two Lambdas (dispatcher + worker via ImageConfig
         # command overrides). Keep SOURCE_DIRS in lockstep with the
         # Dockerfile's COPY list — a path copied but not hashed here
         # would ship stale code under an unchanged content-hash tag.
@@ -148,23 +231,85 @@ case "$SERVICE" in
             "backend/src/apis/shared/scheduled_prompts"
             "backend/src/apis/shared/sessions_bff"
             "backend/src/apis/shared/sessions"
+            "backend/src/apis/shared/browser_takeover"
             "backend/src/apis/shared/storage"
             "backend/src/apis/shared/observability"
+            # projects/ — project schedules (3.2) and sessions/metadata.py's
+            # project cost rollup; notifications/ — a project schedule's pause notice.
+            "backend/src/apis/shared/projects"
+            "backend/src/apis/shared/notifications"
+            # 3.2b delivery: the share writer, audit, and what get_messages reaches.
+            "backend/src/apis/shared/shares"
+            "backend/src/apis/shared/audit"
+            "backend/src/apis/shared/tool_summaries"
+            "backend/src/apis/shared/conversation_archive"
         )
         # Single-file COPYs hashed as manifests (same as kb-sync/rag-ingestion);
         # the dispatcher's requirements.txt lives inside its own source dir.
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
             "backend/src/apis/shared/errors.py"
+            "backend/src/apis/shared/feature_flags.py"
+            "backend/src/apis/shared/dynamo_errors.py"
+            "backend/src/apis/shared/auth/models.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/mcp_apps/ui_resource_store.py"
+            "backend/src/apis/shared/files/provenance_store.py"
+            "backend/src/apis/shared/extraction/__init__.py"
+            "backend/src/apis/shared/extraction/extraction_store.py"
+            "backend/src/apis/shared/extraction/field_sets.py"
+            "backend/src/apis/shared/extraction/schema.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/scheduled-runs/image-tag"
         ;;
+    memory-maintenance)
+        # Shared Projects 2.6 maintenance worker. Keep SOURCE_DIRS and
+        # MANIFESTS in lockstep with Dockerfile.memory-maintenance's COPY list.
+        DOCKERFILE="backend/Dockerfile.memory-maintenance"
+        SOURCE_DIRS=(
+            "backend/src/lambdas/memory_maintenance_worker"
+            "backend/src/apis/shared/memory"
+            "backend/src/apis/shared/notifications"
+        )
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/projects/__init__.py"
+            "backend/src/apis/shared/projects/access.py"
+            "backend/src/apis/shared/projects/models.py"
+            "backend/src/apis/shared/projects/repository.py"
+            "backend/src/apis/shared/dynamo_errors.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/auth/models.py"
+        )
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/memory-maintenance/image-tag"
+        ;;
+    large-document-prepare)
+        # Large-document attachments PR-1: the `_derived/` sidecar builder.
+        # Keep SOURCE_DIRS and MANIFESTS in lockstep with
+        # Dockerfile.large-document-prepare's COPY list.
+        DOCKERFILE="backend/Dockerfile.large-document-prepare"
+        SOURCE_DIRS=(
+            "backend/src/lambdas/large_document_prepare"
+            "backend/src/apis/shared/files"
+            "backend/src/apis/shared/observability"
+            "backend/src/apis/shared/kb_backend"
+        )
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
+            "backend/src/apis/shared/feature_flags.py"
+        )
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/large-document-prepare/image-tag"
+        ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | scheduled-runs" >&2
+        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | kb-migration | conversation-index | scheduled-runs | memory-maintenance | large-document-prepare" >&2
         exit 1
         ;;
 esac

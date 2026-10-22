@@ -31,10 +31,10 @@ SAFETY
 
 Run against dev first, then prod::
 
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_skill_bundles.py \\
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_skill_bundles.py \\
         --table dev-boisestateai-v2-app-roles \\
         --bucket dev-boisestateai-v2-skill-resources            # dry-run
-    AWS_PROFILE=dev-ai python backend/scripts/backfill_skill_bundles.py \\
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_skill_bundles.py \\
         --table dev-boisestateai-v2-app-roles \\
         --bucket dev-boisestateai-v2-skill-resources --apply
 """

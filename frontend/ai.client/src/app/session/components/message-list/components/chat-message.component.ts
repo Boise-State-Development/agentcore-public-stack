@@ -39,7 +39,7 @@ import {
   
   messageClasses = computed(() => {
     if (this.message().role === 'user') {
-      return 'bg-primary-500 text-white';
+      return 'bg-primary-accessible text-white';
     }
     return 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100';
   });

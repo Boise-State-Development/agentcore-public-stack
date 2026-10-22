@@ -1,4 +1,4 @@
-import { Component, signal, ChangeDetectionStrategy, inject, OnInit, OnDestroy } from '@angular/core';
+import { Component, signal, computed, ChangeDetectionStrategy, inject, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -7,6 +7,8 @@ import { SessionService } from '../session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ConfigService } from '../../services/config.service';
 import { SystemService } from '../../services/system.service';
+import { BrandingService } from '../../../branding/branding.service';
+import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 interface AuthProviderPublicInfo {
   provider_id: string;
@@ -17,13 +19,18 @@ interface AuthProviderPublicInfo {
 
 interface AuthProviderPublicListResponse {
   providers: AuthProviderPublicInfo[];
+  /** Absent on backends that predate the setting; treat as true. */
+  cognito_login_visible?: boolean;
 }
 
 @Component({
   selector: 'app-login',
-  imports: [CommonModule],
+  imports: [CommonModule, SpinnerComponent],
   styleUrl: './login.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: {
+    '(window:pageshow)': 'onPageShow($event)',
+  },
   template: `
     <div class="login-shell fixed inset-0 flex items-center justify-center overflow-y-auto">
       <!-- Decorative background: lava-lamp blobs across three depth tiers
@@ -45,16 +52,16 @@ interface AuthProviderPublicListResponse {
       </div>
 
       <div class="relative w-full max-w-md px-4 py-12">
-        <!-- Logo -->
+        <!-- Logo (read through BrandingService, never from BRAND_CONFIG directly) -->
         <div class="mb-8 flex justify-center">
           <img
-            src="/img/logo-light.png"
-            alt="Logo"
-            class="size-16 dark:hidden">
+            [src]="branding.logo.light"
+            [alt]="branding.appName"
+            class="h-16 w-16 object-contain dark:hidden">
           <img
-            src="/img/logo-dark.png"
-            alt="Logo"
-            class="hidden size-16 dark:block">
+            [src]="branding.logo.dark"
+            [alt]="branding.appName"
+            class="hidden h-16 w-16 object-contain dark:block">
         </div>
 
         <div class="login-card rounded-2xl p-8">
@@ -69,12 +76,12 @@ interface AuthProviderPublicListResponse {
             </div>
 
             @if (errorMessage()) {
-              <div class="w-full p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg" role="alert">
+              <div class="w-full p-4 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg" role="alert">
                 <div class="flex items-start gap-3">
-                  <svg class="size-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <svg class="size-5 text-state-danger-600 dark:text-state-danger-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <p class="text-sm text-red-800 dark:text-red-300">
+                  <p class="text-sm text-state-danger-800 dark:text-state-danger-300">
                     {{ errorMessage() }}
                   </p>
                 </div>
@@ -83,35 +90,40 @@ interface AuthProviderPublicListResponse {
 
             <!-- Login buttons -->
             <div class="w-full flex flex-col gap-3">
-              <!-- Primary Cognito login button -->
-              <button
-                type="button"
-                (click)="handleCognitoLogin()"
-                [disabled]="isLoading()"
-                class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-primary-500 hover:bg-primary-600 shadow-lg shadow-primary-500/20 disabled:opacity-60"
-              >
-                @if (isLoading() && !activeProviderId()) {
-                  <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Connecting...</span>
-                } @else {
-                  <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
-                  <span>Sign in with Cognito</span>
-                }
-              </button>
+              <!-- Cognito login button. Waits for the provider list, which says
+                   whether a system admin hid it, so it never flashes in and out. -->
+              @if (showCognitoLogin()) {
+                <button
+                  type="button"
+                  (click)="handleCognitoLogin()"
+                  [disabled]="isLoading()"
+                  class="w-full px-4 py-3 text-white font-medium rounded-2xl transition-all duration-200 flex items-center justify-center gap-3 bg-primary-accessible hover:brightness-95 shadow-lg shadow-primary-500/20 disabled:opacity-60"
+                >
+                  @if (isLoading() && !activeProviderId()) {
+                    <app-spinner size="md" variant="on-solid" label="Connecting" />
+                    <span>Connecting...</span>
+                  } @else {
+                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <span>Sign in with Cognito</span>
+                  }
+                </button>
+              }
 
               <!-- Federated providers section -->
               @if (providers().length > 0) {
-                <!-- Divider -->
-                <div class="relative my-2">
-                  <div class="absolute inset-0 flex items-center">
-                    <div class="w-full border-t border-gray-300/60 dark:border-white/10"></div>
+                @if (showCognitoLogin()) {
+                  <!-- Divider -->
+                  <div class="relative my-2">
+                    <div class="absolute inset-0 flex items-center">
+                      <div class="w-full border-t border-gray-300/60 dark:border-white/10"></div>
+                    </div>
+                    <div class="relative flex justify-center text-xs">
+                      <span class="login-divider-text px-2 text-gray-600 dark:text-gray-300">or continue with</span>
+                    </div>
                   </div>
-                  <div class="relative flex justify-center text-xs">
-                    <span class="login-divider-text px-2 text-gray-600 dark:text-gray-300">or continue with</span>
-                  </div>
-                </div>
+                }
 
                 @for (provider of providers(); track provider.provider_id) {
                   <button
@@ -123,7 +135,7 @@ interface AuthProviderPublicListResponse {
                     [style.--hover-bg]="provider.button_color ? adjustBrightness(provider.button_color, -15) : '#1d4ed8'"
                   >
                     @if (isLoading() && activeProviderId() === provider.provider_id) {
-                      <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <app-spinner size="md" variant="on-solid" label="Connecting" />
                       <span>Connecting...</span>
                     } @else {
                       @if (provider.logo_url) {
@@ -142,9 +154,7 @@ interface AuthProviderPublicListResponse {
               <!-- Loading spinner for federated providers -->
               @if (providersLoading()) {
                 <div class="flex justify-center py-2">
-                  <div class="size-5 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin" role="status">
-                    <span class="sr-only">Loading federated providers</span>
-                  </div>
+                  <app-spinner size="md" label="Loading sign-in options" />
                 </div>
               }
             </div>
@@ -166,12 +176,26 @@ export class LoginPage implements OnInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private systemService = inject(SystemService);
+  protected branding = inject(BrandingService);
 
   isLoading = signal(false);
   errorMessage = signal<string | null>(null);
   providers = signal<AuthProviderPublicInfo[]>([]);
   providersLoading = signal(true);
   activeProviderId = signal<string | null>(null);
+  cognitoLoginVisible = signal(true);
+
+  /**
+   * `?local=1` is the break-glass path: it shows the Cognito button even when
+   * a system admin hid it, so the first-boot admin (a Cognito user) can still
+   * sign in if the federated provider breaks. Hiding is cosmetic; Cognito
+   * stays an identity provider on the app client either way.
+   */
+  private readonly forceCognitoLogin = this.route.snapshot.queryParamMap.get('local') === '1';
+
+  readonly showCognitoLogin = computed(
+    () => this.forceCognitoLogin || (!this.providersLoading() && this.cognitoLoginVisible()),
+  );
 
   ngOnInit(): void {
     // If the BFF round-tripped an already-authenticated user back to /auth/login
@@ -188,6 +212,18 @@ export class LoginPage implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.sidenavService.show();
+  }
+
+  /**
+   * Back from Cognito (or the IdP) restores this page from the back/forward
+   * cache with its JS state frozen mid-redirect, so the clicked button would
+   * still read "Connecting..." and stay disabled. A cache restore is the only
+   * way back to a page that already started a redirect, so reset there.
+   */
+  onPageShow(event: PageTransitionEvent): void {
+    if (!event.persisted) return;
+    this.isLoading.set(false);
+    this.activeProviderId.set(null);
   }
 
   private async checkFirstBootStatus(): Promise<void> {
@@ -209,9 +245,11 @@ export class LoginPage implements OnInit, OnDestroy {
       );
 
       this.providers.set(response?.providers ?? []);
+      this.cognitoLoginVisible.set(response?.cognito_login_visible ?? true);
     } catch (error) {
       // Federated providers failed to load — Cognito button still works
       this.providers.set([]);
+      this.cognitoLoginVisible.set(true);
     } finally {
       this.providersLoading.set(false);
     }
