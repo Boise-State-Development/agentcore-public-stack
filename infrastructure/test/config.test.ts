@@ -876,6 +876,36 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Handoffs feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Handoffs feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_HANDOFFS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_HANDOFFS_ENABLED is unset', () => {
+      delete process.env.CDK_HANDOFFS_ENABLED;
+      expect(loadConfig(app).handoffs.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_HANDOFFS_ENABLED = '';
+      expect(loadConfig(app).handoffs.enabled).toBe(false);
+    });
+
+    test('CDK_HANDOFFS_ENABLED="true" turns it on', () => {
+      process.env.CDK_HANDOFFS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).handoffs.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_HANDOFFS_ENABLED = 'yes';
+      expect(loadConfig(app).handoffs.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Direct user grants feature flag — default ON with a kill switch
   // ============================================================
 

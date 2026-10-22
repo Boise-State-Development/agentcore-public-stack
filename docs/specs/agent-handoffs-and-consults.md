@@ -83,7 +83,7 @@ send-back is a row we can count. **§7 turns those counts into the go/no-go for 
 
 | Phase | What the user gets | New plumbing | Status |
 |---|---|---|---|
-| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | Proposed |
+| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | In progress: PR-0.1 built (§11) |
 | **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8) | Proposed |
 | **0c — Suggested handoffs** | The model can offer a chip ("Hand off to Rubric Builder →") without stopping its turn; Start opens the same review sheet | `suggest_handoff` tool, `handoff_suggested` SSE event | Proposed, opt-in |
 | **Gate** | — | — | §7 |
@@ -1415,6 +1415,23 @@ has started", and the only one that spends money while nobody is watching.
 - **PR-0.1 — Excerpt renderer + `HANDOFF#` store** in `apis.shared.handoff`, and the app-api `/handoffs` routes
   (create, get, dismiss). The create response includes `contextBlock` for the preview. Acceptance happens on the
   first send (PR-0.2), not as a route. Flags off.
+  *Built.* Notes for the PRs that follow:
+  - `apis.shared.handoff.context` holds the wrapper (`wrap_handoff_context`) and the join
+    (`build_handoff_message`). PR-0.2 must build the model message with these two functions, which is what
+    keeps the preview and the sent prompt byte-identical. The create response also returns the joined
+    `prompt`, so the SPA's preview needs no join of its own.
+  - `HandoffStore.accept` is the only way out of `open` into `running`, conditioned on `open` in the write
+    itself. It is PR-0.2's no-double-send guard. `running` can't rewrite itself; `needs_input` and `stopped`
+    can (a second pause with a new `waitingOn`), and `stopped` follows the target's next turn. `done` and
+    `dismissed` are frozen.
+  - `excerptHash` is taken over normalized text (CRLF → LF, trimmed), so a card opened and closed unedited
+    doesn't count as `contextEdited`.
+  - The row stores `sourceTitle` at create, so the wrapper PR-0.2 builds names the same title the preview did
+    even if the conversation is renamed in between.
+  - Rows expire after 365 days and are removed by the session delete cascade, because they hold the request
+    text.
+  - The excerpt clips a newest turn that is over the cap on its own in the middle, rather than returning
+    nothing. §4.5 didn't cover that case.
 - **PR-0.2 — `handoff_context` on the invocation path.** Wrapper, `displayText`, acceptance, status writes after
   `done` (with `statusLine` and `waitingOn`), EMF.
 - **PR-0.3 — SPA handoff.** A mid-thread mention opens the review sheet (request, context card, full-prompt
