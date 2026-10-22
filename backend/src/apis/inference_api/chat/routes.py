@@ -107,7 +107,12 @@ from apis.shared.tools.injected import (
     WORKSPACE_TOOL_IDS,
     injected_tools_are_key_described,
 )
-from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS, memory_enabled
+from apis.shared.user_settings.models import (
+    MAX_PERSONAL_INSTRUCTIONS_CHARS,
+    cap_memory_mode,
+    memory_capabilities,
+    memory_mode_from,
+)
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .app_context_dispatch import (
@@ -413,9 +418,9 @@ def _personal_instructions(settings: dict) -> Optional[str]:
     return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
 
 
-def _long_term_memory_for_turn(rag_assistant_id: Optional[str], settings: dict) -> bool:
-    """Long-term memory is off in an Agent conversation and when the user turned it off."""
-    return not rag_assistant_id and memory_enabled(settings)
+def _memory_mode_for_turn(rag_assistant_id: Optional[str], settings: dict) -> str:
+    """The user's long-term memory mode, capped to off in an Agent conversation."""
+    return cap_memory_mode(memory_mode_from(settings), "off" if rag_assistant_id else "on")
 
 
 async def _plain_turn_prompt(
@@ -2099,7 +2104,7 @@ async def stream_conversational_message(
     user_id: str,
     user_input: str,
     persist: bool = True,
-    long_term_memory: bool = True,
+    memory_mode: str = "on",
     user_settings: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
@@ -2115,9 +2120,10 @@ async def stream_conversational_message(
         user_id: User ID for persistence
         user_input: The user's original message to save
         persist: False streams the message without writing either turn to history
-        long_term_memory: False in an Agent conversation, whose writes skip
-            long-term memory extraction (``SessionFactory.create_session_manager``).
-            Also turned off here when the user's settings turn memory off.
+        memory_mode: The conversation's cap: "off" in an Agent conversation,
+            whose writes skip long-term memory extraction
+            (``SessionFactory.create_session_manager``). The user's own mode
+            lowers it further here.
         user_settings: The user's settings if the caller already loaded them;
             otherwise read once, and only when memory is still on.
     """
@@ -2159,15 +2165,18 @@ async def stream_conversational_message(
     try:
         from agents.main_agent.session.persistence import persist_synthetic_messages
 
-        if long_term_memory:
-            long_term_memory = memory_enabled(
-                user_settings if user_settings is not None else await _load_user_settings(user_id)
+        if memory_mode != "off":
+            memory_mode = cap_memory_mode(
+                memory_mode,
+                memory_mode_from(
+                    user_settings if user_settings is not None else await _load_user_settings(user_id)
+                ),
             )
         session_manager = SessionFactory.create_session_manager(
             session_id=session_id,
             user_id=user_id,
             caching_enabled=False,
-            long_term_memory=long_term_memory,
+            memory_extraction=memory_capabilities(memory_mode)[1],
         )
         persist_synthetic_messages(
             session_manager,
@@ -2358,7 +2367,7 @@ def _refuse_turn(
             user_id=user_id,
             user_input=input_data.message,
             persist=persist,
-            long_term_memory=not input_data.rag_assistant_id,
+            memory_mode="off" if input_data.rag_assistant_id else "on",
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
@@ -2454,7 +2463,7 @@ async def _agent_for_app_dispatch(
         cache_write=False,
         assistant_id=input_data.rag_assistant_id,
         text_only_model=is_text_only_model(input_modalities),
-        long_term_memory=_long_term_memory_for_turn(input_data.rag_assistant_id, settings),
+        memory_mode=_memory_mode_for_turn(input_data.rag_assistant_id, settings),
     )
 
 
@@ -4227,7 +4236,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # long-term-memory switch all come from it. A preview is an author testing an
     # agent, so it gets none of theirs.
     user_settings = await _load_user_settings(user_id)
-    turn_long_term_memory = _long_term_memory_for_turn(input_data.rag_assistant_id, user_settings)
+    turn_memory_mode = _memory_mode_for_turn(input_data.rag_assistant_id, user_settings)
     personal_instructions = (
         None if is_preview_session(input_data.session_id) else _personal_instructions(user_settings)
     )
@@ -4944,9 +4953,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # The memory binding is a key element too (memory tools close
                 # over it); replay the snapshot's value for the same reason.
                 memory_binding=snapshot.memory_binding,
-                # The long-term-memory switch is a key element too; replay the
-                # snapshot's (None on older snapshots, which means on).
-                long_term_memory=snapshot.long_term_memory is not False,
+                # The long-term-memory mode is a key element too; replay the
+                # snapshot's. Legacy snapshots carry only longTermMemory, where
+                # False resumes off and None means on.
+                memory_mode=snapshot.resume_memory_mode(),
                 # The memory block is hashed with the system prompt in the key.
                 memory_context=snapshot.memory_context,
                 # So is a full-context knowledge base, which is too large for the
@@ -5095,7 +5105,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     memory_context=memory_context,
                     text_only_model=turn_model.text_only,
                     knowledge_context=knowledge_context,
-                    long_term_memory=turn_long_term_memory,
+                    memory_mode=turn_memory_mode,
                 )
 
             # Defer the build into the stream so it can be narrated.
@@ -5508,7 +5518,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                             session_id=input_data.session_id,
                             user_id=user_id,
                             user_input=input_data.message,
-                            long_term_memory=turn_long_term_memory,
+                            memory_mode=turn_memory_mode,
                             user_settings=user_settings,
                         ):
                             yield frame

@@ -20,6 +20,7 @@ import pytest
 from strands.types.session import SessionMessage
 
 from agents.main_agent.session import session_factory as factory
+from agents.main_agent.session import turn_based_session_manager
 from apis.shared import aws_clients
 from bedrock_agentcore.memory.integrations.strands import session_manager as sdk
 
@@ -47,7 +48,10 @@ def memory_env(monkeypatch):
 
 def _build(session_id: str, *, long_term_memory: bool = True) -> Any:
     return factory.SessionFactory.create_session_manager(
-        session_id=session_id, user_id="user-1", long_term_memory=long_term_memory
+        session_id=session_id,
+        user_id="user-1",
+        memory_retrieval=long_term_memory,
+        memory_extraction=long_term_memory,
     )
 
 
@@ -99,7 +103,7 @@ class TestRetrieval:
 
         manager.retrieve_customer_context(event)
 
-        assert manager.long_term_memory is True
+        assert manager.memory_retrieval is True and manager.memory_extraction is True
         assert set(manager.config.retrieval_config) == {
             "/strategies/pref-1/actors/{actorId}",
             "/strategies/sem-1/actors/{actorId}",
@@ -179,19 +183,34 @@ class TestExtraction:
         assert writes and all(w["extractionMode"] == "SKIP" for w in writes)
 
 
+class TestReadOnly:
+    def test_read_only_retrieves_but_writes_with_extraction_skipped(self, memory_env, monkeypatch):
+        manager = factory.SessionFactory.create_session_manager(
+            session_id="session-ro", user_id="user-1", memory_retrieval=True, memory_extraction=False
+        )
+        assert set(manager.config.retrieval_config) == {
+            "/strategies/pref-1/actors/{actorId}",
+            "/strategies/sem-1/actors/{actorId}",
+        }
+        assert isinstance(manager.memory_client.gmdp_client, turn_based_session_manager._SkipExtractionClient)
+        writes = _record_writes(monkeypatch, manager)
+        _write_user_message(manager, "remember that I prefer short answers")
+        assert writes[0]["extractionMode"] == "SKIP"
+
+
 class TestSyntheticWrites:
     def test_the_stream_coordinators_fresh_manager_inherits_the_turns_setting(self):
-        from agents.main_agent.streaming.stream_coordinator import _long_term_memory_of
+        from agents.main_agent.streaming.stream_coordinator import _memory_extraction_of
 
-        assert _long_term_memory_of(SimpleNamespace(session_manager=SimpleNamespace(long_term_memory=False))) is False
-        assert _long_term_memory_of(SimpleNamespace(session_manager=SimpleNamespace(long_term_memory=True))) is True
+        assert _memory_extraction_of(SimpleNamespace(session_manager=SimpleNamespace(memory_extraction=False))) is False
+        assert _memory_extraction_of(SimpleNamespace(session_manager=SimpleNamespace(memory_extraction=True))) is True
         # A preview manager (or none at all) carries no flag: default to the old behavior.
-        assert _long_term_memory_of(SimpleNamespace(session_manager=SimpleNamespace())) is True
-        assert _long_term_memory_of(None) is True
+        assert _memory_extraction_of(SimpleNamespace(session_manager=SimpleNamespace())) is True
+        assert _memory_extraction_of(None) is True
 
 
-@pytest.mark.parametrize("long_term_memory", [True, False])
-def test_base_agent_forwards_the_setting_to_the_session_factory(long_term_memory):
+@pytest.mark.parametrize("retrieval,extraction", [(True, True), (True, False), (False, False)])
+def test_base_agent_forwards_the_setting_to_the_session_factory(retrieval, extraction):
     from unittest.mock import MagicMock, patch
 
     from agents.main_agent import base_agent as ba
@@ -209,6 +228,8 @@ def test_base_agent_forwards_the_setting_to_the_session_factory(long_term_memory
          patch.object(ba, "GatewayIntegration", return_value=MagicMock()), \
          patch.object(ba, "SessionFactory") as sf, \
          patch.object(ba, "StreamCoordinator", return_value=MagicMock()):
-        Probe(session_id="s", user_id="u", long_term_memory=long_term_memory)
+        Probe(session_id="s", user_id="u", memory_retrieval=retrieval, memory_extraction=extraction)
 
-    assert sf.create_session_manager.call_args.kwargs["long_term_memory"] is long_term_memory
+    kwargs = sf.create_session_manager.call_args.kwargs
+    assert kwargs["memory_retrieval"] is retrieval
+    assert kwargs["memory_extraction"] is extraction
