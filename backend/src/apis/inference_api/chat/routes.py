@@ -13,7 +13,7 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -3580,12 +3580,102 @@ async def _build_turn_tools(
     )
 
 
+ResumeUnavailableReason = Literal["missing", "expired", "unknown_interrupt"]
+
+
+class ResumeUnavailable(Exception):
+    """A resume request whose paused turn can no longer be picked up.
+
+    Raised before any model call: the snapshot is gone, past its
+    ``paused_turn_ttl``, or the rebuilt agent never paused on the submitted
+    interrupt ids. It used to be a 400, which the AgentCore Runtime data plane
+    rewrites to a bare 424, so the user saw "Chat Request Failed" right after
+    successfully connecting an account. ``_resume_unavailable_turn`` answers
+    it as an assistant message instead.
+    """
+
+    def __init__(self, reason: ResumeUnavailableReason) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+_RESUME_UNAVAILABLE_CONSENT_MESSAGE = (
+    "Your account is connected, but the request that was waiting for it can no "
+    "longer pick up where it left off. Send your message again and it will run "
+    "with the connection in place."
+)
+_RESUME_UNAVAILABLE_MESSAGE = (
+    "The request that was waiting for your answer can no longer pick up where "
+    "it left off. Send your message again to start it fresh."
+)
+
+
+async def _resume_unavailable_turn(
+    input_data: InvocationRequest, user_id: str, reason: ResumeUnavailableReason
+) -> StreamingResponse:
+    """Retire a paused turn that cannot resume, and tell the user why.
+
+    Clears what would otherwise re-offer the same dead prompt on every reload:
+    the breadcrumbs the submitted ids came from, and — unless only the ids were
+    wrong — the snapshot and every other breadcrumb with it, since without a
+    snapshot nothing in the session can resume. A wrong id leaves the snapshot
+    alone, because a different interrupt on the same turn may still be live.
+
+    Not persisted: history still ends on the paused ``toolUse``, and the next
+    fresh turn already drops that back to the last completed answer
+    (``reset_stale_interrupt_state``). An assistant row written behind it would
+    break role alternation for that repair. The SPA keeps the streamed message
+    in view by skipping its post-resume reload on this ``error_kind``.
+    """
+    from apis.shared.sessions.metadata import (
+        clear_paused_turn,
+        clear_pending_interrupts,
+        get_pending_interrupts,
+        remove_pending_interrupts,
+    )
+
+    submitted_ids = {
+        entry.interruptId for entry in (input_data.interrupt_responses or [])
+    }
+    awaited_consent = False
+    try:
+        pending = await get_pending_interrupts(input_data.session_id, user_id)
+        awaited_consent = any(
+            p.kind == "oauth" and p.interrupt_id in submitted_ids for p in pending
+        )
+        if reason == "unknown_interrupt":
+            await remove_pending_interrupts(input_data.session_id, user_id, submitted_ids)
+        else:
+            await clear_paused_turn(input_data.session_id, user_id)
+            await clear_pending_interrupts(input_data.session_id, user_id)
+    except Exception:
+        logger.error("Failed to retire an unresumable paused turn", exc_info=True)
+
+    message = (
+        _RESUME_UNAVAILABLE_CONSENT_MESSAGE if awaited_consent else _RESUME_UNAVAILABLE_MESSAGE
+    )
+    return _refuse_turn(
+        input_data,
+        user_id,
+        message=message,
+        stop_reason="error",
+        metadata_event=ConversationalErrorEvent(
+            code=ErrorCode.BAD_REQUEST,
+            message=message,
+            recoverable=False,
+            metadata={"error_kind": "resume_unavailable", "reason": reason},
+        ),
+        persist=False,
+    )
+
+
 def _validate_resume_interrupts(agent, input_data: InvocationRequest) -> None:
     """Reject a resume that names interrupts the cached agent has not paused.
 
     Cache eviction, a process restart, or a forged request would otherwise be
     silently accepted by Strands and drop the client's response. Raising up
-    front lets the client see a 400 and restart the turn cleanly.
+    front lets the route tell the user to restart the turn
+    (``ResumeUnavailable``).
     """
     strands_agent = getattr(agent, "agent", None)
     interrupt_state = getattr(strands_agent, "_interrupt_state", None) if strands_agent else None
@@ -3599,10 +3689,7 @@ def _validate_resume_interrupts(agent, input_data: InvocationRequest) -> None:
         logger.warning(
             "Resume rejected: submitted interrupt ids not in paused state"
         )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unknown or expired interrupt ids; restart the turn.",
-        )
+        raise ResumeUnavailable("unknown_interrupt")
 
 
 async def _resume_knowledge_context(
@@ -4768,26 +4855,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         document_read_available = False
         if is_resume:
             from datetime import datetime, timezone
-            from apis.shared.sessions.metadata import clear_paused_turn, get_paused_turn
+            from apis.shared.sessions.metadata import get_paused_turn
 
             snapshot = await get_paused_turn(input_data.session_id, user_id)
             if not snapshot:
                 logger.warning("Resume rejected: no paused_turn snapshot found")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No paused turn for this session; restart the turn.",
-                )
+                raise ResumeUnavailable("missing")
             try:
                 expires_at = datetime.fromisoformat(snapshot.expires_at)
             except ValueError:
                 expires_at = None
             if expires_at and datetime.now(timezone.utc) > expires_at:
                 logger.warning("Resume rejected: paused_turn snapshot expired")
-                await clear_paused_turn(input_data.session_id, user_id)
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Paused turn expired; restart the turn.",
-                )
+                raise ResumeUnavailable("expired")
 
             # Snapshot wins on resume so an authorized turn finishes against the
             # exact param shape it was authorized for, even if admin defaults
@@ -5473,10 +5553,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             headers=_sse_headers(input_data.session_id),
         )
 
+    except ResumeUnavailable as e:
+        # Before any model call, like the HTTPException arm below: the turn
+        # won't stream an agent, so its generator finally never runs.
+        from apis.shared.sessions.session_lease import release_session_lease
+        await release_session_lease(session_lease)
+        return await _resume_unavailable_turn(input_data, user_id, e.reason)
     except HTTPException:
         # Re-raise HTTP exceptions as-is (e.g., from auth). Release the lease
-        # first — a failure raised after acquire (e.g. resume/interrupt 400s)
-        # means the turn won't stream, so its generator finally never runs.
+        # first — a failure raised after acquire means the turn won't stream,
+        # so its generator finally never runs.
         from apis.shared.sessions.session_lease import release_session_lease
         await release_session_lease(session_lease)
         raise

@@ -781,6 +781,9 @@ export class StreamParserService {
         if (isMaxTokens) {
           this.chatStateService.setLastTurnContinuable(state.sessionId, true);
         }
+        if (streamError.metadata?.['error_kind'] === 'resume_unavailable') {
+          this.chatStateService.markResumeUnavailable(state.sessionId);
+        }
       },
 
       onParseError: (message) => this.setError(state, message),

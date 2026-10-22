@@ -2176,16 +2176,16 @@ class StreamCoordinator:
         interrupt extractors so any flavor of pause (OAuth consent, tool
         approval, future variants) gets a snapshot. Multiple interrupts in
         the same turn share one snapshot; they were all built against the
-        same agent. TTL matches AgentCore Identity's consent window so stale
-        snapshots don't pin storage and a too-late resume returns a clean
-        400.
+        same agent. The resume window is ``paused_turn_ttl``: an hour for an
+        attended turn, a week for a headless run, whose owner was not watching
+        when it paused. A too-late resume streams a conversational refusal
+        (``ResumeUnavailable`` in the chat route), never an HTTP error.
 
         Persistence is best-effort: a DynamoDB write failure logs but does
         not break the live SSE flow.
         """
-        from datetime import timedelta
         from apis.shared.sessions.metadata import set_paused_turn
-        from apis.shared.sessions.models import PausedTurnSnapshot
+        from apis.shared.sessions.models import PausedTurnSnapshot, paused_turn_ttl
 
         interrupt_state = getattr(agent, "_interrupt_state", None)
         if not interrupt_state or not getattr(interrupt_state, "activated", False):
@@ -2221,7 +2221,7 @@ class StreamCoordinator:
                 memory_context=snapshot_source.get("memory_context"),
                 text_only_model=snapshot_source.get("text_only_model"),
                 captured_at=now.isoformat(),
-                expires_at=(now + timedelta(hours=1)).isoformat(),
+                expires_at=(now + paused_turn_ttl(session_id)).isoformat(),
             )
             await set_paused_turn(session_id, user_id, snapshot)
         except Exception as e:
