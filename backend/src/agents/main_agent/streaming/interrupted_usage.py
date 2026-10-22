@@ -47,6 +47,7 @@ teardown task — never on the path to a first token.
 """
 
 import logging
+import re
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -59,14 +60,74 @@ METHOD_ESTIMATE = "chars_per_token"       # the chars/4 fallback
 METHOD_PRIOR_CALL = "prior_call_prefix"   # split from the last call that reported usage
 METHOD_FIRST_WRITE = "assumed_first_write"
 METHOD_UNCACHED = "no_cache_points"
+METHOD_BELOW_MINIMUM = "below_cache_minimum"  # cachePoints sent, prompt too short to cache
 
-#: Smallest prefix Bedrock will cache. Below it a cachePoint is ignored and the
-#: prompt is billed as plain input, so the cache buckets must stay empty. The
-#: published minimum is 1,024 tokens for most Claude models and 2,048 for some
-#: of the small ones; the conservative floor is used because the difference
-#: only ever moves a sub-1k-token call between 1.0x and 1.25x — fractions of a
-#: cent — while getting a 40k-token prefix into the right bucket is the point.
-MIN_CACHEABLE_PREFIX_TOKENS = 1024
+#: Smallest prefix Bedrock will cache, per Claude model, from the Bedrock user
+#: guide's explicit-caching table (re-read 2026-10-22). Below it a cachePoint
+#: is ignored and the prompt is billed as plain input, so the cache buckets
+#: must stay empty.
+#:
+#: Bedrock's table is the one that bills us, and it is not Anthropic's: it puts
+#: Opus 4.7 at 4,096 where Anthropic's own page says 2,048. The minimum is also
+#: not monotonic across generations — 512 on the 5.x line, 4,096 on Haiku 4.5
+#: — so no single floor is safe. A flat 1,024 put every 1,024-4,095-token stop
+#: on Haiku 4.5, the default model, into the write bucket; measured on dev
+#: (2026-10-22), the next call in that conversation read nothing from cache.
+#:
+#: Keyed ``(family, major, minor)``, with ``minor`` ``None`` for a model that
+#: has none (``claude-sonnet-5``).
+_MIN_CACHEABLE_PREFIX_TOKENS: Dict[Tuple[str, int, Optional[int]], int] = {
+    ("opus", 5, 5): 512,
+    ("opus", 5, None): 512,
+    ("sonnet", 5, 5): 512,
+    ("haiku", 5, 5): 512,
+    ("fable", 5, 1): 512,
+    ("fable", 5, None): 512,
+    ("mythos", 5, 1): 512,
+    ("mythos", 5, None): 512,
+    ("opus", 4, 8): 1024,
+    ("sonnet", 5, None): 1024,
+    ("sonnet", 4, 6): 1024,
+    ("sonnet", 4, 5): 1024,
+    ("sonnet", 3, 7): 1024,
+    ("sonnet", 3, 5): 1024,
+    ("opus", 4, 7): 4096,
+    ("opus", 4, 6): 4096,
+    ("opus", 4, 5): 4096,
+    ("haiku", 4, 5): 4096,
+}
+
+#: For a Claude id the table does not name (a newer model, an application
+#: inference profile ARN): the commonest published minimum, and what this
+#: module used for every model before the table existed.
+DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS = 1024
+
+# `claude-haiku-4-5-20251001`, `claude-opus-5-5`, `claude-sonnet-5`; a two-digit
+# minor is allowed, a date suffix is not mistaken for one.
+_MODERN_CLAUDE_ID = re.compile(r"claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?!\d)")
+# `claude-3-7-sonnet-20250219`: version before family.
+_LEGACY_CLAUDE_ID = re.compile(r"claude-(\d+)-(\d{1,2})-(opus|sonnet|haiku)")
+
+
+def min_cacheable_prefix_tokens(model_id: Optional[str]) -> int:
+    """Smallest prompt Bedrock will cache for ``model_id``.
+
+    Reads the family and version out of any Bedrock spelling of the id — a bare
+    model id, a ``us.``/``global.`` inference profile, a ``-v1:0`` suffix — and
+    falls back to ``DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS`` when it names no model
+    in the table.
+    """
+    mid = (model_id or "").lower()
+    match = _MODERN_CLAUDE_ID.search(mid)
+    if match:
+        family, major, minor = match.group(1), int(match.group(2)), match.group(3)
+        key = (family, major, int(minor) if minor is not None else None)
+        return _MIN_CACHEABLE_PREFIX_TOKENS.get(key, DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS)
+    match = _LEGACY_CLAUDE_ID.search(mid)
+    if match:
+        key = (match.group(3), int(match.group(1)), int(match.group(2)))
+        return _MIN_CACHEABLE_PREFIX_TOKENS.get(key, DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS)
+    return DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS
 
 #: Characters per token for the fallback output estimate, matching
 #: ``apis.shared.memory.tokens.estimate_tokens``.
@@ -115,25 +176,28 @@ def attribute_input_tokens(
     *,
     cache_points_sent: bool,
     prior_cached_prefix: Optional[int],
+    min_cacheable_tokens: int = DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS,
 ) -> Tuple[Dict[str, int], str]:
     """Split a projected prompt size across the billing buckets.
 
-    Pure arithmetic over the two facts the caller can establish: whether this
-    request carried cachePoints at all, and how large a cache entry the last
-    call we saw usage for left behind.
+    Pure arithmetic over the facts the caller can establish: whether this
+    request carried cachePoints at all, the serving model's minimum cacheable
+    prefix (``min_cacheable_prefix_tokens``), and how large a cache entry the
+    last call we saw usage for left behind.
 
     Returns the bucket dict plus the method name recorded on the row, so a
     reader can tell "split from the call before it" from "assumed to be the
     first write" without re-deriving either.
     """
     total = max(0, int(total))
-    if not cache_points_sent or total < MIN_CACHEABLE_PREFIX_TOKENS:
-        # No caching on this request (caching off, or a transport Strands
-        # sends no cachePoints for), or a prompt too short to be cached at
-        # all: plain input is the correct bucket, not a fallback.
-        return {"inputTokens": total, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}, (
-            METHOD_UNCACHED
-        )
+    plain = {"inputTokens": total, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}
+    # No caching on this request (caching off, or a transport Strands sends no
+    # cachePoints for), or a prompt too short for this model to cache at all:
+    # plain input is the correct bucket, not a fallback.
+    if not cache_points_sent:
+        return plain, METHOD_UNCACHED
+    if total < min_cacheable_tokens:
+        return plain, METHOD_BELOW_MINIMUM
     if prior_cached_prefix:
         read = min(int(prior_cached_prefix), total)
         return {
@@ -168,6 +232,12 @@ def _cache_points_sent(wrapper: Any) -> bool:
         except Exception:  # noqa: BLE001 - never fail metering over a predicate
             logger.debug("Could not read cache-point support", exc_info=True)
     return bool(getattr(model_config, "caching_enabled", False))
+
+
+def _serving_model_id(wrapper: Any) -> Optional[str]:
+    """The model id this turn's requests were built for, when readable."""
+    model_id = getattr(getattr(wrapper, "model_config", None), "model_id", None)
+    return model_id if isinstance(model_id, str) else None
 
 
 async def _count_output_tokens(strands_agent: Any, text: str) -> Tuple[int, str]:
@@ -216,6 +286,7 @@ async def build_interrupted_call_usage(
         prior_cached_prefix=last_reported_cached_prefix(
             getattr(strands_agent, "messages", None)
         ),
+        min_cacheable_tokens=min_cacheable_prefix_tokens(_serving_model_id(wrapper)),
     )
     output_tokens, output_method = await _count_output_tokens(strands_agent, partial_text or "")
 
