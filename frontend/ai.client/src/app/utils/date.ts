@@ -36,3 +36,30 @@ export function parseIso(value: string | number | Date | null | undefined): Date
   if (value === null || value === undefined) return new Date(NaN);
   return new Date(normalizeIsoTimestamp(value));
 }
+
+/** Matches a whole value in the legacy spelling, so free text that merely contains it is left alone. */
+const LEGACY_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T[\d:.]+\+00:00Z$/;
+
+/**
+ * Deep-copy an API payload with every legacy `…+00:00Z` timestamp repaired.
+ *
+ * For surfaces that hand API values straight to Angular's `DatePipe`. Unlike `new Date`,
+ * which degrades to `Invalid Date`, `DatePipe` **throws** (`NG02100`) on the legacy form —
+ * and a throw mid-template aborts the change-detection pass, leaving later bindings
+ * unrendered until some unrelated event triggers another pass. Normalizing once at the
+ * HTTP boundary fixes every `| date` downstream without touching each template.
+ */
+export function normalizeLegacyTimestamps<T>(value: T): T {
+  if (typeof value === 'string') {
+    return (LEGACY_TIMESTAMP.test(value) ? normalizeIsoTimestamp(value) : value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeLegacyTimestamps) as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) out[key] = normalizeLegacyTimestamps(v);
+    return out as T;
+  }
+  return value;
+}

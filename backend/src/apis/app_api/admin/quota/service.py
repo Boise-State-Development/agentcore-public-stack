@@ -1,6 +1,7 @@
 """Business logic for quota admin operations."""
 
 from typing import Optional, List
+from apis.shared.timestamps import utc_now_iso, to_iso
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import uuid
@@ -47,7 +48,7 @@ class QuotaAdminService:
         if existing:
             raise ValueError(f"Tier with ID '{tier_data.tier_id}' already exists")
 
-        now = datetime.now(timezone.utc).isoformat() + 'Z'
+        now = utc_now_iso()
 
         # Convert float values to Decimal for DynamoDB
         tier = QuotaTier(
@@ -195,7 +196,7 @@ class QuotaAdminService:
                     f"Update or delete the existing assignment first."
                 )
 
-        now = datetime.now(timezone.utc).isoformat() + 'Z'
+        now = utc_now_iso()
         assignment_id = str(uuid.uuid4())
 
         assignment = QuotaAssignment(
@@ -354,7 +355,7 @@ class QuotaAdminService:
             remaining = None
 
         # Get recent block events
-        cutoff_time = (now - timedelta(days=1)).isoformat() + 'Z'
+        cutoff_time = to_iso(now - timedelta(days=1))
         recent_events = await self.repository.get_user_events(
             user_id=user_id,
             limit=100,
@@ -387,7 +388,7 @@ class QuotaAdminService:
         import uuid
 
         override_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat() + 'Z'
+        now = utc_now_iso()
 
         # Convert float values to Decimal for DynamoDB
         override = QuotaOverride(

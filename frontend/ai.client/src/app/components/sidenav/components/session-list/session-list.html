@@ -123,6 +123,7 @@
                     />
                 </div>
             } @else {
+                @let indicator = rowIndicator(session);
                 <a
                     [routerLink]="['/s', getSessionId(session.sessionId)]"
                     [queryParams]="getSessionQueryParams(session)"
@@ -153,13 +154,13 @@
                             <span class="session-title-enter min-w-0 truncate">{{ title }}</span>
                         }
                     }
-                    @if (isSessionStreaming(session.sessionId)) {
-                        <span class="sr-only">(response in progress)</span>
-                    } @else if (shouldShowUnreadDot(session)) {
-                        <span class="sr-only">(unread)</span>
+                    @switch (indicator) {
+                        @case ('streaming') { <span class="sr-only">(response in progress)</span> }
+                        @case ('awaiting-input') { <span class="sr-only">(needs your input)</span> }
+                        @case ('unread') { <span class="sr-only">(unread)</span> }
                     }
                 </a>
-                @if (isSessionStreaming(session.sessionId)) {
+                @if (indicator === 'streaming') {
                     <!-- Response-in-progress dot. While streaming it owns the
                          pr-10 gutter outright — the ellipsis menu button below is
                          not rendered, both to avoid overlapping the dot on hover
@@ -171,7 +172,22 @@
                         aria-hidden="true"
                     ></span>
                 } @else {
-                    @if (shouldShowUnreadDot(session)) {
+                    @if (indicator === 'awaiting-input') {
+                        <!-- Needs-your-input dot: the turn is paused on a prompt
+                             only the user can answer (connect an account, approve
+                             a tool, answer a question, sign in to a site). Amber,
+                             and it outranks unread because a paused turn goes
+                             nowhere until the user acts. Same gutter and the same
+                             hover / focus-visible fade as the unread dot below,
+                             for the same reasons. Cleared when the prompt is
+                             answered, dismissed or superseded by a new message.
+                             700 in light, 400 in dark: the lightest shades that keep
+                             the dot 3:1 against the sidebar, hovered and active rows. -->
+                        <span
+                            class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-state-warning-700 transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0 dark:bg-state-warning-400"
+                            aria-hidden="true"
+                        ></span>
+                    } @else if (indicator === 'unread') {
                         <!-- Unread dot: an unattended (scheduled) run finished, or a
                              backgrounded response completed while the user was viewing
                              another conversation. Static blue (vs. the pulsing
