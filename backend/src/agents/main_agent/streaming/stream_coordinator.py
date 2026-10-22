@@ -97,15 +97,16 @@ class _CooperativeStopSignal(Exception):
     """
 
 
-def _long_term_memory_of(main_agent_wrapper: Any) -> bool:
-    """Whether the turn's own session manager feeds long-term memory.
+def _memory_extraction_of(main_agent_wrapper: Any) -> bool:
+    """Whether the turn's own session manager extracts long-term memory.
 
     A synthetic write (an error reply, an interrupted partial) goes through a
-    fresh manager, which must inherit the turn's setting: an Agent
-    conversation's partial answer is knowledge-base material like the rest.
+    fresh manager, which must inherit the turn's extraction setting:
+    an Agent conversation's partial answer is knowledge-base material like the
+    rest, and a read-only turn learns nothing.
     """
     manager = getattr(main_agent_wrapper, "session_manager", None)
-    return getattr(manager, "long_term_memory", True) is not False
+    return getattr(manager, "memory_extraction", True) is not False
 
 
 def reset_cancellation_state(agent: Any, session_manager: Any) -> None:
@@ -1277,7 +1278,7 @@ class StreamCoordinator:
                                 session_id=session_id,
                                 user_id=user_id,
                                 caching_enabled=False,
-                                long_term_memory=_long_term_memory_of(main_agent_wrapper),
+                                memory_extraction=_memory_extraction_of(main_agent_wrapper),
                             )
                             persist_synthetic_messages(
                                 persist_session_manager,
@@ -1782,7 +1783,7 @@ class StreamCoordinator:
                     session_id=session_id,
                     user_id=user_id,
                     caching_enabled=False,
-                    long_term_memory=_long_term_memory_of(main_agent_wrapper),
+                    memory_extraction=_memory_extraction_of(main_agent_wrapper),
                 )
                 persist_synthetic_messages(
                     persist_session_manager,
@@ -2038,7 +2039,7 @@ class StreamCoordinator:
                         session_id=session_id,
                         user_id=user_id,
                         caching_enabled=False,
-                        long_term_memory=_long_term_memory_of(main_agent_wrapper),
+                        memory_extraction=_memory_extraction_of(main_agent_wrapper),
                     )
                     partial_persisted = persist_synthetic_messages(
                         persist_session_manager,
@@ -2302,7 +2303,7 @@ class StreamCoordinator:
                 mantle_region=snapshot_source.get("mantle_region"),
                 assistant_id=snapshot_source.get("assistant_id"),
                 memory_binding=snapshot_source.get("memory_binding"),
-                long_term_memory=snapshot_source.get("long_term_memory"),
+                memory_mode=snapshot_source.get("memory_mode"),
                 memory_context=snapshot_source.get("memory_context"),
                 text_only_model=snapshot_source.get("text_only_model"),
                 captured_at=now.isoformat(),

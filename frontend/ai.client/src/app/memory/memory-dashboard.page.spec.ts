@@ -54,7 +54,7 @@ describe('MemoryDashboardPage deleteMemory', () => {
           provide: UserSettingsService,
           useFactory: () => ({
             settingsResource: resource({ loader: async () => ({ defaultModelId: null }) as UserSettings }),
-            updateSettings: vi.fn().mockResolvedValue({ defaultModelId: null, memoryEnabled: false }),
+            updateSettings: vi.fn().mockResolvedValue({ defaultModelId: null, memoryMode: 'read_only' }),
           }),
         },
       ],
@@ -94,20 +94,20 @@ describe('MemoryDashboardPage deleteMemory', () => {
     expect(page.facts()).toEqual([]);
   });
 
-  it('turns long-term memory off through the user settings', async () => {
+  it('switches long-term memory to read only through the user settings', async () => {
     await vi.waitFor(() => expect(service.memoryStatus.hasValue()).toBe(true));
     await vi.waitFor(() => expect(settings.settingsResource.hasValue()).toBe(true));
     const fixture = TestBed.createComponent(MemoryDashboardPage);
     fixture.detectChanges();
-    const toggle = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('button[role="switch"]')!;
-    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    const el = fixture.nativeElement as HTMLElement;
+    const radio = (value: string) => el.querySelector<HTMLInputElement>(`input[name="memory-mode"][value="${value}"]`)!;
 
-    toggle.click();
+    expect(radio('on').checked).toBe(true);
+    radio('read_only').click();
     await fixture.whenStable();
 
-    expect(settings.updateSettings).toHaveBeenCalledWith({ memoryEnabled: false });
+    expect(settings.updateSettings).toHaveBeenCalledWith({ memoryMode: 'read_only' });
   });
-
   it('keeps the memory when the delete request fails', async () => {
     service.deleteMemory.mockRejectedValueOnce(new Error('boom'));
     vi.spyOn(console, 'error').mockImplementation(() => {});

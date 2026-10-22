@@ -37,7 +37,7 @@ from apis.shared.sessions.metadata import (
 from apis.shared.tools.always_on import union_enabled_tools
 from apis.shared.tools.freshness import drop_disabled_tools
 from apis.shared.sessions.models import SessionMetadata
-from apis.shared.user_settings.models import memory_enabled
+from apis.shared.user_settings.models import memory_capabilities, memory_mode_from
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 logger = logging.getLogger(__name__)
@@ -221,16 +221,16 @@ async def _always_on_tool_ids_for_voice(
     return always_on + [tid for tid in system if tid not in seen]
 
 
-async def _load_memory_enabled(user_id: str) -> bool:
-    """Whether the user's long-term memory is on. Best-effort: on means on if unreadable."""
+async def _load_memory_mode(user_id: str) -> str:
+    """The user's long-term memory mode. Best-effort: on if unreadable."""
     try:
         repo = UserSettingsRepository()
         if not repo.enabled:
-            return True
-        return memory_enabled(await repo.get_settings(user_id))
+            return "on"
+        return memory_mode_from(await repo.get_settings(user_id))
     except Exception:
         logger.warning("Failed to load user settings", exc_info=True)
-        return True
+        return "on"
 
 
 async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
@@ -567,13 +567,15 @@ async def voice_stream(
     try:
         # Create VoiceAgent
         VoiceAgent = _get_voice_agent_class()
+        memory_retrieval, memory_extraction = memory_capabilities(await _load_memory_mode(user_id))
         voice_agent = VoiceAgent(
             session_id=session_id,
             user_id=user_id,
             auth_token=auth_token,
             enabled_tools=enabled_tools_list,
             voice=requested_voice,
-            long_term_memory=await _load_memory_enabled(user_id),
+            memory_retrieval=memory_retrieval,
+            memory_extraction=memory_extraction,
         )
         if requested_voice and voice_agent.voice_id != str(requested_voice).strip().lower():
             logger.warning(

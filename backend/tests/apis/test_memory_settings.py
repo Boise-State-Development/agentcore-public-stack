@@ -12,6 +12,7 @@ import apis.app_api.user_settings.routes as settings_routes
 import apis.inference_api.chat.routes as chat_routes
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.user_settings.models import memory_capabilities
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 TABLE = "test-user-settings"
@@ -48,17 +49,20 @@ def client(repo) -> TestClient:
 
 
 def test_default_is_on(client):
-    assert client.get("/users/me/settings").json()["memoryEnabled"] is True
+    assert client.get("/users/me/settings").json()["memoryMode"] == "on"
 
 
-def test_turning_it_off_round_trips(client):
-    res = client.put("/users/me/settings", json={"memoryEnabled": False})
+def test_read_only_round_trips(client):
+    res = client.put("/users/me/settings", json={"memoryMode": "read_only"})
     assert res.status_code == 200, res.text
-    assert res.json()["memoryEnabled"] is False
-    assert client.get("/users/me/settings").json()["memoryEnabled"] is False
+    assert res.json()["memoryMode"] == "read_only"
+    assert client.get("/users/me/settings").json()["memoryMode"] == "read_only"
 
 
-def test_memory_off_turns_off_long_term_memory_for_a_chat_turn():
-    assert chat_routes._long_term_memory_for_turn(None, {"memoryEnabled": False}) is False
-    assert chat_routes._long_term_memory_for_turn(None, {}) is True
-    assert chat_routes._long_term_memory_for_turn("ast-1", {"memoryEnabled": True}) is False
+def test_the_turns_mode_is_the_users_mode_capped_by_the_conversation():
+    assert chat_routes._memory_mode_for_turn(None, {"memoryMode": "read_only"}) == "read_only"
+    assert chat_routes._memory_mode_for_turn(None, {"memoryMode": "off"}) == "off"
+    assert chat_routes._memory_mode_for_turn(None, {}) == "on"
+    assert chat_routes._memory_mode_for_turn("ast-1", {"memoryMode": "on"}) == "off"
+    assert memory_capabilities("read_only") == (True, False)
+    assert memory_capabilities("off") == (False, False)

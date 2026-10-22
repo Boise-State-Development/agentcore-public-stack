@@ -19,6 +19,7 @@ from agents.main_agent.base_agent import BaseAgent
 from apis.shared.sessions.metadata import update_session_title
 
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.user_settings.models import MemoryMode, cap_memory_mode, memory_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +68,13 @@ def _create_cache_key(
     memory_binding: str = "",
     memory_context: Optional[str] = None,
     knowledge_context: Optional[str] = None,
-    long_term_memory: bool = True,
+    memory_mode: str = "on",
 ) -> Tuple:
     """
     Create a cache key for agent instances.
 
-    `long_term_memory` is the effective long-term-memory switch for the turn, so a
-    user who turns memory off mid-conversation misses the memory-on agent.
+    `memory_mode` is the effective long-term-memory mode for the turn, so a
+    user who changes it mid-conversation misses the agent built for the old mode.
 
     `memory_binding` is ``memory_binding_digest`` of what the turn's memory
     tools close over, or "" when there are none. For an Agent's binding that is
@@ -144,7 +145,7 @@ def _create_cache_key(
         provider or "bedrock",
         freshness_hash,
         agent_type or "chat",
-        bool(long_term_memory),
+        memory_mode or "on",
         memory_binding,  # ahead of the rest so their positions ([-1]..[-3]) stay put
         bool(document_tools),
         assistant_id or "",
@@ -413,7 +414,7 @@ async def get_agent(
     memory_context: Optional[str] = None,
     text_only_model: bool = False,
     knowledge_context: Optional[str] = None,
-    long_term_memory: bool = True,
+    memory_mode: MemoryMode = "on",
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -426,9 +427,9 @@ async def get_agent(
     Args:
         session_id: Session identifier
         user_id: User identifier (defaults to session_id)
-        long_term_memory: False when the user has turned long-term memory off.
-            It can only turn memory off: an Agent conversation (``assistant_id``)
-            is memory-off regardless.
+        memory_mode: The user's long-term memory mode ("on" | "read_only" |
+            "off"). It can only reduce memory: an Agent conversation
+            (``assistant_id``) is memory-off regardless.
         enabled_tools: List of tool IDs to enable
         model_id: Model ID (provider-specific format)
         temperature: Legacy. Folded into ``inference_params['temperature']``.
@@ -503,7 +504,7 @@ async def get_agent(
 
         skills_hash = await get_skills_freshness_hash(accessible_skill_ids)
 
-    effective_long_term_memory = long_term_memory and not assistant_id
+    effective_memory_mode = cap_memory_mode(memory_mode, "off" if assistant_id else "on")
     cache_key = _create_cache_key(
         session_id=session_id,
         user_id=user_id,
@@ -521,7 +522,7 @@ async def get_agent(
         memory_binding=memory_binding_digest(memory_binding),
         memory_context=memory_context,
         knowledge_context=knowledge_context,
-        long_term_memory=effective_long_term_memory,
+        memory_mode=effective_memory_mode,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.
@@ -606,10 +607,13 @@ async def get_agent(
     # An Agent conversation is isolated from the user's long-term memory, both
     # ways: memory is keyed to the user alone, so it carried one Agent's
     # knowledge base into the next. A user who turned long-term memory off in
-    # their settings gets the same behavior. The effective value is a key
-    # element and on the snapshot.
-    if not effective_long_term_memory:
-        create_kwargs["long_term_memory"] = False
+    # their settings gets the same behavior; "read only" still retrieves but
+    # never learns. The effective mode is a key element and on the snapshot.
+    memory_retrieval, memory_extraction = memory_capabilities(effective_memory_mode)
+    if not memory_retrieval:
+        create_kwargs["memory_retrieval"] = False
+    if not memory_extraction:
+        create_kwargs["memory_extraction"] = False
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills
     # plugin. Pass it through whenever resolved — VoiceAgent does not take the
@@ -658,7 +662,7 @@ async def get_agent(
         # The assistant is a key element (spreadsheet tools close over it), so
         # resume must replay it verbatim or the paused agent is orphaned.
         agent._construction_snapshot["assistant_id"] = assistant_id
-        agent._construction_snapshot["long_term_memory"] = effective_long_term_memory
+        agent._construction_snapshot["memory_mode"] = effective_memory_mode
         # Same for the memory binding (memory tools close over it).
         agent._construction_snapshot["memory_binding"] = dict(memory_binding) if memory_binding else None
 

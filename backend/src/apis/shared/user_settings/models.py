@@ -1,7 +1,7 @@
 """Domain models for user settings."""
 
 from pydantic import BaseModel, ConfigDict, field_validator
-from typing import Annotated, Any, List, Mapping, Optional
+from typing import Annotated, Any, List, Literal, Mapping, Optional
 from pydantic import Field
 
 from apis.shared.voice_catalog import get_voice
@@ -17,6 +17,33 @@ MAX_PERSONAL_INSTRUCTIONS_CHARS = 4_000
 MAX_SIDEBAR_ITEMS = 32
 SIDEBAR_ITEM_ID_PATTERN = r"^[a-z][a-z0-9-]{0,39}$"
 
+
+# Long-term memory mode: "on" retrieves and learns, "read_only" retrieves but
+# learns nothing new, "off" does neither.
+MemoryMode = Literal["on", "read_only", "off"]
+_MEMORY_MODE_RANK = {"off": 0, "read_only": 1, "on": 2}
+
+
+def normalize_memory_mode(value: Any) -> MemoryMode:
+    """A known mode as is; anything else (missing, garbage) fails open to on."""
+    return value if value in _MEMORY_MODE_RANK else "on"
+
+
+def memory_mode_from(settings: Mapping[str, Any]) -> MemoryMode:
+    """The memory mode of a settings dict (missing means on)."""
+    return normalize_memory_mode(settings.get("memoryMode"))
+
+
+def cap_memory_mode(mode: Any, cap: Any) -> MemoryMode:
+    """The lower of two modes: a conversation cap can only reduce memory."""
+    a, b = normalize_memory_mode(mode), normalize_memory_mode(cap)
+    return a if _MEMORY_MODE_RANK[a] <= _MEMORY_MODE_RANK[b] else b
+
+
+def memory_capabilities(mode: Any) -> tuple[bool, bool]:
+    """(retrieval, extraction) for a mode."""
+    mode = normalize_memory_mode(mode)
+    return mode != "off", mode == "on"
 
 class SidebarItemPreference(BaseModel):
     """One sidebar navigation entry: where it sits and whether it is shown.
@@ -43,20 +70,14 @@ class UserSettings(BaseModel):
     sidebar_items: Annotated[
         Optional[List[SidebarItemPreference]], Field(alias="sidebarItems")
     ] = None
-    # Long-term memory (preferences/facts) is on unless the user turns it off.
-    # A missing value means on, and the setting can only turn memory off.
-    memory_enabled: Annotated[Optional[bool], Field(alias="memoryEnabled")] = True
+    # Long-term memory mode. A missing value means on, and the setting can only
+    # reduce memory (an Agent conversation is always off).
+    memory_mode: Annotated[Optional[MemoryMode], Field(alias="memoryMode")] = "on"
 
-    @field_validator("memory_enabled", mode="before")
+    @field_validator("memory_mode", mode="before")
     @classmethod
-    def _default_memory_enabled(cls, value: Any) -> Any:
-        return True if value is None else value
-
-
-def memory_enabled(settings: Mapping[str, Any]) -> bool:
-    """Whether long-term memory is on for a settings dict (missing means on)."""
-    return settings.get("memoryEnabled") is not False
-
+    def _default_memory_mode(cls, value: Any) -> Any:
+        return normalize_memory_mode(value)
 
 class UserSettingsUpdate(BaseModel):
     """Partial update payload for user settings."""
@@ -76,8 +97,8 @@ class UserSettingsUpdate(BaseModel):
         Optional[List[SidebarItemPreference]],
         Field(alias="sidebarItems", max_length=MAX_SIDEBAR_ITEMS),
     ] = None
-    # False turns long-term memory off; null removes the stored value (back to on).
-    memory_enabled: Annotated[Optional[bool], Field(alias="memoryEnabled")] = None
+    # "on" | "read_only" | "off"; null removes the stored value (back to on).
+    memory_mode: Annotated[Optional[MemoryMode], Field(alias="memoryMode")] = None
 
     @field_validator("sidebar_items")
     @classmethod

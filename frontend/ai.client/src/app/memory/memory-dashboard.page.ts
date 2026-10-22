@@ -12,7 +12,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { MemoryService } from './services/memory.service';
 import { MemoriesResponse } from './models/memory.model';
-import { UserSettingsService } from '../services/user-settings.service';
+import { MemoryMode, UserSettingsService } from '../services/user-settings.service';
 import { parseIso } from '../utils/date';
 import { SpinnerComponent } from '../components/spinner/spinner.component';
 
@@ -155,43 +155,57 @@ export class ParsePreferencePipe implements PipeTransform {
         } @else {
           <!-- Memory Available - Show Content -->
 
-          <!-- Long-term memory switch -->
-          <section class="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-            <div class="flex items-start justify-between gap-4">
-              <div>
-                <p id="memory-enabled-label" class="text-sm/6 font-medium text-gray-900 dark:text-gray-100">
-                  Enable long-term memory
-                </p>
-                <p id="memory-enabled-description" class="text-sm/6 text-gray-600 dark:text-gray-400">
-                  When on, the assistant remembers preferences and facts from your conversations and uses
-                  them to personalize responses. When off, it won't use your memories or learn new ones.
-                  Your existing memories are kept, and you can still view and delete them here. This
-                  setting doesn't affect project memory or agent memory (Memory Spaces).
-                </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-labelledby="memory-enabled-label"
-                aria-describedby="memory-enabled-description"
-                [attr.aria-checked]="memoryEnabled()"
-                [disabled]="savingMemorySetting()"
-                (click)="toggleMemoryEnabled()"
-                class="relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
-                [class]="memoryEnabled() ? 'bg-primary-accessible' : 'bg-gray-300 dark:bg-gray-600'"
-              >
-                <span
-                  aria-hidden="true"
-                  class="inline-block size-5 transform rounded-full bg-white shadow transition-transform duration-150"
-                  [class]="memoryEnabled() ? 'translate-x-5' : 'translate-x-0.5'"
-                ></span>
-              </button>
+          <!-- Long-term memory mode -->
+          <section
+            aria-labelledby="memory-mode-label"
+            class="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
+          >
+            <p id="memory-mode-label" class="text-sm/6 font-medium text-gray-900 dark:text-gray-100">
+              Long-term memory
+            </p>
+            <p id="memory-mode-description" class="text-sm/6 text-gray-600 dark:text-gray-400">
+              Choose whether the assistant uses the preferences and facts it learns from your conversations.
+              Your existing memories are kept in every mode, and you can view and delete them here.
+              Memory Spaces belonging to projects and agents are separate and aren't affected by this setting.
+            </p>
+            <div
+              role="radiogroup"
+              aria-labelledby="memory-mode-label"
+              aria-describedby="memory-mode-description"
+              class="mt-3 grid gap-2 sm:grid-cols-3"
+            >
+              @for (option of memoryModeOptions; track option.value) {
+                <label
+                  class="flex cursor-pointer flex-col rounded-2xl border border-gray-300 px-4 py-3 transition-colors hover:bg-gray-50 has-checked:border-primary-500 has-checked:bg-gray-100 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-primary-500 has-disabled:cursor-not-allowed has-disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700/40 dark:has-checked:border-primary-400 dark:has-checked:bg-gray-700"
+                >
+                  <input
+                    type="radio"
+                    name="memory-mode"
+                    class="sr-only"
+                    [attr.value]="option.value"
+                    [checked]="memoryMode() === option.value"
+                    [disabled]="savingMemorySetting()"
+                    [attr.aria-labelledby]="'memory-mode-' + option.value + '-label'"
+                    [attr.aria-describedby]="'memory-mode-' + option.value + '-hint'"
+                    (change)="setMemoryMode(option.value)"
+                  />
+                  <span
+                    [id]="'memory-mode-' + option.value + '-label'"
+                    class="text-sm/6 font-medium text-gray-900 dark:text-white"
+                    >{{ option.label }}</span
+                  >
+                  <span
+                    [id]="'memory-mode-' + option.value + '-hint'"
+                    class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-300"
+                    >{{ option.description }}</span
+                  >
+                </label>
+              }
             </div>
             @if (memorySettingError(); as message) {
               <p role="alert" class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ message }}</p>
             }
           </section>
-
           <!-- Info Banner -->
           <div class="mb-6 rounded-lg border border-state-info-200 bg-state-info-50 p-4 dark:border-state-info-800 dark:bg-state-info-900/20">
             <div class="flex items-start gap-3">
@@ -608,26 +622,34 @@ export class MemoryDashboardPage {
   readonly isSearching = signal(false);
   readonly searchResults = signal<MemoriesResponse | null>(null);
 
-  // Long-term memory switch (user setting; missing means on)
+  // Long-term memory mode (user setting; missing means on)
   readonly savingMemorySetting = signal(false);
   readonly memorySettingError = signal<string | null>(null);
-  private readonly memoryEnabledSaved = signal<boolean | null>(null);
-  readonly memoryEnabled = computed(
+  readonly memoryModeOptions: ReadonlyArray<{ value: MemoryMode; label: string; description: string }> = [
+    { value: 'on', label: 'On', description: 'Uses your memories and learns new ones.' },
+    { value: 'read_only', label: 'Read only', description: "Uses your existing memories but won't learn new ones." },
+    { value: 'off', label: 'Off', description: "Won't use your memories or learn new ones." },
+  ];
+  private readonly memoryModeSaved = signal<MemoryMode | null>(null);
+  readonly memoryMode = computed<MemoryMode>(
     () =>
-      this.memoryEnabledSaved() ??
+      this.memoryModeSaved() ??
       (this.userSettings.settingsResource.hasValue()
-        ? this.userSettings.settingsResource.value()?.memoryEnabled !== false
-        : true),
+        ? (this.userSettings.settingsResource.value()?.memoryMode ?? 'on')
+        : 'on'),
   );
 
-  async toggleMemoryEnabled(): Promise<void> {
-    if (this.savingMemorySetting()) return;
+  async setMemoryMode(mode: MemoryMode): Promise<void> {
+    if (this.savingMemorySetting() || mode === this.memoryMode()) return;
+    const previous = this.memoryMode();
     this.savingMemorySetting.set(true);
     this.memorySettingError.set(null);
+    this.memoryModeSaved.set(mode);
     try {
-      const result = await this.userSettings.updateSettings({ memoryEnabled: !this.memoryEnabled() });
-      this.memoryEnabledSaved.set(result.memoryEnabled !== false);
+      const result = await this.userSettings.updateSettings({ memoryMode: mode });
+      this.memoryModeSaved.set(result.memoryMode ?? 'on');
     } catch {
+      this.memoryModeSaved.set(previous);
       this.memorySettingError.set("Couldn't save this setting. Try again.");
     } finally {
       this.savingMemorySetting.set(false);

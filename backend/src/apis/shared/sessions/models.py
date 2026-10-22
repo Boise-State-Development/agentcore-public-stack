@@ -192,12 +192,19 @@ class PausedTurnSnapshot(BaseModel):
                     "replays it or the paused agent is orphaned. None when the turn had no "
                     "memory tools and on snapshots written before the field existed.",
     )
+    memory_mode: Optional[str] = Field(
+        default=None,
+        alias="memoryMode",
+        description="Effective long-term-memory mode ('on' | 'read_only' | 'off') of "
+                    "the paused turn. A cache-key element: resume replays it or the paused "
+                    "agent is orphaned. None on snapshots written before the field existed "
+                    "(see resume_memory_mode).",
+    )
     long_term_memory: Optional[bool] = Field(
         default=None,
         alias="longTermMemory",
-        description="Whether the paused turn ran with long-term memory. A cache-key "
-                    "element: resume replays it or the paused agent is orphaned. None on "
-                    "snapshots written before the field existed (treated as on).",
+        description="Legacy: written by pre-three-mode builds of #114. Read only by "
+                    "resume_memory_mode(); False means off.",
     )
     memory_context: Optional[str] = Field(
         default=None,
@@ -215,6 +222,17 @@ class PausedTurnSnapshot(BaseModel):
     )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
+
+    def resume_memory_mode(self) -> str:
+        """The memory mode a resumed turn replays.
+
+        Snapshots written by the three-mode build carry ``memory_mode``. Older
+        ones carry only the legacy ``long_term_memory`` bool: False resumes off,
+        anything else on.
+        """
+        if self.memory_mode in ("on", "read_only", "off"):
+            return self.memory_mode
+        return "off" if self.long_term_memory is False else "on"
 
 
 #: How long an attended turn's pause stays resumable. The person was watching
