@@ -1868,6 +1868,54 @@ class StreamCoordinator:
             logger.debug("Could not read agent.messages tail for alternation guard", exc_info=True)
         return None
 
+    @staticmethod
+    def _append_interrupted_reply(
+        agent: Any,
+        session_id: str,
+        message: str,
+        *,
+        tail: Optional[Dict[str, Any]],
+        history_len: int,
+    ) -> bool:
+        """Give the live conversation the synthetic reply Memory just got.
+
+        ``persist_synthetic_messages`` writes straight to Memory and nothing
+        appends it to ``agent.messages``. The next turn usually hits the agent
+        cache, where ``initialize()`` never re-runs, so without this the model
+        answers the follow-up from ``[question, follow-up]`` with no partial,
+        while a later restore from Memory produces a different history and
+        re-writes the cached prefix. Same class as #741 and #751.
+
+        Appends **in place**: the list is aliased across every agent serving
+        this ``(session, user)`` (``_adopt_session_conversation``), so one
+        append reaches all of them and nothing is held on this instance. The
+        message is the exact dict ``persist_synthetic_messages`` stores, so a
+        later restore serializes it byte for byte the same.
+
+        Skipped when the list moved since the alternation decision was made
+        (a new turn already appended its prompt): appending now would land the
+        reply after the wrong user turn. Returns whether it appended.
+        """
+        try:
+            messages = getattr(agent, "messages", None)
+            if not isinstance(messages, list):
+                return False
+            if len(messages) != history_len or (messages[-1] if messages else None) is not tail:
+                logger.warning(
+                    "Session %s: conversation moved before the interrupted reply "
+                    "could join it in process; Memory holds it, this process does not",
+                    session_id,
+                )
+                return False
+            messages.append({"role": "assistant", "content": [{"text": message}]})
+            return True
+        except Exception:  # noqa: BLE001 - best-effort, like the rest of the teardown
+            logger.error(
+                "Failed to append interrupted reply to the live conversation for session %s",
+                session_id, exc_info=True,
+            )
+            return False
+
     async def _persist_interruption(
         self,
         agent: Any,
@@ -1929,6 +1977,9 @@ class StreamCoordinator:
         Whenever nothing is persisted, only the marker is set. The write itself
         also passes ``last_persisted_role`` to ``persist_synthetic_messages`` so
         the centralized alternation guard is the single enforcement point.
+        Whatever Memory gets, the live conversation gets too
+        (``_append_interrupted_reply``), so the next turn's model sees the
+        partial and the in-process history matches what a restore would build.
 
         ``history_count``, when passed, supersedes ``initial_message_count``
         and is resolved inside the shielded task, so the teardown cannot
@@ -1955,10 +2006,17 @@ class StreamCoordinator:
                 base_index = await history_count.resolve()
             text = partial_text.strip()
             last_role = None
+            tail = None
+            history_len = 0
+            archive_messages: List[Dict[str, Any]] = []
             try:
                 messages = getattr(agent, "messages", None) or []
                 if messages:
-                    last_role = messages[-1].get("role")
+                    tail = messages[-1]
+                    last_role = tail.get("role")
+                history_len = len(messages)
+                if archive_appended_count is not None:
+                    archive_messages = list(messages)
             except Exception:  # noqa: BLE001 - diagnostic only
                 logger.debug("Could not read agent.messages tail", exc_info=True)
 
@@ -1993,6 +2051,10 @@ class StreamCoordinator:
                         "Failed to persist interrupted partial for session %s: %s",
                         session_id, persist_error, exc_info=True,
                     )
+                if partial_persisted:
+                    self._append_interrupted_reply(
+                        agent, session_id, message, tail=tail, history_len=history_len
+                    )
             else:
                 logger.info(
                     "Interruption for session %s — marker only, no synthetic write "
@@ -2007,7 +2069,6 @@ class StreamCoordinator:
                 try:
                     from apis.shared.conversation_archive.live import schedule_turn_archive
 
-                    archive_messages = list(getattr(agent, "messages", None) or [])
                     appended = archive_appended_count
                     if partial_persisted and text:
                         archive_messages.append({"role": "assistant", "content": [{"text": text}]})
