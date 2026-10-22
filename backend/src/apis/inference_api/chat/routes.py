@@ -107,7 +107,7 @@ from apis.shared.tools.injected import (
     WORKSPACE_TOOL_IDS,
     injected_tools_are_key_described,
 )
-from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS
+from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS, memory_enabled
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .app_context_dispatch import (
@@ -413,7 +413,14 @@ def _personal_instructions(settings: dict) -> Optional[str]:
     return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
 
 
-async def _plain_turn_prompt(input_data, user_id: Optional[str]) -> Optional[str]:
+def _long_term_memory_for_turn(rag_assistant_id: Optional[str], settings: dict) -> bool:
+    """Long-term memory is off in an Agent conversation and when the user turned it off."""
+    return not rag_assistant_id and memory_enabled(settings)
+
+
+async def _plain_turn_prompt(
+    input_data, user_id: Optional[str], settings: Optional[dict] = None
+) -> Optional[str]:
     """The system prompt a no-model App dispatch must pass to reuse the turn's cached agent.
 
     The agent cache keys on the system prompt, so a dispatch that left out the personal
@@ -423,7 +430,8 @@ async def _plain_turn_prompt(input_data, user_id: Optional[str]) -> Optional[str
     if input_data.rag_assistant_id:
         return input_data.system_prompt
     return personal_plain_prompt(
-        input_data.system_prompt, _personal_instructions(await _load_user_settings(user_id))
+        input_data.system_prompt,
+        _personal_instructions(settings if settings is not None else await _load_user_settings(user_id)),
     )
 
 
@@ -2092,6 +2100,7 @@ async def stream_conversational_message(
     user_input: str,
     persist: bool = True,
     long_term_memory: bool = True,
+    user_settings: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -2107,7 +2116,10 @@ async def stream_conversational_message(
         user_input: The user's original message to save
         persist: False streams the message without writing either turn to history
         long_term_memory: False in an Agent conversation, whose writes skip
-            long-term memory extraction (``SessionFactory.create_session_manager``)
+            long-term memory extraction (``SessionFactory.create_session_manager``).
+            Also turned off here when the user's settings turn memory off.
+        user_settings: The user's settings if the caller already loaded them;
+            otherwise read once, and only when memory is still on.
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -2147,6 +2159,10 @@ async def stream_conversational_message(
     try:
         from agents.main_agent.session.persistence import persist_synthetic_messages
 
+        if long_term_memory:
+            long_term_memory = memory_enabled(
+                user_settings if user_settings is not None else await _load_user_settings(user_id)
+            )
         session_manager = SessionFactory.create_session_manager(
             session_id=session_id,
             user_id=user_id,
@@ -2396,11 +2412,12 @@ async def _agent_for_app_dispatch(
     ``cache_write=False`` — this path builds no injected tools, so an agent it
     built must never seed a slot the real turns would then hit.
     """
+    settings = await _load_user_settings(user_id)
     request_inference_params = dict(input_data.inference_params or {})
     dispatch_model_id, dispatch_provider = input_data.model_id, input_data.provider
     if not dispatch_model_id:
         dispatch_model_id, dispatch_provider = await _resolve_fallback_model(
-            user_id, current_user, dispatch_provider
+            user_id, current_user, dispatch_provider, settings=settings
         )
     caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider, input_modalities = await _resolve_model_settings(
         model_id=dispatch_model_id,
@@ -2423,7 +2440,7 @@ async def _agent_for_app_dispatch(
             current_user,
         ),
         model_id=dispatch_model_id,
-        system_prompt=await _plain_turn_prompt(input_data, user_id),
+        system_prompt=await _plain_turn_prompt(input_data, user_id, settings),
         caching_enabled=caching_enabled,
         provider=dispatch_provider or registry_provider,
         inference_params=inference_params,
@@ -2437,6 +2454,7 @@ async def _agent_for_app_dispatch(
         cache_write=False,
         assistant_id=input_data.rag_assistant_id,
         text_only_model=is_text_only_model(input_modalities),
+        long_term_memory=_long_term_memory_for_turn(input_data.rag_assistant_id, settings),
     )
 
 
@@ -4205,9 +4223,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # block goes into the system prompt. None on a plain turn or a resume.
     kb_full_context_task: Optional["asyncio.Task[Optional[str]]"] = None
     system_prompt = input_data.system_prompt  # Start with provided system prompt
-    # One settings read per turn: the default model and personal instructions both
-    # come from it. A preview is an author testing an agent, so it gets none of theirs.
+    # One settings read per turn: the default model, personal instructions and the
+    # long-term-memory switch all come from it. A preview is an author testing an
+    # agent, so it gets none of theirs.
     user_settings = await _load_user_settings(user_id)
+    turn_long_term_memory = _long_term_memory_for_turn(input_data.rag_assistant_id, user_settings)
     personal_instructions = (
         None if is_preview_session(input_data.session_id) else _personal_instructions(user_settings)
     )
@@ -4924,6 +4944,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # The memory binding is a key element too (memory tools close
                 # over it); replay the snapshot's value for the same reason.
                 memory_binding=snapshot.memory_binding,
+                # The long-term-memory switch is a key element too; replay the
+                # snapshot's (None on older snapshots, which means on).
+                long_term_memory=snapshot.long_term_memory is not False,
                 # The memory block is hashed with the system prompt in the key.
                 memory_context=snapshot.memory_context,
                 # So is a full-context knowledge base, which is too large for the
@@ -5072,6 +5095,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     memory_context=memory_context,
                     text_only_model=turn_model.text_only,
                     knowledge_context=knowledge_context,
+                    long_term_memory=turn_long_term_memory,
                 )
 
             # Defer the build into the stream so it can be narrated.
@@ -5484,7 +5508,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                             session_id=input_data.session_id,
                             user_id=user_id,
                             user_input=input_data.message,
-                            long_term_memory=not input_data.rag_assistant_id,
+                            long_term_memory=turn_long_term_memory,
+                            user_settings=user_settings,
                         ):
                             yield frame
                         return

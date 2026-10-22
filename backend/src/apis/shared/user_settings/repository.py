@@ -14,6 +14,7 @@ DEFAULT_SETTINGS = {
     "personalInstructions": None,
     "voiceId": None,
     "sidebarItems": None,
+    "memoryEnabled": None,
 }
 
 
@@ -86,6 +87,7 @@ class UserSettingsRepository:
                 "personalInstructions": item.get("personalInstructions"),
                 "voiceId": item.get("voiceId"),
                 "sidebarItems": item.get("sidebarItems"),
+                "memoryEnabled": item.get("memoryEnabled"),
             }
         except ClientError as e:
             logger.error(f"Error getting settings for user {user_id}: {e}")

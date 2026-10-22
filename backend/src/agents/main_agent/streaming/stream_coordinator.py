@@ -2302,6 +2302,7 @@ class StreamCoordinator:
                 mantle_region=snapshot_source.get("mantle_region"),
                 assistant_id=snapshot_source.get("assistant_id"),
                 memory_binding=snapshot_source.get("memory_binding"),
+                long_term_memory=snapshot_source.get("long_term_memory"),
                 memory_context=snapshot_source.get("memory_context"),
                 text_only_model=snapshot_source.get("text_only_model"),
                 captured_at=now.isoformat(),

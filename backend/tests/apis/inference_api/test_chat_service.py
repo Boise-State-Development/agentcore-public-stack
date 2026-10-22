@@ -1078,3 +1078,11 @@ class TestAgentChatLongTermMemory:
 
         assert plain is not mention
         assert mock_create_agent.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_memory_off_user_builds_without_long_term_memory_in_its_own_slot(self, mock_create_agent, mock_freshness_hash):
+        on = await service.get_agent(session_id="s", user_id="u")
+        off = await service.get_agent(session_id="s", user_id="u", long_term_memory=False)
+        assert on is not off
+        assert mock_create_agent.call_count == 2
+        assert mock_create_agent.call_args.kwargs["long_term_memory"] is False

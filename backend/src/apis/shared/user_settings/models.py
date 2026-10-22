@@ -1,7 +1,7 @@
 """Domain models for user settings."""
 
 from pydantic import BaseModel, ConfigDict, field_validator
-from typing import Annotated, List, Optional
+from typing import Annotated, Any, List, Mapping, Optional
 from pydantic import Field
 
 from apis.shared.voice_catalog import get_voice
@@ -43,6 +43,19 @@ class UserSettings(BaseModel):
     sidebar_items: Annotated[
         Optional[List[SidebarItemPreference]], Field(alias="sidebarItems")
     ] = None
+    # Long-term memory (preferences/facts) is on unless the user turns it off.
+    # A missing value means on, and the setting can only turn memory off.
+    memory_enabled: Annotated[Optional[bool], Field(alias="memoryEnabled")] = True
+
+    @field_validator("memory_enabled", mode="before")
+    @classmethod
+    def _default_memory_enabled(cls, value: Any) -> Any:
+        return True if value is None else value
+
+
+def memory_enabled(settings: Mapping[str, Any]) -> bool:
+    """Whether long-term memory is on for a settings dict (missing means on)."""
+    return settings.get("memoryEnabled") is not False
 
 
 class UserSettingsUpdate(BaseModel):
@@ -63,6 +76,8 @@ class UserSettingsUpdate(BaseModel):
         Optional[List[SidebarItemPreference]],
         Field(alias="sidebarItems", max_length=MAX_SIDEBAR_ITEMS),
     ] = None
+    # False turns long-term memory off; null removes the stored value (back to on).
+    memory_enabled: Annotated[Optional[bool], Field(alias="memoryEnabled")] = None
 
     @field_validator("sidebar_items")
     @classmethod
