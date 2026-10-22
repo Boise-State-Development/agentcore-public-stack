@@ -1251,3 +1251,241 @@ class TestADeletedDocumentIsNotIngested:
 
         assert ic._get_doc_row(ASSISTANT_ID, DOCUMENT_ID)["status"] == "uploading"
         assert reads[0].get("ConsistentRead") is True
+
+
+# ---------------------------------------------------------------------------
+# An upload whose PUT never reached S3
+# ---------------------------------------------------------------------------
+class TestAnUploadThatNeverLanded:
+    """The prod dead-letter of 2026-10-19.
+
+    A born-managed first upload writes its ``DOC#`` row before the browser
+    ``PUT``s, and the provisioning job hands every waiting row to this consumer
+    once the knowledge base is ready. One row's ``PUT`` never happened. The
+    consumer submitted an S3 URI with nothing behind it, Bedrock accepted the
+    call, the status probe read ``NOT_FOUND``, and three attempts later the event
+    dead-lettered with the row stuck at ``uploading``. Nothing was lost, but the
+    alarm stayed red until someone drained the queue by hand.
+    """
+
+    DECLARED = 2048
+
+    def _seed(self, table, created_at):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+        item = {
+            "PK": f"AST#{ASSISTANT_ID}",
+            "SK": f"DOC#{DOCUMENT_ID}",
+            "status": "uploading",
+            "sizeBytes": self.DECLARED,
+        }
+        if created_at:
+            item["createdAt"] = created_at
+        table.put_item(Item=item)
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"},
+            UpdateExpression="SET reservedBytes = :d, storedBytes = :z, totalBytes = :d",
+            ExpressionAttributeValues={":d": self.DECLARED, ":z": 0},
+        )
+        boto3.client("s3", region_name=REGION).delete_object(Bucket=BUCKET, Key=KEY)
+
+    @staticmethod
+    def _ago(seconds):
+        from datetime import timedelta
+
+        return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+    @staticmethod
+    def _kb(table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        )["Item"]
+
+    def _handoff(self, fake):
+        """The provisioning job's event, through the real entry point."""
+        event = {
+            "source": "kb-migration.born-managed",
+            "detail-type": "Object Created",
+            **_eventbridge_event(),
+        }
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            return ic.lambda_handler(event, None)["results"][0]
+
+    def test_an_expired_upload_fails_the_row_without_raising(self, table):
+        self._seed(table, created_at=self._ago(ic.UPLOAD_URL_TTL_SECONDS + 60))
+        fake = _FakeBackend(statuses=["NOT_FOUND"])
+
+        result = self._handoff(fake)
+
+        assert result["note"] == "upload-missing"
+        assert result["status"] == "failed"
+        assert fake.ingested == [], "a URI with no object behind it was submitted"
+        item = _doc(table)
+        assert item["status"] == "failed"
+        assert item["ingestionError"] == ic.UPLOAD_MISSING_MESSAGE
+        assert "upload the file again" in item["ingestionError"].lower()
+
+    def test_an_expired_upload_returns_its_reservation(self, table):
+        self._seed(table, created_at=self._ago(ic.UPLOAD_URL_TTL_SECONDS + 60))
+
+        self._handoff(_FakeBackend(statuses=["NOT_FOUND"]))
+
+        kb = self._kb(table)
+        assert int(kb["reservedBytes"]) == 0
+        assert int(kb["totalBytes"]) == 0
+        assert _doc(table).get("byteCapSettled") is True
+
+    def test_a_row_with_no_creation_time_is_treated_as_expired(self, table):
+        self._seed(table, created_at=None)
+
+        result = self._handoff(_FakeBackend(statuses=["NOT_FOUND"]))
+
+        assert result["note"] == "upload-missing"
+        assert _doc(table)["status"] == "failed"
+
+    def test_an_upload_still_within_its_url_window_is_left_for_its_own_event(self, table):
+        """The PUT may still be in flight. Failing the row would settle its bytes,
+        and the object's ObjectCreated event would then be skipped as already
+        settled, losing an upload that worked."""
+        self._seed(table, created_at=self._ago(90))
+        fake = _FakeBackend(statuses=["NOT_FOUND"])
+
+        result = self._handoff(fake)
+
+        assert result["note"] == "awaiting-upload"
+        assert fake.ingested == []
+        item = _doc(table)
+        assert item["status"] == "uploading"
+        assert "byteCapSettled" not in item
+        assert int(self._kb(table)["reservedBytes"]) == self.DECLARED
+
+    def test_the_late_put_then_completes_normally(self, table):
+        self._seed(table, created_at=self._ago(90))
+        self._handoff(_FakeBackend(statuses=["NOT_FOUND"]))
+
+        boto3.client("s3", region_name=REGION).put_object(
+            Bucket=BUCKET, Key=KEY, Body=b"x" * self.DECLARED
+        )
+        fake = _FakeBackend()
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] == "complete"
+        assert int(self._kb(table)["storedBytes"]) == self.DECLARED
+
+    def test_an_inconclusive_probe_ingests_as_before(self, table, monkeypatch):
+        """A HEAD that could not answer (throttled, refused) is not evidence the
+        upload is missing."""
+        self._seed(table, created_at=self._ago(ic.UPLOAD_URL_TTL_SECONDS + 60))
+        boto3.client("s3", region_name=REGION).put_object(
+            Bucket=BUCKET, Key=KEY, Body=b"x" * self.DECLARED
+        )
+        monkeypatch.setattr(ic, "_source_object_exists", lambda bucket, key: None)
+        fake = _FakeBackend()
+
+        self._handoff(fake)
+
+        assert fake.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] == "complete"
+
+    def test_the_existence_probe_reads_a_404_as_missing(self, table):
+        boto3.client("s3", region_name=REGION).delete_object(Bucket=BUCKET, Key=KEY)
+        assert ic._source_object_exists(BUCKET, KEY) is False
+
+    def test_the_existence_probe_reads_a_present_object(self, table):
+        assert ic._source_object_exists(BUCKET, KEY) is True
+
+    def test_the_existence_probe_is_inconclusive_on_other_errors(self, table):
+        assert ic._source_object_exists("no-such-bucket-here", KEY) is None
+
+    def test_the_upload_url_ttl_is_the_one_the_route_signs(self):
+        """The window is only right if it is the URL's real lifetime."""
+        from apis.app_api.documents import routes
+
+        assert routes.UPLOAD_URL_TTL_SECONDS is ic.UPLOAD_URL_TTL_SECONDS
+
+
+class TestARefusedIngestIsTerminal:
+    """A document Bedrock refuses in the ingest response itself is failed with
+    Bedrock's reason, not re-submitted until it dead-letters."""
+
+    def test_a_refusal_fails_the_row_with_the_reason_and_does_not_raise(self, table):
+        from apis.shared.kb_backend.managed_backend import ManagedKbDocumentRejected
+
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"},
+            UpdateExpression="SET sizeBytes = :d",
+            ExpressionAttributeValues={":d": 1024},
+        )
+        table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"},
+            UpdateExpression="SET reservedBytes = :d, storedBytes = :z, totalBytes = :d",
+            ExpressionAttributeValues={":d": 1024, ":z": 0},
+        )
+
+        class _Refusing(_FakeBackend):
+            async def ingest(self, kb_ref, source):
+                raise ManagedKbDocumentRejected(
+                    {source.document_id: ("FAILED", "Unsupported file format")}
+                )
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_Refusing(statuses=["NOT_FOUND"]),
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["note"] == "ingest-rejected"
+        item = _doc(table)
+        assert item["status"] == "failed"
+        assert "Unsupported file format" in item["ingestionError"]
+        kb = table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        )["Item"]
+        assert int(kb["reservedBytes"]) == 0
+
+
+class TestNotFoundGraceAfterSubmit:
+    """A probe issued right behind the consumer's own submit can miss the
+    document. That read used to end the wait at once and spend a redelivery."""
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def test_a_document_that_appears_within_the_grace_completes(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["NOT_FOUND", "NOT_FOUND", "NOT_FOUND", "INDEXED"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] == "complete"
+
+    def test_the_grace_is_bounded(self, table):
+        self._seed_managed(table)
+        fake = _FakeBackend(statuses=["NOT_FOUND"])
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake
+        ):
+            with pytest.raises(ic.IngestionRoutingError, match="NOT_FOUND"):
+                ic.handle_object(BUCKET, KEY)
+
+        # The pre-submit probe, the wait's first probe, then the grace.
+        assert fake.status_calls == 2 + ic.NOT_FOUND_GRACE_POLLS
+
+    def test_no_grace_unless_asked(self):
+        fake = _FakeBackend(statuses=["NOT_FOUND"])
+
+        status, _ = ic.wait_until_indexed(fake, ASSISTANT_ID, DOCUMENT_ID, sleep=lambda _s: None)
+
+        assert status == "NOT_FOUND"
+        assert fake.status_calls == 1

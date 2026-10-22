@@ -21,9 +21,21 @@ needs **zero new infra**. New `APPCARD#` SK prefix, alongside the `C#`
 (cost) and `META` rows:
 
     PK:     USER#<user_id>
-    SK:     APPCARD#<created_at>#<card_id>
+    SK:     APPCARD#<card_key>
     GSI_PK: SESSION#<session_id>      (SessionLookupIndex)
     GSI_SK: APPCARD#<created_at>
+
+**One card per distinct action, not per run.** An App re-runs its setup
+calls every time its frame mounts (GitHub's `issue_write` App issues five
+`ui_get` lookups), and the frame re-mounts on every reload. A card per run
+grew the frame's "N actions · M failed" chip each time a conversation was
+reopened. So `<card_key>` is a hash of the call's identity — the session,
+the originating `toolUseId` (the frame), the tool and its arguments — and a
+repeat run updates that card's result in place, keeping its first
+`createdAt` so it holds its position. The cost: two byte-identical calls
+from one frame (the same issue submitted twice with the same text) record
+as one card showing the latest result. Rows written before this keyed on
+`<created_at>#<random id>`; `list_for_session` collapses those the same way.
 
 The write stays on the **app-api boundary** (called from
 `/mcp-apps/proxy-call` after a successful dispatch) so inference-api keeps
@@ -34,9 +46,10 @@ gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default true since PR #7).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
-import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -82,6 +95,56 @@ def _decimal_to_native(obj: Any) -> Any:
     return obj
 
 
+def _canonical_arguments(arguments: Any) -> str:
+    """Arguments as a stable string: key order and float spelling don't vary."""
+    return json.dumps(
+        _decimal_to_native(arguments or {}),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def card_key(
+    *, session_id: str, tool_use_id: str, tool_name: str, arguments: Any
+) -> str:
+    """The identity of an app-initiated call: same frame, tool and arguments.
+
+    Re-running a call (an App's setup lookups on every frame mount) yields
+    the same key, so it updates one card instead of adding another.
+    """
+    identity = json.dumps(
+        [session_id, tool_use_id, tool_name, _canonical_arguments(arguments)],
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(identity.encode()).hexdigest()[:32]
+
+
+def _collapse_reruns(cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Fold repeat runs of one call into its first card, with the latest result.
+
+    `cards` is oldest-first. Rows keyed by `card_key` are already one per
+    call; this collapses rows written before that, one per run.
+    """
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for card in cards:
+        key = card_key(
+            session_id=str(card.get("sessionId") or ""),
+            tool_use_id=str(card.get("toolUseId") or ""),
+            tool_name=str(card.get("toolName") or ""),
+            arguments=card.get("arguments"),
+        )
+        first = by_key.get(key)
+        if first is None:
+            by_key[key] = card
+            continue
+        first["content"] = card.get("content")
+        first["isError"] = card.get("isError")
+    return list(by_key.values())
+
+
 class AppCardStore:
     """Per-session store of app-initiated tool-call provenance cards."""
 
@@ -120,19 +183,28 @@ class AppCardStore:
     ) -> None:
         """Persist one app-initiated tool-call card. Best-effort.
 
+        A repeat of a call already on record (same frame, tool and
+        arguments) updates that card's result and keeps its `createdAt`,
+        so reopening a conversation, which re-mounts the App and re-runs
+        its setup calls, never adds cards.
+
         Never raises into the proxy path — a failed provenance write must
         not fail the tool call the App is waiting on (it still surfaced
         live via the broker; only the reload card is lost).
         """
         if self._table is None:
             return
-        created_at = datetime.now(timezone.utc).isoformat()
-        card_id = uuid_lib.uuid4().hex[:12]
+        now = datetime.now(timezone.utc)
+        created_at = now.isoformat()
+        key = card_key(
+            session_id=session_id,
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
 
         safe_content = content
         try:
-            import json
-
             if len(json.dumps(content, ensure_ascii=False).encode()) > _MAX_CONTENT_BYTES:
                 safe_content = [
                     {
@@ -145,28 +217,45 @@ class AppCardStore:
                 {"type": "text", "text": "[result not serializable for history]"}
             ]
 
-        ttl = int(
-            (datetime.now(timezone.utc) + timedelta(days=_CARD_TTL_DAYS)).timestamp()
-        )
-        item = {
-            "PK": f"USER#{user_id}",
-            "SK": f"APPCARD#{created_at}#{card_id}",
+        ttl = int((now + timedelta(days=_CARD_TTL_DAYS)).timestamp())
+        # Set on the first run only, so a re-run keeps the card's position.
+        first_run = {
             "GSI_PK": f"SESSION#{session_id}",
             "GSI_SK": f"APPCARD#{created_at}",
             "userId": user_id,
             "sessionId": session_id,
-            "cardId": card_id,
+            "cardId": key[:16],
             "toolUseId": tool_use_id,
             "toolName": tool_name,
             "arguments": arguments,
-            "content": safe_content,
-            "isError": is_error,
             "createdAt": created_at,
             "producedByMessageIndex": produced_by_message_index,
+        }
+        # Refreshed on every run: the latest result is the one to show.
+        every_run = {
+            "content": safe_content,
+            "isError": is_error,
+            "updatedAt": created_at,
             "ttl": ttl,
         }
+        names: Dict[str, str] = {}
+        values: Dict[str, Any] = {}
+        clauses: List[str] = []
+        for i, (attr, value) in enumerate({**first_run, **every_run}.items()):
+            names[f"#a{i}"] = attr
+            values[f":v{i}"] = value
+            clauses.append(
+                f"#a{i} = if_not_exists(#a{i}, :v{i})"
+                if attr in first_run
+                else f"#a{i} = :v{i}"
+            )
         try:
-            self._table.put_item(Item=_floats_to_decimal(item))
+            self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"APPCARD#{key}"},
+                UpdateExpression="SET " + ", ".join(clauses),
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=_floats_to_decimal(values),
+            )
         except Exception:  # noqa: BLE001 - provenance is best-effort
             logger.warning(
                 "mcp-apps card store: failed to persist card (session=%s)",
@@ -181,7 +270,8 @@ class AppCardStore:
 
         Queried off the session GSI then re-filtered by `userId` so a
         guessed session id can't surface another user's cards (mirrors the
-        Artifacts ownership re-check). Oldest-first for stable rendering.
+        Artifacts ownership re-check). Oldest-first for stable rendering,
+        one card per distinct call (see `_collapse_reruns`).
         """
         if self._table is None:
             return []
@@ -216,7 +306,7 @@ class AppCardStore:
                 {k: v for k, v in raw.items() if k not in _KEY_ATTRS}
             )
             cards.append(card)
-        return cards
+        return _collapse_reruns(cards)
 
 
 _store: Optional[AppCardStore] = None

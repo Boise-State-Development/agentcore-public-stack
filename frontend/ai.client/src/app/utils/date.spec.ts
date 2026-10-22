@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeIsoTimestamp, parseIso } from './date';
+import { normalizeIsoTimestamp, normalizeLegacyTimestamps, parseIso } from './date';
 
 /**
  * The legacy spelling still sitting in DynamoDB. Rows written before the backend fix keep
@@ -40,6 +40,35 @@ describe('parseIso', () => {
 
   it('still yields an Invalid Date for genuinely unparseable input', () => {
     expect(Number.isNaN(parseIso('not a date').getTime())).toBe(true);
+  });
+});
+
+describe('normalizeLegacyTimestamps', () => {
+  it('repairs legacy values at any depth and leaves everything else as-is', () => {
+    const input = {
+      createdAt: LEGACY,
+      items: [{ at: LEGACY, n: 3, ok: true, none: null }],
+      note: `free text mentioning ${LEGACY}`,
+      valid: VALID,
+    };
+    expect(normalizeLegacyTimestamps(input)).toEqual({
+      createdAt: VALID,
+      items: [{ at: VALID, n: 3, ok: true, none: null }],
+      note: `free text mentioning ${LEGACY}`,
+      valid: VALID,
+    });
+  });
+
+  it('does not mutate its input', () => {
+    const input = { createdAt: LEGACY };
+    normalizeLegacyTimestamps(input);
+    expect(input.createdAt).toBe(LEGACY);
+  });
+
+  it('passes primitives and null through', () => {
+    expect(normalizeLegacyTimestamps(null)).toBeNull();
+    expect(normalizeLegacyTimestamps(42)).toBe(42);
+    expect(normalizeLegacyTimestamps(LEGACY)).toBe(VALID);
   });
 });
 

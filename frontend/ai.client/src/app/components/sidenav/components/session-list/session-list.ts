@@ -23,6 +23,7 @@ import { ProjectsService } from '../../../../projects/services/projects.service'
 import { FEATURES } from '../../../../services/features';
 import { UNTITLED_SESSION_TITLE } from './session-title-filter';
 import { bindingQueryParams } from '../../../../session/services/session/conversation-binding.service';
+import { appPin, appPinOff } from './pin-icons';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -32,6 +33,9 @@ import { bindingQueryParams } from '../../../../session/services/session/convers
 export type SessionListEntry =
   | { kind: 'session'; session: SessionMetadata }
   | { kind: 'project'; projectId: string; name: string; sessions: SessionMetadata[] };
+
+/** The status dot a conversation row shows, if any (see `rowIndicator`). */
+export type SessionRowIndicator = 'streaming' | 'awaiting-input' | 'unread' | null;
 
 /** Where a project's group sits: where its most recent task in the bucket would. */
 export function groupProjectSessions(
@@ -60,7 +64,7 @@ export function groupProjectSessions(
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -135,8 +139,11 @@ export class SessionList {
    * Today, Yesterday, Last 7 Days, Last 30 Days, Older.
    */
   readonly groupedSessions = computed(() => {
-    const sessions = this.sessions();
-    if (!sessions || sessions.length === 0) return [];
+    // Pinned conversations get their own group on top and leave their time bucket.
+    const pinned = this.sessionService.pinnedSessions();
+    const pinnedIds = this.sessionService.pinnedSessionIds();
+    const sessions = this.sessions()?.filter(s => !pinnedIds.has(s.sessionId)) ?? [];
+    if (sessions.length === 0 && pinned.length === 0) return [];
 
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -169,7 +176,7 @@ export class SessionList {
 
     // Only return groups that have sessions
     const names = this.projectNames();
-    return groups
+    const timeGroups = groups
       .filter(g => g.sessions.length > 0)
       .map(g => ({
         ...g,
@@ -177,6 +184,15 @@ export class SessionList {
           ? groupProjectSessions(g.sessions, names)
           : g.sessions.map(session => ({ kind: 'session' as const, session })),
       }));
+    if (pinned.length === 0) return timeGroups;
+    return [
+      {
+        label: 'Pinned',
+        sessions: pinned,
+        entries: pinned.map(session => ({ kind: 'session' as const, session }) as SessionListEntry),
+      },
+      ...timeGroups,
+    ];
   });
 
   constructor() {
@@ -316,6 +332,30 @@ export class SessionList {
    */
   protected isSessionStreaming(sessionId: string): boolean {
     return this.chatStateService.isSessionLoading(sessionId);
+  }
+
+  /**
+   * Whether this conversation's turn is paused waiting on the user (OAuth
+   * consent, tool approval, a clarifying question, a browser sign-in), which
+   * shows the amber dot. Precedence on the row: streaming > awaiting input >
+   * unread. The server derives `awaitingInput` only while the pause can still
+   * be resumed; ChatStateService layers this tab's live knowledge on top (a
+   * background stream that just ended on a prompt, or a prompt just answered).
+   */
+  protected isAwaitingInput(session: SessionMetadata): boolean {
+    return this.chatStateService.awaitingInputFor(session) !== null;
+  }
+
+  /**
+   * The one status dot a row shows, highest first: a streaming response, a
+   * turn paused on the user, then unread. The template draws exactly this, so
+   * the order lives here and nowhere else.
+   */
+  protected rowIndicator(session: SessionMetadata): SessionRowIndicator {
+    if (this.isSessionStreaming(session.sessionId)) return 'streaming';
+    if (this.isAwaitingInput(session)) return 'awaiting-input';
+    if (this.shouldShowUnreadDot(session)) return 'unread';
+    return null;
   }
 
   /**
@@ -567,6 +607,36 @@ export class SessionList {
         this.chatStateService.markSessionUnread(session.sessionId);
         this.sessionService.refreshSessions();
       }
+    });
+  }
+
+  protected isPinned(session: SessionMetadata): boolean {
+    return this.sessionService.pinnedSessionIds().has(session.sessionId);
+  }
+
+  /** Project tasks already list under their project, so they can't be pinned. */
+  protected canPin(session: SessionMetadata): boolean {
+    return !session.preferences?.projectId;
+  }
+
+  /**
+   * Pins or unpins a conversation. The row moves right away (optimistic);
+   * a failed request moves it back and shows a toast.
+   */
+  protected onTogglePinClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const pin = !this.isPinned(session);
+
+    // Deferred past the CDK menu's close, for the same reason as onToggleReadClick.
+    queueMicrotask(() => {
+      this.sessionService.setSessionPinned(session.sessionId, pin).catch(error => {
+        console.error('Failed to update pin:', error);
+        this.toastService.error(
+          pin ? 'Failed to pin' : 'Failed to unpin',
+          'There was an error updating the conversation. Please try again.'
+        );
+      });
     });
   }
 

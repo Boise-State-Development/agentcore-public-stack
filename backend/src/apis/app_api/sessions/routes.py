@@ -32,8 +32,10 @@ from apis.shared.sessions.feedback import (
 )
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import (
+    list_pinned_sessions,
     list_user_sessions,
     get_session_metadata,
+    set_session_pinned,
     mark_session_read,
     mark_session_unread,
     remove_pending_interrupts,
@@ -109,9 +111,24 @@ async def list_user_sessions_endpoint(
             for session in sessions
         ]
 
+        # Pins ride on the first page so the sidebar gets them without a second
+        # request. A failure here degrades to "no Pinned group", never a failed list.
+        pinned_responses = None
+        if not next_token:
+            try:
+                pinned_responses = [
+                    SessionMetadataResponse.model_validate(
+                        {**session.model_dump(by_alias=True), "pinnedAt": pinned_at}
+                    )
+                    for session, pinned_at in await list_pinned_sessions(user_id)
+                ]
+            except Exception:
+                logger.error("Error listing pinned sessions", exc_info=True)
+
         return SessionsListResponse(
             sessions=session_responses,
-            next_token=next_page_token
+            next_token=next_page_token,
+            pinned=pinned_responses,
         )
 
     except Exception as e:
@@ -214,6 +231,38 @@ async def mark_session_unread_endpoint(
     Requires session-cookie authentication. Returns 204 No Content.
     """
     await mark_session_unread(session_id=session_id, user_id=current_user.user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/{session_id}/pin", status_code=status.HTTP_204_NO_CONTENT)
+async def pin_session_endpoint(
+    session_id: str,
+    current_user: User = Depends(get_current_user_from_session)
+):
+    """
+    Pin a conversation to the top of the sidebar (issue #711).
+
+    Idempotent: re-pinning moves it to the top of the Pinned group. Returns
+    404 for a session the user doesn't own, and 409 for a project task, which
+    already lists under its project and can't be pinned.
+    """
+    result = await set_session_pinned(session_id, current_user.user_id, pinned=True)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="Session not found")
+    if result == "project":
+        raise HTTPException(status_code=409, detail="Project conversations can't be pinned")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{session_id}/pin", status_code=status.HTTP_204_NO_CONTENT)
+async def unpin_session_endpoint(
+    session_id: str,
+    current_user: User = Depends(get_current_user_from_session)
+):
+    """Unpin a conversation. Idempotent; 404 for a session the user doesn't own."""
+    result = await set_session_pinned(session_id, current_user.user_id, pinned=False)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="Session not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

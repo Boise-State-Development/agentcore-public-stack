@@ -842,6 +842,12 @@ export class ChatRequestService implements OnDestroy {
    * `preview-` prefix.
    */
   private async reconcileAfterResume(sessionId: string): Promise<void> {
+    // Checked first so the mark is always consumed. A refused resume streams
+    // an unpersisted explanation; a reload would replace it with history that
+    // has none.
+    if (this.chatStateService.takeResumeUnavailable(sessionId)) {
+      return;
+    }
     if (isPreviewSession(sessionId)) {
       return;
     }

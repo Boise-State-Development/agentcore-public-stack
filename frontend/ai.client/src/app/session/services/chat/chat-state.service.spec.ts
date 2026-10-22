@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { ChatStateService } from './chat-state.service';
 
@@ -96,6 +96,62 @@ describe('ChatStateService', () => {
     });
   });
 
+  describe('awaiting-input marks', () => {
+    // A list row as the server last returned it.
+    const row = (awaitingInput: 'oauth' | null, lastMessageAt = '2026-10-22T11:00:00Z') => ({
+      sessionId: 'a',
+      lastMessageAt,
+      awaitingInput,
+    });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-22T12:00:00Z'));
+    });
+
+    afterEach(() => vi.useRealTimers());
+
+    it('defers to the server row while the tab knows nothing', () => {
+      expect(service.awaitingInputFor(row('oauth'))).toBe('oauth');
+      expect(service.awaitingInputFor(row(null))).toBeNull();
+    });
+
+    it('shows a live pause the row does not know about yet', () => {
+      service.markSessionAwaitingInput('a', 'tool_approval');
+      expect(service.awaitingInputFor(row(null))).toBe('tool_approval');
+      // Only the session the stream belongs to.
+      expect(service.awaitingInputFor({ ...row(null), sessionId: 'b' })).toBeNull();
+    });
+
+    it('clears when a new turn starts in the session (an answer or a new message)', () => {
+      service.markSessionAwaitingInput('a', 'user_question');
+      service.setChatLoading('a', true);
+      expect(service.awaitingInputFor(row('oauth'))).toBeNull();
+    });
+
+    it('clears on an explicit dismissal', () => {
+      service.markSessionAwaitingInput('a', 'oauth');
+      service.clearSessionAwaitingInput('a');
+      expect(service.awaitingInputFor(row('oauth'))).toBeNull();
+    });
+
+    it('yields to a server row newer than the mark', () => {
+      service.clearSessionAwaitingInput('a');
+      // A scheduled run paused the conversation again after this tab's answer.
+      expect(service.awaitingInputFor(row('oauth', '2026-10-22T12:05:00Z'))).toBe('oauth');
+    });
+
+    it('lets a live pause lapse with the snapshot it points at', () => {
+      service.markSessionAwaitingInput('a', 'browser_login');
+      vi.advanceTimersByTime(59 * 60 * 1000);
+      expect(service.awaitingInputFor(row(null))).toBe('browser_login');
+      vi.advanceTimersByTime(60 * 1000);
+      expect(service.awaitingInputFor(row(null))).toBeNull();
+      // Even if the stale row still says so.
+      expect(service.awaitingInputFor(row('oauth'))).toBeNull();
+    });
+  });
+
   describe('setLastTurnContinuable', () => {
     it('toggles the continuable flag per session', () => {
       service.setViewedSession('a');
@@ -108,6 +164,16 @@ describe('ChatStateService', () => {
 
       service.setLastTurnContinuable('a', false);
       expect(service.lastTurnContinuable()).toBe(false);
+    });
+  });
+
+  describe('resume-unavailable mark', () => {
+    it('is read once per session, then cleared', () => {
+      service.markResumeUnavailable('a');
+
+      expect(service.takeResumeUnavailable('b')).toBe(false);
+      expect(service.takeResumeUnavailable('a')).toBe(true);
+      expect(service.takeResumeUnavailable('a')).toBe(false);
     });
   });
 

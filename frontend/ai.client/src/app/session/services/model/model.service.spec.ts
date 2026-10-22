@@ -426,6 +426,18 @@ describe('ModelService', () => {
       expect(isTextOnlyModel(service.getDefaultModel())).toBe(false);
     });
   });
+
+  // #1585 — a newly saved default must replace the tab's existing pick.
+  it('applyUserDefault replaces an existing in-tab pick', async () => {
+    await setup();
+    await vi.waitFor(() => expect(service.availableModels().length).toBe(2));
+    service.setSelectedModelById('claude-sonnet');
+
+    service.applyUserDefault('claude-haiku');
+
+    expect(service.selectedModel().modelId).toBe('claude-haiku');
+    expect(sessionStore['selectedModelId']).toBe('claude-haiku');
+  });
 });
 
 describe('isTextOnlyModel', () => {

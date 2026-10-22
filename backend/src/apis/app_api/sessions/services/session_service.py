@@ -250,7 +250,7 @@ class SessionService:
                     Key={'PK': pk, 'SK': target_sk},
                     UpdateExpression=(
                         "SET #s = :d, deleted = :true, deletedAt = :da "
-                        "REMOVE GSI4_PK, GSI4_SK, GSI5_PK, GSI5_SK"
+                        "REMOVE GSI4_PK, GSI4_SK, GSI5_PK, GSI5_SK, GSI6_PK, GSI6_SK"
                     ),
                     ExpressionAttributeNames={'#s': 'status'},
                     ExpressionAttributeValues={':d': 'deleted', ':true': True, ':da': deleted_at},
@@ -260,7 +260,7 @@ class SessionService:
                 # recency keys) and drop the old row. One-time move; carry existing fields.
                 deleted_item = {
                     k: v for k, v in existing.items()
-                    if k not in ('PK', 'SK', 'GSI4_PK', 'GSI4_SK', 'GSI5_PK', 'GSI5_SK')
+                    if k not in ('PK', 'SK', 'GSI4_PK', 'GSI4_SK', 'GSI5_PK', 'GSI5_SK', 'GSI6_PK', 'GSI6_SK')
                 }
                 deleted_item.update({
                     'PK': pk,

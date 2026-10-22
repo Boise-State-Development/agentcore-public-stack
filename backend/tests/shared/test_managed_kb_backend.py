@@ -25,11 +25,13 @@ Requirements: 7.1-7.8, 8.1-8.8, 9.1-9.6, 11.1-11.5, 20.7, 24.2, 24.3, 24.11
 """
 
 import ast
+import logging
 import subprocess
 import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import MagicMock
 
 import boto3
 import pytest
@@ -1488,6 +1490,93 @@ class TestIngestion:
         )
         with pytest.raises(mb.ManagedKbNotProvisioned, match="awsDataSourceId"):
             await backend.ingest(APP_KB_ID, DocumentSource("doc-a", "a.pdf", chunks=["x"]))
+
+
+def _ingest_detail(document_id: str, status: str, reason: Optional[str] = None) -> Dict[str, Any]:
+    """One ``documentDetails`` entry, in the shape the service model declares."""
+    detail: Dict[str, Any] = {
+        "knowledgeBaseId": AWS_KB_ID,
+        "dataSourceId": AWS_DS_ID,
+        "status": status,
+        "identifier": {"dataSourceType": "CUSTOM", "custom": {"id": document_id}},
+    }
+    if reason:
+        detail["statusReason"] = reason
+    return detail
+
+
+class TestIngestRefusalsSurface:
+    """``IngestKnowledgeBaseDocuments`` succeeds at the HTTP level even when it
+    refuses a document; the refusal is only in ``documentDetails``. Dropping the
+    response is what let a document whose S3 object never existed look submitted
+    in prod, and dead-letter one poll later with no reason attached."""
+
+    @staticmethod
+    def _agent_answering(*details: Dict[str, Any]) -> FakeBedrockAgent:
+        agent = FakeBedrockAgent()
+
+        def _ingest(**kwargs):
+            agent.ingest_calls.append(kwargs)
+            return {"documentDetails": list(details)}
+
+        agent.ingest_knowledge_base_documents = _ingest
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_a_refused_single_document_raises_with_its_reason(self):
+        agent = self._agent_answering(
+            _ingest_detail("doc-a", "FAILED", "The S3 object does not exist")
+        )
+        backend = mb.ManagedKbBackend(agent_client=agent, locator=_locator())
+
+        with pytest.raises(mb.ManagedKbDocumentRejected, match="does not exist") as caught:
+            await backend.ingest(APP_KB_ID, DocumentSource("doc-a", "a.pdf", chunks=["x"]))
+
+        assert caught.value.rejections == {
+            "doc-a": ("FAILED", "The S3 object does not exist")
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["FAILED", "METADATA_UPDATE_FAILED", "IGNORED"])
+    async def test_every_refusal_status_is_surfaced(self, status):
+        agent = self._agent_answering(_ingest_detail("doc-a", status))
+        backend = mb.ManagedKbBackend(agent_client=agent, locator=_locator())
+
+        with pytest.raises(mb.ManagedKbDocumentRejected):
+            await backend.ingest(APP_KB_ID, DocumentSource("doc-a", "a.pdf", chunks=["x"]))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["STARTING", "PENDING", "IN_PROGRESS", "INDEXED"])
+    async def test_an_accepted_document_does_not_raise(self, status):
+        agent = self._agent_answering(_ingest_detail("doc-a", status))
+        backend = mb.ManagedKbBackend(agent_client=agent, locator=_locator())
+
+        await backend.ingest(APP_KB_ID, DocumentSource("doc-a", "a.pdf", chunks=["x"]))
+
+    @pytest.mark.asyncio
+    async def test_a_batch_returns_its_refusals_without_failing_the_rest(self, caplog):
+        """A batch caller (migration worker, conversation index) must not lose its
+        accepted documents to one refusal; it gets the refusals back, logged."""
+        agent = self._agent_answering(
+            _ingest_detail("doc-a", "STARTING"),
+            _ingest_detail("doc-b", "IGNORED", "unsupported file type"),
+        )
+        backend = mb.ManagedKbBackend(agent_client=agent, locator=_locator())
+
+        with caplog.at_level(logging.ERROR, logger=mb.logger.name):
+            rejected = await backend.ingest_documents(
+                APP_KB_ID,
+                [
+                    DocumentSource("doc-a", "a.pdf", chunks=["x"]),
+                    DocumentSource("doc-b", "b.bin", chunks=["x"]),
+                ],
+            )
+
+        assert rejected == {"doc-b": ("IGNORED", "unsupported file type")}
+        assert "doc-b" in caplog.text and "unsupported file type" in caplog.text
+
+    def test_a_response_that_is_not_a_mapping_is_ignored(self):
+        assert mb.ingest_rejections([None, MagicMock(), {"documentDetails": None}]) == {}
 
 
 class TestTrackedChangesIngestion:

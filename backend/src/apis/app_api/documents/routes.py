@@ -36,6 +36,7 @@ from apis.app_api.documents.services.storage_service import (
     generate_upload_url,
 )
 from apis.app_api.file_sources.service import require_file_source_token, resolve_file_source
+from apis.app_api.kb_migration.ingestion_consumer import UPLOAD_URL_TTL_SECONDS
 from apis.app_api.kb_upgrade.born_managed import STATUS_PROVISIONING, begin_born_managed, initial_document_status
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.oauth.provider_repository import (
@@ -256,7 +257,7 @@ async def generate_upload_url_endpoint(
 
             # 4. Generate presigned S3 URL
             presigned_url, _ = await generate_upload_url(
-                assistant_id=assistant_id, document_id=document_id, filename=request.filename, content_type=request.content_type, expires_in=3600
+                assistant_id=assistant_id, document_id=document_id, filename=request.filename, content_type=request.content_type, expires_in=UPLOAD_URL_TTL_SECONDS
             )
         except Exception:
             # A step after the reservation failed and the client never received a
@@ -266,7 +267,7 @@ async def generate_upload_url_endpoint(
             raise
 
         # 5. Return response
-        return UploadUrlResponse(documentId=document_id, uploadUrl=presigned_url, expiresIn=3600)
+        return UploadUrlResponse(documentId=document_id, uploadUrl=presigned_url, expiresIn=UPLOAD_URL_TTL_SECONDS)
 
     except ByteCapExceeded as e:
         # Requirement 12.12: the numbers make the error actionable — the user can

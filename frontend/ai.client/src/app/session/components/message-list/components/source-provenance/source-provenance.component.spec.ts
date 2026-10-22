@@ -47,12 +47,18 @@ describe('SourceProvenanceComponent', () => {
   describe('a clean run', () => {
     it('summarises in one line and stays collapsed', async () => {
       const fixture = await render([claim(), claim({ id: 'start' })]);
-      expect(text(fixture)).toContain('2 values checked against the source');
+      expect(text(fixture)).toContain('Confirmed 2 values');
       expect(text(fixture)).toContain('award.pdf');
       const toggle = (fixture.nativeElement as HTMLElement).querySelector('button')!;
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
-      // The detail, including the quote, is not in the DOM until asked for.
-      expect(text(fixture)).not.toContain('The total approved budget');
+      // The rows animate open rather than being added to the DOM, so the
+      // quotes are present but must not be exposed: they are passages from
+      // the user's document, and a screen reader should not read out ones
+      // nobody opened.
+      const host = fixture.nativeElement as HTMLElement;
+      const panel = host.querySelector('.collapsible-content')!;
+      expect(panel.getAttribute('aria-hidden')).toBe('true');
+      expect(panel.hasAttribute('inert')).toBe(true);
     });
 
     it('expands to the detail on click', async () => {
@@ -61,6 +67,9 @@ describe('SourceProvenanceComponent', () => {
       toggle.click();
       fixture.detectChanges();
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      const panel = (fixture.nativeElement as HTMLElement).querySelector('.collapsible-content')!;
+      expect(panel.getAttribute('aria-hidden')).toBeNull();
+      expect(panel.hasAttribute('inert')).toBe(false);
       expect(text(fixture)).toContain('The total approved budget is $487,500');
       expect(text(fixture)).toContain('found on page 1');
     });
@@ -78,7 +87,7 @@ describe('SourceProvenanceComponent', () => {
       const fixture = await render([fabricated]);
       const toggle = (fixture.nativeElement as HTMLElement).querySelector('button')!;
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
-      expect(text(fixture)).toContain('1 value could not be confirmed');
+      expect(text(fixture)).toContain('1 unconfirmed');
     });
 
     it('names the value it cannot confirm', async () => {
@@ -96,7 +105,7 @@ describe('SourceProvenanceComponent', () => {
 
     it('dominates the headline even when most claims are fine', async () => {
       const fixture = await render([claim(), claim({ id: 'b' }), fabricated]);
-      expect(text(fixture)).toContain('1 value could not be confirmed');
+      expect(text(fixture)).toContain('1 unconfirmed');
     });
   });
 
@@ -124,15 +133,16 @@ describe('SourceProvenanceComponent', () => {
         claim(),
         claim({ id: 'b', state: 'unverified', locator: null }),
       ]);
-      expect(text(fixture)).toContain('1 of 2 values confirmed');
+      expect(text(fixture)).toContain('Confirmed 1 of 2 values');
     });
 
     it('does not treat them as warnings', async () => {
-      // Only `quote_unsupported` earns the amber shell: an absence of evidence
-      // is not a claim that the answer is wrong.
+      // Only `quote_unsupported` earns the danger count in the header: an
+      // absence of evidence is not a claim that the answer is wrong.
       const fixture = await render([claim({ state: 'unverified', locator: null })]);
-      const shell = (fixture.nativeElement as HTMLElement).querySelector('div')!;
-      expect(shell.className).not.toContain('amber');
+      expect(text(fixture)).not.toContain('unconfirmed');
+      const dot = (fixture.nativeElement as HTMLElement).querySelector('.status-dot')!;
+      expect(dot.className).not.toContain('danger');
     });
   });
 
@@ -196,7 +206,7 @@ describe('SourceProvenanceComponent', () => {
       expect(host.querySelector(`#${panelId}`)).toBeTruthy();
     });
 
-    it('does not rely on colour alone — every state carries an icon and words', async () => {
+    it('does not rely on colour alone — every state carries a dot and words', async () => {
       const states: SourceProvenanceClaim['state'][] = [
         'supported',
         'quote_unsupported',
@@ -208,7 +218,7 @@ describe('SourceProvenanceComponent', () => {
         (fixture.nativeElement as HTMLElement).querySelector('button')!.click();
         fixture.detectChanges();
         const host = fixture.nativeElement as HTMLElement;
-        expect(host.querySelectorAll('ng-icon').length).toBeGreaterThan(0);
+        expect(host.querySelectorAll('.status-dot').length).toBeGreaterThan(0);
         expect(text(fixture).trim().length).toBeGreaterThan(20);
       }
     });

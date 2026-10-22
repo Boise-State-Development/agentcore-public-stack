@@ -303,7 +303,7 @@ async def test_persistence_failure_does_not_break_stream(
 async def test_failure_is_swallowed(coord, catalog_clean, monkeypatch):
     _seed(monkeypatch, _FakeMCPClient(_html_result()))
 
-    def _boom(tool_name, tool_use_id):
+    def _boom(tool_name, tool_use_id, user_id=None):
         raise RuntimeError("catalog exploded")
 
     monkeypatch.setattr(mcp_apps, "fetch_ui_resource", _boom)

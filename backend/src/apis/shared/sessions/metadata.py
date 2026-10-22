@@ -31,7 +31,7 @@ import base64
 from dataclasses import dataclass
 
 from apis.shared.aws_clients import get_dynamodb_table
-from typing import Iterable, List, Optional, Tuple, Any, Dict
+from typing import Iterable, List, Literal, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
 # Relative imports from shared sessions module
@@ -1100,7 +1100,9 @@ async def _store_session_metadata_cloud(
         # carries the row's recency keys as extras; drop them so the keys written
         # below are derived from this write alone.
         item = session_metadata.model_dump(by_alias=True, exclude_none=True)
-        for gsi_key in _RECENCY_KEY_ATTRS:
+        # Pin keys are owned by set_session_pinned alone: a full-row write never
+        # writes them, so a stale model can't resurrect a pin the user removed.
+        for gsi_key in (*_RECENCY_KEY_ATTRS, *_PIN_KEY_ATTRS):
             item.pop(gsi_key, None)
         # The lexical search attribute follows the title on every full-row write
         # (the rename route, the first-turn create), never a stale copy of it.
@@ -1149,6 +1151,10 @@ async def _store_session_metadata_cloud(
                 )
                 merged_item['PK'] = pk
                 merged_item['SK'] = new_sk
+                # Pin keys carry across the move, but a deleted session is never pinned.
+                if not is_active:
+                    for pin_key in _PIN_KEY_ATTRS:
+                        merged_item.pop(pin_key, None)
                 # The merge can surface a project id only the old row had.
                 merged_item.update(_project_gsi_keys(
                     user_id, session_id, last_message_at,
@@ -1187,7 +1193,7 @@ async def _store_session_metadata_cloud(
                     expression_attribute_values[placeholder_value] = value
 
                 remove_parts = []
-                stale_keys = [] if is_active else ['GSI4_PK', 'GSI4_SK']
+                stale_keys = [] if is_active else ['GSI4_PK', 'GSI4_SK', *_PIN_KEY_ATTRS]
                 if not project_keys:
                     stale_keys += ['GSI5_PK', 'GSI5_SK']
                 for gsi_key in stale_keys:
@@ -1261,6 +1267,13 @@ def _recency_gsi_keys(
 _RECENCY_KEY_ATTRS = ("GSI4_PK", "GSI4_SK", "GSI5_PK", "GSI5_SK")
 
 PROJECT_SESSION_INDEX = "ProjectSessionIndex"
+
+# PinnedSessionIndex (GSI6, issue #711): GSI6_PK = USER#{userId},
+# GSI6_SK = {pinnedAt}#{sessionId}. Present only while pinned. Unlike the recency
+# keys they are not derived from row state on each write: set_session_pinned is
+# their only writer, row moves carry them, and soft-delete removes them.
+PINNED_SESSION_INDEX = "PinnedSessionIndex"
+_PIN_KEY_ATTRS = ("GSI6_PK", "GSI6_SK")
 
 
 def _project_gsi_pk(project_id: str, user_id: str) -> str:
@@ -1546,6 +1559,91 @@ async def mark_session_unread(session_id: str, user_id: str) -> None:
     inside ``set_session_unread`` via the per-user GSI lookup.
     """
     await set_session_unread(session_id, user_id, True)
+
+
+PinResult = Literal["ok", "not_found", "project"]
+
+
+async def set_session_pinned(session_id: str, user_id: str, pinned: bool) -> PinResult:
+    """Pin or unpin one of the user's conversations (issue #711).
+
+    Pinning writes the sparse PinnedSessionIndex keys with the pin time as the
+    sort key (most recently pinned lists first); unpinning removes them. A
+    targeted update on the current SK, so it never races the full-row writers.
+
+    Returns ``"not_found"`` for a session the user doesn't own (or that is
+    deleted) and ``"project"`` when pinning a project task: those already sit
+    under their project in the sidebar, so they can't be pinned. Unpinning is
+    always allowed and idempotent.
+    """
+    from datetime import datetime, timezone
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+    table = get_dynamodb_table(sessions_metadata_table)
+
+    existing = await _get_session_by_gsi(session_id, user_id, table)
+    if not existing or not existing.get("SK") or existing.get("deleted") or existing.get("status") == "deleted":
+        return "not_found"
+    key = {"PK": f"USER#{user_id}", "SK": existing["SK"]}
+
+    if not pinned:
+        table.update_item(Key=key, UpdateExpression="REMOVE GSI6_PK, GSI6_SK")
+        return "ok"
+
+    if _preferences_project_id(existing):
+        return "project"
+    pinned_at = datetime.now(timezone.utc).isoformat()
+    table.update_item(
+        Key=key,
+        UpdateExpression="SET GSI6_PK = :pk, GSI6_SK = :sk",
+        ExpressionAttributeValues={":pk": f"USER#{user_id}", ":sk": f"{pinned_at}#{session_id}"},
+    )
+    return "ok"
+
+
+async def list_pinned_sessions(user_id: str) -> List[Tuple[SessionMetadata, str]]:
+    """The user's pinned conversations as ``(session, pinnedAt)``, most recently pinned first.
+
+    Reads PinnedSessionIndex, which holds only pinned rows, so this is one small
+    query regardless of how many conversations the user has. Empty while the
+    index is absent or still building.
+    """
+    from boto3.dynamodb.conditions import Key
+    from botocore.exceptions import ClientError
+
+    from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
+
+    table_name = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not table_name:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+    table = get_dynamodb_table(table_name)
+
+    params: Dict[str, Any] = {
+        "IndexName": PINNED_SESSION_INDEX,
+        "KeyConditionExpression": Key("GSI6_PK").eq(f"USER#{user_id}"),
+        "ScanIndexForward": False,
+    }
+    pinned: List[Tuple[SessionMetadata, str]] = []
+    try:
+        while True:
+            response = table.query(**params)
+            for item in response["Items"]:
+                pinned_at = str(item.get("GSI6_SK", "")).rsplit("#", 1)[0]
+                metadata = _item_to_session_metadata(item)
+                if metadata is None or metadata.deleted:
+                    continue
+                pinned.append((metadata, pinned_at))
+            lek = response.get("LastEvaluatedKey")
+            if not lek:
+                return pinned
+            params["ExclusiveStartKey"] = lek
+    except ClientError as e:
+        if is_missing_index_error(e):
+            log_missing_index(PINNED_SESSION_INDEX, "pinned conversations")
+            return []
+        raise
 
 
 async def update_session_activity(
@@ -2605,7 +2703,7 @@ async def _get_session_metadata_cloud(
             )
 
         # Remove DynamoDB keys before validation
-        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS):
+        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS, *_PIN_KEY_ATTRS):
             item.pop(key, None)
 
         # Dedupe pending interrupts at the storage boundary so list_append
@@ -2725,7 +2823,7 @@ def _item_to_session_metadata(item: Dict[str, Any]) -> Optional[SessionMetadata]
     """
     try:
         item = _convert_decimal_to_float(item)
-        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS):
+        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS, *_PIN_KEY_ATTRS):
             item.pop(key, None)
 
         # Skip preview sessions - they should not appear in user's session list

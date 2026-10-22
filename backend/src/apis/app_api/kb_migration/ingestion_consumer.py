@@ -140,6 +140,26 @@ INDEXED_POLL_TIMEOUT_SECONDS = 600.0
 #: so a finer interval buys nothing.
 INDEXED_POLL_INTERVAL_SECONDS = 5.0
 
+#: How long a presigned upload URL stays valid (``POST /upload-url``, which reads
+#: this constant). Until it expires the browser's ``PUT`` can still land, so a
+#: document whose object is missing inside this window is waited on, not failed.
+UPLOAD_URL_TTL_SECONDS = 3600
+
+#: Extra status probes after the consumer's own submit, while Bedrock still reports
+#: ``NOT_FOUND``. The ingest call returns once the request is accepted, and a probe
+#: issued right behind it can miss the document; without this, that read ends the
+#: wait at once and spends one of the two redeliveries Lambda allows. 3 probes at
+#: :data:`INDEXED_POLL_INTERVAL_SECONDS` is 15 s, paid only by a document that is
+#: still unknown to Bedrock after it was submitted.
+NOT_FOUND_GRACE_POLLS = 3
+
+#: Written to a document whose upload never reached S3, for the person who
+#: uploaded it rather than an operator.
+UPLOAD_MISSING_MESSAGE = (
+    "The upload of this file never completed, so it was not added to the "
+    "knowledge base. Please upload the file again."
+)
+
 #: Bounded retries on the record update. The event source already redelivers, so
 #: this only covers a transient DynamoDB failure inside one invocation; unbounded
 #: retries would burn the Lambda timeout and lose the DLQ signal.
@@ -425,6 +445,7 @@ def wait_until_indexed(
     interval_seconds: Optional[float] = None,
     sleep: Any = time.sleep,
     not_before: Optional[str] = None,
+    not_found_grace_polls: int = 0,
 ) -> Tuple[str, Optional[str]]:
     """Poll Bedrock's document status until it settles, or give up.
 
@@ -435,6 +456,10 @@ def wait_until_indexed(
     ``not_before`` is for a document Bedrock already holds a version of: a status
     last updated at or before it describes that previous version, not the one just
     submitted, and is waited out like an in-flight one (:func:`_is_stale`).
+
+    ``not_found_grace_polls`` is for a document the caller has just submitted: up
+    to that many further probes are spent while Bedrock still reports
+    ``NOT_FOUND`` (:data:`NOT_FOUND_GRACE_POLLS`), instead of returning at once.
 
     Why a *bounded* in-invocation wait rather than pure redelivery: most documents
     index in a few seconds, and making every one of them wait for an EventBridge
@@ -453,10 +478,15 @@ def wait_until_indexed(
         interval_seconds = INDEXED_POLL_INTERVAL_SECONDS
 
     deadline = time.monotonic() + timeout_seconds
+    grace = not_found_grace_polls
     status, updated_at = document_status(backend, kb_ref, document_id)
-    while (
-        _still_working(status, document_id) or _is_stale(updated_at, not_before)
-    ) and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
+        if _still_working(status, document_id) or _is_stale(updated_at, not_before):
+            pass
+        elif status == DOC_STATUS_NOT_FOUND and grace > 0:
+            grace -= 1
+        else:
+            break
         sleep(interval_seconds)
         status, updated_at = document_status(backend, kb_ref, document_id)
     return status, updated_at
@@ -645,6 +675,96 @@ def _delete_s3_object(bucket: str, key: str) -> None:
         logger.warning(f"failed to delete orphaned object s3://{bucket}/{key}: {exc}")
 
 
+def _source_object_exists(bucket: str, key: str) -> Optional[bool]:
+    """Whether the document's S3 object exists: ``True``, ``False``, or ``None``.
+
+    ``None`` means the probe could not tell (throttled, refused, network). The
+    caller then ingests as before: a probe failure is not evidence the upload is
+    missing, and failing a document on one would fail uploads that worked.
+
+    S3 answers a HEAD on a missing key with 404 only when the caller may list the
+    bucket; without ``s3:ListBucket`` it is a 403 and lands in ``None``. The
+    consumer's role has it (``documentsBucket.grantRead``).
+    """
+    import boto3
+    from botocore.exceptions import ClientError
+
+    try:
+        boto3.client("s3").head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code") or "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        logger.warning(f"could not check s3://{bucket}/{key} exists ({code}): {exc}")
+        return None
+    except Exception as exc:  # noqa: BLE001 - a probe failure is not a missing upload
+        logger.warning(f"could not check s3://{bucket}/{key} exists: {exc}")
+        return None
+
+
+def _upload_window_open(doc_row: Optional[Dict[str, Any]]) -> bool:
+    """Whether the browser's ``PUT`` for this row could still land.
+
+    Measured from the row's ``createdAt``, which ``POST /upload-url`` writes just
+    before signing a URL valid for :data:`UPLOAD_URL_TTL_SECONDS`. A row with no
+    readable ``createdAt`` cannot be placed and is treated as closed.
+    """
+    created = (doc_row or {}).get("createdAt")
+    if not created:
+        return False
+    from datetime import datetime, timezone
+
+    from apis.shared.timestamps import from_iso
+
+    try:
+        age = (datetime.now(timezone.utc) - from_iso(str(created))).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return age < UPLOAD_URL_TTL_SECONDS
+
+
+def _missing_upload_result(
+    assistant_id: str,
+    document_id: str,
+    doc_row: Optional[Dict[str, Any]],
+    declared: int,
+) -> Dict[str, Any]:
+    """Settle a managed document whose S3 object does not exist. Never raises.
+
+    Reached when the born-managed provisioning job hands over a row whose browser
+    ``PUT`` never happened: the row is written before the upload, and the job
+    hands over every waiting row. Ingesting would submit a URI with nothing behind
+    it, Bedrock would report ``NOT_FOUND``, and the event would dead-letter with
+    the row stuck at ``uploading``.
+
+    * **Window still open** — the ``PUT`` may be in flight. Write nothing: the
+      object's own ``ObjectCreated`` event routes it once it lands, and the
+      document list's stale sweep fails it if it never does. Failing it here
+      instead would settle its bytes, and that event would then be skipped as
+      already settled, losing an upload that worked.
+    * **Window closed** — the ``PUT`` can no longer happen. Fail the row with a
+      message that says to upload again, and return its reservation.
+    """
+    summary: Dict[str, Any] = {"routed": "managed", "ingested": False, "document_id": document_id}
+    if _upload_window_open(doc_row):
+        logger.info(
+            f"document {document_id}'s object is not in S3 yet and its upload URL is "
+            f"still valid; leaving it for the object's own event"
+        )
+        return {**summary, "note": "awaiting-upload"}
+
+    logger.warning(
+        f"document {document_id}'s object is not in S3 and its upload URL has "
+        f"expired; marking it failed"
+    )
+    set_document_terminal(
+        assistant_id, document_id, STATUS_FAILED, error=UPLOAD_MISSING_MESSAGE
+    )
+    _release_reservation(assistant_id, document_id, declared)
+    return {**summary, "status": STATUS_FAILED, "note": "upload-missing"}
+
+
 def _release_reservation(assistant_id: str, document_id: str, declared: int) -> None:
     """Return the request-time reservation on a terminal ingestion FAILURE.
 
@@ -804,7 +924,10 @@ def _reingest_changed_document(
     import asyncio
 
     from apis.shared.kb_backend import byte_cap
-    from apis.shared.kb_backend.managed_backend import ManagedKbBackend
+    from apis.shared.kb_backend.managed_backend import (
+        ManagedKbBackend,
+        ManagedKbDocumentRejected,
+    )
     from apis.shared.kb_backend.protocol import DocumentSource
 
     summary: Dict[str, Any] = {"routed": "managed", "document_id": document_id}
@@ -837,7 +960,21 @@ def _reingest_changed_document(
         source = DocumentSource(document_id=document_id, filename=filename, s3_key=key)
         # A submit that raises leaves the claim and its reservation in place for
         # redelivery. The document is not failed: its previous version is intact.
-        asyncio.run(backend.ingest(assistant_id, source))
+        # A refusal is the exception: the same bytes would be refused again, so it
+        # settles like an ingestion Bedrock reports FAILED.
+        try:
+            asyncio.run(backend.ingest(assistant_id, source))
+        except ManagedKbDocumentRejected as exc:
+            logger.error(f"re-ingestion of document {document_id} was refused: {exc}")
+            released = byte_cap.release_reingest_once(assistant_id, document_id, staged)
+            if released:
+                byte_cap.release(assistant_id, assistant_id, released)
+            set_document_terminal(
+                assistant_id, document_id, STATUS_FAILED,
+                error=f"the knowledge base refused this document: {_rejection_reason(exc)}",
+            )
+            return {**summary, "ingested": False, "status": STATUS_FAILED,
+                    "note": "ingest-rejected"}
         _mark_reingest_submitted(assistant_id, document_id, staged, submitted_at)
 
     status, bedrock_updated_at = wait_until_indexed(
@@ -881,6 +1018,13 @@ def _reingest_changed_document(
         "indexedAt": indexed_at,
         "retrievableAt": retrievable_at,
     }
+
+
+def _rejection_reason(exc: Any) -> str:
+    """Bedrock's reason for refusing a document, for its ``ingestionError``."""
+    for status, reason in (getattr(exc, "rejections", None) or {}).values():
+        return f"{status}: {reason}" if reason else str(status)
+    return str(exc)
 
 
 def _claim_reingest(
@@ -1118,7 +1262,10 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
 
     import asyncio
 
-    from apis.shared.kb_backend.managed_backend import ManagedKbBackend
+    from apis.shared.kb_backend.managed_backend import (
+        ManagedKbBackend,
+        ManagedKbDocumentRejected,
+    )
     from apis.shared.kb_backend.protocol import DocumentSource
 
     # The DOC# row carries what was reserved at request time (`_declared_bytes`)
@@ -1204,9 +1351,24 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
                 "status": status}
 
     if status == DOC_STATUS_NOT_FOUND:
-        # Bedrock has never heard of it, so this is the first delivery. Submit.
+        # Bedrock has never heard of it, so this is the first delivery. Submit —
+        # but only bytes that exist. Bedrock accepts an ingest for a missing S3
+        # object and then never indexes it.
+        if _source_object_exists(bucket, key) is False:
+            return _missing_upload_result(assistant_id, document_id, doc_row, declared)
         try:
             asyncio.run(backend.ingest(assistant_id, source))
+        except ManagedKbDocumentRejected as exc:
+            # Refused in the ingest response itself. The same bytes would be
+            # refused again, so this is terminal, not a redelivery.
+            logger.error(f"direct ingestion of {document_id} was refused: {exc}")
+            set_document_terminal(
+                assistant_id, document_id, STATUS_FAILED,
+                error=f"the knowledge base refused this document: {_rejection_reason(exc)}",
+            )
+            _release_reservation(assistant_id, document_id, declared)
+            return {"routed": "managed", "ingested": False, "document_id": document_id,
+                    "status": STATUS_FAILED, "note": "ingest-rejected"}
         except Exception as exc:
             logger.error(f"direct ingestion of {document_id} failed: {exc}", exc_info=True)
             set_document_terminal(assistant_id, document_id, STATUS_FAILED, error=str(exc))
@@ -1226,7 +1388,12 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
     # mid-flight" need the same thing: give Bedrock time, bounded by a budget that
     # fits inside this Lambda, because redelivery is capped at 2 retries.
     if _still_working(status, document_id) or status == DOC_STATUS_NOT_FOUND:
-        status, bedrock_updated_at = wait_until_indexed(backend, assistant_id, document_id)
+        status, bedrock_updated_at = wait_until_indexed(
+            backend, assistant_id, document_id,
+            not_found_grace_polls=(
+                NOT_FOUND_GRACE_POLLS if status == DOC_STATUS_NOT_FOUND else 0
+            ),
+        )
 
     if status in DOC_STATUSES_FAILED:
         logger.error(f"document {document_id} became {status} during indexing")

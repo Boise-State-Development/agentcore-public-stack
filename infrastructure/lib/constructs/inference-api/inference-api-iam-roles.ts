@@ -429,8 +429,13 @@ export function createRuntimeExecutionRole(
   // `MemorySpaceRepository.record_retrieval`. Its own managed policy rather than
   // another statement on the role: the role's statements already spill into
   // CDK overflow policies, packed by a size CDK estimates before ARNs resolve,
-  // and on dev OverflowPolicy1 resolves to 5,473 of IAM's 6,144 characters.
-  // The same packing rolled back the first 2.6a deploy on app-api's role.
+  // and the fullest of them runs close to IAM's 6,144-character limit. For the
+  // current figure read `platform-ceilings.test.ts`'s `[policy headroom]`
+  // output, which measures it on every test run, rather than a number written
+  // here: this comment said "5,473" until 2026-10-20, when a live read put it
+  // at 5,443, and a recorded size nobody re-measures is how the 2026-10-08
+  // deploy failure got its surprise. The same packing rolled back the first
+  // 2.6a deploy on app-api's role.
   //
   // `analyze_spreadsheet` downloads an assistant's knowledge-base spreadsheet
   // from its original upload in rag-documents (`assistants/{id}/documents/...`),

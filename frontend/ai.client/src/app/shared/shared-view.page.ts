@@ -24,9 +24,13 @@ import { SpinnerComponent } from '../components/spinner/spinner.component';
   imports: [NgIcon, DatePipe, MessageListComponent, SpinnerComponent],
   providers: [provideIcons({ heroLockClosed, heroExclamationTriangle, heroChatBubbleLeftRight })],
   template: `
-    <div class="min-h-screen bg-white dark:bg-gray-900">
+    <!-- No surface of its own: the page sits on the shell's body background
+         like the conversation page does. The assistant bubble is drawn in
+         that same gray-50, so a white panel here turned every turn into a
+         gray card inside a white box framed by the shell's gray padding. -->
+    <div>
       <!-- Header banner -->
-      <div class="sticky top-0 z-10 border-b border-gray-200 bg-white/95 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95">
+      <div class="sticky top-0 z-10 border-b border-gray-200 bg-gray-50/95 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95">
         <div class="mx-auto flex max-w-4xl items-center justify-center px-4 py-3">
           <div class="flex items-center gap-2">
             <ng-icon name="heroLockClosed" class="size-4 text-gray-400" aria-hidden="true" />

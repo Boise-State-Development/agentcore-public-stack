@@ -6,10 +6,12 @@ This module contains all session-related data models including:
 - Session preferences and configuration
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from apis.shared.scheduled_prompts.models import is_headless_session
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 
@@ -206,6 +208,24 @@ class PausedTurnSnapshot(BaseModel):
     )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
+
+
+#: How long an attended turn's pause stays resumable. The person was watching
+#: when it paused, so an answer an hour later is an answer to a turn they have
+#: moved on from.
+PAUSED_TURN_TTL = timedelta(hours=1)
+
+#: How long a headless run's pause stays resumable. Nobody is watching a
+#: scheduled run when it pauses on a connector's consent, so the owner first
+#: sees the prompt whenever they next open the conversation — routinely hours
+#: later, and days for a weekly schedule. At one hour the Connect button was a
+#: dead end almost every time: consent succeeded, then the resume was refused.
+HEADLESS_PAUSED_TURN_TTL = timedelta(days=7)
+
+
+def paused_turn_ttl(session_id: Optional[str]) -> timedelta:
+    """The resume window for a turn pausing in ``session_id``."""
+    return HEADLESS_PAUSED_TURN_TTL if is_headless_session(session_id) else PAUSED_TURN_TTL
 
 
 class SessionPreferences(BaseModel):
@@ -537,6 +557,49 @@ class BrowserLiveViewResponse(BaseModel):
     )
 
 
+AwaitingInputKind = Literal["oauth", "tool_approval", "user_question", "browser_login"]
+
+# When a turn paused on more than one prompt, the session list names one. A
+# fixed order keeps a row from flipping between kinds across refetches: the
+# sign-in handover first (it holds a live browser against a deadline), then the
+# prompts answered in place, then OAuth consent.
+_AWAITING_INPUT_ORDER: tuple[AwaitingInputKind, ...] = (
+    "browser_login",
+    "tool_approval",
+    "user_question",
+    "oauth",
+)
+
+
+def derive_awaiting_input(
+    interrupt_kinds: Iterable[Optional[str]],
+    paused_turn_expires_at: Optional[str],
+    now: Optional[datetime] = None,
+) -> Optional[AwaitingInputKind]:
+    """Which prompt a session's paused turn is waiting on, or None.
+
+    Only a pause that can still be answered counts: a breadcrumb is there AND
+    the ``pausedTurn`` snapshot is there AND it has not expired. The resume
+    route refuses an expired snapshot, so a "needs your input" marker for one
+    would lead the user to a prompt that can no longer do anything.
+
+    A breadcrumb with no ``kind`` predates the discriminator and is OAuth,
+    matching :class:`PendingInterrupt`'s default.
+    """
+    kinds = {kind or "oauth" for kind in interrupt_kinds}
+    if not kinds or not paused_turn_expires_at:
+        return None
+    try:
+        expires_at = datetime.fromisoformat(paused_turn_expires_at.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= (now or datetime.now(timezone.utc)):
+        return None
+    return next((kind for kind in _AWAITING_INPUT_ORDER if kind in kinds), None)
+
+
 class SessionMetadataResponse(BaseModel):
     """Response containing session metadata"""
 
@@ -601,6 +664,38 @@ class SessionMetadataResponse(BaseModel):
         False,
         description="True when an unattended (scheduled) run left a response the user hasn't opened yet; drives the blue unread dot in the session list",
     )
+    pinned_at: Optional[str] = Field(
+        default=None,
+        alias="pinnedAt",
+        description="ISO 8601 timestamp the user pinned this conversation; set only on entries of SessionsListResponse.pinned",
+    )
+    awaiting_input: Optional[AwaitingInputKind] = Field(
+        default=None,
+        alias="awaitingInput",
+        description="Which prompt this conversation's paused turn is waiting on (OAuth consent, tool approval, a clarifying question, a browser sign-in), only while the pause can still be answered; drives the amber 'needs your input' dot in the session list. Derived from pendingInterrupts + pausedTurn, which are never returned here",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_awaiting_input(cls, data: Any) -> Any:
+        """Fill ``awaitingInput`` from the full row every caller builds this from.
+
+        Every route builds the response with
+        ``model_validate(session.model_dump(by_alias=True))``, so the dict
+        carries ``pendingInterrupts`` and ``pausedTurn`` even though this model
+        declares neither. Deriving here gives the list, pinned, project and
+        single-session surfaces the same answer from data already loaded, and
+        the breadcrumbs and snapshot themselves are still dropped as extras.
+        """
+        if not isinstance(data, dict) or "awaitingInput" in data or "awaiting_input" in data:
+            return data
+        interrupts = data.get("pendingInterrupts") or []
+        paused_turn = data.get("pausedTurn") or {}
+        kind = derive_awaiting_input(
+            (item.get("kind") for item in interrupts if isinstance(item, dict)),
+            paused_turn.get("expiresAt") if isinstance(paused_turn, dict) else None,
+        )
+        return {**data, "awaitingInput": kind}
 
 
 class SessionsListResponse(BaseModel):
@@ -609,6 +704,10 @@ class SessionsListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     sessions: List[SessionMetadataResponse] = Field(..., description="List of sessions for the user")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for retrieving the next page of results")
+    pinned: Optional[List[SessionMetadataResponse]] = Field(
+        None,
+        description="The user's pinned conversations, most recently pinned first. Returned on the first page only (no next_token); they may also appear in `sessions`",
+    )
 
 
 class BulkDeleteSessionsRequest(BaseModel):
