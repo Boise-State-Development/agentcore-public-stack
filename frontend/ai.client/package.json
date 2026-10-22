@@ -44,7 +44,7 @@
     "clipboard": "2.0.11",
     "docx-preview": "0.4.0",
     "echarts": "file:./shims/echarts-stub",
-    "katex": "0.16.45",
+    "katex": "0.18.2",
     "marked": "17.0.6",
     "mermaid": "11.16.1",
     "ng2-charts": "10.0.0",
@@ -78,9 +78,9 @@
   "overrides": {
     "undici": ">=7.29.1 <8.0.0",
     "picomatch": ">=4.0.4",
-    "vite": ">=8.0.16",
+    "vite": ">=8.1.6 <8.2.0",
     "esbuild": ">=0.28.1",
-    "dompurify": ">=3.4.13",
+    "dompurify": ">=3.4.16",
     "lodash-es": ">=4.18.0",
     "hono": ">=4.13.7",
     "@hono/node-server": ">=1.19.13",
@@ -95,10 +95,14 @@
     "http-cache-semantics": ">=4.3.0",
     "@babel/core": ">=7.29.6 <8.0.0",
     "mermaid": {
-      "uuid": "14.0.0"
+      "uuid": "14.0.0",
+      "katex": "$katex"
     },
     "pptx-preview": {
       "uuid": "14.0.0"
+    },
+    "ngx-markdown": {
+      "katex": "$katex"
     }
   }
 }
