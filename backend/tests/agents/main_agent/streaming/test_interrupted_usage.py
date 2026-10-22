@@ -41,13 +41,91 @@ class TestAttributeInputTokens:
         """A cachePoint on a short prompt is ignored and the prompt is billed
         as plain input, so the cache buckets must stay empty."""
         buckets, method = iu.attribute_input_tokens(
-            iu.MIN_CACHEABLE_PREFIX_TOKENS - 1,
+            iu.DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS - 1,
             cache_points_sent=True,
             prior_cached_prefix=None,
         )
-        assert buckets["inputTokens"] == iu.MIN_CACHEABLE_PREFIX_TOKENS - 1
+        assert buckets["inputTokens"] == iu.DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS - 1
         assert buckets["cacheWriteInputTokens"] == 0
-        assert method == iu.METHOD_UNCACHED
+        assert method == iu.METHOD_BELOW_MINIMUM
+
+    def test_the_floor_is_the_one_passed_not_a_global(self):
+        """3,729 tokens clears a 1,024 floor and not Haiku 4.5's 4,096 — the
+        dev case, where the next call read nothing from cache."""
+        below, method = iu.attribute_input_tokens(
+            3_729, cache_points_sent=True, prior_cached_prefix=None, min_cacheable_tokens=4_096
+        )
+        assert below == {"inputTokens": 3_729, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}
+        assert method == iu.METHOD_BELOW_MINIMUM
+
+        above, method = iu.attribute_input_tokens(
+            3_729, cache_points_sent=True, prior_cached_prefix=None, min_cacheable_tokens=1_024
+        )
+        assert above["cacheWriteInputTokens"] == 3_729
+        assert method == iu.METHOD_FIRST_WRITE
+
+    def test_a_prompt_exactly_at_the_minimum_is_cached(self):
+        buckets, method = iu.attribute_input_tokens(
+            4_096, cache_points_sent=True, prior_cached_prefix=None, min_cacheable_tokens=4_096
+        )
+        assert buckets["cacheWriteInputTokens"] == 4_096
+        assert method == iu.METHOD_FIRST_WRITE
+
+
+class TestMinCacheablePrefixTokens:
+    """Bedrock's explicit-caching table, read out of every spelling of a Claude
+    id this stack sends: bare, `us.`/`global.` profiles, `-v1:0` suffixes."""
+
+    @pytest.mark.parametrize(
+        "model_id, minimum",
+        [
+            # The curated catalog's ids.
+            ("us.anthropic.claude-haiku-4-5-20251001-v1:0", 4_096),
+            ("us.anthropic.claude-opus-4-7", 4_096),
+            ("us.anthropic.claude-sonnet-4-6", 1_024),
+            ("global.anthropic.claude-sonnet-5", 1_024),
+            ("us.anthropic.claude-opus-5-5", 512),
+            ("global.anthropic.claude-fable-5-1", 512),
+            # The rest of the table.
+            ("anthropic.claude-opus-4-6-v1", 4_096),
+            ("anthropic.claude-opus-4-5-20251101-v1:0", 4_096),
+            ("anthropic.claude-opus-4-8", 1_024),
+            ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", 1_024),
+            ("anthropic.claude-sonnet-5-5", 512),
+            ("anthropic.claude-haiku-5-5", 512),
+            ("anthropic.claude-opus-5", 512),
+            ("anthropic.claude-fable-5", 512),
+            ("anthropic.claude-mythos-5-1", 512),
+            ("anthropic.claude-3-7-sonnet-20250219-v1:0", 1_024),
+            ("anthropic.claude-3-5-sonnet-20241022-v2:0", 1_024),
+        ],
+    )
+    def test_named_models(self, model_id, minimum):
+        assert iu.min_cacheable_prefix_tokens(model_id) == minimum
+
+    def test_case_does_not_matter(self):
+        assert iu.min_cacheable_prefix_tokens("US.ANTHROPIC.CLAUDE-HAIKU-4-5-20251001-V1:0") == 4_096
+
+    def test_sonnet_5_is_not_sonnet_5_5(self):
+        """The bare major must not borrow its successor's 512."""
+        assert iu.min_cacheable_prefix_tokens("anthropic.claude-sonnet-5") == 1_024
+        assert iu.min_cacheable_prefix_tokens("anthropic.claude-sonnet-5-5") == 512
+
+    def test_a_date_suffix_is_not_read_as_a_minor_version(self):
+        assert iu.min_cacheable_prefix_tokens("anthropic.claude-opus-5-20260101-v1:0") == 512
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            None,
+            "",
+            "anthropic.claude-opus-9-9",
+            "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+            "amazon.nova-micro-v1:0",
+        ],
+    )
+    def test_anything_unnamed_falls_back_to_the_default(self, model_id):
+        assert iu.min_cacheable_prefix_tokens(model_id) == iu.DEFAULT_MIN_CACHEABLE_PREFIX_TOKENS
 
     def test_the_reproduced_case_is_a_cache_write(self):
         """No call in this process reported usage — a first turn — so the
@@ -177,13 +255,51 @@ class TestBuildInterruptedCallUsage:
     def _agent(self, messages=None):
         return SimpleNamespace(model=None, messages=messages or [])
 
-    def _wrapper(self, caching: bool):
-        return SimpleNamespace(
-            model_config=SimpleNamespace(
-                bedrock_cache_points_supported=lambda: caching,
-                caching_enabled=caching,
-            )
+    def _wrapper(self, caching: bool, model_id: str | None = None):
+        config = SimpleNamespace(
+            bedrock_cache_points_supported=lambda: caching,
+            caching_enabled=caching,
         )
+        if model_id is not None:
+            config.model_id = model_id
+        return SimpleNamespace(model_config=config)
+
+    @pytest.mark.asyncio
+    async def test_a_short_stop_on_haiku_4_5_stays_plain_input(self, monkeypatch):
+        """The dev reproduction (2026-10-22): a 3,729-token first turn on
+        Haiku 4.5, stopped mid-answer. Its follow-up read 0 tokens from cache,
+        so Bedrock billed this prompt as plain input — not the write a 1,024
+        floor attributed it to."""
+        monkeypatch.setattr(
+            "agents.main_agent.session.hooks.context_attribution.get_projected_input_tokens",
+            lambda agent: 3_729,
+        )
+
+        result = await iu.build_interrupted_call_usage(
+            strands_agent=self._agent(),
+            wrapper=self._wrapper(caching=True, model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+            partial_text="",
+        )
+
+        assert result["usage"]["inputTokens"] == 3_729
+        assert result["usage"]["cacheWriteInputTokens"] == 0
+        assert result["usageEstimate"]["cacheSplit"] == iu.METHOD_BELOW_MINIMUM
+
+    @pytest.mark.asyncio
+    async def test_the_same_prompt_on_a_512_token_model_is_a_write(self, monkeypatch):
+        monkeypatch.setattr(
+            "agents.main_agent.session.hooks.context_attribution.get_projected_input_tokens",
+            lambda agent: 3_729,
+        )
+
+        result = await iu.build_interrupted_call_usage(
+            strands_agent=self._agent(),
+            wrapper=self._wrapper(caching=True, model_id="us.anthropic.claude-opus-5-5"),
+            partial_text="",
+        )
+
+        assert result["usage"]["cacheWriteInputTokens"] == 3_729
+        assert result["usageEstimate"]["cacheSplit"] == iu.METHOD_FIRST_WRITE
 
     @pytest.mark.asyncio
     async def test_the_reproduced_row_after_the_fix(self, monkeypatch):
