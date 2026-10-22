@@ -61,6 +61,24 @@ export class AlarmFactory {
 /** Shared period for count-based alarms; thresholds are chosen against it. */
 export const ALARM_PERIOD = cdk.Duration.minutes(5);
 
+/** CloudWatch rejects a math-expression alarm over more than 10 metrics. */
+export const MAX_METRICS_PER_MATH_ALARM = 10;
+
+/**
+ * Splits `items` into consecutive groups of at most `size`, keeping order.
+ *
+ * Grouped alarms exist for the 500-resource stack limit: one alarm per group
+ * of resources instead of one per resource. Order is kept so a resource
+ * appended to the list joins the last group rather than reshuffling the
+ * others; a reshuffle only updates alarms in place, but it changes which
+ * alarm a given resource reports through.
+ */
+export function chunk<T>(items: readonly T[], size: number): T[][] {
+  const groups: T[][] = [];
+  for (let i = 0; i < items.length; i += size) groups.push(items.slice(i, i + size));
+  return groups;
+}
+
 /**
  * Every alarm beneath `scope`, for the dashboard's alarm-status widget.
  *
