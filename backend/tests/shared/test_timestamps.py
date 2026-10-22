@@ -15,9 +15,10 @@ import pytest
 
 from apis.shared.timestamps import from_iso, to_iso, utc_now_iso
 
-# The exact expression that caused the outage. Kept as one regex so the guard test below
-# and this docstring cannot drift apart.
-BROKEN_IDIOM = re.compile(r'now\(timezone\.utc\)\.isoformat\(\)\s*\+\s*"Z"')
+# The exact expression that caused the outage, in either quote style — the quota code
+# spelled it with single quotes and slipped past a double-quote-only guard. Kept as one
+# regex so the guard test below and this docstring cannot drift apart.
+BROKEN_IDIOM = re.compile(r"""\.isoformat\(\)\s*\+\s*["']Z["']""")
 
 SRC = pathlib.Path(__file__).resolve().parents[2] / "src"
 
