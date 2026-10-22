@@ -6,11 +6,12 @@ This module contains all session-related data models including:
 - Session preferences and configuration
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from apis.shared.scheduled_prompts.models import is_headless_session
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 
@@ -207,6 +208,24 @@ class PausedTurnSnapshot(BaseModel):
     )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
+
+
+#: How long an attended turn's pause stays resumable. The person was watching
+#: when it paused, so an answer an hour later is an answer to a turn they have
+#: moved on from.
+PAUSED_TURN_TTL = timedelta(hours=1)
+
+#: How long a headless run's pause stays resumable. Nobody is watching a
+#: scheduled run when it pauses on a connector's consent, so the owner first
+#: sees the prompt whenever they next open the conversation — routinely hours
+#: later, and days for a weekly schedule. At one hour the Connect button was a
+#: dead end almost every time: consent succeeded, then the resume was refused.
+HEADLESS_PAUSED_TURN_TTL = timedelta(days=7)
+
+
+def paused_turn_ttl(session_id: Optional[str]) -> timedelta:
+    """The resume window for a turn pausing in ``session_id``."""
+    return HEADLESS_PAUSED_TURN_TTL if is_headless_session(session_id) else PAUSED_TURN_TTL
 
 
 class SessionPreferences(BaseModel):

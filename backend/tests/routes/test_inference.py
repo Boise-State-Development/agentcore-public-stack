@@ -645,3 +645,145 @@ class TestInvocationsResume:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
         assert "event: done" in body
+
+
+class TestInvocationsResumeUnavailable:
+    """A resume that can no longer be picked up streams an assistant message.
+
+    It used to be a 400, which the AgentCore Runtime data plane rewrites to a
+    bare 424: a user who had just connected Gmail for employees from a
+    scheduled run's prompt saw "Chat Request Failed" instead of being told to
+    send the message again (prod, 2026-10-22).
+    """
+
+    SESSION = "headless-0000000000000001"
+    INTERRUPT_ID = "int-gmail"
+
+    def _post(self, client, *, snapshot, agent=None, pending=()):
+        from apis.shared.sessions.models import PendingInterrupt
+
+        mocks = {
+            "clear_paused_turn": AsyncMock(),
+            "clear_pending_interrupts": AsyncMock(),
+            "remove_pending_interrupts": AsyncMock(),
+        }
+        breadcrumbs = [
+            PendingInterrupt(
+                interrupt_id=iid,
+                provider_id="gmail-employee",
+                kind=kind,
+                created_at="2026-10-22T13:05:58+00:00",
+            )
+            for iid, kind in pending
+        ]
+        with patch(
+            "apis.inference_api.chat.routes.get_agent",
+            return_value=agent or TestInvocationsResume._paused_agent(self.INTERRUPT_ID),
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.shared.sessions.metadata.get_paused_turn",
+            AsyncMock(return_value=snapshot),
+        ), patch(
+            "apis.shared.sessions.metadata.get_pending_interrupts",
+            AsyncMock(return_value=breadcrumbs),
+        ), patch.multiple("apis.shared.sessions.metadata", **mocks):
+            resp = client.post(
+                "/invocations",
+                json={
+                    "session_id": self.SESSION,
+                    "message": "",
+                    "interrupt_responses": [
+                        {"interruptId": self.INTERRUPT_ID, "response": "consented"}
+                    ],
+                },
+            )
+            body = resp.text
+        return resp, body, mocks
+
+    @staticmethod
+    def _stream_error(body):
+        import json
+
+        for frame in body.split("\n\n"):
+            if frame.startswith("event: stream_error"):
+                return json.loads(frame.split("data: ", 1)[1])
+        raise AssertionError(f"no stream_error frame in {body!r}")
+
+    @staticmethod
+    def _expired_snapshot():
+        from datetime import datetime, timedelta, timezone
+
+        snapshot = TestInvocationsResume._snapshot(enabled_tools=["gmail_employee"])
+        snapshot.expires_at = (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat()
+        return snapshot
+
+    def test_expired_snapshot_streams_a_message_and_retires_the_prompt(self, authed_client):
+        resp, body, mocks = self._post(
+            authed_client,
+            snapshot=self._expired_snapshot(),
+            pending=[(self.INTERRUPT_ID, "oauth")],
+        )
+
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        error = self._stream_error(body)
+        assert error["metadata"] == {"error_kind": "resume_unavailable", "reason": "expired"}
+        assert error["message"].startswith("Your account is connected")
+        assert "event: done" in body
+        mocks["clear_paused_turn"].assert_awaited_once()
+        mocks["clear_pending_interrupts"].assert_awaited_once()
+        mocks["remove_pending_interrupts"].assert_not_awaited()
+
+    def test_missing_snapshot_streams_the_generic_message(self, authed_client):
+        resp, body, mocks = self._post(authed_client, snapshot=None)
+
+        assert resp.status_code == 200
+        error = self._stream_error(body)
+        assert error["metadata"]["reason"] == "missing"
+        assert error["message"].startswith("The request that was waiting")
+        mocks["clear_pending_interrupts"].assert_awaited_once()
+
+    def test_unknown_interrupt_drops_only_the_submitted_breadcrumbs(self, authed_client):
+        resp, body, mocks = self._post(
+            authed_client,
+            snapshot=TestInvocationsResume._snapshot(enabled_tools=["gmail_employee"]),
+            agent=TestInvocationsResume._paused_agent("int-other"),
+        )
+
+        assert resp.status_code == 200
+        assert self._stream_error(body)["metadata"]["reason"] == "unknown_interrupt"
+        mocks["remove_pending_interrupts"].assert_awaited_once()
+        assert set(mocks["remove_pending_interrupts"].await_args.args[2]) == {self.INTERRUPT_ID}
+        mocks["clear_paused_turn"].assert_not_awaited()
+
+    def test_refusal_is_not_persisted(self, authed_client):
+        with patch(
+            "agents.main_agent.session.persistence.persist_synthetic_messages"
+        ) as persist:
+            self._post(authed_client, snapshot=None)
+        persist.assert_not_called()
+
+    def test_lease_is_released(self, authed_client):
+        from apis.shared.sessions.session_lease import SessionLease
+
+        lease = SessionLease(session_id=self.SESSION, user_id="u1", owner="owner-xyz")
+        release = AsyncMock()
+        with patch(
+            "apis.shared.sessions.session_lease.acquire_session_lease",
+            AsyncMock(return_value=lease),
+        ), patch("apis.shared.sessions.session_lease.release_session_lease", release):
+            self._post(authed_client, snapshot=None)
+        release.assert_awaited_with(lease)
+
+
+class TestPausedTurnTtl:
+    def test_headless_runs_get_a_week_attended_turns_an_hour(self):
+        from datetime import timedelta
+
+        from apis.shared.sessions.models import paused_turn_ttl
+
+        assert paused_turn_ttl("headless-0000000000000001") == timedelta(days=7)
+        assert paused_turn_ttl("2b1c6f0e-0000-4000-8000-000000000000") == timedelta(hours=1)
+        assert paused_turn_ttl(None) == timedelta(hours=1)

@@ -66,7 +66,7 @@ describe('ChatRequestService', () => {
         ChatRequestService,
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
-        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null) } },
+        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null), takeResumeUnavailable: vi.fn().mockReturnValue(false) } },
         { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined), markSendFailed: vi.fn(), removeTrailingMessage: vi.fn().mockReturnValue(true) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
         // Turn timing and prewarm off: the tests that need them turn them on.
@@ -602,6 +602,19 @@ describe('ChatRequestService', () => {
       // The resumed stream can't attach the tool_result live, so we
       // reconcile from persisted memory to flip the card to its result.
       expect(messageMap.reloadMessagesForSession).toHaveBeenCalledWith('session1');
+    });
+
+    it('keeps a refused resume\'s streamed explanation instead of reloading over it', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      const chatState = TestBed.inject(ChatStateService) as any;
+      chatState.takeResumeUnavailable.mockReturnValue(true);
+
+      await oauthResumeHandler!(['int-1'], { sessionId: 'session1' });
+
+      // The refusal is streamed but never persisted, so a reload would
+      // replace it with history that has no explanation at all.
+      expect(chatState.takeResumeUnavailable).toHaveBeenCalledWith('session1');
+      expect(messageMap.reloadMessagesForSession).not.toHaveBeenCalled();
     });
 
     it('is a no-op without interrupt ids', async () => {

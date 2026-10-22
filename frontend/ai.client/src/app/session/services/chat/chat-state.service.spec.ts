@@ -167,6 +167,16 @@ describe('ChatStateService', () => {
     });
   });
 
+  describe('resume-unavailable mark', () => {
+    it('is read once per session, then cleared', () => {
+      service.markResumeUnavailable('a');
+
+      expect(service.takeResumeUnavailable('b')).toBe(false);
+      expect(service.takeResumeUnavailable('a')).toBe(true);
+      expect(service.takeResumeUnavailable('a')).toBe(false);
+    });
+  });
+
   describe('setLastTurnInterrupted', () => {
     it('sets the flag + reason per session and clears the reason on false', () => {
       service.setViewedSession('a');
