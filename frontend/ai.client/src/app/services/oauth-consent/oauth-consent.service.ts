@@ -3,6 +3,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { fromEvent } from 'rxjs';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { SessionService } from '../../session/services/session/session.service';
+import { ChatStateService } from '../../session/services/chat/chat-state.service';
 
 /**
  * Pending OAuth consent request surfaced by the backend when an external
@@ -103,6 +104,7 @@ export class OAuthConsentService {
   private readonly destroyRef = inject(DestroyRef);
   private readonly userConnectorsService = inject(UserConnectorsService);
   private readonly sessionService = inject(SessionService);
+  private readonly chatState = inject(ChatStateService);
 
   /** Map of providerId → request. A provider only appears once, even if
    *  the backend emits duplicates mid-stream. */
@@ -562,6 +564,11 @@ export class OAuthConsentService {
     if (options?.syncServer === false || !sessionId || !interruptId) {
       return;
     }
+
+    // The user turned the paused turn's prompt down, so the conversation is
+    // no longer waiting on them; drop its "needs your input" dot now rather
+    // than after the next list refetch.
+    this.chatState.clearSessionAwaitingInput(sessionId);
 
     // Best-effort: a backend cleanup failure shouldn't block the UI from
     // hiding the prompt — the prompt is already gone locally.
