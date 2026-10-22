@@ -29,6 +29,8 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 from apis.inference_api.runtime_health import ping_payload
+from apis.shared.handoff.context import build_handoff_message
+from apis.shared.handoff.turn import HandoffTurn
 from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
     agent_preparing_phase_enabled,
@@ -4791,6 +4793,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # already ended, so they take the lease with force=True (never blocked, but
     # still install it so a fresh duplicate during them is rejected). Preview
     # sessions and the local no-DynamoDB path (lease None) skip the guard.
+    # Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): decided here with no IO, from
+    # the request and the B1 snapshot. Acceptance starts at the head of the stream, beside the
+    # agent build, and is awaited only where the message is assembled.
+    handoff_turn = HandoffTurn.for_turn(
+        user_id=user_id,
+        session_id=input_data.session_id,
+        agent_id=input_data.rag_assistant_id,
+        handoff_context=input_data.handoff_context,
+        session_row=session_meta.row,
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        is_preview=is_preview_session(input_data.session_id),
+    )
+
     session_lease = None
     if not is_preview_session(input_data.session_id):
         from apis.shared.sessions.session_lease import (
@@ -5188,6 +5204,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # the outer function; reassigning it here would make the whole
             # name local and UnboundLocalError before the assignment runs).
             final_message = augmented_message
+            # A handoff's context card, wrapped (§4.2). First, so it reads as the setting for
+            # everything after it; the bubble still shows only what the user typed, through the
+            # `original_message` displayText split below.
+            if handoff_turn is not None:
+                handoff_block = await handoff_turn.context_block()
+                if handoff_block:
+                    final_message = build_handoff_message(handoff_block, final_message)
             if attachment_guidance:
                 final_message = f"{final_message}\n\n{attachment_guidance}"
             # Rendered into the persisted user message once, from this turn's
@@ -5397,6 +5420,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             nonlocal agent, kb_search, context_chunks, augmented_message, citations_for_storage
 
             heartbeat_task = None
+            disconnected = False
+            if handoff_turn is not None:
+                # Beside the build, so the acceptance round trips cost the first token nothing.
+                handoff_turn.start()
             try:
                 # The deferred agent build (PR-3). Narrated, because this is
                 # where a cold turn spends over a second with nothing on the
@@ -5533,9 +5560,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 )
 
                 async for chunk in stream_with_quota_warning():
+                    if handoff_turn is not None:
+                        handoff_turn.observe(chunk)
                     yield chunk
+            except (asyncio.CancelledError, GeneratorExit):
+                disconnected = True
+                raise
             finally:
                 await _release_turn_lease(heartbeat_task, session_lease)
+                if handoff_turn is not None:
+                    # After the stream, never before a token: what this turn ended as, onto the
+                    # source conversation's handoff row (§4.3).
+                    handoff_turn.schedule_status_write(disconnected=disconnected)
 
         # Everything after the agent build: citation assembly, the title task,
         # the lease acquire and the generator wiring. The `turn_prelude` line

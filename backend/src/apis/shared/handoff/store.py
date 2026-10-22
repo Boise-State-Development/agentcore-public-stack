@@ -41,6 +41,7 @@ from apis.shared.handoff.models import (
     HANDOFF_DISPLAY_MAX_CHARS,
     Handoff,
     HandoffStatus,
+    WaitingOn,
     sources_of,
 )
 
@@ -59,7 +60,7 @@ _TRANSITION_FIELDS = (
     "waitingOn",
     "stoppedReason",
 )
-_DISPLAY_FIELDS = ("statusLine", "waitingOn", "stoppedReason")
+_DISPLAY_FIELDS = ("statusLine", "stoppedReason")
 
 
 class HandoffStoreUnavailable(RuntimeError):
@@ -77,7 +78,12 @@ class HandoffStore:
         if not table_name:
             return
         try:
-            self._table = boto3.resource("dynamodb").Table(table_name)
+            # The process-wide cached resource, not a fresh boto3.resource: constructing one costs
+            # ~47ms on a throttled Runtime container (turn-path spec §2B), and a handoff target's
+            # first turn usually lands on a fresh process.
+            from apis.shared.aws_clients import get_dynamodb_table
+
+            self._table = get_dynamodb_table(table_name)
         except Exception:  # noqa: BLE001 - dev without AWS creds
             logger.warning("handoff store: DynamoDB unavailable", exc_info=True)
             self._table = None
@@ -200,6 +206,9 @@ class HandoffStore:
                 continue
             if name in _DISPLAY_FIELDS:
                 value = str(value)[:HANDOFF_DISPLAY_MAX_CHARS]
+            elif name == "waitingOn":
+                value = WaitingOn.model_validate(value).model_dump()
+                value["name"] = value["name"][:HANDOFF_DISPLAY_MAX_CHARS]
             names[f"#{name}"] = name
             values[f":{name}"] = value
             sets.append(f"#{name} = :{name}")

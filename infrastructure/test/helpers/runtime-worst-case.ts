@@ -29,6 +29,7 @@ export function synthWorstCasePlatformStack(overrides: Partial<AppConfig> = {}):
     artifacts: { shareInboxEnabled: false, retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
     mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
     fineTuning: { enabled: true, defaultQuotaHours: 0 },
+    handoffs: { enabled: true },
     tokenExchange: { url: 'https://tokens.example.com/v2/oauth/token', clientId: 'test-client' },
     ...overrides,
   });

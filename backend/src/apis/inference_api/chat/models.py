@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 from apis.shared.browser_takeover import coerce_frame_height
+from apis.shared.handoff.turn import HandoffContextRequest
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 # Hard upper bound on a request's ``system_prompt``. The Agent Designer preview sends an
@@ -181,6 +182,13 @@ class InvocationRequest(BaseModel):
     # rather than a quietly-ignored flag — a silently downgraded preview would run the
     # wrong configuration and report it as the reviewed one.
     review_preview: Optional[bool] = None
+    # Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): this is the first turn of a
+    # conversation started by handing off from another one. `{handoffId, text}`, where `text` is
+    # the context card as the user sent it (absent when they removed it). The server re-caps it,
+    # accepts the handoff once, and prepends it wrapped; the bubble shows `message` only. Ignored
+    # with a warning while HANDOFFS_ENABLED is off, on a resume, and on a conversation that
+    # already took a handoff.
+    handoff_context: Optional[HandoffContextRequest] = None
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.

@@ -272,8 +272,8 @@ jobs:
       # Handoffs: a mid-thread @-mention hands off to an Agent with reviewed
       # context (docs/specs/agent-handoffs-and-consults.md, Phase 0). Opt-in
       # while in development: set `CDK_HANDOFFS_ENABLED` to "true" in an
-      # environment to turn it on there. app-api only until the Runtime side
-      # lands (PR-0.2).
+      # environment to turn it on there. Sets it on app-api and on the AgentCore
+      # Runtime (only while on).
       CDK_HANDOFFS_ENABLED: ${{ vars.CDK_HANDOFFS_ENABLED }}
       # Client-measured time to first token: POST /telemetry/turn-timing records the
       # SPA's own send-to-first-token in AgentCoreStack/TurnLatency

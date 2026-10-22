@@ -2438,6 +2438,57 @@ async def _backfill_session_aggregates(
         logger.warning("backfill_session_aggregates failed for %s: %s", session_id, e)
 
 
+def set_session_spawned_from(session_id: str, user_id: str, source_session_id: str, handoff_id: str) -> bool:
+    """Record on a handoff's target conversation where it came from (handoffs spec §4.2).
+
+    ``spawnedFrom: {sessionId, handoffId}`` on the target's ``META`` row. It is how every later
+    turn of the target finds the source's ``HANDOFF#`` row to keep its status current, from the
+    B1 snapshot, with no extra read. A field-level ``SET`` on the static SK, so the full-row
+    writes elsewhere (which only ``SET`` their own fields) never remove it. Synchronous: callers
+    run it in a worker thread, after the first token. Returns False when the row is missing.
+    """
+    from botocore.exceptions import ClientError
+
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return False
+    try:
+        get_dynamodb_table(table_name).update_item(
+            Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
+            UpdateExpression="SET spawnedFrom = :sf",
+            ConditionExpression="attribute_exists(PK)",
+            ExpressionAttributeValues={":sf": {"sessionId": source_session_id, "handoffId": handoff_id}},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def settle_session_spawned_from(session_id: str, user_id: str) -> None:
+    """Mark a target's ``spawnedFrom`` settled: its handoff is done and stops following its turns.
+
+    Without it, every later turn of a finished handoff's target would make a status write that the
+    row refuses (``done`` is frozen). The link itself stays; Phase 2 reads it.
+    """
+    from botocore.exceptions import ClientError
+
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return
+    try:
+        get_dynamodb_table(table_name).update_item(
+            Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
+            UpdateExpression="SET spawnedFrom.settled = :t",
+            ConditionExpression="attribute_exists(spawnedFrom)",
+            ExpressionAttributeValues={":t": True},
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+
+
 async def get_session_compaction(session_id: str, user_id: str) -> Tuple[int, Optional[str]]:
     """The applied compaction checkpoint and its summary for a session, or ``(0, None)``.
 

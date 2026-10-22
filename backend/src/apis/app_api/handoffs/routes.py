@@ -39,7 +39,7 @@ from apis.shared.handoff import (
     wrap_handoff_context,
 )
 from apis.shared.handoff.metrics import emit_handoff_metric
-from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, EffectiveHandoffStatus
+from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, EffectiveHandoffStatus, WaitingOn
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_compaction, get_session_metadata
 from apis.shared.timestamps import utc_now_iso
@@ -99,7 +99,7 @@ class HandoffView(BaseModel):
     updated_at: str = Field(..., alias="updatedAt")
     target_session_id: Optional[str] = Field(None, alias="targetSessionId")
     status_line: Optional[str] = Field(None, alias="statusLine")
-    waiting_on: Optional[str] = Field(None, alias="waitingOn")
+    waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
 
     @classmethod
     def from_row(cls, row: Handoff) -> "HandoffView":
