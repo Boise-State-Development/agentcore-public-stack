@@ -192,6 +192,13 @@ class PausedTurnSnapshot(BaseModel):
                     "replays it or the paused agent is orphaned. None when the turn had no "
                     "memory tools and on snapshots written before the field existed.",
     )
+    long_term_memory: Optional[bool] = Field(
+        default=None,
+        alias="longTermMemory",
+        description="Whether the paused turn ran with long-term memory. A cache-key "
+                    "element: resume replays it or the paused agent is orphaned. None on "
+                    "snapshots written before the field existed (treated as on).",
+    )
     memory_context: Optional[str] = Field(
         default=None,
         alias="memoryContext",

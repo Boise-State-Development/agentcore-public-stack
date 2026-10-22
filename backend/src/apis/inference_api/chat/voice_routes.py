@@ -37,6 +37,8 @@ from apis.shared.sessions.metadata import (
 from apis.shared.tools.always_on import union_enabled_tools
 from apis.shared.tools.freshness import drop_disabled_tools
 from apis.shared.sessions.models import SessionMetadata
+from apis.shared.user_settings.models import memory_enabled
+from apis.shared.user_settings.repository import UserSettingsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +219,18 @@ async def _always_on_tool_ids_for_voice(
     # a byte-stable list for the cacheable toolConfig prefix.
     seen = set(always_on)
     return always_on + [tid for tid in system if tid not in seen]
+
+
+async def _load_memory_enabled(user_id: str) -> bool:
+    """Whether the user's long-term memory is on. Best-effort: on means on if unreadable."""
+    try:
+        repo = UserSettingsRepository()
+        if not repo.enabled:
+            return True
+        return memory_enabled(await repo.get_settings(user_id))
+    except Exception:
+        logger.warning("Failed to load user settings", exc_info=True)
+        return True
 
 
 async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
@@ -559,6 +573,7 @@ async def voice_stream(
             auth_token=auth_token,
             enabled_tools=enabled_tools_list,
             voice=requested_voice,
+            long_term_memory=await _load_memory_enabled(user_id),
         )
         if requested_voice and voice_agent.voice_id != str(requested_voice).strip().lower():
             logger.warning(

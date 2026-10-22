@@ -12,6 +12,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { MemoryService } from './services/memory.service';
 import { MemoriesResponse } from './models/memory.model';
+import { UserSettingsService } from '../services/user-settings.service';
 import { parseIso } from '../utils/date';
 import { SpinnerComponent } from '../components/spinner/spinner.component';
 
@@ -153,6 +154,43 @@ export class ParsePreferencePipe implements PipeTransform {
           </div>
         } @else {
           <!-- Memory Available - Show Content -->
+
+          <!-- Long-term memory switch -->
+          <section class="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <p id="memory-enabled-label" class="text-sm/6 font-medium text-gray-900 dark:text-gray-100">
+                  Enable long-term memory
+                </p>
+                <p id="memory-enabled-description" class="text-sm/6 text-gray-600 dark:text-gray-400">
+                  When on, the assistant remembers preferences and facts from your conversations and uses
+                  them to personalize responses. When off, it won't use your memories or learn new ones.
+                  Your existing memories are kept, and you can still view and delete them here. This
+                  setting doesn't affect project memory or agent memory (Memory Spaces).
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-labelledby="memory-enabled-label"
+                aria-describedby="memory-enabled-description"
+                [attr.aria-checked]="memoryEnabled()"
+                [disabled]="savingMemorySetting()"
+                (click)="toggleMemoryEnabled()"
+                class="relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+                [class]="memoryEnabled() ? 'bg-primary-accessible' : 'bg-gray-300 dark:bg-gray-600'"
+              >
+                <span
+                  aria-hidden="true"
+                  class="inline-block size-5 transform rounded-full bg-white shadow transition-transform duration-150"
+                  [class]="memoryEnabled() ? 'translate-x-5' : 'translate-x-0.5'"
+                ></span>
+              </button>
+            </div>
+            @if (memorySettingError(); as message) {
+              <p role="alert" class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ message }}</p>
+            }
+          </section>
 
           <!-- Info Banner -->
           <div class="mb-6 rounded-lg border border-state-info-200 bg-state-info-50 p-4 dark:border-state-info-800 dark:bg-state-info-900/20">
@@ -557,6 +595,7 @@ export class ParsePreferencePipe implements PipeTransform {
 })
 export class MemoryDashboardPage {
   private memoryService = inject(MemoryService);
+  private userSettings = inject(UserSettingsService);
 
   // Resources from service
   readonly memoryStatus = this.memoryService.memoryStatus;
@@ -568,6 +607,32 @@ export class MemoryDashboardPage {
   readonly lastSearchQuery = signal('');
   readonly isSearching = signal(false);
   readonly searchResults = signal<MemoriesResponse | null>(null);
+
+  // Long-term memory switch (user setting; missing means on)
+  readonly savingMemorySetting = signal(false);
+  readonly memorySettingError = signal<string | null>(null);
+  private readonly memoryEnabledSaved = signal<boolean | null>(null);
+  readonly memoryEnabled = computed(
+    () =>
+      this.memoryEnabledSaved() ??
+      (this.userSettings.settingsResource.hasValue()
+        ? this.userSettings.settingsResource.value()?.memoryEnabled !== false
+        : true),
+  );
+
+  async toggleMemoryEnabled(): Promise<void> {
+    if (this.savingMemorySetting()) return;
+    this.savingMemorySetting.set(true);
+    this.memorySettingError.set(null);
+    try {
+      const result = await this.userSettings.updateSettings({ memoryEnabled: !this.memoryEnabled() });
+      this.memoryEnabledSaved.set(result.memoryEnabled !== false);
+    } catch {
+      this.memorySettingError.set("Couldn't save this setting. Try again.");
+    } finally {
+      this.savingMemorySetting.set(false);
+    }
+  }
   readonly deletingMemoryId = signal<string | null>(null);
 
   // Computed values

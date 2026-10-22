@@ -33,6 +33,11 @@ export interface UserSettings {
    * Null (or an empty list) means the default layout.
    */
   sidebarItems?: SidebarItemPreference[] | null;
+  /**
+   * Long-term memory (learned preferences and facts) is on unless this is
+   * `false`; missing or null means on. It does not affect project or agent memory.
+   */
+  memoryEnabled?: boolean | null;
 }
 
 /** `MAX_PERSONAL_INSTRUCTIONS_CHARS` in `apis/shared/user_settings/models.py`. */

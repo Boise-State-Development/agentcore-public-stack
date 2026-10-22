@@ -4,6 +4,7 @@ import { ResourceRef, resource } from '@angular/core';
 import { MemoryDashboardPage } from './memory-dashboard.page';
 import { MemoryService } from './services/memory.service';
 import { AllMemoriesResponse, MemoriesResponse, MemoryStatus } from './models/memory.model';
+import { UserSettings, UserSettingsService } from '../services/user-settings.service';
 
 function memories(namespace: string, ids: string[]): MemoriesResponse {
   return {
@@ -20,6 +21,10 @@ describe('MemoryDashboardPage deleteMemory', () => {
     deleteMemory: ReturnType<typeof vi.fn>;
     searchMemories: ReturnType<typeof vi.fn>;
     reload: ReturnType<typeof vi.fn>;
+  };
+  let settings: {
+    settingsResource: ResourceRef<UserSettings | undefined>;
+    updateSettings: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -43,9 +48,19 @@ describe('MemoryDashboardPage deleteMemory', () => {
 
     TestBed.configureTestingModule({
       imports: [MemoryDashboardPage],
-      providers: [{ provide: MemoryService, useFactory: createService }],
+      providers: [
+        { provide: MemoryService, useFactory: createService },
+        {
+          provide: UserSettingsService,
+          useFactory: () => ({
+            settingsResource: resource({ loader: async () => ({ defaultModelId: null }) as UserSettings }),
+            updateSettings: vi.fn().mockResolvedValue({ defaultModelId: null, memoryEnabled: false }),
+          }),
+        },
+      ],
     });
     service = TestBed.inject(MemoryService) as unknown as typeof service;
+    settings = TestBed.inject(UserSettingsService) as unknown as typeof settings;
     await vi.waitFor(() => expect(service.allMemories.hasValue()).toBe(true));
   });
 
@@ -77,6 +92,20 @@ describe('MemoryDashboardPage deleteMemory', () => {
     expect(page.searchResults()?.memories.map(m => m.recordId)).toEqual(['p2']);
     expect(page.searchResults()?.totalCount).toBe(1);
     expect(page.facts()).toEqual([]);
+  });
+
+  it('turns long-term memory off through the user settings', async () => {
+    await vi.waitFor(() => expect(service.memoryStatus.hasValue()).toBe(true));
+    await vi.waitFor(() => expect(settings.settingsResource.hasValue()).toBe(true));
+    const fixture = TestBed.createComponent(MemoryDashboardPage);
+    fixture.detectChanges();
+    const toggle = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('button[role="switch"]')!;
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+
+    toggle.click();
+    await fixture.whenStable();
+
+    expect(settings.updateSettings).toHaveBeenCalledWith({ memoryEnabled: false });
   });
 
   it('keeps the memory when the delete request fails', async () => {
