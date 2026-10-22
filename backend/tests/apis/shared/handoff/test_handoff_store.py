@@ -8,7 +8,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from apis.shared.handoff.models import Handoff, TurnsCovered
+from apis.shared.handoff.models import Handoff, TurnsCovered, WaitingOn
 from apis.shared.handoff.store import HandoffStore, HandoffStoreUnavailable
 
 REGION = "us-west-2"
@@ -115,8 +115,9 @@ def test_the_full_happy_path(store):
 
     accepted = accept(store)
     assert (accepted.status, accepted.target_session_id, accepted.context_edited) == ("running", "tgt", False)
-    assert store.transition("user-a", "h1", "needs_input", waitingOn="oauth:canvas").waiting_on == "oauth:canvas"
-    assert store.transition("user-a", "h1", "needs_input", waitingOn="approval:send_email")
+    waiting = store.transition("user-a", "h1", "needs_input", waitingOn={"kind": "oauth_consent", "name": "canvas"})
+    assert waiting.waiting_on == WaitingOn(kind="oauth_consent", name="canvas")
+    assert store.transition("user-a", "h1", "needs_input", waitingOn={"kind": "tool_approval", "name": "send_email"})
     assert store.transition("user-a", "h1", "running")
     done = store.transition("user-a", "h1", "done", statusLine="Finished · Drafted a 4-row rubric")
 

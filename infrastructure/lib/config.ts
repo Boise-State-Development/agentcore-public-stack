@@ -469,9 +469,11 @@ export interface SessionPrewarmConfig {
  * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0). **Opt-in while
  * the feature is in development**: off unless CDK_HANDOFFS_ENABLED=true (or a
  * `handoffs.enabled: true` cdk.json context). Sets HANDOFFS_ENABLED on **app-api**,
- * which serves `/sessions/{id}/handoffs`. The Runtime's copy, which accepts
- * `handoff_context` on a turn, arrives with that work (PR-0.2). No new resources:
- * `HANDOFF#` rows live in sessions-metadata on the existing SessionLookupIndex.
+ * which serves `/sessions/{id}/handoffs`, and on the **AgentCore Runtime** (only
+ * while on, so the default spends none of the V2 environment budget), which
+ * accepts `handoff_context` on a target's first turn and keeps the source's row
+ * current. No new resources: `HANDOFF#` rows live in sessions-metadata on the
+ * existing SessionLookupIndex.
  */
 export interface HandoffsConfig {
   enabled: boolean;

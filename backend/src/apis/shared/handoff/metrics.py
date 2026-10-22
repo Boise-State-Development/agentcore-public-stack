@@ -14,12 +14,22 @@ from apis.shared.observability.emf import emit_emf_metrics
 _NAMESPACE = "AgentCoreStack/PromptCache"
 
 
-def emit_handoff_metric(name: str, kind: str, *, session_id: Optional[str] = None) -> None:
-    """One count of ``name`` (``HandoffCreated``, ``HandoffCancelled`` …), with ``kind`` as a property."""
+def emit_handoff_metric(
+    name: str,
+    kind: str,
+    *,
+    session_id: Optional[str] = None,
+    detail: Optional[str] = None,
+) -> None:
+    """One count of ``name`` (``HandoffCreated``, ``HandoffCancelled`` …), with ``kind`` as a property.
+
+    ``detail`` rides as a property too: the interrupt kind on ``HandoffNeedsInput``, the reason on
+    ``HandoffStopped``. Properties, not dimensions, like every other caller of ``emit_emf_metrics``.
+    """
     emit_emf_metrics(
         _NAMESPACE,
         metrics={name: 1},
-        properties={"handoffKind": kind, "sessionId": session_id},
+        properties={"handoffKind": kind, "sessionId": session_id, "handoffDetail": detail},
         units={name: "Count"},
     )
 

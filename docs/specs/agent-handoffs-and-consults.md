@@ -83,7 +83,7 @@ send-back is a row we can count. **§7 turns those counts into the go/no-go for 
 
 | Phase | What the user gets | New plumbing | Status |
 |---|---|---|---|
-| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | In progress: PR-0.1 built (§11) |
+| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | In progress: PR-0.1 and PR-0.2 built (§11) |
 | **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8) | Proposed |
 | **0c — Suggested handoffs** | The model can offer a chip ("Hand off to Rubric Builder →") without stopping its turn; Start opens the same review sheet | `suggest_handoff` tool, `handoff_suggested` SSE event | Proposed, opt-in |
 | **Gate** | — | — | §7 |
@@ -1434,6 +1434,34 @@ has started", and the only one that spends money while nobody is watching.
     nothing. §4.5 didn't cover that case.
 - **PR-0.2 — `handoff_context` on the invocation path.** Wrapper, `displayText`, acceptance, status writes after
   `done` (with `statusLine` and `waitingOn`), EMF.
+  *Built* (`apis/shared/handoff/turn.py`, wired in `inference_api/chat/routes.py`). Notes for the PRs that follow:
+  - **TTFT.** An ordinary turn pays one `for_turn` call with no IO (~0.6µs measured). On a target's first turn,
+    acceptance (a `GetItem` and the conditional `accept`, on the process-wide cached client) starts as a task
+    at the head of `_guarded_stream`, beside the agent build, and is awaited only where the message is
+    assembled. A target is always a new session, so its build is a cache miss that outlasts the two round
+    trips, and the first token waits for neither. A route test pins the order (start → build → await).
+    Status writes run after the stream ends.
+  - **Status comes from the frames, not the coordinator.** The route feeds every SSE chunk the turn streams to
+    an observer that reads only `tool_group_summary`, the four interrupt events, `stream_error`,
+    `message_stop` and `done`; other frames are skipped before their JSON is parsed (~0.8µs a frame). A
+    disconnect (`CancelledError`/`GeneratorExit`) is `stopped` with `connection_lost`, a cooperative Stop is
+    `user_stopped`, and an error or a stream that never reached `done` is `error`. A pre-flight
+    `oauth_required` (no `interruptId`) paused nothing and is not `needs_input`. One seam in the outermost
+    generator covers every exit arm of the coordinator without touching it.
+  - **`waitingOn` is `{kind, name}`**, not a string: `oauth_consent` + provider, `tool_approval` + tool,
+    `user_question` + the first question's header, `browser_login` + empty. **`statusLine` is the raw latest
+    tool summary**; PR-0.3 adds the "Finished · " prefix.
+  - **Later turns find their handoff from `spawnedFrom` on the B1 snapshot**, so following a target costs no
+    read. `spawnedFrom` is written by a field-level `SET` after acceptance, in the background. Once the row is
+    `done`, or can no longer move, the target's link is marked `settled` and later turns stop writing.
+  - **What is ignored, with a warning, rather than refused:** the field while the flag is off; on a resume or
+    continuation; on a preview session; on a conversation that already took a handoff; a handoff that is not
+    the caller's, is for a different Agent, or was already sent or dismissed. In every case the turn runs as an
+    ordinary turn. A second send from one handoff therefore starts a conversation without context; it never
+    gets the context twice.
+  - **Not yet:** the sent bubble's "Context from *{title}*" label needs display metadata on the persisted user
+    message, or the SPA can read it from `spawnedFrom` on the first turn of a target. PR-0.3 decides which.
+  - `HANDOFFS_ENABLED` is now also written to the AgentCore Runtime, only while on.
 - **PR-0.3 — SPA handoff.** A mid-thread mention opens the review sheet (request, context card, full-prompt
   preview); a no-navigate send; the handoff row as a linked card with title and live status line, live and replayed; completion and needs-input toasts;
   the card on sent bubbles; the unload guard. Verify interrupt-service scoping (§4.3) here.

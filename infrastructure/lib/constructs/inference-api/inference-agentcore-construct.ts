@@ -417,6 +417,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // runs the check and emits `source_provenance`. Written only while ON,
         // so the default costs nothing against the V2 payload budget.
         ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Handoffs (in development): the Runtime accepts `handoff_context` on a
+        // target's first turn and keeps the source's HANDOFF# row current. Written
+        // only while ON, so the default costs nothing against the V2 payload budget.
+        ...(config.handoffs.enabled ? { HANDOFFS_ENABLED: 'true' } : {}),
         // Typed structured extraction: the Runtime mounts `document_extract`,
         // makes the constrained side-channel call, verifies each value through
         // source_provenance and emits `document_extraction`. Written only while

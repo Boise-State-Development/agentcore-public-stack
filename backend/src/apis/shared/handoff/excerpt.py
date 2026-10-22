@@ -166,10 +166,10 @@ def _fit(units: List[_Unit], budget: int) -> List[_Unit]:
     if kept:
         return list(reversed(kept))
     newest = units[-1]
-    return [_Unit(newest.first_turn, newest.last_turn, _clip_middle(newest.text, budget))]
+    return [_Unit(newest.first_turn, newest.last_turn, clip_middle(newest.text, budget))]
 
 
-def _clip_middle(text: str, budget: int) -> str:
+def clip_middle(text: str, budget: int) -> str:
     """Keep the head and tail of ``text`` within ``budget`` characters, marking the cut."""
     if len(text) <= budget:
         return text
@@ -275,4 +275,4 @@ def _range_attr(first: int, last: int) -> str:
     return str(first) if first == last else f"{first}-{last}"
 
 
-__all__ = ["CHARS_PER_TOKEN", "Excerpt", "HANDOFF_EXCERPT_MAX_TOKENS", "render_excerpt"]
+__all__ = ["CHARS_PER_TOKEN", "Excerpt", "HANDOFF_EXCERPT_MAX_TOKENS", "clip_middle", "render_excerpt"]

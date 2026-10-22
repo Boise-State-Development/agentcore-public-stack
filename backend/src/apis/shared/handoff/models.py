@@ -25,6 +25,7 @@ from typing import Dict, FrozenSet, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 HandoffKind = Literal["mention", "suggested", "send_back"]
+WaitingKind = Literal["oauth_consent", "tool_approval", "user_question", "browser_login"]
 HandoffStatus = Literal["open", "running", "needs_input", "done", "stopped", "dismissed"]
 EffectiveHandoffStatus = Literal["open", "running", "needs_input", "done", "stopped", "dismissed", "abandoned"]
 
@@ -50,6 +51,19 @@ TRANSITIONS: Dict[str, FrozenSet[str]] = {
 def sources_of(status: str) -> FrozenSet[str]:
     """Every status a row may be in for a move to ``status`` to be allowed."""
     return frozenset(src for src, targets in TRANSITIONS.items() if status in targets)
+
+
+class WaitingOn(BaseModel):
+    """What a ``needs_input`` handoff is waiting on: the interrupt kind and its display name.
+
+    ``name`` is the provider for a consent, the tool for an approval, the question's header for
+    ``ask_user_question``, and empty for a browser sign-in. Never request or conversation text.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: WaitingKind
+    name: str = ""
 
 
 class TurnsCovered(BaseModel):
@@ -89,7 +103,7 @@ class Handoff(BaseModel):
     context_edited: Optional[bool] = Field(None, alias="contextEdited")
     context_removed: Optional[bool] = Field(None, alias="contextRemoved")
     status_line: Optional[str] = Field(None, alias="statusLine")
-    waiting_on: Optional[str] = Field(None, alias="waitingOn")
+    waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
     stopped_reason: Optional[str] = Field(None, alias="stoppedReason")
 
     def effective_status(self, now: Optional[datetime] = None) -> EffectiveHandoffStatus:
@@ -117,5 +131,7 @@ __all__ = [
     "HandoffStatus",
     "TRANSITIONS",
     "TurnsCovered",
+    "WaitingKind",
+    "WaitingOn",
     "sources_of",
 ]

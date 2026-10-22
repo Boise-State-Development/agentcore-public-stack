@@ -55,6 +55,7 @@ describe('AgentCore Runtime environment variable ceiling', () => {
         enabled: true,
         defaultQuotaHours: 0,
       },
+      handoffs: { enabled: true },
       tokenExchange: {
         url: 'https://tokens.example.com/v2/oauth/token',
         clientId: 'test-client',
