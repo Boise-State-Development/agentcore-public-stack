@@ -2051,10 +2051,6 @@ class StreamCoordinator:
                         "Failed to persist interrupted partial for session %s: %s",
                         session_id, persist_error, exc_info=True,
                     )
-                if partial_persisted:
-                    self._append_interrupted_reply(
-                        agent, session_id, message, tail=tail, history_len=history_len
-                    )
             else:
                 logger.info(
                     "Interruption for session %s — marker only, no synthetic write "
@@ -2191,6 +2187,16 @@ class StreamCoordinator:
                         "Failed to persist interrupted-turn metadata for session %s: %s",
                         session_id, meta_error, exc_info=True,
                     )
+
+            # Last, after metering: the in-flight estimate describes the
+            # request the cut call sent, and its native count is keyed to that
+            # request's message count (``get_projected_input_tokens``). With
+            # the reply appended first the count no longer matched, a first
+            # turn had no fallback, and the stopped call went unmetered.
+            if partial_persisted:
+                self._append_interrupted_reply(
+                    agent, session_id, message, tail=tail, history_len=history_len
+                )
 
         try:
             await asyncio.shield(asyncio.ensure_future(_do()))

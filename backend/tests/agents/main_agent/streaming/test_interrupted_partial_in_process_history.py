@@ -234,3 +234,46 @@ def test_reply_is_not_appended_once_the_conversation_moved():
 
     assert appended is False
     assert [m["content"][0]["text"] for m in agent.messages] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_stopped_call_is_still_metered_from_its_own_request():
+    """The in-flight estimate reads the native count of the request the cut
+    call sent, keyed to that request's message count. Appending the reply
+    before metering changed the count, and a first turn (no usage baseline to
+    fall back on) wrote no cost row at all (dev, 2026-10-22). The append must
+    come after metering."""
+    from agents.main_agent.session.hooks.context_attribution import _SNAPSHOT_FULL_ATTR
+
+    agent = _StrandsLikeAgent([{"role": "user", "content": [{"text": "write me a long story"}]}])
+    setattr(agent, _SNAPSHOT_FULL_ATTR, (len(agent.messages), 4321))
+    stored: Dict[str, Any] = {}
+
+    async def _capture(self, *, calls, per_message_metadata, **kwargs):
+        stored.update(calls=calls, slots=per_message_metadata)
+
+    async def _noop_update(self, **kwargs):
+        return None
+
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=_RecordingPersistSessionManager(),
+    ), patch("apis.shared.sessions.metadata.set_interrupted_turn", _noop_marker), patch.object(
+        StreamCoordinator, "_store_turn_call_metadata", _capture
+    ), patch.object(StreamCoordinator, "_update_session_metadata", _noop_update):
+        await StreamCoordinator()._persist_interruption(
+            agent=agent,
+            session_id="sess-stop",
+            user_id="user-1",
+            partial_text="Chapter one begins with a storm",
+            main_agent_wrapper=object(),
+            current_assistant_message_index=0,
+            per_message_metadata=[{"usage": {}, "metrics": {}, "start_time": 1.0, "end_time": None}],
+        )
+
+    assert stored.get("calls") == [(0, 1)]
+    usage = stored["slots"][0]["usage"]
+    prompt = usage["inputTokens"] + usage["cacheReadInputTokens"] + usage["cacheWriteInputTokens"]
+    assert prompt == 4321
+    # The reply still joins the live conversation, after the row was written.
+    assert [m["role"] for m in agent.messages] == ["user", "assistant"]
