@@ -64,14 +64,15 @@ class ModelPicker(ModalScreen[ModelChoice | None]):
         self._error = error
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="picker-frame"):
-            yield Label("Select a model", id="picker-title")
+        with Vertical(id="picker-frame") as frame:
+            frame.border_title = "Model"
+            yield Label("Which model answers the next turn?", id="picker-title")
             if self._error:
                 # A failed catalogue fetch still shows the picker, because
                 # "System Default" remains selectable and is a working choice.
                 yield Label(self._error, id="picker-error", classes="-error")
             yield OptionList(*self._options(), id="picker-list")
-            yield Label("Enter to select · Esc to cancel", id="picker-help")
+            yield Label("↑↓ move · Enter select · Esc cancel", id="picker-help")
 
     def _options(self) -> list[Option]:
         options = [Option(self._label("System Default", "", ""), id="")]
@@ -80,10 +81,10 @@ class ModelPicker(ModalScreen[ModelChoice | None]):
         return options
 
     def _label(self, name: str, provider: str, model_id: str) -> str:
-        marker = "> " if model_id == self._current else "  "
+        marker = "● " if model_id == self._current else "  "
         # The provider is shown, not hidden, because it is the difference between
         # two models with similar names and it is what actually gets sent.
-        suffix = f"  ({provider})" if provider else ""
+        suffix = f"  [dim]{provider}[/]" if provider else ""
         return f"{marker}{name}{suffix}"
 
     def on_mount(self) -> None:

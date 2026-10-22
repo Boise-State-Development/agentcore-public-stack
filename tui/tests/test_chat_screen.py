@@ -180,7 +180,10 @@ class TestBoot:
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
             await pilot.pause()
-            assert app.chat.query(Notice)
+            # The landing is an empty state, not a notice: nothing on screen
+            # should look like a warning before the user has done anything.
+            assert app.chat.query("#empty-state")
+            assert not app.chat.query(Notice)
             assert app.chat.composer.submit_enabled is True
             assert app.chat.composer.disabled is False
             assert isinstance(app.chat.query_one(StatusBar), StatusBar)

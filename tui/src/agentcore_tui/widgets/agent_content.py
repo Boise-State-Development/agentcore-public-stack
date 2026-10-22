@@ -48,6 +48,42 @@ RESULT_DISPLAY_CHARS = 1200
 #: off screen.
 ARGS_DISPLAY_CHARS = 600
 
+#: The header shows the one argument most likely to say what the call was *for*
+#: — a query, a URL, a path — trimmed to this many characters.
+SUMMARY_CHARS = 56
+
+#: Argument names tried in order for the header summary before falling back to
+#: the first string-valued argument.
+SUMMARY_KEYS = ("query", "q", "search", "url", "path", "file", "name", "title", "prompt", "expression", "code", "command")
+
+
+def summarize_arguments(arguments: dict[str, Any]) -> str:
+    """One short phrase saying what a tool was asked, for the call's header line.
+
+    Picks the most descriptive string argument. Multi-line values are cut at the
+    first line break, because a code cell's first line is a better summary than
+    its first 56 characters.
+    """
+    if not arguments:
+        return ""
+    value: str | None = None
+    for key in SUMMARY_KEYS:
+        preferred = arguments.get(key)
+        if isinstance(preferred, str) and preferred.strip():
+            value = preferred
+            break
+    if value is None:
+        for candidate in arguments.values():
+            if isinstance(candidate, str) and candidate.strip():
+                value = candidate
+                break
+    if value is None:
+        return ""
+    first_line: str = value.strip().splitlines()[0].strip()
+    if len(first_line) > SUMMARY_CHARS:
+        return first_line[: SUMMARY_CHARS - 1].rstrip() + "…"
+    return first_line
+
 
 def _format_arguments(arguments: dict[str, Any]) -> str:
     """Render tool arguments as compact, readable JSON.
@@ -90,7 +126,7 @@ class ToolCall(Vertical):
         self._result_body: Static | None = None
 
     def compose(self) -> ComposeResult:
-        self._header = Label(self._header_text(), classes="tool-call-header")
+        self._header = Label(self._header_text(), classes="tool-call-header", markup=False)
         yield self._header
 
         self._args_body = Static(self._args_text(), markup=False, classes="tool-call-args")
@@ -98,7 +134,7 @@ class ToolCall(Vertical):
         detail = Collapsible(
             self._args_body,
             self._result_body,
-            title="Details",
+            title="details",
             collapsed=True,
             classes="tool-call-detail",
         )
@@ -112,11 +148,14 @@ class ToolCall(Vertical):
             return "✗"
         if self._record.finished:
             return "✓"
-        return "…"
+        return "◌"
 
     def _header_text(self) -> str:
         name = self._record.name or "tool"
         parts = [f"{self._status_glyph()} {name}"]
+        summary = summarize_arguments(self._record.arguments)
+        if summary:
+            parts.append(f"· {summary}")
         if not self._record.finished and self._record.progress:
             parts.append(f"— {self._record.progress}")
         elif self._record.is_error:
@@ -183,7 +222,7 @@ class Citations(Vertical):
             body = "\n\n".join(f"{c.file_name or c.document_id}:\n{_truncate(c.text.strip(), 400)}" for c in excerpts)
             yield Collapsible(
                 Static(body, markup=False),
-                title="Excerpts",
+                title="excerpts",
                 collapsed=True,
                 classes="citations-detail",
             )

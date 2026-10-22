@@ -36,18 +36,17 @@ from ..credentials import CredentialSource
 from ..errors import AgentCoreTuiError, ConfigError
 from ..turn import FLUSH_INTERVAL, AgentClientSupplier, AgentTurnController, BaseTurnController, ClientSupplier, TurnController
 from ..usage import Usage
-from ..widgets import AssistantMessage, Composer, Notice, StatusBar, ToolCall, UserMessage
+from ..widgets import AssistantMessage, Composer, EmptyState, Notice, StatusBar, ToolCall, UserMessage, short_model
 from .conversations import ConversationList
 from .model_picker import ModelChoice, ModelPicker
 from .tool_picker import ToolPicker
 
 logger = logging.getLogger(__name__)
 
-WELCOME = "Ask anything. Enter sends; Alt+Enter (or Ctrl+O) starts a new line."
-
-#: Shown instead of WELCOME when the agent is reachable, because the difference
-#: is the whole point of signing in.
-WELCOME_AGENT = "Ask anything — tools, memory and your saved conversations are available. Enter sends; Alt+Enter starts a new line."
+#: Composer hints. Shown in the frame's bottom edge so they are always visible
+#: without taking a transcript row.
+COMPOSER_HINT = "Enter to send · Alt+Enter for a new line"
+COMPOSER_HINT_BUSY = "Esc to stop"
 
 
 class ChatScreen(Screen[None]):
@@ -160,8 +159,19 @@ class ChatScreen(Screen[None]):
             )
 
         self.composer.focus()
-        await self.transcript.mount(Notice(WELCOME_AGENT if self._agent_mode else WELCOME))
+        self._set_composer_chrome()
+        await self.transcript.mount(EmptyState(agent=self._agent_mode))
         self.status.set_state("Ready")
+
+    def _set_composer_chrome(self, *, busy: bool = False) -> None:
+        """Model in the top edge of the composer, the key hint in the bottom edge."""
+        composer = self.composer
+        composer.border_title = short_model(self._config.model_id) if self._config.model_id else "System Default"
+        composer.border_subtitle = COMPOSER_HINT_BUSY if busy else COMPOSER_HINT
+
+    async def _clear_empty_state(self) -> None:
+        for widget in self.query("#empty-state"):
+            await widget.remove()
 
     async def _show_no_chat_transport(self) -> None:
         """Signed in, but this screen cannot use a session to chat.
@@ -320,6 +330,7 @@ class ChatScreen(Screen[None]):
     async def _start_turn(self, prompt: str) -> None:
         await self._turn.begin(prompt)
 
+        await self._clear_empty_state()
         await self.transcript.mount(UserMessage(prompt))
         pending = AssistantMessage(self._config.model_id)
         await self.transcript.mount(pending)
@@ -327,6 +338,7 @@ class ChatScreen(Screen[None]):
 
         self.composer.submit_enabled = False
         self.composer.add_class("-busy")
+        self._set_composer_chrome(busy=True)
         self.refresh_bindings()
 
         self._flush_timer = self.set_interval(FLUSH_INTERVAL, self._turn.flush)
@@ -346,6 +358,7 @@ class ChatScreen(Screen[None]):
         self._pending = None
         self.composer.submit_enabled = True
         self.composer.remove_class("-busy")
+        self._set_composer_chrome()
         self.status.set_turns(self._store.turns)
         self.refresh_bindings()
         if self.is_attached:
@@ -393,7 +406,8 @@ class ChatScreen(Screen[None]):
             await self.action_cancel_turn()
         self._store.reset()
         await self.transcript.remove_children()
-        await self.transcript.mount(Notice(WELCOME))
+        self._tool_widgets.clear()
+        await self.transcript.mount(EmptyState(agent=self._agent_mode))
         self.status.set_turns(0)
         self.status.set_usage(None)
         self.status.set_state("Ready")
@@ -531,6 +545,8 @@ class ChatScreen(Screen[None]):
         self._turn = self._build_controller()
         await self._discard_client()
         self.status.set_model(choice.model_id or "System Default")
+        if self.is_attached and self._config.is_complete:
+            self._set_composer_chrome(busy=self._turn.busy)
 
     def _build_controller(self) -> BaseTurnController[Any]:
         """The one place a controller is constructed.

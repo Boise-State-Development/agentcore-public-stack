@@ -82,6 +82,21 @@ def _parse(timestamp: str) -> datetime | None:
 GROUP_ORDER = ("Today", "Yesterday", "Last 7 days", "Last 30 days", "Older")
 
 
+def _relative_day(timestamp: str, *, now: datetime | None = None) -> str:
+    """``14:05`` for today, ``Tue`` within the week, ``12 Mar`` otherwise."""
+    moment = _parse(timestamp)
+    if moment is None:
+        return ""
+    local = moment.astimezone()
+    reference = (now or datetime.now(timezone.utc)).astimezone()
+    days = (reference.date() - local.date()).days
+    if days <= 0:
+        return local.strftime("%H:%M")
+    if days < 7:
+        return local.strftime("%a")
+    return local.strftime("%-d %b")
+
+
 class ConfirmDelete(ModalScreen[bool]):
     """Confirms one deletion. Destructive and not undoable from here."""
 
@@ -92,10 +107,11 @@ class ConfirmDelete(ModalScreen[bool]):
         self._title = title
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-frame"):
+        with Vertical(id="confirm-frame") as frame:
+            frame.border_title = "Delete"
             yield Label("Delete this conversation?", id="picker-title")
-            yield Static(self._title, id="confirm-subject")
-            yield Label("This also removes it from the web app.", id="picker-help")
+            yield Static(self._title, id="confirm-subject", markup=False)
+            yield Label("This also removes it from the web app. It cannot be undone.", id="picker-help")
             with Horizontal(id="confirm-actions"):
                 yield Button("Delete", id="confirm-yes", variant="error")
                 yield Button("Cancel", id="confirm-no", variant="primary")
@@ -121,7 +137,8 @@ class RenameConversation(ModalScreen[str | None]):
         self._current = current
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="rename-frame"):
+        with Vertical(id="rename-frame") as frame:
+            frame.border_title = "Rename"
             yield Label("Rename conversation", id="picker-title")
             yield Input(value=self._current, id="rename-input")
             yield Label("Enter to save · Esc to cancel", id="picker-help")
@@ -150,10 +167,21 @@ class ConversationRow(ListItem):
         yield Static(self._row_text(), classes="conversation-title")
 
     def _row_text(self) -> str:
-        marker = "● " if self.summary.unread else "  "
-        counts = f"{self.summary.message_count} msg" if self.summary.message_count else "empty"
-        context = f" · {self.summary.context_percent}% ctx" if self.summary.context_percent is not None else ""
-        return f"{marker}{self.summary.title}\n   {counts}{context}"
+        """Title on the first line; a muted meta line beneath.
+
+        Markup is built here rather than trusting the title, which is user text:
+        it is escaped so a conversation called ``[bold]`` renders literally.
+        """
+        from rich.markup import escape
+
+        marker = "[$accent]●[/] " if self.summary.unread else "  "
+        counts = f"{self.summary.message_count} messages" if self.summary.message_count != 1 else "1 message"
+        if not self.summary.message_count:
+            counts = "empty"
+        context = f" · {self.summary.context_percent}% of context" if self.summary.context_percent is not None else ""
+        when = _relative_day(self.summary.last_message_at)
+        meta = " · ".join(part for part in (when, counts + context) if part)
+        return f"{marker}{escape(self.summary.title)}\n  [dim]{meta}[/]"
 
     def refresh_title(self) -> None:
         self.query_one(Static).update(self._row_text())
@@ -168,7 +196,7 @@ class GroupHeading(ListItem):
         self._label = label
 
     def compose(self) -> ComposeResult:
-        yield Static(self._label, classes="conversation-group-label")
+        yield Static(self._label.upper(), classes="conversation-group-label", markup=False)
 
 
 class ConversationList(Screen[None]):
@@ -259,6 +287,14 @@ class ConversationList(Screen[None]):
             await self.list_view.append(GroupHeading(heading))
             for summary in group:
                 await self.list_view.append(ConversationRow(summary))
+
+        # Land on the first conversation, not the heading above it, so Enter
+        # opens something straight away.
+        for index, item in enumerate(self.list_view.children):
+            if isinstance(item, ConversationRow):
+                self.list_view.index = index
+                break
+        self.list_view.focus()
 
         more = " · press m for more" if self._next_token else ""
         self.status.remove_class("-error")

@@ -57,8 +57,9 @@ class ToolPicker(ModalScreen[dict[str, bool] | None]):
         self._error = error
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="tool-picker-frame"):
-            yield Label("Tools the agent may use", id="picker-title")
+        with Vertical(id="tool-picker-frame") as frame:
+            frame.border_title = "Tools"
+            yield Label("Tools the agent may use on the next turn", id="picker-title")
             if self._error:
                 yield Label(self._error, id="picker-error", classes="-error")
             if not self._tools:
@@ -75,34 +76,37 @@ class ToolPicker(ModalScreen[dict[str, bool] | None]):
                 yield Button("Cancel", id="tool-cancel")
 
     def _selections(self) -> list[Selection[str]]:
-        selections: list[Selection[str]] = []
-        current_category = ""
-        for tool in self._tools:
-            if tool.category and tool.category != current_category:
-                current_category = tool.category
-                # A disabled-looking header row: SelectionList has no group
-                # concept, so the category is carried as an unselectable label
-                # prefix on the first tool of each group.
-                selections.append(Selection(f"── {current_category} ──", f"__header__{current_category}", False, disabled=True))
-            selections.append(Selection(self._label(tool), tool.tool_id, tool.enabled))
-        return selections
+        """One row per tool, sorted by category.
 
-    def _label(self, tool: Tool) -> str:
-        parts = [tool.name]
+        No header rows: SelectionList has no group concept, and a disabled
+        Selection still draws a checkbox, which made every heading look like a
+        tool that could not be switched on. The category rides on each row
+        instead, padded so the names line up in a column.
+        """
+        width = max((len(tool.category) for tool in self._tools), default=0)
+        return [Selection(self._label(tool, width), tool.tool_id, tool.enabled) for tool in self._tools]
+
+    def _label(self, tool: Tool, category_width: int = 0) -> str:
+        from rich.markup import escape
+
+        parts = []
+        if category_width:
+            parts.append(f"[dim]{escape(tool.category.ljust(category_width))}[/]")
+        parts.append(f"[b]{escape(tool.name)}[/]")
         if not tool.available:
             # Surfaced rather than hidden: a tool the server reports unhealthy
             # can still be selected, and the turn will simply not use it.
-            parts.append(f"[{tool.status}]")
+            parts.append(f"[$warning]{escape(tool.status)}[/]")
         if tool.requires_oauth_provider:
             # Worth flagging here: choosing it may pause a turn for consent,
             # which the terminal cannot complete on its own.
-            parts.append("(needs sign-in)")
+            parts.append("[dim]needs sign-in[/]")
         if tool.description:
-            parts.append(f"— {tool.description[:60]}")
-        return " ".join(parts)
+            parts.append(f"[dim]{escape(tool.description[:60])}[/]")
+        return "  ".join(parts)
 
     def _help_text(self) -> str:
-        return f"Space toggles · Ctrl+A all · Ctrl+D none · Ctrl+S save · Esc cancel   ({len(self._tools)} available)"
+        return f"Space toggle · Ctrl+A all · Ctrl+D none · Ctrl+S save · Esc cancel   ({len(self._tools)} available)"
 
     def on_mount(self) -> None:
         if self._tools:

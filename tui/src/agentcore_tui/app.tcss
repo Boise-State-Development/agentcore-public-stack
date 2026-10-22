@@ -4,6 +4,18 @@
  * bubbles, generous vertical rhythm, and no decoration that does not carry
  * information. Colours come from Textual theme variables so every built-in
  * theme (including ansi-dark / ansi-light for limited terminals) stays legible.
+ *
+ * Two rules keep the whole thing coherent:
+ *
+ * 1. One accent per meaning. $primary is "you" and the thing you act on next
+ *    (composer, highlighted row). $accent is the assistant. $success is work
+ *    that finished, $warning is a soft limit, $error is a failure. Nothing else
+ *    gets a colour.
+ * 2. Every container between #transcript and its text has `height: auto`.
+ *    Textual containers default to `height: 1fr`, which makes a message fill
+ *    the viewport instead of sizing to content; the transcript's virtual size
+ *    then never exceeds one screen and long answers are clipped and
+ *    unreachable. That shipped once.
  */
 
 Screen {
@@ -11,20 +23,60 @@ Screen {
     background: $background;
 }
 
-#transcript {
-    padding: 1 2 0 2;
-    scrollbar-size-vertical: 1;
+Header {
+    background: $background;
+    color: $text-muted;
 }
 
-/* ------------------------------------------------------------------ messages */
+HeaderTitle {
+    color: $text;
+}
 
-/* `height: auto` is load-bearing. Textual containers (Vertical) default to
- * `height: 1fr`, which makes each message expand to fill the transcript's
- * viewport instead of sizing to its content. The scroll container's virtual
- * size then never exceeds one screen, max_scroll_y stays 0, and everything
- * past the first screenful is clipped and unreachable — long answers look
- * like they stopped mid-sentence. Every widget between #transcript and the
- * text needs to size to content for the transcript to scroll. */
+Footer {
+    background: $surface;
+}
+
+/* ----------------------------------------------------------------- transcript */
+
+#transcript {
+    padding: 1 3 0 3;
+    scrollbar-size-vertical: 1;
+    scrollbar-gutter: stable;
+}
+
+/* Shown until the first message: a quiet landing rather than a notice bar. */
+#empty-state {
+    width: 100%;
+    height: 1fr;
+    align: center middle;
+}
+
+#empty-state > * {
+    width: auto;
+    height: auto;
+}
+
+#empty-state .wordmark {
+    color: $accent;
+    text-style: bold;
+}
+
+#empty-state .tagline {
+    color: $text;
+    margin-top: 1;
+}
+
+#empty-state .hints {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#empty-state .hint-key {
+    color: $primary;
+}
+
+/* ------------------------------------------------------------------- messages */
+
 .message {
     width: 100%;
     height: auto;
@@ -33,14 +85,14 @@ Screen {
 
 .message-role {
     text-style: bold;
-    padding-left: 1;
     height: auto;
 }
 
 .user-message {
-    border-left: thick $primary;
+    border-left: wide $primary;
     padding: 0 1;
     height: auto;
+    background: $boost;
 }
 
 .user-message .message-role {
@@ -48,7 +100,7 @@ Screen {
 }
 
 .assistant-message {
-    border-left: thick $accent;
+    border-left: wide $accent;
     padding: 0 1;
     height: auto;
 }
@@ -71,17 +123,66 @@ Screen {
     height: auto;
 }
 
+/* ------------------------------------------------------------ collapsibles */
+
+/* Textual's Collapsible is a panel: surface background, a rule on top, inner
+ * padding. Inside a transcript that reads as a second message. Flatten every
+ * one into a single muted toggle line that opens in place. */
+.message Collapsible,
+.notice Collapsible {
+    background: transparent;
+    border-top: none;
+    padding: 0;
+    margin: 0;
+    height: auto;
+}
+
+.message Collapsible:focus-within,
+.notice Collapsible:focus-within {
+    background-tint: $foreground 0%;
+}
+
+.message CollapsibleTitle,
+.notice CollapsibleTitle {
+    padding: 0;
+    color: $text-muted;
+    text-style: none;
+}
+
+.message CollapsibleTitle:hover,
+.notice CollapsibleTitle:hover {
+    background: transparent;
+    color: $text;
+}
+
+.message CollapsibleTitle:focus,
+.notice CollapsibleTitle:focus {
+    background: transparent;
+    color: $text;
+    text-style: underline;
+}
+
+/* Collapsible renders its own contents container; it needs to size to content
+ * too or the pane clips its body when expanded. */
+.message Contents,
+.notice Contents {
+    height: auto;
+    padding: 0 0 0 2;
+}
+
 .reasoning {
     margin: 0 0 1 0;
-    height: auto;
     color: $text-muted;
 }
 
 .reasoning Markdown {
     background: transparent;
     height: auto;
+    padding: 0;
     color: $text-muted;
 }
+
+/* -------------------------------------------------------------------- notices */
 
 /* System / error notices rendered inline in the transcript. */
 .notice {
@@ -89,12 +190,12 @@ Screen {
     height: auto;
     padding: 0 1;
     margin-bottom: 1;
-    border-left: thick $warning;
+    border-left: wide $warning;
     color: $text-muted;
 }
 
 .notice.-error {
-    border-left: thick $error;
+    border-left: wide $error;
     color: $error;
 }
 
@@ -106,41 +207,38 @@ Screen {
 
 /* ------------------------------------------------------- agent-stream content */
 
-/* Everything in this section sets `height: auto` for the reason documented on
- * `.message` above: a `1fr` container between #transcript and its text stops
- * the transcript from ever being scrollable. */
-
-/* Tool calls. A dim left rule while running, accent once it succeeded, error
- * colour if it failed — so a glance down the transcript shows where work
- * happened and whether any of it broke. */
+/* Tool calls. One line — glyph, name, what it was asked — plus a muted toggle
+ * for the payload. A dim rule while running, success once it returned, error
+ * if it failed, so a glance down the transcript shows where work happened and
+ * whether any of it broke. */
 .tool-call {
     width: 100%;
     height: auto;
     padding: 0 1;
     margin-bottom: 1;
-    border-left: thick $surface-lighten-2;
+    border-left: wide $surface-lighten-2;
     color: $text-muted;
 }
 
 .tool-call.-finished {
-    border-left: thick $success;
+    border-left: wide $success;
 }
 
 .tool-call.-error {
-    border-left: thick $error;
+    border-left: wide $error;
+}
+
+.tool-call.-error .tool-call-header {
     color: $error;
 }
 
 .tool-call-header {
     height: auto;
-    text-style: bold;
-    padding-left: 1;
+    color: $text;
 }
 
 .tool-call-detail {
     height: auto;
-    margin: 0;
-    color: $text-muted;
 }
 
 .tool-call-args,
@@ -149,20 +247,13 @@ Screen {
     color: $text-muted;
 }
 
-/* Collapsible renders its own contents container; it needs to size to content
- * too or the pane clips its body when expanded. */
-.tool-call-detail Contents,
-.citations-detail Contents {
-    height: auto;
-}
-
 /* Citations. */
 .citations {
     width: 100%;
     height: auto;
     padding: 0 1;
     margin-bottom: 1;
-    border-left: thick $secondary;
+    border-left: wide $secondary;
     color: $text-muted;
 }
 
@@ -177,13 +268,13 @@ Screen {
 
 .citations-detail {
     height: auto;
-    margin: 0;
 }
 
 /* Quota. Warnings inherit `.notice`'s warning rule; a hard stop adds
  * `.-error`, which `.notice.-error` already colours. */
 .quota-notice {
     height: auto;
+    color: $text;
 }
 
 .quota-notice .message-role {
@@ -199,7 +290,7 @@ Screen {
  * reading as something that went wrong. */
 .compaction-notice {
     height: auto;
-    border-left: thick $surface-lighten-2;
+    border-left: wide $surface-lighten-2;
 }
 
 /* Artifacts. */
@@ -208,7 +299,7 @@ Screen {
     height: auto;
     padding: 0 1;
     margin-bottom: 1;
-    border-left: thick $success;
+    border-left: wide $success;
 }
 
 .artifact-card .message-role {
@@ -224,7 +315,7 @@ Screen {
 /* Interrupts are actionable, not failures. */
 .interrupt-notice {
     height: auto;
-    border-left: thick $primary;
+    border-left: wide $primary;
     color: $text;
 }
 
@@ -244,16 +335,21 @@ Screen {
 
 /* ------------------------------------------------------------------- composer */
 
+/* Docked bottom, as is the Footer; two widgets docked to the same edge overlap,
+ * so the bottom padding is exactly the Footer's height and keeps the status
+ * bar above it. */
 #composer-area {
     dock: bottom;
     height: auto;
     max-height: 14;
-    padding: 0 2 1 2;
+    padding: 0 3 1 3;
     background: $background;
 }
 
 #composer {
     border: round $primary;
+    border-title-color: $primary;
+    border-subtitle-color: $text-muted;
     height: auto;
     max-height: 10;
     padding: 0 1;
@@ -261,28 +357,47 @@ Screen {
 }
 
 #composer:focus {
-    border: round $accent;
+    border: round $primary-lighten-1;
 }
 
 /* $text-muted resolves to `auto 60%`, which `color` accepts but `border` does
  * not — borders need a concrete color, so use a surface-derived one. */
 #composer.-busy {
     border: round $surface-lighten-3;
+    border-title-color: $accent;
 }
 
+#composer:disabled {
+    border: round $surface-lighten-2;
+}
+
+/* Two halves: state on the left, model and token counts on the right. The bar
+ * itself is quiet — the footer directly below is the one with a background. */
 #status-bar {
     height: 1;
     padding: 0 1;
     color: $text-muted;
-    background: $panel;
 }
 
-#status-bar.-error {
+#status-state {
+    width: auto;
+    height: 1;
+    color: $text-muted;
+}
+
+#status-bar.-busy #status-state {
+    color: $accent;
+}
+
+#status-bar.-error #status-state {
     color: $error;
 }
 
-#status-bar.-busy {
-    color: $accent;
+#status-meta {
+    width: 1fr;
+    height: 1;
+    text-align: right;
+    color: $text-muted;
 }
 
 /* --------------------------------------------------------------------- splash */
@@ -326,34 +441,173 @@ Splash #splash-hint {
     margin-top: 1;
 }
 
-/* --------------------------------------------------------------- model picker */
+/* --------------------------------------------------------------------- modals */
 
-ModelPicker {
+/* Every dialog shares one frame: a rounded panel floating over a dimmed chat,
+ * a bold title, muted help text, and actions bottom-right. */
+ModalScreen {
     align: center middle;
+    background: $background 60%;
 }
 
-ModelPicker > #picker-frame {
-    width: 80;
-    max-width: 90%;
+#picker-frame,
+#tool-picker-frame,
+#confirm-frame,
+#rename-frame {
+    width: 76;
+    max-width: 92%;
     height: auto;
-    max-height: 20;
-    border: round $accent;
+    max-height: 90%;
+    border: round $primary;
+    border-title-color: $text-muted;
     background: $surface;
     padding: 1 2;
 }
 
-ModelPicker #picker-title {
+#tool-picker-frame {
+    width: 96;
+}
+
+#confirm-frame {
+    width: 60;
+    border: round $error;
+}
+
+#picker-title {
+    width: 100%;
+    height: auto;
     text-style: bold;
+    color: $text;
     margin-bottom: 1;
 }
 
-ModelPicker OptionList {
+#picker-help {
+    width: 100%;
     height: auto;
-    max-height: 12;
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#picker-error,
+#tool-picker-empty {
+    width: 100%;
+    height: auto;
+    color: $error;
+    margin-bottom: 1;
+}
+
+#tool-picker-empty {
+    color: $text-muted;
+}
+
+#confirm-subject {
+    width: 100%;
+    height: auto;
+    color: $text;
+    text-style: bold;
+}
+
+/* Lists inside dialogs lose their own chrome — the frame is the border. */
+ModalScreen OptionList,
+ModalScreen SelectionList {
+    height: auto;
+    max-height: 16;
+    border: none;
+    padding: 0;
     background: transparent;
 }
 
-ModelPicker #picker-help {
-    color: $text-muted;
+ModalScreen OptionList:focus,
+ModalScreen SelectionList:focus {
+    border: none;
+    background-tint: $foreground 0%;
+}
+
+#tool-picker-body {
+    height: auto;
+    max-height: 18;
+    scrollbar-size-vertical: 1;
+}
+
+#rename-input {
+    width: 100%;
+    border: tall $surface-lighten-2;
+    background: $background;
+}
+
+#rename-input:focus {
+    border: tall $primary;
+}
+
+#tool-picker-actions,
+#confirm-actions {
+    width: 100%;
+    height: auto;
+    align-horizontal: right;
     margin-top: 1;
+}
+
+#tool-picker-actions Button,
+#confirm-actions Button {
+    min-width: 12;
+    margin-left: 1;
+}
+
+/* -------------------------------------------------------------- conversations */
+
+#conversation-list {
+    background: transparent;
+    padding: 0 2;
+    scrollbar-size-vertical: 1;
+}
+
+#conversation-list > ListItem {
+    padding: 0 1;
+}
+
+/* Date headings are landmarks, not rows: spaced above, never highlighted. */
+.conversation-group {
+    margin-top: 1;
+    padding: 0;
+}
+
+#conversation-list > .conversation-group.-highlight,
+#conversation-list:focus > .conversation-group.-highlight {
+    background: transparent;
+}
+
+.conversation-group-label {
+    color: $text-muted;
+    text-style: bold;
+}
+
+.conversation-row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#conversation-list > .conversation-row.-highlight {
+    background: $boost;
+    color: $text;
+}
+
+#conversation-list:focus > .conversation-row.-highlight {
+    background: $primary 20%;
+    color: $text;
+    text-style: none;
+}
+
+.conversation-title {
+    height: auto;
+}
+
+#conversation-status {
+    width: 100%;
+    height: 1;
+    padding: 0 3;
+    color: $text-muted;
+}
+
+#conversation-status.-error {
+    color: $error;
 }

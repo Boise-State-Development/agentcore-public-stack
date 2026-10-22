@@ -292,6 +292,20 @@ class TestConversationList:
             assert "2 conversation(s)" in status_text(screen)
         await api.aclose()
 
+    async def test_the_first_conversation_is_highlighted_not_its_heading(self) -> None:
+        """Enter must open something immediately; the heading row is disabled."""
+        api = catalog_for(routing_handler(sessions=[session_wire("s1", "Only thing")]))
+        screen = ConversationList(lambda: api, on_open=Opened())
+        app = Host()
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+            selected = screen.selected()
+            assert selected is not None
+            assert selected.title == "Only thing"
+        await api.aclose()
+
     async def test_an_empty_list_says_so_rather_than_looking_broken(self) -> None:
         api = catalog_for(routing_handler(sessions=[]))
         screen = ConversationList(lambda: api, on_open=Opened())

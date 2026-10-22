@@ -6,6 +6,8 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Collapsible, Label, Markdown, Static
 
+from .status import short_model
+
 
 class UserMessage(Vertical):
     """A single user turn.
@@ -53,21 +55,8 @@ class AssistantMessage(Vertical):
         yield body
 
     def _short_model_name(self) -> str:
-        """Trim a Bedrock model ID down to something readable in a label.
-
-        ``us.anthropic.claude-haiku-4-5-20251001-v1:0`` -> ``claude-haiku-4-5``
-        """
-        name = self._model_id.rsplit(".", 1)[-1]
-        parts = name.split("-")
-        keep: list[str] = []
-        for part in parts:
-            # Stop at the date stamp / version suffix.
-            if part.isdigit() and len(part) == 8:
-                break
-            if part.startswith("v") and part[1:].split(":")[0].isdigit():
-                break
-            keep.append(part)
-        return "-".join(keep) or name
+        """The model's display name, trimmed of its region and version stamp."""
+        return short_model(self._model_id)
 
     async def append_text(self, chunk: str) -> None:
         """Append a chunk of answer markdown."""
@@ -101,3 +90,28 @@ class Notice(Vertical):
         yield Static(self._message, markup=False)
         if self._hint:
             yield Static(self._hint, classes="notice-hint", markup=False)
+
+
+class EmptyState(Vertical):
+    """What an empty conversation shows: a wordmark, one line of intent, the keys.
+
+    Replaces a welcome *notice*. A notice has a coloured rule and sits in the
+    transcript's flow, so the first thing a new user saw was something that
+    looked like a warning. This is centred, quiet, and removed by the first
+    message.
+    """
+
+    def __init__(self, *, agent: bool) -> None:
+        super().__init__(id="empty-state")
+        self._agent = agent
+
+    def compose(self) -> ComposeResult:
+        yield Static("AgentCore", classes="wordmark", markup=False)
+        if self._agent:
+            yield Static("Ask anything — tools, memory and your saved conversations are here.", classes="tagline", markup=False)
+        else:
+            yield Static("Ask anything.", classes="tagline", markup=False)
+        yield Static(
+            "[$primary]Enter[/] send   [$primary]Alt+Enter[/] new line   [$primary]F2[/] model   [$primary]F3[/] tools   [$primary]F4[/] chats   [$primary]F1[/] palette",
+            classes="hints",
+        )
