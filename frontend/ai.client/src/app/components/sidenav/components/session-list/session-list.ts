@@ -34,6 +34,9 @@ export type SessionListEntry =
   | { kind: 'session'; session: SessionMetadata }
   | { kind: 'project'; projectId: string; name: string; sessions: SessionMetadata[] };
 
+/** The status dot a conversation row shows, if any (see `rowIndicator`). */
+export type SessionRowIndicator = 'streaming' | 'awaiting-input' | 'unread' | null;
+
 /** Where a project's group sits: where its most recent task in the bucket would. */
 export function groupProjectSessions(
   sessions: SessionMetadata[],
@@ -329,6 +332,30 @@ export class SessionList {
    */
   protected isSessionStreaming(sessionId: string): boolean {
     return this.chatStateService.isSessionLoading(sessionId);
+  }
+
+  /**
+   * Whether this conversation's turn is paused waiting on the user (OAuth
+   * consent, tool approval, a clarifying question, a browser sign-in), which
+   * shows the amber dot. Precedence on the row: streaming > awaiting input >
+   * unread. The server derives `awaitingInput` only while the pause can still
+   * be resumed; ChatStateService layers this tab's live knowledge on top (a
+   * background stream that just ended on a prompt, or a prompt just answered).
+   */
+  protected isAwaitingInput(session: SessionMetadata): boolean {
+    return this.chatStateService.awaitingInputFor(session) !== null;
+  }
+
+  /**
+   * The one status dot a row shows, highest first: a streaming response, a
+   * turn paused on the user, then unread. The template draws exactly this, so
+   * the order lives here and nowhere else.
+   */
+  protected rowIndicator(session: SessionMetadata): SessionRowIndicator {
+    if (this.isSessionStreaming(session.sessionId)) return 'streaming';
+    if (this.isAwaitingInput(session)) return 'awaiting-input';
+    if (this.shouldShowUnreadDot(session)) return 'unread';
+    return null;
   }
 
   /**
