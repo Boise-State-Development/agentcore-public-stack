@@ -826,6 +826,25 @@ def client_turn_timing_enabled() -> bool:
     return os.environ.get("CLIENT_TURN_TIMING_ENABLED", "").strip().lower() != "false"
 
 
+def handoffs_enabled() -> bool:
+    """Whether a mid-thread ``@``-mention hands off with context instead of sending at once.
+
+    ``docs/specs/agent-handoffs-and-consults.md`` Phase 0. Gates app-api's
+    ``/sessions/{id}/handoffs`` routes (404 after authentication while off),
+    and, from PR-0.2, the Runtime's acceptance of ``handoff_context`` and
+    ``deliveries`` on a turn, which a flag-off server ignores with a warning
+    rather than refusing, so a stale SPA never bricks a thread. **Opt-in while
+    the feature is in development** (CLAUDE.md "Feature flags"): only
+    ``"true"`` (case-insensitive) enables it; unset or anything else is off.
+    CDK sets it on app-api from ``config.handoffs.enabled``. The SPA's matching
+    switch will be ``features.handoffs``.
+
+    A **feature switch** once finished: off is today's immediate handoff into
+    a new conversation, which is a product choice a deployment may keep.
+    """
+    return os.environ.get("HANDOFFS_ENABLED", "").strip().lower() == "true"
+
+
 def session_prewarm_enabled() -> bool:
     """Whether app-api warms a conversation's AgentCore Runtime session ahead of its first send.
 

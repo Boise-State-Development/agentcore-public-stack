@@ -1,7 +1,7 @@
 """What deleting a conversation removes, in one place.
 
 ``SessionService.delete_session`` only soft-deletes the row. Everything else a
-conversation left behind goes in a cascade of five cleanups:
+conversation left behind goes in a cascade of six cleanups:
 
 1. AgentCore Memory: the session's short-term events and its summary records.
 2. The session's uploaded files (S3 objects, metadata rows, quota).
@@ -9,10 +9,13 @@ conversation left behind goes in a cascade of five cleanups:
 4. Artifact shares from the session, scoped to the owner.
 5. The session's archived turns. Each S3 deletion raises *Object Deleted*,
    which is how the conversation-search index drops the turn.
+6. Handoffs opened from the session (``HANDOFF#`` rows), which carry the
+   request the user typed for the Agent. The Agent's own conversation is a
+   conversation of its own and is not touched.
 
 Three callers run it: the single delete route, the bulk delete route, and the
 retention pruner (``apis/app_api/conversation_index/session_pruner.py``). They
-all go through :class:`SessionDeleteCascade` so a sixth cleanup added later
+all go through :class:`SessionDeleteCascade` so a seventh cleanup added later
 cannot reach two of them and miss the third.
 
 The routes queue the steps as FastAPI background tasks so the response does
@@ -35,14 +38,22 @@ from typing import Any, Callable, List, Tuple
 logger = logging.getLogger(__name__)
 
 
+def delete_session_handoffs(user_id: str, session_id: str) -> int:
+    """Delete the ``HANDOFF#`` rows opened from a conversation."""
+    from apis.shared.handoff import get_handoff_store
+
+    return get_handoff_store().delete_for_session(user_id, session_id)
+
+
 @dataclass(frozen=True)
 class SessionDeleteCascade:
-    """The five cleanups that follow a soft delete. See the module docstring."""
+    """The six cleanups that follow a soft delete. See the module docstring."""
 
     session_service: Any
     share_service: Any
     artifact_share_service: Any
     delete_archive: Callable[[str, str], int]
+    delete_handoffs: Callable[[str, str], int] = delete_session_handoffs
 
     def steps(self, user_id: str, session_id: str) -> List[Tuple[str, Callable[..., Any], Tuple[Any, ...]]]:
         """``(name, callable, args)`` for each cleanup, in order."""
@@ -56,6 +67,8 @@ class SessionDeleteCascade:
             # Not gated on the index flag: a deployment that turned indexing off
             # must still remove what it already wrote.
             ("conversation_archive", self.delete_archive, (user_id, session_id)),
+            # Not gated on the handoffs flag, for the same reason as the archive.
+            ("handoffs", self.delete_handoffs, (user_id, session_id)),
         ]
 
     def queue(self, background_tasks: Any, user_id: str, session_id: str) -> None:

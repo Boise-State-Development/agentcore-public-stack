@@ -2438,6 +2438,26 @@ async def _backfill_session_aggregates(
         logger.warning("backfill_session_aggregates failed for %s: %s", session_id, e)
 
 
+async def get_session_compaction(session_id: str, user_id: str) -> Tuple[int, Optional[str]]:
+    """The applied compaction checkpoint and its summary for a session, or ``(0, None)``.
+
+    ``SessionMetadata`` deliberately carries only ``totalSummarizedTurns`` from
+    the nested ``compaction`` map. A handoff's excerpt needs the applied
+    checkpoint (an absolute message index) and the summary that stands in for
+    the messages before it, which is what the conversation's own model sees.
+    A pending, not yet applied, cut is ignored for the same reason.
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return 0, None
+    item = await _get_session_by_gsi(session_id, user_id, get_dynamodb_table(table_name))
+    compaction = (item or {}).get("compaction")
+    if not isinstance(compaction, dict):
+        return 0, None
+    summary = compaction.get("summary")
+    return int(compaction.get("checkpoint") or 0), summary if isinstance(summary, str) else None
+
+
 async def get_session_metadata(session_id: str, user_id: str) -> Optional[SessionMetadata]:
     """
     Retrieve session metadata
