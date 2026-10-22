@@ -29,13 +29,84 @@
                  the admin console's arrive identically. Doubles as the
                  skeleton-to-loaded transition when sessions land after boot. -->
             <div class="sidenav-body-enter flex flex-col gap-y-3" style="animation-delay: 60ms">
-                @for (group of groupedSessions(); track group.label; let gi = $index) {
+                <!-- Pinned: a drop list of its own. Shown while there are pins, and
+                     while any row is dragging so it can be the first pin's target.
+                     Two drop lists in all — this one and the time buckets as one
+                     list below — connected to each other: a drop here pins, a drop
+                     from here onto the buckets unpins. Sorting is off in both
+                     (pins order by pin time). Rows are draggable with the mouse at
+                     once, or on touch after a press-and-hold (dragStartDelay) so a
+                     drag doesn't fight the drawer's scroll; not while renaming.
+                     The Pin/Unpin menu item stays the keyboard path. -->
+                @if (pinnedSessions().length > 0 || isDragging()) {
+                    <section>
+                        <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-600 dark:text-gray-300">Pinned</h3>
+                        <ul
+                            role="list"
+                            cdkDropList
+                            [id]="pinnedListId"
+                            [cdkDropListConnectedTo]="[unpinnedListId]"
+                            cdkDropListSortingDisabled
+                            (cdkDropListDropped)="onPinnedDrop($event)"
+                            (cdkDropListEntered)="isOverPinned.set(true)"
+                            (cdkDropListExited)="isOverPinned.set(false)"
+                            [attr.data-over]="isOverPinned() ? '' : null"
+                            class="group/pinned flex flex-col gap-y-0.5 rounded-md transition-colors data-over:bg-primary-50 dark:data-over:bg-white/5"
+                        >
+                            @for (session of pinnedSessions(); track session.sessionId) {
+                                <li
+                                    cdkDrag
+                                    [cdkDragData]="session"
+                                    [cdkDragStartDelay]="dragStartDelay"
+                                    [cdkDragDisabled]="renamingSessionId() === session.sessionId"
+                                    [cdkDragPreviewClass]="dragPreviewClass"
+                                    (cdkDragStarted)="onDragStarted()"
+                                    (cdkDragEnded)="onDragEnded()"
+                                    class="group relative"
+                                >
+                                    <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+                                </li>
+                            } @empty {
+                                <li
+                                    class="flex min-h-8 items-center justify-center gap-1.5 rounded-md border border-dashed border-gray-300 group-data-over/pinned:hidden px-2 py-1.5 text-xs/5 text-gray-600 transition-colors group-data-over/pinned:border-primary-500 group-data-over/pinned:text-gray-900 dark:border-white/15 dark:text-gray-400 dark:group-data-over/pinned:border-primary-400 dark:group-data-over/pinned:text-white"
+                                >
+                                    <ng-icon name="appPin" class="size-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Drop here to pin</span>
+                                </li>
+                            }
+                        </ul>
+                    </section>
+                }
+
+                <!-- Every time bucket together is the other drop list. Rows nest
+                     inside the buckets' lists; CDK finds them through DI, and with
+                     sorting off only the drop matters (unpin, when from Pinned). -->
+                <div
+                    cdkDropList
+                    [id]="unpinnedListId"
+                    [cdkDropListConnectedTo]="[pinnedListId]"
+                    cdkDropListSortingDisabled
+                    (cdkDropListDropped)="onUnpinnedDrop($event)"
+                    class="flex flex-col gap-y-3"
+                >
+                @for (group of timeGroups(); track group.label; let gi = $index) {
                     <section>
                         <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-600 dark:text-gray-300">{{ group.label }}</h3>
                         <ul role="list" class="flex flex-col gap-y-0.5">
                             @for (entry of group.entries; track entry.kind === 'session' ? entry.session.sessionId : 'project:' + entry.projectId) {
                                 @if (entry.kind === 'session') {
-                                    <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: entry.session }" />
+                                    <li
+                                        cdkDrag
+                                        [cdkDragData]="entry.session"
+                                        [cdkDragStartDelay]="dragStartDelay"
+                                        [cdkDragDisabled]="renamingSessionId() === entry.session.sessionId"
+                                        [cdkDragPreviewClass]="dragPreviewClass"
+                                        (cdkDragStarted)="onDragStarted()"
+                                        (cdkDragEnded)="onDragEnded()"
+                                        class="group relative"
+                                    >
+                                        <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: entry.session }" />
+                                    </li>
                                 } @else {
                                     <!-- A project's tasks in this bucket, under the project's name. -->
                                     <li>
@@ -53,8 +124,11 @@
                                             class="ml-3.5 flex flex-col gap-y-0.5 border-l border-gray-200 pl-1 dark:border-white/10"
                                             [attr.aria-labelledby]="'session-group-' + gi + '-' + entry.projectId"
                                         >
+                                            <!-- Project tasks aren't draggable: they can't be pinned. -->
                                             @for (session of entry.sessions; track session.sessionId) {
-                                                <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+                                                <li class="group relative">
+                                                    <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+                                                </li>
                                             }
                                         </ul>
                                     </li>
@@ -63,6 +137,7 @@
                         </ul>
                     </section>
                 }
+                </div>
 
                 <ng-container *ngTemplateOutlet="loadMoreSentinel" />
             </div>
@@ -105,9 +180,12 @@
         }
     </ng-template>
 
-    <!-- One conversation row: shared by plain rows and by rows under a project heading. -->
+    <!-- One conversation row's contents, inside the row's <li class="group relative">.
+         Draggable rows put cdkDrag on that <li> where they are inserted, not in
+         here: an embedded view resolves DI from where its template is declared
+         (out here, outside both drop lists), so a cdkDrag inside this template
+         would never find its cdkDropList. -->
     <ng-template #sessionRow let-session>
-        <li class="group relative">
             @if (renamingSessionId() === session.sessionId) {
                 <!-- Inline rename input -->
                 <div class="flex items-center gap-1 rounded-md px-2 py-1">
@@ -295,6 +373,5 @@
                     </div>
                 </ng-template>
             }
-        </li>
     </ng-template>
 </nav>

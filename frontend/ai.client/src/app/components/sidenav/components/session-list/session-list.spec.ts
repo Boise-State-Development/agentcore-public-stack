@@ -368,6 +368,26 @@ describe('SessionList', () => {
     expect(component['isTitlePending'](untitled)).toBe(false);
   });
 
+  describe('drag to pin', () => {
+    // The two drop lists, as CDK hands them to the dropped handlers.
+    const pinnedList = { id: 'session-list-pinned' };
+    const unpinnedList = { id: 'session-list-unpinned' };
+    const drop = (from: object, to: object) =>
+      ({ previousContainer: from, container: to, item: { data: mockSession } }) as any;
+
+    it('pins a conversation dropped on Pinned', async () => {
+      const component = await createComponent();
+      (component as any).onPinnedDrop(drop(unpinnedList, pinnedList));
+      expect(mockSessionService.setSessionPinned).toHaveBeenCalledWith('test-session', true);
+    });
+
+    it('unpins a conversation dragged out of Pinned', async () => {
+      const component = await createComponent();
+      (component as any).onUnpinnedDrop(drop(pinnedList, unpinnedList));
+      expect(mockSessionService.setSessionPinned).toHaveBeenCalledWith('test-session', false);
+    });
+  });
+
   describe('project grouping', () => {
     const now = new Date().toISOString();
     const plain = (id: string) => ({ ...mockSession, sessionId: id, lastMessageAt: now, createdAt: now });
