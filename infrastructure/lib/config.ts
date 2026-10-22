@@ -56,6 +56,13 @@ export interface AppConfig {
   // target for each origin so an operator can create the records by hand.
   manageDnsRecords: boolean;
   albSubdomain?: string; // Subdomain for ALB (e.g., 'api' for api.yourdomain.com)
+  // Restrict ALB ingress to CloudFront's origin-facing IP ranges (the AWS
+  // managed prefix list `com.amazonaws.global.cloudfront.origin-facing`).
+  // Defaults to `true`: every browser and API-key request already arrives
+  // through the SPA distribution's `/api/*` behavior, so a directly
+  // reachable ALB only serves callers who skip CloudFront. Set to `false`
+  // only if something outside AWS must call the ALB hostname directly.
+  albRestrictToCloudFront: boolean;
   certificateArn?: string; // ACM certificate ARN for HTTPS on the ALB (MUST be in the stack's own region)
   // Shared ACM certificate ARN for ALL CloudFront origins (SPA / artifacts /
   // mcp-sandbox). MUST be in us-east-1 (CloudFront requirement) and SHOULD be
@@ -1296,6 +1303,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
       ?? scope.node.tryGetContext('manageDnsRecords')
       ?? true,
     albSubdomain: process.env.CDK_ALB_SUBDOMAIN || scope.node.tryGetContext('albSubdomain'),
+    albRestrictToCloudFront: parseBooleanEnv(process.env.CDK_ALB_RESTRICT_TO_CLOUDFRONT)
+      // Context may arrive as a boolean (cdk.context.json) or a string
+      // (`--context albRestrictToCloudFront=false`); normalise to a string.
+      ?? parseBooleanEnv(
+        scope.node.tryGetContext('albRestrictToCloudFront') === undefined
+          ? undefined
+          : String(scope.node.tryGetContext('albRestrictToCloudFront')),
+      )
+      ?? true,
     certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
     cloudfrontCertificateArn: process.env.CDK_CLOUDFRONT_CERTIFICATE_ARN || scope.node.tryGetContext('cloudfrontCertificateArn'),
     cognito: {
@@ -2032,6 +2048,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   Production: ${config.production}`);
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
   console.log(`   Manage DNS Records: ${config.manageDnsRecords}`);
+  console.log(`   ALB ingress: ${config.albRestrictToCloudFront ? 'CloudFront origin-facing only' : 'internet (0.0.0.0/0)'}`);
   console.log(`   App Version: ${config.appVersion}`);
   // Printed so a deploy log shows which values actually took effect.
   console.log(
