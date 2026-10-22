@@ -170,6 +170,7 @@ jobs:
       # a different AWS account (records are then created manually from the
       # deploy's CfnOutputs). Defaults to true.
       CDK_MANAGE_DNS_RECORDS: ${{ vars.CDK_MANAGE_DNS_RECORDS }}
+      CDK_ALB_RESTRICT_TO_CLOUDFRONT: ${{ vars.CDK_ALB_RESTRICT_TO_CLOUDFRONT }}
       # AgentCore Gateway inbound authorizer: "iam" (default) or "jwt".
       # The authorizer is IMMUTABLE after Gateway creation — the AgentCore
       # control plane rejects a change on an existing Gateway. Leave unset (or

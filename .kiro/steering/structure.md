@@ -146,7 +146,7 @@ infrastructure/
 ├── lib/
 │   ├── config.ts               # Configuration loader & validator
 │   ├── platform-stack.ts       # The one stack — all infrastructure
-│   └── constructs/             # 39 reusable CDK constructs
+│   └── constructs/             # Reusable CDK constructs, grouped by domain
 │       ├── network/            # VPC, ALB, ECS cluster
 │       ├── identity/           # Cognito, secrets, KMS, OAuth
 │       ├── data/               # DynamoDB tables, file uploads

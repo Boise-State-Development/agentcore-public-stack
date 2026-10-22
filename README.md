@@ -143,37 +143,43 @@ The admin dashboard gives institutional administrators full control over the pla
 
 ## 🏗️ Architecture
 
+Every request, browser or API key, enters through one CloudFront distribution. Static assets come from S3; everything under `/api/*` is proxied to the App API, which is the only caller of the agent runtime. The load balancer accepts connections from CloudFront only.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              User Interface                                 │
-│                     Angular v21 + Tailwind CSS v4.2+                        │
-└──────────┬──────────────────────────────────────────────┬───────────────────┘
-           │ REST (auth, sessions, admin, files)          │ SSE Streaming
-           v                                              │
-┌──────────────────────────────┐                          │
-│       App API (FastAPI)      │                          │
-│  Auth · RBAC · Sessions      │  /auth/runtime-endpoint  │
-│  Admin · Costs · Quotas      │── returns runtime URL ───┘
-└──────────────────────────────┘                          │
-                                                          v
-                                        ┌─────────────────────────────────┐
-                                        │  AgentCore Runtime (AWS Managed)│
-                                        │  Inference API + Strands Agent  │
-                                        │  /invocations (SSE streaming)   │
-                                        └───────┬─────────┬───────┬───────┘
-                                                │         │       │
-                    ┌───────────────────────────┘         │       └───────────┐
-                    v                                     v                   v
-          ┌──────────────────┐              ┌──────────────────┐  ┌──────────────────┐
-          │   Local Tools    │              │  AgentCore Tools │  │  AgentCore       │
-          │   (Direct)       │              │  (AWS Managed)   │  │  Gateway (MCP)   │
-          │                  │              │                  │  │                  │
-          │ Weather, Search, │              │ Code Interpreter │  │ Lambda Functions │
-          │ Visualization    │              │ Browser (Nova)   │  │ Wikipedia, ArXiv │
-          └──────────────────┘              │ Memory           │  │ Google, Tavily,  │
-                                            └──────────────────┘  │ Finance          │
-                                                                  └──────────────────┘
+│                  Browser (Angular v21 SPA) · API-key clients                │
+└─────────────────────────────────────┬───────────────────────────────────────┘
+                                      │ HTTPS
+                                      v
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         CloudFront (SPA distribution)                       │
+│      /*  → S3 (SPA bundle, Origin Access Control)                           │
+│  /api/*  → ALB, prefix stripped, uncached; cookies, CSRF, SSE pass through  │
+└─────────────────────────────────────┬───────────────────────────────────────┘
+                                      │ ALB ingress: CloudFront origin-facing
+                                      v  ranges only
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     App API (FastAPI on ECS Fargate) · BFF                  │
+│   Cookie sessions · API keys · RBAC · Quotas · Costs · Admin · Files        │
+│   POST /chat/stream (SSE proxy)        POST /chat/api-converse (API keys)   │
+└──────────────┬─────────────────────────────────┬────────────────────────────┘
+               │ /invocations (SSE)              │ DynamoDB · S3 · Cognito
+               v                                 v
+┌──────────────────────────────────┐   ┌──────────────────────────────────────┐
+│  AgentCore Runtime (AWS managed) │   │  App state: sessions, users, roles,  │
+│  Inference API + Strands Agent   │   │  quotas, costs, files, knowledge     │
+└───────┬───────────┬──────────┬───┘   └──────────────────────────────────────┘
+        │           │          │
+        v           v          v
+┌────────────┐ ┌────────────┐ ┌───────────────────────┐ ┌───────────────────┐
+│ Amazon     │ │ Built-in & │ │ AgentCore services    │ │ MCP servers       │
+│ Bedrock    │ │ local tools│ │ Memory · Code Interp. │ │ Gateway targets & │
+│ (+ external│ │ docs, files│ │ Browser · Gateway     │ │ registered remote │
+│ providers) │ │ charts, web│ │                       │ │ MCP servers       │
+└────────────┘ └────────────┘ └───────────────────────┘ └───────────────────┘
 ```
+
+Artifacts and the MCP Apps sandbox are served from their own CloudFront distributions on separate origins. See the [architecture overview](docs-site/src/content/docs/getting-started/architecture-overview.md) for the full reference diagram.
 
 <!-- IMAGE PLACEHOLDER: A polished, designed version of the architecture diagram above — using a tool like Excalidraw, draw.io, or Figma. Use color-coded boxes, clean arrows, and icons for each layer. This would replace or complement the ASCII diagram for a more professional look. Dimensions: ~900x500px. -->
 <!-- Example: ![Architecture Diagram](docs/images/architecture-diagram.png) -->
@@ -269,7 +275,7 @@ agentcore-public-stack/
 │   └── lib/
 │       ├── platform-stack.ts        # The one stack — all infrastructure
 │       ├── config.ts                # Configuration loader & validator
-│       └── constructs/              # 39 reusable CDK constructs
+│       └── constructs/              # Reusable CDK constructs, grouped by domain
 │           ├── network/             # VPC, ALB, ECS cluster
 │           ├── identity/            # Cognito, secrets, KMS, OAuth
 │           ├── data/                # DynamoDB tables, file uploads
