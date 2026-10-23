@@ -17,9 +17,14 @@ cachetools==6.2.4
 # package; none of its bidi extras are imported). Versions match backend/uv.lock.
 strands-agents==1.61.1
 mcp==1.30.0
-opentelemetry-api==1.44.0
-opentelemetry-sdk==1.44.0
-opentelemetry-instrumentation-threading==0.65b0
+# OpenTelemetry is AHEAD of backend/uv.lock here, deliberately: 1.45.1 fixes
+# GHSA-xcq7-p3pf-p88h (O(N^2) tracestate parsing). backend/uv.lock cannot follow
+# until aws-opentelemetry-distro ships a release built on 1.45.1 (every release
+# through 0.21.0 hard-pins opentelemetry-api==1.44.0). This image installs no
+# ADOT, so nothing here is bound by that pin.
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1
+opentelemetry-instrumentation-threading==0.66b1
 jsonschema==4.26.0
 docstring-parser==0.17.0
 pyyaml==6.0.3
