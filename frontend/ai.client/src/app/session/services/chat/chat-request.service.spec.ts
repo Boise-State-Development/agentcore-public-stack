@@ -18,6 +18,7 @@ import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
+import { IncognitoChatService } from '../incognito';
 
 describe('ChatRequestService', () => {
   let service: ChatRequestService;
@@ -128,6 +129,18 @@ describe('ChatRequestService', () => {
         enabled_tools: ['tool1', 'tool2'],
       })
     );
+  });
+
+  it('starts the new conversation incognito when the toggle is on (#1738)', async () => {
+    const incognito = TestBed.inject(IncognitoChatService);
+    vi.spyOn(incognito, 'available').mockReturnValue(true);
+    incognito.toggle();
+
+    await service.submitChatRequest('Hello', null);
+
+    expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).toMatchObject({ incognito: true });
+    // The toggle is spent: the next new chat starts as not incognito.
+    expect(incognito.pending()).toBe(false);
   });
 
   describe('folder attachments', () => {

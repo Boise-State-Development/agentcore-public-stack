@@ -66,3 +66,19 @@ def test_the_turns_mode_is_the_users_mode_capped_by_the_conversation():
     assert chat_routes._memory_mode_for_turn("ast-1", {"memoryMode": "on"}) == "off"
     assert memory_capabilities("read_only") == (True, False)
     assert memory_capabilities("off") == (False, False)
+
+
+def test_an_incognito_chat_reads_memory_but_learns_nothing():
+    """Issue #1738: incognito caps the turn at read only; an Agent chat stays off."""
+    assert chat_routes._memory_mode_for_turn(None, {"memoryMode": "on"}, incognito=True) == "read_only"
+    assert chat_routes._memory_mode_for_turn("ast-1", {"memoryMode": "on"}, incognito=True) == "off"
+
+
+def test_incognito_is_fixed_when_the_session_row_is_created():
+    from apis.shared.sessions.metadata import session_is_incognito
+
+    # No row yet: the first turn's choice applies.
+    assert session_is_incognito(None, requested=True) is True
+    # Once the row exists, the stored flag wins over the request either way.
+    assert session_is_incognito({"preferences": {}}, requested=True) is False
+    assert session_is_incognito({"preferences": {"incognito": True}}, requested=False) is True

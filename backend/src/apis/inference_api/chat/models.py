@@ -139,6 +139,11 @@ class InvocationRequest(BaseModel):
     # AgentCore Runtime returns 424 when it sees a non-empty 'assistant_id' field,
     # likely trying to resolve it as an AWS Bedrock Agent ID.
     rag_assistant_id: Optional[str] = None
+    # Incognito chat (#1738): the user chose, before the first message, that
+    # this conversation reads long-term memory but never adds to it. Honoured
+    # only on the turn that creates the session; afterwards the stored flag
+    # decides (``session_is_incognito``), so a later request can't change it.
+    incognito: Optional[bool] = None
     # Marketplace D11: this turn was handed to the Agent by an `@`-mention in
     # the composer, rather than the whole conversation being bound to it.
     #

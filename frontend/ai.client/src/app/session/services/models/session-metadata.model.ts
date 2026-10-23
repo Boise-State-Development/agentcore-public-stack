@@ -23,6 +23,11 @@ export interface SessionPreferences {
    * project in the sidebar and enables "Project members" sharing.
    */
   projectId?: string;
+  /**
+   * Incognito chat (#1738): reads long-term memory but never adds to it.
+   * Fixed by the backend when the first turn creates the session.
+   */
+  incognito?: boolean;
   /** Display state for promoted visuals, keyed by tool_use_id */
   visualState?: Record<string, VisualDisplayState>;
 }

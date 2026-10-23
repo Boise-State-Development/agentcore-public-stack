@@ -25,6 +25,7 @@ import { FEATURES } from '../../../../services/features';
 import { UNTITLED_SESSION_TITLE } from './session-title-filter';
 import { bindingQueryParams } from '../../../../session/services/session/conversation-binding.service';
 import { appPin, appPinOff } from './pin-icons';
+import { IncognitoChatService, incognitoIcon } from '../../../../session/services/incognito';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -65,7 +66,7 @@ export function groupProjectSessions(
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, CdkDrag, CdkDropList, InViewDirective],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff, incognitoIcon })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -81,6 +82,7 @@ export class SessionList {
   private appRef = inject(ApplicationRef);
   private userService = inject(UserService);
   private projectsService = inject(ProjectsService);
+  private incognitoChat = inject(IncognitoChatService);
   /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
   private readonly projectsOn = inject(FEATURES).projects;
 
@@ -467,6 +469,14 @@ export class SessionList {
    * @param session - Session metadata
    * @returns Display title
    */
+  /**
+   * Incognito chat (#1738): from the row, or from this tab when it started
+   * the conversation and the row's preferences haven't arrived yet.
+   */
+  protected isIncognito(session: SessionMetadata): boolean {
+    return session.preferences?.incognito === true || this.incognitoChat.isIncognito(session.sessionId);
+  }
+
   protected getSessionTitle(session: SessionMetadata): string {
     return session.title || UNTITLED_SESSION_TITLE;
   }
