@@ -36,8 +36,12 @@ from apis.shared.sessions.metadata import (
 )
 from apis.shared.tools.always_on import union_enabled_tools
 from apis.shared.tools.freshness import drop_disabled_tools
-from apis.shared.sessions.models import SessionMetadata
-from apis.shared.user_settings.models import memory_capabilities, memory_mode_from
+from apis.shared.sessions.models import SessionMetadata, SessionPreferences
+from apis.shared.user_settings.models import (
+    cap_memory_mode,
+    memory_capabilities,
+    memory_mode_from,
+)
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 logger = logging.getLogger(__name__)
@@ -233,11 +237,28 @@ async def _load_memory_mode(user_id: str) -> str:
         return "on"
 
 
-async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
+async def _voice_session_incognito(session_id: str, user_id: str, requested: bool) -> bool:
+    """Whether the conversation is incognito (#1738).
+
+    An existing session's stored flag decides; the client's choice applies
+    only to a session this connection is about to create.
+    """
+    try:
+        existing = await get_session_metadata(session_id, user_id)
+    except Exception:
+        logger.warning("Failed to read session metadata for incognito check", exc_info=True)
+        return bool(requested)
+    if existing is None:
+        return bool(requested)
+    return bool(existing.preferences and existing.preferences.incognito)
+
+
+async def _ensure_session_metadata(session_id: str, user_id: str, incognito: bool = False) -> None:
     """Create session metadata entry if one doesn't already exist.
 
     This makes the voice session visible in the conversations side nav.
     If the session started as a text chat, existing metadata is preserved.
+    ``incognito`` is stamped only on a session created here.
     """
     try:
         existing = await get_session_metadata(session_id, user_id)
@@ -256,7 +277,7 @@ async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
             message_count=0,
             starred=False,
             tags=[],
-            preferences=None,
+            preferences=SessionPreferences(incognito=True) if incognito else None,
         )
         await store_session_metadata(session_id=session_id, user_id=user_id, session_metadata=metadata)
         logger.info(f"Created session metadata for voice session {_sanitize_log(session_id)}")
@@ -490,6 +511,7 @@ async def voice_stream(
     auth_token = _get_param_from_request(websocket, "auth-token", token) or ""
     requested_voice: Optional[str] = None
     frame_user_id: Optional[str] = None
+    requested_incognito = False
 
     # Always read config message from client (sent on WebSocket open).
     # Required for auth_token in AgentCore mode and supplements any
@@ -507,6 +529,9 @@ async def voice_stream(
             # (an unknown id falls back to the default rather than 4xx-ing a
             # WebSocket the user has already heard connect).
             requested_voice = first_msg.get("voice")
+            # Incognito chat (#1738): honoured only if this connection
+            # creates the session (`_voice_session_incognito`).
+            requested_incognito = first_msg.get("incognito") is True
             logger.info(f"Voice config received from client message")
     except asyncio.TimeoutError:
         logger.warning("No config message received within 10s, using query params")
@@ -567,7 +592,10 @@ async def voice_stream(
     try:
         # Create VoiceAgent
         VoiceAgent = _get_voice_agent_class()
-        memory_retrieval, memory_extraction = memory_capabilities(await _load_memory_mode(user_id))
+        incognito = await _voice_session_incognito(session_id, user_id, requested_incognito)
+        memory_retrieval, memory_extraction = memory_capabilities(
+            cap_memory_mode(await _load_memory_mode(user_id), "read_only" if incognito else "on")
+        )
         voice_agent = VoiceAgent(
             session_id=session_id,
             user_id=user_id,
@@ -598,7 +626,7 @@ async def voice_stream(
         await voice_agent.start()
 
         # Create session metadata so voice sessions appear in the side nav
-        await _ensure_session_metadata(session_id, user_id)
+        await _ensure_session_metadata(session_id, user_id, incognito=incognito)
 
         # Run bidirectional communication
         receive_task = asyncio.create_task(

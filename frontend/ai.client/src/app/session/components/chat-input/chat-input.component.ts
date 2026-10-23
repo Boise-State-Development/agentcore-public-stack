@@ -113,6 +113,8 @@ import {
   StoredFolder,
 } from '../../services/session/composer-draft-storage.service';
 import { ComposerHandoffService } from './composer-handoff.service';
+import { IncognitoToggleComponent } from './incognito-toggle.component';
+import { IncognitoChatService } from '../../services/incognito';
 import { ComposerSegment, findHighlightRanges, toSegments } from './composer-highlights';
 
 // Must stay in sync with the min-height/max-height classes on the textarea in
@@ -323,7 +325,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
+  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent, IncognitoToggleComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },
@@ -459,6 +461,18 @@ export class ChatInputComponent {
    * hides itself when neither projects nor folders have anything to offer.
    */
   readonly showScopePicker = input<boolean>(false);
+
+  /**
+   * Offer the incognito switch beside the model picker (#1738). Only the
+   * conversation page's empty state for a plain chat sets it: an Agent chat
+   * or a project task never writes to the user's memory anyway. Shown only
+   * while the account's memory mode is "on".
+   */
+  readonly offerIncognito = input<boolean>(false);
+  private readonly incognitoChat = inject(IncognitoChatService);
+  protected readonly incognitoOffered = computed(
+    () => this.offerIncognito() && !this.compact() && this.incognitoChat.available(),
+  );
 
   /**
    * The project this conversation runs in, or null. Named in the placeholder:

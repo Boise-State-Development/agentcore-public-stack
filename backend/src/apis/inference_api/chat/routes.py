@@ -91,6 +91,7 @@ from apis.inference_api.chat.agent_binding_resolver import (
 from apis.shared.sessions.metadata import (
     ensure_session_metadata_exists,
     load_session_meta,
+    session_is_incognito,
 )
 from apis.shared.tools.always_on import (
     resolve_always_on_tool_ids,
@@ -418,9 +419,19 @@ def _personal_instructions(settings: dict) -> Optional[str]:
     return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
 
 
-def _memory_mode_for_turn(rag_assistant_id: Optional[str], settings: dict) -> str:
-    """The user's long-term memory mode, capped to off in an Agent conversation."""
-    return cap_memory_mode(memory_mode_from(settings), "off" if rag_assistant_id else "on")
+def _memory_mode_for_turn(
+    rag_assistant_id: Optional[str], settings: dict, incognito: bool = False
+) -> str:
+    """The user's long-term memory mode, capped to off in an Agent conversation
+    and to read only in an incognito one (#1738)."""
+    mode = cap_memory_mode(memory_mode_from(settings), "off" if rag_assistant_id else "on")
+    return cap_memory_mode(mode, "read_only" if incognito else "on")
+
+
+def _turn_is_incognito(input_data: InvocationRequest, session_meta) -> bool:
+    """Whether this turn's conversation is incognito: the stored flag, or the
+    request's choice when the session has no row yet."""
+    return session_is_incognito(session_meta.row, requested=bool(input_data.incognito))
 
 
 async def _plain_turn_prompt(
@@ -2106,6 +2117,7 @@ async def stream_conversational_message(
     persist: bool = True,
     memory_mode: str = "on",
     user_settings: Optional[dict] = None,
+    incognito_requested: Optional[bool] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -2126,6 +2138,9 @@ async def stream_conversational_message(
             lowers it further here.
         user_settings: The user's settings if the caller already loaded them;
             otherwise read once, and only when memory is still on.
+        incognito_requested: None when ``memory_mode`` already accounts for an
+            incognito conversation. Otherwise the request's incognito choice:
+            the session row is read and its stored flag wins (#1738).
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -2172,6 +2187,10 @@ async def stream_conversational_message(
                     user_settings if user_settings is not None else await _load_user_settings(user_id)
                 ),
             )
+        if memory_mode == "on" and incognito_requested is not None:
+            row = await load_session_meta(session_id, user_id)
+            if session_is_incognito(row.row, requested=incognito_requested):
+                memory_mode = "read_only"
         session_manager = SessionFactory.create_session_manager(
             session_id=session_id,
             user_id=user_id,
@@ -2368,6 +2387,7 @@ def _refuse_turn(
             user_input=input_data.message,
             persist=persist,
             memory_mode="off" if input_data.rag_assistant_id else "on",
+            incognito_requested=bool(input_data.incognito),
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
@@ -2409,6 +2429,7 @@ async def _agent_for_app_dispatch(
     *,
     agent_type: str,
     accessible_skill_ids: Optional[list],
+    incognito: bool = False,
 ):
     """The conversation's agent for an MCP App dispatch (map stage B3).
 
@@ -2463,7 +2484,7 @@ async def _agent_for_app_dispatch(
         cache_write=False,
         assistant_id=input_data.rag_assistant_id,
         text_only_model=is_text_only_model(input_modalities),
-        memory_mode=_memory_mode_for_turn(input_data.rag_assistant_id, settings),
+        memory_mode=_memory_mode_for_turn(input_data.rag_assistant_id, settings, incognito),
     )
 
 
@@ -2475,6 +2496,7 @@ async def _agent_for_app_tool_call(
     *,
     agent_type: str,
     accessible_skill_ids: Optional[list],
+    incognito: bool = False,
 ):
     """The agent an App's ``tools/call`` dispatches against.
 
@@ -2501,6 +2523,7 @@ async def _agent_for_app_tool_call(
         auth_token,
         agent_type=agent_type,
         accessible_skill_ids=accessible_skill_ids,
+        incognito=incognito,
     )
 
 
@@ -3151,7 +3174,10 @@ async def _prepare_session_state(
     is_new_session = False
     if not is_resume and not is_continuation:
         is_new_session = await ensure_session_metadata_exists(
-            input_data.session_id, user_id, snapshot=session_meta
+            input_data.session_id,
+            user_id,
+            snapshot=session_meta,
+            incognito=bool(input_data.incognito),
         )
         try:
             from apis.shared.sessions.metadata import (
@@ -4025,6 +4051,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 auth_token,
                 agent_type=effective_agent_type,
                 accessible_skill_ids=effective_skill_ids,
+                incognito=_turn_is_incognito(input_data, session_meta),
             )
             payload = await dispatch_app_tool_call(
                 agent,
@@ -4236,7 +4263,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # long-term-memory switch all come from it. A preview is an author testing an
     # agent, so it gets none of theirs.
     user_settings = await _load_user_settings(user_id)
-    turn_memory_mode = _memory_mode_for_turn(input_data.rag_assistant_id, user_settings)
+    # An incognito conversation (#1738) reads memory but learns nothing. The
+    # flag comes from the row read at the top of the turn, so only a first turn
+    # can set it.
+    turn_memory_mode = _memory_mode_for_turn(
+        input_data.rag_assistant_id,
+        user_settings,
+        _turn_is_incognito(input_data, session_meta),
+    )
     personal_instructions = (
         None if is_preview_session(input_data.session_id) else _personal_instructions(user_settings)
     )

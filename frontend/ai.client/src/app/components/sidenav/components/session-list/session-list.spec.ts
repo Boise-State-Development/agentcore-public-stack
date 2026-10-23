@@ -195,6 +195,12 @@ describe('SessionList', () => {
     expect(component['getSessionTitle']({ ...mockSession, title: '' })).toBe('Untitled Session');
   });
 
+  it('marks an incognito chat for the icon before its title (#1738)', async () => {
+    const component = await createComponent();
+    expect(component['isIncognito']({ ...mockSession, preferences: { incognito: true } })).toBe(true);
+    expect(component['isIncognito'](mockSession)).toBe(false);
+  });
+
   it('closes the sidenav and optimistically sets the clicked session on click', async () => {
     const component = await createComponent();
     mockSessionService.currentSession.set({ ...mockSession, sessionId: 'other', title: 'Other' });

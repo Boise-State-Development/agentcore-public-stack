@@ -264,6 +264,11 @@ class SessionPreferences(BaseModel):
     assistant_id: Optional[str] = Field(default=None, alias="assistantId", description="Assistant ID attached to this session")
     project_id: Optional[str] = Field(default=None, alias="projectId", description="Shared Project whose harness this session runs, when assistantId is a project's agent")
     agent_type: Optional[str] = Field(default=None, alias="agentType", description="Agent mode this conversation runs in ('skill' or 'chat'); reopening the session restores it")
+    # Incognito chat (#1738): the conversation reads long-term memory but never
+    # adds to it. Set by the server only when it creates the session row, from
+    # the first turn's request, and never changed after (see
+    # ``session_is_incognito``).
+    incognito: Optional[bool] = Field(default=None, alias="incognito", description="True when this conversation never writes to long-term memory")
 
     # System prompt hash for tracking exact prompt version sent to the model
     # This is a hash of the FINAL rendered system prompt (after date injection, variable substitution, etc.)

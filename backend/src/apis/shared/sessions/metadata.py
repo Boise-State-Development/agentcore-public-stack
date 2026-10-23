@@ -1308,13 +1308,33 @@ def _preferences_project_id(row: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def session_is_incognito(row: Optional[Dict[str, Any]], requested: bool = False) -> bool:
+    """Whether a conversation is incognito (#1738): reads memory, never writes it.
+
+    An existing row decides, whatever the request says: the flag is fixed when
+    the row is created, because facts extracted from earlier turns can't be
+    traced back to the conversation and removed. With no row yet (the first
+    turn), the request's choice applies.
+    """
+    if row is None:
+        return bool(requested)
+    prefs = row.get("preferences")
+    return isinstance(prefs, dict) and prefs.get("incognito") is True
+
+
 async def ensure_session_metadata_exists(
-    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+    session_id: str,
+    user_id: str,
+    snapshot: Optional["SessionMetaSnapshot"] = None,
+    incognito: bool = False,
 ) -> bool:
     """Idempotently create a session metadata row if it doesn't exist yet.
 
     Returns ``True`` when a new row was created (caller can use this as the
     "first turn" signal, e.g. to fire title generation).
+
+    ``incognito`` is stamped on the new row's preferences. It has no effect on
+    a row that already exists: a conversation can't become incognito later.
 
     Existence is gated on a ``SessionLookupIndex`` GSI lookup rather than a
     conditional ``put_item``: the main-table SK encodes ``lastMessageAt``
@@ -1394,6 +1414,8 @@ async def ensure_session_metadata_exists(
             "starred": False,
             "tags": [],
         }
+        if incognito:
+            item["preferences"] = {"incognito": True}
 
         # The SK is now deterministic (S#{session_id}), so attribute_not_exists is a
         # real idempotency guard (issue #175): two concurrent first turns compute the
