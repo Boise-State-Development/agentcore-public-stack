@@ -52,7 +52,7 @@ def _python_files() -> Iterator[Tuple[str, Path]]:
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.py")):
-            yield str(path.relative_to(_BACKEND)), path
+            yield path.relative_to(_BACKEND).as_posix(), path
 
 
 def test_no_module_outside_the_pure_one_writes_a_state_value_literally() -> None:

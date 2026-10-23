@@ -71,7 +71,16 @@ def _zone(timezone_name: str) -> ZoneInfo:
     unknown name, and ``ValueError``/``TypeError``/``OSError`` for a malformed
     one or a path that is not a zone file, so a caller catching only
     ``ValueError`` let a typo through as a 500.
+
+    Surrounding whitespace and a trailing dot are rejected up front: no IANA
+    name has them, but Windows filesystems drop them when the zone file is
+    opened, so ``"America/Boise "`` would otherwise resolve there and fail on
+    Linux.
     """
+    if isinstance(timezone_name, str) and (
+        timezone_name != timezone_name.strip() or timezone_name.endswith(".")
+    ):
+        raise InvalidTimezoneError(f"Unknown timezone: {timezone_name!r}")
     try:
         return ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError, TypeError, OSError) as e:

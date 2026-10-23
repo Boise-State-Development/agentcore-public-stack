@@ -30,6 +30,7 @@ Requirements: 20.8, 13.4, 13.5, 24.9
 import json
 import os
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -135,6 +136,11 @@ def _ours():
 @pytest.fixture
 def run_teardown(tmp_path):
     """Run ``managed-kb.sh`` against a scripted account. Returns (result, calls)."""
+    if sys.platform == "win32":
+        # The harness is POSIX throughout: a ':'-separated PATH, a stub `aws`
+        # run through its `#!/usr/bin/env python3` shebang, and bash itself
+        # (on Windows usually the WSL launcher). Linux and macOS still run it.
+        pytest.skip("managed-kb.sh harness needs a POSIX shell environment")
 
     def _run(views, tags, tag_errors=None, delete_errors=None, extra_env=None, script=KB_SCRIPT):
         bin_dir = tmp_path / "bin"
