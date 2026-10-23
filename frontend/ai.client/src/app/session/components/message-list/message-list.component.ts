@@ -15,6 +15,9 @@ import { BrowserLoginPromptComponent } from './components/browser-login-prompt/b
 import { BrowserPanelComponent } from './components/browser-panel/browser-panel.component';
 import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
 import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
+import { HandoffRowComponent } from '../handoff/handoff-row.component';
+import { HandoffStateService } from '../../services/handoff/handoff-state.service';
+import { HandoffView } from '../../services/handoff/handoff.models';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
 import { FilePreviewPanelComponent } from './components/file-preview/file-preview-panel.component';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
@@ -138,6 +141,7 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     SharedArtifactCardComponent,
     McpAppActionsComponent,
     AgentFeedbackLinkComponent,
+    HandoffRowComponent,
   ],
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
@@ -234,6 +238,7 @@ export class MessageListComponent {
   continueRequested = output<void>();
 
   private consentService = inject(OAuthConsentService);
+  private handoffState = inject(HandoffStateService);
   private toolApprovalService = inject(ToolApprovalService);
   private userQuestionService = inject(UserQuestionService);
   private browserLoginService = inject(BrowserLoginService);
@@ -731,6 +736,40 @@ export class MessageListComponent {
   }
 
   // ----------------------------------------------------------------
+  // Handoff rows (handoffs spec §4.3): UI only, never part of the
+  // conversation the model reads. Anchored like artifacts, after the
+  // message that was last when the handoff was sent.
+  // ----------------------------------------------------------------
+
+  private readonly handoffRows = computed<readonly HandoffView[]>(() =>
+    this.handoffState.rowsFor(this.sessionId()),
+  );
+
+  private readonly handoffRowsByMessageIndex = computed<ReadonlyMap<number, HandoffView[]>>(() => {
+    const loaded = this.loadedMessageIndices();
+    const map = new Map<number, HandoffView[]>();
+    for (const row of this.handoffRows()) {
+      if (!loaded.has(row.sourceMessageIndex)) continue;
+      const list = map.get(row.sourceMessageIndex);
+      if (list) list.push(row);
+      else map.set(row.sourceMessageIndex, [row]);
+    }
+    return map;
+  });
+
+  /** Rows whose anchor isn't in the loaded page (or a conversation that was empty), at the tail. */
+  protected readonly unanchoredHandoffRows = computed<readonly HandoffView[]>(() => {
+    const loaded = this.loadedMessageIndices();
+    return this.handoffRows().filter((row) => !loaded.has(row.sourceMessageIndex));
+  });
+
+  protected handoffRowsForMessageId(id: string): readonly HandoffView[] {
+    const n = this.parseMessageIndex(id);
+    if (n === null) return [];
+    return this.handoffRowsByMessageIndex().get(n) ?? [];
+  }
+
+  // ----------------------------------------------------------------
   // Shared-conversation artifacts (recipient view)
   // ----------------------------------------------------------------
 
@@ -792,7 +831,15 @@ export class MessageListComponent {
    *  affordance instead of a silently stalled tool call. */
   protected unanchoredInterrupts = computed<OAuthConsentRequest[]>(() => {
     const ids = new Set(this.messages().map((m) => m.id));
-    return this.consentService.pending().filter((req) => !req.messageId || !ids.has(req.messageId));
+    // Scoped to THIS list's session (handoffs spec §4.3): a handoff's target streams in the
+    // background, and its `oauth_required` anchors to a message id that is never in this list,
+    // so without the session check it rendered here as though this thread were waiting on it.
+    // A list bound to no session keeps the old behaviour.
+    const sessionId = this.sessionId();
+    return this.consentService
+      .pending()
+      .filter((req) => !sessionId || !req.sessionId || req.sessionId === sessionId)
+      .filter((req) => !req.messageId || !ids.has(req.messageId));
   });
 
   /** Pending tool-approval prompts, rendered at the end of the conversation.

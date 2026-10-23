@@ -39,7 +39,7 @@ from apis.shared.handoff import (
     wrap_handoff_context,
 )
 from apis.shared.handoff.metrics import emit_handoff_metric
-from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, EffectiveHandoffStatus, WaitingOn
+from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_compaction, get_session_metadata
 from apis.shared.timestamps import utc_now_iso
@@ -78,48 +78,16 @@ class CreateHandoffResponse(BaseModel):
     context_block: str = Field(..., alias="contextBlock", description="The excerpt wrapped as the Agent receives it")
     prompt: str = Field(..., description="The full first message the Agent receives: contextBlock, then request")
     request: str
-
-
-class HandoffView(BaseModel):
-    """A row as the SPA reads it: the stored status, with ``abandoned`` derived."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    handoff_id: str = Field(..., alias="handoffId")
-    session_id: str = Field(..., alias="sessionId")
-    kind: str
-    status: EffectiveHandoffStatus
-    agent_id: str = Field(..., alias="agentId")
-    agent_name: str = Field(..., alias="agentName")
-    request: str
-    source_message_index: int = Field(..., alias="sourceMessageIndex")
-    excerpt_tokens: int = Field(..., alias="excerptTokens")
-    turns_covered: Optional[TurnsCovered] = Field(None, alias="turnsCovered")
-    created_at: str = Field(..., alias="createdAt")
-    updated_at: str = Field(..., alias="updatedAt")
-    target_session_id: Optional[str] = Field(None, alias="targetSessionId")
-    status_line: Optional[str] = Field(None, alias="statusLine")
-    waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
-
-    @classmethod
-    def from_row(cls, row: Handoff) -> "HandoffView":
-        return cls(
-            handoff_id=row.handoff_id,
-            session_id=row.session_id,
-            kind=row.kind,
-            status=row.effective_status(),
-            agent_id=row.agent_id,
-            agent_name=row.agent_name,
-            request=row.request,
-            source_message_index=row.source_message_index,
-            excerpt_tokens=row.excerpt_tokens,
-            turns_covered=row.turns_covered,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-            target_session_id=row.target_session_id,
-            status_line=row.status_line,
-            waiting_on=row.waiting_on,
-        )
+    source_message_index: int = Field(
+        ...,
+        alias="sourceMessageIndex",
+        description="Index of the message the handoff row will sit after; -1 for an empty conversation",
+    )
+    source_title: str = Field(
+        ...,
+        alias="sourceTitle",
+        description="The title the wrapper names. The review sheet re-wraps an edited card with it, as the server will",
+    )
 
 
 @router.post(
@@ -204,6 +172,8 @@ async def create_handoff(
         context_block=context_block,
         prompt=build_handoff_message(context_block, request),
         request=request,
+        source_message_index=row.source_message_index,
+        source_title=source_title,
     )
 
 

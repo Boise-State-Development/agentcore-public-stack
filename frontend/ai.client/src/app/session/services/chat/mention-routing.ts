@@ -67,3 +67,15 @@ export function routeMention({
   // sent to. The last name typed wins, because nothing has happened yet to contradict it.
   return { sessionId, assistantId: mentionedAgentId, handedOff: false };
 }
+
+/**
+ * The request the review sheet starts from: what the user typed, minus the `@Name` that picked the
+ * Agent (§4.2, "Request: what the user typed, minus the mention"). The composer inserts the token
+ * at the caret, so it can be anywhere; only that one token goes, and the gap it leaves closes.
+ */
+export function stripMention(content: string, agentName: string): string {
+  const token = `@${agentName}`;
+  const at = content.indexOf(token);
+  if (at < 0) return content.trim();
+  return (content.slice(0, at) + content.slice(at + token.length)).replace(/[ \t]{2,}/g, ' ').trim();
+}

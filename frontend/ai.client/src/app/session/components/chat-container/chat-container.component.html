@@ -348,6 +348,11 @@
         @if (isArchiveServed()) {
           <app-expired-session-notice />
         } @else {
+          <!-- A mid-thread @-mention's review sheet (handoffs spec §4.2): renders
+               only while one is open for this conversation. -->
+          @if (sessionId(); as sid) {
+            <app-handoff-review-sheet [sessionId]="sid" />
+          }
           <app-chat-input
             [showAnnouncements]="showAnnouncements()"
             [announcementPlacement]="announcementPlacement()"

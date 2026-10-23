@@ -1,3 +1,4 @@
+import { HandoffView, SpawnedFrom } from '../handoff/handoff.models';
 import { inject, Injectable, signal, WritableSignal, resource, computed, effect, untracked } from '@angular/core';
 import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
@@ -119,6 +120,15 @@ export interface MessagesListResponse {
    * clean answer. Present only on the first page.
    */
   sourceProvenance?: { toolUseId?: string; claims?: SourceProvenanceClaim[] }[];
+  /**
+   * Handoffs sent from this conversation (handoffs spec §4.3), each shaped like
+   * `GET /sessions/{id}/handoffs/{handoffId}`. Rendered as handoff rows after their
+   * `sourceMessageIndex`. Present only on the first page, and empty while the backend
+   * flag is off.
+   */
+  handoffs?: HandoffView[];
+  /** Set when this conversation was started by a handoff: where its context came from. */
+  spawnedFrom?: SpawnedFrom;
   /**
    * True when Memory's events for this session have expired and these
    * messages are the conversation archive's text-only copy. The agent cannot
