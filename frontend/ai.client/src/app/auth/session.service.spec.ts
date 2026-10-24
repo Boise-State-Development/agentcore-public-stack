@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionService } from './session.service';
 import { ConfigService } from '../services/config.service';
+import {
+  PREFLIGHT_DISMISSALS_KEY,
+  PreflightDismissalStorageService,
+} from '../services/oauth-consent/preflight-dismissal-storage.service';
 
 describe('SessionService', () => {
   let service: SessionService;
@@ -487,6 +491,26 @@ describe('SessionService', () => {
 
       expect(service.user()).toBeNull();
       expect(window.location.href).toBe('');
+    });
+
+    it('adopts the signed-in user\'s connector dismissals and forgets them on logout', async () => {
+      localStorage.setItem(
+        PREFLIGHT_DISMISSALS_KEY,
+        JSON.stringify({ owner: 'u-123', providers: ['oracle-oac'] }),
+      );
+      setCsrfCookie();
+      const bootPromise = service.bootstrap();
+      httpMock.expectOne('http://localhost:8000/auth/session').flush(sessionResponse);
+      await bootPromise;
+      const dismissals = TestBed.inject(PreflightDismissalStorageService);
+      expect(dismissals.has('oracle-oac')).toBe(true);
+
+      const logoutPromise = service.logout();
+      httpMock.expectOne('http://localhost:8000/auth/logout').flush({ post_logout_url: null });
+      await logoutPromise;
+
+      expect(localStorage.getItem(PREFLIGHT_DISMISSALS_KEY)).toBeNull();
+      expect(dismissals.has('oracle-oac')).toBe(false);
     });
 
     it('clears local state even when /auth/logout fails', async () => {
