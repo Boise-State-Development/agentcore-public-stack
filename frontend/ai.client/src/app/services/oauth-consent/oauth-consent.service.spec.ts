@@ -3,11 +3,15 @@ import { OAuthConsentService } from './oauth-consent.service';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { SessionService } from '../../session/services/session/session.service';
 import { ChatStateService } from '../../session/services/chat/chat-state.service';
+import {
+  PREFLIGHT_DISMISSALS_KEY,
+  PreflightDismissalStorageService,
+} from './preflight-dismissal-storage.service';
 
 describe('OAuthConsentService', () => {
   let service: OAuthConsentService;
 
-  beforeEach(() => {
+  function freshService(): OAuthConsentService {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
@@ -18,11 +22,17 @@ describe('OAuthConsentService', () => {
         },
       ],
     });
-    service = TestBed.inject(OAuthConsentService);
+    return TestBed.inject(OAuthConsentService);
+  }
+
+  beforeEach(() => {
+    localStorage.removeItem(PREFLIGHT_DISMISSALS_KEY);
+    service = freshService();
   });
 
   afterEach(() => {
     TestBed.resetTestingModule();
+    localStorage.removeItem(PREFLIGHT_DISMISSALS_KEY);
   });
 
   describe('requestConsent dedup by interruptId', () => {
@@ -160,12 +170,43 @@ describe('OAuthConsentService', () => {
       expect(service.pending()[0].interruptId).toBe('i-99');
     });
 
-    it('clear() lifts the dismissal', () => {
+    it('keeps the dismissal across a conversation change', () => {
+      // The backend re-emits a pre-flight prompt in every conversation until
+      // consent lands, so declining it is about the provider, not the chat.
       service.requestConsent('github-oauth', URL_A, undefined, 'msg-1', 'sess-1');
       service.dismiss('github-oauth');
       service.clear();
 
       service.requestConsent('github-oauth', URL_A, undefined, 'msg-2', 'sess-2');
+      expect(service.pending().length).toBe(0);
+    });
+
+    it('keeps the dismissal across a reload for the same user', () => {
+      TestBed.inject(PreflightDismissalStorageService).adopt('u-1');
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-1', 'sess-1');
+      service.dismiss('github-oauth');
+
+      // A reload is a fresh injector over the same localStorage.
+      const reloaded = freshService();
+      TestBed.inject(PreflightDismissalStorageService).adopt('u-1');
+      reloaded.requestConsent('github-oauth', URL_A, undefined, 'msg-2', 'sess-2');
+      expect(reloaded.pending().length).toBe(0);
+    });
+
+    it('lifts the dismissal once consent succeeds', () => {
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-1', 'sess-1');
+      service.dismiss('github-oauth');
+      service.requestConsent('github-oauth', URL_A, 'i-1', 'msg-2', 'sess-1');
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: window.location.origin,
+          data: { type: 'agentcore-oauth-complete', status: 'success', providerId: 'github-oauth', error: null },
+        }),
+      );
+
+      // Connected, then disconnected later: the prompt must be able to return.
+      service.requestConsent('github-oauth', URL_A, undefined, 'msg-3', 'sess-1');
       expect(service.pending().length).toBe(1);
     });
   });
