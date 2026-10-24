@@ -387,7 +387,8 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
         if not await assistant_exists(agent_id):
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
         assistant, permission = await get_assistant_with_access_check(
-            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email,
+            resolve_public_share=True,
         )
         if not assistant:
             raise HTTPException(status_code=403, detail="Access denied: you do not have permission to access this agent")
@@ -481,7 +482,11 @@ async def update_agent_endpoint(
 
         try:
             await validate_agent_write(
-                current_user, bindings=request.bindings, model_settings=request.model_settings
+                current_user,
+                bindings=request.bindings,
+                model_settings=request.model_settings,
+                existing_bindings=assistant.bindings,
+                existing_model_settings=assistant.model_settings,
             )
         except BindingValidationError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)

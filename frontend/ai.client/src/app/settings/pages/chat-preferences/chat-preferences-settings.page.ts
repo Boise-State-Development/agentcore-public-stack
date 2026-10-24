@@ -285,6 +285,9 @@ export class ChatPreferencesSettingsPage {
 
     try {
       await this.userSettingsService.updateSettings({ defaultModelId: modelId });
+      // Reflect the new default in this tab's selection so the next new chat
+      // uses it without a reload (#1585).
+      this.modelService.applyUserDefault(modelId);
     } catch {
       this.saveError.set('Failed to save default model. Please try again.');
     } finally {

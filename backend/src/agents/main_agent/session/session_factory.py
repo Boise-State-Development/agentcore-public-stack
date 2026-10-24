@@ -99,10 +99,18 @@ if AGENTCORE_MEMORY_AVAILABLE:
     class _SharedSessionMemoryClient(MemoryClient):
         """``MemoryClient`` built from the shared session when the flag is on.
 
-        The SDK session manager constructs ``MemoryClient(region_name=...)``
-        with no session, so it cannot be handed one; its clients are then
-        replaced a few lines later, so they were pure cost. Rebinding the name
-        in the SDK module is the only seam the pinned bedrock-agentcore offers.
+        Through bedrock-agentcore 1.24.1 the SDK session manager built
+        ``MemoryClient(region_name=...)`` with no session — it accepted a
+        ``boto_session`` and then ignored it — so the client could not be
+        handed one, and its clients were replaced a few lines later at pure
+        cost. Rebinding the name in the SDK module was the only seam on offer.
+
+        1.24.2 passes ``boto3_session=`` through, so on the session-manager
+        path this subclass now just forwards what it is given and the
+        contextvar fallback below is unreachable there. It is kept as the seam
+        for any SDK path that still constructs a client without one; removing
+        it is a follow-up, not part of the bump.
+
         Pinned by ``test_session_factory_shared_clients.py``, which fails if an
         SDK upgrade stops going through it.
         """
@@ -208,7 +216,8 @@ class SessionFactory:
         caching_enabled: bool = True,
         compaction_enabled: Optional[bool] = None,
         compaction_threshold: Optional[int] = None,
-        long_term_memory: bool = True,
+        memory_retrieval: bool = True,
+        memory_extraction: bool = True,
     ) -> Any:
         """
         Create appropriate session manager based on environment configuration
@@ -219,9 +228,11 @@ class SessionFactory:
             caching_enabled: Whether to enable prompt caching
             compaction_enabled: Override AGENTCORE_MEMORY_COMPACTION_ENABLED env var
             compaction_threshold: Override AGENTCORE_MEMORY_COMPACTION_TOKEN_THRESHOLD env var
-            long_term_memory: False for a conversation with an Agent (an
-                assistant): the user's long-term memory is neither retrieved
-                into it nor extracted from it. See ``_create_cloud_session_manager``.
+            memory_retrieval: False keeps the user's long-term memory out of the
+                conversation (Agent chats, memory mode "off").
+            memory_extraction: False keeps the conversation from becoming
+                long-term memory (Agent chats, memory modes "read only" and
+                "off"). See ``_create_cloud_session_manager``.
 
         Returns:
             Session manager instance (TurnBasedSessionManager or PreviewSessionManager)
@@ -248,7 +259,8 @@ class SessionFactory:
             caching_enabled=caching_enabled,
             compaction_enabled=compaction_enabled,
             compaction_threshold=compaction_threshold,
-            long_term_memory=long_term_memory,
+            memory_retrieval=memory_retrieval,
+            memory_extraction=memory_extraction,
         )
 
     @staticmethod
@@ -260,19 +272,22 @@ class SessionFactory:
         caching_enabled: bool,
         compaction_enabled: Optional[bool] = None,
         compaction_threshold: Optional[int] = None,
-        long_term_memory: bool = True,
+        memory_retrieval: bool = True,
+        memory_extraction: bool = True,
     ) -> Any:
         """
         Create AgentCore Memory session manager with built-in compaction
 
-        ``long_term_memory=False`` keeps the user's long-term memory out of
-        this conversation in both directions. Long-term memory is keyed to the
+        ``memory_retrieval=False`` / ``memory_extraction=False`` keep the user's
+        long-term memory out of this conversation, one direction each (an Agent
+        chat and the "off" mode set both; "read only" sets extraction only). Long-term memory is keyed to the
         user alone (``/strategies/{id}/actors/{actorId}``), so a conversation
         with an Agent would otherwise read facts extracted from every other
         Agent's chats, and write its own knowledge-base-augmented prompts back
         for the next one to read: one instructor's assistant answered about an
-        assignment its only file never mentioned. With it off, no namespace is
-        retrieved and every event is written with ``extractionMode="SKIP"``
+        assignment its only file never mentioned. With retrieval off, no
+        namespace is retrieved; with extraction off every event is written
+        with ``extractionMode="SKIP"``
         (short-term history is unaffected). Preview sessions get the same
         isolation from ``PreviewSessionManager``.
 
@@ -316,8 +331,8 @@ class SessionFactory:
         # AgentCore stores memories in: /strategies/{strategyId}/actors/{actorId}
         retrieval_config: Dict[str, RetrievalConfig] = {}
 
-        if not long_term_memory:
-            logger.info("   • Long-term memory: off for this conversation (Agent chat)")
+        if not memory_retrieval:
+            logger.info("   • Long-term memory retrieval: off for this conversation")
         elif preference_id:
             # User preferences (e.g., coding style, response length preferences)
             preference_namespace = f"/strategies/{preference_id}/actors/{{actorId}}"
@@ -327,7 +342,7 @@ class SessionFactory:
             )
             logger.info(f"   • Preferences namespace: {preference_namespace}")
 
-        if semantic_id and long_term_memory:
+        if semantic_id and memory_retrieval:
             # Semantic facts (e.g., user's name, project details, learned information)
             facts_namespace = f"/strategies/{semantic_id}/actors/{{actorId}}"
             retrieval_config[facts_namespace] = RetrievalConfig(
@@ -336,7 +351,7 @@ class SessionFactory:
             )
             logger.info(f"   • Facts namespace: {facts_namespace}")
 
-        if summary_id and long_term_memory and summary_namespace_retrieval_enabled():
+        if summary_id and memory_retrieval and summary_namespace_retrieval_enabled():
             # Session summaries (condensed conversation context for the current session)
             # Note: Summary namespace includes sessionId since summaries are per-session.
             #
@@ -359,7 +374,7 @@ class SessionFactory:
 
         logger.info(f"   • Retrieval: top_k={top_k}, relevance_score={relevance_score}")
 
-        if not retrieval_config and long_term_memory:
+        if not retrieval_config and memory_retrieval:
             logger.warning("⚠️ No memory strategies found - long-term memory retrieval disabled")
 
         # Configure AgentCore Memory with dynamically discovered namespaces
@@ -393,7 +408,8 @@ class SessionFactory:
                 user_id=user_id,
                 summarization_strategy_id=summary_id,
                 boto_session=shared_boto_session() if shared_clients else None,
-                long_term_memory=long_term_memory,
+                memory_retrieval=memory_retrieval,
+                memory_extraction=memory_extraction,
             )
         finally:
             _use_shared_memory_clients.reset(token)

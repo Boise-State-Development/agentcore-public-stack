@@ -196,9 +196,12 @@ CloudFormation caps a stack at **500 resources**, and this is a deliberate
 single-stack architecture with nowhere to spill. Alarms are the largest
 discretionary consumer.
 
-Measured: **308** resources before this work, **~370** after. A guard in
-`observability-dynamodb-alarms.test.ts` fails the build above 460, so the ceiling
-surfaces while there is still room to react rather than as a failed deploy.
+Measured: **308** resources before this work, **~370** after. The guard is
+`platform-ceilings.test.ts`, which synthesizes the stack twice — with the
+shipped defaults and with every opt-in flag on — and fails the build above a
+margin below 500, so the ceiling surfaces while there is still room to react
+rather than as a failed deploy. It prints both counts on every run; read them
+there rather than keeping a number in prose.
 
 When budget matters, decide with data rather than by covering every documented
 metric. The DynamoDB allocation was cut from 78 alarms to 27 because a live sweep
@@ -289,9 +292,9 @@ cannot be quietly reversed.
 | `bedrock-invocation-throttles` | At a model's TPM/RPM quota | Users see chats that never respond. Quota increase. |
 | `agentcore-memory-*` | Memory hot path failing | Users experience an agent that has forgotten the conversation. |
 | `agentcore-gateway-*` | MCP calls failing at the gateway | Agents lose tool access. Check gateway targets. |
-| `ddb-*-throttle` | Named table throttling | On-demand, so this is a hot partition or an account limit. Compare `ReadThrottleEvents` vs `WriteThrottleEvents` on that table. |
+| `ddb-throttle-group-*` | At least one table in the group is throttling | The description lists the group's tables; compare `ReadThrottleEvents` vs `WriteThrottleEvents` across them to find it. On-demand, so this is a hot partition or an account limit. While the alarm stays in ALARM, a second table in the same group starting to throttle sends no new notification. |
 | `ddb-user-errors` | DynamoDB rejecting our requests (4xx) | Application code misusing the API. Account-wide, so use CloudTrail or app logs to find the caller. |
-| `lambda-token-enrichment-errors` | **Silent** degradation | Handler is fail-open: logins still work, but MCP tools are losing user-identity claims. |
+| `lambda-errors-group-*` / `lambda-throttles-group-*` | At least one Lambda in the group is failing or throttled | The description lists the members; each function's own `Errors` / `Throttles` metric shows which one. If it is token-enrichment, that is **silent** degradation: the handler is fail-open, so logins still work but MCP tools are losing user-identity claims. |
 | `dlq-kb-ingestion-not-empty` | Work accepted then failed every retry | Will **not** self-clear. Inspect, fix, then replay or drain. |
 | `prompt-cache-session-partial-miss` | One conversation re-writing its prefix every turn | Use the "Sessions by partial-miss waste" widget to find which session. |
 

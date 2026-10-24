@@ -1,9 +1,10 @@
-import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector, effect, untracked } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy, ApplicationRef, computed, signal, afterNextRender, Injector, effect, untracked } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
+import { CdkDrag, CdkDragDrop, CdkDropList } from '@angular/cdk/drag-drop';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack } from '@ng-icons/heroicons/outline';
@@ -23,6 +24,8 @@ import { ProjectsService } from '../../../../projects/services/projects.service'
 import { FEATURES } from '../../../../services/features';
 import { UNTITLED_SESSION_TITLE } from './session-title-filter';
 import { bindingQueryParams } from '../../../../session/services/session/conversation-binding.service';
+import { appPin, appPinOff } from './pin-icons';
+import { IncognitoChatService, incognitoIcon } from '../../../../session/services/incognito';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -32,6 +35,9 @@ import { bindingQueryParams } from '../../../../session/services/session/convers
 export type SessionListEntry =
   | { kind: 'session'; session: SessionMetadata }
   | { kind: 'project'; projectId: string; name: string; sessions: SessionMetadata[] };
+
+/** The status dot a conversation row shows, if any (see `rowIndicator`). */
+export type SessionRowIndicator = 'streaming' | 'awaiting-input' | 'unread' | null;
 
 /** Where a project's group sits: where its most recent task in the bucket would. */
 export function groupProjectSessions(
@@ -59,8 +65,8 @@ export function groupProjectSessions(
 
 @Component({
   selector: 'app-session-list',
-  imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack })],
+  imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, CdkDrag, CdkDropList, InViewDirective],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff, incognitoIcon })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -73,8 +79,10 @@ export class SessionList {
   private dialog = inject(Dialog);
   private router = inject(Router);
   private injector = inject(Injector);
+  private appRef = inject(ApplicationRef);
   private userService = inject(UserService);
   private projectsService = inject(ProjectsService);
+  private incognitoChat = inject(IncognitoChatService);
   /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
   private readonly projectsOn = inject(FEATURES).projects;
 
@@ -134,9 +142,11 @@ export class SessionList {
    * Computed signal that groups sessions by time period:
    * Today, Yesterday, Last 7 Days, Last 30 Days, Older.
    */
-  readonly groupedSessions = computed(() => {
-    const sessions = this.sessions();
-    if (!sessions || sessions.length === 0) return [];
+  readonly timeGroups = computed(() => {
+    // Pinned conversations get their own group on top and leave their time bucket.
+    const pinnedIds = this.sessionService.pinnedSessionIds();
+    const sessions = this.sessions()?.filter(s => !pinnedIds.has(s.sessionId)) ?? [];
+    if (sessions.length === 0) return [];
 
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -173,11 +183,53 @@ export class SessionList {
       .filter(g => g.sessions.length > 0)
       .map(g => ({
         ...g,
-        entries: this.projectsOn
+        entries: (this.projectsOn
           ? groupProjectSessions(g.sessions, names)
-          : g.sessions.map(session => ({ kind: 'session' as const, session })),
+          : g.sessions.map(session => ({ kind: 'session' as const, session }))) as SessionListEntry[],
       }));
   });
+
+  /** The user's pinned conversations, most recently pinned first. */
+  readonly pinnedSessions = this.sessionService.pinnedSessions;
+
+  /** Every group the list shows: Pinned (when there are pins) above the time buckets. */
+  readonly groupedSessions = computed(() => {
+    const pinned = this.pinnedSessions();
+    const timeGroups = this.timeGroups();
+    if (pinned.length === 0) return timeGroups;
+    return [
+      {
+        label: 'Pinned',
+        sessions: pinned,
+        entries: pinned.map(session => ({ kind: 'session' as const, session }) as SessionListEntry),
+      },
+      ...timeGroups,
+    ];
+  });
+
+  /** A conversation row is being dragged; shows the Pinned drop zone even with no pins. */
+  protected readonly isDragging = signal(false);
+
+  /** The dragged row is over the Pinned list. */
+  protected readonly isOverPinned = signal(false);
+
+  /** Touch needs a short press-and-hold so a drag never fights the drawer's scroll. */
+  protected readonly dragStartDelay = { touch: 300, mouse: 0 };
+
+  /**
+   * Classes for the floating copy of a dragged row. CDK appends it to <body>,
+   * outside this component's encapsulated styles, so it is styled with global
+   * Tailwind utilities (dark mode included) rather than the component CSS.
+   * The background is `!important`: CDK resets the preview's popover styles
+   * (`background: none`) in its own cascade layer, which outranks utilities.
+   */
+  protected readonly dragPreviewClass = [
+    'list-none', 'rounded-md', 'bg-white!', 'shadow-lg', 'ring-1', 'ring-black/5',
+    'dark:bg-gray-800!', 'dark:ring-white/10',
+  ];
+
+  protected readonly pinnedListId = 'session-list-pinned';
+  protected readonly unpinnedListId = 'session-list-unpinned';
 
   constructor() {
     // Project names load once, and only for someone who has a project task. The
@@ -319,6 +371,30 @@ export class SessionList {
   }
 
   /**
+   * Whether this conversation's turn is paused waiting on the user (OAuth
+   * consent, tool approval, a clarifying question, a browser sign-in), which
+   * shows the amber dot. Precedence on the row: streaming > awaiting input >
+   * unread. The server derives `awaitingInput` only while the pause can still
+   * be resumed; ChatStateService layers this tab's live knowledge on top (a
+   * background stream that just ended on a prompt, or a prompt just answered).
+   */
+  protected isAwaitingInput(session: SessionMetadata): boolean {
+    return this.chatStateService.awaitingInputFor(session) !== null;
+  }
+
+  /**
+   * The one status dot a row shows, highest first: a streaming response, a
+   * turn paused on the user, then unread. The template draws exactly this, so
+   * the order lives here and nowhere else.
+   */
+  protected rowIndicator(session: SessionMetadata): SessionRowIndicator {
+    if (this.isSessionStreaming(session.sessionId)) return 'streaming';
+    if (this.isAwaitingInput(session)) return 'awaiting-input';
+    if (this.shouldShowUnreadDot(session)) return 'unread';
+    return null;
+  }
+
+  /**
    * Whether this conversation should show the blue unread dot (distinct from
    * the pulsing secondary streaming dot). Unread has two sources, ORed here:
    *
@@ -393,6 +469,14 @@ export class SessionList {
    * @param session - Session metadata
    * @returns Display title
    */
+  /**
+   * Incognito chat (#1738): from the row, or from this tab when it started
+   * the conversation and the row's preferences haven't arrived yet.
+   */
+  protected isIncognito(session: SessionMetadata): boolean {
+    return session.preferences?.incognito === true || this.incognitoChat.isIncognito(session.sessionId);
+  }
+
   protected getSessionTitle(session: SessionMetadata): string {
     return session.title || UNTITLED_SESSION_TITLE;
   }
@@ -567,6 +651,66 @@ export class SessionList {
         this.chatStateService.markSessionUnread(session.sessionId);
         this.sessionService.refreshSessions();
       }
+    });
+  }
+
+  protected isPinned(session: SessionMetadata): boolean {
+    return this.sessionService.pinnedSessionIds().has(session.sessionId);
+  }
+
+  /** Project tasks already list under their project, so they can't be pinned. */
+  protected canPin(session: SessionMetadata): boolean {
+    return !session.preferences?.projectId;
+  }
+
+  /**
+   * Pins or unpins a conversation. The row moves right away (optimistic);
+   * a failed request moves it back and shows a toast.
+   */
+  protected onTogglePinClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const pin = !this.isPinned(session);
+
+    // Deferred past the CDK menu's close, for the same reason as onToggleReadClick.
+    queueMicrotask(() => this.setPinned(session, pin));
+  }
+
+  /**
+   * A row started dragging. Renders the Pinned drop zone synchronously: CDK
+   * measures every connected list right after this event, so a zone that
+   * appeared on the next change-detection pass would be measured in the wrong
+   * place (or not at all, when there were no pins).
+   */
+  protected onDragStarted(): void {
+    this.isDragging.set(true);
+    this.appRef.tick();
+  }
+
+  protected onDragEnded(): void {
+    this.isDragging.set(false);
+    this.isOverPinned.set(false);
+  }
+
+  /** A row dropped on Pinned: pin it, unless it came from Pinned already. */
+  protected onPinnedDrop(event: CdkDragDrop<unknown, unknown, SessionMetadata>): void {
+    if (event.previousContainer === event.container) return;
+    this.setPinned(event.item.data, true);
+  }
+
+  /** A row dropped on the rest of the list: unpin it if it came from Pinned. */
+  protected onUnpinnedDrop(event: CdkDragDrop<unknown, unknown, SessionMetadata>): void {
+    if (event.previousContainer === event.container) return;
+    this.setPinned(event.item.data, false);
+  }
+
+  private setPinned(session: SessionMetadata, pin: boolean): void {
+    this.sessionService.setSessionPinned(session.sessionId, pin).catch(error => {
+      console.error('Failed to update pin:', error);
+      this.toastService.error(
+        pin ? 'Failed to pin' : 'Failed to unpin',
+        'There was an error updating the conversation. Please try again.'
+      );
     });
   }
 

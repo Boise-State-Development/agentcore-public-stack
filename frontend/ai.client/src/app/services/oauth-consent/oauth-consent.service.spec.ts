@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { OAuthConsentService } from './oauth-consent.service';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { SessionService } from '../../session/services/session/session.service';
+import { ChatStateService } from '../../session/services/chat/chat-state.service';
 
 describe('OAuthConsentService', () => {
   let service: OAuthConsentService;
@@ -93,6 +94,25 @@ describe('OAuthConsentService', () => {
 
       service.requestConsent('google', 'https://accounts.example/c', 'i-1');
       expect(service.pending().length).toBe(1);
+    });
+  });
+
+  describe('the session list\'s "needs your input" mark', () => {
+    const row = { sessionId: 'sess-1', lastMessageAt: '2026-01-01T00:00:00Z', awaitingInput: 'oauth' as const };
+
+    it('clears when the user dismisses a paused turn\'s prompt', () => {
+      const chatState = TestBed.inject(ChatStateService);
+      service.requestConsent('google', 'https://accounts.example/c', 'i-1', 'msg-1', 'sess-1');
+      service.dismiss('google');
+      expect(chatState.awaitingInputFor(row)).toBeNull();
+    });
+
+    it('is left to the resume when consent completes', () => {
+      const chatState = TestBed.inject(ChatStateService);
+      service.requestConsent('google', 'https://accounts.example/c', 'i-1', 'msg-1', 'sess-1');
+      // Completion-driven cleanup: the resume stream that follows clears it.
+      service.dismiss('google', { syncServer: false });
+      expect(chatState.awaitingInputFor(row)).toBe('oauth');
     });
   });
 

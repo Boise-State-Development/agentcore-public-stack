@@ -17,6 +17,8 @@ describe('FEATURES', () => {
     // (and its backend *_ENABLED) by choice; see CLAUDE.md "Feature flags".
     expect(environment.features.sessionPrewarm).toBe(false);
     expect(environment.features.attachmentKb).toBe(false);
+    expect(environment.features.sourceProvenance).toBe(false);
+    expect(environment.features.documentExtract).toBe(false);
   });
 
   it('turns finished features on locally, matching their default-on backend switches', () => {

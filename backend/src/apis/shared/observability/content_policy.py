@@ -160,6 +160,11 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "cacheGapSeconds",
     "cachePrefixGapSeconds",
     "wastedUsd",
+    # Present only when this call's usage was estimated rather than reported
+    # (an interrupted turn's cut generation): a field -> method map, closed
+    # vocabulary, no content. Without it a reader cannot tell a measured row
+    # from an estimated one, which is the whole point of writing it.
+    "usageEstimated",
     "agentSwitched",
     "modelSwitched",
     "turnAgentId",

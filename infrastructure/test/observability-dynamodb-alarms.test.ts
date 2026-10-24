@@ -4,7 +4,7 @@ import { Template } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
 
-describe('DynamoDB per-table alarms', () => {
+describe('DynamoDB grouped throttle alarms', () => {
   let template: Template;
   let alarms: Record<string, any>;
   let tableCount: number;
@@ -39,61 +39,81 @@ describe('DynamoDB per-table alarms', () => {
     tableCount = Object.keys(template.findResources('AWS::DynamoDB::Table')).length;
   });
 
+  function throttleGroups(): any[] {
+    return Object.values(alarms).filter((a) => (
+      typeof a.Properties.AlarmName === 'string'
+      && a.Properties.AlarmName.startsWith(`${MOCK_PREFIX}-ddb-throttle-group-`)
+    ));
+  }
+
+  /** Logical ids of the tables a grouped alarm's metrics are bound to. */
+  function tablesIn(alarm: any): string[] {
+    return alarm.Properties.Metrics
+      .filter((m: any) => m.MetricStat)
+      .map((m: any) => m.MetricStat.Metric.Dimensions[0].Value.Ref);
+  }
+
   // Tied to the real table count, so a new table without an alarm fails here.
-  it('covers every table in the stack — one throttle alarm each', () => {
+  it('groups every table into throttle alarms of at most five tables', () => {
     expect(tableCount).toBe(29);
-    // 29 per-table throttle alarms + 1 account-level UserErrors alarm.
-    expect(ddbAlarmNames()).toHaveLength(tableCount + 1);
+    // ceil(29 / 5) grouped throttle alarms + 1 account-level UserErrors alarm.
+    expect(throttleGroups()).toHaveLength(6);
+    expect(ddbAlarmNames()).toHaveLength(6 + 1);
   });
 
-  it('every table has a throttle alarm naming that table', () => {
-    const names = new Set(ddbAlarmNames());
-    // Derive expected table short-names from the template's OWN TableName
-    // properties, so this does not restate the list the construct is given.
-    const tableShortNames = Object.values(template.findResources('AWS::DynamoDB::Table'))
-      .map((t: any) => (t.Properties.TableName as string).replace(`${MOCK_PREFIX}-`, ''));
-
-    const missing = tableShortNames
-      .map((short) => `${MOCK_PREFIX}-ddb-${short}-throttle`)
-      .filter((expected) => !names.has(expected));
-    expect(missing).toEqual([]);
+  it('every table is covered by exactly one throttle group', () => {
+    const tableIds = Object.keys(template.findResources('AWS::DynamoDB::Table'));
+    const covered = throttleGroups().flatMap(tablesIn);
+    for (const id of tableIds) {
+      // Two metrics (reads, writes) per table, all in the same group.
+      expect(covered.filter((c) => c === id)).toHaveLength(2);
+    }
+    expect(new Set(covered).size).toBe(tableIds.length);
   });
 
-  it('throttle alarm sums read and write events in one expression', () => {
-    const alarm = Object.values(alarms).find(
-      (a) => a.Properties.AlarmName === `${MOCK_PREFIX}-ddb-users-throttle`,
+  it('the description names every table its group covers', () => {
+    const tableNames = Object.fromEntries(
+      Object.entries(template.findResources('AWS::DynamoDB::Table')).map(([id, t]: [string, any]) => (
+        [id, (t.Properties.TableName as string).replace(`${MOCK_PREFIX}-`, '')]
+      )),
     );
-    expect(alarm).toBeDefined();
-    // Metric math renders as Metrics[], not a flat MetricName.
+    for (const alarm of throttleGroups()) {
+      for (const id of new Set(tablesIn(alarm))) {
+        expect(alarm.Properties.AlarmDescription).toContain(tableNames[id]);
+      }
+    }
+  });
+
+  // MAX over per-table sums keeps the threshold per table, not per group; FILL
+  // keeps a table that only throttles reads (or only writes) from being dropped.
+  it('alarms on the worst table, summing its filled read and write events', () => {
+    const alarm = throttleGroups()[0];
     expect(alarm.Properties.MetricName).toBeUndefined();
     const json = JSON.stringify(alarm.Properties.Metrics);
     expect(json).toContain('ReadThrottleEvents');
     expect(json).toContain('WriteThrottleEvents');
-    expect(json).toContain('reads + writes');
+    const expression = alarm.Properties.Metrics.find((m: any) => m.Expression).Expression;
+    expect(expression).toMatch(/^MAX\(\[FILL\(r0, 0\) \+ FILL\(w0, 0\), /);
     expect(alarm.Properties.Threshold).toBe(10); // configured default
     expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
   });
 
   // CloudWatch caps math-expression alarms at 10 metrics.
-  it('throttle expression stays well inside the 10-metric math limit', () => {
-    const alarm = Object.values(alarms).find(
-      (a) => a.Properties.AlarmName === `${MOCK_PREFIX}-ddb-users-throttle`,
-    );
-    const metricCount = alarm.Properties.Metrics.filter((m: any) => m.MetricStat).length;
-    expect(metricCount).toBe(2);
+  it('no throttle group exceeds the 10-metric math limit', () => {
+    for (const alarm of throttleGroups()) {
+      expect(alarm.Properties.Metrics.filter((m: any) => m.MetricStat).length)
+        .toBeLessThanOrEqual(10);
+    }
   });
 
   it('throttle alarms bind TableName to the real table resource', () => {
-    const alarm = Object.values(alarms).find(
-      (a) => a.Properties.AlarmName === `${MOCK_PREFIX}-ddb-sessions-metadata-throttle`,
-    );
-    const stats = alarm.Properties.Metrics.filter((m: any) => m.MetricStat);
-    expect(stats.length).toBeGreaterThan(0);
-    for (const m of stats) {
-      const dims = m.MetricStat.Metric.Dimensions;
-      expect(dims).toHaveLength(1);
-      expect(dims[0].Name).toBe('TableName');
-      expect(JSON.stringify(dims[0].Value)).toMatch(/Ref|Fn::GetAtt/);
+    for (const alarm of throttleGroups()) {
+      for (const m of alarm.Properties.Metrics.filter((x: any) => x.MetricStat)) {
+        const dims = m.MetricStat.Metric.Dimensions;
+        expect(dims).toHaveLength(1);
+        expect(dims[0].Name).toBe('TableName');
+        expect(JSON.stringify(dims[0].Value)).toMatch(/Ref|Fn::GetAtt/);
+      }
     }
   });
 
@@ -123,14 +143,5 @@ describe('DynamoDB per-table alarms', () => {
         expect(alarm.Properties.OKActions).toHaveLength(1);
       }
     }
-  });
-
-  // Single-stack architecture against a hard 500-resource CFN limit, so the
-  // ceiling is asserted while there is still room to react. Raised from 460 to
-  // 465 (2026-10-08, Shared Projects 2.6b) for the Runtime's own STATS# grant
-  // policy, which stays out of the role's CDK overflow policies on purpose.
-  it('stack stays clear of the 500-resource CloudFormation limit', () => {
-    const total = Object.keys(template.toJSON().Resources).length;
-    expect(total).toBeLessThan(465);
   });
 });

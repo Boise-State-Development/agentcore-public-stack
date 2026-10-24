@@ -42,6 +42,9 @@ describe('SessionList', () => {
       markSessionRead: vi.fn().mockResolvedValue(undefined),
       markSessionUnread: vi.fn().mockResolvedValue(undefined),
       refreshSessions: vi.fn(),
+      pinnedSessions: signal([]),
+      pinnedSessionIds: signal(new Set<string>()),
+      setSessionPinned: vi.fn().mockResolvedValue(undefined),
     };
     mockSidenavService = { close: vi.fn() };
     mockToastService = { success: vi.fn(), error: vi.fn() };
@@ -192,6 +195,12 @@ describe('SessionList', () => {
     expect(component['getSessionTitle']({ ...mockSession, title: '' })).toBe('Untitled Session');
   });
 
+  it('marks an incognito chat for the icon before its title (#1738)', async () => {
+    const component = await createComponent();
+    expect(component['isIncognito']({ ...mockSession, preferences: { incognito: true } })).toBe(true);
+    expect(component['isIncognito'](mockSession)).toBe(false);
+  });
+
   it('closes the sidenav and optimistically sets the clicked session on click', async () => {
     const component = await createComponent();
     mockSessionService.currentSession.set({ ...mockSession, sessionId: 'other', title: 'Other' });
@@ -216,6 +225,54 @@ describe('SessionList', () => {
 
     chatState.setChatLoading('test-session', false);
     expect(component['isSessionStreaming']('test-session')).toBe(false);
+  });
+
+  describe('row indicator precedence', () => {
+    const pausedUnread = { ...mockSession, unread: true, awaitingInput: 'oauth' as const };
+
+    it('ranks streaming over a paused turn over unread', async () => {
+      const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+      const chatState = TestBed.inject(ChatStateService);
+      const component = await createComponent();
+
+      expect(component['rowIndicator'](pausedUnread)).toBe('awaiting-input');
+      expect(component['rowIndicator']({ ...mockSession, unread: true })).toBe('unread');
+      expect(component['rowIndicator'](mockSession)).toBeNull();
+
+      chatState.setChatLoading('test-session', true);
+      expect(component['rowIndicator'](pausedUnread)).toBe('streaming');
+    });
+
+    it('shows the paused state from a live stream before the list knows', async () => {
+      const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+      const chatState = TestBed.inject(ChatStateService);
+      const component = await createComponent();
+
+      // A background conversation's stream ends on an approval prompt.
+      chatState.setViewedSession('other');
+      chatState.setChatLoading('test-session', true);
+      chatState.markSessionAwaitingInput('test-session', 'tool_approval');
+      chatState.setChatLoading('test-session', false);
+
+      // It is also unread now, and the paused state outranks that.
+      expect(component['shouldShowUnreadDot'](mockSession)).toBe(true);
+      expect(component['rowIndicator'](mockSession)).toBe('awaiting-input');
+    });
+
+    it('drops a stale server pause once this tab saw the turn resume', async () => {
+      const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+      const chatState = TestBed.inject(ChatStateService);
+      const component = await createComponent();
+
+      chatState.setViewedSession('test-session');
+      expect(component['rowIndicator'](pausedUnread)).toBe('awaiting-input');
+
+      // Answering resumes the turn on a new stream; the list row is not
+      // refetched yet and still says oauth.
+      chatState.setChatLoading('test-session', true);
+      chatState.setChatLoading('test-session', false);
+      expect(component['isAwaitingInput'](pausedUnread)).toBe(false);
+    });
   });
 
   it('shows the unread dot for a server-unread session and suppresses it once locally read', async () => {
@@ -315,6 +372,26 @@ describe('SessionList', () => {
     // Stream ends without a title → shimmer clears; row shows the fallback.
     chatState.setChatLoading('test-session', false);
     expect(component['isTitlePending'](untitled)).toBe(false);
+  });
+
+  describe('drag to pin', () => {
+    // The two drop lists, as CDK hands them to the dropped handlers.
+    const pinnedList = { id: 'session-list-pinned' };
+    const unpinnedList = { id: 'session-list-unpinned' };
+    const drop = (from: object, to: object) =>
+      ({ previousContainer: from, container: to, item: { data: mockSession } }) as any;
+
+    it('pins a conversation dropped on Pinned', async () => {
+      const component = await createComponent();
+      (component as any).onPinnedDrop(drop(unpinnedList, pinnedList));
+      expect(mockSessionService.setSessionPinned).toHaveBeenCalledWith('test-session', true);
+    });
+
+    it('unpins a conversation dragged out of Pinned', async () => {
+      const component = await createComponent();
+      (component as any).onUnpinnedDrop(drop(pinnedList, unpinnedList));
+      expect(mockSessionService.setSessionPinned).toHaveBeenCalledWith('test-session', false);
+    });
   });
 
   describe('project grouping', () => {

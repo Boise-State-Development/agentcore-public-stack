@@ -455,3 +455,161 @@ class TestMemorySpace:
                 bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
             )
         assert ei.value.status_code == 400
+
+
+# --------------------------------------------------------------------------- kept bindings
+class TestKeptBindings:
+    """An update keeps what is already on the record without re-judging the saver.
+
+    The Designer palettes list only the saver's own capabilities, and the form sends
+    back every binding — so a share editor who lacks the owner's model, tool or skill
+    could otherwise never save. Newly added bindings are still checked; shape checks
+    run on everything.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _flag_on(self, monkeypatch):
+        monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: True)
+
+    @pytest.mark.asyncio
+    async def test_kept_tool_skips_the_palette(self):
+        svc = _tool_svc()  # the saver can reach no tools at all
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="tool", ref="owner_only")],
+            existing_bindings=[AgentBinding(kind="tool", ref="owner_only")],
+            tool_service=svc,
+        )
+        svc.get_user_accessible_tools.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_kept_scoped_tool_skips_the_name_check(self):
+        ref = "canvas_faculty::grade_submission"
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="tool", ref=ref), AgentBinding(kind="tool", ref="mine")],
+            existing_bindings=[AgentBinding(kind="tool", ref=ref)],
+            tool_service=_tool_svc("mine"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_added_tool_is_still_checked(self):
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[
+                    AgentBinding(kind="tool", ref="owner_only"),
+                    AgentBinding(kind="tool", ref="new_secret"),
+                ],
+                existing_bindings=[AgentBinding(kind="tool", ref="owner_only")],
+                tool_service=_tool_svc(),
+            )
+        assert ei.value.status_code == 403
+        assert "new_secret" in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_kept_tool_shape_is_still_checked(self):
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[AgentBinding(kind="tool", ref="canvas::")],
+                existing_bindings=[AgentBinding(kind="tool", ref="canvas::")],
+                tool_service=_tool_svc(),
+            )
+        assert ei.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_kept_skill_skips_the_palette(self, monkeypatch):
+        palette = AsyncMock(return_value=[])
+        monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", palette)
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="skill", ref="owner_skill")],
+            existing_bindings=[AgentBinding(kind="skill", ref="owner_skill")],
+        )
+        palette.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_added_skill_is_still_checked(self, monkeypatch):
+        monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", AsyncMock(return_value=[]))
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[AgentBinding(kind="skill", ref="new_skill")],
+                existing_bindings=[AgentBinding(kind="skill", ref="owner_skill")],
+            )
+        assert ei.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_kept_skill_pin_must_still_exist(self, monkeypatch):
+        monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", AsyncMock(return_value=[]))
+        repo = AsyncMock()
+        repo.batch_get_skill_versions = AsyncMock(return_value={})
+        monkeypatch.setattr(f"{MODULE}.get_skill_catalog_repository", lambda: repo)
+        b = AgentBinding(kind="skill", ref="owner_skill", config={"version": 4})
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(_user(), bindings=[b], existing_bindings=[b])
+        assert ei.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_same_ref_under_another_kind_is_not_kept(self):
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[AgentBinding(kind="tool", ref="x")],
+                existing_bindings=[AgentBinding(kind="skill", ref="x")],
+                tool_service=_tool_svc(),
+            )
+        assert ei.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_kb_binding_is_rejected_even_if_kept(self):
+        b = AgentBinding(kind="knowledge_base", ref="ast_1")
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(_user(), bindings=[b], existing_bindings=[b])
+        assert ei.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_unchanged_model_skips_the_access_check(self, monkeypatch):
+        monkeypatch.setattr(
+            f"{MODULE}.list_all_managed_models",
+            AsyncMock(return_value=[SimpleNamespace(model_id="m1", supported_params=None)]),
+        )
+        svc = _model_svc(False)
+        await validate_agent_write(
+            _user(),
+            model_settings=AgentModelConfig(model_id="m1"),
+            existing_model_settings=AgentModelConfig(model_id="m1"),
+            model_access_service=svc,
+        )
+        svc.filter_accessible_models.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_changed_model_is_checked(self, monkeypatch):
+        monkeypatch.setattr(
+            f"{MODULE}.list_all_managed_models",
+            AsyncMock(return_value=[SimpleNamespace(model_id="m2", supported_params=None)]),
+        )
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                model_settings=AgentModelConfig(model_id="m2"),
+                existing_model_settings=AgentModelConfig(model_id="m1"),
+                model_access_service=_model_svc(False),
+            )
+        assert ei.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_unchanged_model_params_are_still_governed(self, monkeypatch):
+        monkeypatch.setattr(
+            f"{MODULE}.list_all_managed_models",
+            AsyncMock(return_value=[SimpleNamespace(model_id="m1", supported_params=None)]),
+        )
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                model_settings=AgentModelConfig(model_id="m1", params={"temperature": 0.5}),
+                existing_model_settings=AgentModelConfig(model_id="m1"),
+                model_access_service=_model_svc(False),
+            )
+        assert ei.value.status_code == 400

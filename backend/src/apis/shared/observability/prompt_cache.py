@@ -148,6 +148,14 @@ class CacheStatus(str, Enum):
       the bug class the fingerprints exist to diagnose.
     - ``uncached``: no cache activity at all (caching disabled, non-Bedrock
       provider, or prompt below the minimum cacheable length).
+    - ``estimated``: the call's usage was never reported, so its cache outcome
+      was not measured. Written by nothing but the interrupted-call path
+      (``agents.main_agent.streaming.interrupted_usage``), whose cache buckets
+      are an attribution rather than an observation. It is deliberately NOT a
+      classification: a plausible ``first_write`` or ``miss_avoidable`` derived
+      from guessed buckets is the kind of lie that sends the next cache
+      investigation after a call nobody measured. ``wastedUsd`` and the
+      avoidable-/partial-miss metrics are suppressed for these rows.
     """
 
     FIRST_WRITE = "first_write"
@@ -156,6 +164,7 @@ class CacheStatus(str, Enum):
     MISS_TTL_EXPIRED = "miss_ttl_expired"
     MISS_AVOIDABLE = "miss_avoidable"
     UNCACHED = "uncached"
+    ESTIMATED = "estimated"
 
 
 def fingerprint_text(text: Optional[str]) -> str:

@@ -86,3 +86,20 @@
     animation: none;
   }
 }
+
+/* Drag to pin: the dragged row's ghost, left in place and shown in Pinned
+   while the row is over it. The floating preview is styled in the component
+   class (dragPreviewClass), since CDK appends it outside this stylesheet. */
+.cdk-drag-placeholder {
+  opacity: 0.4;
+}
+
+.cdk-drag-animating {
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cdk-drag-animating {
+    transition: none;
+  }
+}

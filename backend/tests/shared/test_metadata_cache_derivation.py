@@ -112,6 +112,28 @@ class TestDeriveCacheObservability:
         assert result["wastedUsd"] == 0.0
         assert "cacheGapSeconds" not in result
 
+    def test_estimated_usage_is_never_classified(self):
+        """An interrupted turn's cut call carries attributed cache buckets, not
+        reported ones. Classifying them would put a confident `miss_avoidable`
+        — the status that fires the AvoidableMiss alarm and starts a cache
+        investigation — on numbers nobody measured."""
+        table = _FakeTable([_prev_row(seconds_ago=60, cache_read=4000, cache_write=1000)])
+        meta = _metadata(input_t=0, output_t=120, cache_write=6000)
+        meta.usageEstimated = {"reason": "interrupted", "cacheSplit": "assumed_first_write"}
+
+        result = self._derive(table, meta)
+
+        assert result == {"cacheStatus": "estimated", "wastedUsd": 0.0}
+        # Returned before the predecessor query: nothing to classify against.
+        assert table.query_kwargs is None
+
+    def test_an_estimated_row_still_anchors_the_next_call(self):
+        """Its buckets are the best estimate of what was billed, so the call
+        after it classifies against them like any predecessor."""
+        table = _FakeTable([_prev_row(seconds_ago=20, cache_write=6000)])
+        result = self._derive(table, _metadata(cache_read=6000, cache_write=80))
+        assert result["cacheStatus"] == "hit"
+
     def test_hit_with_previous_row(self):
         table = _FakeTable([_prev_row(seconds_ago=30, cache_write=5000)])
         result = self._derive(table, _metadata(cache_read=5000, cache_write=100))

@@ -75,4 +75,29 @@ export interface FeatureFlags {
    * folder schedule while off; the kb-sync Lambdas carry it too).
    */
   folderSync: boolean;
+  /**
+   * Source provenance verification
+   * (docs/specs/source-provenance-verification.md): a cited value is rendered
+   * with a page reference only where the backend could confirm the passage is
+   * in the document AND that the value appears in it; a located passage that
+   * does not support its value renders as the warning it is. Backend:
+   * SOURCE_PROVENANCE_ENABLED (the Runtime builds `verify_sources` and emits
+   * `source_provenance`; app-api replays it). In development, so `false`
+   * everywhere until a deployment turns both sides on.
+   */
+  sourceProvenance: boolean;
+
+  /**
+   * Structured extraction: a named field set run over a document as typed rows
+   * (docs/specs/structured-extraction.md). The UI's share is the rows table —
+   * each cell showing its source-provenance state in the same vocabulary
+   * `sourceProvenance` established, plus the `schemaEnforced` disclosure when
+   * the typed schema was requested rather than guaranteed. Backend:
+   * DOCUMENT_EXTRACT_ENABLED (the Runtime mounts `document_extract`, extracts,
+   * verifies and emits `document_extraction`; app-api replays the `EXTR#`
+   * rows). In development, so `false` everywhere until a deployment turns both
+   * sides on. Carried from slice one so the two sides can land independently;
+   * the table render is slice three.
+   */
+  documentExtract: boolean;
 }

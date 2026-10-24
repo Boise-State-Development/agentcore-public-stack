@@ -413,6 +413,35 @@ export class InferenceAgentCoreConstruct extends Construct {
         // deployment, never per session. Spread in only while on, like
         // full-context mode; must match app-api's and the prepare Lambda's copies.
         ...(config.attachmentKb.enabled ? { ATTACHMENT_KB_ENABLED: 'true' } : {}),
+        // Source provenance verification: the Runtime builds `verify_sources`,
+        // runs the check and emits `source_provenance`. Written only while ON,
+        // so the default costs nothing against the V2 payload budget.
+        ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Handoffs (in development): the Runtime accepts `handoff_context` on a
+        // target's first turn and keeps the source's HANDOFF# row current. Written
+        // only while ON, so the default costs nothing against the V2 payload budget.
+        ...(config.handoffs.enabled ? { HANDOFFS_ENABLED: 'true' } : {}),
+        // Typed structured extraction: the Runtime mounts `document_extract`,
+        // makes the constrained side-channel call, verifies each value through
+        // source_provenance and emits `document_extraction`. Written only while
+        // ON, so the default costs nothing against the V2 payload budget. The
+        // model id rides along only while on for the same reason — it is read
+        // on the extraction path and nowhere else.
+        ...(config.documentExtract.enabled
+          ? {
+              DOCUMENT_EXTRACT_ENABLED: 'true',
+              DOCUMENT_EXTRACT_MODEL_ID: config.documentExtract.modelId,
+              // Only when a deployment overrode it; the backend's default (4)
+              // applies otherwise and costs the V2 payload budget nothing.
+              ...(config.documentExtract.concurrency
+                ? {
+                    DOCUMENT_EXTRACT_CONCURRENCY: String(
+                      config.documentExtract.concurrency,
+                    ),
+                  }
+                : {}),
+            }
+          : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's
         // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',

@@ -13,7 +13,7 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -29,6 +29,8 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 from apis.inference_api.runtime_health import ping_payload
+from apis.shared.handoff.context import build_handoff_message
+from apis.shared.handoff.turn import HandoffTurn
 from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
     agent_preparing_phase_enabled,
@@ -89,6 +91,7 @@ from apis.inference_api.chat.agent_binding_resolver import (
 from apis.shared.sessions.metadata import (
     ensure_session_metadata_exists,
     load_session_meta,
+    session_is_incognito,
 )
 from apis.shared.tools.always_on import (
     resolve_always_on_tool_ids,
@@ -105,7 +108,12 @@ from apis.shared.tools.injected import (
     WORKSPACE_TOOL_IDS,
     injected_tools_are_key_described,
 )
-from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS
+from apis.shared.user_settings.models import (
+    MAX_PERSONAL_INSTRUCTIONS_CHARS,
+    cap_memory_mode,
+    memory_capabilities,
+    memory_mode_from,
+)
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .app_context_dispatch import (
@@ -411,7 +419,24 @@ def _personal_instructions(settings: dict) -> Optional[str]:
     return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
 
 
-async def _plain_turn_prompt(input_data, user_id: Optional[str]) -> Optional[str]:
+def _memory_mode_for_turn(
+    rag_assistant_id: Optional[str], settings: dict, incognito: bool = False
+) -> str:
+    """The user's long-term memory mode, capped to off in an Agent conversation
+    and to read only in an incognito one (#1738)."""
+    mode = cap_memory_mode(memory_mode_from(settings), "off" if rag_assistant_id else "on")
+    return cap_memory_mode(mode, "read_only" if incognito else "on")
+
+
+def _turn_is_incognito(input_data: InvocationRequest, session_meta) -> bool:
+    """Whether this turn's conversation is incognito: the stored flag, or the
+    request's choice when the session has no row yet."""
+    return session_is_incognito(session_meta.row, requested=bool(input_data.incognito))
+
+
+async def _plain_turn_prompt(
+    input_data, user_id: Optional[str], settings: Optional[dict] = None
+) -> Optional[str]:
     """The system prompt a no-model App dispatch must pass to reuse the turn's cached agent.
 
     The agent cache keys on the system prompt, so a dispatch that left out the personal
@@ -421,7 +446,8 @@ async def _plain_turn_prompt(input_data, user_id: Optional[str]) -> Optional[str
     if input_data.rag_assistant_id:
         return input_data.system_prompt
     return personal_plain_prompt(
-        input_data.system_prompt, _personal_instructions(await _load_user_settings(user_id))
+        input_data.system_prompt,
+        _personal_instructions(settings if settings is not None else await _load_user_settings(user_id)),
     )
 
 
@@ -1243,7 +1269,23 @@ async def _build_document_tools(
     from agents.builtin_tools.document_read_tool import make_document_read_tool
 
     tools = [make_document_read_tool(session_id, user_id, text_only=text_only)]
-    logger.info("Created document_read tool (session has a readable document)")
+
+    # Source provenance rides the same gate, for the same reason: the governing
+    # capability is the user's own attachment, and there is nothing to verify a
+    # quote against without one. The flag is a deployment constant, so this adds
+    # no key element of its own — `has_document_tools` already covers the gate
+    # (docs/specs/source-provenance-verification.md §8).
+    from apis.shared.feature_flags import source_provenance_enabled
+
+    if source_provenance_enabled():
+        from agents.builtin_tools.verify_sources_tool import make_verify_sources_tool
+
+        tools.append(make_verify_sources_tool(session_id, user_id))
+
+    logger.info(
+        "Created document tools (session has a readable document): %s",
+        ", ".join(getattr(t, "tool_name", type(t).__name__) for t in tools),
+    )
     return tools
 
 
@@ -2073,7 +2115,9 @@ async def stream_conversational_message(
     user_id: str,
     user_input: str,
     persist: bool = True,
-    long_term_memory: bool = True,
+    memory_mode: str = "on",
+    user_settings: Optional[dict] = None,
+    incognito_requested: Optional[bool] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -2088,8 +2132,15 @@ async def stream_conversational_message(
         user_id: User ID for persistence
         user_input: The user's original message to save
         persist: False streams the message without writing either turn to history
-        long_term_memory: False in an Agent conversation, whose writes skip
-            long-term memory extraction (``SessionFactory.create_session_manager``)
+        memory_mode: The conversation's cap: "off" in an Agent conversation,
+            whose writes skip long-term memory extraction
+            (``SessionFactory.create_session_manager``). The user's own mode
+            lowers it further here.
+        user_settings: The user's settings if the caller already loaded them;
+            otherwise read once, and only when memory is still on.
+        incognito_requested: None when ``memory_mode`` already accounts for an
+            incognito conversation. Otherwise the request's incognito choice:
+            the session row is read and its stored flag wins (#1738).
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -2129,11 +2180,22 @@ async def stream_conversational_message(
     try:
         from agents.main_agent.session.persistence import persist_synthetic_messages
 
+        if memory_mode != "off":
+            memory_mode = cap_memory_mode(
+                memory_mode,
+                memory_mode_from(
+                    user_settings if user_settings is not None else await _load_user_settings(user_id)
+                ),
+            )
+        if memory_mode == "on" and incognito_requested is not None:
+            row = await load_session_meta(session_id, user_id)
+            if session_is_incognito(row.row, requested=incognito_requested):
+                memory_mode = "read_only"
         session_manager = SessionFactory.create_session_manager(
             session_id=session_id,
             user_id=user_id,
             caching_enabled=False,
-            long_term_memory=long_term_memory,
+            memory_extraction=memory_capabilities(memory_mode)[1],
         )
         persist_synthetic_messages(
             session_manager,
@@ -2324,7 +2386,8 @@ def _refuse_turn(
             user_id=user_id,
             user_input=input_data.message,
             persist=persist,
-            long_term_memory=not input_data.rag_assistant_id,
+            memory_mode="off" if input_data.rag_assistant_id else "on",
+            incognito_requested=bool(input_data.incognito),
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
@@ -2366,6 +2429,7 @@ async def _agent_for_app_dispatch(
     *,
     agent_type: str,
     accessible_skill_ids: Optional[list],
+    incognito: bool = False,
 ):
     """The conversation's agent for an MCP App dispatch (map stage B3).
 
@@ -2378,11 +2442,12 @@ async def _agent_for_app_dispatch(
     ``cache_write=False`` — this path builds no injected tools, so an agent it
     built must never seed a slot the real turns would then hit.
     """
+    settings = await _load_user_settings(user_id)
     request_inference_params = dict(input_data.inference_params or {})
     dispatch_model_id, dispatch_provider = input_data.model_id, input_data.provider
     if not dispatch_model_id:
         dispatch_model_id, dispatch_provider = await _resolve_fallback_model(
-            user_id, current_user, dispatch_provider
+            user_id, current_user, dispatch_provider, settings=settings
         )
     caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider, input_modalities = await _resolve_model_settings(
         model_id=dispatch_model_id,
@@ -2405,7 +2470,7 @@ async def _agent_for_app_dispatch(
             current_user,
         ),
         model_id=dispatch_model_id,
-        system_prompt=await _plain_turn_prompt(input_data, user_id),
+        system_prompt=await _plain_turn_prompt(input_data, user_id, settings),
         caching_enabled=caching_enabled,
         provider=dispatch_provider or registry_provider,
         inference_params=inference_params,
@@ -2419,6 +2484,7 @@ async def _agent_for_app_dispatch(
         cache_write=False,
         assistant_id=input_data.rag_assistant_id,
         text_only_model=is_text_only_model(input_modalities),
+        memory_mode=_memory_mode_for_turn(input_data.rag_assistant_id, settings, incognito),
     )
 
 
@@ -2430,6 +2496,7 @@ async def _agent_for_app_tool_call(
     *,
     agent_type: str,
     accessible_skill_ids: Optional[list],
+    incognito: bool = False,
 ):
     """The agent an App's ``tools/call`` dispatches against.
 
@@ -2456,6 +2523,7 @@ async def _agent_for_app_tool_call(
         auth_token,
         agent_type=agent_type,
         accessible_skill_ids=accessible_skill_ids,
+        incognito=incognito,
     )
 
 
@@ -3106,7 +3174,10 @@ async def _prepare_session_state(
     is_new_session = False
     if not is_resume and not is_continuation:
         is_new_session = await ensure_session_metadata_exists(
-            input_data.session_id, user_id, snapshot=session_meta
+            input_data.session_id,
+            user_id,
+            snapshot=session_meta,
+            incognito=bool(input_data.incognito),
         )
         try:
             from apis.shared.sessions.metadata import (
@@ -3564,12 +3635,102 @@ async def _build_turn_tools(
     )
 
 
+ResumeUnavailableReason = Literal["missing", "expired", "unknown_interrupt"]
+
+
+class ResumeUnavailable(Exception):
+    """A resume request whose paused turn can no longer be picked up.
+
+    Raised before any model call: the snapshot is gone, past its
+    ``paused_turn_ttl``, or the rebuilt agent never paused on the submitted
+    interrupt ids. It used to be a 400, which the AgentCore Runtime data plane
+    rewrites to a bare 424, so the user saw "Chat Request Failed" right after
+    successfully connecting an account. ``_resume_unavailable_turn`` answers
+    it as an assistant message instead.
+    """
+
+    def __init__(self, reason: ResumeUnavailableReason) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+_RESUME_UNAVAILABLE_CONSENT_MESSAGE = (
+    "Your account is connected, but the request that was waiting for it can no "
+    "longer pick up where it left off. Send your message again and it will run "
+    "with the connection in place."
+)
+_RESUME_UNAVAILABLE_MESSAGE = (
+    "The request that was waiting for your answer can no longer pick up where "
+    "it left off. Send your message again to start it fresh."
+)
+
+
+async def _resume_unavailable_turn(
+    input_data: InvocationRequest, user_id: str, reason: ResumeUnavailableReason
+) -> StreamingResponse:
+    """Retire a paused turn that cannot resume, and tell the user why.
+
+    Clears what would otherwise re-offer the same dead prompt on every reload:
+    the breadcrumbs the submitted ids came from, and — unless only the ids were
+    wrong — the snapshot and every other breadcrumb with it, since without a
+    snapshot nothing in the session can resume. A wrong id leaves the snapshot
+    alone, because a different interrupt on the same turn may still be live.
+
+    Not persisted: history still ends on the paused ``toolUse``, and the next
+    fresh turn already drops that back to the last completed answer
+    (``reset_stale_interrupt_state``). An assistant row written behind it would
+    break role alternation for that repair. The SPA keeps the streamed message
+    in view by skipping its post-resume reload on this ``error_kind``.
+    """
+    from apis.shared.sessions.metadata import (
+        clear_paused_turn,
+        clear_pending_interrupts,
+        get_pending_interrupts,
+        remove_pending_interrupts,
+    )
+
+    submitted_ids = {
+        entry.interruptId for entry in (input_data.interrupt_responses or [])
+    }
+    awaited_consent = False
+    try:
+        pending = await get_pending_interrupts(input_data.session_id, user_id)
+        awaited_consent = any(
+            p.kind == "oauth" and p.interrupt_id in submitted_ids for p in pending
+        )
+        if reason == "unknown_interrupt":
+            await remove_pending_interrupts(input_data.session_id, user_id, submitted_ids)
+        else:
+            await clear_paused_turn(input_data.session_id, user_id)
+            await clear_pending_interrupts(input_data.session_id, user_id)
+    except Exception:
+        logger.error("Failed to retire an unresumable paused turn", exc_info=True)
+
+    message = (
+        _RESUME_UNAVAILABLE_CONSENT_MESSAGE if awaited_consent else _RESUME_UNAVAILABLE_MESSAGE
+    )
+    return _refuse_turn(
+        input_data,
+        user_id,
+        message=message,
+        stop_reason="error",
+        metadata_event=ConversationalErrorEvent(
+            code=ErrorCode.BAD_REQUEST,
+            message=message,
+            recoverable=False,
+            metadata={"error_kind": "resume_unavailable", "reason": reason},
+        ),
+        persist=False,
+    )
+
+
 def _validate_resume_interrupts(agent, input_data: InvocationRequest) -> None:
     """Reject a resume that names interrupts the cached agent has not paused.
 
     Cache eviction, a process restart, or a forged request would otherwise be
     silently accepted by Strands and drop the client's response. Raising up
-    front lets the client see a 400 and restart the turn cleanly.
+    front lets the route tell the user to restart the turn
+    (``ResumeUnavailable``).
     """
     strands_agent = getattr(agent, "agent", None)
     interrupt_state = getattr(strands_agent, "_interrupt_state", None) if strands_agent else None
@@ -3583,10 +3744,7 @@ def _validate_resume_interrupts(agent, input_data: InvocationRequest) -> None:
         logger.warning(
             "Resume rejected: submitted interrupt ids not in paused state"
         )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unknown or expired interrupt ids; restart the turn.",
-        )
+        raise ResumeUnavailable("unknown_interrupt")
 
 
 async def _resume_knowledge_context(
@@ -3893,6 +4051,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 auth_token,
                 agent_type=effective_agent_type,
                 accessible_skill_ids=effective_skill_ids,
+                incognito=_turn_is_incognito(input_data, session_meta),
             )
             payload = await dispatch_app_tool_call(
                 agent,
@@ -4100,9 +4259,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # block goes into the system prompt. None on a plain turn or a resume.
     kb_full_context_task: Optional["asyncio.Task[Optional[str]]"] = None
     system_prompt = input_data.system_prompt  # Start with provided system prompt
-    # One settings read per turn: the default model and personal instructions both
-    # come from it. A preview is an author testing an agent, so it gets none of theirs.
+    # One settings read per turn: the default model, personal instructions and the
+    # long-term-memory switch all come from it. A preview is an author testing an
+    # agent, so it gets none of theirs.
     user_settings = await _load_user_settings(user_id)
+    # An incognito conversation (#1738) reads memory but learns nothing. The
+    # flag comes from the row read at the top of the turn, so only a first turn
+    # can set it.
+    turn_memory_mode = _memory_mode_for_turn(
+        input_data.rag_assistant_id,
+        user_settings,
+        _turn_is_incognito(input_data, session_meta),
+    )
     personal_instructions = (
         None if is_preview_session(input_data.session_id) else _personal_instructions(user_settings)
     )
@@ -4688,6 +4856,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # already ended, so they take the lease with force=True (never blocked, but
     # still install it so a fresh duplicate during them is rejected). Preview
     # sessions and the local no-DynamoDB path (lease None) skip the guard.
+    # Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): decided here with no IO, from
+    # the request and the B1 snapshot. Acceptance starts at the head of the stream, beside the
+    # agent build, and is awaited only where the message is assembled.
+    handoff_turn = HandoffTurn.for_turn(
+        user_id=user_id,
+        session_id=input_data.session_id,
+        agent_id=input_data.rag_assistant_id,
+        handoff_context=input_data.handoff_context,
+        session_row=session_meta.row,
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        is_preview=is_preview_session(input_data.session_id),
+    )
+
     session_lease = None
     if not is_preview_session(input_data.session_id):
         from apis.shared.sessions.session_lease import (
@@ -4752,26 +4934,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         document_read_available = False
         if is_resume:
             from datetime import datetime, timezone
-            from apis.shared.sessions.metadata import clear_paused_turn, get_paused_turn
+            from apis.shared.sessions.metadata import get_paused_turn
 
             snapshot = await get_paused_turn(input_data.session_id, user_id)
             if not snapshot:
                 logger.warning("Resume rejected: no paused_turn snapshot found")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No paused turn for this session; restart the turn.",
-                )
+                raise ResumeUnavailable("missing")
             try:
                 expires_at = datetime.fromisoformat(snapshot.expires_at)
             except ValueError:
                 expires_at = None
             if expires_at and datetime.now(timezone.utc) > expires_at:
                 logger.warning("Resume rejected: paused_turn snapshot expired")
-                await clear_paused_turn(input_data.session_id, user_id)
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Paused turn expired; restart the turn.",
-                )
+                raise ResumeUnavailable("expired")
 
             # Snapshot wins on resume so an authorized turn finishes against the
             # exact param shape it was authorized for, even if admin defaults
@@ -4812,6 +4987,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # The memory binding is a key element too (memory tools close
                 # over it); replay the snapshot's value for the same reason.
                 memory_binding=snapshot.memory_binding,
+                # The long-term-memory mode is a key element too; replay the
+                # snapshot's. Legacy snapshots carry only longTermMemory, where
+                # False resumes off and None means on.
+                memory_mode=snapshot.resume_memory_mode(),
                 # The memory block is hashed with the system prompt in the key.
                 memory_context=snapshot.memory_context,
                 # So is a full-context knowledge base, which is too large for the
@@ -4960,6 +5139,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     memory_context=memory_context,
                     text_only_model=turn_model.text_only,
                     knowledge_context=knowledge_context,
+                    memory_mode=turn_memory_mode,
                 )
 
             # Defer the build into the stream so it can be narrated.
@@ -5092,6 +5272,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # the outer function; reassigning it here would make the whole
             # name local and UnboundLocalError before the assignment runs).
             final_message = augmented_message
+            # A handoff's context card, wrapped (§4.2). First, so it reads as the setting for
+            # everything after it; the bubble still shows only what the user typed, through the
+            # `original_message` displayText split below.
+            if handoff_turn is not None:
+                handoff_block = await handoff_turn.context_block()
+                if handoff_block:
+                    final_message = build_handoff_message(handoff_block, final_message)
             if attachment_guidance:
                 final_message = f"{final_message}\n\n{attachment_guidance}"
             # Rendered into the persisted user message once, from this turn's
@@ -5301,6 +5488,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             nonlocal agent, kb_search, context_chunks, augmented_message, citations_for_storage
 
             heartbeat_task = None
+            disconnected = False
+            if handoff_turn is not None:
+                # Beside the build, so the acceptance round trips cost the first token nothing.
+                handoff_turn.start()
             try:
                 # The deferred agent build (PR-3). Narrated, because this is
                 # where a cold turn spends over a second with nothing on the
@@ -5361,7 +5552,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                             session_id=input_data.session_id,
                             user_id=user_id,
                             user_input=input_data.message,
-                            long_term_memory=not input_data.rag_assistant_id,
+                            memory_mode=turn_memory_mode,
+                            user_settings=user_settings,
                         ):
                             yield frame
                         return
@@ -5437,9 +5629,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 )
 
                 async for chunk in stream_with_quota_warning():
+                    if handoff_turn is not None:
+                        handoff_turn.observe(chunk)
                     yield chunk
+            except (asyncio.CancelledError, GeneratorExit):
+                disconnected = True
+                raise
             finally:
                 await _release_turn_lease(heartbeat_task, session_lease)
+                if handoff_turn is not None:
+                    # After the stream, never before a token: what this turn ended as, onto the
+                    # source conversation's handoff row (§4.3).
+                    handoff_turn.schedule_status_write(disconnected=disconnected)
 
         # Everything after the agent build: citation assembly, the title task,
         # the lease acquire and the generator wiring. The `turn_prelude` line
@@ -5457,10 +5658,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             headers=_sse_headers(input_data.session_id),
         )
 
+    except ResumeUnavailable as e:
+        # Before any model call, like the HTTPException arm below: the turn
+        # won't stream an agent, so its generator finally never runs.
+        from apis.shared.sessions.session_lease import release_session_lease
+        await release_session_lease(session_lease)
+        return await _resume_unavailable_turn(input_data, user_id, e.reason)
     except HTTPException:
         # Re-raise HTTP exceptions as-is (e.g., from auth). Release the lease
-        # first — a failure raised after acquire (e.g. resume/interrupt 400s)
-        # means the turn won't stream, so its generator finally never runs.
+        # first — a failure raised after acquire means the turn won't stream,
+        # so its generator finally never runs.
         from apis.shared.sessions.session_lease import release_session_lease
         await release_session_lease(session_lease)
         raise

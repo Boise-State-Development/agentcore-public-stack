@@ -383,6 +383,8 @@ export function buildAppApiEnvironment(
     // Session prewarm (opt-in while in development): gates POST /chat/prewarm.
     // app-api only; the Runtime's warm action is a no-op behind this route.
     SESSION_PREWARM_ENABLED: config.sessionPrewarm.enabled ? 'true' : 'false',
+    // Handoffs (opt-in while in development): gates /sessions/{id}/handoffs.
+    HANDOFFS_ENABLED: config.handoffs.enabled ? 'true' : 'false',
     // Client-measured time to first token (default on): gates
     // POST /telemetry/turn-timing, which records the SPA's own measurement.
     CLIENT_TURN_TIMING_ENABLED: config.clientTurnTiming.enabled ? 'true' : 'false',
@@ -403,6 +405,19 @@ export function buildAppApiEnvironment(
     // Folder sync (default on): app-api accepts a
     // `drive_folder` KB sync policy. The kb-sync Lambdas carry it too.
     FOLDER_SYNC_ENABLED: config.folderSync.enabled ? 'true' : 'false',
+
+    // Source provenance verification (docs/specs/source-provenance-verification.md).
+    // app-api's share is the read side: `GET /messages` replays the stored
+    // `SRCV#` verdicts, which the SSE event does not re-stream. In development,
+    // so only "true" enables.
+    SOURCE_PROVENANCE_ENABLED: config.sourceProvenance.enabled ? 'true' : 'false',
+
+    // Typed structured extraction (docs/specs/structured-extraction.md).
+    // app-api's share is the read side: `GET /messages` replays the stored
+    // `EXTR#` rows, which the SSE event does not re-stream. In development, so
+    // only "true" enables. The model id is deliberately NOT set here — app-api
+    // never makes the extraction call.
+    DOCUMENT_EXTRACT_ENABLED: config.documentExtract.enabled ? 'true' : 'false',
     ...(params.largeDocumentPrepareQueueUrl
       ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
       : {}),

@@ -712,6 +712,119 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  // ============================================================
+  // Source provenance verification — in development, so only "true" enables
+  // ============================================================
+
+  describe('Source provenance feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SOURCE_PROVENANCE_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_SOURCE_PROVENANCE_ENABLED;
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+      process.env.CDK_SOURCE_PROVENANCE_ENABLED = '';
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_SOURCE_PROVENANCE_ENABLED = 'True';
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(true);
+      // Anything else a human might set is still off, because a half-built
+      // feature must not switch on for another deployment by accident.
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_SOURCE_PROVENANCE_ENABLED = value;
+        expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+      }
+    });
+  });
+
+  // ============================================================
+  // Structured extraction — in development, so only "true" enables
+  // ============================================================
+
+  describe('Document extract feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_ENABLED;
+      delete process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_ENABLED;
+      expect(loadConfig(app).documentExtract.enabled).toBe(false);
+      process.env.CDK_DOCUMENT_EXTRACT_ENABLED = '';
+      expect(loadConfig(app).documentExtract.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_ENABLED = 'True';
+      expect(loadConfig(app).documentExtract.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_DOCUMENT_EXTRACT_ENABLED = value;
+        expect(loadConfig(app).documentExtract.enabled).toBe(false);
+      }
+    });
+
+    // The model id gets a case of its own because getting it wrong is silent.
+    // An id with no catalog row prices the extraction call to null: it costs
+    // $0, counts against no quota, and only the UnmeteredModelCall metric
+    // says so (structured-extraction.md §9).
+    test('the extraction model id defaults to a real Bedrock-native id', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID;
+      const modelId = loadConfig(app).documentExtract.modelId;
+      expect(modelId).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+      // Structured outputs is per model AND per inference profile: the India
+      // profile is the one documented exclusion, and our own profiles are the
+      // only ones this stack ever sets.
+      expect(modelId.startsWith('in.')).toBe(false);
+      expect(modelId.startsWith('us.') || modelId.startsWith('global.')).toBe(true);
+    });
+
+    test('the model id is overridable per environment, and is trimmed', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID =
+        '  global.anthropic.claude-haiku-4-5-20251001-v1:0  ';
+      expect(loadConfig(app).documentExtract.modelId).toBe(
+        'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+      );
+    });
+
+    test('an unset GitHub variable ("") falls back to the default, not to empty', () => {
+      // The trap this exists for: `vars.X` forwards "" when unset, and
+      // `'' || default` is the default while `''.trim()` alone would have
+      // shipped an empty model id to the Runtime.
+      process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID = '';
+      expect(loadConfig(app).documentExtract.modelId).toBe(
+        'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      );
+    });
+
+    // Batch concurrency (structured-extraction.md §17.4). Left UNDEFINED
+    // unless a deployment sets it, so the Runtime's environment carries
+    // nothing for the default case and spends none of the V2 payload budget.
+    // The backend's own default is 4 and it clamps to 1..16.
+    test('concurrency is undefined unless a deployment sets it', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY;
+      expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+      process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = '';
+      expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+    });
+
+    test('a deployment can override the concurrency', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = '8';
+      expect(loadConfig(app).documentExtract.concurrency).toBe(8);
+    });
+
+    test('a non-numeric or non-positive concurrency is dropped, not forwarded', () => {
+      // The backend falls back anyway, and a bad string sitting in the
+      // Runtime's environment is harder to spot than an absent one.
+      for (const value of ['abc', '4.5', '0', '-2', 'true']) {
+        process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = value;
+        expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+      }
+    });
+  });
+
   describe('Client turn timing feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;
@@ -759,6 +872,36 @@ describe('RAG Ingestion Configuration', () => {
     test('anything but "true" leaves it off', () => {
       process.env.CDK_SESSION_PREWARM_ENABLED = 'yes';
       expect(loadConfig(app).sessionPrewarm.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Handoffs feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Handoffs feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_HANDOFFS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_HANDOFFS_ENABLED is unset', () => {
+      delete process.env.CDK_HANDOFFS_ENABLED;
+      expect(loadConfig(app).handoffs.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_HANDOFFS_ENABLED = '';
+      expect(loadConfig(app).handoffs.enabled).toBe(false);
+    });
+
+    test('CDK_HANDOFFS_ENABLED="true" turns it on', () => {
+      process.env.CDK_HANDOFFS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).handoffs.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_HANDOFFS_ENABLED = 'yes';
+      expect(loadConfig(app).handoffs.enabled).toBe(false);
     });
   });
 

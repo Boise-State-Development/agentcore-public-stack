@@ -863,7 +863,7 @@ test whose assertion never ran.
 | I3 | **One cache key per configuration, shared by all three callers.** The main turn, the resume (`is_resume=True`, `cache_write=False`, `memory_binding=snapshot.memory_binding`) and the MCP App dispatch (`cache_write=False`) compute the same key for the same session state. | `tests/apis/inference_api/test_get_agent_call_sites.py` (AST-pinned), `test_chat_service.py::test_resume_replay_from_snapshot_hits_same_cache_slot` |
 | I4 | **Lease discipline.** Acquired exactly once per turn before the stream; released on every exit: stream end, cancellation, pre-stream `HTTPException`, pre-stream error; heartbeat cancelled first. | `tests/apis/inference_api/test_turn_lease_release.py`, `test_carried_steering.py` |
 | I5 | **No session state on an agent instance.** `turn_lease`, `cancelled`, display-text arm, fingerprints, interrupt state are reset at the head of every turn; conversation list is aliased across instances **of the same `(session, user)`**, never across users on one session id; compaction state is re-read per turn. | `test_chat_service.py::test_second_cache_key_for_a_session_shares_the_conversation`, `::test_adoption_never_crosses_users_on_one_session_id`, `tests/agents/main_agent/session/test_compaction_deferred_apply.py`, `test_turn_based_session_manager.py` |
-| I6 | **Early exits stream, they do not 4xx.** Quota exceeded, retired model without successor, model access denied (not granted, or disabled by an admin), blocked agent binding, archived project, an agent that is gone or that the caller may not use (one message for both, so the answer never says whether an id exists): a conversational `message_start … done` with the metadata event, persisted via `persist_synthetic_messages` — except the model-access denial, which is streamed only (it runs at B3, before the session row exists, and the turn never ran). Only ownership (404), resume validation (400) and duplicate turn (409) raise. | `tests/routes/test_inference.py`, `test_inference_unavailable_agent.py`, `test_model_retirement_routes.py`, `test_model_access_enforcement.py`, `test_project_harness_invocation.py` |
+| I6 | **Early exits stream, they do not 4xx.** Quota exceeded, retired model without successor, model access denied (not granted, or disabled by an admin), blocked agent binding, archived project, an agent that is gone or that the caller may not use (one message for both, so the answer never says whether an id exists): a conversational `message_start … done` with the metadata event, persisted via `persist_synthetic_messages` — except the model-access denial, which is streamed only (it runs at B3, before the session row exists, and the turn never ran). A resume that can no longer be picked up (snapshot missing or past `paused_turn_ttl`, or ids the rebuilt agent never paused on) streams too, unpersisted, with `error_kind: "resume_unavailable"` so the SPA skips its post-resume reload. Only ownership (404) and duplicate turn (409) raise. | `tests/routes/test_inference.py`, `test_inference_unavailable_agent.py`, `test_model_retirement_routes.py`, `test_model_access_enforcement.py`, `test_project_harness_invocation.py` |
 | I7 | **Attachment semantics.** CSV/XLSX never inline; PPTX never inline; oversized dropped with a note; per-message cap and byte budget applied before S3 reads; marker names follow attachment order; recovered attachments dropped when the turn carries its own. A model whose row declares TEXT input *only* never receives a document or image block, from this turn or from history (keyed on TEXT-only, never on a missing `DOCUMENT`: Claude rows declare `["TEXT", "IMAGE"]`). History is projected per call, never mutated, because the list is shared with a vision agent serving the same session. | `test_attachment_turn_guard.py` (37), `test_attachment_recovery.py`, `test_presentation_attachment_carveout.py`, `test_attachment_tool_autoenable.py`, `test_text_only_model_attachments.py`, `tests/shared/test_text_only_input.py`, `test_get_agent_call_sites.py` |
 | I8 | **`turn_prelude` shape.** One line per agent turn with `stages`, `groups` (`preamble`, `agent_build`), `totalMs`, `isResume`, `deferredBuild`, `hasAssistant`; EMF metric names derived from stage names; disabled by `TURN_LATENCY_METRICS_ENABLED=false`. | `test_turn_timing.py` |
 | I9 | **No network in tests.** | the socket guard in `tests/conftest.py` (fails at teardown) |
@@ -957,6 +957,34 @@ How the probe runs (`apis/app_api/telemetry/ttft_probe.py`, `TtftProbeConstruct`
 - First manual run on dev (2026-10-10): cold 9,004 ms, prewarmed 2,321 ms, follow-up 1,533 ms, warm call 2,024 ms. One sample is not a baseline; set latency alarms on the probe's daily median after one to two weeks of it.
 
 Reading drift: compare the daily medians on the dashboard's trend widget, first turns and follow-ups separately, and when one moves, slice it by `modelId` in Logs Insights before calling it a regression; a change of default model moves every percentile. Alarms wait for a baseline (see the probe).
+
+#### Recorded comparisons
+
+A dependency bump or a change on this path that gets measured by hand lands here,
+with the statistics it actually supports. `smoke_turns.py` is the usual
+instrument, and its first-token line is the number quoted.
+
+**strands-agents 1.57.2 → 1.61.1, bedrock-agentcore 1.24.0 → 1.24.2** (PRs
+`71c24232` + `961b8f7a`, measured on dev 2026-10-20). Both runs
+`scripts/smoke_turns.py --auth headless-grant` against dev, same rows, same user,
+same day; pre-bump on the image deployed 20:06:18Z (which carried #1681 and
+#1686 but not the bump), post-bump on `78321529`.
+
+| first token | pre-bump | post-bump | Δ |
+|---|---|---|---|
+| min | 1,365 ms | 1,355 ms | −10 ms |
+| median | 4,062 ms | 4,242 ms | **+180 ms (+4.4%)** |
+| max | 4,611 ms | 4,849 ms | +238 ms |
+
+**Read this as "no evidence the bump moved TTFT", not as "TTFT unchanged."**
+Six turns per side, and every smoke row opens a new session, so each measurement
+is a cold agent build — the noisiest thing on this path. That sample has no power
+to detect anything under roughly **500 ms**, so the +180 ms median sits inside
+expected variance and a real regression smaller than half a second would have
+passed this comparison unnoticed. The budget in §1 is not satisfied by this
+number; it is merely not contradicted by it. Anything claiming a TTFT effect at
+finer resolution needs the probe's daily medians (above) or a purpose-built A/B,
+not a six-turn smoke run.
 
 ## 7. Clarity refactors
 

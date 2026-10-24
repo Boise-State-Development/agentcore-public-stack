@@ -9,6 +9,7 @@ heavy dependencies lazily.
 import io
 import json
 import zipfile
+from pathlib import Path
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -280,7 +281,8 @@ class TestResolveImagePath:
         image = tmp_path / "images" / "a.png"
         image.write_bytes(PNG_BYTES)
 
-        assert resolve_image_path(str(tmp_path), "images/a.png") == str(image)
+        # Compare as Paths: on Windows the joined result mixes separators.
+        assert Path(resolve_image_path(str(tmp_path), "images/a.png")) == image
 
     def test_strips_surrounding_whitespace(self, tmp_path):
         image = tmp_path / "a.png"

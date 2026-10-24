@@ -1,6 +1,7 @@
 """Records quota enforcement events."""
 
 from typing import Optional
+from apis.shared.timestamps import utc_now_iso
 from datetime import datetime, timezone
 import uuid
 import logging
@@ -36,7 +37,7 @@ class QuotaEventRecorder:
             current_usage=current_usage,
             quota_limit=limit,
             percentage_used=percentage_used,
-            timestamp=datetime.now(timezone.utc).isoformat() + 'Z',
+            timestamp=utc_now_iso(),
             metadata={
                 "tier_name": tier.tier_name,
                 "session_id": session_id,
@@ -89,7 +90,7 @@ class QuotaEventRecorder:
             current_usage=current_usage,
             quota_limit=limit,
             percentage_used=percentage_used,
-            timestamp=datetime.now(timezone.utc).isoformat() + 'Z',
+            timestamp=utc_now_iso(),
             metadata={
                 "threshold": threshold,
                 "tier_name": tier.tier_name,
@@ -148,7 +149,7 @@ class QuotaEventRecorder:
             current_usage=session_cost,
             quota_limit=limit,
             percentage_used=session_percentage,
-            timestamp=datetime.now(timezone.utc).isoformat() + 'Z',
+            timestamp=utc_now_iso(),
             metadata={
                 "session_id": session_id,
                 "session_cost": str(session_cost),
@@ -183,7 +184,7 @@ class QuotaEventRecorder:
             current_usage=0.0,
             quota_limit=tier.monthly_cost_limit,
             percentage_used=0.0,
-            timestamp=datetime.now(timezone.utc).isoformat() + 'Z',
+            timestamp=utc_now_iso(),
             metadata={
                 "override_id": override_id,
                 "tier_name": tier.tier_name,
@@ -213,7 +214,7 @@ class QuotaEventRecorder:
             current_usage=0.0,
             quota_limit=tier.monthly_cost_limit,
             percentage_used=0.0,
-            timestamp=datetime.now(timezone.utc).isoformat() + 'Z',
+            timestamp=utc_now_iso(),
             metadata={
                 "reason": reason,
                 "tier_name": tier.tier_name,

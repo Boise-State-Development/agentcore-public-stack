@@ -105,9 +105,18 @@ TAIL_ALLOWED = frozenset(
         "compaction",
         "session_title",
         "tool_group_summary",
+        # `verify_sources` verdicts drain beside the tool summaries, including
+        # the one flush in the `done` branch, so a turn that verified anything
+        # lands this after the final message_stop.
+        "source_provenance",
         "agent_status",
         "artifact",
         "ui_resource",
+        # Drained on the same pass as the tool-batch summaries, so like them
+        # it can land in the tail when the tool ran in the final batch
+        # (docs/specs/structured-extraction.md §9). `source_provenance` is
+        # added by the PR that dev-validates it, which owns that line.
+        "document_extraction",
         "event",
         "message",
         "result",
@@ -628,7 +637,9 @@ def _pick_username_field(form: _HtmlForm) -> str:
 # ============================================================
 
 
-RESUME_HEAD_EXTRA = frozenset({"tool_use", "tool_result", "tool_error", "message", "metadata", "tool_group_summary", "ui_resource"})
+RESUME_HEAD_EXTRA = frozenset(
+    {"tool_use", "tool_result", "tool_error", "message", "metadata", "tool_group_summary", "ui_resource", "source_provenance"}
+)
 
 
 def assert_frame_contract(turn: TurnResult, *, allow_interrupt: bool = False, resume: bool = False) -> List[str]:
@@ -725,10 +736,27 @@ def _restore_check(messages_body: Dict[str, Any], user_prompt: str, assistant_te
 
 PDF_TOKEN = "SMOKE-PDF-TOKEN-7731"
 
+#: The one sentence in the source-provenance fixture PDF. Carries an amount the
+#: value check can match literally, and nothing else a stray number could match.
+PROVENANCE_SENTENCE = "The total approved budget is $487,500 for this award."
+PROVENANCE_AMOUNT = "$487,500"
+#: An amount deliberately absent from the document. The point of the row is that
+#: this one comes back quote_unsupported while carrying a real quote.
+PROVENANCE_FABRICATED = "$912,000"
 
-def minimal_pdf(text: str) -> bytes:
-    """A valid single-page PDF whose only content is ``text`` (Helvetica 24pt)."""
-    stream = f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode("latin-1")
+
+def minimal_pdf(text: str, *, font_size: int = 24) -> bytes:
+    """A valid single-page PDF whose only content is ``text`` (Helvetica).
+
+    ``font_size`` defaults to 24, which is what the token rows have always
+    used. Pass something smaller for anything sentence-length: text wider than
+    the 612pt MediaBox runs off the page, and ``get_text_bounded`` clips to the
+    page box, so the text layer comes back **silently truncated** — a 53-char
+    sentence at 24pt extracts as its first 49 characters. A row asserting on
+    that text then fails for a reason that has nothing to do with what it is
+    testing.
+    """
+    stream = f"BT /F1 {font_size} Tf 72 700 Td ({text}) Tj ET".encode("latin-1")
     objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -1137,6 +1165,150 @@ async def row_attach_pdf(ctx: Context) -> RowResult:
     return RowResult("attach_pdf", "PASS", f"inline PDF accepted, answer streamed, attachment restored; tools={_tools_used(turn)}", warnings)
 
 
+
+async def _register_upload(
+    user_id: str, session_id: str, filename: str, mime_type: str, data: bytes
+) -> str:
+    """Register *data* as a READY session file and return its upload_id.
+
+    The SPA presigns, PUTs to S3 and completes the upload, then sends
+    ``file_upload_ids`` — never base64 ``files`` (`chat-request.service.ts`).
+    That difference decides whether ``document_read`` and ``verify_sources``
+    exist on the turn: ``turn_has_document`` is classified from the *resolved
+    uploads* only (`routes.py`, `_resolved_files_include_a_document`), and
+    inline base64 never produces an upload row — `inline_persist` writes rows
+    for spreadsheets and decks, not documents.
+
+    So a row that needs the document tools cannot use the base64 path, and this
+    writes the same two things a completed upload does: the S3 object at the
+    conventional key, and a READY row. Needs AWS credentials, so it is only
+    reachable where the harness already resolved the deployed environment.
+    """
+    import boto3
+
+    from apis.shared.files.models import FileMetadata, FileStatus
+    from apis.shared.files.repository import get_file_upload_repository
+
+    bucket = os.environ.get("S3_USER_FILES_BUCKET_NAME", "")
+    if not bucket:
+        raise RowSkip("S3_USER_FILES_BUCKET_NAME is not set; needs --prefix (deployed) or a local stack")
+    upload_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:12]}"
+    key = f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
+    await asyncio.to_thread(
+        boto3.client("s3").put_object, Bucket=bucket, Key=key, Body=data, ContentType=mime_type
+    )
+    await get_file_upload_repository().create_file(
+        FileMetadata(
+            upload_id=upload_id,
+            user_id=user_id,
+            session_id=session_id,
+            filename=filename,
+            mime_type=mime_type,
+            size_bytes=len(data),
+            s3_key=key,
+            s3_bucket=bucket,
+            status=FileStatus.READY,
+        )
+    )
+    return upload_id
+
+async def row_source_provenance(ctx: Context) -> RowResult:
+    """`verify_sources` answers both questions and emits `source_provenance`.
+
+    The row the feature exists for is `quote_unsupported`: a real sentence from
+    the document carrying a value that is not in it. A badge keyed on "did we
+    find the quote" would certify that, so the row asserts the two states
+    differ while both quotes are the same located sentence.
+
+    The prompt is explicit because nothing in the system prompt asks the model
+    to verify before asserting (docs/specs/source-provenance-verification.md D6
+    names that consequence). So this proves the machinery, not the coverage: a
+    turn where the model volunteers the call is not what is being measured here.
+    """
+    if not ctx.args.with_attachments:
+        raise RowSkip("pass --with-attachments")
+    sid = ctx.new_session()
+    prompt = (
+        "The attached smoke.pdf contains exactly one sentence. Do precisely this and nothing else:\n"
+        "1. Call document_read with no arguments to get smoke.pdf's upload_id.\n"
+        "2. Call verify_sources ONCE with that upload_id and exactly two claims:\n"
+        f"   - id \"real\", value \"{PROVENANCE_AMOUNT}\", quote set to that sentence copied verbatim.\n"
+        f"   - id \"bogus\", value \"{PROVENANCE_FABRICATED}\", quote set to the SAME sentence verbatim.\n"
+        "3. Reply with just: real=<state> bogus=<state>"
+    )
+    # A real upload, not base64: see _register_upload for why the document
+    # tools do not exist on an inline-base64 turn.
+    upload_id = await _register_upload(
+        ctx.args.user_id or "", sid, "smoke.pdf", "application/pdf", minimal_pdf(PROVENANCE_SENTENCE, font_size=11)
+    )
+    turn = await ctx.transport.stream_turn(
+        ctx.base_payload(sid, prompt, file_upload_ids=[upload_id], enabled_tools=None)
+    )
+    ctx.note(turn)
+    warnings = assert_frame_contract(turn)
+
+    frames = turn.all("source_provenance")
+    if not frames:
+        raise RowFailure(
+            "no source_provenance frame. Is SOURCE_PROVENANCE_ENABLED=true on the AgentCore "
+            f"Runtime, and did the model call verify_sources? tools={_tools_used(turn)}; "
+            f"answer: {turn.final_text[:80]!r}"
+        )
+
+    claims = {c.get("id"): c for f in frames for c in (f.data.get("claims") or [])}
+    missing = {"real", "bogus"} - set(claims)
+    if missing:
+        raise RowFailure(f"frame carried claims {sorted(claims)}, missing {sorted(missing)}")
+
+    real, bogus = claims["real"], claims["bogus"]
+    if real.get("state") != "supported":
+        raise RowFailure(f"the document's own amount read {real.get('state')!r} ({real.get('method')!r}), not supported")
+    if bogus.get("state") != "quote_unsupported":
+        raise RowFailure(
+            f"a fabricated amount on a real quote read {bogus.get('state')!r} "
+            f"({bogus.get('method')!r}), not quote_unsupported — this is the state the feature exists for"
+        )
+    # Both quotes are the same located sentence, so both must carry a locator.
+    # If only the supported one did, the badge and the warning would disagree
+    # about whether the passage was found.
+    for name, claim in (("real", real), ("bogus", bogus)):
+        locator = claim.get("locator") or {}
+        if locator.get("kind") != "page" or locator.get("value") != 1:
+            raise RowFailure(f"{name} locator was {locator!r}, expected page 1")
+        if locator.get("precision") != "measured":
+            raise RowFailure(
+                f"{name} locator precision was {locator.get('precision')!r}; pypdfium2 measures "
+                "every page boundary, so a hedge here means the precision is being inferred"
+            )
+
+    # The frame never re-streams, so a reload reads the SRCV# rows instead.
+    code, body = await ctx.transport.get_messages(sid)
+    if code != 200 or body is None:
+        raise RowFailure(f"GET /messages -> {code}")
+    replayed = {
+        c.get("id"): c
+        for row in (body.get("sourceProvenance") or [])
+        for c in (row.get("claims") or [])
+    }
+    if not replayed:
+        raise RowFailure("GET /messages returned no sourceProvenance — the verdicts would vanish on reload")
+    for name, expected in (("real", "supported"), ("bogus", "quote_unsupported")):
+        if (replayed.get(name) or {}).get("state") != expected:
+            raise RowFailure(f"replayed {name} was {(replayed.get(name) or {}).get('state')!r}, expected {expected}")
+
+    answer = turn.final_text.lower()
+    if "supported" not in answer:
+        warnings.append(f"model did not read the states back: {turn.final_text[:60]!r}")
+    return RowResult(
+        "source_provenance",
+        "PASS",
+        f"real={real.get('method')} bogus={bogus.get('method')}, both located p.1 measured, "
+        f"replayed on reload; tools={_tools_used(turn)}",
+        warnings,
+        {"real": real, "bogus": bogus},
+    )
+
+
 async def row_attach_csv(ctx: Context) -> RowResult:
     if not ctx.args.with_attachments:
         raise RowSkip("pass --with-attachments")
@@ -1231,6 +1403,7 @@ ROWS: List[Tuple[str, Callable[[Context], Awaitable[Any]]]] = [
     ("preview_session", row_preview_session),
     ("steer_mid_turn", row_steer_observed),
     ("attach_pdf", row_attach_pdf),
+    ("source_provenance", row_source_provenance),
     ("attach_csv", row_attach_csv),
     ("skill_invoke", row_skill_invoke),
     ("kb_agent_first_turn", row_kb_agent),
@@ -1287,6 +1460,20 @@ def resolve_runtime_env(prefix: str, region: str) -> None:
         "DYNAMODB_ASSISTANTS_TABLE_NAME": param("rag/assistants-table-name", f"{prefix}-assistants"),
         "DYNAMODB_USER_SETTINGS_TABLE_NAME": param("settings/user-settings-table-name", f"{prefix}-user-settings"),
         "AGENTCORE_MEMORY_ID": param("inference-api/memory-id", ""),
+        # Session files, for rows that need a real upload rather than inline
+        # base64 (`_register_upload`). Both are `{prefix}-user-file-uploads`,
+        # the bucket suffixed with the account — taken from app-api's live task
+        # definition, not from a bucket-name search: this account also holds an
+        # unrelated `*-user-files-*` bucket from another stack.
+        "DYNAMODB_USER_FILES_TABLE_NAME": f"{prefix}-user-file-uploads",
+        "S3_USER_FILES_BUCKET_NAME": f"{prefix}-user-file-uploads-{account}",
+        # Runtime-direct mode reads `GET /messages` in-process, standing in for
+        # app-api, so the in-process reader needs app-api's flags too. Only the
+        # *read* is affected: the `source_provenance` frame comes from the
+        # deployed Runtime, so a deployment with the feature genuinely off fails
+        # the frame assertion first and this cannot mask it. `setdefault`, so an
+        # operator who exports it wins.
+        "SOURCE_PROVENANCE_ENABLED": "true",
     }
     for k, v in env.items():
         os.environ.setdefault(k, v)

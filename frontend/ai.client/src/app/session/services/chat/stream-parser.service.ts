@@ -602,6 +602,12 @@ export class StreamParserService {
       onToolGroupSummary: (data) =>
         this.toolInsight.recordSummary(state.sessionId, data),
 
+      // Source-provenance verdicts for a `verify_sources` call. Scoped to the
+      // streaming session, not the viewed one: a background conversation's
+      // verdicts belong to that conversation.
+      onSourceProvenance: (data) =>
+        this.toolInsight.recordProvenance(state.sessionId, data),
+
       onModelRetry: (data: ModelRetryEvent) => {
         // Not viewed-session-scoped on purpose: this signal is read per
         // session id, so a background conversation's retry stays with that
@@ -635,6 +641,12 @@ export class StreamParserService {
           lastAssistantId,
           state.sessionId,
         );
+        // Only the interrupt-driven flavor pauses the turn. A pre-flight
+        // prompt (no interruptId) left a finished turn behind, so the
+        // conversation is not waiting on anything.
+        if (data.interruptId) {
+          this.chatStateService.markSessionAwaitingInput(state.sessionId, 'oauth');
+        }
       },
 
       onSteeringApplied: (data: SteeringAppliedEvent) => {
@@ -729,6 +741,7 @@ export class StreamParserService {
           messageId: lastAssistantId,
           sessionId: state.sessionId,
         });
+        this.chatStateService.markSessionAwaitingInput(state.sessionId, 'tool_approval');
       },
 
       onUserQuestionRequired: (data: UserQuestionRequiredEvent) => {
@@ -740,6 +753,7 @@ export class StreamParserService {
           messageId: lastAssistantId,
           sessionId: state.sessionId,
         });
+        this.chatStateService.markSessionAwaitingInput(state.sessionId, 'user_question');
       },
 
       onBrowserLoginRequired: (data: BrowserLoginRequiredEvent) => {
@@ -760,6 +774,7 @@ export class StreamParserService {
           sandboxOrigin: data.sandboxOrigin,
           messageId: lastAssistantId,
         });
+        this.chatStateService.markSessionAwaitingInput(state.sessionId, 'browser_login');
       },
 
       onError: (data) => this.handleError(state, data),
@@ -774,6 +789,9 @@ export class StreamParserService {
           streamError.metadata?.['error_kind'] === 'max_tokens';
         if (isMaxTokens) {
           this.chatStateService.setLastTurnContinuable(state.sessionId, true);
+        }
+        if (streamError.metadata?.['error_kind'] === 'resume_unavailable') {
+          this.chatStateService.markResumeUnavailable(state.sessionId);
         }
       },
 

@@ -338,8 +338,17 @@ async def test_interruption_persists_partial_turn_metadata():
     # Interrupted message sits at initial + 2*idx + 1 = 4 + 0 + 1 = 5 — the same
     # odd-position index the messages endpoint re-derives as `idx` on reload.
     assert stored.get("message_id") == 5
-    # Terminal usage never arrived → projected input from context attribution.
-    assert stored.get("usage") == {"inputTokens": 1234, "outputTokens": 0, "totalTokens": 1234}
+    # Terminal usage never arrived → projected input from context attribution,
+    # and the partial's own 28 characters as output on the chars/4 fallback
+    # (this wrapper exposes no model config, so neither a native count nor
+    # cache attribution is available — the prompt stays plain input).
+    assert stored.get("usage") == {
+        "inputTokens": 1234,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 7,
+        "totalTokens": 1241,
+    }
     assert stored.get("agent") is wrapper
 
 

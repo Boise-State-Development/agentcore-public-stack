@@ -80,6 +80,7 @@ export interface AppConfig {
   projects: ProjectsConfig;
   userGrants: UserGrantsConfig;
   sessionPrewarm: SessionPrewarmConfig;
+  handoffs: HandoffsConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -95,6 +96,8 @@ export interface AppConfig {
   attachmentKb: AttachmentKbConfig;
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
+  sourceProvenance: SourceProvenanceConfig;
+  documentExtract: DocumentExtractConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -463,6 +466,20 @@ export interface SessionPrewarmConfig {
 }
 
 /**
+ * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0). **Opt-in while
+ * the feature is in development**: off unless CDK_HANDOFFS_ENABLED=true (or a
+ * `handoffs.enabled: true` cdk.json context). Sets HANDOFFS_ENABLED on **app-api**,
+ * which serves `/sessions/{id}/handoffs`, and on the **AgentCore Runtime** (only
+ * while on, so the default spends none of the V2 environment budget), which
+ * accepts `handoff_context` on a target's first turn and keeps the source's row
+ * current. No new resources: `HANDOFF#` rows live in sessions-metadata on the
+ * existing SessionLookupIndex.
+ */
+export interface HandoffsConfig {
+  enabled: boolean;
+}
+
+/**
  * Client-measured time to first token (docs/specs/turn-path-ttft.md §6).
  * **Default ON with a kill switch**: on unless CDK_CLIENT_TURN_TIMING_ENABLED=false
  * (or a `clientTurnTiming.enabled: false` cdk.json context). A feature switch. Sets
@@ -751,6 +768,67 @@ export interface FolderAttachmentsConfig {
  */
 export interface FolderSyncConfig {
   enabled: boolean;
+}
+
+/**
+ * Source provenance verification (docs/specs/source-provenance-verification.md):
+ * a session with a readable document also gets `verify_sources`, which answers
+ * two separate questions about a cited passage — is it in the document, and does
+ * the asserted value actually appear in it — and collapses them into one of four
+ * states. **Opt-in while in development**: off unless
+ * CDK_SOURCE_PROVENANCE_ENABLED=true (or a `sourceProvenance.enabled: true`
+ * cdk.json context). A feature switch, and therefore permanent: it adds a tool
+ * to toolConfig and changes what the product asserts about a user's document.
+ * Sets SOURCE_PROVENANCE_ENABLED on the AgentCore Runtime (which builds the
+ * tool, verifies and emits the event) and on app-api (which replays the stored
+ * verdicts on GET /messages). Written to the Runtime's environment **only while
+ * on**, so the default spends none of the V2 payload budget. No resources: the
+ * verdicts are `SRCV#` rows on the existing sessions-metadata table and its
+ * SessionLookupIndex GSI.
+ */
+export interface SourceProvenanceConfig {
+  enabled: boolean;
+}
+
+/**
+ * Typed structured extraction (docs/specs/structured-extraction.md). On, a turn
+ * whose active skills declare a field set also gets `document_extract`: a named,
+ * typed field set is run over one document and comes back as rows, each value
+ * carrying a source-provenance state rather than a bare answer. **Opt-in while
+ * in development**: off unless CDK_DOCUMENT_EXTRACT_ENABLED=true (or a
+ * `documentExtract.enabled: true` cdk.json context). A feature switch, and
+ * therefore permanent: each run spends a model call whose input scales with the
+ * document, and it has the product assert typed values about a user's document.
+ *
+ * Sets DOCUMENT_EXTRACT_ENABLED on the AgentCore Runtime (which mounts the tool,
+ * extracts, verifies and emits `document_extraction`) and on app-api (which
+ * replays the stored `EXTR#` rows on GET /messages). Written to the Runtime's
+ * environment **only while on**, so the default spends none of the V2 payload
+ * budget. No resources: the rows sit on the existing sessions-metadata table and
+ * its SessionLookupIndex GSI, and the artifact and workbook use existing paths.
+ *
+ * `modelId` is the Bedrock-native Converse model the constrained call runs on —
+ * deliberately not the turn's model, because strict tool use is a Converse
+ * feature a Mantle-hosted model never receives. It **must** have a catalog row:
+ * without one the call prices to null, costs $0, counts against no quota and
+ * fires UnmeteredModelCall. Regional (`us.*`) on dev, Global (`global.*`) in
+ * production, matching how the stack already distinguishes them.
+ */
+export interface DocumentExtractConfig {
+  enabled: boolean;
+  modelId: string;
+  /**
+   * Concurrent extraction calls when one `document_extract` call carries
+   * several documents (structured-extraction.md §17.4). Optional, and written
+   * to the Runtime only when set, so the default spends none of the V2
+   * environment budget. The backend's own default is 4 — deliberately
+   * conservative, because each call is a constrained Converse request carrying
+   * a whole document and this account has a Bedrock throttle alarm that an
+   * over-eager default would trip on the first real batch. Raise it on the
+   * DocumentExtract EMF records plus an absence of throttling, not on
+   * impatience; the backend clamps to 1..16.
+   */
+  concurrency?: number;
 }
 
 /**
@@ -1485,6 +1563,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_SESSION_PREWARM_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sessionPrewarm')?.enabled ?? false,
     },
+    handoffs: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_HANDOFFS_ENABLED
+        ? process.env.CDK_HANDOFFS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('handoffs')?.enabled ?? false,
+    },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_CLIENT_TURN_TIMING_ENABLED
@@ -1581,6 +1665,39 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_FOLDER_SYNC_ENABLED
         ? process.env.CDK_FOLDER_SYNC_ENABLED.trim().toLowerCase() !== 'false'
         : scope.node.tryGetContext('folderSync')?.enabled ?? true,
+    },
+    sourceProvenance: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_SOURCE_PROVENANCE_ENABLED
+        ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
+    },
+    documentExtract: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_DOCUMENT_EXTRACT_ENABLED
+        ? process.env.CDK_DOCUMENT_EXTRACT_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('documentExtract')?.enabled ?? false,
+      // Haiku 4.5 carries structured outputs on bedrock-runtime, and the
+      // Regional (`us.*`) profile is what dev runs. Production overrides this
+      // with the Global id through the same variable. Pinned by a config test
+      // because an id with no catalog row is an unmetered call, not an error.
+      modelId:
+        process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID?.trim() ||
+        scope.node.tryGetContext('documentExtract')?.modelId ||
+        'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      // Left undefined unless a deployment sets it, so the Runtime's
+      // environment carries nothing for the default case. A non-numeric value
+      // is dropped rather than forwarded: the backend would fall back anyway,
+      // and a bad string in the Runtime's env is harder to spot than an absent
+      // one.
+      ...(() => {
+        const raw = process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY?.trim();
+        const fromContext = scope.node.tryGetContext('documentExtract')?.concurrency;
+        const value = raw ? Number(raw) : fromContext;
+        return Number.isInteger(value) && value > 0 ? { concurrency: value } : {};
+      })(),
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

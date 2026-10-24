@@ -31,7 +31,7 @@ import base64
 from dataclasses import dataclass
 
 from apis.shared.aws_clients import get_dynamodb_table
-from typing import Iterable, List, Optional, Tuple, Any, Dict
+from typing import Iterable, List, Literal, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
 # Relative imports from shared sessions module
@@ -426,7 +426,9 @@ def _derive_cache_observability(
     query) and derives:
 
     - ``cacheStatus``: first_write | hit | partial_miss | miss_ttl_expired |
-      miss_avoidable | uncached (see ``apis.shared.observability.CacheStatus``).
+      miss_avoidable | uncached (see ``apis.shared.observability.CacheStatus``),
+      or ``estimated`` for a row whose usage was never reported — those return
+      early, before the query, and are never classified.
     - ``cacheGapSeconds``: whole seconds since the previous call, when known.
     - ``cachePrefixGapSeconds``: seconds since the last call with the *same*
       prefix, when that is a different (older) call than the previous one.
@@ -476,6 +478,18 @@ def _derive_cache_observability(
             return {}
 
         cache_read, cache_write = _extract_cache_usage(message_metadata)
+
+        # A call whose usage was never reported (an interrupted turn's cut
+        # generation) carries estimated buckets, so there is nothing here to
+        # classify. Say exactly that instead of deriving a status from the
+        # estimate: `cacheStatus` is where a cache investigation starts, and a
+        # confident-looking `first_write` or `miss_avoidable` on numbers nobody
+        # measured would send it after the wrong call. `wastedUsd` stays zero
+        # for the same reason — it is the metric the AvoidableMiss alarm reads.
+        # The buckets themselves are still the row's best estimate of what was
+        # billed, so the next call's own classification keeps its predecessor.
+        if (message_metadata.model_extra or {}).get("usageEstimated"):
+            return {"cacheStatus": CacheStatus.ESTIMATED.value, "wastedUsd": 0.0}
 
         # Recent cost rows for this session, newest first (GSI_SK = C#<timestamp>
         # sorts chronologically). We need a window rather than just the previous
@@ -1086,7 +1100,9 @@ async def _store_session_metadata_cloud(
         # carries the row's recency keys as extras; drop them so the keys written
         # below are derived from this write alone.
         item = session_metadata.model_dump(by_alias=True, exclude_none=True)
-        for gsi_key in _RECENCY_KEY_ATTRS:
+        # Pin keys are owned by set_session_pinned alone: a full-row write never
+        # writes them, so a stale model can't resurrect a pin the user removed.
+        for gsi_key in (*_RECENCY_KEY_ATTRS, *_PIN_KEY_ATTRS):
             item.pop(gsi_key, None)
         # The lexical search attribute follows the title on every full-row write
         # (the rename route, the first-turn create), never a stale copy of it.
@@ -1135,6 +1151,10 @@ async def _store_session_metadata_cloud(
                 )
                 merged_item['PK'] = pk
                 merged_item['SK'] = new_sk
+                # Pin keys carry across the move, but a deleted session is never pinned.
+                if not is_active:
+                    for pin_key in _PIN_KEY_ATTRS:
+                        merged_item.pop(pin_key, None)
                 # The merge can surface a project id only the old row had.
                 merged_item.update(_project_gsi_keys(
                     user_id, session_id, last_message_at,
@@ -1173,7 +1193,7 @@ async def _store_session_metadata_cloud(
                     expression_attribute_values[placeholder_value] = value
 
                 remove_parts = []
-                stale_keys = [] if is_active else ['GSI4_PK', 'GSI4_SK']
+                stale_keys = [] if is_active else ['GSI4_PK', 'GSI4_SK', *_PIN_KEY_ATTRS]
                 if not project_keys:
                     stale_keys += ['GSI5_PK', 'GSI5_SK']
                 for gsi_key in stale_keys:
@@ -1248,6 +1268,13 @@ _RECENCY_KEY_ATTRS = ("GSI4_PK", "GSI4_SK", "GSI5_PK", "GSI5_SK")
 
 PROJECT_SESSION_INDEX = "ProjectSessionIndex"
 
+# PinnedSessionIndex (GSI6, issue #711): GSI6_PK = USER#{userId},
+# GSI6_SK = {pinnedAt}#{sessionId}. Present only while pinned. Unlike the recency
+# keys they are not derived from row state on each write: set_session_pinned is
+# their only writer, row moves carry them, and soft-delete removes them.
+PINNED_SESSION_INDEX = "PinnedSessionIndex"
+_PIN_KEY_ATTRS = ("GSI6_PK", "GSI6_SK")
+
 
 def _project_gsi_pk(project_id: str, user_id: str) -> str:
     return f"PROJECT#{project_id}#USER#{user_id}"
@@ -1281,13 +1308,33 @@ def _preferences_project_id(row: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def session_is_incognito(row: Optional[Dict[str, Any]], requested: bool = False) -> bool:
+    """Whether a conversation is incognito (#1738): reads memory, never writes it.
+
+    An existing row decides, whatever the request says: the flag is fixed when
+    the row is created, because facts extracted from earlier turns can't be
+    traced back to the conversation and removed. With no row yet (the first
+    turn), the request's choice applies.
+    """
+    if row is None:
+        return bool(requested)
+    prefs = row.get("preferences")
+    return isinstance(prefs, dict) and prefs.get("incognito") is True
+
+
 async def ensure_session_metadata_exists(
-    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+    session_id: str,
+    user_id: str,
+    snapshot: Optional["SessionMetaSnapshot"] = None,
+    incognito: bool = False,
 ) -> bool:
     """Idempotently create a session metadata row if it doesn't exist yet.
 
     Returns ``True`` when a new row was created (caller can use this as the
     "first turn" signal, e.g. to fire title generation).
+
+    ``incognito`` is stamped on the new row's preferences. It has no effect on
+    a row that already exists: a conversation can't become incognito later.
 
     Existence is gated on a ``SessionLookupIndex`` GSI lookup rather than a
     conditional ``put_item``: the main-table SK encodes ``lastMessageAt``
@@ -1367,6 +1414,8 @@ async def ensure_session_metadata_exists(
             "starred": False,
             "tags": [],
         }
+        if incognito:
+            item["preferences"] = {"incognito": True}
 
         # The SK is now deterministic (S#{session_id}), so attribute_not_exists is a
         # real idempotency guard (issue #175): two concurrent first turns compute the
@@ -1532,6 +1581,91 @@ async def mark_session_unread(session_id: str, user_id: str) -> None:
     inside ``set_session_unread`` via the per-user GSI lookup.
     """
     await set_session_unread(session_id, user_id, True)
+
+
+PinResult = Literal["ok", "not_found", "project"]
+
+
+async def set_session_pinned(session_id: str, user_id: str, pinned: bool) -> PinResult:
+    """Pin or unpin one of the user's conversations (issue #711).
+
+    Pinning writes the sparse PinnedSessionIndex keys with the pin time as the
+    sort key (most recently pinned lists first); unpinning removes them. A
+    targeted update on the current SK, so it never races the full-row writers.
+
+    Returns ``"not_found"`` for a session the user doesn't own (or that is
+    deleted) and ``"project"`` when pinning a project task: those already sit
+    under their project in the sidebar, so they can't be pinned. Unpinning is
+    always allowed and idempotent.
+    """
+    from datetime import datetime, timezone
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+    table = get_dynamodb_table(sessions_metadata_table)
+
+    existing = await _get_session_by_gsi(session_id, user_id, table)
+    if not existing or not existing.get("SK") or existing.get("deleted") or existing.get("status") == "deleted":
+        return "not_found"
+    key = {"PK": f"USER#{user_id}", "SK": existing["SK"]}
+
+    if not pinned:
+        table.update_item(Key=key, UpdateExpression="REMOVE GSI6_PK, GSI6_SK")
+        return "ok"
+
+    if _preferences_project_id(existing):
+        return "project"
+    pinned_at = datetime.now(timezone.utc).isoformat()
+    table.update_item(
+        Key=key,
+        UpdateExpression="SET GSI6_PK = :pk, GSI6_SK = :sk",
+        ExpressionAttributeValues={":pk": f"USER#{user_id}", ":sk": f"{pinned_at}#{session_id}"},
+    )
+    return "ok"
+
+
+async def list_pinned_sessions(user_id: str) -> List[Tuple[SessionMetadata, str]]:
+    """The user's pinned conversations as ``(session, pinnedAt)``, most recently pinned first.
+
+    Reads PinnedSessionIndex, which holds only pinned rows, so this is one small
+    query regardless of how many conversations the user has. Empty while the
+    index is absent or still building.
+    """
+    from boto3.dynamodb.conditions import Key
+    from botocore.exceptions import ClientError
+
+    from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
+
+    table_name = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not table_name:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+    table = get_dynamodb_table(table_name)
+
+    params: Dict[str, Any] = {
+        "IndexName": PINNED_SESSION_INDEX,
+        "KeyConditionExpression": Key("GSI6_PK").eq(f"USER#{user_id}"),
+        "ScanIndexForward": False,
+    }
+    pinned: List[Tuple[SessionMetadata, str]] = []
+    try:
+        while True:
+            response = table.query(**params)
+            for item in response["Items"]:
+                pinned_at = str(item.get("GSI6_SK", "")).rsplit("#", 1)[0]
+                metadata = _item_to_session_metadata(item)
+                if metadata is None or metadata.deleted:
+                    continue
+                pinned.append((metadata, pinned_at))
+            lek = response.get("LastEvaluatedKey")
+            if not lek:
+                return pinned
+            params["ExclusiveStartKey"] = lek
+    except ClientError as e:
+        if is_missing_index_error(e):
+            log_missing_index(PINNED_SESSION_INDEX, "pinned conversations")
+            return []
+        raise
 
 
 async def update_session_activity(
@@ -2326,6 +2460,77 @@ async def _backfill_session_aggregates(
         logger.warning("backfill_session_aggregates failed for %s: %s", session_id, e)
 
 
+def set_session_spawned_from(session_id: str, user_id: str, source_session_id: str, handoff_id: str) -> bool:
+    """Record on a handoff's target conversation where it came from (handoffs spec §4.2).
+
+    ``spawnedFrom: {sessionId, handoffId}`` on the target's ``META`` row. It is how every later
+    turn of the target finds the source's ``HANDOFF#`` row to keep its status current, from the
+    B1 snapshot, with no extra read. A field-level ``SET`` on the static SK, so the full-row
+    writes elsewhere (which only ``SET`` their own fields) never remove it. Synchronous: callers
+    run it in a worker thread, after the first token. Returns False when the row is missing.
+    """
+    from botocore.exceptions import ClientError
+
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return False
+    try:
+        get_dynamodb_table(table_name).update_item(
+            Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
+            UpdateExpression="SET spawnedFrom = :sf",
+            ConditionExpression="attribute_exists(PK)",
+            ExpressionAttributeValues={":sf": {"sessionId": source_session_id, "handoffId": handoff_id}},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def settle_session_spawned_from(session_id: str, user_id: str) -> None:
+    """Mark a target's ``spawnedFrom`` settled: its handoff is done and stops following its turns.
+
+    Without it, every later turn of a finished handoff's target would make a status write that the
+    row refuses (``done`` is frozen). The link itself stays; Phase 2 reads it.
+    """
+    from botocore.exceptions import ClientError
+
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return
+    try:
+        get_dynamodb_table(table_name).update_item(
+            Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
+            UpdateExpression="SET spawnedFrom.settled = :t",
+            ConditionExpression="attribute_exists(spawnedFrom)",
+            ExpressionAttributeValues={":t": True},
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+
+
+async def get_session_compaction(session_id: str, user_id: str) -> Tuple[int, Optional[str]]:
+    """The applied compaction checkpoint and its summary for a session, or ``(0, None)``.
+
+    ``SessionMetadata`` deliberately carries only ``totalSummarizedTurns`` from
+    the nested ``compaction`` map. A handoff's excerpt needs the applied
+    checkpoint (an absolute message index) and the summary that stands in for
+    the messages before it, which is what the conversation's own model sees.
+    A pending, not yet applied, cut is ignored for the same reason.
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return 0, None
+    item = await _get_session_by_gsi(session_id, user_id, get_dynamodb_table(table_name))
+    compaction = (item or {}).get("compaction")
+    if not isinstance(compaction, dict):
+        return 0, None
+    summary = compaction.get("summary")
+    return int(compaction.get("checkpoint") or 0), summary if isinstance(summary, str) else None
+
+
 async def get_session_metadata(session_id: str, user_id: str) -> Optional[SessionMetadata]:
     """
     Retrieve session metadata
@@ -2591,7 +2796,7 @@ async def _get_session_metadata_cloud(
             )
 
         # Remove DynamoDB keys before validation
-        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS):
+        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS, *_PIN_KEY_ATTRS):
             item.pop(key, None)
 
         # Dedupe pending interrupts at the storage boundary so list_append
@@ -2711,7 +2916,7 @@ def _item_to_session_metadata(item: Dict[str, Any]) -> Optional[SessionMetadata]
     """
     try:
         item = _convert_decimal_to_float(item)
-        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS):
+        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS, *_PIN_KEY_ATTRS):
             item.pop(key, None)
 
         # Skip preview sessions - they should not appear in user's session list

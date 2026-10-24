@@ -1176,3 +1176,66 @@ def _unique_document_name(filename: str, suffix: str) -> str:
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
     stem = re.sub(r"\s+", " ", _NAME_UNSAFE.sub(" ", stem)).strip()[:40] or "document"
     return f"{stem} {suffix} {uuid.uuid4().hex[:6]}"
+
+
+# ---------------------------------------------------------------------------
+# Provenance: one document's text as the units it is numbered by
+# ---------------------------------------------------------------------------
+
+
+def _units_text(fmt: str, raw: bytes) -> List[str]:
+    """One string per page / paragraph / line, from the document's bytes.
+
+    The same three extractors the retrieval modes above use, so a quote is
+    verified against exactly the text ``document_read`` would have shown — not
+    a second, differently-cleaned rendering of the same file. HTML in
+    particular is left as-is, because that is what ``pattern`` mode searches.
+    """
+    if fmt == "pdf":
+        pdf = _open_pdf(raw)
+        try:
+            return [_pdf_page_text(pdf, i) for i in range(len(pdf))]
+        finally:
+            pdf.close()
+    if fmt == "docx":
+        return docx_paragraphs(raw)
+    return raw.decode("utf-8", errors="replace").splitlines()
+
+
+async def document_provenance_units(
+    user_id: str, session_id: str, upload_id: str
+) -> Tuple[FileMetadata, str, List[str]]:
+    """``(meta, fmt, unit texts)`` for one of the session's documents.
+
+    The document side of ``docs/specs/source-provenance-verification.md``. A
+    *prepared* document is read from the text layer the prepare Lambda already
+    wrote — ``text.jsonl``'s records are its persisted page markers, so this is
+    one S3 GET and no parse. Anything else is fetched and extracted, the same
+    work a ``document_read`` call does, under the same source-size bound.
+
+    Never on the pre-first-token path: the only caller is a tool the model
+    invokes after it has read a document and formed an answer.
+
+    An empty list (a scanned PDF with no text layer) is returned rather than
+    raised on, so the caller can say "nothing is traced here" instead of
+    failing the turn.
+    """
+    _require_identity(user_id, session_id)
+    if not upload_id:
+        raise WorkspaceValidationError("upload_id is required")
+
+    meta = await _get_owned_ready_file(user_id, upload_id)
+    fmt = document_format_for(meta.mime_type, meta.filename)
+    if fmt is None:
+        raise DocumentReadError(
+            f"'{meta.filename}' is not a readable document, so there is nothing to "
+            "verify a quote against."
+        )
+
+    if large_document.is_prepared(meta):
+        return meta, fmt, await _fetch_text_layer(meta)
+
+    if meta.size_bytes > _MAX_DOCUMENT_BYTES:
+        raise DocumentReadError(_unreadable_message(meta))
+    raw = await _fetch_bytes(meta)
+    return meta, fmt, await asyncio.to_thread(_units_text, fmt, raw)

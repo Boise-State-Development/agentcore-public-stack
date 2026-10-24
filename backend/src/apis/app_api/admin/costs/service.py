@@ -1037,6 +1037,9 @@ class AdminCostService:
             cache_write = int(token_usage.get("cacheWriteInputTokens") or 0)
             cache_status = record.get("cacheStatus")
             row_wasted = float(record.get("wastedUsd") or 0.0)
+            # An interrupted turn's cut generation: the tokens and cost on this
+            # row are the best estimate of what was billed, not a report.
+            usage_estimated_raw = record.get("usageEstimated")
             # #756 — derived at write time, where the predecessor row was already
             # in hand; read here as a plain projection.
             agent_switched = bool(record.get("agentSwitched"))
@@ -1076,6 +1079,11 @@ class AdminCostService:
                     int(prefix_gap_raw) if prefix_gap_raw is not None else None
                 ),
                 wasted_usd=row_wasted,
+                usage_estimated=(
+                    {str(key): str(value) for key, value in usage_estimated_raw.items()}
+                    if isinstance(usage_estimated_raw, dict) and usage_estimated_raw
+                    else None
+                ),
                 turn_agent_id=record.get("turnAgentId"),
                 agent_switched=agent_switched,
                 model_switched=model_switched,

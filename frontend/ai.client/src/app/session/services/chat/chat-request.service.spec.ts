@@ -18,6 +18,7 @@ import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
+import { IncognitoChatService } from '../incognito';
 
 describe('ChatRequestService', () => {
   let service: ChatRequestService;
@@ -66,7 +67,7 @@ describe('ChatRequestService', () => {
         ChatRequestService,
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
-        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null) } },
+        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null), takeResumeUnavailable: vi.fn().mockReturnValue(false) } },
         { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined), markSendFailed: vi.fn(), removeTrailingMessage: vi.fn().mockReturnValue(true) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
         // Turn timing and prewarm off: the tests that need them turn them on.
@@ -128,6 +129,18 @@ describe('ChatRequestService', () => {
         enabled_tools: ['tool1', 'tool2'],
       })
     );
+  });
+
+  it('starts the new conversation incognito when the toggle is on (#1738)', async () => {
+    const incognito = TestBed.inject(IncognitoChatService);
+    vi.spyOn(incognito, 'available').mockReturnValue(true);
+    incognito.toggle();
+
+    await service.submitChatRequest('Hello', null);
+
+    expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).toMatchObject({ incognito: true });
+    // The toggle is spent: the next new chat starts as not incognito.
+    expect(incognito.pending()).toBe(false);
   });
 
   describe('folder attachments', () => {
@@ -602,6 +615,19 @@ describe('ChatRequestService', () => {
       // The resumed stream can't attach the tool_result live, so we
       // reconcile from persisted memory to flip the card to its result.
       expect(messageMap.reloadMessagesForSession).toHaveBeenCalledWith('session1');
+    });
+
+    it('keeps a refused resume\'s streamed explanation instead of reloading over it', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      const chatState = TestBed.inject(ChatStateService) as any;
+      chatState.takeResumeUnavailable.mockReturnValue(true);
+
+      await oauthResumeHandler!(['int-1'], { sessionId: 'session1' });
+
+      // The refusal is streamed but never persisted, so a reload would
+      // replace it with history that has no explanation at all.
+      expect(chatState.takeResumeUnavailable).toHaveBeenCalledWith('session1');
+      expect(messageMap.reloadMessagesForSession).not.toHaveBeenCalled();
     });
 
     it('is a no-op without interrupt ids', async () => {

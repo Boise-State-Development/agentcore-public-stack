@@ -539,6 +539,14 @@ export class MessageMapService {
         sessionId,
         messagesResponse.toolSummaries ?? [],
       );
+
+      // Source-provenance verdicts: same contract again. The one that matters
+      // is `quote_unsupported` — a warning the user saw live that silently
+      // disappeared on reload would leave the answer looking clean.
+      this.toolInsight.seedProvenanceFromHydration(
+        sessionId,
+        messagesResponse.sourceProvenance ?? [],
+      );
     } finally {
       if (showLoading) {
         this._isLoadingSession.set(null);

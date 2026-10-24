@@ -137,9 +137,16 @@ match.
 
 - `normalize_usage(usage, provider)` — Bedrock passes through untouched; OpenAI
   gets both cache buckets subtracted out of `inputTokens`, clamped at 0.
-- `openai_cache_write_tokens(usage_obj)` — reads
-  `input_tokens_details.cache_write_tokens` (also checks the top level, where some
-  OpenAI-compatible gateways hoist it).
+- `cacheWriteInputTokens` comes from the SDK. We shipped a local
+  `openai_cache_write_tokens(usage_obj)` recovery alongside the above, because
+  through 1.57.1 Strands dropped the field. Both OpenAI paths map it upstream
+  now (Chat Completions 1.57 / #4361, Responses 1.57.2 / #4193), so the recovery
+  became a same-value overwrite and was **removed**; `TestStrandsSdkContract`
+  asserts the upstream mapping against the real SDK in its place. One behaviour
+  went with it: our helper also read a top-level `cache_write_tokens`, where
+  some OpenAI-compatible gateways hoist it, and upstream reads only
+  `input_tokens_details`. No model we route reports it that way — a gateway that
+  did would silently record 0 cache writes.
 - `usage_normalized(model_cls)` — memoized subclass applying both while the model
   formats its `metadata` chunk.
 
