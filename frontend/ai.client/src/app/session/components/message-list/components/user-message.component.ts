@@ -10,8 +10,9 @@ import {
   OnDestroy,
   inject,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowPath, heroArrowTurnDownRight, heroExclamationCircle } from '@ng-icons/heroicons/outline';
+import { heroArrowPath, heroArrowTurnDownRight, heroArrowUturnLeft, heroExclamationCircle } from '@ng-icons/heroicons/outline';
 import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
 import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
@@ -19,6 +20,9 @@ import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import { FailedSendService } from '../../../services/chat/failed-send.service';
 import { parseIso } from '../../../../utils/date';
+import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
+import { extractHandoffContext } from '../../../services/handoff/handoff-prompt';
+import { SessionService } from '../../../services/session/session.service';
 
 function isImageMimeType(mimeType: string): boolean {
   return mimeType.startsWith('image/');
@@ -29,8 +33,8 @@ const MAX_HEIGHT_PX = 200;
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
-  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath })],
+  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon, RouterLink],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroArrowUturnLeft, heroExclamationCircle, heroArrowPath })],
   template: `
     @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
       <div class="group relative flex w-full flex-col items-end gap-2">
@@ -50,6 +54,38 @@ const MAX_HEIGHT_PX = 200;
           because the bubble alone reads as the start of a new turn, which is
           exactly what it isn't — the reply above and below it is one response.
         -->
+        <!--
+          The first message of a conversation a handoff started (handoffs spec §4.2): the bubble
+          shows what the user typed, and this says where the context came from and links back.
+          The context itself is one click away, read from the message the model received.
+        -->
+        @if (handoffOrigin(); as origin) {
+          <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
+            <span class="flex items-center gap-1">
+              <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
+              Context from
+              <a
+                [routerLink]="['/s', origin.sessionId]"
+                class="font-medium text-gray-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300"
+              >{{ origin.title }}</a>
+              @if (handoffContext()) {
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  class="font-medium text-gray-700 underline-offset-2 hover:underline dark:text-gray-300"
+                  [attr.aria-expanded]="contextOpen()"
+                  (click)="contextOpen.set(!contextOpen())"
+                >
+                  {{ contextOpen() ? 'Hide context' : 'Show context' }}
+                </button>
+              }
+            </span>
+            @if (contextOpen() && handoffContext(); as context) {
+              <pre tabindex="0" role="region" aria-label="Context carried by this handoff" class="max-h-64 w-full overflow-auto whitespace-pre-wrap rounded-lg bg-gray-100 p-2 text-left font-mono text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ context }}</pre>
+            }
+          </div>
+        }
+
         @if (message().steering) {
           <span class="flex items-center gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
             <ng-icon name="heroArrowTurnDownRight" class="size-3.5" aria-hidden="true" />
@@ -173,6 +209,34 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
 
   private localSettings = inject(LocalSettingsService);
   private failedSends = inject(FailedSendService);
+  private handoffState = inject(HandoffStateService);
+  private sessions = inject(SessionService);
+
+  protected readonly contextOpen = signal(false);
+
+  /**
+   * Set on the first message of a conversation a handoff started: the source to link back to,
+   * titled as the sidenav titles it now (falling back to the title the context was sent under).
+   */
+  protected readonly handoffOrigin = computed((): { sessionId: string; title: string } | null => {
+    const id = this.message().id;
+    const dash = id.lastIndexOf('-');
+    if (!id.startsWith('msg-') || dash < 0 || id.slice(dash + 1) !== '0') return null;
+    const spawned = this.handoffState.spawnedFrom(id.slice(4, dash));
+    if (!spawned) return null;
+    const listed = this.sessions
+      .mergedSessionsResource()
+      .sessions.find((s) => s.sessionId === spawned.sessionId)
+      ?.title?.trim();
+    return { sessionId: spawned.sessionId, title: listed || spawned.sourceTitle || 'another conversation' };
+  });
+
+  /** The context card this message carried, when the persisted message has it (after a reload). */
+  protected readonly handoffContext = computed((): string | null => {
+    if (!this.handoffOrigin()) return null;
+    const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
+    return text ? extractHandoffContext(text) : null;
+  });
 
   /** Offered only while a resend could start a turn — see FailedSendService. */
   canRetry = computed(() => this.failedSends.canRetry(this.message().id));

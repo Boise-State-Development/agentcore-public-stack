@@ -147,6 +147,8 @@ def test_create_returns_the_card_and_the_exact_prompt(make_client, store):
     assert data["contextBlock"] == wrap_handoff_context(excerpt, "Course planning")
     assert data["prompt"] == build_handoff_message(data["contextBlock"], "draft a rubric for this")
     assert data["request"] == "draft a rubric for this"
+    assert data["sourceTitle"] == "Course planning"
+    assert data["sourceMessageIndex"] == 3
     assert data["excerptHash"] == context_hash(excerpt)
     assert data["turnsCovered"] == {"first": 1, "last": 2, "of": 2, "omitted": 0}
     assert data["excerptTokens"] > 0

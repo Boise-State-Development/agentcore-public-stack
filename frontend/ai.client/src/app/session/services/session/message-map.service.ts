@@ -11,6 +11,7 @@ import { UserQuestionService } from '../../../services/user-question/user-questi
 import { validateUserQuestions } from '../../../shared/utils/stream-parser';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from '../chat/tool-insight.service';
+import { HandoffStateService } from '../handoff/handoff-state.service';
 import { normalizeSteeringMessages } from '../chat/steering';
 import { matchToolResultsToToolUses } from './tool-results';
 import { ChatStateService } from '../chat/chat-state.service';
@@ -91,6 +92,7 @@ export class MessageMapService {
   private userQuestionService = inject(UserQuestionService);
   private mcpAppState = inject(McpAppStateService);
   private toolInsight = inject(ToolInsightService);
+  private handoffState = inject(HandoffStateService);
   private injector = inject(Injector);
   private chatStateService = inject(ChatStateService);
 
@@ -546,6 +548,14 @@ export class MessageMapService {
       this.toolInsight.seedProvenanceFromHydration(
         sessionId,
         messagesResponse.sourceProvenance ?? [],
+      );
+
+      // Handoffs (spec §4.3): the rows this thread sent, and where this
+      // conversation came from if a handoff started it. Neither re-streams.
+      this.handoffState.hydrate(
+        sessionId,
+        messagesResponse.handoffs,
+        messagesResponse.spawnedFrom,
       );
     } finally {
       if (showLoading) {
