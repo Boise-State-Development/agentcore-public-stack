@@ -16,7 +16,7 @@ overrides = [{ name = "pillow", specifier = "==13.0.0" }]
 
 [[package]]
 name = "agentcore-stack"
-version = "1.30.0"
+version = "1.31.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
