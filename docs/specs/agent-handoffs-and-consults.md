@@ -26,6 +26,14 @@ in the background (§4.3, "Relayed prompts"). The prompt still belongs to the ta
 platform from the pending interrupt, not by a model, and it never enters the source's model history. Separately, a
 delivery can now carry **artifact references** as well as text, so a result that is an artifact (a rubric, a
 report) can come back as itself rather than as a paragraph about it (§4.8, "Artifacts on a delivery").
+**Amendment (2026-10-22): a model-written brief, from the source's own prompt cache.** The context card is no longer
+the conversation's tail copied verbatim. When the review sheet opens, the **source conversation's own model** writes a
+brief aimed at the request: what is being asked and why, the background that matters, decisions and constraints so
+far, files and artifacts in play, and open questions. It writes it **from the source's cached prefix**: the request
+is the source's last turn, byte for byte, with one instruction appended. So the history it reads is billed at the
+cache-read rate (0.1× on our models) rather than re-sent, and nothing is written back to the source (§4.5). The
+deterministic excerpt stays as the fallback. PR-0.1 and PR-0.2 (merged) and PR-0.3 (in review) use the excerpt;
+this changes what fills the card, not how a handoff is sent or accepted.
 **Targets branch:** `develop`
 **Related:**
 - `docs/specs/agent-marketplace.md` §D11 — the 2026-09-14 revision that made a mention *bind* (#1115)
@@ -181,11 +189,11 @@ User-facing copy: "Hand off to *Rubric Builder*", "Handed off to *Rubric Builder
 | Question | Decision |
 |---|---|
 | Unit of work | A **handoff**: a `HANDOFF#<handoffId>` row on the *source* session. `kind` is `mention`, `suggested` or `send_back` |
-| How context moves | A **context card**: a bounded, deterministic **excerpt** attached to the first message of the target conversation |
+| How context moves | A **context card** attached to the first message of the target conversation: a **brief** the source's model writes for this request from the source's cached prefix, or, if that can't run, the bounded deterministic **excerpt** (§4.5) |
 | Review | **Required, in place.** A review sheet opens in the source thread before anything is sent. The full prompt the Agent will receive is one click away |
 | Where the user ends up | **Where they were.** The target conversation starts in the background and appears in the conversation list. The user opens it when they choose |
 | How progress is shown | A **handoff row** in the source thread: a card linking to the target, with its title and a live status line (*running*, *needs your input*, *done*, *stopped*), the existing unread dot, a toast, an entry in the **in-app inbox** (the bell), and a **browser notification** while the page is hidden. Never a model message |
-| Where the excerpt is rendered | **Server-side, once**, by a pure renderer in `apis.shared.handoff`. The SPA never builds it, because Phase 1 needs the same renderer in Python |
+| Where the card is made | The brief: **on the Runtime**, as a non-persisting side call on the source session's own agent (§4.5). The excerpt: **server-side, once**, by a pure renderer in `apis.shared.handoff`. The SPA builds neither |
 | How the model sees a card | Wrapped block **in the user message**; `displayText` = what the user typed; the card renders as a collapsible panel on the bubble |
 | Background execution | **Client-driven.** The SPA runs the target's turn as a second stream. It lives as long as the tab (§4.6) |
 | Model-suggested handoffs | `suggest_handoff` tool, **non-blocking** (returns immediately; the turn continues). Constant spec. No Agent list in the schema |
@@ -201,13 +209,18 @@ User-facing copy: "Hand off to *Rubric Builder*", "Handed off to *Rubric Builder
 1. **Nothing is sent yet.** The SPA calls app-api `POST /sessions/{id}/handoffs` with
    `{kind: "mention", agentId, request}`, using cookie auth (`get_current_user_from_session`). The server checks
    that the user owns the session, then:
-   - renders the excerpt from persisted messages (§4.5)
+   - renders the excerpt from persisted messages (§4.5.2), the card's fallback
    - writes `HANDOFF#<handoffId>` with `status: "open"`
    - returns `{handoffId, excerpt, excerptHash, excerptTokens, turnsCovered, contextBlock, request}`, where
      `contextBlock` is the excerpt already wrapped as the Agent will receive it
 
    It does **not** create the target session. Nothing hides empty sessions from the list, so a row created here
    would leave a blank "New Conversation" behind every cancelled handoff.
+
+   *Amended 2026-10-22:* with `HANDOFF_BRIEF_ENABLED` on, the SPA then asks the Runtime for the **brief** (§4.5): an
+   invocation on the **source** session carrying `handoff_brief: {handoffId}` and the same model, tools and binding
+   a turn there would carry. The brief streams into the context card as it is written. The excerpt from this
+   step is held as the fallback, and shows only if the brief can't be written.
 2. **A review sheet opens above the composer, in the source thread.** It is a labelled region, not a modal: the
    thread stays readable above it, and Esc cancels.
 
@@ -272,7 +285,7 @@ own sentence and could be sent half-edited by accident. A card keeps the request
 context editable as a document, and lets the SPA show "Context from *Course planning*" on the sent bubble without
 parsing the prompt.
 
-**Attachments** in the *source* thread are named in the excerpt, not carried over (§4.5).
+**Attachments** in the *source* thread are named in the card (the brief or the excerpt), not carried over (§4.5).
 
 **Cancelled handoffs.** Cancel calls `POST /sessions/{id}/handoffs/{handoffId}/dismiss`, and no session is created.
 If the user navigates away with the sheet open, the handoff stays `open`, and one older than 24h reads as
@@ -594,7 +607,116 @@ brief isn't streamed for chips the user dismisses.
 **Dismiss**. Once started, it becomes that handoff's row (§4.3). Chips replay on reload with the rest of
 `handoffs`. Dismiss is `POST /sessions/{id}/handoffs/{handoffId}/dismiss`.
 
-### 4.5 The excerpt renderer (shared with Phase 1)
+### 4.5 The context card: a brief from the source's cache, the excerpt as fallback
+
+*Rewritten 2026-10-22.* The card is a **brief** written for the request by the source conversation's own model, from
+the source's prompt cache (below). When the brief can't run (flag off, the source busy, over quota, a model error or
+timeout), the card is the deterministic **excerpt**, as built in PR-0.1.
+
+**Why a brief.** The excerpt is the conversation's tail, verbatim, cut at 4k tokens by dropping the oldest turns. On
+dev that dropped the very turns the request referred to: two long answers filled the budget and six earlier turns,
+the actual subject, became `[6 earlier turns omitted]`. It carries noise as faithfully as signal, and it is the same
+whatever the request is. A brief written by a model that has read the whole conversation, for *this* request, is what
+Claude does when it starts a conversation from another one, and it is a better start for the Agent.
+
+**Why from the source's cache.** The source's model has the whole conversation in context already, cached: its last
+turn wrote the prefix (tools, system prompt, history) moments ago. Asking it, with the request it already holds,
+reads that prefix at the cache-read rate instead of paying a second model to read an excerpt from scratch. It also
+sees what the source's model saw: the compaction summary in place of compacted turns, tool results, attachments, and
+what the source's tools could do.
+
+#### 4.5.1 How the brief reuses the cache
+
+A Bedrock cache hit is an exact prefix match on `toolConfig` → system → messages, per model. A change to
+`tool_choice` or to the thinking or effort settings invalidates the **messages** tier, and a change to the tools,
+the system prompt or the model invalidates everything. So the brief request must be the source's last request, byte
+for byte, up to a new final message.
+
+- **The same agent, resolved the same way.** The SPA sends the brief as an invocation on the source session with the
+  body a turn there would carry (model, tools, skills, binding: `buildChatRequestObject`) plus
+  `handoff_brief: {handoffId}`. The Runtime resolves the agent **exactly as a turn does**, through the turn path's
+  agent-resolution phases, so a cache miss in this process rebuilds an identical `toolConfig` and system prompt. The
+  MCP App dispatch's shortcut (`get_agent(cache_write=False)` with no injected tools) is **not** enough: on a miss it
+  builds a different `toolConfig`. This is what PR-1.1's `resolve_turn_agent` extraction is for, so PR-1.1 moves
+  into this work (§11).
+- **The same request, one message longer.** The call is `strands.event_loop.streaming.stream_messages` (the function
+  Strands' event loop calls), with the agent's own model, system prompt content, tool specs, `tool_choice`, inference
+  settings and trailing-block arguments, over a **copy** of `agent.messages` plus one appended user message:
+
+  ```
+  <handoff_brief_request agent="Rubric Builder" agent_description="…">
+  Write a brief for another of the user's agents, which will continue this work in a new conversation …
+  The request: draft a rubric for this
+  </handoff_brief_request>
+  ```
+
+  The instruction is a constant, versioned per deployment; only the request and the Agent's name and description
+  vary. It names the sections and a length bound (about 800 words), and says to answer in text without tools.
+- **Nothing reaches the source.** The copy is never assigned back, no `MessageAddedEvent` fires, no session-manager
+  write happens, and hooks don't run. The source's next real turn has the same `historyHash` lineage it would have
+  had. `apply_pending_compaction` is **not** run: the brief reads the history the cache holds, and a pending cut
+  stays pending for the next real turn.
+- **Tools stay offered but aren't used.** Dropping tools or setting `tool_choice` to `none` would invalidate the
+  cache, so the request keeps them and the instruction says not to call them. A response with a `toolUse` block
+  keeps its text if it has some, and otherwise falls back to the excerpt. Nothing is ever executed.
+- **Per-call projections apply the same way.** Whatever a turn does to the history per call, rather than in storage
+  (the TEXT-only model projection, document offload stubs), must happen identically on the brief's copy, or the bytes
+  differ from what the cache holds. The brief calls through the same model wrapper the event loop uses; verify there
+  is nothing a hook does per call that the brief would skip.
+- **Thinking and effort are the source's.** Changing them would invalidate the messages tier. The thinking tokens
+  are billed output; a deep-effort source writes a slower, costlier brief, and that is the price of the cache.
+- **Output.** `max_tokens` is not part of the cached prefix, so the brief caps its own output
+  (`HANDOFF_BRIEF_MAX_TOKENS`, default 2,000 including thinking). The text streams back as `content_block_delta`
+  frames and ends with `metadata` and `done`. The SPA reads this stream into the review sheet's card only, never
+  into any session's message map.
+
+**Bookkeeping on the source.**
+- **The lease.** The brief takes the source's single-flight lease, like a turn: a brief can't run beside a turn on the
+  same history, and a source that is streaming answers 409, which falls back to the excerpt.
+- **Quota.** Checked like a turn. Over quota falls back to the excerpt; the brief never streams the quota message.
+- **Metering.** One `C#` cost row on the **source** session, with `callKind: "handoff_brief"` and the usual
+  `cacheStatus` and fingerprint hashes. Its `toolConfigHash` and `systemPromptHash` must equal the source's last
+  turn's; that is the test that the cache was reused (§10). It counts against the user's quota.
+- **The HANDOFF# row** records `briefHash`, `briefTokens` and `briefCacheStatus` at the end. Acceptance (PR-0.2)
+  compares the sent card's hash with `briefHash` when there is one, else `excerptHash`, so `contextEdited` still
+  means "the user changed what we wrote".
+- **Skipped**, because this is not a turn: attachment resolution and the pending-attachment pop, the stale-marker
+  clears (an interrupted-turn note must survive for the next real turn), KB search, title generation, steering, and
+  handoff acceptance.
+- **TTFT.** A turn pays one field check for the new mode. The brief is its own invocation, so nothing it does sits
+  on any turn's path; its own latency is the agent lookup plus the model's time to first token, shown in the sheet.
+
+**Warm and cold.** The cache is warm when the source's last model call started less than 5 minutes ago (our TTL;
+the 1-hour static-prefix flag is off), which is the normal case: the user is mid-conversation when they type the
+mention. Cold, the brief writes the prefix at 1.25× instead of reading it at 0.1×. That write is not wasted when the
+user stays in the source, which is what a handoff is for: their next turn there within 5 minutes reads it instead of
+writing it again. v1 runs the brief either way and records which it was; whether a cold brief should fall back to
+the excerpt instead is a measurement question (§13).
+
+**Cost**, for a 30k-token source history, a ~400-token instruction and a ~900-token brief, at our Regional rates:
+
+| Source model | Warm (history read) | Cold (history written) | For comparison: a separate uncached Haiku 4.5 call over a 24k excerpt |
+|---|---|---|---|
+| Haiku 4.5 ($1.10 / $5.50; read $0.11) | ~$0.009 | ~$0.047 | ~$0.032 |
+| Sonnet 4.6 ($3.30 / $16.50; read $0.33) | ~$0.026 | ~$0.140 | ~$0.032 |
+
+On an expensive source model the output dominates (Fable 5.1 at $50/MTok: ~$0.045 for the brief, ~$0.0075 to read
+the history). Thinking adds output on top. The brief runs once per handoff, when the user asks for one.
+
+**The edges.**
+- **History that ends on a user message** (a failed or interrupted turn with no reply). Appending a second user
+  message breaks Converse's alternation. Verify first whether appending the instruction as a block after that
+  message's existing content (after its cachePoint) keeps the read; until then, fall back to the excerpt.
+- **A source this process has never built.** The agent builds as a turn would, a cold build of a second or more. The
+  sheet shows "Writing a brief…" meanwhile, and a timeout (`HANDOFF_BRIEF_TIMEOUT_SECONDS`, default 30) falls back.
+- **An empty or near-empty source.** Below the model's minimum cacheable prefix there is nothing to reuse and
+  little to brief. A source with fewer than two turns uses the excerpt.
+- **A refusal or a safety stop.** Falls back to the excerpt; the reason is logged, not shown.
+
+**Trust.** The brief is model output over a conversation that may contain web pages and tool results. The review step
+is the protection: the user reads, edits or removes it before anything is sent, exactly as with the excerpt.
+
+#### 4.5.2 The excerpt (the fallback, and Phase 1)
 
 `apis/shared/handoff/excerpt.py` is a pure function over persisted messages. It is deterministic, has no model
 call, and is tested on its own:
@@ -618,9 +740,8 @@ Assistant: …
 - **Watermark-capable.** It takes an optional `since_index`. Phase 0 doesn't use it; Phase 1's repeated consults
   do (§8.4).
 
-A **model-written** brief for 0a (a Nova Micro side-channel like `session_title`, well under a cent even on an
-uncached 50k-token thread) is a deliberate follow-up, not v1. Build the deterministic version first. Replace it
-only if `contextEdited` shows users rewriting it.
+*Superseded 2026-10-22:* this section once deferred a model-written brief until `contextEdited` showed users
+rewriting the excerpt. Dogfooding the built excerpt answered the question first (§4.5).
 
 ### 4.6 Background runs, and what Phase 0 leaves out
 
@@ -664,6 +785,9 @@ EMF, under the existing PromptCache namespace so the cost dashboard can show it:
 - `HandoffCreated` by `kind`
 - `HandoffSent` / `HandoffCancelled` / `HandoffAbandoned` by `kind`
 - `HandoffPromptPreviewed`: the review sheet's full-prompt preview was opened
+- `HandoffBriefWritten` by `briefCacheStatus` (`hit`, `partial_miss`, `miss`), with `HandoffBriefMs` and
+  `HandoffBriefTokens`; `HandoffBriefFallback` by reason (`flag_off`, `busy`, `quota`, `timeout`, `error`,
+  `tool_use_only`, `short_source`). A high `miss` share decides §13's cold-cache question
 - `HandoffContextEdited` / `HandoffContextRemoved`
 - `HandoffCompleted` / `HandoffNeedsInput` / `HandoffStopped`
 - `HandoffOpenedWhileRunning`: the user opened the target before it finished
@@ -834,6 +958,7 @@ and leaves the rubric behind. So a delivery can carry **references** to artifact
 |---|---|---|---|
 | `HANDOFFS_ENABLED` / `FEATURES.handoffs` | backend / SPA | off | yes; off = today's immediate handoff |
 | `HANDOFF_SUGGESTIONS_ENABLED` | backend | off | yes; off = `suggest_handoff` never registered |
+| `HANDOFF_BRIEF_ENABLED` | backend (Runtime) | off | yes; off = the card is the excerpt. A **feature switch**: it spends model tokens per handoff, a choice a deployment may decline |
 | `AGENT_CONSULT_ENABLED` / `FEATURES.agentConsult` | backend / SPA | off | yes; off = Phase 0 behaviour |
 | `CONVERSATION_MESSAGES_ENABLED` / `FEATURES.conversationMessages` | backend / SPA | off | yes; off = `send_to_conversation` never registered, agent-sent cards hidden |
 | `CONVERSATION_MESSAGE_STEER_ENABLED` | backend | off | yes; off = a message to a streaming conversation stays pending (2a) |
@@ -1317,6 +1442,20 @@ has started", and the only one that spends money while nobody is watching.
 **Phase 0**
 - **Excerpt renderer.** Deterministic output for the same input, whole-turn truncation, compaction-summary
   substitution, attachments named not inlined, and a `since_index` that only moves forward.
+- **Brief (cache reuse).** The thing that has to hold is that the brief request *is* the source's last request plus
+  one message:
+  - Capture the request a real source turn sends and the request the brief sends from the same agent: `toolConfig`,
+    system content, `tool_choice`, inference and thinking settings byte-identical; `messages` equal up to the brief's
+    one appended message.
+  - On a fresh process (agent cache miss), the agent the brief resolves has the same cache key and the same
+    `toolConfig` hash as the one a turn resolves (the MCP App shortcut fails this test; it must keep failing).
+  - Nothing persists: no session-manager write, no `MessageAddedEvent`, `agent.messages` unchanged by identity and
+    content, compaction state unchanged, an interrupted-turn marker still set afterwards.
+  - The lease is taken and released; a held lease answers 409 and the SPA shows the excerpt.
+  - A `toolUse`-only response, a timeout, a refusal and over-quota each fall back, with the reason recorded.
+  - On dev: a brief right after a source turn records `cacheStatus` `hit` with that turn's `toolConfigHash` and
+    `systemPromptHash`, a `cacheReadInputTokens` near the source's history size, and the source's next turn is still
+    a `hit`.
 - **Handoff lifecycle.** Owner scoping on every `/handoffs` route (cookie auth; another user's handoff id → 404),
   `open → running → needs_input ⇄ running → done | stopped`, `open → dismissed | abandoned`, and no double-send.
 - **`handoff_context`.** The server applies the cap again; `displayText` is the user's text only;
@@ -1465,6 +1604,21 @@ has started", and the only one that spends money while nobody is watching.
 - **PR-0.3 — SPA handoff.** A mid-thread mention opens the review sheet (request, context card, full-prompt
   preview); a no-navigate send; the handoff row as a linked card with title and live status line, live and replayed; completion and needs-input toasts;
   the card on sent bubbles; the unload guard. Verify interrupt-service scoping (§4.3) here.
+- **PR-0.3a — The brief** (§4.5; flag `HANDOFF_BRIEF_ENABLED`, off). Two PRs:
+  1. **Runtime.** First PR-1.1's pure refactor, extracting `resolve_turn_agent` from `chat/routes.py`, so a turn
+     and the brief resolve the agent through one function. Then the `handoff_brief` invocation mode: quota and
+     lease as a turn, the skipped phases listed in §4.5.1, the non-persisting `stream_messages` call over a copy of
+     the history, the fallbacks, the `C#` row with `callKind: "handoff_brief"`, and `briefHash` /
+     `briefCacheStatus` on `HANDOFF#`. Settle the verify-firsts: the trailing-blocks and `tool_choice` arguments as
+     the event loop passes them, the per-call history projections (§4.5.1), and a history that ends on a user
+     message.
+  2. **SPA.** After `POST /handoffs` returns, stream the brief into the card ("Writing a brief…", then the text),
+     keep the excerpt as the fallback with a one-line note when it is used, and send whichever the user ends up
+     with. Acceptance compares against `briefHash`.
+
+  Dev validation: a handoff right after a source turn shows a `hit` brief on the source's `C#` rows with the
+  source's hashes, and the source's next turn is still a `hit`; one sent after a 6-minute pause shows the `miss`
+  and the next source turn reading what it wrote.
 - **PR-0.3b — Notifications.** The three `handoff_*` inbox kinds, written by inference-api after `done`; the scoped
   `PutItem` grant; the bell shown with `features.handoffs` and rendering the new kinds; read-state rules; browser
   notifications through the Notification API, with the in-context permission ask.
@@ -1496,7 +1650,7 @@ has started", and the only one that spends money while nobody is watching.
   Then flip defaults on and start the §7 clock.
 
 **Phase 1** (after the gate)
-- **PR-1.1 — Extract `resolve_turn_agent`.** Pure refactor.
+- **PR-1.1 — Extract `resolve_turn_agent`.** Pure refactor. *Moved into PR-0.3a (2026-10-22)*, which needs it.
 - **PR-1.2 — Backend consult** (flag off): session prefix + list filter, orchestration, report, `CONSULT#` rows,
   SSE events, metering attributes, interrupt handling, `CLAUDE.md` SSE table.
 - **PR-1.3 — SPA**: Ask here / Hand off choice, consult card, disclosure, replay.
@@ -1570,13 +1724,26 @@ has started", and the only one that spends money while nobody is watching.
 - **O. Show a relayed prompt in the source composer's own prompt slot.** One place for every prompt, but it makes
   the target's pause look like the source's, which is the exact failure §4.3's scoping check guards against.
   Rejected: the relay lives in the handoff row.
+- **Q. A separate, cheap model writes the brief from the excerpt** (Nova Micro or Haiku over a ~24k-token excerpt).
+  Independent of the source's model and its price, but it reads the conversation from scratch every time (~$0.03
+  on Haiku 4.5 at 24k, uncached), sees only what the excerpt kept, and doesn't know what the source's tools could
+  do. Rejected for the cached brief (§4.5), which is cheaper whenever the cache is warm and reads everything the
+  source's model saw.
+- **R. Strip the tools, or set `tool_choice` to `none`, so the brief can't call one.** Either invalidates the cache
+  the brief exists to reuse (tools invalidate every tier; `tool_choice` the messages tier). Rejected: keep the
+  request identical and instruct against tool use, and never execute a tool call.
+- **S. Persist the brief request and answer into the source's history** (the model "writes a handoff note" as a
+  turn). The cache stays warm the same way, but the source's history would carry an instruction and a brief the
+  user didn't write, in the cached prefix for good. Rejected: the brief is a side call that leaves the source as it
+  was.
 - **P. Inline artifact bodies in a delivery.** The model could read the artifact without a tool, but a whole
   document would enter the receiver's history permanently, at model rates on every later turn, whether or not the
   conversation needs it again. Rejected for references plus, if needed, a bounded `read_artifact` (§13 Q14).
 
 ## 13. Open questions
 
-1. **Excerpt size.** Is 4k tokens enough in practice? Measure `HandoffContextEdited` before tuning.
+1. **Excerpt size.** Is 4k tokens enough in practice? Measure `HandoffContextEdited` before tuning. *(2026-10-22: the
+   excerpt is now the fallback; the question moves to the brief's length bound.)*
 2. **Should the source's model learn about a handoff?** Today it doesn't until a result is brought back, so "what
    did Rubric Builder say?" gets a blank. One option: on the source's next user turn, append a one-line note
    (`[Handed off "draft a rubric for this" to Rubric Builder]`). It is append-only, so the cached prefix is safe, but
@@ -1610,6 +1777,21 @@ has started", and the only one that spends money while nobody is watching.
     `update_artifact` lets it overwrite a document it can't read. Is a bounded, offset-paged `read_artifact` worth
     its one-time fleet-wide `toolConfig` write? It would help well beyond handoffs (revising an artifact from an
     earlier turn after compaction, say), so it may belong in the artifacts spec rather than here.
+
+15. **A cold brief.** When the source's cache has expired, should the brief still run on the source's model (it
+    writes the prefix at 1.25×, which the user's next source turn then reads), fall back to the excerpt, or switch to
+    a cheaper uncached model? Decide from `HandoffBriefWritten` by `briefCacheStatus` and whether the next source turn
+    reads the write.
+16. **Expensive source models.** A brief on Fable 5.1 costs mostly output (~$0.045). Is that fine because the user
+    chose that model, or should a brief on a very expensive model show its cost, or fall back?
+17. **A suggested request.** Claude also rewrites the request into a self-contained prompt. Should the brief end
+    with a suggested request the user can accept into the Request field, or should the request always stay exactly
+    what the user typed?
+18. **Phase 1 reuse.** A consult needs the same "what does the other Agent need to know" step. Should the consult's
+    context be this brief, written from the parent's cache, instead of an excerpt?
+
+**Decided (2026-10-22):** the context card is a brief written by the source conversation's own model from its own
+prompt cache, as a non-persisting side call; the deterministic excerpt is the fallback.
 
 **Decided (2026-09-27):** review before sending is required, and the handoff never sends immediately. This replaces
 the earlier open question about auto-send.
