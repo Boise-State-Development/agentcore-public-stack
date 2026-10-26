@@ -49,6 +49,11 @@ export class AgentApiService {
     return this.http.post<Agent>(this.baseUrl(), request);
   }
 
+  /** Copy an agent the caller owns or can edit into a new private agent. The KB is not copied. */
+  duplicateAgent(id: string): Observable<Agent> {
+    return this.http.post<Agent>(`${this.baseUrl()}/${id}/duplicate`, {});
+  }
+
   getAgents(params?: { includeDrafts?: boolean }): Observable<AgentsListResponse> {
     let httpParams = new HttpParams();
     if (params?.includeDrafts !== undefined) {

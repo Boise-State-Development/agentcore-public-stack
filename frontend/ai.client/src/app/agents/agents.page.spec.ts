@@ -5,6 +5,8 @@ import { provideRouter } from '@angular/router';
 import { AgentsPage } from './agents.page';
 import { AgentService } from './services/agent.service';
 import { Agent } from './models/agent.model';
+import { Router } from '@angular/router';
+import { ToastService } from '../services/toast/toast.service';
 import { LocalSettingsService } from '../services/local-settings.service';
 import { ConfigService } from '../services/config.service';
 
@@ -34,6 +36,7 @@ describe('AgentsPage row actions', () => {
             loading$: signal(false),
             error$: signal(null),
             loadAgents: vi.fn().mockResolvedValue(undefined),
+            duplicateAgent: vi.fn().mockResolvedValue({ ...AGENT, agentId: 'ast-copy' }),
           },
         },
         {
@@ -60,8 +63,19 @@ describe('AgentsPage row actions', () => {
     expect(labels).toEqual([
       'Chat with Rubric Builder',
       'Edit Rubric Builder',
+      'Duplicate Rubric Builder',
       'Share Rubric Builder',
       'Delete Rubric Builder',
     ]);
+  });
+
+  it("duplicates and opens the copy's edit page", async () => {
+    const fixture = TestBed.createComponent(AgentsPage);
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const info = vi.spyOn(TestBed.inject(ToastService), 'info');
+    await fixture.componentInstance.onDuplicate(AGENT);
+    expect(TestBed.inject(AgentService).duplicateAgent).toHaveBeenCalledWith('ast-a1b2c3d4e5f6');
+    expect(navigate).toHaveBeenCalledWith(['/agents', 'ast-copy', 'edit']);
+    expect(info).toHaveBeenCalledTimes(1);
   });
 });

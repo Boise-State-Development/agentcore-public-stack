@@ -286,3 +286,61 @@ class TestBindable:
         assert resp.status_code == 200
         m.assert_awaited_once()
         exists.assert_not_called()  # did NOT fall through to get_agent_endpoint
+
+
+# --------------------------------------------------------------------------- duplicate
+DUP_MODULE = "apis.app_api.agent_designer.services.agent_duplication"
+
+
+class TestAgentDuplicate:
+    def test_owner_duplicate_is_private_owned_copy_without_kb(self, app, make_user, _flag_on):
+        user = make_user()
+        mock_auth_user(app, user)
+        source = _make_assistant(
+            ownerId="someone-else",
+            visibility="PUBLIC",
+            bindings=[
+                AgentBinding(kind="tool", ref="t1"),
+                AgentBinding(kind="knowledge_base", ref="ast-001"),
+            ],
+            model_settings=AgentModelConfig(model_id="m1"),
+        )
+
+        async def _create(**kwargs):
+            return _make_assistant(
+                assistantId="ast-new",
+                ownerId=kwargs["owner_id"],
+                name=kwargs["name"],
+                visibility=kwargs["visibility"],
+                bindings=kwargs["bindings"],
+            )
+
+        with patch(
+            f"{DUP_MODULE}.resolve_assistant_permission", new_callable=AsyncMock, return_value=(source, "editor")
+        ), patch(f"{DUP_MODULE}.validate_agent_write", new_callable=AsyncMock), patch(
+            f"{DUP_MODULE}.create_assistant", new_callable=AsyncMock, side_effect=_create
+        ) as create, patch(f"{DUP_MODULE}._copy_icon", new_callable=AsyncMock):
+            resp = TestClient(app).post("/agents/ast-001/duplicate")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["agentId"] == "ast-new"
+        assert body["userPermission"] == "owner"
+        kwargs = create.await_args.kwargs
+        assert kwargs["owner_id"] == user.user_id
+        assert kwargs["visibility"] == "PRIVATE"
+        assert kwargs["name"] == "Copy of My Agent"
+        assert kwargs["instructions"] == "You are helpful."
+        assert kwargs["bindings"] == [AgentBinding(kind="tool", ref="t1")]
+        assert kwargs["model_settings"].model_id == "m1"
+
+    def test_viewer_gets_403(self, app, make_user, _flag_on):
+        mock_auth_user(app, make_user())
+        with patch(
+            f"{DUP_MODULE}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=(_make_assistant(visibility="PUBLIC"), "viewer"),
+        ), patch(f"{DUP_MODULE}.create_assistant", new_callable=AsyncMock) as create:
+            resp = TestClient(app).post("/agents/ast-001/duplicate")
+        assert resp.status_code == 403
+        create.assert_not_awaited()

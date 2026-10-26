@@ -32,6 +32,10 @@ from fastapi import (
 )
 
 from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
+from apis.app_api.agent_designer.services.agent_duplication import (
+    AgentDuplicationError,
+    duplicate_agent,
+)
 from apis.app_api.agent_designer.services.bindable_catalog import (
     BINDABLE_KINDS,
     list_bindable,
@@ -536,6 +540,22 @@ async def delete_agent_endpoint(agent_id: str, current_user: User = Depends(requ
     except Exception as e:
         logger.error(f"Error deleting agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete agent: {str(e)}")
+
+
+@router.post("/{agent_id}/duplicate", response_model=AgentResponse, response_model_exclude_none=True)
+async def duplicate_agent_endpoint(agent_id: str, current_user: User = Depends(require_agents_enabled)):
+    """Copy an Agent (owner/editor only) into a new PRIVATE Agent owned by the caller.
+    The knowledge base is not copied."""
+    try:
+        new = await duplicate_agent(agent_id, current_user)
+        return _agent_response(new, permission="owner")
+    except AgentDuplicationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error duplicating agent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to duplicate agent: {str(e)}")
 
 
 # --------------------------------------------------------------------------- shares
