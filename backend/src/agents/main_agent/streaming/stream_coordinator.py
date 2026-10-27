@@ -1525,13 +1525,26 @@ class StreamCoordinator:
             # the `except` arm below.
             turn_usage_recorded = True
 
-            # Always update session metadata (for last_model, message_count, etc.)
-            await self._update_session_metadata(
-                session_id=session_id,
-                user_id=user_id,
-                message_id=message_id,  # May be None if no assistant messages
-                agent=main_agent_wrapper,  # Use wrapper instead of internal agent
-            )
+            # The user can delete the conversation while it streams (#1764).
+            # Its delete cleanup has already run by then, so the session writes
+            # below would only leave records behind for a conversation that is
+            # gone. Cost rows are still written: the turn was billed either way.
+            from apis.shared.sessions.metadata import session_is_deleted
+
+            session_deleted = await session_is_deleted(session_id, user_id)
+            if session_deleted:
+                logger.warning(
+                    "Session %s was deleted during the turn; skipping post-turn session writes",
+                    session_id,
+                )
+            else:
+                # Update session metadata (for last_model, message_count, etc.)
+                await self._update_session_metadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    message_id=message_id,  # May be None if no assistant messages
+                    agent=main_agent_wrapper,  # Use wrapper instead of internal agent
+                )
 
             # Store message-level metadata for assistant messages created during this stream
             # Use individual per-message metadata if we tracked it, otherwise fallback to accumulated
@@ -1560,7 +1573,7 @@ class StreamCoordinator:
             # didn't happen: a wrapper with no hook (voice, tests), or a
             # failed write. Skipped otherwise, so the normal path still makes
             # exactly one put.
-            if original_message and not self._display_text_written(main_agent_wrapper):
+            if original_message and not session_deleted and not self._display_text_written(main_agent_wrapper):
                 user_message_index = initial_message_count  # User message is first in this turn
                 try:
                     from apis.shared.sessions.metadata import store_user_display_text
@@ -1582,11 +1595,12 @@ class StreamCoordinator:
             # jumps to an `except` below, leaving the marker in place so the
             # next turn can re-send the attachments the model never saw. See
             # `set_pending_attachments` for the full lifecycle.
-            try:
-                from apis.shared.sessions.metadata import clear_pending_attachments
-                await clear_pending_attachments(session_id, user_id)
-            except Exception as e:
-                logger.error(f"Failed to clear pending attachments: {e}", exc_info=True)
+            if not session_deleted:
+                try:
+                    from apis.shared.sessions.metadata import clear_pending_attachments
+                    await clear_pending_attachments(session_id, user_id)
+                except Exception as e:
+                    logger.error(f"Failed to clear pending attachments: {e}", exc_info=True)
 
             # Same reasoning, applied to the interrupted-turn marker: a turn
             # that reached here produced a COMPLETE answer, so it was not
@@ -1616,11 +1630,12 @@ class StreamCoordinator:
             # happened. That is what this does. The real interruption arms
             # below re-set it after persisting their partial, so a genuine
             # interruption is unaffected.
-            try:
-                from apis.shared.sessions.metadata import clear_interrupted_turn
-                await clear_interrupted_turn(session_id, user_id)
-            except Exception as e:
-                logger.error(f"Failed to clear stale interrupted_turn: {e}", exc_info=True)
+            if not session_deleted:
+                try:
+                    from apis.shared.sessions.metadata import clear_interrupted_turn
+                    await clear_interrupted_turn(session_id, user_id)
+                except Exception as e:
+                    logger.error(f"Failed to clear stale interrupted_turn: {e}", exc_info=True)
 
             # Conversation search's archive (docs/specs/conversation-search.md
             # §4): one S3 object per turn, written in a background task. Last,
@@ -1632,22 +1647,25 @@ class StreamCoordinator:
             # message, and `message_id` then falls back to the session
             # manager's stale per-instance count (it once landed a resume on
             # the previous turn's key).
+            # Set even when the session was deleted, so the failure arms below
+            # don't archive the turn either.
             turn_archived = True
-            try:
-                from apis.shared.conversation_archive.live import schedule_turn_archive
-                archive_messages = getattr(agent, "messages", None) or []
-                schedule_turn_archive(
-                    messages=archive_messages,
-                    user_id=user_id,
-                    session_id=session_id,
-                    turn_first_index=initial_message_count,
-                    appended_count=appended_since(archive_messages, archive_anchor),
-                    original_message=original_message,
-                    project_id=turn_project_id,
-                    assistant_id=turn_agent_id,
-                )
-            except Exception as e:
-                logger.error(f"Failed to schedule conversation archive write: {e}", exc_info=True)
+            if not session_deleted:
+                try:
+                    from apis.shared.conversation_archive.live import schedule_turn_archive
+                    archive_messages = getattr(agent, "messages", None) or []
+                    schedule_turn_archive(
+                        messages=archive_messages,
+                        user_id=user_id,
+                        session_id=session_id,
+                        turn_first_index=initial_message_count,
+                        appended_count=appended_since(archive_messages, archive_anchor),
+                        original_message=original_message,
+                        project_id=turn_project_id,
+                        assistant_id=turn_agent_id,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to schedule conversation archive write: {e}", exc_info=True)
 
         except _CooperativeStopSignal:
             # Deliberate user Stop observed mid-stream (see the in-loop check).
@@ -3325,6 +3343,14 @@ class StreamCoordinator:
 
             batch_id = str(batch.get("batchId") or "")
             tool_use_ids = [str(t) for t in (batch.get("toolUseIds") or [])]
+
+            # Deleted mid-turn (#1764): the delete cleanup has run, so a row
+            # written now would outlive the conversation.
+            from apis.shared.sessions.metadata import session_is_deleted
+
+            if await session_is_deleted(session_id, user_id):
+                logger.info("Session %s was deleted; tool batch summary not stored", session_id)
+                return None
 
             # Persist before returning: the emit loop may never get to this
             # payload (cancelled turn, dropped connection), but the row is

@@ -119,6 +119,10 @@ class SessionService:
             GSI_SK: META
     """
 
+    # Sparse index keys that list a session (recency, project, pinned). Live
+    # rows may carry them; a soft-deleted row never should.
+    _LISTING_KEY_ATTRS = ('GSI4_PK', 'GSI4_SK', 'GSI5_PK', 'GSI5_SK', 'GSI6_PK', 'GSI6_SK')
+
     def __init__(self):
         self.table_name = os.environ.get(
             'DYNAMODB_SESSIONS_METADATA_TABLE_NAME',
@@ -233,7 +237,21 @@ class SessionService:
                 return False
 
             if existing.get('deleted') or existing.get('status') == 'deleted':
-                logger.info("Session already deleted")
+                # A tombstone should carry no listing keys. If a write landed
+                # after the delete and put some back (#1764), the conversation
+                # is in the sidebar again and can't be opened or pinned; remove
+                # them so deleting again repairs it.
+                stale = [k for k in self._LISTING_KEY_ATTRS if k in existing]
+                if stale:
+                    logger.warning(
+                        "Deleted session still had listing keys %s; removing them", stale
+                    )
+                    self.table.update_item(
+                        Key={'PK': f'USER#{user_id}', 'SK': existing['SK']},
+                        UpdateExpression="REMOVE " + ", ".join(stale),
+                    )
+                else:
+                    logger.info("Session already deleted")
                 return True
 
             now = datetime.now(timezone.utc)

@@ -1096,6 +1096,16 @@ async def _store_session_metadata_cloud(
         # First, check if session exists via GSI to get current SK
         existing_session = await _get_session_by_gsi(session_id, user_id, table)
 
+        # A soft-deleted row is final (#1764). Callers rebuild the row from a
+        # model, and a rebuilt model reads as active, so writing it would put
+        # the recency keys back and return the deleted conversation to the
+        # sidebar. Only SessionService.delete_session writes a tombstone.
+        if existing_session and _row_is_deleted(existing_session):
+            logger.warning(
+                "store_session_metadata: session %s is deleted; write refused", session_id
+            )
+            return
+
         # Prepare item for DynamoDB. A model read back through get_session_metadata
         # carries the row's recency keys as extras; drop them so the keys written
         # below are derived from this write alone.
@@ -1720,6 +1730,15 @@ async def update_session_activity(
                 )
                 return False
 
+        # Deleted mid-turn (#1764): the SET below would restore the recency
+        # keys and bring the conversation back to the sidebar.
+        if _row_is_deleted(existing):
+            logger.warning(
+                "update_session_activity: session %s was deleted; activity not recorded",
+                session_id,
+            )
+            return False
+
         old_sk = existing.get("SK")
         if not old_sk:
             logger.warning("update_session_activity: session %s has no SK", session_id)
@@ -2098,6 +2117,30 @@ async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[
         # failure - the session might not exist, or we're in a transitional state.
         logger.debug(f"GSI lookup failed (may not exist yet): {e}")
         return None
+
+
+def _row_is_deleted(row: Dict[str, Any]) -> bool:
+    """Whether a raw session row is soft-deleted (either marker counts)."""
+    return row.get('deleted') is True or row.get('status') == 'deleted'
+
+
+async def session_is_deleted(session_id: str, user_id: str) -> bool:
+    """Whether the user's session row exists and is soft-deleted (#1764).
+
+    For writers that run after a turn has started: the user can delete the
+    conversation while it streams, and nothing should be written for it after
+    that. A missing row or a failed lookup reads as not deleted, so callers
+    carry on as they did before this check existed.
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return False
+    try:
+        row = await _get_session_by_gsi(session_id, user_id, get_dynamodb_table(table_name))
+    except Exception:
+        logger.warning("session_is_deleted: lookup failed for %s", session_id, exc_info=True)
+        return False
+    return row is not None and _row_is_deleted(row)
 
 
 
