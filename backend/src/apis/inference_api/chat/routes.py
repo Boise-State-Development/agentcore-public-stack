@@ -342,6 +342,10 @@ async def _find_managed_model(model_id: str | None):
 # remember a preference "just for me", Haiku 4.5 said it had saved or noted it without
 # calling `memory_save` (2 of 10 on dev before; the tool spec alone left 1 of 10). An empty
 # personal space renders no memory block, so this is the one place always in the prompt.
+# The tools paragraph is a 2026-10 support ticket: a harness runs only on the project's bound
+# tools, but the base prompt's missing-tool advice sent a faculty member to Customize →
+# Tools, where turning Canvas on changes nothing for a project. It names the project's
+# Tools page instead and says so over the base advice.
 # Constant text, so it costs one cache write per harness, on deploy.
 PROJECT_WORKSPACE_GUIDANCE = (
     "## Project Workspace\n\n"
@@ -351,7 +355,11 @@ PROJECT_WORKSPACE_GUIDANCE = (
     "relevant shared conversations, not only memory.\n\n"
     "When a member asks you to remember something, for the team or just for them, call `memory_save` "
     "in that same turn. Nothing carries into a later conversation until it succeeds, so never say "
-    "you've saved, noted or recorded something you haven't saved."
+    "you've saved, noted or recorded something you haven't saved.\n\n"
+    "This project's tools are set on the project, for everyone in it: a member's own choices under "
+    "Customize → Tools do not reach project conversations. When a request needs a tool you don't have, "
+    "say this project doesn't include it, and that someone who can edit the project can add it from "
+    "the project's page under Tools. This replaces the Customize → Tools advice above for this project."
 )
 
 
@@ -366,8 +374,13 @@ def compose_agent_system_prompt(base_prompt: str, instructions: str, *, project_
     Deliberately takes nothing about the invoking user: this text is the head of the
     cacheable system block, and two members of one project must render it identically or
     each member pays a cache write for the same project (the prompt-cache contract).
+
+    A project with no instructions still gets the guidance, with no instructions heading:
+    a new project has none, and its harness runs on the project's tools all the same.
     """
     guidance = f"\n\n{PROJECT_WORKSPACE_GUIDANCE}" if project_harness else ""
+    if not instructions:
+        return f"{base_prompt}{guidance}"
     return f"{base_prompt}{guidance}\n\n## {_instructions_heading(project_harness)}\n\n{instructions}"
 
 
@@ -4718,6 +4731,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
                 base_prompt_builder = SystemPromptBuilder()
                 system_prompt = base_prompt_builder.build(include_date=True)
+            if turn_project_id:
+                # A new project has no instructions; its harness still needs the
+                # project guidance (memory, shared conversations, where tools are set).
+                system_prompt = compose_agent_system_prompt(system_prompt, "", project_harness=True)
             logger.info(
                 "Assistant has no instructions - using fallback system prompt"
             )
