@@ -341,7 +341,10 @@ Footer {
 #composer-area {
     dock: bottom;
     height: auto;
-    max-height: 14;
+    /* Room for the command menu (10) above a one-line composer (3), the
+     * status bar (1) and the bottom padding (1). The menu only opens while the
+     * composer holds a single line, so the two never need their maxima at once. */
+    max-height: 18;
     padding: 0 3 1 3;
     background: $background;
 }

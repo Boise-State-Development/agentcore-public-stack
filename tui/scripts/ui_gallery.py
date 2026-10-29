@@ -138,6 +138,16 @@ async def chat_scenes(out: Path, theme: str | None = None) -> None:
         await pilot.pause()
         (out / "03b-prompt-focused.svg").write_text(app.export_screenshot())
 
+        app.chat.composer.text = "/"
+        await pilot.pause()
+        (out / "03c-command-menu.svg").write_text(app.export_screenshot())
+        app.chat.composer.text = "/mo"
+        await pilot.pause()
+        (out / "03d-command-menu-filtered.svg").write_text(app.export_screenshot())
+        app.chat.command_menu.hide()
+        app.chat.composer.text = ""
+        await pilot.pause()
+
         app.chat.composer.text = "Thanks — now summarise that as a table I can paste into Slack.\nKeep it under ten rows."
         app.chat.status.set_state("Thinking…", busy=True)
         app.chat.composer.add_class("-busy")

@@ -186,27 +186,45 @@ agentcore-tui logout     # clear stored credentials for this deployment
 The base URL is the app-api root. On a CloudFront deployment that usually ends
 in `/api` — the same origin the SPA calls.
 
-## Key bindings
+## Commands
+
+Everything is a slash command typed into the composer. Type `/` and a menu
+lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
+`Enter` to run, `Esc` to close. `/help` prints the same list.
+
+| Command | What it does |
+|---|---|
+| `/new` | Start a new conversation |
+| `/model [name]` | Pick a model, or switch straight to one whose name contains `name` |
+| `/tools` | Choose which server tools the agent may use (signed in) |
+| `/tools local on\|off` | Switch tools that run on this machine for the session |
+| `/conversations [search]` | Browse, open, rename (`r`) or delete saved conversations |
+| `/attach <path>` | Upload a file and send it with your next message |
+| `/continue` | Let an answer that hit the token limit carry on |
+| `/stop` | Stop the turn in flight |
+| `/copy [all]` | Copy the last answer, or the whole conversation as Markdown |
+| `/clear` | Clear the screen; the conversation continues |
+| `/theme [name]` | Switch the colour theme, or list them |
+| `/status` | Server, sign-in, model, tools, session id, log file |
+| `/screenshot` | Save an SVG snapshot of the screen |
+| `/help` | List the commands |
+| `/quit` | Leave |
+
+Start a message with `//` to send a literal slash. There are no function keys
+and no command palette: the only keys are the ones every terminal user already
+has.
 
 | Key | Action |
 |---|---|
-| `Enter` | Send |
+| `Enter` | Send, or run the highlighted command |
 | `Alt+Enter`, `Shift+Enter`, `Ctrl+O` | Insert a newline |
-| `Esc` | Stop the in-flight turn |
-| `Ctrl+N` | New conversation |
-| `F2` | Switch model |
-| `F3` | Choose tools |
-| `F4` | Saved conversations (`/` filters, Enter searches message text) |
-| `F1` | Command palette (themes, and more) |
+| `Esc` | Stop the in-flight turn; close the command menu |
+| `Up` / `Down`, `Tab` | Move in the command menu; complete |
 | `Ctrl+Q` | Quit |
 
 While a turn is paused on a prompt: `y` / `n` approve or decline, `a` allows a
 local tool for the session, `1`–`9` pick an answer, `o` types a free-text one,
 `s` skips a question, `x` skips them all.
-
-Slash commands, typed into the composer: `/new`, `/model [name]`, `/tools`,
-`/chats`, `/attach <path>`, `/copy [all]`, `/continue`, `/clear`, `/stop`,
-`/help`, `/quit`. Start a message with `//` to send a literal slash.
 
 Three aliases exist for "newline" because terminals disagree: `Shift+Enter`
 requires the Kitty keyboard protocol, while `Alt+Enter` and `Ctrl+O` work
@@ -244,7 +262,7 @@ Config file location:
 base_url = "https://your-host/api"
 model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
-# The model picker (F2) reads this list. `GET /models` is cookie-session
+# The model picker (/model) reads this list. `GET /models` is cookie-session
 # authenticated, so an API-key client cannot discover the catalogue — set the
 # models your deployment actually grants your role.
 models = [
@@ -307,7 +325,7 @@ read-only home, for instance) the only consequence is that the banner replays.
 key revokes the old one. Mint a fresh key and run `agentcore-tui login` again.
 
 **"Your account is not permitted to use ..." (403).** RBAC is enforced
-server-side against your role's model grants. Press `F2` to pick another model,
+server-side against your role's model grants. Use `/model` to pick another model,
 or ask an administrator to grant your role access.
 
 **"Rate limit or quota exceeded" (429).** The endpoint allows 60 requests per
@@ -521,7 +539,8 @@ tui/
     ├── turn.py                  # one in-flight turn, behind a TurnSink protocol
     ├── usage.py                 # token counts, shared by wire/domain/view
     ├── errors.py                # typed errors, each with an actionable hint
-    ├── app.py                   # bindings, screen stack, palette, startup
+    ├── app.py                   # quit binding, screen stack, startup
+    ├── commands.py              # the slash-command registry (popup, /help, dispatch)
     ├── app.tcss                 # stylesheet
     ├── client/
     │   ├── endpoints.py         # every app-api URL

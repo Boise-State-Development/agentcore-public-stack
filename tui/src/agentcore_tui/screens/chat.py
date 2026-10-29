@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 #: Composer hints. Shown in the frame's bottom edge so they are always visible
 #: without taking a transcript row.
-COMPOSER_HINT = "Enter to send · Alt+Enter for a new line"
+COMPOSER_HINT = "Enter to send · Alt+Enter for a new line · / for commands"
 COMPOSER_HINT_BUSY = "Esc to stop"
 
 

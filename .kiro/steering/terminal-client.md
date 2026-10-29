@@ -26,8 +26,8 @@ else:
 |---|---|
 | Enter | send (or run the completed slash command) |
 | Esc | stop the current turn; close a popup or picker |
-| Ctrl+C | quit (press twice while a turn is running) |
-| Ctrl+J | newline in the composer |
+| Ctrl+Q | quit (Textual binds Ctrl+C to *copy* in a focused TextArea, and its own Ctrl+C handler says to press Ctrl+Q) |
+| Alt+Enter (also Shift+Enter, Ctrl+O) | newline in the composer; Ctrl+J is LF and collides with Enter |
 | Up / Down | history in the composer; move in lists and popups |
 | Tab | complete the highlighted slash command |
 | PgUp / PgDn | scroll the transcript |
@@ -189,16 +189,17 @@ block has the same latent problem.
 
 `client_surface: "terminal"` on every `/chat/stream` turn
 (`client/agent_stream.py`, `CLIENT_SURFACE`). The backend composes
-`SHARED_SYSTEM_PROMPT` + a per-surface interface block, so the agent names F2/F3/F4
-instead of a gear icon and is explicitly forbidden from emitting KaTeX and
+`SHARED_SYSTEM_PROMPT` + a per-surface interface block, so the agent points at
+slash commands instead of a gear icon and is explicitly forbidden from emitting KaTeX and
 Mermaid — a terminal renders both as literal noise, and the model's priors push
 hard toward them unless told no.
 
-**If you move a keybinding, update `TERMINAL_SURFACE_GUIDANCE`** in
-`backend/src/agents/main_agent/core/system_prompt_builder.py`. It hardcodes F2,
-F3 and F4; a stale block means the agent confidently tells users the wrong key,
-which is the exact failure the split was built to end. A test asserts the keys
-are present but cannot know whether they are still correct.
+**`TERMINAL_SURFACE_GUIDANCE`** in
+`backend/src/agents/main_agent/core/system_prompt_builder.py` must name **no
+keys and no specific commands beyond `/help`**: "features are slash commands;
+`/help` lists them". The version that shipped in #1770 hardcoded F2/F3/F4, which
+went stale the same day; `fix/terminal-guidance-slash` replaces it. A prompt
+that says "type `/help`" cannot go stale as long as `/help` exists.
 
 The surface is a dimension of the **agent cache key**, and a paused turn records
 it in its snapshot. Both are deliberate — details in
@@ -241,8 +242,8 @@ closure). Any test of a Strands tool must go through
 `tool._metadata.validate_input(...)` — calling the body directly skips the step
 that failed.
 
-Related expectation to set for users: local tools do **not** appear in the F3
-picker. The picker is the server's RBAC-gated catalogue; local tools are
+Related expectation to set for users: local tools do **not** appear in the
+`/tools` picker; `/tools local on|off` is their switch. The picker is the server's RBAC-gated catalogue; local tools are
 declared per request and can only be switched off client-side
 (`--no-local-tools`). The approval prompt is the control.
 
@@ -292,7 +293,8 @@ tui/src/agentcore_tui/
 ├── usage.py          token counts, shared by wire/domain/view
 ├── errors.py         typed errors, each carrying an actionable `hint`
 ├── logging_setup.py  rotating file log; content redacted unless opted in
-├── app.py            bindings, screen stack, palette, startup (~145 lines)
+├── commands.py       the slash-command registry: popup, /help and dispatch read it
+├── app.py            quit binding, screen stack, startup (~120 lines)
 ├── app.tcss          stylesheet
 ├── client/           endpoints.py (URLs), auth.py (AuthProvider seam +
 │                     ApiKeyAuth/SessionAuth), device_auth.py (CLI sign-in),
@@ -302,7 +304,7 @@ tui/src/agentcore_tui/
 └── widgets/          transcript messages, composer, status bar
 ```
 
-730 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+758 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.
@@ -408,12 +410,13 @@ bash scripts/common/sync-version.sh --check
   looked exactly like the model stopped mid-sentence. Every widget between
   `#transcript` and the text needs `height: auto`. Regression-tested in
   `TestTranscriptGrowth`; the app also logs `CLIPPED` if it recurs.
-- **`Ctrl+P` is Docker's detach key.** `docker exec -it` withholds it pending the
-  next keystroke, so the palette appeared dead and then opened with your first
-  typed character in its search box. The palette is bound to **F1** and `Ctrl+P`
-  is left unbound. `--detach-keys ctrl-@` also protects `Ctrl+Q`.
-- **Textual only auto-registers `COMMAND_PALETTE_BINDING` when no binding targets
-  the `command_palette` action.** Adding F1 alone silently killed `Ctrl+P`.
+- **`Ctrl+P` and `Ctrl+Q` are in Docker's detach sequence.** `docker exec -it`
+  withholds `Ctrl+P` pending the next keystroke, so anything bound to it looks
+  dead and then fires with your next character appended. Nothing is bound to it;
+  `--detach-keys ctrl-@` (set by `tui.sh`) protects `Ctrl+Q`.
+- **The command palette is off** (`ENABLE_COMMAND_PALETTE = False`), not merely
+  unbound: Textual auto-registers its default key whenever nothing targets the
+  `command_palette` action, so "unbound" quietly meant "on Ctrl+P".
 - **Optional fields hide plumbing bugs.** `cliAppClient` is optional on
   `PlatformComputeRefs`, so omitting it from the refs literal type-checked
   cleanly while the runtime authorizer quietly kept one entry. `tsc` and the
@@ -473,7 +476,7 @@ non-browser client. The agent emits ~35 event types (api-converse had 11); the
 SPA handles 23 and ignores 11, and `event`/`message`/`result` **must** be ignored
 or output doubles.
 
-Two behaviours to design for: `Esc`/`Ctrl+C` must `POST /sessions/{id}/interrupt`
+Two behaviours to design for: `Esc` must `POST /sessions/{id}/interrupt`
 or the turn keeps burning tokens and holds the session lease; and never
 transparently retry a stream, because a reopen double-runs the turn and corrupts
 memory.

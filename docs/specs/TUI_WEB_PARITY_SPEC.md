@@ -128,6 +128,31 @@ flow that already works: print the authorization URL, let the user complete it i
 any browser, then send `interrupt_responses: [{interruptId, response}]` to resume.
 Same shape for `POST /connectors/{id}/initiate-consent`.
 
+## How features are reached: slash commands only
+
+Decided 2026-10-29, modelled on Kiro CLI. Every feature in the terminal is a
+slash command typed into the composer; `/` opens a completion popup; `/help`
+is generated from the same registry (`tui/src/agentcore_tui/commands.py`).
+There are no function keys and no command palette, so a parity row below
+maps to a *command*, never a key. The web app's gear icon, sidebar and panels
+become `/model`, `/tools`, `/conversations`, `/attach`, and later `/project`
+and `/agent`. Keys are reserved for Enter, Esc, Ctrl+Q, newline and
+navigation. Rationale and the rule set live in
+`.kiro/steering/terminal-client.md`.
+
+**Projects (next).** A project conversation is an ordinary session whose first
+turn sends `rag_assistant_id = project.harnessAgentId`; the server derives
+`projectId`, applies the harness's instructions, model, tools, skills,
+knowledge and memory, and persists `preferences.projectId`. The terminal
+therefore needs: `/project [name]` over `GET /projects` (Mine / Shared with
+me), the harness id on the first turn, the project name in the status bar and
+grouped in `/conversations`, the gate refusals (archived, deleted, no access)
+as typed errors, and `GET /projects/{id}/tasks|shared-tasks` to open a
+teammate's shared conversation read-only. Read-only `/project info`
+(instructions, model, tools, members, memory files) follows. Member
+management, instruction versions, the memory editor, proposals, schedules
+and outputs stay in the web app.
+
 ## Phases
 
 **Phase 1 — done.** Real model catalogue carrying the provider; tool picker

@@ -75,7 +75,8 @@ class CommandMenu(OptionList):
         previous = self.current
         self._shown = matches
         self.clear_options()
-        self.add_options([self._option_for(command) for command in matches])
+        width = max(len(command.display) for command in matches) + 2
+        self.add_options([self._option_for(command, width) for command in matches])
         # Keep the highlight on the same command through a keystroke when it
         # survives the filter; otherwise the first match. Exact name match wins
         # so `/clear` highlights `clear` even though `clear-conversation` is
@@ -104,9 +105,9 @@ class CommandMenu(OptionList):
         self.highlighted = (current + delta) % len(self._shown)
 
     @staticmethod
-    def _option_for(command: SlashCommand) -> Option:
-        label = Text()
-        label.append(command.display, style="bold")
-        label.append("  ")
+    def _option_for(command: SlashCommand, width: int) -> Option:
+        """One row: the command in a fixed-width column, then its summary."""
+        label = Text(no_wrap=True, overflow="ellipsis")
+        label.append(command.display.ljust(width), style="bold")
         label.append(command.summary, style="dim")
         return Option(label, id=command.name)
