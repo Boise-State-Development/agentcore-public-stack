@@ -149,4 +149,32 @@ describe('AgentService', () => {
     const skills = await service.loadBindable('skill');
     expect(skills).toEqual([]); // degrades gracefully
   });
+
+  it('re-fetches one kind after invalidateBindable and leaves the others cached', async () => {
+    const before: BindableItem[] = [
+      { kind: 'skill', ref: 'house_style', label: 'House style', description: '', meta: {} },
+    ];
+    const after: BindableItem[] = [
+      ...before,
+      { kind: 'skill', ref: 'grant_writing', label: 'Grant Writing', description: '', meta: {} },
+    ];
+    const models: BindableItem[] = [
+      { kind: 'model', ref: 'us.anthropic.claude', label: 'Claude', description: '', meta: {} },
+    ];
+    mockApi.getBindable.mockImplementation((kind: string) =>
+      of({ kind, items: kind === 'skill' ? before : models }),
+    );
+    await service.loadBindable('skill');
+    await service.loadBindable('model');
+
+    // A skill authored elsewhere joins the accessible set; the palette must follow.
+    mockApi.getBindable.mockImplementation((kind: string) =>
+      of({ kind, items: kind === 'skill' ? after : models }),
+    );
+    service.invalidateBindable('skill');
+
+    expect(await service.loadBindable('skill')).toEqual(after);
+    expect(await service.loadBindable('model')).toEqual(models);
+    expect(mockApi.getBindable).toHaveBeenCalledTimes(3); // skill twice, model once
+  });
 });
