@@ -54,6 +54,24 @@ after deploy" section. **No infrastructure deploy was required** — grants live
 the existing BFF sessions table, so there is no CDK grants table and
 `platform.yml` never ran.
 
+**The backend half lives on develop now (PR #1770, 2026-10-29).** Device auth,
+`client_surface` and `client_tools` were cut to `feature/cli-backend` and
+squash-merged so dev could be tested while the TUI is finished. Consequences:
+
+- This branch should carry **no `backend/` diff** against develop. Check with
+  `git diff origin/develop --stat -- backend`; if it is non-empty, something
+  belongs in its own PR off develop, not here.
+- Backend fixes go on a branch cut from `origin/develop` (e.g.
+  `fix/client-tools-signature`), never on this branch.
+- Because #1770 was squashed, merging develop here produced add/add conflicts
+  on every backend file. Resolve with `git checkout origin/develop -- backend
+  CLAUDE.MD docs/...`; develop's copy is always the right one.
+- Verified live on dev the same day: `login --sso` end to end (PKCE + nonce +
+  binding cookie against real Cognito), `/chat/stream` over `Authorization:
+  BFF`, title generation, tool rendering, `/attach`. The model saw and called
+  `local_list_directory`, which proves the inference image carried
+  `client_tools` too.
+
 **Still pending:** nothing in the original plan. The device-polling flow, the
 `/chat/stream` transport and the turn wiring are all **done and proven live**
 against `dev.boisestate.ai` — a signed-in terminal runs tool-using agent turns,
@@ -172,6 +190,24 @@ Two things that capture also pinned down, both worth not rediscovering:
   "tokens used" figure. Label it accordingly.
 * **`metadata` fires per LLM call.** A one-tool turn emitted three.
 
+## Strands validates the Python signature, not inputSchema
+
+The first live `local_list_directory` call came back as an error result before
+the interrupt fired. `@tool(inputSchema=...)` only shapes what the *model*
+sees; Strands validates the incoming call against a Pydantic model built from
+the decorated function's **Python parameters**. A body declared `def _run(
+tool_context, **arguments)` therefore demanded a field literally named
+`arguments` and rejected `{"path": "."}`. `build_client_tools` now synthesises
+one keyword-only parameter per schema property (`inspect.Signature` on the
+closure). Any test of a Strands tool must go through
+`tool._metadata.validate_input(...)` — calling the body directly skips the step
+that failed.
+
+Related expectation to set for users: local tools do **not** appear in the F3
+picker. The picker is the server's RBAC-gated catalogue; local tools are
+declared per request and can only be switched off client-side
+(`--no-local-tools`). The approval prompt is the control.
+
 ## The auth situation (read before touching auth)
 
 `get_current_user_from_session` (`apis/shared/auth/dependencies.py:217`) does
@@ -228,7 +264,7 @@ tui/src/agentcore_tui/
 └── widgets/          transcript messages, composer, status bar
 ```
 
-637 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+730 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.
