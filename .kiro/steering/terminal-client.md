@@ -11,6 +11,44 @@ uv project so it can ship independently (`uvx agentcore-tui`). Built on
 
 Branch: `feature/tui-client`. Nothing is deployed and nothing is published.
 
+## UX paradigm: slash commands invoke features, keys do not
+
+Decided 2026-10-29, modelled on Kiro CLI. **Every feature is a slash command**
+typed into the composer: `/model`, `/tools`, `/conversations`, `/project`,
+`/attach`, `/help`. Typing `/` opens a completion popup, so the command list is
+the documentation. There are no F-keys, no command palette, and no key that
+opens a feature.
+
+Keys are reserved for conventions a terminal user already has, and nothing
+else:
+
+| Key | Meaning |
+|---|---|
+| Enter | send (or run the completed slash command) |
+| Esc | stop the current turn; close a popup or picker |
+| Ctrl+C | quit (press twice while a turn is running) |
+| Ctrl+J | newline in the composer |
+| Up / Down | history in the composer; move in lists and popups |
+| Tab | complete the highlighted slash command |
+| PgUp / PgDn | scroll the transcript |
+
+Why: F-keys are swallowed by VS Code's terminal, macOS without Fn, tmux and
+several Windows Terminal profiles, and depend on `TERM` agreeing over SSH.
+A slash command is text in a text box and works wherever the composer works.
+One name per feature also means one thing to document and one thing for the
+agent's surface guidance to say ("slash commands; `/help` lists them") instead
+of hardcoded key names that go stale.
+
+Rules that follow:
+
+- **Adding a key binding for a feature is a review rejection.** Not even as
+  an alias beside the slash command; aliases are the mixing this replaces.
+- A picker or full-screen pane is what a command *does*, not a way in.
+  `/model` opens the model picker; nothing else does.
+- `/help` is generated from the command registry, never hand-written, so it
+  cannot drift.
+- Backend text about the terminal (`TERMINAL_SURFACE_GUIDANCE`) names no keys.
+
 ## Where it stands
 
 **Phase 1 — done, working against a live sandbox.** Streaming chat over the
