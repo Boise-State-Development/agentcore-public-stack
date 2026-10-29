@@ -248,3 +248,17 @@ class TestRefusal:
     def test_agent_refusal_points_at_agent_off(self) -> None:
         event = ErrorEvent(message="This agent or project isn't available to you.", code="FORBIDDEN", recoverable=False)
         assert "/agent off" in refusal_hint(event, in_project=False, in_agent=True)
+
+
+class TestPinnedModel:
+    async def test_an_agent_that_pins_a_model_shows_it(self) -> None:
+        backend = Backend(agents=[agent_wire("a1", "Grader", modelConfig={"modelId": "us.anthropic.claude-sonnet-4-5-v1:0"})])
+        app = app_for(backend)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await send(pilot, app, "/agent grader")
+            await pilot.pause()
+            assert "claude-sonnet-4-5 (set by Grader)" in app.chat.status.line
+            # The wire still carries the user's own model; the server applies the pin.
+            await send(pilot, app, "hi")
+        assert backend.stream_bodies[0]["rag_assistant_id"] == "a1"

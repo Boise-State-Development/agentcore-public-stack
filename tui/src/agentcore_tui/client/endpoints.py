@@ -191,6 +191,11 @@ class Endpoints:
     def project(self, project_id: str) -> str:
         return f"{self.projects}/{quote(project_id, safe='')}"
 
+    def project_model(self, project_id: str) -> str:
+        """The model a project pins (``modelConfig``), or null for "each
+        member's own default"."""
+        return f"{self.project(project_id)}/model"
+
     def project_shared_tasks(self, project_id: str) -> str:
         """Conversations members shared with the project. "Task" is the wire
         name; everything a person reads says "conversation"."""

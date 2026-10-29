@@ -426,3 +426,39 @@ class TestRefusalHints:
 
     def test_forbidden_outside_a_project_gets_no_project_hint(self) -> None:
         assert refusal_hint(self._forbidden("You may not use this agent."), in_project=False) == ""
+
+
+class TestPinnedModel:
+    async def test_a_project_that_pins_a_model_shows_it_as_set_by_the_project(self) -> None:
+        bodies: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("/projects/p1/model"):
+                return httpx.Response(200, json={"modelConfig": {"modelId": "us.anthropic.claude-sonnet-4-5-v1:0"}, "canEdit": False})
+            if path.endswith("/projects"):
+                return httpx.Response(200, json={"projects": [project_wire("p1", "Grants")]})
+            if path.endswith("/chat/stream"):
+                bodies.append(json.loads(request.content))
+                return sse_response(agent_turn("ok"))
+            return httpx.Response(404, json={"detail": "no route"})
+
+        app = build_agent_app(handler, config=make_config(api_key=None, credential_source=CredentialSource.BFF_SESSION))
+        app.chat._catalog = catalog_for(handler)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await send(pilot, app, "/project grants")
+            await pilot.pause()
+            assert "claude-sonnet-4-5 (set by Grants)" in app.chat.status.line
+            await send(pilot, app, "/project off")
+            await pilot.pause()
+            assert "set by" not in app.chat.status.line
+
+    async def test_a_project_without_a_pin_shows_the_users_model(self) -> None:
+        bodies: list[dict[str, Any]] = []
+        app, _ = agent_app_with_capture(bodies, projects=[project_wire("p1", "Grants")])
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await send(pilot, app, "/project grants")
+            await pilot.pause()
+            assert "set by" not in app.chat.status.line

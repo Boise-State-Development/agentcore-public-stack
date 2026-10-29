@@ -77,6 +77,8 @@ class StatusBar(Horizontal):
         self._project = ""
         self._agent = ""
         self._mode = ""
+        #: Who chose the model shown, when it is not the user ("Grants").
+        self._model_owner = ""
         self._state = "Ready"
         self._usage_text = ""
         self._turns = 0
@@ -110,7 +112,8 @@ class StatusBar(Horizontal):
         if self._mode:
             segments.append(f"mode: {self._mode}")
         if self._model_id:
-            segments.append(short_model(self._model_id))
+            label = short_model(self._model_id)
+            segments.append(f"{label} (set by {self._model_owner})" if self._model_owner else label)
         if self._turns:
             segments.append(f"{self._turns} turn{'s' if self._turns != 1 else ''}")
         if self._usage_text:
@@ -151,8 +154,11 @@ class StatusBar(Horizontal):
         self._project = name or ""
         self.refresh_line()
 
-    def set_model(self, model_id: str) -> None:
+    def set_model(self, model_id: str, *, set_by: str | None = None) -> None:
+        """The model answering turns. ``set_by`` names the project or agent
+        that pins it, when that is what decides rather than the user."""
         self._model_id = model_id
+        self._model_owner = set_by or ""
         self.refresh_line()
 
     def set_state(self, state: str, *, busy: bool = False, error: bool = False) -> None:

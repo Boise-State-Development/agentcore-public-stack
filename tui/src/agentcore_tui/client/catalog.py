@@ -328,6 +328,9 @@ class Agent:
     permission: str = ""
     model_label: str = ""
     starters: tuple[str, ...] = ()
+    #: The model the Agent pins (``modelConfig.modelId``); empty when it
+    #: leaves the choice to the user. Only ``GET /agents/{id}`` carries it.
+    model_id: str = ""
 
     @property
     def label(self) -> str:
@@ -346,6 +349,7 @@ class Agent:
             permission=str(payload.get("userPermission") or ("owner" if not shared else "")),
             model_label=str(payload.get("modelLabel") or ""),
             starters=tuple(str(s) for s in payload.get("starters") or () if s),
+            model_id=str((payload.get("modelConfig") or {}).get("modelId") or ""),
         )
 
     @classmethod
@@ -734,6 +738,12 @@ class CatalogClient:
         projects = [Project.from_wire(item) for item in _items(payload, "projects")]
         projects.sort(key=lambda p: (p.archived, not p.mine, p.name.casefold()))
         return projects
+
+    async def project_model(self, project_id: str) -> str | None:
+        """The model id a project pins, or None when members use their own."""
+        payload = await self._get(self._endpoints.project_model(project_id))
+        config = payload.get("modelConfig") or {}
+        return str(config.get("modelId") or "") or None
 
     async def project(self, project_id: str) -> Project:
         """One project. 404 maps to ApiError; the caller decides what that means."""

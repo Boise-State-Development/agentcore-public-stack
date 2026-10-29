@@ -118,6 +118,10 @@ class ChatScreen(Screen[None]):
         #: The conversation mode, or None. Survives /new like the model does;
         #: opening a conversation adopts that conversation's stored mode.
         self._mode: SystemPromptOption | None = None
+        #: ``(model_id, owner name)`` when the bound project or agent pins the
+        #: model. The server applies the pin regardless of what the turn sends
+        #: (as for the web app), so this only changes what the user is shown.
+        self._pinned_model: tuple[str, str] | None = None
         #: Runs the local tools and remembers "always" approvals for the session.
         self._executor = ToolExecutor()
         #: Prompts still waiting on the user, by interrupt id. The turn resumes
@@ -473,7 +477,7 @@ class ChatScreen(Screen[None]):
         if not isinstance(self._turn, AgentTurnController) or not self._turn.paused:
             logger.warning("answers collected but no paused agent turn to resume")
             return
-        pending = AssistantMessage(self._config.model_id)
+        pending = AssistantMessage(self._display_model)
         await self.transcript.mount(pending)
         self._pending = pending
         self._flush_timer = self.set_interval(FLUSH_INTERVAL, self._turn.flush)
@@ -815,6 +819,7 @@ class ChatScreen(Screen[None]):
         self.status.set_project(binding.name if binding else None)
         if binding is not None:
             self.status.set_agent(None)
+        await self._refresh_pinned_model()
         if binding is None:
             self.notify("Left the project. New conversations run on the default agent.", timeout=6)
         else:
@@ -891,6 +896,8 @@ class ChatScreen(Screen[None]):
         self.status.set_agent(binding.name if binding else None)
         if binding is not None:
             self.status.set_project(None)
+        await self._refresh_pinned_model()
+        if binding is not None:
             note = f"New conversations talk to {binding.name}: its instructions, model, tools and knowledge apply."
             if agent is not None and agent.starters:
                 note += " Try: " + " · ".join(f"“{s}”" for s in agent.starters[:3])
@@ -945,7 +952,7 @@ class ChatScreen(Screen[None]):
                 chosen,
                 self._catalog_or_create,
                 on_continue=self._open_forked_conversation,
-                model_label=self._config.model_id,
+                model_label=self._display_model,
             )
         )
 
@@ -1139,7 +1146,7 @@ class ChatScreen(Screen[None]):
 
         await self._clear_empty_state()
         await self.transcript.mount(UserMessage(prompt))
-        pending = AssistantMessage(self._config.model_id)
+        pending = AssistantMessage(self._display_model)
         await self.transcript.mount(pending)
         self._pending = pending
 
@@ -1217,7 +1224,7 @@ class ChatScreen(Screen[None]):
         if not isinstance(turn, AgentTurnController) or not turn.can_continue:
             self.notify("Nothing to continue.", severity="warning", timeout=5)
             return
-        pending = AssistantMessage(self._config.model_id)
+        pending = AssistantMessage(self._display_model)
         await self.transcript.mount(pending)
         self._pending = pending
         self.composer.submit_enabled = False
@@ -1268,6 +1275,11 @@ class ChatScreen(Screen[None]):
         else:
             error = "Sign in with `agentcore-tui login --sso` to see your deployment's models."
 
+        if self._pinned_model and not error:
+            error = (
+                f"{self._pinned_model[1]} sets the model ({short_model(self._pinned_model[0])}) for its conversations. "
+                "Your choice here applies outside it."
+            )
         chosen = await self.app.push_screen_wait(ModelPicker(models, current=self._config.model_id, error=error))
         if chosen is None:
             return
@@ -1366,12 +1378,13 @@ class ChatScreen(Screen[None]):
         self.status.set_project(binding.name if binding else None)
         self.status.set_agent(agent_binding.name if agent_binding else None)
         await self._adopt_mode(summary.selected_prompt_id)
+        await self._refresh_pinned_model()
 
         await self.transcript.remove_children()
         self._tool_widgets.clear()
         self._pending = None
 
-        rendered = await render_history(self.transcript, messages, model_label=self._config.model_id)
+        rendered = await render_history(self.transcript, messages, model_label=self._display_model)
         self._tool_widgets.update(rendered.tool_widgets)
         records = rendered.records
 
@@ -1396,6 +1409,32 @@ class ChatScreen(Screen[None]):
         if isinstance(self._turn, AgentTurnController):
             self._turn.selected_prompt_id = prompt_id
         self.status.set_mode(mode.name if mode else None)
+
+    @property
+    def _display_model(self) -> str:
+        """The model that will actually answer, for labels."""
+        return self._pinned_model[0] if self._pinned_model else self._config.model_id
+
+    async def _refresh_pinned_model(self) -> None:
+        """Ask the bound project or agent whether it pins a model. Best effort:
+        on failure the user's own model is shown, as before."""
+        pinned: tuple[str, str] | None = None
+        try:
+            if self._store.project is not None:
+                model_id = await self._catalog_or_create().project_model(self._store.project.project_id)
+                if model_id:
+                    pinned = (model_id, self._store.project.name)
+            elif self._store.agent is not None:
+                agent = await self._catalog_or_create().agent(self._store.agent.agent_id)
+                if agent.model_id:
+                    pinned = (agent.model_id, self._store.agent.name)
+        except AgentCoreTuiError as exc:
+            logger.info("pinned model unavailable: %s", exc)
+        self._pinned_model = pinned
+        if pinned:
+            self.status.set_model(pinned[0], set_by=pinned[1])
+        else:
+            self.status.set_model(self._config.model_id or "System Default")
 
     async def _agent_name(self, agent_id: str) -> str:
         try:
@@ -1448,7 +1487,10 @@ class ChatScreen(Screen[None]):
         self._config = self._config.with_model(choice.model_id, choice.provider)
         self._rebuild_controller()
         await self._discard_client()
-        self.status.set_model(choice.model_id or "System Default")
+        if self._pinned_model:
+            self.status.set_model(self._pinned_model[0], set_by=self._pinned_model[1])
+        else:
+            self.status.set_model(choice.model_id or "System Default")
         if self.is_attached and self._config.is_complete:
             self._set_composer_chrome(busy=self._turn.busy)
 
