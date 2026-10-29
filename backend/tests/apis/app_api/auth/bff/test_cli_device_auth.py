@@ -474,3 +474,49 @@ class TestEndToEnd:
         replay = client.get(f"/auth/callback?code=abc&state={state}")
         assert replay.status_code == 302
         assert "auth_error=bad_state" in replay.headers["location"]
+
+
+# =====================================================================
+# Operational edges
+# =====================================================================
+
+
+class TestOperationalEdges:
+    def test_the_authorize_rate_limit_keys_on_the_forwarded_address(self, cli_app):
+        """Behind the ALB the socket peer is the load balancer; the per-IP limit
+        has to read X-Forwarded-For or one noisy client throttles everyone."""
+        client = TestClient(cli_app)
+        a = {"X-Forwarded-For": "198.51.100.7, 10.0.0.1"}
+        b = {"X-Forwarded-For": "198.51.100.8"}
+        codes_a = [client.post("/auth/cli/authorize", headers=a).status_code for _ in range(25)]
+        assert 429 in codes_a
+        # A different forwarded address, same socket peer: still served.
+        assert client.post("/auth/cli/authorize", headers=b).status_code == 200
+
+    def test_an_empty_forwarded_header_falls_back_to_the_peer(self, cli_app):
+        client = TestClient(cli_app)
+        response = client.post("/auth/cli/authorize", headers={"X-Forwarded-For": " , "})
+        assert response.status_code == 200
+
+    def test_verify_is_503_when_bff_auth_is_not_configured(self, cli_app, monkeypatch):
+        """Misconfiguration surfaces on the request, not as a startup crash."""
+        from apis.app_api.auth.bff import config as bff_config
+
+        monkeypatch.setattr(bff_config.BFFAuthConfig, "is_ready", lambda self: False)
+        client = TestClient(cli_app, follow_redirects=False)
+        user_code = client.post("/auth/cli/authorize").json()["user_code"]
+        response = client.get(f"/auth/cli/verify?user_code={user_code}")
+        assert response.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_a_failed_orphan_delete_is_logged_not_raised(self, cli_app, monkeypatch, caplog):
+        """Best effort: the DynamoDB TTL is the backstop."""
+
+        class Boom:
+            async def delete(self, session_id):
+                raise RuntimeError("dynamo down")
+
+        monkeypatch.setattr(bff_routes, "_get_repository", lambda config: Boom())
+        with caplog.at_level("WARNING"):
+            await bff_routes._discard_orphan_session("sess-x")
+        assert any("orphaned device session" in record.getMessage() for record in caplog.records)

@@ -562,3 +562,70 @@ class TestGrantAndSessionItemsCoexist:
         assert f"SESSION#{record.session_id}" in keys
         assert f"DEVICE-GRANT#{hash_device_code(auth.device_code)}" in keys
         assert f"DEVICE-USERCODE#{normalise_user_code(auth.user_code)}" in keys
+
+
+class TestAuthorizeCollisions:
+    """A user-code collision is retried with a fresh pair; persistent collision
+    is a RuntimeError rather than an infinite loop."""
+
+    @pytest.mark.asyncio
+    async def test_a_collision_regenerates_both_codes(self, service, grants, monkeypatch):
+        from botocore.exceptions import ClientError
+
+        real_create = grants.create
+        calls = []
+
+        async def flaky_create(grant):
+            calls.append(grant)
+            if len(calls) == 1:
+                raise ClientError({"Error": {"Code": "TransactionCanceledException"}}, "TransactWriteItems")
+            return await real_create(grant)
+
+        monkeypatch.setattr(grants, "create", flaky_create)
+        response = await service.authorize()
+        assert len(calls) == 2
+        assert calls[0].user_code != calls[1].user_code
+        assert calls[0].device_code_hash != calls[1].device_code_hash
+        assert response.user_code == calls[1].user_code
+
+    @pytest.mark.asyncio
+    async def test_other_dynamodb_errors_are_not_retried(self, service, grants, monkeypatch):
+        from botocore.exceptions import ClientError
+
+        async def failing_create(grant):
+            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "TransactWriteItems")
+
+        monkeypatch.setattr(grants, "create", failing_create)
+        with pytest.raises(ClientError):
+            await service.authorize()
+
+    @pytest.mark.asyncio
+    async def test_persistent_collision_gives_up(self, service, grants, monkeypatch):
+        from botocore.exceptions import ClientError
+
+        from apis.shared.auth.device_grants import service as service_module
+
+        async def always_collides(grant):
+            raise ClientError({"Error": {"Code": "TransactionCanceledException"}}, "TransactWriteItems")
+
+        monkeypatch.setattr(grants, "create", always_collides)
+        with pytest.raises(RuntimeError, match=str(service_module._MAX_CODE_ATTEMPTS)):
+            await service.authorize()
+
+
+class TestApprovedWithoutSession:
+    @pytest.mark.asyncio
+    async def test_poll_treats_a_sessionless_approved_grant_as_invalid(self, service, grants):
+        """Unreachable through `approve`, which writes both together — so if a
+        row ever looks like this, the poller must refuse rather than mint."""
+        from dataclasses import replace
+
+        from apis.shared.auth.device_grants.models import GrantStatus
+
+        auth = await service.authorize()
+        stored = await grants.get_by_device_code_hash(hash_device_code(auth.device_code))
+        await grants.delete(stored)
+        await grants.create(replace(stored, status=GrantStatus.APPROVED, session_id=None, user_id="u"))
+
+        outcome = await service.poll(device_code=auth.device_code)
+        assert outcome.error == "invalid_grant"

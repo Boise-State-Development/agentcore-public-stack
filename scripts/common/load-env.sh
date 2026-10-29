@@ -397,6 +397,8 @@ export CDK_CERTIFICATE_ARN="${CDK_CERTIFICATE_ARN:-$(get_json_value "certificate
 # Behavior flags — env var > context file (no hardcoded defaults)
 export CDK_RETAIN_DATA_ON_DELETE="${CDK_RETAIN_DATA_ON_DELETE:-$(get_json_value "retainDataOnDelete" "${CONTEXT_FILE}")}"
 export CDK_MANAGE_DNS_RECORDS="${CDK_MANAGE_DNS_RECORDS:-$(get_json_value "manageDnsRecords" "${CONTEXT_FILE}")}"
+# Empty = config.ts default (true): ALB ingress limited to CloudFront.
+export CDK_ALB_RESTRICT_TO_CLOUDFRONT="${CDK_ALB_RESTRICT_TO_CLOUDFRONT:-$(get_json_value "albRestrictToCloudFront" "${CONTEXT_FILE}")}"
 
 # AgentCore Gateway inbound authorizer: "iam" (default) or "jwt".
 # Empty is safe — config.ts falls back to 'iam'. NOTE: the authorizer is
@@ -503,6 +505,12 @@ validate_config() {
         errors=$((errors + 1))
     fi
 
+    if [ -n "${CDK_ALB_RESTRICT_TO_CLOUDFRONT:-}" ] && ! [[ "${CDK_ALB_RESTRICT_TO_CLOUDFRONT}" =~ ^(true|false|1|0)$ ]]; then
+        log_error "Invalid CDK_ALB_RESTRICT_TO_CLOUDFRONT value: '${CDK_ALB_RESTRICT_TO_CLOUDFRONT}'"
+        log_error "  Expected 'true', 'false', '1', or '0'"
+        errors=$((errors + 1))
+    fi
+
     # Validate the Gateway inbound authorizer selection. A typo would otherwise
     # fall through to the 'iam' default and silently not apply.
     if [ -n "${CDK_GATEWAY_INBOUND_AUTH:-}" ] && ! [[ "${CDK_GATEWAY_INBOUND_AUTH}" =~ ^(iam|jwt)$ ]]; then
@@ -549,6 +557,7 @@ if [ "${LOAD_ENV_QUIET:-false}" != "true" ]; then
     log_config "  VPC CIDR:       ${CDK_VPC_CIDR:-<not set>}"
     log_config "  Retain Data:    ${CDK_RETAIN_DATA_ON_DELETE}"
     log_config "  Manage DNS:     ${CDK_MANAGE_DNS_RECORDS:-true}"
+    log_config "  ALB CF-only:    ${CDK_ALB_RESTRICT_TO_CLOUDFRONT:-true}"
     log_config "  CORS Origins:   ${CDK_CORS_ORIGINS}"
 
     if [ -n "${CDK_HOSTED_ZONE_DOMAIN:-}" ]; then

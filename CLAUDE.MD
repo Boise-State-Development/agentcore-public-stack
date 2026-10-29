@@ -130,7 +130,8 @@ Today A2A is **client-only** — `A2AAgentConfig` (`apis/shared/tools/models.py`
 
 - Backend route handlers define the API shape; frontend TypeScript interfaces must match
 - Breaking changes to an endpoint require updating both packages in the same PR
-- SSE event types are part of the contract — changes must be coordinated
+- SSE event types are part of the contract — changes must be coordinated. **Two clients consume it:** the Angular SPA and the terminal client in `tui/` (`agentcore_tui/client/agent_events.py` is its parser). A new event is harmless to the TUI (it logs unknown names once per turn) but a renamed or reshaped one breaks it, so check both when changing the table
+- Two request fields exist only for the terminal client and must stay optional with web-identical defaults: `client_surface` (prompt guidance for the surface; `"web"`/absent is byte-for-byte the default prompt) and `client_tools` (tools the *client* executes via the `client_tool_call` interrupt; `apis.shared.client_tools`). `docs/specs/TUI_WEB_PARITY_SPEC.md` is the contract for both
 - `app_api`, `inference_api`, and `agents/` are independent consumers of `apis.shared`. They must never import from each other — only from `apis.shared`. If something is needed by more than one of them, move it to `apis.shared`. This is enforced by `tests/architecture/test_import_boundaries.py`.
 
 ## File Creation Rules
@@ -171,6 +172,8 @@ The SPA sends an httpOnly session cookie — not `Authorization: Bearer`. A rout
 **Rule:** New routes under `apis/app_api/` use `Depends(get_current_user_from_session)` from `apis.shared.auth.dependencies` for user authentication. Admin routes use `Depends(require_admin)` (which chains through the same cookie dependency). The only exceptions are the API-key feature (`auth/api_keys/`, uses `X-API-Key`) and voice mode (`voice/`, uses a voice-ticket cookie) — both handle auth on their own terms and should not be used as templates for ordinary user routes.
 
 Do not reintroduce a Bearer-only `Depends(...)` on any user-facing route. If you find one in older code, migrate it to `get_current_user_from_session`.
+
+**The same session, presented two ways.** `SessionRefreshMiddleware` resolves a BFF session from the httpOnly cookie *or* from `Authorization: BFF <sealed>` (the terminal client, which has no cookie jar). Both land in `request.state.bff_session`, so `get_current_user_from_session` and every route behind it work unchanged for either client — a new route needs nothing extra to be reachable from the terminal. Header-presented sessions are exempt from `CSRFMiddleware` (a browser cannot attach `Authorization` cross-site on its own), and sessions for the terminal are minted by the device-authorization flow under `/auth/cli/*` (`docs/specs/CLI_DEVICE_AUTH_SPEC.md`), which reuses `/auth/callback`. Do not add a third way to present a session; extend `SessionRefreshMiddleware` if a new client shape ever needs one.
 
 ### App shell chrome: `data.chrome` on the route
 

@@ -158,10 +158,19 @@ Switch to the **Variables** tab. These eight are the minimum for a first deploy.
 | `CDK_AWS_ACCOUNT` | `123456789012` | Your 12-digit AWS account ID |
 | `CDK_PROJECT_PREFIX` | `agentcore` | Unique prefix for all resource names |
 | `CDK_HOSTED_ZONE_DOMAIN` | `example.com` | Route 53 hosted zone domain |
-| `CDK_ALB_SUBDOMAIN` | `api` | Subdomain for the API load balancer |
+| `CDK_ALB_SUBDOMAIN` | `api` | Subdomain for the load balancer. CloudFront uses it as the `/api/*` origin; clients do not call it directly (see below) |
 | `CDK_DOMAIN_NAME` | `app.example.com` | Full domain for the frontend |
 | `CDK_CERTIFICATE_ARN` | `arn:aws:acm:us-west-2:…` | ALB certificate ARN |
 | `CDK_FRONTEND_CERTIFICATE_ARN` | `arn:aws:acm:us-east-1:…` | CloudFront certificate ARN |
+
+### Load balancer ingress
+
+The ALB accepts connections only from CloudFront's origin-facing IP ranges
+(the AWS managed prefix list `com.amazonaws.global.cloudfront.origin-facing`).
+Browsers and API-key clients reach the App API at `https://{CDK_DOMAIN_NAME}/api/...`;
+requests sent straight to `CDK_ALB_SUBDOMAIN` time out. Set
+`CDK_ALB_RESTRICT_TO_CLOUDFRONT=false` only if something outside AWS must call
+the ALB hostname itself.
 
 ### Feature certificates
 
