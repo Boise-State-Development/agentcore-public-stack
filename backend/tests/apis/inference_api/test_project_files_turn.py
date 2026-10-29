@@ -101,6 +101,10 @@ class TestGuidance:
         guidance = routes.PROJECT_WORKSPACE_GUIDANCE
         assert "that search sees passages, not files" in guidance
         assert "call `project_files`" in guidance
+        # The report's own wording: "list_word_documents and list_spreadsheets return empty" was read as
+        # proof the Files could not be reached. Those tools are scoped to the conversation's attachments.
+        assert "see only files attached to this conversation" in guidance
+        assert "an empty listing from them says nothing about the project's Files" in guidance
         assert "Never say you cannot read the project's files" in guidance
         assert "project_files" not in routes.compose_agent_system_prompt("BASE", "Do X.", project_harness=False)
 
