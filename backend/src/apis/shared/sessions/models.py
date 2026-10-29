@@ -1026,6 +1026,15 @@ class MessagesListResponse(BaseModel):
         alias="extractions",
         description="Persisted structured-extraction runs for this session, each shaped like the live `document_extraction` SSE event ({toolUseId, fieldSet, fieldSetVersion, uploadId, filename, modelId, schemaEnforced, artifactId, downloadUploadId, fields}), where every field carries {name, title, type, value, state, method, quote, locator}. `state` is the source-provenance verdict for that value, so a reloaded table keeps its per-cell status rather than showing bare values — a `quote_unsupported` that vanishes on refresh reads as a clean answer. `schemaEnforced: false` means the typed schema could not be applied to that run and the types were requested rather than guaranteed. `quotesOmitted` is set when the stored row had to drop its quotes to fit DynamoDB's item limit; the artifact holds the full table regardless. Returned only on the first page.",
     )
+    handoffs: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Handoffs sent from this conversation (handoffs spec §4.3), each shaped like `GET /sessions/{id}/handoffs/{handoffId}` ({handoffId, kind, status, agentId, agentName, request, sourceMessageIndex, targetSessionId, statusLine, waitingOn, ...}). The SPA renders a handoff row after `sourceMessageIndex`. UI only, never part of the model's history. Empty while HANDOFFS_ENABLED is off. Returned only on the first page.",
+    )
+    spawned_from: Optional[Dict[str, Any]] = Field(
+        None,
+        alias="spawnedFrom",
+        description="Set when this conversation was started by a handoff: {sessionId, handoffId, sourceTitle, agentName}. The SPA labels the first user bubble \"Context from {title}\" and links it to the source. Returned only on the first page.",
+    )
     from_archive: bool = Field(
         False,
         alias="fromArchive",
