@@ -6,6 +6,7 @@
 agentcore-public-stack/
 ├── backend/                    # Python backend services
 ├── frontend/ai.client/         # Angular frontend application
+├── tui/                        # Terminal client (Textual); its own pyproject, consumes app-api only
 ├── infrastructure/             # AWS CDK infrastructure code
 ├── docs/                       # Documentation and specifications
 ├── scripts/                    # Deployment and build scripts
@@ -36,7 +37,9 @@ backend/
 │   └── apis/
 │       ├── shared/             # Shared utilities (lowest layer — NO app_api or inference_api imports)
 │       │   ├── auth/           # JWT validation, RBAC, API keys
-│       │   │   └── api_keys/   # API key models, service, repository
+│       │   │   ├── api_keys/   # API key models, service, repository
+│       │   │   └── device_grants/ # CLI device-authorization grants (RFC 8628 shape)
+│       │   ├── client_tools/   # Tools a client executes on its own machine (terminal)
 │       │   ├── rbac/           # Role-based access control
 │       │   ├── costs/          # Cost models, calculator, pricing, aggregator
 │       │   ├── tools/          # Tool models, repository, freshness cache
@@ -51,7 +54,7 @@ backend/
 │       │   └── user_settings/  # User settings models and repository
 │       ├── app_api/            # Main application API (port 8000) — may import from shared, NOT inference_api
 │       │   ├── main.py         # FastAPI app entry point
-│       │   ├── auth/           # Authentication routes
+│       │   ├── auth/           # Authentication routes (bff/ holds the SPA login and the CLI device flow)
 │       │   ├── sessions/       # Session management
 │       │   ├── messages/       # Message handling
 │       │   ├── files/          # File upload/download

@@ -69,6 +69,8 @@ def _create_cache_key(
     memory_context: Optional[str] = None,
     knowledge_context: Optional[str] = None,
     memory_mode: str = "on",
+    client_surface: Optional[str] = None,
+    client_tools_digest: str = "",
 ) -> Tuple:
     """
     Create a cache key for agent instances.
@@ -122,17 +124,32 @@ def _create_cache_key(
     granted skills, which `enabled_tools` does not capture — so without this an
     edit to a granted skill (or a role grant change) would serve a stale agent.
     Empty for chat turns with no skills, so the default path is unaffected.
+
+    `client_surface` changes the *built* system prompt while leaving the raw
+    `system_prompt` argument untouched, and one conversation can be opened from
+    both the web app and the terminal, so it must separate keys. It is folded
+    into the prompt hash only for a non-web surface: a web turn (surface None
+    or "web") keys byte-identically to a key built without the field.
     """
     tools_hash = _hash_tools(enabled_tools)
+    # Client-executed tools are part of toolConfig, so a different declared set
+    # is a different agent. Folded into the tools element rather than given a
+    # slot of its own so the tuple shape (which tests index) is unchanged, and
+    # a turn without client tools keys exactly as before.
+    if client_tools_digest:
+        tools_hash = f"{tools_hash}+client:{client_tools_digest}"
 
     # Hash system prompt if provided (can be very long)
     prompt_hash = None
-    if system_prompt or memory_context or knowledge_context:
+    non_web_surface = client_surface if client_surface and client_surface != "web" else None
+    if system_prompt or memory_context or knowledge_context or non_web_surface:
         prompt_material = system_prompt or ""
         if memory_context:
             prompt_material += "\x00memory\x00" + memory_context
         if knowledge_context:
             prompt_material += "\x00knowledge\x00" + knowledge_context
+        if non_web_surface:
+            prompt_material += "\x00surface\x00" + non_web_surface
         prompt_hash = hashlib.md5(prompt_material.encode()).hexdigest()[:8]
 
     return (
@@ -415,6 +432,8 @@ async def get_agent(
     text_only_model: bool = False,
     knowledge_context: Optional[str] = None,
     memory_mode: MemoryMode = "on",
+    client_surface: Optional[str] = None,
+    client_tools_digest: str = "",
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -465,6 +484,9 @@ async def get_agent(
             (``is_text_only_model``), so the agent's model sees history with
             image, document and video blocks replaced by text. Not a key
             element: it follows from ``model_id``, which already is one.
+        client_surface: Which client the user is on ("web", "terminal").
+            Selects the agent's interface guidance; part of the key only when
+            not web, so web turns key exactly as before.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -523,6 +545,8 @@ async def get_agent(
         memory_context=memory_context,
         knowledge_context=knowledge_context,
         memory_mode=effective_memory_mode,
+        client_surface=client_surface,
+        client_tools_digest=client_tools_digest,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.
@@ -598,6 +622,8 @@ async def get_agent(
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
     )
+    if client_surface:
+        create_kwargs["client_surface"] = client_surface
     if memory_context:
         create_kwargs["memory_context"] = memory_context
     if knowledge_context:

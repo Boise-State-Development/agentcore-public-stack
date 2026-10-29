@@ -1094,3 +1094,40 @@ class TestAgentChatLongTermMemory:
         assert read_only["memory_extraction"] is False and "memory_retrieval" not in read_only
         off = mock_create_agent.call_args_list[2].kwargs
         assert off["memory_retrieval"] is False and off["memory_extraction"] is False
+
+class TestClientSurfaceCacheKey:
+    """One conversation can be opened from the web app and from the terminal,
+    and the surface changes the *built* system prompt, so the two must not
+    share a cached agent. The web app is the primary client: its keys must be
+    byte-identical to keys built before the field existed."""
+
+    BASE = dict(
+        session_id="s", user_id="u", enabled_tools=["t"], model_id="m",
+        inference_params={}, system_prompt=None, caching_enabled=False,
+        provider="bedrock", freshness_hash="f", agent_type="chat",
+    )
+
+    def test_terminal_and_web_do_not_share_a_slot(self):
+        web = service._create_cache_key(**self.BASE, client_surface="web")
+        terminal = service._create_cache_key(**self.BASE, client_surface="terminal")
+        assert web != terminal
+
+    def test_web_keys_are_unchanged_by_the_field(self):
+        without = service._create_cache_key(**self.BASE)
+        assert service._create_cache_key(**self.BASE, client_surface="web") == without
+        assert service._create_cache_key(**self.BASE, client_surface=None) == without
+
+    def test_the_surface_moves_no_tuple_position(self):
+        web = service._create_cache_key(**self.BASE, skills_hash="k")
+        terminal = service._create_cache_key(**self.BASE, skills_hash="k", client_surface="terminal")
+        assert len(web) == len(terminal)
+        assert terminal[-1] == "k"
+        # Only the prompt-hash element differs.
+        assert [i for i, (a, b) in enumerate(zip(web, terminal)) if a != b] == [5]
+
+    @pytest.mark.asyncio
+    async def test_web_turns_pass_no_surface_to_the_factory(self, mock_create_agent, mock_freshness_hash):
+        await service.get_agent(session_id="s", user_id="u")
+        assert "client_surface" not in mock_create_agent.call_args.kwargs
+        await service.get_agent(session_id="s2", user_id="u", client_surface="terminal")
+        assert mock_create_agent.call_args.kwargs["client_surface"] == "terminal"

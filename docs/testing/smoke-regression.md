@@ -104,6 +104,7 @@ new-event-name notes that do not change the status.
 | `tool_turn` | prompt forcing `--tool` (default `calculator`) | a `tool_use` and a `tool_result`; `agent_status` carries `tool_start`/`tool_end` when present; warns if the arithmetic is wrong | the tool granted to the user |
 | `ask_user_question_resume` | prompt forcing `ask_user_question` | `user_question_required` **after** the final `message_stop` with `interruptId` + `questions`; resume with `{answers: {<header>: {selected, text}}}` finishes without re-raising; `pendingInterrupts` empty afterwards | `ASK_USER_QUESTION_ENABLED` (default on), tool granted |
 | `tool_approval_resume` | prompt forcing `--approval-tool` | `tool_approval_required`, resume with `"approved"`, a `tool_result` follows | `--approval-tool <id>` for a tool flagged `needsApproval` (dev has an MCP server whose hello tool is) |
+| `client_tool_call_resume` | declare one `client_tools` spec (`echo_marker`), prompt forcing it | `client_tool_call` **after** the final `message_stop` with `interruptId`, the bare `toolName`, `arguments`; resume with `{output, isError}` finishes without re-raising (proves the snapshot rebuilt the tool) and the answer echoes the output; `pendingInterrupts` empty afterwards. This is the terminal client's local-tools protocol with the script standing in as the client | none — the field is request-only |
 | `duplicate_send_409` | second POST while the first streams | HTTP 409 with the single-flight detail | app-api target |
 | `stop_mid_answer` | abort the stream after 12 deltas, `POST /sessions/{id}/interrupt {reason: user_stopped}` | the next send is accepted within 45 s (lease released); reports whether the partial answer persisted. A short turn can finish server-side before the heartbeat and clear its own marker, which is by design | app-api target |
 | `preview_session` | `preview-…` session id | completes; `GET /messages` empty or 404; absent from `GET /sessions` | — |
@@ -221,7 +222,7 @@ conversations afterwards from Manage Conversations.
 |---|---|
 | anything | L0 for the packages touched |
 | `inference_api/chat/*`, `agents/main_agent/**`, `apis/shared/harness/**`, the SSE table | L0 + L1 against dev once the branch is deployed there (merge to `develop` auto-deploys dev), or against a local stack before |
-| an interrupt flow (OAuth, approval, question, browser login) | + L1's resume rows + the matching L2 row |
+| an interrupt flow (OAuth, approval, question, browser login, client tool) | + L1's resume rows + the matching L2 row |
 | the composer, loader, tool rail, pickers, banners | + L2 rows for the surface |
 | a release | L0 + full L1 against dev + the L2 checklist, once, on the release branch |
 
