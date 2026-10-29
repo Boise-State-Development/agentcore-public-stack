@@ -7,6 +7,9 @@ with inputs that cross them.
 
 from __future__ import annotations
 
+import os
+import subprocess
+
 import sys
 from pathlib import Path
 
@@ -175,3 +178,99 @@ class TestDescribeCall:
     def test_unknown_tool_still_describes_itself(self) -> None:
         headline, _ = describe_call(call("weird", x=1))
         assert "weird" in headline
+
+
+# ---------------------------------------------------------------- workspace
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.test",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.test",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+        },
+    )
+
+
+def _repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (repo / "README.md").write_text("hi\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "first commit")
+    return repo
+
+
+class TestWorkspaceInfo:
+    async def test_outside_a_repository(self, tmp_path: Path) -> None:
+        result = await ToolExecutor(cwd=tmp_path).execute(call("workspace_info"))
+        assert not result.is_error
+        assert f"Directory: {tmp_path.resolve()}" in result.output
+        assert "Git: not a repository" in result.output
+        assert "Project files: none" in result.output
+
+    async def test_a_clean_repository_reports_branch_commits_and_markers(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path)
+        result = await ToolExecutor(cwd=repo).execute(call("workspace_info"))
+        out = result.output
+        assert f"Git root: {repo.resolve()}" in out
+        assert "Branch: main" in out
+        assert "Changes: clean" in out
+        assert "first commit" in out
+        assert "Project files: pyproject.toml" in out
+
+    async def test_changes_keep_porcelain_columns_and_never_include_contents(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path)
+        (repo / "README.md").write_text("SECRET-CONTENT-SHOULD-NOT-APPEAR\n")
+        (repo / "new.txt").write_text("also secret\n")
+        result = await ToolExecutor(cwd=repo).execute(call("workspace_info"))
+        out = result.output
+        assert "Changes: 2 file(s)" in out
+        # Column 1 is meaningful: " M" is a worktree-only change, not staged.
+        assert "   M README.md" in out
+        assert "  ?? new.txt" in out
+        assert "SECRET" not in out and "also secret" not in out
+
+    async def test_a_subdirectory_reports_the_repository_root(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path)
+        sub = repo / "src"
+        sub.mkdir()
+        result = await ToolExecutor(cwd=sub).execute(call("workspace_info"))
+        assert f"Git root: {repo.resolve()}" in result.output
+        assert "Project files: none" in result.output  # markers are looked for in the cwd
+
+    async def test_many_changes_are_capped(self, tmp_path: Path) -> None:
+        from agentcore_tui.local_tools.executor import MAX_CHANGED_FILES
+
+        repo = _repo(tmp_path)
+        for i in range(MAX_CHANGED_FILES + 5):
+            (repo / f"f{i}.txt").write_text("x")
+        result = await ToolExecutor(cwd=repo).execute(call("workspace_info"))
+        assert f"Changes: {MAX_CHANGED_FILES + 5} file(s)" in result.output
+        assert "… 5 more" in result.output
+
+    async def test_git_missing_is_reported_not_raised(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+        result = await ToolExecutor(cwd=tmp_path).execute(call("workspace_info"))
+        assert not result.is_error
+        assert "Git: not installed" in result.output
+
+    def test_the_approval_prompt_says_no_contents_are_shared(self) -> None:
+        headline, detail = describe_call(call("workspace_info"))
+        assert "summary" in headline
+        assert "No file contents" in detail
+
+    def test_it_is_declared_first_and_takes_no_arguments(self) -> None:
+        specs = tool_specs()
+        assert specs[0]["name"] == "workspace_info"
+        assert specs[0]["inputSchema"] == {"type": "object", "properties": {}}

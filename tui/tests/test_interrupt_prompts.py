@@ -108,7 +108,7 @@ class TestClientToolPrompt:
             await pilot.press("enter")
             await wait_for_turn(pilot, app)
         names = [spec["name"] for spec in script.bodies[0]["client_tools"]]
-        assert names == ["run_command", "read_file", "list_directory", "write_file"]
+        assert names == ["workspace_info", "run_command", "read_file", "list_directory", "write_file"]
 
     async def test_no_local_tools_means_none_declared(self) -> None:
         script = Script(finished_turn())
@@ -144,7 +144,8 @@ class TestClientToolPrompt:
         assert entry["response"]["isError"] is False
         assert entry["response"]["output"].startswith("hi\n[exit 0]")
         assert script.resume["message"] == ""
-        assert [s["name"] for s in script.resume["client_tools"]][0] == "run_command"
+        # The resume re-declares the same set, so the paused agent is rebuilt identically.
+        assert "run_command" in [s["name"] for s in script.resume["client_tools"]]
         assert app.chat.store.messages[-1].content == "Done."
 
     async def test_n_declines_without_running(self, tmp_path: Path) -> None:

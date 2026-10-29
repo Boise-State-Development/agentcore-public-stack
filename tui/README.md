@@ -310,9 +310,19 @@ the web app; the terminal is for working inside one.
 local_tools = false   # never offer the agent tools that run on this machine
 ```
 
-Also `--no-local-tools` for one run, or `AGENTCORE_LOCAL_TOOLS=false`. On by
-default: every call is shown and approved before it runs, and the output the
-agent sees is capped (6 000 characters, 60-second timeout, 64 KB reads).
+Also `--no-local-tools` for one run, or `AGENTCORE_LOCAL_TOOLS=false`, or
+`/tools local off` for the rest of a session. On by default: every call is
+shown and approved before it runs, and the output the agent sees is capped
+(6 000 characters, 60-second timeout, 64 KB reads).
+
+The agent gets five: `workspace_info`, `run_command`, `read_file`,
+`list_directory` and `write_file`. `workspace_info` is how "fix the failing
+test" works without you naming a file: it tells the agent the directory you
+started in, the git root, branch and upstream, which files have uncommitted
+changes, the last three commits, and which project files are present
+(`pyproject.toml`, `package.json`, …). Names only, never file contents, and it
+runs `git` directly rather than through a shell. Press `a` at its prompt once
+and it stops asking for the session.
 
 ### Startup banner
 

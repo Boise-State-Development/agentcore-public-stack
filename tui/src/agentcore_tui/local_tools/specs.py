@@ -16,8 +16,9 @@ RUN_COMMAND = "run_command"
 READ_FILE = "read_file"
 LIST_DIRECTORY = "list_directory"
 WRITE_FILE = "write_file"
+WORKSPACE_INFO = "workspace_info"
 
-LOCAL_TOOL_NAMES: tuple[str, ...] = (RUN_COMMAND, READ_FILE, LIST_DIRECTORY, WRITE_FILE)
+LOCAL_TOOL_NAMES: tuple[str, ...] = (WORKSPACE_INFO, RUN_COMMAND, READ_FILE, LIST_DIRECTORY, WRITE_FILE)
 
 
 def tool_specs() -> list[dict[str, Any]]:
@@ -25,6 +26,19 @@ def tool_specs() -> list[dict[str, Any]]:
     the server folds a digest of this list into its agent cache key, so a list
     that changed every turn would rebuild the agent every turn."""
     return [
+        {
+            "name": WORKSPACE_INFO,
+            "description": (
+                "Describe where the user is working on their local machine: the current directory, "
+                "whether it is a git repository and if so its root, branch, how far it is ahead of or "
+                "behind its upstream, uncommitted changes and the last few commits, plus the project "
+                "files present (pyproject.toml, package.json and so on). Read-only; runs no shell. "
+                "Call it first when the user refers to their project, repo, branch, the tests, or a "
+                "file without giving a path, instead of guessing or asking them. The user approves it "
+                "like the other local tools."
+            ),
+            "inputSchema": {"type": "object", "properties": {}},
+        },
         {
             "name": RUN_COMMAND,
             "description": (

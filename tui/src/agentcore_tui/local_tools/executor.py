@@ -31,6 +31,30 @@ MAX_WRITE_BYTES = 256 * 1024
 DEFAULT_TIMEOUT = 60.0
 #: Entries listed before a directory listing is cut.
 MAX_DIRECTORY_ENTRIES = 400
+#: Workspace summary limits. Small on purpose: this is orientation, and the
+#: model can list or read more with the other tools.
+MAX_CHANGED_FILES = 40
+RECENT_COMMITS = 3
+GIT_TIMEOUT = 5.0
+#: Files whose presence says what kind of project this is, in the order shown.
+PROJECT_MARKERS: tuple[str, ...] = (
+    "pyproject.toml",
+    "setup.py",
+    "requirements.txt",
+    "package.json",
+    "tsconfig.json",
+    "cdk.json",
+    "go.mod",
+    "Cargo.toml",
+    "pom.xml",
+    "build.gradle",
+    "Gemfile",
+    "composer.json",
+    "Makefile",
+    "Dockerfile",
+    "docker-compose.yml",
+    ".github",
+)
 
 
 class ApprovalDecision(enum.Enum):
@@ -90,6 +114,9 @@ def describe_call(call: LocalToolCall) -> tuple[str, str]:
         case "list_directory":
             headline = f"list {args.get('path') or '.'}"
             detail = ""
+        case "workspace_info":
+            headline = "share a summary of this directory"
+            detail = "Path, git branch and upstream, changed file names, last 3 commits, project files. No file contents."
         case "write_file":
             content = str(args.get("content", ""))
             lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
@@ -135,6 +162,8 @@ class ToolExecutor:
         """Run the call. Never raises: a failure is an error result the model can read."""
         try:
             match call.tool_name:
+                case "workspace_info":
+                    return await self._workspace_info()
                 case "run_command":
                     return await self._run_command(call.arguments)
                 case "read_file":
@@ -177,6 +206,77 @@ class ToolExecutor:
         body = _cap(text.rstrip("\n"))
         output = f"{body}\n[exit {code}]" if body else f"[exit {code}]"
         return LocalToolResult(output=output, is_error=code != 0)
+
+    async def _git(self, *args: str) -> tuple[int, str]:
+        """Run git without a shell. (127, "") when git is not installed."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                *args,
+                cwd=self._cwd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                env={**os.environ, "GIT_PAGER": "cat", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"},
+            )
+        except FileNotFoundError:
+            return 127, ""
+        try:
+            raw, _ = await asyncio.wait_for(process.communicate(), timeout=GIT_TIMEOUT)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return 124, ""
+        # rstrip, not strip: porcelain status puts meaning in column 1 (" M").
+        return process.returncode or 0, raw.decode("utf-8", errors="replace").rstrip()
+
+    async def _workspace_info(self) -> LocalToolResult:
+        """A short, factual orientation. Never file contents.
+
+        ``GIT_OPTIONAL_LOCKS=0`` so ``git status`` does not take the index lock
+        and collide with whatever the user is doing in another terminal.
+        """
+        home = Path.home()
+        try:
+            shown = f"~/{self._cwd.relative_to(home)}" if self._cwd != home else "~"
+        except ValueError:
+            shown = str(self._cwd)
+        lines = [f"Directory: {self._cwd}" + (f"  ({shown})" if shown != str(self._cwd) else "")]
+
+        code, root = await self._git("rev-parse", "--show-toplevel")
+        if code == 127:
+            lines.append("Git: not installed")
+        elif code != 0 or not root:
+            lines.append("Git: not a repository")
+        else:
+            lines.append(f"Git root: {root}")
+            _, branch = await self._git("rev-parse", "--abbrev-ref", "HEAD")
+            upstream_line = ""
+            ucode, upstream = await self._git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+            if ucode == 0 and upstream:
+                _, counts = await self._git("rev-list", "--left-right", "--count", f"{upstream}...HEAD")
+                behind, _, ahead = counts.partition("\t")
+                upstream_line = f" (upstream {upstream}: {ahead.strip() or '0'} ahead, {behind.strip() or '0'} behind)"
+            lines.append(f"Branch: {branch or '(detached)'}{upstream_line}")
+
+            _, status = await self._git("status", "--porcelain=v1", "--untracked-files=normal")
+            changed = [line for line in status.splitlines() if line.strip()]
+            if not changed:
+                lines.append("Changes: clean")
+            else:
+                lines.append(f"Changes: {len(changed)} file(s) (XY = index, worktree; ?? = untracked)")
+                lines.extend(f"  {line}" for line in changed[:MAX_CHANGED_FILES])
+                if len(changed) > MAX_CHANGED_FILES:
+                    lines.append(f"  … {len(changed) - MAX_CHANGED_FILES} more")
+
+            _, log = await self._git("log", f"-{RECENT_COMMITS}", "--format=%h %s (%cr)")
+            if log:
+                lines.append("Recent commits:")
+                lines.extend(f"  {line}" for line in log.splitlines())
+
+        markers = [name for name in PROJECT_MARKERS if (self._cwd / name).exists()]
+        lines.append("Project files: " + (", ".join(markers) if markers else "none of the usual ones here"))
+        return LocalToolResult(output="\n".join(lines))
 
     def _resolve(self, raw: Any) -> Path:
         path = Path(str(raw or ".")).expanduser()

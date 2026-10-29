@@ -85,8 +85,9 @@ interrupt machinery that already exists for `ask_user_question`.
 
 1. **Declare.** Every `/chat/stream` request carries `client_tools`: a list of
    `{name, description, inputSchema}` (`apis.shared.client_tools.ClientToolSpec`).
-   The TUI sends the same four every turn (`run_command`, `read_file`,
-   `list_directory`, `write_file`; `tui/src/agentcore_tui/local_tools/specs.py`).
+   The TUI sends the same five every turn (`workspace_info`, `run_command`,
+   `read_file`, `list_directory`, `write_file`;
+   `tui/src/agentcore_tui/local_tools/specs.py`).
    The SPA never sends the field, so nothing below runs for a web turn.
 2. **Build.** `build_client_tools` makes one Strands tool per spec, named
    `local_<name>` so it cannot collide with a registry, gateway or MCP tool. Its
