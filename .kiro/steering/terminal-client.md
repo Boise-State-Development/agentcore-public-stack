@@ -125,6 +125,18 @@ the screen's priority binding), so no prompt binds Esc; `x` skips all
 questions. Cancelling a paused turn does **not** POST `/interrupt` — nothing is
 generating, and the server keeps the paused turn for a later resume.
 
+**A paused turn outlives the client.** The server keeps it, and one
+`PendingInterrupt` row per open prompt, until someone answers. Opening that
+conversation (`_adopt_conversation` → `_restore_pending`) reads
+`pendingInterrupts` off a one-message `GET /sessions/{id}/messages` page,
+rebuilds each row into the live event through `interrupt_from_pending`
+(which goes via `parse_agent_event`, so restored and live prompts cannot
+drift), and calls `AgentTurnController.restore_paused`, which is the paused
+state with no stream open. Answering resumes as usual; Esc leaves the server's
+copy for later. OAuth rows never store a URL (they expire), so one is minted
+per row with `initiate-consent`; "already connected" means the prompt only
+needs Enter. There is **no GET** on `/sessions/{id}/pending-interrupts`.
+
 **Local tools.** The agent can run commands and read/write files on the user's
 machine (`local_tools/`), through the client-tools protocol in
 #[[file:docs/specs/TUI_WEB_PARITY_SPEC.md]]. The specs are sent on every turn
@@ -324,7 +336,7 @@ tui/src/agentcore_tui/
 └── widgets/          transcript messages, composer, status bar
 ```
 
-788 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+819 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.

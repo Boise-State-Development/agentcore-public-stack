@@ -46,6 +46,7 @@ from ..errors import (
     UploadError,
     UpstreamError,
 )
+from .agent_events import AgentEvent, interrupt_from_pending
 from .auth import AuthProvider
 from .endpoints import Endpoints
 
@@ -640,6 +641,42 @@ class CatalogClient:
             items=[HistoryMessage.from_wire(item) for item in _items(payload, "messages")],
             next_token=payload.get("nextToken"),
         )
+
+    async def pending_interrupts(self, session_id: str) -> list[AgentEvent]:
+        """Interrupts a turn in this conversation paused on and nobody answered.
+
+        Read from ``pendingInterrupts`` on the messages response (a one-message
+        page: the field is filled from session metadata regardless of paging).
+        An OAuth row has no URL by design, so a fresh one is minted per row.
+        Best-effort per row: one that cannot be rebuilt is skipped and logged,
+        not allowed to stop the conversation from opening.
+        """
+        payload = await self._get(self._endpoints.session_messages(session_id), params={"limit": 1})
+        rows = payload.get("pendingInterrupts") or []
+        events: list[AgentEvent] = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            url = ""
+            if str(row.get("kind") or "oauth") == "oauth" and row.get("providerId"):
+                url = await self.consent_url(str(row["providerId"])) or ""
+            event = interrupt_from_pending(row, authorization_url=url)
+            if event is None:
+                logger.warning("skipping a stored interrupt this client cannot rebuild: kind=%s", row.get("kind"))
+                continue
+            events.append(event)
+        return events
+
+    async def consent_url(self, provider_id: str) -> str | None:
+        """A fresh consent URL, or None when the user is already connected."""
+        try:
+            payload = await self._post(self._endpoints.connector_initiate_consent(provider_id), {})
+        except ApiError as exc:
+            logger.warning("could not mint a consent URL for %s: %s", provider_id, exc)
+            return None
+        if payload.get("connected"):
+            return None
+        return str(payload.get("authorization_url") or payload.get("authorizationUrl") or "") or None
 
     async def rename(self, session_id: str, title: str) -> None:
         await self._put(self._endpoints.session_metadata(session_id), {"title": title})

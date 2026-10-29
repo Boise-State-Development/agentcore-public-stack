@@ -37,6 +37,7 @@ from ..errors import AgentCoreTuiError, ConfigError
 from ..local_tools import ApprovalDecision, LocalToolResult, ToolExecutor, tool_specs
 from ..turn import (
     FLUSH_INTERVAL,
+    INTERRUPT_TYPES,
     AgentClientSupplier,
     AgentTurnController,
     BaseTurnController,
@@ -1096,6 +1097,39 @@ class ChatScreen(Screen[None]):
         self.status.set_state("Ready")
         self.transcript.scroll_end(animate=False)
         logger.info("adopted conversation %s with %d message(s), %d tool call(s)", summary.session_id, len(restored), len(records))
+        await self._restore_pending(summary.session_id)
+
+    async def _restore_pending(self, session_id: str) -> None:
+        """Re-offer the prompts of a turn that paused while nobody was here.
+
+        Without this, a conversation whose turn paused (you quit at an approval
+        prompt, the connection dropped, or a browser tab never answered) opens
+        looking idle while the server holds the turn, and the next message is
+        refused because the session is busy. Best-effort: if the fetch fails,
+        the conversation still opens and says so.
+        """
+        turn = self._turn
+        if not isinstance(turn, AgentTurnController) or turn.busy:
+            return
+        try:
+            stored = await self._catalog_or_create().pending_interrupts(session_id)
+        except AgentCoreTuiError as exc:
+            logger.warning("could not check for a paused turn in %s: %s", session_id, exc)
+            return
+        interrupts = [event for event in stored if isinstance(event, INTERRUPT_TYPES)]
+        if not interrupts or self._store.session_id != session_id:
+            return
+        await self.transcript.mount(
+            Notice(
+                f"This conversation paused on {len(interrupts)} question{'s' if len(interrupts) != 1 else ''} that never got an answer.",
+                hint="Answer below to let the turn finish, or press Esc to leave it paused.",
+            )
+        )
+        self.composer.submit_enabled = False
+        self.composer.add_class("-busy")
+        self._set_composer_chrome(busy=True)
+        self.refresh_bindings()
+        await turn.restore_paused(interrupts)
 
     async def set_model(self, choice: ModelChoice | str) -> None:
         """Switch models for subsequent turns.

@@ -37,6 +37,7 @@ than the concatenation of everything.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -573,6 +574,69 @@ def _unwrap_tool_results(payload: dict[str, Any]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
+
+
+#: ``PendingInterrupt.kind`` on the wire → the SSE event that announced it live.
+_PENDING_KIND_EVENT: dict[str, str] = {
+    "client_tool": "client_tool_call",
+    "tool_approval": "tool_approval_required",
+    "user_question": "user_question_required",
+    "oauth": "oauth_required",
+    "browser_login": "browser_login_required",
+}
+
+
+def interrupt_from_pending(row: Mapping[str, Any], *, authorization_url: str = "") -> AgentEvent | None:
+    """Rebuild the live interrupt event from a stored ``PendingInterrupt`` row.
+
+    The server records one row per paused interrupt so a client that was not
+    connected when the turn paused can still answer it (``pendingInterrupts``
+    on ``GET /sessions/{id}/messages``). The row's fields are the live event's
+    fields under the same names, except that ``tool_input`` and ``questions``
+    are JSON strings (DynamoDB mangles nested floats) and an OAuth row carries
+    no URL, since consent URLs expire — the caller fetches a fresh one and
+    passes it in. Built through :func:`parse_agent_event` so a restored prompt
+    and a live one cannot drift apart.
+
+    Returns None for a kind this client does not know or a row it cannot use.
+    """
+    kind = str(row.get("kind") or "oauth")
+    name = _PENDING_KIND_EVENT.get(kind)
+    interrupt_id = str(row.get("interruptId") or "")
+    if name is None or not interrupt_id:
+        return None
+    payload: dict[str, Any] = {
+        "interruptId": interrupt_id,
+        "toolUseId": row.get("toolUseId") or "",
+        "toolName": row.get("toolName") or "",
+    }
+    match kind:
+        case "client_tool":
+            payload["arguments"] = _json_field(row.get("toolInput"), {})
+        case "tool_approval":
+            payload["toolInput"] = row.get("toolInput") or ""
+            payload["message"] = row.get("message") or ""
+        case "user_question":
+            payload["questions"] = _json_field(row.get("questions"), [])
+        case "oauth":
+            payload["providerId"] = row.get("providerId") or ""
+            payload["authorizationUrl"] = authorization_url
+        case "browser_login":
+            payload["message"] = row.get("reason") or ""
+    event = parse_agent_event(name, json.dumps(payload))
+    if isinstance(event, UserQuestionRequired) and not event.questions:
+        return None
+    return event
+
+
+def _json_field(raw: Any, default: Any) -> Any:
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        value = json.loads(raw) if raw else default
+    except (TypeError, ValueError):
+        return default
+    return value if isinstance(value, type(default)) else default
 
 
 def parse_agent_event(name: str, data: str) -> AgentEvent:

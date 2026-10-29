@@ -330,8 +330,14 @@ class OAuthPrompt(_Prompt):
     def compose(self) -> ComposeResult:
         name = self.event.provider_id or "an external service"
         yield Label(f"Sign-in needed · {name}", classes="message-role")
-        yield Static(f"A tool needs your permission to use {name}. Open this URL, grant access, then come back:", markup=False)
-        yield Static(self.event.authorization_url, markup=False, classes="interrupt-url")
+        if self.event.authorization_url:
+            yield Static(f"A tool needs your permission to use {name}. Open this URL, grant access, then come back:", markup=False)
+            yield Static(self.event.authorization_url, markup=False, classes="interrupt-url")
+        else:
+            # A restored prompt: the stored interrupt carries no URL, and the
+            # server said the user is already connected, so only the go-ahead
+            # is missing.
+            yield Static(f"A tool was waiting for access to {name}. You're connected now; press Enter to let it continue.", markup=False)
         yield Static("[b]Enter[/] I've signed in   [b]n[/] skip this tool", classes="prompt-keys")
 
     def action_done(self) -> None:

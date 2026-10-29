@@ -111,9 +111,16 @@ class Endpoints:
         """
         return f"{self.session(session_id)}/interrupt"
 
-    def session_pending_interrupts(self, session_id: str) -> str:
-        """How a client discovers a turn that paused while it was disconnected."""
-        return f"{self.session(session_id)}/pending-interrupts"
+    def session_pending_interrupt(self, session_id: str, interrupt_id: str) -> str:
+        """``DELETE`` drops one stored breadcrumb. There is no GET: a client
+        discovers paused interrupts from ``pendingInterrupts`` on the messages
+        response."""
+        return f"{self.session(session_id)}/pending-interrupts/{quote(interrupt_id, safe='')}"
+
+    def connector_initiate_consent(self, provider_id: str) -> str:
+        """A fresh OAuth consent URL for a connector (they expire, so stored
+        interrupts never carry one)."""
+        return self._join(f"connectors/{quote(provider_id, safe='')}/initiate-consent")
 
     # -- files ---------------------------------------------------------------
     #

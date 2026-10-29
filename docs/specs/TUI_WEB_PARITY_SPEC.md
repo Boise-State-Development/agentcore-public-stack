@@ -51,7 +51,7 @@ rather than reproducing that hierarchy.
 | Title generation | `POST /chat/generate-title` | ✅ client done, not yet auto-fired |
 | Sampling overrides | `inference_params` | ❌ |
 | Continue after truncation | `continue_truncated: true` with empty message | ✅ `/continue` |
-| Resume a paused turn | `interrupt_responses`, `GET .../pending-interrupts` | ✅ all five interrupt kinds answered in the transcript; `pending-interrupts` on reconnect pending |
+| Resume a paused turn | `interrupt_responses`; `pendingInterrupts` on `GET /sessions/{id}/messages`; `POST /connectors/{id}/initiate-consent` | ✅ all five interrupt kinds answered in the transcript, live or on reopening a conversation that paused while nobody was there (OAuth rows get a fresh URL; there is no GET on `/pending-interrupts`, only DELETE) |
 | Conversation search | `GET /sessions/search` | ✅ Enter in the list's filter; local title filter when the server has it off |
 | **Client-executed tools** | `client_tools` on the request → `client_tool_call` SSE → `interrupt_responses` | ✅ see below — the one capability the terminal has that the web app does not |
 

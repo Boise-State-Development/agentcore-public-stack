@@ -119,7 +119,8 @@ class TestEndpoints:
         assert endpoints.session_metadata("abc") == "https://h/api/sessions/abc/metadata"
         assert endpoints.session_read("abc") == "https://h/api/sessions/abc/read"
         assert endpoints.session_unread("abc") == "https://h/api/sessions/abc/unread"
-        assert endpoints.session_pending_interrupts("abc") == "https://h/api/sessions/abc/pending-interrupts"
+        assert endpoints.session_pending_interrupt("abc", "v1:x/y") == "https://h/api/sessions/abc/pending-interrupts/v1%3Ax%2Fy"
+        assert endpoints.connector_initiate_consent("google") == "https://h/api/connectors/google/initiate-consent"
 
     def test_session_ids_are_url_encoded(self) -> None:
         """Ids are client-minted, so a caller could supply anything."""

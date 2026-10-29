@@ -84,6 +84,8 @@ FLUSH_INTERVAL = 0.08
 #: Every way a turn can pause. The agent dialect's `complete()` reports each
 #: through `TurnSink.on_interrupt`; the api-converse dialect has none.
 InterruptEvent = OAuthRequired | ToolApprovalRequired | UserQuestionRequired | BrowserLoginRequired | ClientToolCall
+#: The same union as a runtime tuple, for isinstance narrowing.
+INTERRUPT_TYPES = (OAuthRequired, ToolApprovalRequired, UserQuestionRequired, BrowserLoginRequired, ClientToolCall)
 
 
 class TurnSink(Protocol):
@@ -602,6 +604,31 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         await self._sink.on_elapsed(None)
         await self._sink.on_state("Continuing...", busy=True)
         await self.stream()
+
+    async def restore_paused(self, interrupts: Sequence[InterruptEvent]) -> None:
+        """Re-enter a pause the server is still holding, with no stream open.
+
+        A turn that paused while this client was gone (quit mid-prompt, a
+        dropped connection, a browser tab that never answered) is kept server
+        side until someone answers. Opening that conversation restores it: the
+        controller becomes busy-and-paused exactly as if the stream had just
+        ended on those interrupts, the sink mounts one prompt per interrupt,
+        and :meth:`resume` sends the answers as usual. Cancelling drops the
+        pause locally and leaves the server's copy for a later attempt, which
+        is what cancel already does for a live pause.
+        """
+        if self._busy or not interrupts:
+            return
+        logger.info("turn restore session=%s interrupts=%d", self._store.session_id, len(interrupts))
+        self._accumulator = self._new_accumulator()
+        self._text_buffer = ""
+        self._reasoning_buffer = ""
+        self._busy = True
+        self._paused = True
+        self._started_at = time.monotonic()
+        await self._sink.on_state("Waiting for you", busy=True)
+        for interrupt in interrupts:
+            await self._sink.on_interrupt(interrupt)
 
     async def resume(self, responses: Sequence[Mapping[str, Any]]) -> None:
         """Continue a paused turn with the user's answers.

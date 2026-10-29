@@ -223,6 +223,11 @@ has.
 | `Up` / `Down`, `Tab` | Move in the command menu; complete |
 | `Ctrl+Q` | Quit |
 
+A turn that paused while you were away (you quit at a prompt, the connection
+dropped, or a browser tab never answered) is still waiting on the server.
+Opening that conversation from `/conversations` shows its prompts again; answer
+them and the turn finishes. Esc leaves it paused.
+
 While a turn is paused on a prompt: `y` / `n` approve or decline, `a` allows a
 local tool for the session, `1`–`9` pick an answer, `o` types a free-text one,
 `s` skips a question, `x` skips them all.
