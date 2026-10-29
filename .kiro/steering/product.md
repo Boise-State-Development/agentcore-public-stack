@@ -30,17 +30,14 @@ AgentCore Public Stack is a production-ready multi-agent conversational AI syste
 
 ## Architecture
 
-**Frontend** → CloudFront → ALB → **Frontend+BFF** (Angular/FastAPI on Fargate)
+**Browser / API-key client** → CloudFront (`/*` → S3 SPA; `/api/*` → ALB, CloudFront-only ingress)
                                       ↓
-                                **AgentCore Runtime** (Strands Agent container)
+                                **App API** (FastAPI BFF on ECS Fargate: auth, RBAC, quotas, `/chat/stream` SSE proxy, `/chat/api-converse`)
+                                      ↓
+                                **AgentCore Runtime** (Inference API + Strands Agent)
                                       ↓
                     ┌─────────────────┼─────────────────┐
                     ↓                 ↓                 ↓
-            **AgentCore Gateway**  **Report Writer**  **Built-in Tools**
-            (MCP endpoints)        (A2A protocol)     (Code Interpreter, Browser)
-                    ↓
-            Lambda Functions (5x)
-            └─ Wikipedia, ArXiv, Google, Tavily, Finance
-
-            **AgentCore Memory**
-            └─ Conversation history, User preferences & facts
+            **Amazon Bedrock**   **Built-in & local tools**   **AgentCore services**
+            (+ external          (documents, files,           (Memory, Code Interpreter,
+             providers)           charts, web fetch)           Browser, Gateway → MCP servers)
