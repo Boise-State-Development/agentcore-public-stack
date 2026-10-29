@@ -270,3 +270,65 @@ class TestSnapshotRoundTrip:
 
         p = PendingInterrupt(interrupt_id="i", kind="client_tool", tool_name="run_command", tool_input="{}", created_at="t")
         assert p.kind == "client_tool"
+
+
+class TestSnapshotRecording:
+    """`_record_client_tools_on` is what makes resume possible: it is the only
+    writer of the field the resume path reads. Round-trip the two."""
+
+    def test_record_then_rebuild_yields_the_same_tools_and_digest(self):
+        from apis.inference_api.chat.models import InvocationRequest
+        from apis.inference_api.chat.routes import (
+            _client_tools_digest,
+            _client_tools_digest_from_snapshot,
+            _client_tools_from_snapshot,
+            _record_client_tools_on,
+        )
+
+        request = InvocationRequest(
+            session_id="s", message="m", client_tools=[spec().model_dump(by_alias=True), spec("read_file").model_dump(by_alias=True)]
+        )
+        agent = SimpleNamespace(_construction_snapshot={"model_id": "m"})
+        _record_client_tools_on(agent, request)
+
+        snapshot = SimpleNamespace(client_tools=agent._construction_snapshot["client_tools"])
+        rebuilt = _client_tools_from_snapshot(snapshot)
+        assert [t.tool_name for t in rebuilt] == ["local_run_command", "local_read_file"]
+        assert _client_tools_digest_from_snapshot(snapshot) == _client_tools_digest(request)
+
+    def test_nothing_is_recorded_without_client_tools(self):
+        from apis.inference_api.chat.models import InvocationRequest
+        from apis.inference_api.chat.routes import _record_client_tools_on
+
+        agent = SimpleNamespace(_construction_snapshot={"model_id": "m"})
+        _record_client_tools_on(agent, InvocationRequest(session_id="s", message="m"))
+        assert "client_tools" not in agent._construction_snapshot
+
+    def test_an_agent_without_a_snapshot_dict_is_left_alone(self):
+        from apis.inference_api.chat.models import InvocationRequest
+        from apis.inference_api.chat.routes import _record_client_tools_on
+
+        agent = SimpleNamespace()
+        _record_client_tools_on(agent, InvocationRequest(session_id="s", message="m", client_tools=[spec().model_dump(by_alias=True)]))
+        assert not hasattr(agent, "_construction_snapshot")
+
+
+class TestRequestValidationMessages:
+    """A misbehaving client gets a 422 whose message says what to fix."""
+
+    @pytest.mark.parametrize(
+        ("tools", "fragment"),
+        [
+            ([spec(f"t{i}").model_dump(by_alias=True) for i in range(MAX_CLIENT_TOOLS + 1)], "at most"),
+            ([spec("dup").model_dump(by_alias=True)] * 2, "twice"),
+            ([{"name": "bad-name", "description": "d"}], "client tool name"),
+            ([{"name": "ok", "description": ""}], "must not be empty"),
+            ([{"name": "ok", "description": "d", "inputSchema": {"type": "array"}}], '"type": "object"'),
+        ],
+    )
+    def test_messages(self, tools, fragment):
+        from apis.inference_api.chat.models import InvocationRequest
+
+        with pytest.raises(ValidationError) as excinfo:
+            InvocationRequest(session_id="s", message="m", client_tools=tools)
+        assert fragment in str(excinfo.value)

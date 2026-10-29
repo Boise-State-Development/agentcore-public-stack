@@ -100,6 +100,7 @@ TAIL_ALLOWED = frozenset(
         "tool_approval_required",
         "user_question_required",
         "browser_login_required",
+        "client_tool_call",
         "metadata",
         "metadata_summary",
         "compaction",
@@ -160,6 +161,7 @@ INTERRUPT_EVENTS = frozenset(
         "tool_approval_required",
         "user_question_required",
         "browser_login_required",
+        "client_tool_call",
     }
 )
 
@@ -1001,6 +1003,82 @@ async def row_ask_user_question(ctx: Context) -> RowResult:
     )
 
 
+CLIENT_TOOL_PROMPT = (
+    "Use the local_echo_marker tool exactly once, with marker set to 'smoke-7731', "
+    "and then tell me verbatim what it returned."
+)
+
+
+async def row_client_tool_call(ctx: Context) -> RowResult:
+    """The terminal client's protocol: declare a tool, the model calls it, the
+    turn pauses on `client_tool_call`, the client resumes with the output.
+
+    The declared tool here is a stub nobody runs — this script *is* the client,
+    so it answers the interrupt itself. What this proves is the server half:
+    the spec reaches toolConfig, the pause lands after the final message_stop,
+    and the resume rebuilds the tool from the snapshot and returns our output
+    as the tool result (the answer should echo it).
+    """
+    spec = {
+        "name": "echo_marker",
+        "description": "Runs on the user's machine and returns the marker string it was given, prefixed with OK.",
+        "inputSchema": {"type": "object", "properties": {"marker": {"type": "string"}}, "required": ["marker"]},
+    }
+    warnings: List[str] = []
+    turn: Optional[TurnResult] = None
+    call: Optional[Frame] = None
+    sid = ""
+    for attempt in range(1, 4):
+        sid = ctx.new_session()
+        turn = await ctx.transport.stream_turn(ctx.base_payload(sid, CLIENT_TOOL_PROMPT, client_tools=[spec]))
+        ctx.note(turn)
+        warnings += assert_frame_contract(turn, allow_interrupt=True)
+        call = turn.first("client_tool_call")
+        if call is not None:
+            if attempt > 1:
+                warnings.append(f"model only called the client tool on attempt {attempt}")
+            break
+    assert turn is not None
+    if call is None:
+        raise RowFailure(f"no client_tool_call frame in 3 attempts; frames={sorted(set(turn.names))}; answer: {turn.final_text[:60]!r}")
+    names = turn.names
+    if names.index("client_tool_call") < len(names) - 1 - names[::-1].index("message_stop"):
+        raise RowFailure("client_tool_call arrived before the final message_stop")
+    if call.data.get("toolName") != "echo_marker":
+        raise RowFailure(f"client_tool_call names {call.data.get('toolName')!r}, expected the bare declared name 'echo_marker'")
+    marker = (call.data.get("arguments") or {}).get("marker", "")
+    interrupt_id = call.data.get("interruptId")
+    if not interrupt_id:
+        raise RowFailure(f"client_tool_call lacks interruptId: {call.data}")
+
+    resume = await ctx.transport.stream_turn(
+        {
+            "session_id": sid,
+            "message": "",
+            "enabled_tools": [],
+            "client_tools": [spec],
+            **({"model_id": ctx.args.model_id} if ctx.args.model_id else {}),
+            "interrupt_responses": [{"interruptId": interrupt_id, "response": {"output": f"OK {marker}", "isError": False}}],
+        }
+    )
+    ctx.note(resume)
+    warnings += assert_frame_contract(resume, resume=True)
+    if resume.all("client_tool_call"):
+        raise RowFailure("the resumed turn re-raised client_tool_call (the tool was not rebuilt from the snapshot, or the answer was rejected)")
+    if "7731" not in resume.final_text:
+        warnings.append(f"resumed answer did not echo the marker: {resume.final_text[:60]!r}")
+    code, body = await ctx.transport.get_messages(sid)
+    if code == 200 and body is not None and body.get("pendingInterrupts"):
+        raise RowFailure("pendingInterrupts still non-empty after a successful resume")
+    return RowResult(
+        "client_tool_call_resume",
+        "PASS",
+        f"paused on echo_marker(marker={marker!r}), resumed; answer: {resume.final_text[:40]!r}",
+        warnings,
+        {},
+    )
+
+
 async def row_tool_approval(ctx: Context) -> RowResult:
     tool = ctx.args.approval_tool
     if not tool:
@@ -1399,6 +1477,7 @@ ROWS: List[Tuple[str, Callable[[Context], Awaitable[Any]]]] = [
     ("tool_turn", row_tool_turn),
     ("ask_user_question_resume", row_ask_user_question),
     ("tool_approval_resume", row_tool_approval),
+    ("client_tool_call_resume", row_client_tool_call),
     ("duplicate_send_409+stop_mid_answer", row_duplicate_and_stop),
     ("preview_session", row_preview_session),
     ("steer_mid_turn", row_steer_observed),
