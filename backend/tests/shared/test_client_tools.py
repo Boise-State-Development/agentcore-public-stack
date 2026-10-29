@@ -142,9 +142,45 @@ def _body(tool):
     return tool._tool_func if hasattr(tool, "_tool_func") else tool.original_function
 
 
+def _validate(tool, tool_input: dict):
+    """Run Strands' own input validation — the step that rejected every real
+    call when the body was declared as ``**arguments``."""
+    return tool._metadata.validate_input(dict(tool_input))
+
+
 class TestBuiltTool:
     def test_none_builds_nothing(self):
         assert build_client_tools(None) == []
+
+    def test_strands_validation_accepts_what_the_schema_advertises(self):
+        """Strands validates against the Python signature, not inputSchema. A
+        `**kwargs` body made every call fail with "Field required: arguments"
+        before the interrupt could fire — found live, not by the unit tests
+        that called the body directly."""
+        [tool] = build_client_tools(
+            [spec(inputSchema={"type": "object", "properties": {"path": {"type": "string"}, "depth": {"type": "integer"}}, "required": ["path"]})]
+        )
+        fields = tool._metadata.input_model.model_fields
+        assert fields["path"].is_required() and not fields["depth"].is_required()
+        assert "arguments" not in fields
+        validated = _validate(tool, {"path": "."})
+        assert validated["path"] == "."
+        with pytest.raises(ValueError, match="path"):
+            _validate(tool, {"depth": 2})
+
+    def test_unset_optional_arguments_are_not_forwarded_to_the_client(self):
+        [tool] = build_client_tools(
+            [spec(inputSchema={"type": "object", "properties": {"path": {"type": "string"}, "depth": {"type": "integer"}}, "required": ["path"]})]
+        )
+        ctx = _Ctx({"output": "ok"})
+        _body(tool)(**_validate(tool, {"path": "."}), tool_context=ctx)
+        assert ctx.calls[0][1]["arguments"] == {"path": "."}
+
+    def test_a_schema_with_no_properties_builds_a_callable_tool(self):
+        [tool] = build_client_tools([ClientToolSpec(name="noop", description="Does nothing.")])
+        assert _validate(tool, {}) == {}
+        out = _body(tool)(tool_context=_Ctx({"output": "ran"}))
+        assert out["status"] == "success"
 
     def test_spec_reaches_the_tool_config_with_the_prefix(self):
         [tool] = build_client_tools([spec()])
