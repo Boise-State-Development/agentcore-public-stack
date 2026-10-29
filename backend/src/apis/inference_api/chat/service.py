@@ -70,6 +70,7 @@ def _create_cache_key(
     knowledge_context: Optional[str] = None,
     memory_mode: str = "on",
     client_surface: Optional[str] = None,
+    client_tools_digest: str = "",
 ) -> Tuple:
     """
     Create a cache key for agent instances.
@@ -131,6 +132,12 @@ def _create_cache_key(
     or "web") keys byte-identically to a key built without the field.
     """
     tools_hash = _hash_tools(enabled_tools)
+    # Client-executed tools are part of toolConfig, so a different declared set
+    # is a different agent. Folded into the tools element rather than given a
+    # slot of its own so the tuple shape (which tests index) is unchanged, and
+    # a turn without client tools keys exactly as before.
+    if client_tools_digest:
+        tools_hash = f"{tools_hash}+client:{client_tools_digest}"
 
     # Hash system prompt if provided (can be very long)
     prompt_hash = None
@@ -426,6 +433,7 @@ async def get_agent(
     knowledge_context: Optional[str] = None,
     memory_mode: MemoryMode = "on",
     client_surface: Optional[str] = None,
+    client_tools_digest: str = "",
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -538,6 +546,7 @@ async def get_agent(
         knowledge_context=knowledge_context,
         memory_mode=effective_memory_mode,
         client_surface=client_surface,
+        client_tools_digest=client_tools_digest,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.

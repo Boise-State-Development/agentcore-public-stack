@@ -868,6 +868,12 @@ class StreamCoordinator:
                         user_id=user_id,
                     ):
                         yield sse
+                    for sse in await self._extract_client_tool_call_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
+                        yield sse
                     for sse in self._extract_preflight_consent_events(user_id):
                         yield sse
 
@@ -2316,6 +2322,7 @@ class StreamCoordinator:
                 max_tokens=inference_params.get("max_tokens"),
                 agent_type=snapshot_source.get("agent_type"),
                 client_surface=snapshot_source.get("client_surface"),
+                client_tools=snapshot_source.get("client_tools"),
                 enabled_skills=snapshot_source.get("enabled_skills"),
                 inference_params=dict(inference_params) if inference_params else None,
                 mantle_api_mode=snapshot_source.get("mantle_api_mode"),
@@ -2624,6 +2631,73 @@ class StreamCoordinator:
                     interrupt_id=interrupt.id,
                     tool_use_id=tool_use_id,
                     questions=questions,
+                ).to_sse_format()
+            )
+        return events
+
+    async def _extract_client_tool_call_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield one SSE-formatted `client_tool_call` event per pending
+        client-executed tool interrupt (``apis.shared.client_tools``).
+
+        Same shape as :meth:`_extract_user_question_required_events`: the tool
+        raised the interrupt itself through ``ToolContext``, and the client
+        answers by resuming with an ``interrupt_responses`` entry. Only a client
+        that declared ``client_tools`` on the request can receive one of these,
+        since only such a turn has the tools to call.
+        """
+        from apis.shared.client_tools import ClientToolCallEvent, INTERRUPT_TYPE
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != INTERRUPT_TYPE:
+                continue
+            tool_name = str(reason.get("toolName") or "")
+            if not tool_name:
+                logger.warning("client_tool_call interrupt has no toolName: id=%s", interrupt.id)
+                continue
+            tool_use_id = str(reason.get("toolUseId") or "")
+            arguments = reason.get("arguments")
+            if not isinstance(arguments, dict):
+                arguments = {}
+
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            kind="client_tool",
+                            tool_use_id=tool_use_id,
+                            tool_name=tool_name,
+                            tool_input=json.dumps(arguments, default=str),
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist client_tool pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
+            events.append(
+                ClientToolCallEvent(
+                    interrupt_id=interrupt.id,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    arguments=arguments,
                 ).to_sse_format()
             )
         return events

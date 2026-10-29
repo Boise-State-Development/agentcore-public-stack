@@ -14,7 +14,14 @@ from typing import Any
 import pytest
 
 from agentcore_tui.client.agent_events import (
+    AgentNotice,
+    AgentStatus,
     Artifact,
+    ClientToolCall,
+    QuestionOption,
+    ToolGroupSummary,
+    UserQuestion,
+    UserQuestionRequired,
     CitationEvent,
     Compaction,
     Done,
@@ -88,7 +95,7 @@ class TestRequestShape:
         controller, _sink, store, client = build(answer("hi"))
         await run(controller, "what is 2+2")
 
-        assert client.stream_calls == [{"session_id": store.session_id, "message": "what is 2+2", "enabled_tools": None}]
+        assert client.stream_calls == [{"session_id": store.session_id, "message": "what is 2+2", "enabled_tools": None, "client_tools": None}]
 
     async def test_a_tool_selection_is_passed_through(self) -> None:
         controller, _sink, _store, client = build(answer("hi"), enabled_tools=["calculator"])
@@ -245,9 +252,13 @@ class TestTerminalStates:
         )
         await run(controller)
 
-        assert sink.state_labels[-1] == "Paused"
+        # Still busy: the session is holding the paused turn until `resume()`.
+        assert sink.state_labels[-1] == "Waiting for you"
+        assert controller.busy and controller.paused
+        assert not sink.errors
         assert sink.errors == []
-        assert any("paused" in message for message, _hint, _error in sink.notices)
+        assert len(sink.interrupts) == 1
+        assert isinstance(sink.interrupts[0], OAuthRequired)
 
     async def test_a_paused_turn_keeps_the_partial_answer(self) -> None:
         """Discarding it would make the transcript silently lossy."""
@@ -376,3 +387,103 @@ async def test_an_empty_prompt_still_reaches_the_server(prompt: str) -> None:
     controller, _sink, _store, client = build(answer("?"))
     await run(controller, prompt)
     assert client.stream_calls[0]["message"] == prompt
+
+
+class TestResume:
+    """A paused turn continues with the user's answers, on the same session."""
+
+    PAUSE = [
+        MessageStart(),
+        TextDelta(index=0, text="Let me check."),
+        MessageStop(),
+        ClientToolCall(interrupt_id="v1:tool_call:tu-1:abc", tool_use_id="tu-1", tool_name="run_command", arguments={"command": "ls"}),
+        Done(),
+    ]
+
+    async def test_pause_reports_each_interrupt_and_stays_busy(self) -> None:
+        controller, sink, store, _client = build(self.PAUSE)
+        await run(controller)
+        assert controller.paused and controller.busy
+        [event] = sink.interrupts
+        assert isinstance(event, ClientToolCall) and event.arguments == {"command": "ls"}
+        # The pre-pause text is kept.
+        assert store.messages[-1].content == "Let me check."
+
+    async def test_resume_sends_the_answers_and_no_new_message(self) -> None:
+        controller, sink, store, client = build(self.PAUSE, client_tools=[{"name": "run_command", "description": "d"}])
+        await run(controller)
+        client._events = answer("Two files.")  # the resumed stream
+        await controller.resume([{"interruptId": "v1:tool_call:tu-1:abc", "response": {"output": "a\nb", "isError": False}}])
+
+        assert not controller.busy and not controller.paused
+        assert sink.state_labels[-1] == "Ready"
+        resume_call = client.stream_calls[-1]
+        assert resume_call["message"] == ""
+        assert resume_call["interrupt_responses"] == [{"interruptId": "v1:tool_call:tu-1:abc", "response": {"output": "a\nb", "isError": False}}]
+        # Declared tools ride every request, including the resume, so the
+        # rebuilt agent has the same toolConfig.
+        assert resume_call["client_tools"] == [{"name": "run_command", "description": "d"}]
+        assert store.messages[-1].content == "Two files."
+        assert sink.text.endswith("Two files.")
+
+    async def test_client_tools_are_declared_on_the_first_request(self) -> None:
+        controller, _sink, _store, client = build(answer("hi"), client_tools=[{"name": "x", "description": "d"}])
+        await run(controller)
+        assert client.stream_calls[0]["client_tools"] == [{"name": "x", "description": "d"}]
+
+    async def test_resume_without_a_pause_is_ignored(self) -> None:
+        controller, sink, _store, client = build(answer("hi"))
+        await run(controller)
+        await controller.resume([{"interruptId": "x", "response": "approved"}])
+        assert len(client.stream_calls) == 1
+
+    async def test_cancelling_a_paused_turn_does_not_interrupt_the_server(self) -> None:
+        """Nothing is generating; the server is holding a paused turn, and an
+        interrupt POST there would be noise."""
+        controller, sink, _store, client = build(self.PAUSE)
+        await run(controller)
+        await controller.cancel()
+        assert client.interrupts == []
+        assert not controller.busy and not controller.paused
+        assert sink.state_labels[-1] == "Stopped"
+
+    async def test_a_second_pause_during_resume_is_reported_again(self) -> None:
+        controller, sink, _store, client = build(self.PAUSE)
+        await run(controller)
+        client._events = [
+            MessageStart(),
+            MessageStop(),
+            UserQuestionRequired(
+                interrupt_id="v1:tool_call:tu-2:q",
+                tool_use_id="tu-2",
+                questions=(UserQuestion(header="Scope", question="How much?", options=(QuestionOption(label="All"), QuestionOption(label="Some"))),),
+            ),
+            Done(),
+        ]
+        await controller.resume([{"interruptId": "v1:tool_call:tu-1:abc", "response": {"output": "", "isError": False}}])
+        assert controller.paused
+        assert isinstance(sink.interrupts[-1], UserQuestionRequired)
+
+
+class TestInformationalEvents:
+    async def test_agent_status_narrates_the_status_bar(self) -> None:
+        controller, sink, _store, _client = build(
+            [AgentStatus(phase="tool_start", tool_name="web_search"), AgentStatus(phase="tool_end", tool_name="web_search"), *answer("ok")]
+        )
+        await run(controller)
+        assert "Running web_search..." in sink.state_labels
+        assert sink.state_labels[-1] == "Ready"
+
+    async def test_agent_notice_and_tool_summary_become_notices(self) -> None:
+        controller, sink, _store, _client = build(
+            [
+                AgentNotice(message="The model this Agent names is unavailable; using the default."),
+                ToolGroupSummary(batch_id="b", tool_use_ids=("t",), summary="Searched two sources."),
+                *answer("ok"),
+            ]
+        )
+        await run(controller)
+        messages = [m for m, _h, _e in sink.notices]
+        assert "The model this Agent names is unavailable; using the default." in messages
+        assert "Searched two sources." in messages
+        assert not sink.errors

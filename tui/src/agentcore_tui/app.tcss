@@ -611,3 +611,61 @@ ModalScreen SelectionList:focus {
 #conversation-status.-error {
     color: $error;
 }
+
+/* -------------------------------------------------------------- prompts */
+
+/* A paused turn's prompt. It is the one thing on screen asking for a key, so
+ * it takes focus and gets a visible frame while open; once answered it
+ * collapses to a single muted outcome line and gives the rule up. */
+.prompt {
+    background: $boost;
+    border-left: wide $primary;
+    padding: 0 1;
+}
+
+.prompt:focus {
+    border-left: wide $accent;
+    background: $primary 12%;
+}
+
+.prompt .message-role {
+    color: $primary;
+}
+
+.prompt:focus .message-role {
+    color: $accent;
+}
+
+.prompt-command {
+    height: auto;
+    color: $text;
+    text-style: bold;
+    padding: 0 0 0 2;
+}
+
+.prompt-keys {
+    height: auto;
+    color: $text-muted;
+    margin-top: 1;
+}
+
+.prompt #uq-options {
+    height: auto;
+    padding: 0 0 0 2;
+}
+
+.prompt #uq-other {
+    margin-top: 1;
+}
+
+.interrupt-notice.-settled {
+    border-left: wide $surface-lighten-2;
+    background: transparent;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+.prompt-outcome {
+    height: auto;
+    color: $text-muted;
+}

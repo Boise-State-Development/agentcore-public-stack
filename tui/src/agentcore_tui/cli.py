@@ -99,6 +99,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Suppress the startup banner for this run (set `banner = false` in the config file to disable it permanently)",
     )
+    tool_flags = parser.add_mutually_exclusive_group()
+    tool_flags.add_argument(
+        "--local-tools",
+        dest="local_tools",
+        action="store_true",
+        default=None,
+        help="Let the agent run commands and read/write files on this machine (each call is approved first). This is the default.",
+    )
+    tool_flags.add_argument(
+        "--no-local-tools",
+        dest="local_tools",
+        action="store_false",
+        default=None,
+        help="Do not offer the agent any tools that run on this machine (set `local_tools = false` in the config file to make it permanent)",
+    )
     # NB: no `parser.set_defaults()` for the shared dests. `set_defaults`
     # rewrites `action.default` on every matching action, and `parents=[common]`
     # shares those Action *instances* with the subparsers — so setting a default
@@ -331,6 +346,7 @@ def _command_chat(args: argparse.Namespace) -> int:
         config_file=args.config_file,
         banner=banner,
         force_banner=banner is True,
+        local_tools=getattr(args, "local_tools", None),
     )
     ChatApp(config).run()
     return 0
@@ -342,7 +358,7 @@ def _normalise(args: argparse.Namespace) -> argparse.Namespace:
     Shared flags default to SUPPRESS so a subcommand cannot overwrite a value
     given before it; the cost is that absent flags have no attribute at all.
     """
-    for name in ("base_url", "model_id", "config_file", "api_key", "command", "log_level", "log_file", "banner"):
+    for name in ("base_url", "model_id", "config_file", "api_key", "command", "log_level", "log_file", "banner", "local_tools"):
         if not hasattr(args, name):
             setattr(args, name, None)
     return args

@@ -34,9 +34,28 @@ from ..config import Config, config_path, load_session_from_keyring
 from ..conversation import ConversationStore, Message
 from ..credentials import CredentialSource
 from ..errors import AgentCoreTuiError, ConfigError
-from ..turn import FLUSH_INTERVAL, AgentClientSupplier, AgentTurnController, BaseTurnController, ClientSupplier, TurnController
+from ..local_tools import ApprovalDecision, LocalToolResult, ToolExecutor, tool_specs
+from ..turn import (
+    FLUSH_INTERVAL,
+    AgentClientSupplier,
+    AgentTurnController,
+    BaseTurnController,
+    ClientSupplier,
+    InterruptEvent,
+    TurnController,
+)
 from ..usage import Usage
 from ..widgets import AssistantMessage, Composer, EmptyState, Notice, StatusBar, ToolCall, UserMessage, short_model
+from ..widgets.prompts import (
+    BrowserLoginPrompt,
+    ClientToolPrompt,
+    InterruptAnswered,
+    LocalToolApproval,
+    OAuthPrompt,
+    ToolApprovalPrompt,
+    UserQuestionPrompt,
+    _Prompt,
+)
 from .conversations import ConversationList
 from .model_picker import ModelChoice, ModelPicker
 from .tool_picker import ToolPicker
@@ -85,6 +104,12 @@ class ChatScreen(Screen[None]):
         self._agent_supplier = agent_client_supplier
         #: None means "every tool my role grants". Narrowed by the tool picker.
         self._enabled_tools: list[str] | None = None
+        #: Runs the local tools and remembers "always" approvals for the session.
+        self._executor = ToolExecutor()
+        #: Prompts still waiting on the user, by interrupt id. The turn resumes
+        #: when this empties.
+        self._open_prompts: dict[str, _Prompt] = {}
+        self._answers: list[dict[str, Any]] = []
 
         # Which controller depends on which credential is held, because the two
         # endpoints accept different ones and neither accepts both. A session
@@ -160,7 +185,7 @@ class ChatScreen(Screen[None]):
 
         self.composer.focus()
         self._set_composer_chrome()
-        await self.transcript.mount(EmptyState(agent=self._agent_mode))
+        await self.transcript.mount(EmptyState(agent=self._agent_mode, local_tools=self._agent_mode and self._config.local_tools))
         self.status.set_state("Ready")
 
     def _set_composer_chrome(self, *, busy: bool = False) -> None:
@@ -293,6 +318,13 @@ class ChatScreen(Screen[None]):
         self.status.set_state(state, busy=busy, error=error)
         if not busy:
             self._end_of_turn_ui()
+        elif state == "Waiting for you":
+            # Paused: stop repainting, keep the composer locked. The resume
+            # restarts the flush timer against a fresh assistant message.
+            if self._flush_timer is not None:
+                self._flush_timer.stop()
+                self._flush_timer = None
+            self._set_composer_chrome(busy=True)
 
     async def on_notice(self, message: str, *, hint: str = "", error: bool = False) -> None:
         await self.transcript.mount(Notice(message, hint=hint, error=error))
@@ -318,6 +350,102 @@ class ChatScreen(Screen[None]):
 
     async def on_title(self, title: str) -> None:
         self.sub_title = title
+
+    async def on_interrupt(self, event: InterruptEvent) -> None:
+        """Mount a prompt for one paused interrupt and move focus to it.
+
+        The transcript's `_pending` assistant message stays put: the model's
+        pre-pause text is already stored, and the resumed stream mounts a fresh
+        message when its text starts.
+        """
+        prompt = self._prompt_for(event)
+        self._open_prompts[event.interrupt_id] = prompt
+        await self.transcript.mount(prompt)
+        self.transcript.scroll_end(animate=False)
+        self.refresh_bindings()
+
+        # A local tool the user has already said "always" to runs straight away.
+        if isinstance(prompt, ClientToolPrompt) and self._executor.is_pre_approved(prompt.call.tool_name):
+            self.post_message(LocalToolApproval(prompt.call, ApprovalDecision.APPROVE))
+            return
+        prompt.focus()
+
+    def _prompt_for(self, event: InterruptEvent) -> _Prompt:
+        from ..client.agent_events import (
+            BrowserLoginRequired,
+            ClientToolCall,
+            OAuthRequired,
+            ToolApprovalRequired,
+            UserQuestionRequired,
+        )
+
+        match event:
+            case ClientToolCall():
+                return ClientToolPrompt(event)
+            case ToolApprovalRequired():
+                return ToolApprovalPrompt(event)
+            case UserQuestionRequired():
+                return UserQuestionPrompt(event)
+            case OAuthRequired():
+                return OAuthPrompt(event)
+            case BrowserLoginRequired():
+                return BrowserLoginPrompt(event)
+        raise TypeError(f"no prompt for {type(event).__name__}")  # pragma: no cover - the union is closed
+
+    # -- answering interrupts ------------------------------------------------
+
+    async def on_local_tool_approval(self, message: LocalToolApproval) -> None:
+        """Run (or refuse) a local tool, then answer its interrupt."""
+        prompt = self._open_prompts.get(message.call.interrupt_id)
+        call = message.call
+        if message.decision is ApprovalDecision.DECLINE:
+            result = LocalToolResult(declined=True)
+            summary = f"✗ Declined · {call.tool_name}"
+        else:
+            if message.decision is ApprovalDecision.ALWAYS:
+                self._executor.remember(call.tool_name)
+            self.status.set_state(f"Running {call.tool_name}...", busy=True)
+            if prompt is not None:
+                prompt.settle(f"… running {call.tool_name}")
+            result = await self._executor.execute(call)
+            glyph = "✗" if result.is_error else "✓"
+            first_line = result.output.strip().splitlines()[0] if result.output.strip() else "(no output)"
+            summary = f"{glyph} {call.tool_name} · {first_line[:100]}"
+            logger.info("local tool %s ran error=%s chars=%d", call.tool_name, result.is_error, len(result.output))
+        await self._record_answer(call.interrupt_id, result.to_wire(), summary)
+
+    async def on_interrupt_answered(self, message: InterruptAnswered) -> None:
+        await self._record_answer(message.interrupt_id, message.response, message.summary)
+
+    async def _record_answer(self, interrupt_id: str, response: Any, summary: str) -> None:
+        prompt = self._open_prompts.pop(interrupt_id, None)
+        if prompt is not None:
+            prompt.settle(summary)
+        self._answers.append({"interruptId": interrupt_id, "response": response})
+        if self._open_prompts:
+            # More to answer; focus the next one.
+            next(iter(self._open_prompts.values())).focus()
+            return
+        answers, self._answers = self._answers, []
+        self.refresh_bindings()
+        await self._resume_turn(answers)
+
+    async def _resume_turn(self, answers: list[dict[str, Any]]) -> None:
+        if not isinstance(self._turn, AgentTurnController) or not self._turn.paused:
+            logger.warning("answers collected but no paused agent turn to resume")
+            return
+        pending = AssistantMessage(self._config.model_id)
+        await self.transcript.mount(pending)
+        self._pending = pending
+        self._flush_timer = self.set_interval(FLUSH_INTERVAL, self._turn.flush)
+        self.transcript.scroll_end(animate=False)
+        self._resume_stream(answers)
+
+    @work(exclusive=True, group="turn")
+    async def _resume_stream(self, answers: list[dict[str, Any]]) -> None:
+        assert isinstance(self._turn, AgentTurnController)
+        await self._turn.resume(answers)
+        self._log_layout_metrics()
 
     # -- turn lifecycle ------------------------------------------------------
 
@@ -397,6 +525,10 @@ class ChatScreen(Screen[None]):
         if not self._turn.busy:
             return
         self.workers.cancel_group(self, "turn")
+        for prompt in self._open_prompts.values():
+            prompt.settle("Cancelled")
+        self._open_prompts.clear()
+        self._answers.clear()
         await self._turn.cancel()
         self.notify("Turn cancelled.", severity="warning")
 
@@ -405,9 +537,12 @@ class ChatScreen(Screen[None]):
         if self._turn.busy:
             await self.action_cancel_turn()
         self._store.reset()
+        self._open_prompts.clear()
+        self._answers.clear()
+        self._executor.forget_all()
         await self.transcript.remove_children()
         self._tool_widgets.clear()
-        await self.transcript.mount(EmptyState(agent=self._agent_mode))
+        await self.transcript.mount(EmptyState(agent=self._agent_mode, local_tools=self._agent_mode and self._config.local_tools))
         self.status.set_turns(0)
         self.status.set_usage(None)
         self.status.set_state("Ready")
@@ -562,6 +697,7 @@ class ChatScreen(Screen[None]):
                 client_supplier=self._agent_supplier or self._agent_client_or_create,
                 max_tokens=self._config.max_tokens,
                 enabled_tools=self._enabled_tools,
+                client_tools=tool_specs() if self._config.local_tools else None,
             )
         return TurnController(
             self._store,

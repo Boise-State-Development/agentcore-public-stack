@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 import httpx
@@ -173,6 +173,8 @@ class AgentStreamClient:
         message: str,
         model_id: str | None,
         enabled_tools: Sequence[str] | None,
+        client_tools: Sequence[Mapping[str, Any]] | None = None,
+        interrupt_responses: Sequence[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """The `InvocationRequest` shape, relayed verbatim by app-api.
 
@@ -215,6 +217,15 @@ class AgentStreamClient:
             payload["temperature"] = self._config.temperature
         if enabled_tools is not None:
             payload["enabled_tools"] = list(enabled_tools)
+        if client_tools:
+            # Tools this terminal will run on the user's machine. The server
+            # builds one interrupting tool per spec; a call comes back as a
+            # `client_tool_call` event and is answered by a resume.
+            payload["client_tools"] = [dict(spec) for spec in client_tools]
+        if interrupt_responses:
+            # A resume: no new user message, the paused turn continues with
+            # these answers. Same shape as the SPA sends.
+            payload["interrupt_responses"] = [dict(entry) for entry in interrupt_responses]
         return payload
 
     def _map_error(self, response: httpx.Response, model_id: str) -> Exception:
@@ -256,8 +267,10 @@ class AgentStreamClient:
         message: str,
         model_id: str | None = None,
         enabled_tools: Sequence[str] | None = None,
+        client_tools: Sequence[Mapping[str, Any]] | None = None,
+        interrupt_responses: Sequence[Mapping[str, Any]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        """Yield parsed events for one agent turn.
+        """Yield parsed events for one agent turn, or for the resume of a paused one.
 
         HTTP-level failures raise the typed errors in
         :mod:`agentcore_tui.errors`. A failure *inside* the stream arrives as an
@@ -271,6 +284,8 @@ class AgentStreamClient:
             message=message,
             model_id=model_id,
             enabled_tools=enabled_tools,
+            client_tools=client_tools,
+            interrupt_responses=interrupt_responses,
         )
 
         logger.info(

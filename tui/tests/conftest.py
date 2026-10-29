@@ -23,6 +23,7 @@ import re
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 import pytest
@@ -142,6 +143,7 @@ class RecordingSink:
     notices: list[tuple[str, str, bool]] = field(default_factory=list)
     tools: list[ToolCallRecord] = field(default_factory=list)
     titles: list[str] = field(default_factory=list)
+    interrupts: list[Any] = field(default_factory=list)
 
     async def on_text(self, chunk: str) -> None:
         self.text += chunk
@@ -165,6 +167,9 @@ class RecordingSink:
 
     async def on_title(self, title: str) -> None:
         self.titles.append(title)
+
+    async def on_interrupt(self, event: Any) -> None:
+        self.interrupts.append(event)
 
     @property
     def state_labels(self) -> list[str]:

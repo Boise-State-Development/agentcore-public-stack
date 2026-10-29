@@ -43,11 +43,23 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Generic, Protocol, TypeVar
 
 from .client import AgentStreamClient, ApiConverseClient
-from .client.agent_events import AgentTurnAccumulator, ToolCallRecord
+from .client.agent_events import (
+    AgentNotice,
+    AgentStatus,
+    AgentTurnAccumulator,
+    BrowserLoginRequired,
+    ClientToolCall,
+    OAuthRequired,
+    SteeringApplied,
+    ToolApprovalRequired,
+    ToolCallRecord,
+    ToolGroupSummary,
+    UserQuestionRequired,
+)
 from .client.agent_events import Compaction as AgentCompaction
 from .client.agent_events import ErrorEvent as AgentErrorEvent
 from .client.agent_events import Metadata as AgentMetadata
@@ -66,6 +78,11 @@ logger = logging.getLogger(__name__)
 
 #: How often the screen should call :meth:`BaseTurnController.flush`.
 FLUSH_INTERVAL = 0.08
+
+
+#: Every way a turn can pause. The agent dialect's `complete()` reports each
+#: through `TurnSink.on_interrupt`; the api-converse dialect has none.
+InterruptEvent = OAuthRequired | ToolApprovalRequired | UserQuestionRequired | BrowserLoginRequired | ClientToolCall
 
 
 class TurnSink(Protocol):
@@ -101,6 +118,14 @@ class TurnSink(Protocol):
 
     async def on_title(self, title: str) -> None:
         """The server named this conversation. May arrive after the answer."""
+
+    async def on_interrupt(self, event: InterruptEvent) -> None:
+        """The turn paused and is waiting on the user.
+
+        The sink renders a prompt and, when the user has answered every
+        outstanding interrupt, calls :meth:`AgentTurnController.resume`. The
+        turn stays busy in between; nothing else may be sent on the session.
+        """
 
 
 ClientSupplier = Callable[[], ApiConverseClient]
@@ -266,8 +291,13 @@ class BaseTurnController(ABC, Generic[AccumulatorT]):
         """
         if not self._busy:
             return
-        logger.info("turn cancelled session=%s", self._store.session_id)
+        logger.info("turn cancelled session=%s paused=%s", self._store.session_id, self._is_paused())
         await self._sink.on_state("Stopping...", busy=True)
+        if self._is_paused():
+            # Nothing is generating; the server is holding a paused turn that a
+            # later resume could still pick up. Dropping it locally is enough.
+            await self.finish("Stopped")
+            return
         interrupted = await self._interrupt_server()
         if not interrupted:
             logger.debug("no server-side interrupt for this dialect, or it failed")
@@ -276,10 +306,17 @@ class BaseTurnController(ABC, Generic[AccumulatorT]):
     async def finish(self, state: str, *, error: bool = False) -> None:
         """Return to idle. Idempotent, because cancel and completion can race."""
         self._busy = False
+        self._reset_pause()
         self._accumulator = None
         self._text_buffer = ""
         self._reasoning_buffer = ""
         await self._sink.on_state(state, error=error)
+
+    def _reset_pause(self) -> None:
+        """Dialects that can pause override this; the base has nothing to clear."""
+
+    def _is_paused(self) -> bool:
+        return False
 
     # -- handlers shared by both dialects ------------------------------------
 
@@ -390,11 +427,17 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         client_supplier: AgentClientSupplier,
         max_tokens: int | None = None,
         enabled_tools: Sequence[str] | None = None,
+        client_tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         self._client_supplier = client_supplier
         # None means "every tool my role grants"; [] means "none". Passed
         # through untouched — see AgentStreamClient._payload.
         self._enabled_tools = enabled_tools
+        # Specs for tools this client executes, sent on every turn so the
+        # server's cached agent keeps a stable toolConfig. Empty: none offered.
+        self._client_tools: list[Mapping[str, Any]] = list(client_tools or [])
+        self._paused = False
+        self._pending_responses: list[Mapping[str, Any]] = []
         # The title can arrive as an event *or* only be visible on the finished
         # accumulator, and `complete()` checks the latter. Tracking it here stops
         # a turn that got the event from reporting the same title twice.
@@ -417,18 +460,68 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
             SessionTitle: self._handle_title,
             AgentCompaction: self._handle_compaction,
             AgentErrorEvent: self._handle_error_event,
+            AgentStatus: self._handle_status,
+            AgentNotice: self._handle_agent_notice,
+            ToolGroupSummary: self._handle_tool_summary,
+            SteeringApplied: self._handle_steering,
         }
 
     def _events(self, prompt: str) -> AsyncIterator[Any]:
+        if self._pending_responses:
+            # A resume. No new user message; the paused turn continues.
+            responses, self._pending_responses = self._pending_responses, []
+            return self._client_supplier().stream(
+                session_id=self._store.session_id,
+                message="",
+                enabled_tools=self._enabled_tools,
+                client_tools=self._client_tools or None,
+                interrupt_responses=responses,
+            )
         return self._client_supplier().stream(
             session_id=self._store.session_id,
             message=prompt,
             enabled_tools=self._enabled_tools,
+            client_tools=self._client_tools or None,
         )
+
+    # -- pausing and resuming ------------------------------------------------
+
+    @property
+    def paused(self) -> bool:
+        """True while the turn waits on an answer from the user."""
+        return self._paused
+
+    async def resume(self, responses: Sequence[Mapping[str, Any]]) -> None:
+        """Continue a paused turn with the user's answers.
+
+        ``responses`` is a list of ``{"interruptId": ..., "response": ...}``,
+        one per outstanding interrupt. Opens a new stream against the same
+        session and folds its events into a fresh accumulator; the text the
+        model produced before pausing was already stored by :meth:`complete`.
+        """
+        if not self._paused:
+            logger.warning("resume() called with no paused turn")
+            return
+        logger.info("turn resume session=%s interrupts=%d", self._store.session_id, len(responses))
+        self._paused = False
+        self._pending_responses = list(responses)
+        self._accumulator = self._new_accumulator()
+        self._text_buffer = ""
+        self._reasoning_buffer = ""
+        self._busy = True
+        await self._sink.on_state("Resuming...", busy=True)
+        await self.stream()
 
     async def _interrupt_server(self) -> bool:
         """``POST /sessions/{id}/interrupt`` — the real carrier of stop intent."""
         return await self._client_supplier().interrupt(self._store.session_id)
+
+    def _reset_pause(self) -> None:
+        self._paused = False
+        self._pending_responses = []
+
+    def _is_paused(self) -> bool:
+        return self._paused
 
     # -- handlers ------------------------------------------------------------
 
@@ -476,6 +569,31 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
     async def _handle_error_event(self, event: AgentErrorEvent) -> None:
         await self._sink.on_notice(event.message, error=True)
 
+    async def _handle_status(self, event: AgentStatus) -> None:
+        """Narrate the server's phase in the status bar; nothing is stored."""
+        match event.phase:
+            case "thinking":
+                await self._sink.on_state("Thinking...", busy=True)
+            case "preparing":
+                await self._sink.on_state("Preparing...", busy=True)
+            case "tool_start":
+                await self._sink.on_state(f"Running {event.tool_name or 'tool'}...", busy=True)
+            case "tool_end":
+                await self._sink.on_state("Thinking...", busy=True)
+            case _:
+                pass
+
+    async def _handle_agent_notice(self, event: AgentNotice) -> None:
+        if event.message:
+            await self._sink.on_notice(event.message)
+
+    async def _handle_tool_summary(self, event: ToolGroupSummary) -> None:
+        if event.summary:
+            await self._sink.on_notice(event.summary)
+
+    async def _handle_steering(self, event: SteeringApplied) -> None:
+        logger.info("steering applied entry=%s", event.entry_id)
+
     # -- finishing -----------------------------------------------------------
 
     async def complete(self, accumulator: AgentTurnAccumulator) -> None:  # noqa: C901 - one branch per way a turn ends
@@ -508,14 +626,25 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         # A paused turn is waiting for the user, not broken. Store whatever the
         # model said before pausing so the transcript is not silently lossy.
         if accumulator.interrupted:
-            logger.info("turn paused awaiting consent or approval")
+            logger.info("turn paused interrupts=%s", accumulator.interrupt_ids)
             if accumulator.text:
                 self._store.append_assistant(accumulator.text, reasoning=accumulator.reasoning, usage=accumulator.usage)
-            await self._sink.on_notice(
-                "This turn is paused: a tool needs your approval or a sign-in.",
-                hint="Continue this conversation in the web app — the terminal cannot present the consent screen.",
-            )
-            await self.finish("Paused")
+            # Stay busy: the session holds the paused turn and nothing else may
+            # be sent on it until `resume()`. The sink renders one prompt per
+            # interrupt and calls resume with every answer at once.
+            self._paused = True
+            self._text_buffer = ""
+            self._reasoning_buffer = ""
+            await self._sink.on_state("Waiting for you", busy=True)
+            interrupts: list[InterruptEvent] = [
+                *accumulator.client_tool_calls,
+                *accumulator.approvals_required,
+                *accumulator.questions_required,
+                *accumulator.oauth_required,
+                *accumulator.browser_logins_required,
+            ]
+            for interrupt in interrupts:
+                await self._sink.on_interrupt(interrupt)
             return
 
         if accumulator.ok:

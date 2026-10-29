@@ -200,6 +200,110 @@ class OAuthRequired(AgentEvent):
     interrupt_id: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class QuestionOption:
+    label: str
+    description: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class UserQuestion:
+    """One question in an ``ask_user_question`` prompt."""
+
+    header: str
+    question: str
+    options: tuple[QuestionOption, ...]
+    multi_select: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class UserQuestionRequired(AgentEvent):
+    """The agent asked structured questions and paused for the answers.
+
+    Answered by resuming with ``{"answers": {header: {"selected": [...],
+    "freeText": "..."}}}`` or ``{"skipped": true}``; the server's parser is
+    tolerant but those are the SPA's shapes.
+    """
+
+    interrupt_id: str
+    tool_use_id: str
+    questions: tuple[UserQuestion, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserLoginRequired(AgentEvent):
+    """The agent's browser hit a login page and wants the user to take over.
+
+    The live view is a browser-only affordance; the terminal reports it and
+    offers to skip, which is ``{"skipped": true}`` on resume.
+    """
+
+    interrupt_id: str
+    tool_use_id: str = ""
+    message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ClientToolCall(AgentEvent):
+    """The model called one of the tools *this client* declared.
+
+    The turn is paused until the client resumes with the result. See
+    :mod:`agentcore_tui.local_tools` for what runs and the approval that
+    precedes it.
+    """
+
+    interrupt_id: str
+    tool_use_id: str
+    tool_name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Informational events added by the server over time
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class AgentNotice(AgentEvent):
+    """An Agent (saved assistant) could not be honoured in full — a model or tool
+    it names is unavailable to this user. Worth a line in the transcript."""
+
+    message: str
+    unavailable_model_id: str = ""
+    unavailable_tools: tuple[str, ...] = ()
+    unavailable_skills: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AgentStatus(AgentEvent):
+    """A coarse phase transition the server narrates between frames:
+    ``thinking``, ``tool_start``, ``tool_end``, ``preparing``. Live state only;
+    the status bar shows it and nothing stores it."""
+
+    phase: str
+    tool_name: str = ""
+    tool_use_id: str = ""
+    cycle: int = 0
+    ok: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolGroupSummary(AgentEvent):
+    """A one-line summary of a batch of tool calls, generated after the fact."""
+
+    batch_id: str
+    tool_use_ids: tuple[str, ...]
+    summary: str
+
+
+@dataclass(frozen=True, slots=True)
+class SteeringApplied(AgentEvent):
+    """A mid-turn steering note the user typed was folded into the turn."""
+
+    entry_id: str
+    text: str
+
+
 # ---------------------------------------------------------------------------
 # RAG
 # ---------------------------------------------------------------------------
@@ -574,6 +678,85 @@ def parse_agent_event(name: str, data: str) -> AgentEvent:
                 interrupt_id=_first_str(payload, "interruptId", "interrupt_id"),
             )
 
+        case "user_question_required":
+            questions: list[UserQuestion] = []
+            for raw in payload.get("questions") or []:
+                if not isinstance(raw, dict):
+                    continue
+                options = tuple(
+                    QuestionOption(label=_as_str(o.get("label")), description=_as_str(o.get("description")))
+                    for o in raw.get("options") or []
+                    if isinstance(o, dict) and _as_str(o.get("label"))
+                )
+                if not options:
+                    continue
+                questions.append(
+                    UserQuestion(
+                        header=_as_str(raw.get("header")) or f"Q{len(questions) + 1}",
+                        question=_as_str(raw.get("question")),
+                        options=options,
+                        multi_select=bool(raw.get("multiSelect", raw.get("multi_select", False))),
+                    )
+                )
+            return UserQuestionRequired(
+                interrupt_id=_first_str(payload, "interruptId", "interrupt_id"),
+                tool_use_id=_first_str(payload, "toolUseId", "tool_use_id"),
+                questions=tuple(questions),
+            )
+
+        case "browser_login_required":
+            return BrowserLoginRequired(
+                interrupt_id=_first_str(payload, "interruptId", "interrupt_id"),
+                tool_use_id=_first_str(payload, "toolUseId", "tool_use_id"),
+                message=_as_str(payload.get("message")),
+            )
+
+        case "client_tool_call":
+            return ClientToolCall(
+                interrupt_id=_first_str(payload, "interruptId", "interrupt_id"),
+                tool_use_id=_first_str(payload, "toolUseId", "tool_use_id"),
+                tool_name=_first_str(payload, "toolName", "tool_name"),
+                arguments=_as_dict(payload.get("arguments")),
+            )
+
+        case "agent_notice":
+            return AgentNotice(
+                message=_as_str(payload.get("message")),
+                unavailable_model_id=_first_str(payload, "unavailableModelId", "unavailable_model_id"),
+                unavailable_tools=tuple(str(t) for t in payload.get("unavailableTools") or []),
+                unavailable_skills=tuple(str(t) for t in payload.get("unavailableSkills") or []),
+            )
+
+        case "agent_status":
+            ok = payload.get("ok")
+            return AgentStatus(
+                phase=_as_str(payload.get("phase")),
+                tool_name=_first_str(payload, "toolName", "tool_name"),
+                tool_use_id=_first_str(payload, "toolUseId", "tool_use_id"),
+                cycle=_as_int(payload.get("cycle")),
+                ok=ok if isinstance(ok, bool) else None,
+            )
+
+        case "tool_group_summary":
+            return ToolGroupSummary(
+                batch_id=_first_str(payload, "batchId", "batch_id"),
+                tool_use_ids=tuple(str(t) for t in payload.get("toolUseIds") or []),
+                summary=_as_str(payload.get("summary")),
+            )
+
+        case "steering_applied":
+            return SteeringApplied(
+                entry_id=_first_str(payload, "entryId", "entry_id"),
+                text=_as_str(payload.get("text")),
+            )
+
+        case "source_provenance" | "document_extraction":
+            # Provenance annotates claims in the rendered answer with their
+            # sources; extraction reports the server digesting an attachment.
+            # Both are rendered as inline affordances in the SPA that have no
+            # terminal equivalent, and neither changes the answer text.
+            return IgnoredEvent(name=resolved, reason="no terminal rendering")
+
         case "citation":
             return CitationEvent(
                 document_id=_first_str(payload, "documentId", "document_id"),
@@ -722,7 +905,12 @@ class AgentTurnAccumulator:
     quota_notices: list[AgentEvent] = field(default_factory=list)
     oauth_required: list[OAuthRequired] = field(default_factory=list)
     approvals_required: list[ToolApprovalRequired] = field(default_factory=list)
+    questions_required: list[UserQuestionRequired] = field(default_factory=list)
+    browser_logins_required: list[BrowserLoginRequired] = field(default_factory=list)
+    client_tool_calls: list[ClientToolCall] = field(default_factory=list)
     compactions: list[Compaction] = field(default_factory=list)
+    notices: list[AgentNotice] = field(default_factory=list)
+    tool_summaries: list[ToolGroupSummary] = field(default_factory=list)
 
     events_seen: dict[str, int] = field(default_factory=dict)
 
@@ -772,7 +960,23 @@ class AgentTurnAccumulator:
         A turn that stops here has no answer and is not an error: something has
         to be approved or authorized before it can continue.
         """
-        return bool(self.oauth_required or self.approvals_required)
+        return bool(
+            self.oauth_required or self.approvals_required or self.questions_required or self.browser_logins_required or self.client_tool_calls
+        )
+
+    @property
+    def interrupt_ids(self) -> list[str]:
+        """Every interrupt this turn paused on, in arrival order."""
+        ids: list[str] = []
+        for group in (
+            self.oauth_required,
+            self.approvals_required,
+            self.questions_required,
+            self.browser_logins_required,
+            self.client_tool_calls,
+        ):
+            ids.extend(event.interrupt_id for event in group if event.interrupt_id)  # type: ignore[attr-defined]
+        return ids
 
     @property
     def summarized_turns(self) -> int:
@@ -821,6 +1025,16 @@ class AgentTurnAccumulator:
                 self.approvals_required.append(event)
             case OAuthRequired():
                 self.oauth_required.append(event)
+            case UserQuestionRequired():
+                self.questions_required.append(event)
+            case BrowserLoginRequired():
+                self.browser_logins_required.append(event)
+            case ClientToolCall():
+                self.client_tool_calls.append(event)
+            case AgentNotice():
+                self.notices.append(event)
+            case ToolGroupSummary():
+                self.tool_summaries.append(event)
             case CitationEvent():
                 self.citations.append(event)
             case Metadata(usage=usage, context_window=window):

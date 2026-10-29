@@ -3649,6 +3649,55 @@ async def _build_turn_tools(
     )
 
 
+def _build_client_tools(input_data: InvocationRequest) -> list:
+    """Interrupting tools for the request's declared client tools, or []."""
+    if not input_data.client_tools:
+        return []
+    from apis.shared.client_tools import build_client_tools
+
+    return build_client_tools(input_data.client_tools)
+
+
+def _record_client_tools_on(agent, input_data: InvocationRequest) -> None:
+    snapshot = getattr(agent, "_construction_snapshot", None)
+    if isinstance(snapshot, dict) and input_data.client_tools:
+        snapshot["client_tools"] = json.dumps([spec.model_dump(by_alias=True) for spec in input_data.client_tools])
+
+
+def _client_tools_digest(input_data: InvocationRequest) -> str:
+    if not input_data.client_tools:
+        return ""
+    from apis.shared.client_tools import client_tools_digest
+
+    return client_tools_digest(input_data.client_tools)
+
+
+def _client_tools_from_snapshot(snapshot) -> Optional[list]:
+    """Rebuild the paused turn's client tools from its snapshot, or None."""
+    if not getattr(snapshot, "client_tools", None):
+        return None
+    from apis.shared.client_tools import ClientToolSpec, build_client_tools
+
+    try:
+        specs = [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)]
+    except Exception as e:  # noqa: BLE001 - a bad snapshot should miss, not 500
+        logger.warning("Paused-turn snapshot carries unreadable client_tools: %s", e)
+        return None
+    return build_client_tools(specs) or None
+
+
+def _client_tools_digest_from_snapshot(snapshot) -> str:
+    if not getattr(snapshot, "client_tools", None):
+        return ""
+    from apis.shared.client_tools import ClientToolSpec, client_tools_digest
+
+    try:
+        specs = [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)]
+    except Exception:  # noqa: BLE001
+        return ""
+    return client_tools_digest(specs)
+
+
 ResumeUnavailableReason = Literal["missing", "expired", "unknown_interrupt"]
 
 
@@ -4992,6 +5041,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 is_resume=True,
                 # A key dimension for non-web surfaces; replay the paused turn's.
                 client_surface=snapshot.client_surface or input_data.client_surface,
+                # Client-executed tools are the one injected family a resume
+                # MUST rebuild: Strands re-enters the paused tool body with the
+                # client's response, so the tool has to exist on the rebuilt
+                # agent or the resume fails. The specs ride the snapshot; the
+                # digest is replayed so the key lands on the paused agent.
+                extra_tools=_client_tools_from_snapshot(snapshot),
+                client_tools_digest=_client_tools_digest_from_snapshot(snapshot),
                 # The original turn's key carried whether the session had a
                 # readable document; the gate is monotonic, so re-asking it
                 # rebuilds the same key (an orphaned paused agent otherwise).
@@ -5097,6 +5153,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 turn_has_document=attachments.turn_has_document,
                 text_only_model=turn_model.text_only,
             )
+            # Client-executed tools (terminal only; the SPA never declares any).
+            # Key-described by construction: the digest is a cache-key element,
+            # so they do not veto caching the way an undescribed injected tool
+            # would. Appended last so the registry's and the other injected
+            # tools keep their positions in toolConfig.
+            client_tools = _build_client_tools(input_data)
+            client_tools_digest = _client_tools_digest(input_data)
+            if client_tools:
+                turn_tools.extra_tools = turn_tools.extra_tools + client_tools
             document_read_available = bool(turn_tools.document_tools)
             extracted_documents_section = _build_extracted_documents_section(
                 attachments.extracted_documents,
@@ -5134,7 +5199,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     # of the build was done: ~0 on a warm turn, its downloads on a
                     # conversation's first.
                     prelude.mark("agent_build.kb_full_context")
-                return await get_agent(
+                built_agent = await get_agent(
                     session_id=input_data.session_id,
                     user_id=user_id,
                     auth_token=auth_token,
@@ -5150,6 +5215,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     extra_tools=turn_tools.extra_tools,
                     is_resume=False,
                     client_surface=input_data.client_surface,
+                    client_tools_digest=client_tools_digest,
                     accessible_skill_ids=effective_skill_ids,
                     extra_tools_key_described=turn_tools.extra_tools_key_described,
                     has_document_tools=bool(turn_tools.document_tools),
@@ -5162,6 +5228,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     knowledge_context=knowledge_context,
                     memory_mode=turn_memory_mode,
                 )
+                if client_tools:
+                    # The paused-turn snapshot is written from this dict; a
+                    # resume rebuilds the client tools from it (see
+                    # `_client_tools_from_snapshot`). Same specs for a cache hit
+                    # by construction — the digest is in the key.
+                    _record_client_tools_on(built_agent, input_data)
+                return built_agent
 
             # Defer the build into the stream so it can be narrated.
             #

@@ -43,6 +43,7 @@ ENV_BASE_URL = "AGENTCORE_BASE_URL"
 ENV_API_KEY = "AGENTCORE_API_KEY"
 ENV_MODEL_ID = "AGENTCORE_MODEL_ID"
 ENV_BANNER = "AGENTCORE_BANNER"
+ENV_LOCAL_TOOLS = "AGENTCORE_LOCAL_TOOLS"
 
 
 #: Bedrock model IDs known to this codebase. These mirror the platform's own
@@ -101,6 +102,13 @@ class Config:
     banner: bool = False
     #: Set by ``--banner`` to replay it regardless of what state records.
     force_banner: bool = False
+    # -- local tools ---------------------------------------------------------
+    #: Offer the agent tools that run on this machine (shell commands, file
+    #: reads and writes). Every call is approved in the transcript before it
+    #: runs. Default *off* here for the same reason as ``banner``;
+    #: :func:`resolve_config` defaults it on, because a signed-in terminal with
+    #: no local tools is the web app with worse fonts.
+    local_tools: bool = False
     # -- credentials ---------------------------------------------------------
     #: Which credential this client will present. Resolved by
     #: :func:`resolve_config`; the dataclass default is NONE so a
@@ -322,6 +330,7 @@ def resolve_config(
     use_keyring: bool = True,
     banner: bool | None = None,
     force_banner: bool = False,
+    local_tools: bool | None = None,
     session_probe: SessionProbe | None = None,
 ) -> Config:
     """Merge every configuration source into a single :class:`Config`.
@@ -365,6 +374,14 @@ def resolve_config(
     if resolved_banner is None:
         resolved_banner = True
 
+    resolved_local_tools = local_tools
+    if resolved_local_tools is None:
+        resolved_local_tools = _as_bool(environ.get(ENV_LOCAL_TOOLS), ENV_LOCAL_TOOLS)
+    if resolved_local_tools is None:
+        resolved_local_tools = _as_bool(file_settings.get("local_tools"), "local_tools")
+    if resolved_local_tools is None:
+        resolved_local_tools = True
+
     return Config(
         base_url=resolved_base,
         api_key=resolved_key,
@@ -379,6 +396,7 @@ def resolve_config(
         keyring_unavailable_reason=keyring_reason,
         banner=resolved_banner or force_banner,
         force_banner=force_banner,
+        local_tools=resolved_local_tools,
         credential_source=resolve_source(
             base_url=resolved_base,
             api_key=resolved_key,

@@ -6,6 +6,7 @@ Contains Pydantic models for chat API requests and responses.
 import json
 from typing import Any, Dict, List, Optional
 
+from apis.shared.client_tools import ClientToolSpec, validate_client_tools
 from pydantic import BaseModel, Field, field_validator
 
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
@@ -144,6 +145,19 @@ class InvocationRequest(BaseModel):
     # NOTE: this is a *rendering capability* hint, not an authorization input.
     # Nothing downstream may grant or restrict access based on it.
     client_surface: Optional[str] = None
+    # Tools the *client* can execute on its own machine (a terminal running a
+    # shell command, reading a file). The server builds one interrupting tool
+    # per spec; the model's call pauses the turn with a `client_tool_call` SSE
+    # event, the client runs it and resumes with the result. Absent for every
+    # web turn — the SPA has nothing to execute. See `apis.shared.client_tools`.
+    client_tools: Optional[List[ClientToolSpec]] = None
+
+    @field_validator("client_tools")
+    @classmethod
+    def _bound_client_tools(cls, value: Optional[List[ClientToolSpec]]) -> Optional[List[ClientToolSpec]]:
+        # Count and duplicate checks live with the specs; a ValueError here is a
+        # 422 with the message, which is what a misbehaving client should see.
+        return validate_client_tools(value) or None
     # NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
     # AgentCore Runtime's internal 'assistant_id' field handling.
     # AgentCore Runtime returns 424 when it sees a non-empty 'assistant_id' field,

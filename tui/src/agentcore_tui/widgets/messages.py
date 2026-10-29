@@ -101,13 +101,21 @@ class EmptyState(Vertical):
     message.
     """
 
-    def __init__(self, *, agent: bool) -> None:
+    def __init__(self, *, agent: bool, local_tools: bool = False) -> None:
         super().__init__(id="empty-state")
         self._agent = agent
+        self._local_tools = local_tools
 
     def compose(self) -> ComposeResult:
         yield Static("AgentCore", classes="wordmark", markup=False)
-        if self._agent:
+        if self._agent and self._local_tools:
+            yield Static(
+                "Ask anything — tools, memory and your saved conversations are here.\n"
+                "The agent can also run commands and read or write files on this machine; you approve each one first.",
+                classes="tagline",
+                markup=False,
+            )
+        elif self._agent:
             yield Static("Ask anything — tools, memory and your saved conversations are here.", classes="tagline", markup=False)
         else:
             yield Static("Ask anything.", classes="tagline", markup=False)
