@@ -41,6 +41,7 @@ changed set rebuilds the agent rather than reusing one with stale tools.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -238,13 +239,29 @@ def build_client_tools(specs: Optional[List[ClientToolSpec]]) -> list:
 
 
 def _make_tool(spec: ClientToolSpec, strands_tool: Any, tool_context_type: Any) -> Any:
-    """Build one tool. A closure per spec so each carries its own name/schema."""
+    """Build one tool. A closure per spec so each carries its own name/schema.
+
+    Strands validates a call's input against the *Python signature* of the
+    decorated function (it builds a Pydantic model from the parameters), not
+    against the ``inputSchema`` passed to the decorator — that only shapes
+    what the model sees. A body declared as ``**arguments`` therefore rejected
+    every real call with "Field required: arguments" before the interrupt could
+    fire. The body is given one keyword-only parameter per schema property,
+    with ``Any`` annotations and defaults for the optional ones, so the
+    validator accepts exactly what the schema advertises.
+    """
+    properties = spec.input_schema.get("properties") or {}
+    required = set(spec.input_schema.get("required") or ())
+    names = [name for name in properties if isinstance(name, str) and name.isidentifier() and name != "tool_context"]
 
     def _run(tool_context: Any, **arguments: Any) -> Dict[str, Any]:
         tool_use = getattr(tool_context, "tool_use", None) or {}
         tool_use_id = tool_use.get("toolUseId", "")
-        # Strands passes the declared arguments as kwargs; take them all.
-        args = dict(arguments)
+        # Optional parameters the model left unset arrive as None (the
+        # synthesised default); drop them so the client sees only what was
+        # actually passed. A model that wants to send null explicitly cannot,
+        # but no declared schema here has a nullable argument.
+        args = {key: value for key, value in arguments.items() if value is not None}
         logger.info("Pausing for client tool %s tool_use_id=%s", spec.wire_name, tool_use_id)
         response = tool_context.interrupt(
             name=INTERRUPT_TYPE,
@@ -266,6 +283,12 @@ def _make_tool(spec: ClientToolSpec, strands_tool: Any, tool_context_type: Any) 
             "content": [{"text": result.output or "(no output)"}],
         }
 
+    parameters = [inspect.Parameter("tool_context", inspect.Parameter.KEYWORD_ONLY, annotation=tool_context_type)]
+    for name in names:
+        default = inspect.Parameter.empty if name in required else None
+        parameters.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=Any))
+    _run.__signature__ = inspect.Signature(parameters, return_annotation=Dict[str, Any])  # type: ignore[attr-defined]
+    _run.__annotations__ = {"tool_context": tool_context_type, **{name: Any for name in names}, "return": Dict[str, Any]}
     _run.__name__ = spec.wire_name
     _run.__doc__ = f"{spec.description}\n\nRuns on the user's own machine; the user is asked before it executes."
 
