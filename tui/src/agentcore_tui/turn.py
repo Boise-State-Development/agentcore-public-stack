@@ -426,6 +426,26 @@ class TurnController(BaseTurnController[TurnAccumulator]):
         )
 
 
+def refusal_hint(event: AgentErrorEvent, *, in_project: bool) -> str:
+    """A next step for a server refusal, in this client's own vocabulary.
+
+    The server's message says *what* (the project is archived, the agent is
+    gone, you lack access); it points at web-app affordances for *what next*.
+    Here the next step is a slash command. Only unrecoverable refusals get a
+    hint; a recoverable error's own text already says to retry.
+    """
+    if event.recoverable or event.code.upper() != "FORBIDDEN":
+        return ""
+    text = event.message.casefold()
+    if "archived" in text:
+        return "Read it with /conversations; `/project off` or pick another with /project to keep chatting."
+    if in_project and ("no longer exists" in text or "isn't available" in text or "not available" in text):
+        return "The project may have been deleted or you removed from it. `/project off` leaves it; /project picks another."
+    if in_project:
+        return "`/project off` leaves this project; /project picks another."
+    return ""
+
+
 class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
     """The ``/chat/stream`` dialect: the tool-using agent.
 
@@ -502,6 +522,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
                 message="",
                 enabled_tools=self._enabled_tools,
                 client_tools=self._client_tools or None,
+                assistant_id=self._assistant_id,
                 continue_truncated=True,
             )
         if self._pending_responses:
@@ -512,6 +533,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
                 message="",
                 enabled_tools=self._enabled_tools,
                 client_tools=self._client_tools or None,
+                assistant_id=self._assistant_id,
                 interrupt_responses=responses,
             )
         uploads, self._pending_uploads = self._pending_uploads, []
@@ -521,7 +543,20 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
             enabled_tools=self._enabled_tools,
             client_tools=self._client_tools or None,
             file_upload_ids=uploads or None,
+            assistant_id=self._assistant_id,
         )
+
+    @property
+    def _assistant_id(self) -> str | None:
+        """The Agent this conversation is bound to: a project's harness, or None.
+
+        Read from the store on every request rather than captured at
+        construction, so adopting a project conversation from the list, or
+        leaving a project, takes effect on the next turn without rebuilding
+        the controller.
+        """
+        binding = self._store.project
+        return binding.harness_agent_id if binding else None
 
     # -- attachments ---------------------------------------------------------
 
@@ -647,7 +682,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         logger.info("compaction summarized=%s", event.summarized_turns)
 
     async def _handle_error_event(self, event: AgentErrorEvent) -> None:
-        await self._sink.on_notice(event.message, error=True)
+        await self._sink.on_notice(event.message, hint=refusal_hint(event, in_project=self._store.project is not None), error=True)
 
     async def _handle_status(self, event: AgentStatus) -> None:
         """Narrate the server's phase in the status bar; nothing is stored."""

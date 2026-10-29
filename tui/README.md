@@ -199,6 +199,7 @@ lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
 | `/tools` | Choose which server tools the agent may use (signed in) |
 | `/tools local on\|off` | Switch tools that run on this machine for the session |
 | `/conversations [search]` | Browse, open, rename (`r`) or delete saved conversations |
+| `/project [name\|off\|info]` | Run conversations in a Shared Project: pick one, name one, leave, or see its details |
 | `/attach <path>` | Upload a file and send it with your next message |
 | `/continue` | Let an answer that hit the token limit carry on |
 | `/stop` | Stop the turn in flight |
@@ -284,6 +285,24 @@ banner = true
 `api_key` in this file is honoured for environments with no keyring, but the
 client warns on startup because it is plain text on disk. `agentcore-tui login`
 never writes it there.
+
+### Projects
+
+`/project` lists the Shared Projects you own or belong to (Mine, then Shared
+with me, with your role and the owner). Choosing one binds *new*
+conversations to the project: its instructions, model, tools, skills,
+knowledge and memory apply, exactly as in the web app, and the status bar
+shows `⌂ <name>`. `/project grants` binds by name without the picker;
+`/project off` leaves; `/project info` describes the current one.
+
+A conversation belongs to its project for life — the server refuses to rebind
+one that has started — so switching projects mid-conversation starts a new
+one. `/new` inside a project starts another conversation in the same project.
+`/conversations` badges project conversations with `⌂ <name>`, and opening
+one rebinds automatically.
+
+Managing a project (members, instructions, files, memory, schedules) stays in
+the web app; the terminal is for working inside one.
 
 ### Local tools
 

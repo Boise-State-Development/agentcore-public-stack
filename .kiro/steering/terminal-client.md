@@ -185,6 +185,26 @@ The bus-address rejoin lives in **`/etc/profile.d/`**, not `~/.bashrc`:
 returns early for exactly that. The Dockerfile's pre-existing `~/.bashrc` PATH
 block has the same latent problem.
 
+## Projects: one wire fact, four places it must hold
+
+A project conversation is an ordinary session whose **every** turn carries
+`rag_assistant_id = project.harnessAgentId`. The server binds the session to
+that Agent on the first turn and answers 400 ("Cannot change assistants
+mid-session") if a later turn sends a different one or none. The TUI keeps
+the binding in `ConversationStore.project` (a `ProjectBinding`), and
+`AgentTurnController._assistant_id` reads it on *every* request rather than
+capturing it at construction, so adopting a project conversation from
+`/conversations` or leaving with `/project off` takes effect without a
+controller rebuild. `reset()` keeps the binding (`/new` in a project stays in
+the project); `adopt()` replaces it with whatever the opened conversation has,
+using the session's own `preferences.assistantId` when the project itself is
+not listable.
+
+`GET /projects` answering 404 means the feature is off for the deployment;
+`CatalogClient.projects()` returns None and the command says so. Refusals
+arrive as a `FORBIDDEN` error event with `recoverable=false`; the server's
+text says *what*, `turn.refusal_hint` adds *what next* in slash-command terms.
+
 ## The agent is told it is in a terminal
 
 `client_surface: "terminal"` on every `/chat/stream` turn
@@ -300,11 +320,11 @@ tui/src/agentcore_tui/
 │                     ApiKeyAuth/SessionAuth), device_auth.py (CLI sign-in),
 │                     converse.py + events.py (api-converse),
 │                     agent_stream.py + agent_events.py (the agent)
-├── screens/          chat.py, model_picker.py, splash.py
+├── screens/          chat.py, model_picker.py, project_picker.py, conversations.py, splash.py
 └── widgets/          transcript messages, composer, status bar
 ```
 
-758 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+788 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.

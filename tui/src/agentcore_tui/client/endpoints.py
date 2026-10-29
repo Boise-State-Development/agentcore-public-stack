@@ -156,6 +156,17 @@ class Endpoints:
         """ "Conversation modes" in the web UI. Selected by ``selected_prompt_id``."""
         return self._join("system-prompts/")
 
+    # -- projects ------------------------------------------------------------
+
+    @property
+    def projects(self) -> str:
+        """Shared Projects the caller owns or is a member of. 404 while the
+        feature is switched off on the deployment."""
+        return self._join("projects")
+
+    def project(self, project_id: str) -> str:
+        return f"{self.projects}/{quote(project_id, safe='')}"
+
     # -- chat helpers --------------------------------------------------------
 
     @property

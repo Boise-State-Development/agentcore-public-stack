@@ -28,7 +28,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
 
-from ..client.catalog import CatalogClient, ConversationSummary, HistoryMessage
+from ..client.catalog import Project, CatalogClient, ConversationSummary, HistoryMessage
 from ..errors import AgentCoreTuiError
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,9 @@ CatalogSupplier = Callable[[], CatalogClient]
 
 #: Called with the chosen conversation and its restored messages. The caller
 #: owns the store, so it decides what "open" means to the rest of the app.
-OpenHandler = Callable[[ConversationSummary, list[HistoryMessage]], Awaitable[None]]
+#: ``(summary, messages, project)``: the project is resolved when the
+#: conversation belongs to one the user can still see, else None.
+OpenHandler = Callable[[ConversationSummary, list[HistoryMessage], "Project | None"], Awaitable[None]]
 
 
 def group_for(timestamp: str, *, now: datetime | None = None) -> str:
@@ -159,8 +161,9 @@ class RenameConversation(ModalScreen[str | None]):
 class ConversationRow(ListItem):
     """One conversation. Holds its summary so actions need no lookup."""
 
-    def __init__(self, summary: ConversationSummary) -> None:
+    def __init__(self, summary: ConversationSummary, *, project_name: str | None = None) -> None:
         super().__init__(classes="conversation-row")
+        self._project_name = project_name
         self.summary = summary
 
     def compose(self) -> ComposeResult:
@@ -180,7 +183,8 @@ class ConversationRow(ListItem):
             counts = "empty"
         context = f" · {self.summary.context_percent}% of context" if self.summary.context_percent is not None else ""
         when = _relative_day(self.summary.last_message_at)
-        meta = " · ".join(part for part in (when, counts + context) if part)
+        project = f"⌂ {escape(self._project_name)}" if self._project_name else ""
+        meta = " · ".join(part for part in (project, when, counts + context) if part)
         text = f"{marker}{escape(self.summary.title)}\n  [dim]{meta}[/]"
         if self.summary.snippet:
             text += f"\n  [dim]…{escape(self.summary.snippet.strip())}…[/]"
@@ -223,6 +227,10 @@ class ConversationList(Screen[None]):
         self._rows: list[ConversationSummary] = []
         self._next_token: str | None = None
         self._busy = False
+        #: Projects by id, for the row badge and for rebinding on open. Loaded
+        #: once with the first page; empty when the feature is off or the
+        #: fetch failed, in which case rows simply carry no badge.
+        self._projects: dict[str, Project] = {}
         #: Current filter text; empty shows every loaded row.
         self._filter = (initial_query or "").strip()
         #: Rows from a server search, shown instead of the loaded page.
@@ -275,6 +283,7 @@ class ConversationList(Screen[None]):
             if reset:
                 self._rows = []
                 self._next_token = None
+                await self._load_projects()
             page = await self._catalog_supplier().conversations(next_token=self._next_token)
         except AgentCoreTuiError as exc:
             self.status.update(f"{exc.message} — {exc.hint}" if exc.hint else exc.message)
@@ -286,6 +295,21 @@ class ConversationList(Screen[None]):
         self._rows.extend(item for item in page.items if isinstance(item, ConversationSummary))
         self._next_token = page.next_token
         await self._rebuild()
+
+    async def _load_projects(self) -> None:
+        """Best effort: a list without project names is still a usable list."""
+        try:
+            projects = await self._catalog_supplier().projects()
+        except AgentCoreTuiError as exc:
+            logger.info("project names unavailable for the conversation list: %s", exc)
+            return
+        self._projects = {p.project_id: p for p in projects or []}
+
+    def project_for(self, summary: ConversationSummary) -> Project | None:
+        """The project a row belongs to, when it is one the user can see."""
+        if not summary.project_id:
+            return None
+        return self._projects.get(summary.project_id)
 
     def _visible_rows(self) -> list[ConversationSummary]:
         if self._search_results is not None:
@@ -317,7 +341,8 @@ class ConversationList(Screen[None]):
                 continue
             await self.list_view.append(GroupHeading(heading))
             for summary in group:
-                await self.list_view.append(ConversationRow(summary))
+                project = self.project_for(summary)
+                await self.list_view.append(ConversationRow(summary, project_name=project.name if project else None))
 
         # Land on the first conversation, not the heading above it, so Enter
         # opens something straight away. Focus moves to the list only when the
@@ -416,7 +441,7 @@ class ConversationList(Screen[None]):
         # Best-effort, like the web app: a failed read receipt must not stop a
         # conversation from opening.
         await self._catalog_supplier().mark_read(summary.session_id)
-        await self._on_open(summary, messages)
+        await self._on_open(summary, messages, self.project_for(summary))
         self.dismiss(None)
 
     @work

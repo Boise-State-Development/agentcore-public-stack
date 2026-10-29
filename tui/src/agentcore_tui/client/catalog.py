@@ -213,6 +213,11 @@ class ConversationSummary:
     last_turn_continuable: bool = False
     #: Only set on search results: the text around the match.
     snippet: str = ""
+    #: The Agent this conversation is bound to, if any (``preferences.assistantId``).
+    #: For a project conversation this is the project's harness.
+    assistant_id: str | None = None
+    #: The Shared Project this conversation belongs to (``preferences.projectId``).
+    project_id: str | None = None
 
     @property
     def context_percent(self) -> int | None:
@@ -223,6 +228,9 @@ class ConversationSummary:
 
     @classmethod
     def from_wire(cls, payload: dict[str, Any]) -> ConversationSummary:
+        preferences = payload.get("preferences") or {}
+        if not isinstance(preferences, dict):
+            preferences = {}
         return cls(
             session_id=str(payload.get("sessionId", "")),
             title=str(payload.get("title") or "Untitled"),
@@ -234,7 +242,65 @@ class ConversationSummary:
             context_tokens=payload.get("lastContextTokens"),
             context_window=payload.get("contextWindow"),
             last_turn_continuable=bool(payload.get("lastTurnContinuable", False)),
+            assistant_id=_optional_str(preferences.get("assistantId")),
+            project_id=_optional_str(preferences.get("projectId")),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Project:
+    """A Shared Project as ``GET /projects`` describes it to this user.
+
+    A project's chat behaviour (instructions, model, tools, skills, knowledge,
+    memory) lives in a hidden Agent called the *harness*; a conversation
+    joins the project by binding to ``harness_agent_id`` on its first turn.
+    Everything else here is for display.
+    """
+
+    project_id: str
+    name: str
+    harness_agent_id: str
+    description: str = ""
+    owner_email: str = ""
+    owner_name: str | None = None
+    #: The caller's role: ``owner``, ``editor`` or ``viewer``.
+    role: str = "viewer"
+    #: ``active`` or ``archived``. An archived project is read-only; a new
+    #: turn in it is refused by the server.
+    status: str = "active"
+    member_count: int = 0
+    updated_at: str = ""
+
+    @property
+    def mine(self) -> bool:
+        return self.role == "owner"
+
+    @property
+    def archived(self) -> bool:
+        return self.status != "active"
+
+    @property
+    def owner_label(self) -> str:
+        return self.owner_name or self.owner_email
+
+    @classmethod
+    def from_wire(cls, payload: dict[str, Any]) -> Project:
+        return cls(
+            project_id=str(payload.get("projectId", "")),
+            name=str(payload.get("name") or "Untitled project"),
+            harness_agent_id=str(payload.get("harnessAgentId", "")),
+            description=str(payload.get("description") or ""),
+            owner_email=str(payload.get("ownerEmail") or ""),
+            owner_name=_optional_str(payload.get("ownerName")),
+            role=str(payload.get("role") or "viewer"),
+            status=str(payload.get("status") or "active"),
+            member_count=int(payload.get("memberCount") or 0),
+            updated_at=str(payload.get("updatedAt") or ""),
+        )
+
+
+def _optional_str(value: Any) -> str | None:
+    return str(value) if value else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,6 +576,27 @@ class CatalogClient:
     async def system_prompts(self) -> list[SystemPromptOption]:
         payload = await self._get(self._endpoints.system_prompts)
         return [SystemPromptOption.from_wire(item) for item in _items(payload, "prompts")]
+
+    async def projects(self) -> list[Project] | None:
+        """Projects the user owns or belongs to, or None when the deployment
+        has Projects switched off (the route answers 404 then).
+
+        Active projects first, then archived; within each, the user's own
+        before shared ones, then by name — the order the picker shows.
+        """
+        try:
+            payload = await self._get(self._endpoints.projects)
+        except ApiError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        projects = [Project.from_wire(item) for item in _items(payload, "projects")]
+        projects.sort(key=lambda p: (p.archived, not p.mine, p.name.casefold()))
+        return projects
+
+    async def project(self, project_id: str) -> Project:
+        """One project. 404 maps to ApiError; the caller decides what that means."""
+        return Project.from_wire(await self._get(self._endpoints.project(project_id)))
 
     # -- preferences ---------------------------------------------------------
 

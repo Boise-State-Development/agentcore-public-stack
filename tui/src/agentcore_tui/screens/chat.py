@@ -28,10 +28,10 @@ from textual.widgets import Footer, Header
 
 from ..client import AgentStreamClient, ApiConverseClient
 from ..client.agent_events import ToolCallRecord
-from ..client.catalog import CatalogClient, ConversationSummary, HistoryMessage, Model
+from ..client.catalog import CatalogClient, ConversationSummary, HistoryMessage, Model, Project
 from ..client.auth import SessionAuth
 from ..config import Config, config_path, load_session_from_keyring
-from ..conversation import ConversationStore, Message
+from ..conversation import ConversationStore, Message, ProjectBinding
 from ..credentials import CredentialSource
 from ..errors import AgentCoreTuiError, ConfigError
 from ..local_tools import ApprovalDecision, LocalToolResult, ToolExecutor, tool_specs
@@ -58,6 +58,7 @@ from ..widgets.prompts import (
 )
 from .conversations import ConversationList
 from .model_picker import ModelChoice, ModelPicker
+from .project_picker import ProjectPicker
 from ..commands import COMMANDS, SlashCommand
 from ..widgets.command_menu import CommandMenu
 from .tool_picker import ToolPicker
@@ -552,6 +553,8 @@ class ChatScreen(Screen[None]):
                 await self._tools_command(argument)
             case "conversations":
                 self.action_conversations(argument or None)
+            case "project":
+                await self._project_command(argument)
             case "attach":
                 await self._attach_file(argument)
             case "copy":
@@ -579,6 +582,118 @@ class ChatScreen(Screen[None]):
                 await self.app.action_quit()
             case _:  # pragma: no cover - test_commands keeps this unreachable
                 raise AssertionError(f"registered command without a handler: {command.name}")
+
+    async def _project_command(self, argument: str) -> None:
+        """`/project` picks; `/project <name>` binds by name; `off` leaves; `info` describes."""
+        if not self._agent_mode:
+            self.notify("Projects need a signed-in session. Run `agentcore-tui login --sso`.", severity="warning", timeout=8)
+            return
+        word = argument.strip()
+        if word.lower() in {"off", "none", "leave"}:
+            await self._apply_project(None)
+            return
+        if word.lower() == "info":
+            await self._show_project_info()
+            return
+        projects = await self._load_projects()
+        if projects is None:
+            return
+        if word:
+            needle = word.casefold()
+            matches = [p for p in projects if needle in p.name.casefold()]
+            exact = [p for p in matches if p.name.casefold() == needle]
+            if exact:
+                matches = exact
+            if len(matches) == 1:
+                await self._apply_project(matches[0])
+                return
+            if not matches:
+                self.notify(f"No project matching {word!r}.", severity="warning", timeout=6)
+            else:
+                self.notify(
+                    "Several projects match: " + ", ".join(p.name for p in matches[:6]) + ". Be more specific.",
+                    severity="warning",
+                    timeout=8,
+                )
+            return
+        self.action_choose_project(projects)
+
+    async def _load_projects(self) -> list[Project] | None:
+        """The user's projects, or None after telling the user why not."""
+        try:
+            projects = await self._catalog_or_create().projects()
+        except AgentCoreTuiError as exc:
+            await self.transcript.mount(Notice(f"Could not load projects: {exc.message}", hint=exc.hint, error=True))
+            self.transcript.scroll_end(animate=False)
+            return None
+        if projects is None:
+            self.notify("Projects aren't enabled on this deployment.", severity="warning", timeout=8)
+            return None
+        return projects
+
+    @work
+    async def action_choose_project(self, projects: list[Project]) -> None:
+        current = self._store.project.project_id if self._store.project else None
+        chosen = await self.app.push_screen_wait(ProjectPicker(projects, current=current))
+        if chosen is None:
+            return  # cancelled: nothing changes
+        await self._apply_project(chosen if isinstance(chosen, Project) else None)
+
+    async def _apply_project(self, project: Project | None) -> None:
+        """Bind subsequent conversations to a project (or to none).
+
+        The server binds a conversation to its Agent on the first turn and
+        refuses to change it afterwards, so a change mid-conversation starts a
+        new one — the same thing the web app does when you open a project.
+        """
+        current = self._store.project
+        if project is None and current is None:
+            self.notify("Not in a project.", timeout=4)
+            return
+        if project is not None and current is not None and current.project_id == project.project_id:
+            self.notify(f"Already in {project.name}.", timeout=4)
+            return
+        if self._turn.busy:
+            self.notify("Wait for the current turn to finish first.", severity="warning", timeout=5)
+            return
+        binding = ProjectBinding(project.project_id, project.name, project.harness_agent_id) if project else None
+        if not self._store.is_empty:
+            await self.action_new_conversation()
+        self._store.bind_project(binding)
+        self.status.set_project(binding.name if binding else None)
+        if binding is None:
+            self.notify("Left the project. New conversations run on the default agent.", timeout=6)
+        else:
+            note = f"New conversations run in {binding.name}: its instructions, model, tools and knowledge apply."
+            if project is not None and project.archived:
+                note += " This project is archived, so the server will refuse new turns until it is restored."
+            self.notify(note, timeout=8)
+        self.composer.focus()
+
+    async def _show_project_info(self) -> None:
+        binding = self._store.project
+        if binding is None:
+            self.notify("Not in a project. `/project` picks one.", timeout=5)
+            return
+        try:
+            project = await self._catalog_or_create().project(binding.project_id)
+        except AgentCoreTuiError as exc:
+            await self.transcript.mount(Notice(f"Could not load {binding.name}: {exc.message}", hint=exc.hint, error=True))
+            self.transcript.scroll_end(animate=False)
+            return
+        lines = [
+            f"Project   {project.name}" + ("  (archived)" if project.archived else ""),
+            f"Owner     {project.owner_label}",
+            f"Your role {project.role}",
+            f"Members   {project.member_count + 1}",
+        ]
+        if project.description:
+            lines.append(f"About     {project.description}")
+        lines.append("")
+        lines.append("Its instructions, model, tools, skills, knowledge and memory apply to conversations here.")
+        lines.append("Members, files and memory are managed in the web app.")
+        await self.transcript.mount(Notice("\n".join(lines)))
+        self.transcript.scroll_end(animate=False)
 
     async def _tools_command(self, argument: str) -> None:
         """`/tools` opens the server-tool picker; `/tools local on|off` is the local switch.
@@ -818,7 +933,7 @@ class ChatScreen(Screen[None]):
         """Clear the conversation, keeping the configured model."""
         if self._turn.busy:
             await self.action_cancel_turn()
-        self._store.reset()
+        self._store.reset()  # keeps the project binding; /project off leaves
         self._open_prompts.clear()
         self._answers.clear()
         self._executor.forget_all()
@@ -907,7 +1022,7 @@ class ChatScreen(Screen[None]):
             return
         await self.app.push_screen_wait(ConversationList(self._catalog_or_create, on_open=self._adopt_conversation, initial_query=query))
 
-    async def _adopt_conversation(self, summary: ConversationSummary, messages: list[HistoryMessage]) -> None:
+    async def _adopt_conversation(self, summary: ConversationSummary, messages: list[HistoryMessage], project: Project | None = None) -> None:
         """Replace the transcript with a stored conversation.
 
         The store's id changes with its contents, so the next turn continues the
@@ -926,7 +1041,18 @@ class ChatScreen(Screen[None]):
                 restored.append(Message(role="user", content=message.text))
             elif message.role == "assistant" and message.text.strip():
                 restored.append(Message(role="assistant", content=message.text, reasoning=message.reasoning))
-        self._store.adopt(summary.session_id, restored, title=summary.title)
+        # A project conversation stays in its project: the server will refuse a
+        # turn that drops or changes the binding, so the harness id travels
+        # with the history. The name is for the status bar; the harness id
+        # from the project record is preferred, the session's own stored
+        # assistantId is the fallback when the project is not listable.
+        binding: ProjectBinding | None = None
+        if project is not None:
+            binding = ProjectBinding(project.project_id, project.name, project.harness_agent_id)
+        elif summary.project_id and summary.assistant_id:
+            binding = ProjectBinding(summary.project_id, "project", summary.assistant_id)
+        self._store.adopt(summary.session_id, restored, title=summary.title, project=binding)
+        self.status.set_project(binding.name if binding else None)
 
         await self.transcript.remove_children()
         self._tool_widgets.clear()

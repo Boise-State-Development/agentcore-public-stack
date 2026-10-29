@@ -77,11 +77,11 @@ class ModelAccessDeniedError(ApiError):
 class BadRequestError(ApiError):
     """400 — the request was malformed or rejected by content policy."""
 
-    def __init__(self, message: str = "The request was rejected as invalid") -> None:
+    def __init__(self, message: str = "The request was rejected as invalid", *, hint: str | None = None) -> None:
         super().__init__(
             message,
             status_code=400,
-            hint="Check the model ID is correct and that the prompt does not violate content policy.",
+            hint=hint if hint is not None else "Check the model ID is correct and that the prompt does not violate content policy.",
         )
 
 

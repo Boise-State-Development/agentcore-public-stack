@@ -74,6 +74,7 @@ class StatusBar(Horizontal):
     def __init__(self) -> None:
         super().__init__(id="status-bar")
         self._model_id = ""
+        self._project = ""
         self._state = "Ready"
         self._usage_text = ""
         self._turns = 0
@@ -100,6 +101,8 @@ class StatusBar(Horizontal):
 
     def _meta_text(self) -> str:
         segments: list[str] = []
+        if self._project:
+            segments.append(f"⌂ {self._project}")
         if self._model_id:
             segments.append(short_model(self._model_id))
         if self._turns:
@@ -126,6 +129,11 @@ class StatusBar(Horizontal):
     def _tick(self) -> None:
         self._spinner_index = (self._spinner_index + 1) % len(SPINNER_FRAMES)
         self._state_widget.update(self._state_text())
+
+    def set_project(self, name: str | None) -> None:
+        """Name of the Shared Project the conversation runs in; None for none."""
+        self._project = name or ""
+        self.refresh_line()
 
     def set_model(self, model_id: str) -> None:
         self._model_id = model_id

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from .chat import ChatScreen
 from .model_picker import ModelPicker
+from .project_picker import ProjectPicker
 from .splash import Splash
 
-__all__ = ["ChatScreen", "ModelPicker", "Splash"]
+__all__ = ["ChatScreen", "ModelPicker", "ProjectPicker", "Splash"]

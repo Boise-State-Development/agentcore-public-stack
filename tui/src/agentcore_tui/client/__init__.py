@@ -13,6 +13,7 @@ from .auth import ApiKeyAuth, AuthProvider, NoAuth, SessionAuth
 from .catalog import (
     CatalogClient,
     ConversationSummary,
+    Project,
     HistoryMessage,
     Model,
     Page,
@@ -50,6 +51,7 @@ __all__ = [
     "Model",
     "HistoryMessage",
     "ConversationSummary",
+    "Project",
     "CatalogClient",
     "ApiConverseClient",
     "ApiKeyAuth",

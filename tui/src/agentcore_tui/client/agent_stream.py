@@ -177,6 +177,7 @@ class AgentStreamClient:
         interrupt_responses: Sequence[Mapping[str, Any]] | None = None,
         continue_truncated: bool = False,
         file_upload_ids: Sequence[str] | None = None,
+        assistant_id: str | None = None,
     ) -> dict[str, Any]:
         """The `InvocationRequest` shape, relayed verbatim by app-api.
 
@@ -236,6 +237,13 @@ class AgentStreamClient:
             # Files already uploaded to the session (`/attach`); the server
             # resolves them from S3 and hands them to the model with this turn.
             payload["file_upload_ids"] = list(file_upload_ids)
+        if assistant_id:
+            # Binds the conversation to an Agent — for a Shared Project, its
+            # harness. Sent on every turn, as the SPA does: the server validates
+            # it against the session's stored binding and rejects a change with
+            # 400. The field is `rag_assistant_id` because the AgentCore Runtime
+            # 424s on a request carrying `assistant_id`.
+            payload["rag_assistant_id"] = assistant_id
         return payload
 
     def _map_error(self, response: httpx.Response, model_id: str) -> Exception:
@@ -264,6 +272,14 @@ class AgentStreamClient:
             case 429:
                 return RateLimitedError(detail or "Rate limit or quota exceeded", retry_after=_retry_after(response))
             case 400 | 422:
+                if "change assistants mid-session" in (detail or "").casefold():
+                    # The server binds a conversation to its Agent on the first
+                    # turn; this client tried to continue one under a different
+                    # project (or none). `/new` inside the project is the fix.
+                    return BadRequestError(
+                        "This conversation belongs to a different project (or to none).",
+                        hint="Start a new conversation with /new, or open the right one with /conversations.",
+                    )
                 return BadRequestError(detail or "The request was rejected as invalid")
             case _:
                 return UpstreamError(detail or f"Server returned HTTP {response.status_code}")
@@ -281,6 +297,7 @@ class AgentStreamClient:
         interrupt_responses: Sequence[Mapping[str, Any]] | None = None,
         continue_truncated: bool = False,
         file_upload_ids: Sequence[str] | None = None,
+        assistant_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Yield parsed events for one agent turn, or for the resume of a paused one.
 
@@ -300,6 +317,7 @@ class AgentStreamClient:
             interrupt_responses=interrupt_responses,
             continue_truncated=continue_truncated,
             file_upload_ids=file_upload_ids,
+            assistant_id=assistant_id,
         )
 
         logger.info(

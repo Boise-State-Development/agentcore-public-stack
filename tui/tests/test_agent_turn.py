@@ -96,7 +96,14 @@ class TestRequestShape:
         await run(controller, "what is 2+2")
 
         assert client.stream_calls == [
-            {"session_id": store.session_id, "message": "what is 2+2", "enabled_tools": None, "client_tools": None, "file_upload_ids": None}
+            {
+                "session_id": store.session_id,
+                "message": "what is 2+2",
+                "enabled_tools": None,
+                "client_tools": None,
+                "file_upload_ids": None,
+                "assistant_id": None,
+            }
         ]
 
     async def test_a_tool_selection_is_passed_through(self) -> None:

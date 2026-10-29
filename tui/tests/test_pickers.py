@@ -222,8 +222,16 @@ class TestGrouping:
 # ---------------------------------------------------------------------------
 
 
-def session_wire(session_id: str, title: str, *, last: str = "2026-08-08T11:00:00Z", unread: bool = False) -> dict[str, Any]:
-    return {
+def session_wire(
+    session_id: str,
+    title: str,
+    *,
+    last: str = "2026-08-08T11:00:00Z",
+    unread: bool = False,
+    project_id: str | None = None,
+    assistant_id: str | None = None,
+) -> dict[str, Any]:
+    wire: dict[str, Any] = {
         "sessionId": session_id,
         "title": title,
         "status": "active",
@@ -231,6 +239,26 @@ def session_wire(session_id: str, title: str, *, last: str = "2026-08-08T11:00:0
         "lastMessageAt": last,
         "messageCount": 2,
         "unread": unread,
+    }
+    if project_id or assistant_id:
+        wire["preferences"] = {"projectId": project_id, "assistantId": assistant_id}
+    return wire
+
+
+def project_wire(project_id: str, name: str, *, role: str = "owner", status: str = "active", harness: str | None = None) -> dict[str, Any]:
+    return {
+        "projectId": project_id,
+        "name": name,
+        "description": "",
+        "ownerEmail": "owner@example.edu",
+        "ownerName": "Pat Owner",
+        "role": role,
+        "status": status,
+        "editorsManageMembers": True,
+        "memberCount": 3,
+        "harnessAgentId": harness or f"harness-{project_id}",
+        "createdAt": "2026-08-01T00:00:00Z",
+        "updatedAt": "2026-08-08T00:00:00Z",
     }
 
 
@@ -240,11 +268,17 @@ def routing_handler(
     next_token: str | None = None,
     messages: list[dict[str, Any]] | None = None,
     capture: list[httpx.Request] | None = None,
+    projects: list[dict[str, Any]] | None = None,
+    projects_status: int = 200,
 ) -> Any:
     def handler(request: httpx.Request) -> httpx.Response:
         if capture is not None:
             capture.append(request)
         path = request.url.path
+        if path.endswith("/projects"):
+            if projects_status != 200:
+                return httpx.Response(projects_status, json={"detail": "nope"})
+            return httpx.Response(200, json={"projects": projects or []})
         if path.endswith("/messages"):
             return httpx.Response(200, json={"messages": messages or [], "nextToken": None})
         if path.endswith("/sessions"):
@@ -266,9 +300,11 @@ class Opened:
 
     def __init__(self) -> None:
         self.calls: list[tuple[ConversationSummary, list[HistoryMessage]]] = []
+        self.projects: list[object] = []
 
-    async def __call__(self, summary: ConversationSummary, messages: list[HistoryMessage]) -> None:
+    async def __call__(self, summary: ConversationSummary, messages: list[HistoryMessage], project: object = None) -> None:
         self.calls.append((summary, messages))
+        self.projects.append(project)
 
 
 class TestConversationList:

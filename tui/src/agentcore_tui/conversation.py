@@ -74,6 +74,20 @@ class Message:
         return replace(self, usage=usage)
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectBinding:
+    """Which Shared Project a conversation runs in.
+
+    ``harness_agent_id`` is what the wire needs (``rag_assistant_id`` on every
+    turn); ``name`` is what the status bar shows. Kept together so neither can
+    be set without the other.
+    """
+
+    project_id: str
+    name: str
+    harness_agent_id: str
+
+
 class ConversationStore:
     """Owns one conversation.
 
@@ -83,12 +97,13 @@ class ConversationStore:
     letting callers poll.
     """
 
-    __slots__ = ("_messages", "_session_id", "_title")
+    __slots__ = ("_messages", "_project", "_session_id", "_title")
 
     def __init__(self, *, session_id: str | None = None, title: str | None = None) -> None:
         self._session_id = session_id or new_session_id()
         self._title = title
         self._messages: list[Message] = []
+        self._project: ProjectBinding | None = None
 
     # -- identity ------------------------------------------------------------
 
@@ -165,19 +180,48 @@ class ConversationStore:
 
     # -- lifecycle -----------------------------------------------------------
 
-    def reset(self) -> str:
+    # -- project binding -----------------------------------------------------
+
+    @property
+    def project(self) -> ProjectBinding | None:
+        """The Shared Project this conversation runs in, if any."""
+        return self._project
+
+    def bind_project(self, binding: ProjectBinding | None) -> None:
+        """Run this conversation in a project (or in none).
+
+        Only meaningful before the first turn: the server binds a session to an
+        Agent on its first message and refuses to change it afterwards. The
+        screen enforces that; the store just holds the fact.
+        """
+        self._project = binding
+
+    def reset(self, *, keep_project: bool = True) -> str:
         """Start a fresh conversation, returning the new session id.
 
         A new id rather than a cleared list: the old conversation may already be
         persisted server-side under the previous id, and reusing it would append
         to it.
+
+        The project binding survives by default: ``/new`` inside a project starts
+        another conversation in that project, which is what the web app's
+        project page does. ``/project off`` is how you leave.
         """
         self._messages.clear()
         self._title = None
         self._session_id = new_session_id()
+        if not keep_project:
+            self._project = None
         return self._session_id
 
-    def adopt(self, session_id: str, messages: Sequence[Message], *, title: str | None = None) -> None:
+    def adopt(
+        self,
+        session_id: str,
+        messages: Sequence[Message],
+        *,
+        title: str | None = None,
+        project: ProjectBinding | None = None,
+    ) -> None:
         """Become an existing server-side conversation.
 
         The counterpart to :meth:`reset`: that one walks away from a
@@ -190,3 +234,4 @@ class ConversationStore:
         self._session_id = session_id
         self._messages = list(messages)
         self._title = title or None
+        self._project = project

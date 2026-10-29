@@ -46,6 +46,7 @@ rather than reproducing that hierarchy.
 | Read / unread | `POST /sessions/{id}/read` \| `/unread` | ✅ done |
 | Skills | `GET /skills/`, `PUT /skills/preferences` | ❌ |
 | Conversation modes | `GET /system-prompts/` → `selected_prompt_id` | ❌ |
+| Shared Projects (chat in one) | `GET /projects`, `GET /projects/{id}`, `rag_assistant_id = harnessAgentId` on every turn, `preferences.projectId` on sessions | ✅ `/project [name\|off\|info]`; picker (Mine / Shared with me); status-bar badge; `/conversations` badge + rebind on open; gate refusals carry slash-command hints. Management surfaces (members, instructions, memory, schedules, outputs) deliberately web-only |
 | File attachments | `POST /files/presign` → PUT → `POST /files/{id}/complete` | ✅ `/attach <path>`; `file_upload_ids` on the next turn |
 | Title generation | `POST /chat/generate-title` | ✅ client done, not yet auto-fired |
 | Sampling overrides | `inference_params` | ❌ |

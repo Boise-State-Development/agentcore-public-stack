@@ -161,6 +161,28 @@ async def chat_scenes(out: Path, theme: str | None = None) -> None:
         (out / "05-model-picker.svg").write_text(app.export_screenshot())
         app.pop_screen()
 
+        from agentcore_tui.client.catalog import Project
+        from agentcore_tui.screens.project_picker import ProjectPicker
+
+        def _project(pid: str, name: str, role: str = "owner", status: str = "active", owner: str = "You") -> Project:
+            return Project(project_id=pid, name=name, harness_agent_id=f"h-{pid}", role=role, status=status, owner_name=owner, member_count=4)
+
+        app.push_screen(
+            ProjectPicker(
+                [
+                    _project("p1", "Grants FY27"),
+                    _project("p2", "Course redesign — CS 121"),
+                    _project("p3", "Accreditation evidence", role="editor", owner="Dana Reyes"),
+                    _project("p4", "Library chatbot pilot", role="viewer", owner="Sam Okafor"),
+                    _project("p5", "Old budget model", status="archived"),
+                ],
+                current="p2",
+            )
+        )
+        await pilot.pause()
+        (out / "05b-project-picker.svg").write_text(app.export_screenshot())
+        app.pop_screen()
+
         tools = [
             Tool(
                 tool_id="web_search", name="Web search", description="Search the web with Tavily", category="Research", status="active", enabled=True
