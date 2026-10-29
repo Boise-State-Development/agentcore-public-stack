@@ -75,7 +75,7 @@ export class ConversationRewindService {
 }
 
 /** The server's own explanation for a refusal, which is written for the user. */
-function rewindErrorMessage(error: unknown): string {
+export function rewindErrorMessage(error: unknown): string {
   if (error instanceof HttpErrorResponse) {
     const detail = (error.error as { detail?: unknown } | null)?.detail;
     if (typeof detail === 'string' && detail && error.status !== 500) return detail;

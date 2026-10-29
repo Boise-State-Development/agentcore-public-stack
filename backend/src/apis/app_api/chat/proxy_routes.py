@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import session_prewarm_enabled
+from apis.shared.feature_flags import session_fork_enabled, session_prewarm_enabled
 from apis.shared.harness.runner import (
     apply_runtime_session_header,
     build_invocations_url,
@@ -216,15 +216,30 @@ async def chat_stream(
     # otherwise relays verbatim. Read-only and best-effort: a body that isn't
     # JSON, or carries no session_id, simply goes unpinned rather than failing
     # the turn — schema validation still belongs to inference-api.
+    #
+    # A fork pins to the conversation its family started from instead
+    # (`affinity_session_id`, rewind/fork spec §7): its first turn starts from
+    # the parent's live history, which exists only in the parent's container,
+    # and later turns stay there so they never fall back to a stored copy that
+    # lacks the long-term-memory context the cached prefix was written with.
+    # Client-supplied and safe to be: the hash includes the user, so a body can
+    # only choose among that user's own containers, and the Runtime checks the
+    # fork relation on the session row before it uses anything it finds there.
     session_id: Optional[str] = None
+    affinity_id: Optional[str] = None
     try:
         parsed = json.loads(body)
         if isinstance(parsed, dict):
             raw = parsed.get("session_id")
             session_id = raw if isinstance(raw, str) and raw else None
+            pinned = parsed.get("affinity_session_id")
+            affinity_id = pinned if isinstance(pinned, str) and pinned else None
     except (ValueError, TypeError):
         logger.debug("chat proxy: body is not JSON; skipping runtime-session pinning")
-    apply_runtime_session_header(headers, session_id, current_user.user_id)
+    if affinity_id is not None and session_id is not None and session_fork_enabled():
+        apply_runtime_session_header(headers, affinity_id, current_user.user_id)
+    else:
+        apply_runtime_session_header(headers, session_id, current_user.user_id)
 
     # Forward OAuth2CallbackUrl when the SPA supplies it. Inference-api's
     # AgentCoreContextMiddleware reads this header to scope the on-tool
@@ -424,6 +439,9 @@ class PrewarmRequest(BaseModel):
     """The conversation to warm: the id the SPA will send its first turn with."""
 
     session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    # A fork's turns run in its root conversation's microVM (see the chat
+    # proxy), so that is the one to warm.
+    affinity_session_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class _PrewarmLedger:
@@ -528,10 +546,11 @@ async def chat_prewarm(
     if not runtime_session_affinity_enabled():
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "skipped"})
 
-    outcome = _prewarm_ledger.admit(current_user.user_id, body.session_id, time.monotonic())
+    warm_id = body.affinity_session_id if body.affinity_session_id and session_fork_enabled() else body.session_id
+    outcome = _prewarm_ledger.admit(current_user.user_id, warm_id, time.monotonic())
     if outcome == "accepted":
         task = asyncio.create_task(
-            _forward_prewarm(body.session_id, current_user.user_id, current_user.raw_token)
+            _forward_prewarm(warm_id, current_user.user_id, current_user.raw_token)
         )
         _prewarm_tasks.add(task)
         task.add_done_callback(_prewarm_tasks.discard)

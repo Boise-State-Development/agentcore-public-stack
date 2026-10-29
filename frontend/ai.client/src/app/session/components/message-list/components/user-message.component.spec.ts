@@ -6,6 +6,7 @@ import { LocalSettingsService } from '../../../../services/local-settings.servic
 import type { Message } from '../../../services/models/message.model';
 import { FailedSendService } from '../../../services/chat/failed-send.service';
 import { ConversationRewindService } from '../../../services/session/conversation-rewind.service';
+import { ConversationForkService } from '../../../services/session/conversation-fork.service';
 
 /**
  * The "Show more" affordance on a user bubble is driven by ONE measurement of
@@ -243,5 +244,47 @@ describe('UserMessageComponent — rewind', () => {
     expect(rewindButton(await render(sent(), { enabled: false }))).toBeNull();
     expect(rewindButton(await render(sent({ steering: true })))).toBeNull();
     expect(rewindButton(await render(sent({ sendFailure: { reason: 'x' } })))).toBeNull();
+  });
+});
+
+describe('UserMessageComponent — fork', () => {
+  async function render(message: Message, { enabled = true, canFork = true } = {}) {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const forker = {
+      enabled,
+      canFork: vi.fn().mockReturnValue(canFork),
+      fork: vi.fn().mockResolvedValue('child'),
+      pendingMessageId: signal<string | null>(null),
+    };
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [UserMessageComponent],
+      providers: [
+        { provide: LocalSettingsService, useValue: { showDebugOutput: signal(false) } },
+        { provide: ConversationForkService, useValue: forker },
+      ],
+    })
+      .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+    const fixture = TestBed.createComponent(UserMessageComponent);
+    fixture.componentRef.setInput('message', message);
+    fixture.detectChanges();
+    return { el: fixture.nativeElement as HTMLElement, forker };
+  }
+
+  const sent: Message = { id: 'msg-s1-2', role: 'user', content: [{ type: 'text', text: 'again' }] };
+  const forkButton = (el: HTMLElement) =>
+    el.querySelector('button[aria-label="Fork from here"]') as HTMLButtonElement | null;
+
+  it('offers "Fork from here" and hands the message to the fork service', async () => {
+    const { el, forker } = await render(sent);
+
+    forkButton(el)!.click();
+    expect(forker.fork).toHaveBeenCalledWith(expect.objectContaining({ id: 'msg-s1-2' }));
+  });
+
+  it('is disabled while it cannot run and absent with the flag off', async () => {
+    expect(forkButton((await render(sent, { canFork: false })).el)?.disabled).toBe(true);
+    expect(forkButton((await render(sent, { enabled: false })).el)).toBeNull();
   });
 });

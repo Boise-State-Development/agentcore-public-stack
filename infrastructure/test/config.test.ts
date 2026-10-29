@@ -905,6 +905,26 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Session fork feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SESSION_FORK_ENABLED;
+    });
+
+    test('defaults to disabled, and an unset GitHub variable stays off', () => {
+      delete process.env.CDK_SESSION_FORK_ENABLED;
+      expect(loadConfig(app).sessionFork.enabled).toBe(false);
+      process.env.CDK_SESSION_FORK_ENABLED = '';
+      expect(loadConfig(app).sessionFork.enabled).toBe(false);
+    });
+
+    test('only "true" turns it on', () => {
+      process.env.CDK_SESSION_FORK_ENABLED = ' TRUE ';
+      expect(loadConfig(app).sessionFork.enabled).toBe(true);
+      process.env.CDK_SESSION_FORK_ENABLED = 'yes';
+      expect(loadConfig(app).sessionFork.enabled).toBe(false);
+    });
+  });
+
   describe('Session rewind feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_SESSION_REWIND_ENABLED;

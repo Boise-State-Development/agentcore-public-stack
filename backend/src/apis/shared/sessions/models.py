@@ -549,6 +549,34 @@ class SessionRewindRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class SessionForkRequest(BaseModel):
+    """Request body for POST /sessions/{id}/fork: the user message to fork from."""
+
+    message_id: str = Field(
+        min_length=1,
+        max_length=512,
+        alias="messageId",
+        description="The user message to fork from, as `msg-{sessionId}-{index}`. The fork holds everything before it",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SessionForkResponse(BaseModel):
+    """Result of a fork: the new session, and the message's text for its composer."""
+
+    session_id: str = Field(..., alias="sessionId")
+    title: str
+    prefill_text: str = Field(..., alias="prefillText")
+    root_session_id: str = Field(
+        ...,
+        alias="rootSessionId",
+        description="The conversation this family of forks started from. The SPA sends it as `affinity_session_id` on the fork's turns so they run in the container where the parent's history is warm",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class SessionRewindResponse(BaseModel):
     """Result of a rewind."""
 
@@ -676,6 +704,16 @@ class SessionMetadataResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     session_id: str = Field(..., alias="sessionId", description="Session identifier")
+    root_session_id: Optional[str] = Field(
+        None,
+        alias="rootSessionId",
+        description="Set on a fork: the conversation its family started from, which its turns pin their container to (rewind/fork spec §7)",
+    )
+    forked_from: Optional[Dict[str, Any]] = Field(
+        None,
+        alias="forkedFrom",
+        description="Set on a fork: {sessionId, messageIndex, cut, parentRewindEpoch}",
+    )
     title: str = Field(..., description="Session title")
     status: Literal["active", "archived", "deleted"] = Field(..., description="Session status")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")

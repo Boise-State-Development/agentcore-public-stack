@@ -1,7 +1,8 @@
 # Conversation rewind and fork
 
-**Status:** Rewind (§4–§6, delivery PRs 1 and 2) built behind `SESSION_REWIND_ENABLED` /
-`features.sessionRewind`, default off. Fork (§7) not built. Spec written 2026-10-03 against `develop` @ `ac4212a7`.
+**Status:** Rewind (§4–§6) and fork (§7) built, delivery PRs 1–4, behind `SESSION_REWIND_ENABLED` /
+`features.sessionRewind` and `SESSION_FORK_ENABLED` / `features.sessionFork`, both default off. Spec
+written 2026-10-03 against `develop` @ `ac4212a7`.
 
 **As built (2026-10-29), where it differs from the text below:**
 - The restore filter runs inside `TurnBasedSessionManager.list_messages`, only while the SDK's restore
@@ -14,6 +15,19 @@
   logical cut (`cuts`) so several rewinds before a send apply as one.
 - Measured on dev: the first call after a warm rewind was a `hit` that read the same 12,651 tokens the
   rewound turn had read and wrote 28; its row carried `rewound: true` and `wastedUsd` 0.
+- **Fork resolves §2.3 for the warm case without a sidecar (§9 Q1 stays open for cold restores).**
+  The copy is verbatim and written with `extractionMode="SKIP"`, so §7.2's re-extraction question
+  does not arise. The child records `forkedFrom` (with the parent's rewind epoch) and `rootSessionId`,
+  and the SPA sends `affinity_session_id` on the fork's turns, so app-api pins them to the root's
+  microVM (still per user). There, `_seed_forked_conversation` starts the fork's first turn from a
+  deep copy of the parent's *live* list, LTM context included, when the coordinates line up
+  (same live offset, same rewind epoch, same turn structure); otherwise it keeps the stored copy.
+  Later turns stay in that microVM, so they never fall back to the lossy restore. The first cost row
+  carries `forkedFrom` and `forkSeeded`. Measured on dev: the fork's first call was a `hit` reading the
+  parent's full 12,650-token prefix and writing 28, and its second read 12,678. That run had no LTM
+  context; the seed's handling of it is pinned by `test_fork_seed.py`.
+- Fork not built: copying session files (§7.1), tool summaries and UI resources, sidebar "Forked from"
+  provenance, and `rootSessionId` offload bucketing.
 - Not yet built: the Undo toast (§4.4), hiding Rewind on summarized messages (the endpoint refuses
   them with 409 and the SPA shows the reason), `rewindMissCount` / `rewindUsd` rollups (§6, the row
   flag is written), and the smoke-matrix rows (§8.1).

@@ -4303,9 +4303,18 @@ class StreamCoordinator:
                 # metadata writer compares it with the previous call's to stamp
                 # `rewound`, which explains the history re-write a rewind past
                 # the cache TTL causes, the way `agentSwitched` explains a mention.
-                rewind_epoch = getattr(getattr(agent, "session_manager", None), "_rewind_epoch", 0)
+                turn_session_manager = getattr(agent, "session_manager", None)
+                rewind_epoch = getattr(turn_session_manager, "_rewind_epoch", 0)
                 if isinstance(rewind_epoch, int) and rewind_epoch > 0:
                     metadata_kwargs["rewindEpoch"] = rewind_epoch
+                # A fork's first call says where it came from and whether its
+                # history was seeded from the parent's live list (a cache hit is
+                # possible) or restored from the stored copy (it is not), so the
+                # spec's warm/cold claim is a row query. Consumed once.
+                fork_marker = getattr(turn_session_manager, "_pending_fork_marker", None)
+                if isinstance(fork_marker, dict) and fork_marker:
+                    metadata_kwargs.update(fork_marker)
+                    turn_session_manager._pending_fork_marker = None
                 # Shared Projects: which project this call is billed to. The metadata
                 # writer reads it back to bump PROJECT#{id}/COST#{YYYY-MM}.
                 if turn_project_id:

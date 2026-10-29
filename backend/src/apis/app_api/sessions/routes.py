@@ -13,6 +13,8 @@ from apis.shared.sessions.models import (
     SessionSteerResponse,
     SessionRewindRequest,
     SessionRewindResponse,
+    SessionForkRequest,
+    SessionForkResponse,
     SessionMetadataResponse,
     SessionMetadata,
     SessionPreferences,
@@ -57,6 +59,7 @@ from apis.shared.feature_flags import (
     mid_turn_steering_enabled,
     browser_takeover_enabled,
     session_rewind_enabled,
+    session_fork_enabled,
 )
 from apis.shared.auth.models import User
 from apis.shared.system_prompts.service import get_system_prompts_service
@@ -1022,6 +1025,47 @@ async def rewind_session_endpoint(
         prefill_text=result.prefill_text,
         rewound_message_ids=result.rewound_message_ids,
         epoch=result.epoch,
+    )
+
+
+@router.post("/{session_id}/fork", response_model=SessionForkResponse, response_model_by_alias=True)
+async def fork_session_endpoint(
+    session_id: str,
+    body: SessionForkRequest,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Start a new conversation from everything before one of the user's messages.
+
+    The parent is untouched (rewind/fork spec §7). The new session holds a
+    verbatim copy of the parent's visible history before the message, written
+    without long-term extraction, and the message's text comes back as
+    ``prefillText``. ``rootSessionId`` is what the SPA pins the fork's turns
+    to, so the first one starts from the parent's live history and reads the
+    shared prefix from the prompt cache. 404 while ``SESSION_FORK_ENABLED`` is
+    off (checked after authentication); 409 for a message the compaction
+    summary covers or one a rewind hid.
+    """
+    if not session_fork_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    logger.info("POST /sessions/.../fork")
+
+    from .services.fork_service import fork_session
+    from .services.rewind_service import RewindRefused
+
+    try:
+        result = await fork_session(session_id, current_user.user_id, body.message_id)
+    except RewindRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except Exception:
+        logger.error("Error forking a session", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fork the conversation")
+
+    return SessionForkResponse(
+        session_id=result.session_id,
+        title=result.title,
+        prefill_text=result.prefill_text,
+        root_session_id=result.root_session_id,
     )
 
 

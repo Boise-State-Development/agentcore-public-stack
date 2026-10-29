@@ -19,6 +19,7 @@ import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import { FailedSendService } from '../../../services/chat/failed-send.service';
 import { ConversationRewindService } from '../../../services/session/conversation-rewind.service';
+import { ConversationForkService } from '../../../services/session/conversation-fork.service';
 import { TooltipDirective } from '../../../../components/tooltip';
 import { parseIso } from '../../../../utils/date';
 
@@ -28,11 +29,17 @@ function isImageMimeType(mimeType: string): boolean {
 
 const MAX_HEIGHT_PX = 200;
 
+/**
+ * A branch: one line splitting into two. Heroicons has no fork glyph, so this
+ * is drawn on its 24px outline grid, at its stroke width, to sit beside them.
+ */
+const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path stroke-linecap="round" stroke-linejoin="round" d="M6 7v1.5A3.5 3.5 0 0 0 9.5 12h5A3.5 3.5 0 0 0 18 8.5V7M12 12v5"/></svg>`;
+
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon, TooltipDirective],
-  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft })],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft, appFork: FORK_ICON })],
   template: `
     @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
       <div class="group relative flex w-full flex-col items-end gap-2">
@@ -163,11 +170,12 @@ const MAX_HEIGHT_PX = 200;
           sent-at subtitle; opacity only, so it stays in the tab order and
           group-focus-within can reveal it for a keyboard user.
         -->
-        @if (showRewind()) {
+        @if (showRewind() || showFork()) {
           <div
             class="flex items-center gap-1 pr-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
-            [class.opacity-100]="rewinding()"
+            [class.opacity-100]="rewinding() || forking()"
           >
+            @if (showRewind()) {
             <button
               type="button"
               class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
@@ -180,6 +188,23 @@ const MAX_HEIGHT_PX = 200;
             >
               <ng-icon name="heroArrowUturnLeft" class="size-4" aria-hidden="true" />
             </button>
+            }
+            <!-- Fork (rewind/fork spec §7): a new conversation from everything
+                 before this message; this one stays as it is. -->
+            @if (showFork()) {
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              appTooltip="Fork from here"
+              appTooltipPosition="top"
+              aria-label="Fork from here"
+              [attr.aria-busy]="forking() ? 'true' : null"
+              [disabled]="!canFork()"
+              (click)="fork()"
+            >
+              <ng-icon name="appFork" class="size-4" aria-hidden="true" />
+            </button>
+            }
           </div>
         }
       </div>
@@ -224,6 +249,21 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
 
   rewind(): void {
     void this.rewinder.rewind(this.message());
+  }
+
+  private forker = inject(ConversationForkService);
+
+  showFork = computed(() => {
+    const message = this.message();
+    return this.forker.enabled && !message.steering && !message.sendFailure && message.id.startsWith('msg-');
+  });
+
+  canFork = computed(() => this.forker.canFork(this.message()));
+
+  forking = computed(() => this.forker.pendingMessageId() === this.message().id);
+
+  fork(): void {
+    void this.forker.fork(this.message());
   }
 
   readonly maxHeightPx = MAX_HEIGHT_PX;

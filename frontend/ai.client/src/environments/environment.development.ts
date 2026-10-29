@@ -25,5 +25,6 @@ export const environment = {
         sourceProvenance: true,
         documentExtract: false,
         sessionRewind: false,
+        sessionFork: false,
     } satisfies FeatureFlags,
 };

@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { ConfigService } from '../../../services/config.service';
 import { FEATURES } from '../../../services/features';
+import { SessionAffinityService } from './session-affinity.service';
 
 /**
  * Starts a conversation's AgentCore Runtime session before its next send.
@@ -45,6 +46,12 @@ export class SessionPrewarmService {
 
   private readonly http = inject(HttpClient);
   private readonly config = inject(ConfigService);
+  private readonly affinity = inject(SessionAffinityService);
+
+  private affinityBody(sessionId: string): { affinity_session_id?: string } {
+    const root = this.affinity.affinityFor(sessionId);
+    return root ? { affinity_session_id: root } : {};
+  }
   private readonly features = inject(FEATURES);
   private readonly document = inject(DOCUMENT);
   private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
@@ -158,7 +165,8 @@ export class SessionPrewarmService {
     this.http
       .post(
         `${this.config.appApiUrl()}/chat/prewarm`,
-        { session_id: sessionId },
+        // A fork warms the microVM its turns pin to: its root's.
+        { session_id: sessionId, ...this.affinityBody(sessionId) },
         { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) },
       )
       .subscribe({

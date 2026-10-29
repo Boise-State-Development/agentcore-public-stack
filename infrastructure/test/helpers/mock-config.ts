@@ -187,6 +187,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     sessionRewind: {
       enabled: false,
     },
+    sessionFork: {
+      enabled: false,
+    },
     clientTurnTiming: {
       enabled: false,
     },

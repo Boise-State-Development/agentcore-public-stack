@@ -169,6 +169,8 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "modelSwitched",
     "rewound",
     "rewindEpoch",
+    "forkedFrom",
+    "forkSeeded",
     "turnAgentId",
     "prefixFingerprints",
     "contextWindow",

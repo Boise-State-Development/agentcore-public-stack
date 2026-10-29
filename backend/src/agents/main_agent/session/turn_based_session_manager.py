@@ -40,6 +40,7 @@ from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 
 from agents.main_agent.config.constants import Defaults, EnvVars
 from apis.shared.observability.build_stages import mark_stage
+from apis.shared.sessions.fork import ForkOrigin
 from apis.shared.sessions.rewind import RewindState
 
 from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
@@ -346,6 +347,13 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # handed to the compaction re-read that follows so the two share one
         # GSI query. Consumed once.
         self._stashed_session_row: Any = _NO_STASHED_ROW
+        # The row as the restore read it, kept for the one reader that needs it
+        # after compaction has consumed the stash: a fork's first-turn seed
+        # (``fork_origin``). None when the restore did not read the row.
+        self._restore_row: Optional[Dict] = None
+        # Set by the fork seed on a fork's first build, consumed by the first
+        # cost row: ``{"forkedFrom": <parent id>, "forkSeeded": bool}`` (spec §6).
+        self._pending_fork_marker: Optional[Dict[str, Any]] = None
 
         # Log initialization
         if compaction_config and compaction_config.enabled:
@@ -685,13 +693,17 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         if limit is None:
             self._restored_physical_count = offset + len(messages)
 
-        from apis.shared.feature_flags import session_rewind_enabled
+        from apis.shared.feature_flags import session_fork_enabled, session_rewind_enabled
 
-        if not session_rewind_enabled():
+        rewind_on = session_rewind_enabled()
+        if not rewind_on and not session_fork_enabled():
             return messages
         row = self._read_session_row()
         # The compaction load right after this restore reads the same row.
         self._stashed_session_row = row
+        self._restore_row = row
+        if not rewind_on:
+            return messages
         state = RewindState.from_row(row)
         self._rewind_epoch = state.epoch
         if not state.active:
@@ -702,6 +714,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             state.epoch, len(messages) - len(kept), len(messages),
         )
         return kept
+
+    def fork_origin(self) -> Optional[ForkOrigin]:
+        """Where this session was forked from, as its restore read it; None if not a fork."""
+        return ForkOrigin.from_row(self._restore_row)
 
     def read_session(self, session_id: str, **kwargs: Any) -> Any:
         """The SDK's session read, preceded by a build-stage mark.

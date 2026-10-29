@@ -107,6 +107,14 @@ describe('buildAppApiEnvironment — session rewind', () => {
   });
 });
 
+describe('buildAppApiEnvironment — session fork', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SESSION_FORK_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ sessionFork: { enabled: true } }), stubParams());
+    expect(on.SESSION_FORK_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — folder sync', () => {
   it('forwards the flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).FOLDER_SYNC_ENABLED).toBe('false');

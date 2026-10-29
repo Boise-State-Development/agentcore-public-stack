@@ -110,4 +110,14 @@ export interface FeatureFlags {
    * until a deployment turns both sides on.
    */
   sessionRewind: boolean;
+
+  /**
+   * Conversation fork (docs/specs/conversation-rewind-and-fork.md §7): a user
+   * message offers "Fork from here", which starts a new conversation holding
+   * everything before it, with its text in the new composer. The parent stays
+   * as it is. Backend: SESSION_FORK_ENABLED (app-api's `POST /sessions/{id}/fork`
+   * 404s while off; the Runtime seeds the fork's first turn from the parent's
+   * live history). In development, so `false` everywhere.
+   */
+  sessionFork: boolean;
 }

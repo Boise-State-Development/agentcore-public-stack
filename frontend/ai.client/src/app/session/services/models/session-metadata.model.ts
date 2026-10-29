@@ -49,6 +49,10 @@ export interface SessionMetadata {
   starred?: boolean;
   tags?: string[];
   preferences?: SessionPreferences;
+  /** Set on a fork: the conversation its family started from (rewind/fork spec §7). */
+  rootSessionId?: string;
+  /** Set on a fork: where it was cut from its parent. */
+  forkedFrom?: { sessionId: string; messageIndex: number; cut: number };
   /** Running USD cost across all turns in this session. Denormalized on the
    *  session row by the backend's _bump_session_aggregates; legacy sessions
    *  are lazily backfilled on first read. */
