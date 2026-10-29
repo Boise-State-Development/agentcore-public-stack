@@ -323,6 +323,13 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
   });
 }
 
+/**
+ * Shown in a project conversation whose harness binds no skills. A member's own
+ * skills are not offered there, so the one place a skill can come from is the
+ * project's Skills page, and the hint names it.
+ */
+export const PROJECT_SKILLS_HINT = "Skills for this project are chosen on its Skills page";
+
 @Component({
   selector: 'app-chat-input',
   imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent, IncognitoToggleComponent],
@@ -894,6 +901,11 @@ export class ChatInputComponent {
           ? "Type / to run one of this project's skills"
           : 'Type / to run one of your skills',
       );
+    } else if (this.showSkillCommands() && this.projectSkillsLocked()) {
+      // A project that binds no skills offers none, the member's own included — a
+      // skill written under Customize never reaches a project on its own. Say where
+      // it does, or the member who just wrote one is left looking for it here.
+      hints.push(PROJECT_SKILLS_HINT);
     }
     return hints;
   });
@@ -1199,17 +1211,30 @@ export class ChatInputComponent {
   });
 
   /**
+   * The conversation runs in a project whose harness dictates the skills. The `/` menu
+   * then speaks for the project: its rows are the project's skills, its empty state says
+   * where those are chosen, and its last row opens the project's Skills page rather than
+   * Customize, which cannot change a project.
+   */
+  readonly projectSkillsLocked = computed(
+    () => this.project() !== null && this.skillCommandService.agentLocked(),
+  );
+
+  /**
    * The menu opens only when there is something to offer.
    *
    * `/` is far more common in prose than `@` — dates, fractions, "and/or", paths, URLs —
    * so the token rule below is what does the real work; this only stops an empty menu
-   * appearing for a user who has no skills switched on.
+   * appearing for a user who has no skills switched on. In a project the menu opens
+   * even with no skills bound, because then it has something to say: the empty state
+   * names the Skills page, which is the answer to "where did my skill go?" at the
+   * moment the question is asked.
    */
   readonly isSkillMenuOpen = computed(
     () =>
       this.showSkillCommands() &&
       this.skillToken() !== null &&
-      this.skillCommandService.commands().length > 0,
+      (this.skillCommandService.commands().length > 0 || this.projectSkillsLocked()),
   );
 
   readonly skillQuery = computed(() => this.skillToken()?.query ?? '');
@@ -2453,6 +2478,11 @@ export class ChatInputComponent {
   /** The menu's last row: Customize → Skills, which is where turning one on belongs. */
   onSkillBrowseAll(): void {
     this.closeSkillMenu();
+    const project = this.project();
+    if (project && this.skillCommandService.agentLocked()) {
+      void this.router.navigate(['/projects', project.projectId, 'skills']);
+      return;
+    }
     void this.router.navigate(['/customize/skills']);
   }
 
