@@ -1,6 +1,22 @@
 # Conversation rewind and fork
 
-**Status:** DRAFT spec, written 2026-10-03 against `develop` @ `ac4212a7`. Nothing built yet.
+**Status:** Rewind (§4–§6, delivery PRs 1 and 2) built behind `SESSION_REWIND_ENABLED` /
+`features.sessionRewind`, default off. Fork (§7) not built. Spec written 2026-10-03 against `develop` @ `ac4212a7`.
+
+**As built (2026-10-29), where it differs from the text below:**
+- The restore filter runs inside `TurnBasedSessionManager.list_messages`, only while the SDK's restore
+  is reading (`_restoring`), which answers §4.3's *Verify*: the SDK's tool-use repair then runs on the
+  filtered list. Every other caller, including the coordinator's message count, gets the physical list.
+- The warm cut is `apply_rewind`, at the head of every turn before `apply_pending_compaction`, and it
+  hands its row read to the compaction re-read so a turn still pays one GSI query. What the shared live
+  list has been cut to travels with the list (`LiveConversation`, aliased by
+  `_adopt_session_conversation`), so a sibling agent never cuts it twice. The row records each rewind's
+  logical cut (`cuts`) so several rewinds before a send apply as one.
+- Measured on dev: the first call after a warm rewind was a `hit` that read the same 12,651 tokens the
+  rewound turn had read and wrote 28; its row carried `rewound: true` and `wastedUsd` 0.
+- Not yet built: the Undo toast (§4.4), hiding Rewind on summarized messages (the endpoint refuses
+  them with 409 and the SPA shows the reason), `rewindMissCount` / `rewindUsd` rollups (§6, the row
+  flag is written), and the smoke-matrix rows (§8.1).
 **Tracking issue:** #1421
 **Flags (in development, default OFF):** `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` /
 `features.sessionRewind`, and `SESSION_FORK_ENABLED` / `CDK_SESSION_FORK_ENABLED` / `features.sessionFork`.

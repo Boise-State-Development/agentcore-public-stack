@@ -81,6 +81,7 @@ export interface AppConfig {
   userGrants: UserGrantsConfig;
   sessionPrewarm: SessionPrewarmConfig;
   handoffs: HandoffsConfig;
+  sessionRewind: SessionRewindConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -476,6 +477,20 @@ export interface SessionPrewarmConfig {
  * existing SessionLookupIndex.
  */
 export interface HandoffsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4). **Opt-in
+ * while the feature is in development**: off unless CDK_SESSION_REWIND_ENABLED=true
+ * (or a `sessionRewind.enabled: true` cdk.json context). Sets SESSION_REWIND_ENABLED
+ * on **app-api**, which serves `POST /sessions/{id}/rewind` and filters rewound
+ * messages out of `GET /messages`, and on the **AgentCore Runtime** (only while
+ * on, so the default spends none of the V2 environment budget), which filters
+ * them at restore and cuts a warm agent's history in place. No new resources: the
+ * state is one attribute on the existing session metadata row.
+ */
+export interface SessionRewindConfig {
   enabled: boolean;
 }
 
@@ -1568,6 +1583,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_HANDOFFS_ENABLED
         ? process.env.CDK_HANDOFFS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('handoffs')?.enabled ?? false,
+    },
+    sessionRewind: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_SESSION_REWIND_ENABLED
+        ? process.env.CDK_SESSION_REWIND_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('sessionRewind')?.enabled ?? false,
     },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.

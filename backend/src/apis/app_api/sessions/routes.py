@@ -11,6 +11,8 @@ from apis.shared.sessions.models import (
     SessionInterruptRequest,
     SessionSteerRequest,
     SessionSteerResponse,
+    SessionRewindRequest,
+    SessionRewindResponse,
     SessionMetadataResponse,
     SessionMetadata,
     SessionPreferences,
@@ -54,6 +56,7 @@ from apis.shared.feature_flags import (
     response_feedback_enabled,
     mid_turn_steering_enabled,
     browser_takeover_enabled,
+    session_rewind_enabled,
 )
 from apis.shared.auth.models import User
 from apis.shared.system_prompts.service import get_system_prompts_service
@@ -978,6 +981,48 @@ async def steer_running_turn_endpoint(
         raise HTTPException(status_code=500, detail="Failed to queue the follow-up")
 
     return SessionSteerResponse(queued=queued, entry_id=body.entry_id)
+
+
+@router.post("/{session_id}/rewind", response_model=SessionRewindResponse, response_model_by_alias=True)
+async def rewind_session_endpoint(
+    session_id: str,
+    body: SessionRewindRequest,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Rewind the conversation to just before one of the user's messages.
+
+    The message and everything after it are hidden, never deleted (rewind spec
+    §4), and the message's text comes back as ``prefillText`` for the composer.
+    The next turn cuts a warm agent's history in place, so the retained prefix
+    reads from the prompt cache exactly as if the hidden turns never happened.
+
+    Lives on app-api for the same reason ``/steer`` does: the Runtime data
+    plane proxies only ``/invocations`` and ``/ping``. 404 while
+    ``SESSION_REWIND_ENABLED`` is off (checked after authentication); 409 while
+    a turn is streaming, for a message the compaction summary already covers,
+    or when another rewind won a race.
+    """
+    if not session_rewind_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    logger.info("POST /sessions/.../rewind")
+
+    from .services.rewind_service import RewindRefused, rewind_session
+
+    try:
+        result = await rewind_session(session_id, current_user.user_id, body.message_id)
+    except RewindRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except Exception:
+        logger.error("Error rewinding a session", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to rewind the conversation")
+
+    return SessionRewindResponse(
+        next_message_index=result.next_message_index,
+        prefill_text=result.prefill_text,
+        rewound_message_ids=result.rewound_message_ids,
+        epoch=result.epoch,
+    )
 
 
 @router.delete("/{session_id}/steer/{entry_id}", status_code=204)

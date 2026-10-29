@@ -372,6 +372,11 @@ def _adopt_session_conversation(
         dst_sm = getattr(agent, "session_manager", None)
         if src_sm is not None and dst_sm is not None and hasattr(src_sm, "_live_offset"):
             dst_sm._live_offset = src_sm._live_offset
+        # So does what the list has been cut to (rewind spec §4.3), and by
+        # reference: whichever manager next cuts the shared list for a rewind
+        # updates it for the other, which would otherwise cut it again.
+        if src_sm is not None and dst_sm is not None and hasattr(src_sm, "_live_conversation"):
+            dst_sm._live_conversation = src_sm._live_conversation
     except Exception:  # noqa: BLE001 - never let bookkeeping break a turn
         logger.debug("Session %s: could not sync compaction live offset", scrub_log(session_id), exc_info=True)
 

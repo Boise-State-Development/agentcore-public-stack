@@ -100,4 +100,14 @@ export interface FeatureFlags {
    * the table render is slice three.
    */
   documentExtract: boolean;
+
+  /**
+   * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
+   * user message offers "Rewind to here", which hides it and everything after
+   * it and puts its text back in the composer to edit and resend. Backend:
+   * SESSION_REWIND_ENABLED (app-api's `POST /sessions/{id}/rewind` 404s while
+   * off; the Runtime applies the cut). In development, so `false` everywhere
+   * until a deployment turns both sides on.
+   */
+  sessionRewind: boolean;
 }

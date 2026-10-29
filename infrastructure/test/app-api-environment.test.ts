@@ -97,6 +97,16 @@ describe('buildAppApiEnvironment — handoffs', () => {
   });
 });
 
+describe('buildAppApiEnvironment — session rewind', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.SESSION_REWIND_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ sessionRewind: { enabled: true } }), stubParams());
+    expect(on.SESSION_REWIND_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — folder sync', () => {
   it('forwards the flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).FOLDER_SYNC_ENABLED).toBe('false');

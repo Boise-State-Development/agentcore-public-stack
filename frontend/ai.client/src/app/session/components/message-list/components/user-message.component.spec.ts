@@ -5,6 +5,7 @@ import { UserMessageComponent } from './user-message.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import type { Message } from '../../../services/models/message.model';
 import { FailedSendService } from '../../../services/chat/failed-send.service';
+import { ConversationRewindService } from '../../../services/session/conversation-rewind.service';
 
 /**
  * The "Show more" affordance on a user bubble is driven by ONE measurement of
@@ -178,5 +179,69 @@ describe('UserMessageComponent — a message that was not sent', () => {
     const el = await render(delivered);
 
     expect(el.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+describe('UserMessageComponent — rewind', () => {
+  let rewinder: {
+    enabled: boolean;
+    canRewind: ReturnType<typeof vi.fn>;
+    rewind: ReturnType<typeof vi.fn>;
+    pendingMessageId: ReturnType<typeof signal<string | null>>;
+  };
+
+  const sent = (overrides: Partial<Message> = {}): Message => ({
+    id: 'msg-s1-2',
+    role: 'user',
+    content: [{ type: 'text', text: 'what about the second draft?' }],
+    ...overrides,
+  });
+
+  async function render(message: Message, { enabled = true, canRewind = true } = {}): Promise<HTMLElement> {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    rewinder = {
+      enabled,
+      canRewind: vi.fn().mockReturnValue(canRewind),
+      rewind: vi.fn().mockResolvedValue(true),
+      pendingMessageId: signal<string | null>(null),
+    };
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [UserMessageComponent],
+      providers: [
+        { provide: LocalSettingsService, useValue: { showDebugOutput: signal(false) } },
+        { provide: ConversationRewindService, useValue: rewinder },
+      ],
+    })
+      .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+    const fixture = TestBed.createComponent(UserMessageComponent);
+    fixture.componentRef.setInput('message', message);
+    fixture.detectChanges();
+    return fixture.nativeElement;
+  }
+
+  const rewindButton = (el: HTMLElement) =>
+    el.querySelector('button[aria-label="Rewind to here"]') as HTMLButtonElement | null;
+
+  it('offers "Rewind to here" and hands the message to the rewind service', async () => {
+    const el = await render(sent());
+
+    const button = rewindButton(el);
+    expect(button).not.toBeNull();
+    button!.click();
+    expect(rewinder.rewind).toHaveBeenCalledWith(expect.objectContaining({ id: 'msg-s1-2' }));
+  });
+
+  it('is disabled, not hidden, while it cannot run', async () => {
+    const el = await render(sent(), { canRewind: false });
+
+    expect(rewindButton(el)?.disabled).toBe(true);
+  });
+
+  it('is absent with the flag off, on a steer and on an unsent message', async () => {
+    expect(rewindButton(await render(sent(), { enabled: false }))).toBeNull();
+    expect(rewindButton(await render(sent({ steering: true })))).toBeNull();
+    expect(rewindButton(await render(sent({ sendFailure: { reason: 'x' } })))).toBeNull();
   });
 });

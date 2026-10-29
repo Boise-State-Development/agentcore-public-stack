@@ -531,6 +531,47 @@ class SessionSteerRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class SessionRewindRequest(BaseModel):
+    """Request body for POST /sessions/{id}/rewind.
+
+    Names the user message to rewind to. The conversation is cut just before
+    it, so it and everything after it are hidden (never deleted), and its text
+    comes back for the composer. See docs/specs/conversation-rewind-and-fork.md §4.
+    """
+
+    message_id: str = Field(
+        min_length=1,
+        max_length=512,
+        alias="messageId",
+        description="The user message to rewind to, as `msg-{sessionId}-{index}`",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SessionRewindResponse(BaseModel):
+    """Result of a rewind."""
+
+    next_message_index: int = Field(
+        ...,
+        alias="nextMessageIndex",
+        description="The index the next stored message will take; the SPA numbers its next message from it",
+    )
+    prefill_text: str = Field(
+        ...,
+        alias="prefillText",
+        description="The rewound message's text as the user typed it, for the composer",
+    )
+    rewound_message_ids: List[str] = Field(
+        default_factory=list,
+        alias="rewoundMessageIds",
+        description="The visible messages the rewind hid, oldest first",
+    )
+    epoch: int = Field(..., description="The session's rewind epoch after this rewind")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class SessionSteerResponse(BaseModel):
     """Result of arming a mid-turn steer.
 
@@ -1030,4 +1071,9 @@ class MessagesListResponse(BaseModel):
         False,
         alias="fromArchive",
         description="True when Memory's events for this session have expired and these messages are the conversation archive's text-only copy. The agent cannot restore from the archive, and a new turn would be numbered from 0 and overwrite the archived first turn, so the SPA offers such a session read-only. Set on every page of an archive-served session.",
+    )
+    next_message_index: Optional[int] = Field(
+        None,
+        alias="nextMessageIndex",
+        description="The index the next stored message will take (the session's physical message count). Differs from the number of messages returned once a rewind has hidden some: ids stay positional (`msg-{sessionId}-{index}`) and are never reused, so the SPA numbers new messages from this rather than from its list length. Set only while SESSION_REWIND_ENABLED is on.",
     )

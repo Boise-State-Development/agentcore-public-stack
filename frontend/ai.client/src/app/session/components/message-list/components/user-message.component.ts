@@ -11,13 +11,15 @@ import {
   inject,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowPath, heroArrowTurnDownRight, heroExclamationCircle } from '@ng-icons/heroicons/outline';
+import { heroArrowPath, heroArrowTurnDownRight, heroArrowUturnLeft, heroExclamationCircle } from '@ng-icons/heroicons/outline';
 import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
 import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
 import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import { FailedSendService } from '../../../services/chat/failed-send.service';
+import { ConversationRewindService } from '../../../services/session/conversation-rewind.service';
+import { TooltipDirective } from '../../../../components/tooltip';
 import { parseIso } from '../../../../utils/date';
 
 function isImageMimeType(mimeType: string): boolean {
@@ -29,8 +31,8 @@ const MAX_HEIGHT_PX = 200;
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
-  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath })],
+  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon, TooltipDirective],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft })],
   template: `
     @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
       <div class="group relative flex w-full flex-col items-end gap-2">
@@ -154,6 +156,32 @@ const MAX_HEIGHT_PX = 200;
             }
           </div>
         }
+
+        <!--
+          Rewind (rewind spec §4): hides this message and everything after it
+          and puts its text back in the composer. Revealed on hover like the
+          sent-at subtitle; opacity only, so it stays in the tab order and
+          group-focus-within can reveal it for a keyboard user.
+        -->
+        @if (showRewind()) {
+          <div
+            class="flex items-center gap-1 pr-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
+            [class.opacity-100]="rewinding()"
+          >
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              appTooltip="Rewind to here"
+              appTooltipPosition="top"
+              aria-label="Rewind to here"
+              [attr.aria-busy]="rewinding() ? 'true' : null"
+              [disabled]="!canRewind()"
+              (click)="rewind()"
+            >
+              <ng-icon name="heroArrowUturnLeft" class="size-4" aria-hidden="true" />
+            </button>
+          </div>
+        }
       </div>
     }
   `,
@@ -179,6 +207,23 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
 
   retry(): void {
     this.failedSends.retry(this.message().id);
+  }
+
+  private rewinder = inject(ConversationRewindService);
+
+  /** Only on messages the server numbered and could cut before; see ConversationRewindService. */
+  showRewind = computed(() => {
+    const message = this.message();
+    return this.rewinder.enabled && !message.steering && !message.sendFailure && message.id.startsWith('msg-');
+  });
+
+  /** False while this conversation streams or another rewind is in flight. */
+  canRewind = computed(() => this.rewinder.canRewind(this.message()));
+
+  rewinding = computed(() => this.rewinder.pendingMessageId() === this.message().id);
+
+  rewind(): void {
+    void this.rewinder.rewind(this.message());
   }
 
   readonly maxHeightPx = MAX_HEIGHT_PX;
