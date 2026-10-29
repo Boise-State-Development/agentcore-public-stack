@@ -27,8 +27,10 @@ all the way to the payload.
 
 from __future__ import annotations
 
+import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -41,6 +43,7 @@ from ..errors import (
     ConfigError,
     ConnectionFailedError,
     RateLimitedError,
+    UploadError,
     UpstreamError,
 )
 from .auth import AuthProvider
@@ -208,6 +211,8 @@ class ConversationSummary:
     context_tokens: int | None = None
     context_window: int | None = None
     last_turn_continuable: bool = False
+    #: Only set on search results: the text around the match.
+    snippet: str = ""
 
     @property
     def context_percent(self) -> int | None:
@@ -244,14 +249,73 @@ class Page:
         return bool(self.next_token)
 
 
+#: Extension → MIME type, mirroring the server's ALLOWED_EXTENSIONS. The server
+#: is the authority; this lets the client say "not supported" before uploading
+#: and pick the right content type when it is.
+UPLOAD_MIME_TYPES: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".txt": "text/plain",
+    ".html": "text/html",
+    ".csv": "text/csv",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".md": "text/markdown",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class UploadedFile:
+    """A file the session now holds; ``upload_id`` goes on the next turn."""
+
+    upload_id: str
+    filename: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class StoredToolUse:
+    """A ``toolUse`` block from a stored assistant message."""
+
+    tool_use_id: str
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class StoredToolResult:
+    """A ``toolResult`` block from a stored user message (Bedrock puts results
+    on the *user* side of the conversation)."""
+
+    tool_use_id: str
+    text: str = ""
+    is_error: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StoredAttachment:
+    """An ``image`` or ``document`` block: enough to say what was attached."""
+
+    kind: str
+    name: str = ""
+    format: str = ""
+
+
 @dataclass(frozen=True, slots=True)
 class HistoryMessage:
     """One stored message, flattened for display.
 
     The wire form is a list of typed content blocks (`text`, `toolUse`,
     `toolResult`, `image`, `document`, `reasoningContent`, and the schema says
-    "etc."), so this keeps the prose and counts the rest rather than pretending
-    to render every kind. An unknown block type must not lose the message.
+    "etc."). Prose is joined; tool calls, results and attachments are kept as
+    structured records so the transcript can render them the way it renders
+    a live turn. An unknown block type must not lose the message.
     """
 
     message_id: str
@@ -262,6 +326,9 @@ class HistoryMessage:
     tool_blocks: int = 0
     attachment_blocks: int = 0
     other_blocks: tuple[str, ...] = ()
+    tool_uses: tuple[StoredToolUse, ...] = ()
+    tool_results: tuple[StoredToolResult, ...] = ()
+    attachments: tuple[StoredAttachment, ...] = ()
 
     @classmethod
     def from_wire(cls, payload: dict[str, Any]) -> HistoryMessage:
@@ -270,6 +337,9 @@ class HistoryMessage:
         tool_blocks = 0
         attachments = 0
         other: list[str] = []
+        tool_uses: list[StoredToolUse] = []
+        tool_results: list[StoredToolResult] = []
+        attached: list[StoredAttachment] = []
 
         blocks = payload.get("content")
         for block in blocks if isinstance(blocks, list) else []:
@@ -284,10 +354,38 @@ class HistoryMessage:
                 value = _reasoning_text(block)
                 if value:
                     reasoning_parts.append(value)
-            elif kind in {"toolUse", "toolResult"} or "toolUse" in block or "toolResult" in block:
+            elif kind == "toolUse" or "toolUse" in block:
                 tool_blocks += 1
+                inner = _inner(block, "toolUse")
+                arguments = inner.get("input")
+                tool_uses.append(
+                    StoredToolUse(
+                        tool_use_id=str(inner.get("toolUseId", "")),
+                        name=str(inner.get("name", "")),
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                    )
+                )
+            elif kind == "toolResult" or "toolResult" in block:
+                tool_blocks += 1
+                inner = _inner(block, "toolResult")
+                tool_results.append(
+                    StoredToolResult(
+                        tool_use_id=str(inner.get("toolUseId", "")),
+                        text=_result_text(inner),
+                        is_error=str(inner.get("status", "")).lower() == "error",
+                    )
+                )
             elif kind in {"image", "document"} or "image" in block or "document" in block:
                 attachments += 1
+                which = "image" if (kind == "image" or "image" in block) else "document"
+                inner = _inner(block, which)
+                attached.append(
+                    StoredAttachment(
+                        kind=which,
+                        name=str(inner.get("name") or inner.get("fileName") or inner.get("filename") or ""),
+                        format=str(inner.get("format", "")),
+                    )
+                )
             elif kind:
                 other.append(kind)
 
@@ -300,7 +398,38 @@ class HistoryMessage:
             tool_blocks=tool_blocks,
             attachment_blocks=attachments,
             other_blocks=tuple(other),
+            tool_uses=tuple(tool_uses),
+            tool_results=tuple(tool_results),
+            attachments=tuple(attached),
         )
+
+
+def _inner(block: dict[str, Any], key: str) -> dict[str, Any]:
+    """The nested block (`{"toolUse": {...}}`) or the block itself when flat."""
+    nested = block.get(key)
+    return nested if isinstance(nested, dict) else block
+
+
+def _result_text(result: dict[str, Any]) -> str:
+    """Join a toolResult's content blocks into one string, JSON for non-text."""
+    content = result.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, dict):
+            if isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            elif "json" in item:
+                try:
+                    parts.append(json.dumps(item["json"], ensure_ascii=False, default=str))
+                except (TypeError, ValueError):
+                    parts.append(str(item["json"]))
+        elif isinstance(item, str):
+            parts.append(item)
+    return "\n".join(parts)
 
 
 def _reasoning_text(block: dict[str, Any]) -> str:
@@ -483,6 +612,62 @@ class CatalogClient:
 
     async def _put(self, url: str, body: dict[str, Any]) -> dict[str, Any]:
         return await self._request("PUT", url, json=body)
+
+    # -- search --------------------------------------------------------------
+
+    async def search_conversations(self, query: str, *, limit: int = 30) -> list[ConversationSummary] | None:
+        """Server-side search. None when the deployment has it switched off
+        (the route 404s), so the caller can filter locally instead."""
+        try:
+            payload = await self._request("GET", self._endpoints.sessions_search, params={"q": query, "limit": limit})
+        except ApiError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        results: list[ConversationSummary] = []
+        for item in _items(payload, "results"):
+            summary = ConversationSummary.from_wire(item)
+            snippet = str(item.get("snippet") or "")
+            results.append(replace(summary, snippet=snippet) if snippet else summary)
+        return results
+
+    # -- files ---------------------------------------------------------------
+
+    async def upload_file(self, session_id: str, path: Path) -> UploadedFile:
+        """Attach a local file to the conversation, the way the SPA does.
+
+        Presign → PUT to S3 → complete. Raises the usual typed errors; a
+        rejected type or size comes back as a 4xx from presign, before any
+        bytes move.
+        """
+        suffix = path.suffix.lower()
+        mime = UPLOAD_MIME_TYPES.get(suffix)
+        if mime is None:
+            supported = ", ".join(sorted(UPLOAD_MIME_TYPES))
+            raise UploadError(f"{path.name}: unsupported file type", hint=f"Supported: {supported}")
+        data = path.read_bytes()
+        presign = await self._request(
+            "POST",
+            self._endpoints.files_presign,
+            json={"sessionId": session_id, "filename": path.name, "mimeType": mime, "sizeBytes": len(data)},
+        )
+        upload_id = str(presign.get("uploadId", ""))
+        url = str(presign.get("presignedUrl", ""))
+        if not upload_id or not url:
+            raise UploadError("Presign returned no upload URL", hint="This is a server-side problem; try again.")
+        try:
+            put = await self._client.put(url, content=data, headers={"Content-Type": mime})
+        except httpx.HTTPError as exc:
+            raise ConnectionFailedError(url, f"{type(exc).__name__}: {exc}") from exc
+        if put.status_code >= 400:
+            raise UploadError(f"Upload to storage failed ({put.status_code})", hint="Try again; if it persists the presigned URL may have expired.")
+        complete = await self._request("POST", self._endpoints.file_complete(upload_id))
+        logger.info("uploaded %s (%d bytes) as %s", path.name, len(data), upload_id)
+        return UploadedFile(
+            upload_id=str(complete.get("uploadId") or upload_id),
+            filename=str(complete.get("filename") or path.name),
+            size_bytes=int(complete.get("sizeBytes") or len(data)),
+        )
 
     async def _request(
         self,

@@ -669,3 +669,13 @@ ModalScreen SelectionList:focus {
     height: auto;
     color: $text-muted;
 }
+
+#conversation-filter {
+    margin: 0 2;
+    border: tall $surface-lighten-2;
+    background: $background;
+}
+
+#conversation-filter:focus {
+    border: tall $primary;
+}

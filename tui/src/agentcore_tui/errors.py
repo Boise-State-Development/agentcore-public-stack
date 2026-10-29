@@ -41,6 +41,10 @@ class ConfigError(AgentCoreTuiError):
     """Configuration is missing or unusable (no base URL, no API key, bad TOML)."""
 
 
+class UploadError(AgentCoreTuiError):
+    """A file could not be attached: wrong type, too large, or storage refused it."""
+
+
 class ApiError(AgentCoreTuiError):
     """An HTTP-level failure from app-api."""
 

@@ -143,3 +143,166 @@ class TestComposerFrame:
             await send(pilot, app, "go")
             assert "Enter" in str(app.chat.composer.border_subtitle)
             assert not app.chat.composer.has_class("-busy")
+
+
+class TestSlashCommands:
+    async def test_help_lists_commands_without_sending_a_turn(self) -> None:
+        app = build_app(ok_handler(["never"]))
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            app.chat.composer.text = "/help"
+            await pilot.press("enter")
+            await pilot.pause()
+            frame = rendered_text(app)
+            assert "/model" in frame and "/tools" in frame and "/quit" in frame
+            assert app.chat.store.is_empty
+            assert app.chat.composer.text == ""
+
+    async def test_unknown_command_says_so(self) -> None:
+        app = build_app(ok_handler(["never"]))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app.chat.composer.text = "/frobnicate now"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "Unknown command /frobnicate" in rendered_text(app)
+            assert app.chat.store.is_empty
+
+    async def test_double_slash_sends_a_literal_slash(self) -> None:
+        app = build_app(ok_handler(["ok"]))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await send(pilot, app, "//etc/hosts is where?")
+            assert app.chat.store.messages[0].content == "/etc/hosts is where?"
+
+    async def test_new_resets_the_conversation(self) -> None:
+        app = build_app(ok_handler(["ok"]))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await send(pilot, app, "hello")
+            assert not app.chat.store.is_empty
+            app.chat.composer.text = "/new"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.chat.store.is_empty
+            assert app.chat.query("#empty-state")
+
+    async def test_model_by_name_switches_without_the_picker(self) -> None:
+        from .conftest import MODEL_B
+
+        app = build_app(ok_handler(["ok"]))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            needle = MODEL_B.split(".")[-1][:8]
+            app.chat.composer.text = f"/model {needle}"
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+            assert app.chat.config.model_id == MODEL_B
+
+    async def test_model_with_no_match_warns(self) -> None:
+        app = build_app(ok_handler(["ok"]))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            before = app.chat.config.model_id
+            app.chat.composer.text = "/model nonesuch"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.chat.config.model_id == before
+
+    async def test_copy_with_nothing_warns_rather_than_crashing(self) -> None:
+        app = build_app(ok_handler(["ok"]))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app.chat.composer.text = "/copy"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.chat.store.is_empty
+
+
+class TestGauges:
+    def test_elapsed_formatting(self) -> None:
+        from agentcore_tui.widgets.status import format_elapsed
+
+        assert format_elapsed(4.26) == "4.3s"
+        assert format_elapsed(65) == "1m 05s"
+
+    async def test_context_percent_appears_in_the_status_line(self) -> None:
+        app = build_app(ok_handler())
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            bar = app.chat.status
+            bar.set_context(50_000, 200_000)
+            assert "ctx 25%" in bar.line
+            bar.set_context(1234, None)
+            assert "ctx 1,234" in bar.line
+            bar.set_context(None, None)
+            assert "ctx" not in bar.line
+            bar.set_elapsed(3.0)
+            assert "3.0s" in bar.line
+
+
+class TestAttach:
+    async def test_attach_queues_the_upload_for_the_next_turn(self, tmp_path) -> None:
+        import json as _json
+
+        import httpx
+
+        from .test_chat_screen import agent_turn, build_agent_app
+
+        bodies: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("/files/presign"):
+                return httpx.Response(200, json={"uploadId": "up-9", "presignedUrl": "https://bucket.example/up-9", "expiresAt": "t"})
+            if request.url.host == "bucket.example":
+                return httpx.Response(200)
+            if path.endswith("/complete"):
+                return httpx.Response(200, json={"uploadId": "up-9", "status": "completed", "s3Uri": "s3://b/k", "filename": "a.txt", "sizeBytes": 3})
+            if path.endswith("/chat/stream"):
+                bodies.append(_json.loads(request.content))
+                from .conftest import sse_response
+
+                return sse_response(agent_turn("got it"))
+            return httpx.Response(404)
+
+        target = tmp_path / "a.txt"
+        target.write_text("abc")
+        app = build_agent_app(handler)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            # The catalog client shares the handler through the same mock transport.
+            from agentcore_tui.client.auth import SessionAuth
+            from agentcore_tui.client.catalog import CatalogClient
+
+            app.chat._catalog = CatalogClient(
+                app.chat.config.base_url, auth=SessionAuth("s"), client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            )
+            app.chat.composer.text = f"/attach {target}"
+            await pilot.press("enter")
+            for _ in range(10):
+                await pilot.pause()
+                if app.chat.turn.pending_uploads:  # type: ignore[attr-defined]
+                    break
+            assert app.chat.turn.pending_uploads == ["up-9"]  # type: ignore[attr-defined]
+            assert "Attached a.txt" in rendered_text(app)
+
+            await send(pilot, app, "read it")
+            await send(pilot, app, "and again")
+
+        assert bodies[0]["file_upload_ids"] == ["up-9"]
+        assert "file_upload_ids" not in bodies[1]
+
+    async def test_attach_missing_file_is_reported(self) -> None:
+        from .test_chat_screen import agent_turn, build_agent_app
+
+        from .conftest import sse_response
+
+        app = build_agent_app(lambda _r: sse_response(agent_turn()))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app.chat.composer.text = "/attach /definitely/not/here.pdf"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "No such file" in rendered_text(app)

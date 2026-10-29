@@ -314,6 +314,23 @@ class ChatScreen(Screen[None]):
     async def on_usage(self, usage: Usage | None) -> None:
         self.status.set_usage(usage)
 
+    async def on_context(self, used_tokens: int | None, window: int | None) -> None:
+        self.status.set_context(used_tokens, window)
+
+    async def on_elapsed(self, seconds: float | None) -> None:
+        self.status.set_elapsed(seconds)
+
+    async def on_truncated(self) -> None:
+        """The answer hit the token limit. Offer the web app's Continue."""
+        limit = f" (currently {self._config.max_tokens:,})" if self._config.max_tokens else ""
+        await self.transcript.mount(
+            Notice(
+                "The answer was cut off at the token limit.",
+                hint=f"Type /continue to let it carry on, or raise `max_tokens` in your config{limit}.",
+            )
+        )
+        self.transcript.scroll_end(animate=False)
+
     async def on_state(self, state: str, *, busy: bool = False, error: bool = False) -> None:
         self.status.set_state(state, busy=busy, error=error)
         if not busy:
@@ -450,10 +467,149 @@ class ChatScreen(Screen[None]):
     # -- turn lifecycle ------------------------------------------------------
 
     async def on_composer_submitted(self, message: Composer.Submitted) -> None:
+        if message.text.startswith("/") and not message.text.startswith("//"):
+            self.composer.clear_prompt()
+            await self._run_slash_command(message.text[1:])
+            return
         if self._turn.busy or not self._config.is_complete:
             return
         self.composer.clear_prompt()
-        await self._start_turn(message.text)
+        # `//` escapes a leading slash in a real prompt.
+        await self._start_turn(message.text[1:] if message.text.startswith("//") else message.text)
+
+    # -- slash commands ------------------------------------------------------
+
+    SLASH_COMMANDS: ClassVar[dict[str, str]] = {
+        "new": "Start a new conversation",
+        "model [name]": "Pick a model, or switch straight to one whose id contains `name`",
+        "tools": "Choose which tools the agent may use",
+        "chats": "Browse your saved conversations",
+        "copy": "Copy the last answer to the clipboard",
+        "copy all": "Copy the whole conversation as Markdown",
+        "attach <path>": "Upload a file and send it with your next message",
+        "clear": "Clear the screen (the conversation continues)",
+        "continue": "Let an answer that hit the token limit carry on",
+        "stop": "Stop the turn in flight",
+        "help": "Show this list",
+        "quit": "Leave",
+    }
+
+    async def _run_slash_command(self, line: str) -> None:
+        """Dispatch `/command args`. Unknown commands say so and show the list."""
+        name, _, argument = line.strip().partition(" ")
+        name = name.lower()
+        argument = argument.strip()
+        logger.info("slash command %s", name)
+        match name:
+            case "new":
+                await self.action_new_conversation()
+            case "model":
+                if argument:
+                    await self._switch_model_by_name(argument)
+                else:
+                    self.action_choose_model()
+            case "tools":
+                self.action_choose_tools()
+            case "chats" | "conversations" | "history":
+                self.action_conversations()
+            case "attach":
+                await self._attach_file(argument)
+            case "copy":
+                if argument in {"all", "transcript"}:
+                    self._copy_transcript()
+                else:
+                    self._copy_last_answer()
+            case "clear":
+                await self.transcript.remove_children()
+                self._tool_widgets.clear()
+                self.notify("Screen cleared. The conversation continues; /new starts over.", timeout=5)
+            case "continue":
+                await self.action_continue()
+            case "stop" | "cancel":
+                await self.action_cancel_turn()
+            case "help" | "?":
+                await self._show_help()
+            case "quit" | "exit" | "q":
+                await self.app.action_quit()
+            case _:
+                await self.transcript.mount(
+                    Notice(f"Unknown command /{name}.", hint="Type /help for the list. Start a prompt with // to send a literal slash.")
+                )
+                self.transcript.scroll_end(animate=False)
+
+    async def _attach_file(self, raw_path: str) -> None:
+        """Upload a local file into the conversation for the next turn."""
+        from pathlib import Path
+
+        turn = self._turn
+        if not isinstance(turn, AgentTurnController):
+            self.notify("Attachments need a signed-in session. Run `agentcore-tui login --sso`.", severity="warning", timeout=8)
+            return
+        if not raw_path:
+            self.notify("Usage: /attach <path>", severity="warning", timeout=5)
+            return
+        if turn.busy:
+            self.notify("Wait for the current turn to finish before attaching.", severity="warning", timeout=5)
+            return
+        path = Path(raw_path.strip().strip("'\"")).expanduser()
+        if not path.is_file():
+            await self.transcript.mount(Notice(f"No such file: {path}", error=True))
+            self.transcript.scroll_end(animate=False)
+            return
+        self.status.set_state(f"Uploading {path.name}...", busy=True)
+        try:
+            uploaded = await self._catalog_or_create().upload_file(self._store.session_id, path)
+        except AgentCoreTuiError as exc:
+            self.status.set_state("Ready")
+            await self.transcript.mount(Notice(f"Could not attach {path.name}: {exc.message}", hint=exc.hint, error=True))
+            self.transcript.scroll_end(animate=False)
+            return
+        turn.attach(uploaded.upload_id)
+        self.status.set_state("Ready")
+        size = f"{uploaded.size_bytes / 1024:,.0f} KB" if uploaded.size_bytes >= 1024 else f"{uploaded.size_bytes} B"
+        await self.transcript.mount(Notice(f"Attached {uploaded.filename} ({size}). It goes with your next message."))
+        self.transcript.scroll_end(animate=False)
+        self.composer.focus()
+
+    async def _show_help(self) -> None:
+        width = max(len(k) for k in self.SLASH_COMMANDS) + 1
+        lines = "\n".join(f"/{k.ljust(width)} {v}" for k, v in self.SLASH_COMMANDS.items())
+        keys = "F1 palette · F2 model · F3 tools · F4 chats · Ctrl+N new · Esc stop · Ctrl+Q quit · Alt+Enter newline"
+        await self.transcript.mount(Notice(lines, hint=keys))
+        self.transcript.scroll_end(animate=False)
+
+    async def _switch_model_by_name(self, needle: str) -> None:
+        """`/model haiku` without opening the picker.
+
+        Matches against the catalogue when signed in, else the configured list;
+        an ambiguous match lists the candidates rather than guessing.
+        """
+        needle_cf = needle.casefold()
+        candidates: list[ModelChoice] = []
+        labels: list[str] = []
+        if self._agent_mode:
+            try:
+                for model in await self._catalog_or_create().models():
+                    if needle_cf in model.model_id.casefold() or needle_cf in model.label.casefold():
+                        candidates.append(ModelChoice(model_id=model.model_id, provider=model.provider))
+                        labels.append(f"{model.label} ({model.model_id})")
+            except AgentCoreTuiError as exc:
+                self.notify(f"Could not load models: {exc.message}", severity="error", timeout=8)
+                return
+        else:
+            for model_id in self._config.models:
+                if needle_cf in model_id.casefold():
+                    candidates.append(ModelChoice(model_id=model_id, provider=None))
+                    labels.append(model_id)
+        if not candidates:
+            self.notify(f"No model matches '{needle}'.", severity="warning", timeout=6)
+            return
+        if len(candidates) > 1:
+            await self.transcript.mount(Notice(f"'{needle}' matches several models:", hint="\n".join(labels)))
+            self.transcript.scroll_end(animate=False)
+            return
+        await self.set_model(candidates[0])
+        self.notify(f"Model set to {candidates[0].model_id}", timeout=5)
 
     async def _start_turn(self, prompt: str) -> None:
         await self._turn.begin(prompt)
@@ -532,6 +688,29 @@ class ChatScreen(Screen[None]):
         await self._turn.cancel()
         self.notify("Turn cancelled.", severity="warning")
 
+    async def action_continue(self) -> None:
+        """Continue a truncated answer. Only the agent dialect can."""
+        turn = self._turn
+        if not isinstance(turn, AgentTurnController) or not turn.can_continue:
+            self.notify("Nothing to continue.", severity="warning", timeout=5)
+            return
+        pending = AssistantMessage(self._config.model_id)
+        await self.transcript.mount(pending)
+        self._pending = pending
+        self.composer.submit_enabled = False
+        self.composer.add_class("-busy")
+        self._set_composer_chrome(busy=True)
+        self.refresh_bindings()
+        self._flush_timer = self.set_interval(FLUSH_INTERVAL, turn.flush)
+        self.transcript.scroll_end(animate=False)
+        self._continue_stream()
+
+    @work(exclusive=True, group="turn")
+    async def _continue_stream(self) -> None:
+        assert isinstance(self._turn, AgentTurnController)
+        await self._turn.continue_truncated()
+        self._log_layout_metrics()
+
     async def action_new_conversation(self) -> None:
         """Clear the conversation, keeping the configured model."""
         if self._turn.busy:
@@ -545,6 +724,8 @@ class ChatScreen(Screen[None]):
         await self.transcript.mount(EmptyState(agent=self._agent_mode, local_tools=self._agent_mode and self._config.local_tools))
         self.status.set_turns(0)
         self.status.set_usage(None)
+        self.status.set_context(None, None)
+        self.status.set_elapsed(None)
         self.status.set_state("Ready")
         self.composer.focus()
 
@@ -628,44 +809,64 @@ class ChatScreen(Screen[None]):
 
         The store's id changes with its contents, so the next turn continues the
         conversation the user is now looking at rather than the one they left.
+
+        Tool calls are rendered with the same widget a live turn uses: a stored
+        ``toolUse`` opens a record and the matching ``toolResult`` (which Bedrock
+        stores on the *next* user message) closes it. Attachments are named.
+        Only block kinds nobody here can draw are counted and reported.
         """
         restored: list[Message] = []
         for message in messages:
-            # Only the two roles the transcript can render, and only messages
-            # with prose: a tool-call-only block has nothing to show here.
+            # Only the two roles the store models, and only messages with prose:
+            # a tool-result-only user message is not something the user typed.
             if message.role == "user" and message.text.strip():
                 restored.append(Message(role="user", content=message.text))
             elif message.role == "assistant" and message.text.strip():
-                restored.append(Message(role="assistant", content=message.text))
+                restored.append(Message(role="assistant", content=message.text, reasoning=message.reasoning))
         self._store.adopt(summary.session_id, restored, title=summary.title)
 
         await self.transcript.remove_children()
         self._tool_widgets.clear()
         self._pending = None
-        for restored_message in restored:
-            if restored_message.role == "user":
-                await self.transcript.mount(UserMessage(restored_message.content))
-                continue
-            assistant = AssistantMessage(self._config.model_id)
-            await self.transcript.mount(assistant)
-            await assistant.append_text(restored_message.content)
 
-        dropped = len(messages) - len(restored)
-        if dropped > 0:
-            # Tool calls and attachments are stored as their own blocks; saying
-            # so is better than a transcript that silently disagrees with the
-            # web app's.
-            await self.transcript.mount(
-                Notice(
-                    f"{dropped} earlier item(s) are not shown — tool calls and attachments render in the web app.",
-                )
-            )
+        records: dict[str, ToolCallRecord] = {}
+        unrendered = 0
+        for message in messages:
+            for result in message.tool_results:
+                record = records.get(result.tool_use_id)
+                if record is not None:
+                    record.result = result.text
+                    record.is_error = result.is_error
+                    widget = self._tool_widgets.get(record.tool_use_id)
+                    if widget is not None:
+                        widget.refresh_from_record()
+            if message.attachments:
+                names = ", ".join(a.name or a.kind for a in message.attachments)
+                await self.transcript.mount(Notice(f"Attached: {names}"))
+            if message.role == "user" and message.text.strip():
+                await self.transcript.mount(UserMessage(message.text))
+            for use in message.tool_uses:
+                record = ToolCallRecord(tool_use_id=use.tool_use_id, name=use.name, arguments=use.arguments)
+                records[use.tool_use_id] = record
+                widget = ToolCall(record)
+                self._tool_widgets[use.tool_use_id] = widget
+                await self.transcript.mount(widget)
+            if message.role == "assistant" and message.text.strip():
+                assistant = AssistantMessage(self._config.model_id)
+                await self.transcript.mount(assistant)
+                if message.reasoning:
+                    await assistant.append_reasoning(message.reasoning)
+                await assistant.append_text(message.text)
+            unrendered += len(message.other_blocks)
+
+        if unrendered:
+            await self.transcript.mount(Notice(f"{unrendered} stored item(s) of a kind this terminal cannot show were skipped."))
 
         self.sub_title = summary.title
         self.status.set_turns(self._store.turns)
         self.status.set_state("Ready")
         self.transcript.scroll_end(animate=False)
-        logger.info("adopted conversation %s with %d message(s)", summary.session_id, len(restored))
+        logger.info("adopted conversation %s with %d message(s), %d tool call(s)", summary.session_id, len(restored), len(records))
 
     async def set_model(self, choice: ModelChoice | str) -> None:
         """Switch models for subsequent turns.
@@ -728,6 +929,9 @@ class ChatScreen(Screen[None]):
 
         if self._turn.busy:
             yield SystemCommand("Stop response", "Abandon the turn in flight", self.action_cancel_turn)
+
+        if isinstance(self._turn, AgentTurnController) and self._turn.can_continue:
+            yield SystemCommand("Continue response", "Let the cut-off answer carry on", self.action_continue)
 
         if self._store.last_assistant is not None:
             yield SystemCommand("Copy last response", "Copy the most recent answer to the clipboard", self._copy_last_answer)

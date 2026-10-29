@@ -144,6 +144,9 @@ class RecordingSink:
     tools: list[ToolCallRecord] = field(default_factory=list)
     titles: list[str] = field(default_factory=list)
     interrupts: list[Any] = field(default_factory=list)
+    contexts: list[tuple[int | None, int | None]] = field(default_factory=list)
+    elapsed: list[float | None] = field(default_factory=list)
+    truncations: int = 0
 
     async def on_text(self, chunk: str) -> None:
         self.text += chunk
@@ -170,6 +173,15 @@ class RecordingSink:
 
     async def on_interrupt(self, event: Any) -> None:
         self.interrupts.append(event)
+
+    async def on_context(self, used_tokens: int | None, window: int | None) -> None:
+        self.contexts.append((used_tokens, window))
+
+    async def on_elapsed(self, seconds: float | None) -> None:
+        self.elapsed.append(seconds)
+
+    async def on_truncated(self) -> None:
+        self.truncations += 1
 
     @property
     def state_labels(self) -> list[str]:

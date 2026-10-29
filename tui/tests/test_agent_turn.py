@@ -95,7 +95,9 @@ class TestRequestShape:
         controller, _sink, store, client = build(answer("hi"))
         await run(controller, "what is 2+2")
 
-        assert client.stream_calls == [{"session_id": store.session_id, "message": "what is 2+2", "enabled_tools": None, "client_tools": None}]
+        assert client.stream_calls == [
+            {"session_id": store.session_id, "message": "what is 2+2", "enabled_tools": None, "client_tools": None, "file_upload_ids": None}
+        ]
 
     async def test_a_tool_selection_is_passed_through(self) -> None:
         controller, _sink, _store, client = build(answer("hi"), enabled_tools=["calculator"])
@@ -487,3 +489,53 @@ class TestInformationalEvents:
         assert "The model this Agent names is unavailable; using the default." in messages
         assert "Searched two sources." in messages
         assert not sink.errors
+
+
+class TestContinueAndGauges:
+    TRUNCATED = [MessageStart(), TextDelta(index=0, text="Part one"), MessageStop(stop_reason="max_tokens"), Done()]
+
+    async def test_truncation_is_reported_as_continuable_not_as_an_error(self) -> None:
+        controller, sink, _store, _client = build(self.TRUNCATED)
+        await run(controller)
+        assert sink.truncations == 1
+        assert not sink.errors
+        assert controller.can_continue
+
+    async def test_continue_sends_the_flag_and_an_empty_message(self) -> None:
+        controller, sink, store, client = build(self.TRUNCATED)
+        await run(controller)
+        client._events = answer(" and part two.")
+        await controller.continue_truncated()
+        body = client.stream_calls[-1]
+        assert body["message"] == "" and body["continue_truncated"] is True
+        assert not controller.can_continue
+        assert store.messages[-1].content == " and part two."
+        assert sink.state_labels[-1] == "Ready"
+
+    async def test_a_new_prompt_forgets_the_continuation(self) -> None:
+        controller, _sink, _store, client = build(self.TRUNCATED)
+        await run(controller)
+        assert controller.can_continue
+        client._events = answer("complete")
+        await run(controller, "something else")
+        assert not controller.can_continue
+
+    async def test_context_gauge_uses_the_last_call(self) -> None:
+        controller, sink, _store, _client = build(
+            [
+                MessageStart(),
+                TextDelta(index=0, text="x"),
+                MessageStop(),
+                Metadata(usage=Usage(input_tokens=1000, output_tokens=10, cache_read_input_tokens=9000), context_window=200_000),
+                Done(),
+            ]
+        )
+        await run(controller)
+        assert sink.contexts[-1] == (10_000, 200_000)
+
+    async def test_elapsed_is_reported_once_at_the_end(self) -> None:
+        controller, sink, _store, _client = build(answer("hi"))
+        await run(controller)
+        # Cleared at start, measured at finish.
+        assert sink.elapsed[0] is None
+        assert isinstance(sink.elapsed[-1], float) and sink.elapsed[-1] >= 0

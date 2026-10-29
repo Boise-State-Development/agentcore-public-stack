@@ -17,7 +17,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Button, Input, SelectionList
 
 from agentcore_tui.client.auth import SessionAuth
-from agentcore_tui.client.catalog import CatalogClient, ConversationSummary, HistoryMessage, Tool
+from agentcore_tui.client.catalog import CatalogClient, ConversationSummary, HistoryMessage, StoredAttachment, StoredToolUse, Tool
 from agentcore_tui.screens.conversations import (
     GROUP_ORDER,
     ConfirmDelete,
@@ -492,3 +492,180 @@ class TestModals:
             app.push_screen(screen)
             await pilot.pause()
             assert app.focused is screen.query_one("#confirm-no", Button)
+
+
+class TestStoredToolBlocks:
+    """A saved conversation's tool calls render like a live turn's."""
+
+    WIRE = [
+        {"id": "m1", "role": "user", "createdAt": "t", "content": [{"type": "text", "text": "weather in boise?"}]},
+        {
+            "id": "m2",
+            "role": "assistant",
+            "createdAt": "t",
+            "content": [
+                {"type": "text", "text": "Checking."},
+                {"type": "toolUse", "toolUse": {"toolUseId": "tu1", "name": "get_weather", "input": {"city": "Boise"}}},
+            ],
+        },
+        {
+            "id": "m3",
+            "role": "user",
+            "createdAt": "t",
+            "content": [{"type": "toolResult", "toolResult": {"toolUseId": "tu1", "status": "success", "content": [{"json": {"temp": 71}}]}}],
+        },
+        {"id": "m4", "role": "assistant", "createdAt": "t", "content": [{"type": "text", "text": "71°F."}]},
+        {
+            "id": "m5",
+            "role": "user",
+            "createdAt": "t",
+            "content": [
+                {"type": "document", "document": {"name": "notes.pdf", "format": "pdf"}},
+                {"type": "text", "text": "summarise"},
+                {"type": "video"},
+            ],
+        },
+    ]
+
+    def test_history_message_keeps_structured_blocks(self) -> None:
+        m2 = HistoryMessage.from_wire(self.WIRE[1])
+        assert m2.tool_uses == (StoredToolUse(tool_use_id="tu1", name="get_weather", arguments={"city": "Boise"}),)
+        m3 = HistoryMessage.from_wire(self.WIRE[2])
+        assert m3.tool_results[0].tool_use_id == "tu1"
+        assert json.loads(m3.tool_results[0].text) == {"temp": 71}
+        assert not m3.tool_results[0].is_error
+        m5 = HistoryMessage.from_wire(self.WIRE[4])
+        assert m5.attachments == (StoredAttachment(kind="document", name="notes.pdf", format="pdf"),)
+        assert m5.other_blocks == ("video",)
+
+    async def test_adopting_renders_tool_calls_and_attachments(self) -> None:
+        from agentcore_tui.widgets import ToolCall
+        from agentcore_tui.widgets.messages import Notice
+
+        from .conftest import rendered_text, sse_response
+        from .test_chat_screen import agent_turn, build_agent_app
+
+        app = build_agent_app(lambda _r: sse_response(agent_turn()))
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            summary = ConversationSummary(session_id="s1", title="Weather", message_count=4)
+            messages = [HistoryMessage.from_wire(w) for w in self.WIRE]
+            await app.chat._adopt_conversation(summary, messages)
+            await pilot.pause()
+
+            [tool] = app.chat.query(ToolCall)
+            assert tool.has_class("-finished")
+            frame = rendered_text(app)
+            assert "get_weather · Boise" in frame
+            assert "Attached: notes.pdf" in frame
+            assert "1 stored item(s)" in frame
+            # Only prose reaches the store: the tool-result-only message is not a turn.
+            assert [m.role for m in app.chat.store.messages] == ["user", "assistant", "assistant", "user"]
+            assert not any("not shown" in str(n.render()) for n in app.chat.query(Notice))
+
+
+class TestConversationFilter:
+    SESSIONS = [
+        session_wire("s1", "Grant budget sanity check", last="2026-08-08T11:00:00Z"),
+        session_wire("s2", "Draft syllabus", last="2026-08-07T11:00:00Z"),
+        session_wire("s3", "Budget for the lab", last="2020-01-01T11:00:00Z"),
+    ]
+
+    async def test_typing_filters_titles_locally(self) -> None:
+        api = catalog_for(routing_handler(sessions=self.SESSIONS))
+        screen = ConversationList(lambda: api, on_open=Opened())
+        app = Host()
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+            screen.filter_input.focus()
+            for ch in "budget":
+                await pilot.press(ch)
+            await pilot.pause()
+            titles = [item.summary.title for item in screen.query(ConversationRow)]
+            assert titles == ["Grant budget sanity check", "Budget for the lab"]
+            assert "2 of 3 match" in status_text(screen)
+        await api.aclose()
+
+    async def test_no_match_says_so(self) -> None:
+        api = catalog_for(routing_handler(sessions=self.SESSIONS))
+        screen = ConversationList(lambda: api, on_open=Opened())
+        app = Host()
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+            screen.filter_input.focus()
+            for ch in "zzz":
+                await pilot.press(ch)
+            await pilot.pause()
+            assert not screen.query(ConversationRow)
+            assert "No matches" in status_text(screen)
+        await api.aclose()
+
+    async def test_enter_searches_the_server_when_enabled(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/sessions/search"):
+                assert request.url.params["q"] == "lab"
+                return httpx.Response(
+                    200,
+                    json={
+                        "results": [
+                            {
+                                "sessionId": "s9",
+                                "title": "Lab notes",
+                                "lastMessageAt": "2026-08-08T11:00:00Z",
+                                "matchKind": "text",
+                                "snippet": "the lab needs a fridge",
+                            }
+                        ],
+                        "textSearchAvailable": True,
+                    },
+                )
+            return routing_handler(sessions=self.SESSIONS)(request)
+
+        api = catalog_for(handler)
+        screen = ConversationList(lambda: api, on_open=Opened())
+        app = Host()
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+            screen.filter_input.focus()
+            for ch in "lab":
+                await pilot.press(ch)
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+            titles = [item.summary.title for item in screen.query(ConversationRow)]
+            assert titles == ["Lab notes"]
+            assert "1 result(s)" in status_text(screen)
+            from .conftest import rendered_text
+
+            frame = rendered_text(app)
+            assert "the lab needs a fridge" in frame
+        await api.aclose()
+
+    async def test_enter_falls_back_when_search_is_off(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/sessions/search"):
+                return httpx.Response(404, json={"detail": "Not Found"})
+            return routing_handler(sessions=self.SESSIONS)(request)
+
+        api = catalog_for(handler)
+        screen = ConversationList(lambda: api, on_open=Opened())
+        app = Host()
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+            screen.filter_input.focus()
+            for ch in "budget":
+                await pilot.press(ch)
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+            assert len(screen.query(ConversationRow)) == 2
+            assert "message search is off" in status_text(screen)
+        await api.aclose()

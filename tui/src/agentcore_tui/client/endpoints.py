@@ -94,6 +94,12 @@ class Endpoints:
         return f"{self.session(session_id)}/unread"
 
     @property
+    def sessions_search(self) -> str:
+        """Full-text search over the user's conversations. 404 when the
+        deployment has the feature off; callers fall back to a local filter."""
+        return self._join("sessions/search")
+
+    @property
     def sessions_bulk_delete(self) -> str:
         return self._join("sessions/bulk-delete")
 
@@ -108,6 +114,18 @@ class Endpoints:
     def session_pending_interrupts(self, session_id: str) -> str:
         """How a client discovers a turn that paused while it was disconnected."""
         return f"{self.session(session_id)}/pending-interrupts"
+
+    # -- files ---------------------------------------------------------------
+    #
+    # Uploads are two-step like the SPA's: presign, PUT the bytes straight to
+    # S3, then complete. The bytes never pass through app-api.
+
+    @property
+    def files_presign(self) -> str:
+        return self._join("files/presign")
+
+    def file_complete(self, upload_id: str) -> str:
+        return f"{self._join('files')}/{quote(upload_id, safe='')}/complete"
 
     # -- discovery and preferences -------------------------------------------
 

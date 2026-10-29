@@ -42,6 +42,7 @@ unnoticed.
 from __future__ import annotations
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Generic, Protocol, TypeVar
@@ -119,6 +120,16 @@ class TurnSink(Protocol):
     async def on_title(self, title: str) -> None:
         """The server named this conversation. May arrive after the answer."""
 
+    async def on_context(self, used_tokens: int | None, window: int | None) -> None:
+        """How full the model's context is after this turn: the last call's
+        input size against the model's window. Either may be unknown."""
+
+    async def on_elapsed(self, seconds: float | None) -> None:
+        """Wall-clock time the turn took, or None to clear."""
+
+    async def on_truncated(self) -> None:
+        """The answer stopped at the token limit and can be continued."""
+
     async def on_interrupt(self, event: InterruptEvent) -> None:
         """The turn paused and is waiting on the user.
 
@@ -158,6 +169,7 @@ class BaseTurnController(ABC, Generic[AccumulatorT]):
         self._accumulator: AccumulatorT | None = None
         self._text_buffer = ""
         self._reasoning_buffer = ""
+        self._started_at: float | None = None
         self._handlers: dict[type, EventHandler] = self._build_handlers()
 
     # -- per-dialect hooks ---------------------------------------------------
@@ -220,8 +232,15 @@ class BaseTurnController(ABC, Generic[AccumulatorT]):
         self._text_buffer = ""
         self._reasoning_buffer = ""
         self._busy = True
+        self._started_at = time.monotonic()
+        await self._sink.on_elapsed(None)
         await self._sink.on_state("Thinking...", busy=True)
         return message
+
+    @property
+    def elapsed(self) -> float | None:
+        """Seconds since the turn began, or None when idle."""
+        return None if self._started_at is None else time.monotonic() - self._started_at
 
     async def stream(self) -> None:
         """Consume the event stream for the turn started by :meth:`begin`.
@@ -307,6 +326,9 @@ class BaseTurnController(ABC, Generic[AccumulatorT]):
         """Return to idle. Idempotent, because cancel and completion can race."""
         self._busy = False
         self._reset_pause()
+        if self._started_at is not None:
+            await self._sink.on_elapsed(time.monotonic() - self._started_at)
+            self._started_at = None
         self._accumulator = None
         self._text_buffer = ""
         self._reasoning_buffer = ""
@@ -438,6 +460,10 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         self._client_tools: list[Mapping[str, Any]] = list(client_tools or [])
         self._paused = False
         self._pending_responses: list[Mapping[str, Any]] = []
+        self._continue_pending = False
+        self._can_continue = False
+        #: Upload ids queued by `/attach`, sent with (and cleared by) the next prompt.
+        self._pending_uploads: list[str] = []
         # The title can arrive as an event *or* only be visible on the finished
         # accumulator, and `complete()` checks the latter. Tracking it here stops
         # a turn that got the event from reporting the same title twice.
@@ -446,6 +472,8 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
 
     def _new_accumulator(self) -> AgentTurnAccumulator:
         self._title_reported = False
+        if not self._continue_pending:
+            self._can_continue = False
         return AgentTurnAccumulator()
 
     def _build_handlers(self) -> dict[type, EventHandler]:
@@ -467,6 +495,15 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         }
 
     def _events(self, prompt: str) -> AsyncIterator[Any]:
+        if self._continue_pending:
+            self._continue_pending = False
+            return self._client_supplier().stream(
+                session_id=self._store.session_id,
+                message="",
+                enabled_tools=self._enabled_tools,
+                client_tools=self._client_tools or None,
+                continue_truncated=True,
+            )
         if self._pending_responses:
             # A resume. No new user message; the paused turn continues.
             responses, self._pending_responses = self._pending_responses, []
@@ -477,12 +514,24 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
                 client_tools=self._client_tools or None,
                 interrupt_responses=responses,
             )
+        uploads, self._pending_uploads = self._pending_uploads, []
         return self._client_supplier().stream(
             session_id=self._store.session_id,
             message=prompt,
             enabled_tools=self._enabled_tools,
             client_tools=self._client_tools or None,
+            file_upload_ids=uploads or None,
         )
+
+    # -- attachments ---------------------------------------------------------
+
+    def attach(self, upload_id: str) -> None:
+        """Queue an uploaded file for the next prompt."""
+        self._pending_uploads.append(upload_id)
+
+    @property
+    def pending_uploads(self) -> list[str]:
+        return list(self._pending_uploads)
 
     # -- pausing and resuming ------------------------------------------------
 
@@ -490,6 +539,34 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
     def paused(self) -> bool:
         """True while the turn waits on an answer from the user."""
         return self._paused
+
+    @property
+    def can_continue(self) -> bool:
+        """True after a turn ended at the token limit and nothing else has run."""
+        return self._can_continue
+
+    async def continue_truncated(self) -> None:
+        """The web app's Continue: ask the server to extend the cut-off answer.
+
+        No user message is recorded; the server continues the assistant message
+        already in history. The extension streams into a fresh accumulator and
+        is stored as a further assistant message here, since the client has no
+        way to append to a stored one.
+        """
+        if self._busy or not self._can_continue:
+            logger.warning("continue_truncated() with nothing to continue")
+            return
+        logger.info("turn continue session=%s", self._store.session_id)
+        self._can_continue = False
+        self._continue_pending = True
+        self._accumulator = self._new_accumulator()
+        self._text_buffer = ""
+        self._reasoning_buffer = ""
+        self._busy = True
+        self._started_at = time.monotonic()
+        await self._sink.on_elapsed(None)
+        await self._sink.on_state("Continuing...", busy=True)
+        await self.stream()
 
     async def resume(self, responses: Sequence[Mapping[str, Any]]) -> None:
         """Continue a paused turn with the user's answers.
@@ -552,6 +629,9 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         # current context size rather than the turn's total. Correct for a
         # context gauge, wrong as a "tokens billed" figure.
         await self._sink.on_usage(event.usage)
+        if event.usage is not None:
+            used = event.usage.input_tokens + (event.usage.cache_read_input_tokens or 0) + (event.usage.cache_write_input_tokens or 0)
+            await self._sink.on_context(used, event.context_window)
 
     async def _handle_metadata_summary(self, event: AgentMetadataSummary) -> None:
         # Unreachable against today's server, which swallows this event on
@@ -662,13 +742,9 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
             )
 
         if accumulator.truncated:
-            limit = f" (currently {self._max_tokens:,})" if self._max_tokens else ""
             logger.warning("response truncated at max_tokens=%s", self._max_tokens)
-            await self._sink.on_notice(
-                "Response cut off at the token limit.",
-                hint=f"Raise `max_tokens` in your config file{limit}.",
-                error=True,
-            )
+            self._can_continue = True
+            await self._sink.on_truncated()
 
         for citation_count in ([len(accumulator.citations)] if accumulator.citations else []):
             # Batched deliberately: one notice per turn, not one per citation.

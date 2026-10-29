@@ -175,6 +175,8 @@ class AgentStreamClient:
         enabled_tools: Sequence[str] | None,
         client_tools: Sequence[Mapping[str, Any]] | None = None,
         interrupt_responses: Sequence[Mapping[str, Any]] | None = None,
+        continue_truncated: bool = False,
+        file_upload_ids: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """The `InvocationRequest` shape, relayed verbatim by app-api.
 
@@ -226,6 +228,14 @@ class AgentStreamClient:
             # A resume: no new user message, the paused turn continues with
             # these answers. Same shape as the SPA sends.
             payload["interrupt_responses"] = [dict(entry) for entry in interrupt_responses]
+        if continue_truncated:
+            # The web app's "Continue": an empty message plus this flag makes
+            # the server continue the truncated assistant message in place.
+            payload["continue_truncated"] = True
+        if file_upload_ids:
+            # Files already uploaded to the session (`/attach`); the server
+            # resolves them from S3 and hands them to the model with this turn.
+            payload["file_upload_ids"] = list(file_upload_ids)
         return payload
 
     def _map_error(self, response: httpx.Response, model_id: str) -> Exception:
@@ -269,6 +279,8 @@ class AgentStreamClient:
         enabled_tools: Sequence[str] | None = None,
         client_tools: Sequence[Mapping[str, Any]] | None = None,
         interrupt_responses: Sequence[Mapping[str, Any]] | None = None,
+        continue_truncated: bool = False,
+        file_upload_ids: Sequence[str] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Yield parsed events for one agent turn, or for the resume of a paused one.
 
@@ -286,6 +298,8 @@ class AgentStreamClient:
             enabled_tools=enabled_tools,
             client_tools=client_tools,
             interrupt_responses=interrupt_responses,
+            continue_truncated=continue_truncated,
+            file_upload_ids=file_upload_ids,
         )
 
         logger.info(

@@ -43,6 +43,14 @@ def short_model(model_id: str) -> str:
     return "-".join(keep) or name
 
 
+def format_elapsed(seconds: float) -> str:
+    """``4.2s`` under a minute, ``1m 05s`` above."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, rest = divmod(int(round(seconds)), 60)
+    return f"{minutes}m {rest:02d}s"
+
+
 def format_usage(usage: Usage | None) -> str:
     """Render token counts, including cache hits when the model reports them."""
     if usage is None:
@@ -70,6 +78,8 @@ class StatusBar(Horizontal):
         self._usage_text = ""
         self._turns = 0
         self._line = ""
+        self._context_text = ""
+        self._elapsed_text = ""
         self._busy = False
         self._spinner_timer: Timer | None = None
         self._spinner_index = 0
@@ -96,6 +106,10 @@ class StatusBar(Horizontal):
             segments.append(f"{self._turns} turn{'s' if self._turns != 1 else ''}")
         if self._usage_text:
             segments.append(self._usage_text)
+        if self._context_text:
+            segments.append(self._context_text)
+        if self._elapsed_text:
+            segments.append(self._elapsed_text)
         return SEPARATOR.join(segments)
 
     def _state_text(self) -> str:
@@ -135,4 +149,21 @@ class StatusBar(Horizontal):
 
     def set_turns(self, turns: int) -> None:
         self._turns = turns
+        self.refresh_line()
+
+    def set_context(self, used_tokens: int | None, window: int | None) -> None:
+        """Context occupancy. Shown as a percentage when the window is known,
+        else as the raw count, else hidden. This is the *last call's* input
+        size — correct for a gauge, wrong as a running total."""
+        if not used_tokens:
+            self._context_text = ""
+        elif window:
+            percent = min(100, round(100 * used_tokens / window))
+            self._context_text = f"ctx {percent}%"
+        else:
+            self._context_text = f"ctx {used_tokens:,}"
+        self.refresh_line()
+
+    def set_elapsed(self, seconds: float | None) -> None:
+        self._elapsed_text = format_elapsed(seconds) if seconds is not None else ""
         self.refresh_line()

@@ -464,3 +464,64 @@ class TestLifecycle:
             pass
         assert not injected.is_closed
         await injected.aclose()
+
+
+class TestUploadFile:
+    """Presign → PUT the bytes to storage → complete, exactly like the SPA."""
+
+    def handler(self, seen: list[httpx.Request]) -> Any:
+        def respond(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            if request.url.path.endswith("/files/presign"):
+                return httpx.Response(200, json={"uploadId": "up-1", "presignedUrl": "https://bucket.example/up-1?sig=x", "expiresAt": "t"})
+            if request.url.host == "bucket.example":
+                return httpx.Response(200)
+            if request.url.path.endswith("/files/up-1/complete"):
+                return httpx.Response(
+                    200, json={"uploadId": "up-1", "status": "completed", "s3Uri": "s3://b/k", "filename": "notes.md", "sizeBytes": 5}
+                )
+            return httpx.Response(404)
+
+        return respond
+
+    async def test_three_legs_in_order(self, tmp_path) -> None:
+        seen: list[httpx.Request] = []
+        target = tmp_path / "notes.md"
+        target.write_text("hello")
+        client = build(self.handler(seen))
+        uploaded = await client.upload_file("sess-1", target)
+        await client.aclose()
+
+        assert [r.url.path for r in seen] == ["/api/files/presign", "/up-1", "/api/files/up-1/complete"]
+        presign = json.loads(seen[0].content)
+        assert presign == {"sessionId": "sess-1", "filename": "notes.md", "mimeType": "text/markdown", "sizeBytes": 5}
+        assert seen[1].method == "PUT" and seen[1].content == b"hello"
+        assert seen[1].headers["content-type"] == "text/markdown"
+        # The storage PUT carries no session header: the presigned URL is the credential.
+        assert "authorization" not in {k.lower() for k in seen[1].headers}
+        assert uploaded.upload_id == "up-1" and uploaded.filename == "notes.md" and uploaded.size_bytes == 5
+
+    async def test_unsupported_extension_never_touches_the_network(self, tmp_path) -> None:
+        from agentcore_tui.errors import UploadError
+
+        seen: list[httpx.Request] = []
+        target = tmp_path / "x.exe"
+        target.write_bytes(b"MZ")
+        client = build(self.handler(seen))
+        with pytest.raises(UploadError, match="unsupported"):
+            await client.upload_file("s", target)
+        assert seen == []
+
+    async def test_storage_rejection_is_an_upload_error(self, tmp_path) -> None:
+        from agentcore_tui.errors import UploadError
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/presign"):
+                return httpx.Response(200, json={"uploadId": "u", "presignedUrl": "https://bucket.example/u", "expiresAt": "t"})
+            return httpx.Response(403)
+
+        target = tmp_path / "a.txt"
+        target.write_text("x")
+        client = build(respond)
+        with pytest.raises(UploadError, match="403"):
+            await client.upload_file("s", target)

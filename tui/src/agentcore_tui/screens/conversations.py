@@ -181,7 +181,10 @@ class ConversationRow(ListItem):
         context = f" · {self.summary.context_percent}% of context" if self.summary.context_percent is not None else ""
         when = _relative_day(self.summary.last_message_at)
         meta = " · ".join(part for part in (when, counts + context) if part)
-        return f"{marker}{escape(self.summary.title)}\n  [dim]{meta}[/]"
+        text = f"{marker}{escape(self.summary.title)}\n  [dim]{meta}[/]"
+        if self.summary.snippet:
+            text += f"\n  [dim]…{escape(self.summary.snippet.strip())}…[/]"
+        return text
 
     def refresh_title(self) -> None:
         self.query_one(Static).update(self._row_text())
@@ -210,6 +213,7 @@ class ConversationList(Screen[None]):
         Binding("u", "toggle_unread", "Unread"),
         Binding("ctrl+r", "reload", "Reload"),
         Binding("m", "load_more", "More"),
+        Binding("slash", "focus_filter", "Filter", key_display="/"),
     ]
 
     def __init__(self, catalog_supplier: CatalogSupplier, *, on_open: OpenHandler) -> None:
@@ -219,12 +223,21 @@ class ConversationList(Screen[None]):
         self._rows: list[ConversationSummary] = []
         self._next_token: str | None = None
         self._busy = False
+        #: Current filter text; empty shows every loaded row.
+        self._filter = ""
+        #: Rows from a server search, shown instead of the loaded page.
+        self._search_results: list[ConversationSummary] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Input(placeholder="Type to filter · Enter to search everything", id="conversation-filter")
         yield ListView(id="conversation-list")
         yield Label("Loading conversations...", id="conversation-status")
         yield Footer()
+
+    @property
+    def filter_input(self) -> Input:
+        return self.query_one("#conversation-filter", Input)
 
     @property
     def list_view(self) -> ListView:
@@ -243,6 +256,10 @@ class ConversationList(Screen[None]):
 
     async def on_mount(self) -> None:
         self.sub_title = "Conversations"
+        # The list owns focus; the filter is reached with `/`. Composing the
+        # input first would otherwise hand it the initial focus and turn the
+        # first Enter into a search.
+        self.list_view.focus()
         await self._load(reset=True)
 
     async def _load(self, *, reset: bool) -> None:
@@ -270,14 +287,28 @@ class ConversationList(Screen[None]):
         self._next_token = page.next_token
         await self._rebuild()
 
+    def _visible_rows(self) -> list[ConversationSummary]:
+        if self._search_results is not None:
+            return self._search_results
+        if not self._filter:
+            return self._rows
+        needle = self._filter.casefold()
+        return [row for row in self._rows if needle in row.title.casefold()]
+
     async def _rebuild(self) -> None:
         await self.list_view.clear()
-        if not self._rows:
+        if not self._rows and self._search_results is None:
             self.status.update("No conversations yet. Press Esc and ask something.")
             return
 
+        rows = self._visible_rows()
+        if not rows:
+            where = "match" if self._search_results is None else "result"
+            self.status.update(f"No {where}es for '{self._filter}'. Enter searches message text; Ctrl+U clears.")
+            return
+
         by_group: dict[str, list[ConversationSummary]] = {}
-        for row in self._rows:
+        for row in rows:
             by_group.setdefault(group_for(row.last_message_at), []).append(row)
 
         for heading in GROUP_ORDER:
@@ -289,16 +320,65 @@ class ConversationList(Screen[None]):
                 await self.list_view.append(ConversationRow(summary))
 
         # Land on the first conversation, not the heading above it, so Enter
-        # opens something straight away.
+        # opens something straight away. Focus moves to the list only when the
+        # user is not typing in the filter; a rebuild runs on every keystroke.
         for index, item in enumerate(self.list_view.children):
             if isinstance(item, ConversationRow):
                 self.list_view.index = index
                 break
-        self.list_view.focus()
+        if not self.filter_input.has_focus:
+            self.list_view.focus()
 
-        more = " · press m for more" if self._next_token else ""
         self.status.remove_class("-error")
-        self.status.update(f"{len(self._rows)} conversation(s){more}")
+        if self._search_results is not None:
+            self.status.update(f"{len(rows)} result(s) for '{self._filter}' · Ctrl+U clears")
+        elif self._filter:
+            self.status.update(f"{len(rows)} of {len(self._rows)} match '{self._filter}' · Enter searches message text")
+        else:
+            more = " · press m for more" if self._next_token else ""
+            self.status.update(f"{len(self._rows)} conversation(s){more}")
+
+    # -- filtering -----------------------------------------------------------
+
+    def action_focus_filter(self) -> None:
+        self.filter_input.focus()
+
+    async def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "conversation-filter":
+            return
+        self._filter = event.value.strip()
+        # Typing again after a search returns to the local filter.
+        self._search_results = None
+        await self._rebuild()
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "conversation-filter":
+            event.stop()
+            await self._search(event.value)
+
+    async def _search(self, raw_query: str) -> None:
+        """Enter in the filter: search message text server-side, when offered."""
+        query = raw_query.strip()
+        if not query:
+            self._search_results = None
+            await self._rebuild()
+            self.list_view.focus()
+            return
+        self.status.update(f"Searching for '{query}'...")
+        try:
+            results = await self._catalog_supplier().search_conversations(query)
+        except AgentCoreTuiError as exc:
+            self.status.update(f"Search failed: {exc.message}")
+            self.status.add_class("-error")
+            return
+        if results is None:
+            # Not enabled on this deployment; the local title filter already applies.
+            self.status.update(f"{len(self._visible_rows())} title match(es) · message search is off on this server")
+            self.list_view.focus()
+            return
+        self._search_results = results
+        await self._rebuild()
+        self.list_view.focus()
 
     # -- actions -------------------------------------------------------------
 
@@ -313,7 +393,14 @@ class ConversationList(Screen[None]):
             await self._load(reset=False)
 
     async def action_open(self) -> None:
-        """Restore the conversation and hand it to the caller."""
+        """Restore the conversation and hand it to the caller.
+
+        Bound to Enter with priority so it works from the list; when the filter
+        has focus, Enter means "search" instead and is forwarded there.
+        """
+        if self.filter_input.has_focus:
+            await self._search(self.filter_input.value)
+            return
         summary = self.selected()
         if summary is None:
             return
