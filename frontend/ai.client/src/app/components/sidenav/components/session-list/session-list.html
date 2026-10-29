@@ -23,19 +23,109 @@
             <span class="text-sm text-state-danger-500 dark:text-state-danger-400">Failed to load sessions</span>
         </div>
     } @else {
-        @if (groupedSessions().length > 0) {
+        @if (groupedSessions().length > 0 || pinnedAgents().length > 0) {
             <!-- Second beat of the sidebar's entry (the nav links above are the
                  first), on the shared .sidenav-body-enter so the chat sidebar and
                  the admin console's arrive identically. Doubles as the
                  skeleton-to-loaded transition when sessions land after boot. -->
             <div class="sidenav-body-enter flex flex-col gap-y-3" style="animation-delay: 60ms">
-                @for (group of groupedSessions(); track group.label; let gi = $index) {
+                <!-- Pinned: a drop list of its own. Shown while there are pins, and
+                     while any row is dragging so it can be the first pin's target.
+                     Two drop lists in all — this one and the time buckets as one
+                     list below — connected to each other: a drop here pins, a drop
+                     from here onto the buckets unpins. Sorting is off in both
+                     (pins order by pin time). Rows are draggable with the mouse at
+                     once, or on touch after a press-and-hold (dragStartDelay) so a
+                     drag doesn't fight the drawer's scroll; not while renaming.
+                     The Pin/Unpin menu item stays the keyboard path.
+                     Pinned Agents (#712) list first, in the same drop list:
+                     dragging one out unpins it, like a conversation. They are
+                     pinned from the store, never by a drop here. -->
+                @if (hasPins() || isDragging()) {
+                    <section>
+                        <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-600 dark:text-gray-300">Pinned</h3>
+                        <ul
+                            role="list"
+                            cdkDropList
+                            [id]="pinnedListId"
+                            [cdkDropListConnectedTo]="[unpinnedListId]"
+                            cdkDropListSortingDisabled
+                            (cdkDropListDropped)="onPinnedDrop($event)"
+                            (cdkDropListEntered)="isOverPinned.set(true)"
+                            (cdkDropListExited)="isOverPinned.set(false)"
+                            [attr.data-over]="isOverPinned() ? '' : null"
+                            class="group/pinned flex flex-col gap-y-0.5 rounded-md transition-colors data-over:bg-primary-50 dark:data-over:bg-white/5"
+                        >
+                            <!-- No (cdkDragStarted) on Agent rows: they start inside
+                                 Pinned, so there is no drop zone to reveal first. -->
+                            @for (agent of pinnedAgents(); track agent.agentId) {
+                                <li
+                                    cdkDrag
+                                    [cdkDragData]="agent"
+                                    [cdkDragStartDelay]="dragStartDelay"
+                                    [cdkDragDisabled]="agent.locked"
+                                    [cdkDragPreviewClass]="dragPreviewClass"
+                                    (cdkDragEnded)="onDragEnded()"
+                                    class="group relative"
+                                >
+                                    <ng-container *ngTemplateOutlet="agentRow; context: { $implicit: agent }" />
+                                </li>
+                            }
+                            @for (session of pinnedSessions(); track session.sessionId) {
+                                <li
+                                    cdkDrag
+                                    [cdkDragData]="session"
+                                    [cdkDragStartDelay]="dragStartDelay"
+                                    [cdkDragDisabled]="renamingSessionId() === session.sessionId"
+                                    [cdkDragPreviewClass]="dragPreviewClass"
+                                    (cdkDragStarted)="onDragStarted()"
+                                    (cdkDragEnded)="onDragEnded()"
+                                    class="group relative"
+                                >
+                                    <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+                                </li>
+                            }
+                            @if (!hasPins()) {
+                                <li
+                                    class="flex min-h-8 items-center justify-center gap-1.5 rounded-md border border-dashed border-gray-300 group-data-over/pinned:hidden px-2 py-1.5 text-xs/5 text-gray-600 transition-colors group-data-over/pinned:border-primary-500 group-data-over/pinned:text-gray-900 dark:border-white/15 dark:text-gray-400 dark:group-data-over/pinned:border-primary-400 dark:group-data-over/pinned:text-white"
+                                >
+                                    <ng-icon name="appPin" class="size-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Drop here to pin</span>
+                                </li>
+                            }
+                        </ul>
+                    </section>
+                }
+
+                <!-- Every time bucket together is the other drop list. Rows nest
+                     inside the buckets' lists; CDK finds them through DI, and with
+                     sorting off only the drop matters (unpin, when from Pinned). -->
+                <div
+                    cdkDropList
+                    [id]="unpinnedListId"
+                    [cdkDropListConnectedTo]="[pinnedListId]"
+                    cdkDropListSortingDisabled
+                    (cdkDropListDropped)="onUnpinnedDrop($event)"
+                    class="flex flex-col gap-y-3"
+                >
+                @for (group of timeGroups(); track group.label; let gi = $index) {
                     <section>
                         <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-600 dark:text-gray-300">{{ group.label }}</h3>
                         <ul role="list" class="flex flex-col gap-y-0.5">
                             @for (entry of group.entries; track entry.kind === 'session' ? entry.session.sessionId : 'project:' + entry.projectId) {
                                 @if (entry.kind === 'session') {
-                                    <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: entry.session }" />
+                                    <li
+                                        cdkDrag
+                                        [cdkDragData]="entry.session"
+                                        [cdkDragStartDelay]="dragStartDelay"
+                                        [cdkDragDisabled]="renamingSessionId() === entry.session.sessionId"
+                                        [cdkDragPreviewClass]="dragPreviewClass"
+                                        (cdkDragStarted)="onDragStarted()"
+                                        (cdkDragEnded)="onDragEnded()"
+                                        class="group relative"
+                                    >
+                                        <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: entry.session }" />
+                                    </li>
                                 } @else {
                                     <!-- A project's tasks in this bucket, under the project's name. -->
                                     <li>
@@ -53,8 +143,11 @@
                                             class="ml-3.5 flex flex-col gap-y-0.5 border-l border-gray-200 pl-1 dark:border-white/10"
                                             [attr.aria-labelledby]="'session-group-' + gi + '-' + entry.projectId"
                                         >
+                                            <!-- Project tasks aren't draggable: they can't be pinned. -->
                                             @for (session of entry.sessions; track session.sessionId) {
-                                                <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+                                                <li class="group relative">
+                                                    <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+                                                </li>
                                             }
                                         </ul>
                                     </li>
@@ -63,6 +156,7 @@
                         </ul>
                     </section>
                 }
+                </div>
 
                 <ng-container *ngTemplateOutlet="loadMoreSentinel" />
             </div>
@@ -105,9 +199,58 @@
         }
     </ng-template>
 
-    <!-- One conversation row: shared by plain rows and by rows under a project heading. -->
+    <!-- One pinned Agent row's contents: opens a new chat with the Agent, as the
+         store's Start chat does. Same row and menu styling as a conversation.
+         A locked role pin can't be removed, so it gets no menu. -->
+    <ng-template #agentRow let-agent>
+        <a
+            [routerLink]="['/']"
+            [queryParams]="{ assistantId: agent.agentId }"
+            (click)="onAgentClick()"
+            class="flex min-h-8 items-center gap-2 rounded-md px-2 py-1 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+        >
+            <app-agent-icon class="shrink-0" [agentId]="agent.agentId" [iconUrl]="agent.iconUrl" [emoji]="agent.emoji" [size]="28" />
+            <span class="min-w-0 truncate">{{ agent.name }}</span>
+        </a>
+        @if (!agent.locked) {
+            <button
+                type="button"
+                [cdkMenuTriggerFor]="agentMenu"
+                [cdkMenuPosition]="menuPositions"
+                class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                [attr.aria-label]="'Options for agent: ' + agent.name"
+                aria-haspopup="menu"
+            >
+                <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
+            </button>
+            <ng-template #agentMenu>
+                <div
+                    cdkMenu
+                    class="session-options-menu min-w-36 rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                    role="menu"
+                    aria-orientation="vertical"
+                >
+                    <button
+                        cdkMenuItem
+                        type="button"
+                        (click)="onUnpinAgentClick($event, agent)"
+                        class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                        role="menuitem"
+                    >
+                        <ng-icon name="appPinOff" class="size-4" aria-hidden="true" />
+                        <span>Unpin</span>
+                    </button>
+                </div>
+            </ng-template>
+        }
+    </ng-template>
+
+    <!-- One conversation row's contents, inside the row's <li class="group relative">.
+         Draggable rows put cdkDrag on that <li> where they are inserted, not in
+         here: an embedded view resolves DI from where its template is declared
+         (out here, outside both drop lists), so a cdkDrag inside this template
+         would never find its cdkDropList. -->
     <ng-template #sessionRow let-session>
-        <li class="group relative">
             @if (renamingSessionId() === session.sessionId) {
                 <!-- Inline rename input -->
                 <div class="flex items-center gap-1 rounded-md px-2 py-1">
@@ -131,6 +274,11 @@
                     (click)="onSessionClick(session)"
                     class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                 >
+                    @if (isIncognito(session)) {
+                        <!-- Incognito chat (#1738): this conversation adds nothing to memory. -->
+                        <ng-icon name="incognitoIcon" class="mr-1.5 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                        <span class="sr-only">Incognito chat:</span>
+                    }
                     @if (isTitlePending(session)) {
                         <!-- Title still generating (new conversation) — shimmer
                              until the session_title event lands or the stream ends.
@@ -295,6 +443,5 @@
                     </div>
                 </ng-template>
             }
-        </li>
     </ng-template>
 </nav>

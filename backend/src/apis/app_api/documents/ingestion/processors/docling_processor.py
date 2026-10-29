@@ -250,6 +250,10 @@ async def process_with_docling(
             tmp_file.write(file_bytes)
             tmp_file.flush()
             tmp_file_path = tmp_file.name
+            # Close our handle before the converter reopens the file by path and
+            # before the unlink below; Windows refuses both while it is open.
+            # The context manager's own close() is then a no-op.
+            tmp_file.close()
 
             if mime_type == "application/pdf" or tmp_file_path.lower().endswith(".pdf"):
                 logger.info(f"Using PDF specific options...")

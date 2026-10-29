@@ -1,9 +1,10 @@
-import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector, effect, untracked } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy, ApplicationRef, computed, signal, afterNextRender, Injector, effect, untracked } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
+import { CdkDrag, CdkDragDrop, CdkDropList } from '@angular/cdk/drag-drop';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack } from '@ng-icons/heroicons/outline';
@@ -24,6 +25,17 @@ import { FEATURES } from '../../../../services/features';
 import { UNTITLED_SESSION_TITLE } from './session-title-filter';
 import { bindingQueryParams } from '../../../../session/services/session/conversation-binding.service';
 import { appPin, appPinOff } from './pin-icons';
+import { IncognitoChatService, incognitoIcon } from '../../../../session/services/incognito';
+import { AgentPinService } from '../../../../agents/services/agent-pin.service';
+import { AgentIconComponent } from '../../../../agents/components/agent-icon.component';
+import { PinnedAgent } from '../../../../agents/models/store.model';
+
+/** What a dragged row carries: a conversation, or (from Pinned only) a pinned Agent. */
+type DragData = SessionMetadata | PinnedAgent;
+
+function isPinnedAgent(data: DragData): data is PinnedAgent {
+  return 'agentId' in data && !('sessionId' in data);
+}
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -63,8 +75,8 @@ export function groupProjectSessions(
 
 @Component({
   selector: 'app-session-list',
-  imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff })],
+  imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, CdkDrag, CdkDropList, InViewDirective, AgentIconComponent],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff, incognitoIcon })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -77,8 +89,11 @@ export class SessionList {
   private dialog = inject(Dialog);
   private router = inject(Router);
   private injector = inject(Injector);
+  private appRef = inject(ApplicationRef);
   private userService = inject(UserService);
   private projectsService = inject(ProjectsService);
+  private incognitoChat = inject(IncognitoChatService);
+  private agentPinService = inject(AgentPinService);
   /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
   private readonly projectsOn = inject(FEATURES).projects;
 
@@ -138,12 +153,11 @@ export class SessionList {
    * Computed signal that groups sessions by time period:
    * Today, Yesterday, Last 7 Days, Last 30 Days, Older.
    */
-  readonly groupedSessions = computed(() => {
+  readonly timeGroups = computed(() => {
     // Pinned conversations get their own group on top and leave their time bucket.
-    const pinned = this.sessionService.pinnedSessions();
     const pinnedIds = this.sessionService.pinnedSessionIds();
     const sessions = this.sessions()?.filter(s => !pinnedIds.has(s.sessionId)) ?? [];
-    if (sessions.length === 0 && pinned.length === 0) return [];
+    if (sessions.length === 0) return [];
 
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -176,14 +190,33 @@ export class SessionList {
 
     // Only return groups that have sessions
     const names = this.projectNames();
-    const timeGroups = groups
+    return groups
       .filter(g => g.sessions.length > 0)
       .map(g => ({
         ...g,
-        entries: this.projectsOn
+        entries: (this.projectsOn
           ? groupProjectSessions(g.sessions, names)
-          : g.sessions.map(session => ({ kind: 'session' as const, session })),
+          : g.sessions.map(session => ({ kind: 'session' as const, session }))) as SessionListEntry[],
       }));
+  });
+
+  /** The user's pinned conversations, most recently pinned first. */
+  readonly pinnedSessions = this.sessionService.pinnedSessions;
+
+  /**
+   * The user's pinned Agents (#712), listed in Pinned above the pinned
+   * conversations. The same session-wide list the Agents pages read, so a pin
+   * added in the store shows up here at once. A failed load just lists none.
+   */
+  readonly pinnedAgents = this.agentPinService.pins;
+
+  /** Pinned has something to show: pinned Agents, pinned conversations, or both. */
+  readonly hasPins = computed(() => this.pinnedAgents().length > 0 || this.pinnedSessions().length > 0);
+
+  /** Every group the list shows: Pinned (when there are pins) above the time buckets. */
+  readonly groupedSessions = computed(() => {
+    const pinned = this.pinnedSessions();
+    const timeGroups = this.timeGroups();
     if (pinned.length === 0) return timeGroups;
     return [
       {
@@ -195,7 +228,38 @@ export class SessionList {
     ];
   });
 
+  /** A conversation row is being dragged; shows the Pinned drop zone even with no pins. */
+  protected readonly isDragging = signal(false);
+
+  /** The dragged row is over the Pinned list. */
+  protected readonly isOverPinned = signal(false);
+
+  /** Touch needs a short press-and-hold so a drag never fights the drawer's scroll. */
+  protected readonly dragStartDelay = { touch: 300, mouse: 0 };
+
+  /**
+   * Classes for the floating copy of a dragged row. CDK appends it to <body>,
+   * outside this component's encapsulated styles, so it is styled with global
+   * Tailwind utilities (dark mode included) rather than the component CSS.
+   * The background is `!important`: CDK resets the preview's popover styles
+   * (`background: none`) in its own cascade layer, which outranks utilities.
+   */
+  protected readonly dragPreviewClass = [
+    'list-none', 'rounded-md', 'bg-white!', 'shadow-lg', 'ring-1', 'ring-black/5',
+    'dark:bg-gray-800!', 'dark:ring-white/10',
+  ];
+
+  protected readonly pinnedListId = 'session-list-pinned';
+  protected readonly unpinnedListId = 'session-list-unpinned';
+
   constructor() {
+    // Pinned Agents load once the session list has loaded, which is also the
+    // signal that the user is signed in. `load()` is a no-op once it succeeds.
+    effect(() => {
+      if (this.sessionsResource.value() == null) return;
+      untracked(() => void this.agentPinService.load());
+    });
+
     // Project names load once, and only for someone who has a project task. The
     // projects page shares this list, so a project created or renamed there is
     // already current here.
@@ -433,6 +497,14 @@ export class SessionList {
    * @param session - Session metadata
    * @returns Display title
    */
+  /**
+   * Incognito chat (#1738): from the row, or from this tab when it started
+   * the conversation and the row's preferences haven't arrived yet.
+   */
+  protected isIncognito(session: SessionMetadata): boolean {
+    return session.preferences?.incognito === true || this.incognitoChat.isIncognito(session.sessionId);
+  }
+
   protected getSessionTitle(session: SessionMetadata): string {
     return session.title || UNTITLED_SESSION_TITLE;
   }
@@ -629,14 +701,74 @@ export class SessionList {
     const pin = !this.isPinned(session);
 
     // Deferred past the CDK menu's close, for the same reason as onToggleReadClick.
-    queueMicrotask(() => {
-      this.sessionService.setSessionPinned(session.sessionId, pin).catch(error => {
-        console.error('Failed to update pin:', error);
-        this.toastService.error(
-          pin ? 'Failed to pin' : 'Failed to unpin',
-          'There was an error updating the conversation. Please try again.'
-        );
-      });
+    queueMicrotask(() => this.setPinned(session, pin));
+  }
+
+  /**
+   * A row started dragging. Renders the Pinned drop zone synchronously: CDK
+   * measures every connected list right after this event, so a zone that
+   * appeared on the next change-detection pass would be measured in the wrong
+   * place (or not at all, when there were no pins).
+   */
+  protected onDragStarted(): void {
+    this.isDragging.set(true);
+    this.appRef.tick();
+  }
+
+  protected onDragEnded(): void {
+    this.isDragging.set(false);
+    this.isOverPinned.set(false);
+  }
+
+  /**
+   * A row dropped on Pinned: pin it, unless it came from Pinned already. Only
+   * conversations arrive from outside Pinned; Agents are pinned from the store.
+   */
+  protected onPinnedDrop(event: CdkDragDrop<unknown, unknown, DragData>): void {
+    if (event.previousContainer === event.container) return;
+    const data = event.item.data;
+    if (isPinnedAgent(data)) return;
+    this.setPinned(data, true);
+  }
+
+  /** A row dropped on the rest of the list: unpin it (conversation or Agent) if it came from Pinned. */
+  protected onUnpinnedDrop(event: CdkDragDrop<unknown, unknown, DragData>): void {
+    if (event.previousContainer === event.container) return;
+    const data = event.item.data;
+    if (isPinnedAgent(data)) {
+      this.unpinAgent(data);
+    } else {
+      this.setPinned(data, false);
+    }
+  }
+
+  /** A pinned Agent opens a new chat with it, as the store's Start chat does. */
+  protected onAgentClick(): void {
+    this.sidenavService.close();
+  }
+
+  protected onUnpinAgentClick(event: Event, agent: PinnedAgent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    // Deferred past the CDK menu's close, for the same reason as onToggleReadClick.
+    queueMicrotask(() => this.unpinAgent(agent));
+  }
+
+  /** The row leaves right away; AgentPinService puts it back if the request fails. */
+  private unpinAgent(agent: PinnedAgent): void {
+    this.agentPinService.unpin(agent.agentId).catch(error => {
+      console.error('Failed to unpin agent:', error);
+      this.toastService.error('Failed to unpin', 'There was an error updating the agent. Please try again.');
+    });
+  }
+
+  private setPinned(session: SessionMetadata, pin: boolean): void {
+    this.sessionService.setSessionPinned(session.sessionId, pin).catch(error => {
+      console.error('Failed to update pin:', error);
+      this.toastService.error(
+        pin ? 'Failed to pin' : 'Failed to unpin',
+        'There was an error updating the conversation. Please try again.'
+      );
     });
   }
 

@@ -220,7 +220,8 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         compaction_config: Optional[CompactionConfig] = None,
         user_id: Optional[str] = None,
         summarization_strategy_id: Optional[str] = None,
-        long_term_memory: bool = True,
+        memory_retrieval: bool = True,
+        memory_extraction: bool = True,
         **kwargs: Any,
     ):
         """
@@ -232,12 +233,13 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             compaction_config: Compaction configuration (None = disabled)
             user_id: User ID for DynamoDB session lookup
             summarization_strategy_id: Strategy ID for LTM summary retrieval
-            long_term_memory: False for an Agent conversation. Nothing is
-                retrieved into its messages, and every event it writes skips
-                long-term extraction (``_SkipExtractionClient``), so its
-                knowledge-base-augmented prompts never become facts about the
-                user. Compaction then has no extracted summary for the session
-                and uses ``_generate_fallback_summary``.
+            memory_retrieval: False means nothing is retrieved into messages
+                (Agent conversations and the "off" memory mode).
+            memory_extraction: False means every event written skips long-term
+                extraction (``_SkipExtractionClient``), so the conversation never
+                becomes facts about the user (Agent conversations, "read only"
+                and "off"). Compaction then has no extracted summary for the
+                session and uses ``_generate_fallback_summary``.
         """
         super().__init__(
             agentcore_memory_config=agentcore_memory_config,
@@ -245,8 +247,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             **kwargs,
         )
 
-        self.long_term_memory = long_term_memory
-        if not long_term_memory:
+        self.memory_retrieval = memory_retrieval
+        self.memory_extraction = memory_extraction
+        if not memory_extraction:
             self.memory_client.gmdp_client = _SkipExtractionClient(self.memory_client.gmdp_client)
 
         self.user_id = user_id
@@ -435,7 +438,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         content = messages[-1].get("content")
         if not content or "text" not in content[0]:
             return None
-        if not getattr(self, "long_term_memory", True):
+        if not getattr(self, "memory_retrieval", True):
             return None
         if not getattr(self.config, "retrieval_config", None):
             return None

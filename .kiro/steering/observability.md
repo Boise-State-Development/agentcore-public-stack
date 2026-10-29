@@ -292,9 +292,9 @@ cannot be quietly reversed.
 | `bedrock-invocation-throttles` | At a model's TPM/RPM quota | Users see chats that never respond. Quota increase. |
 | `agentcore-memory-*` | Memory hot path failing | Users experience an agent that has forgotten the conversation. |
 | `agentcore-gateway-*` | MCP calls failing at the gateway | Agents lose tool access. Check gateway targets. |
-| `ddb-*-throttle` | Named table throttling | On-demand, so this is a hot partition or an account limit. Compare `ReadThrottleEvents` vs `WriteThrottleEvents` on that table. |
+| `ddb-throttle-group-*` | At least one table in the group is throttling | The description lists the group's tables; compare `ReadThrottleEvents` vs `WriteThrottleEvents` across them to find it. On-demand, so this is a hot partition or an account limit. While the alarm stays in ALARM, a second table in the same group starting to throttle sends no new notification. |
 | `ddb-user-errors` | DynamoDB rejecting our requests (4xx) | Application code misusing the API. Account-wide, so use CloudTrail or app logs to find the caller. |
-| `lambda-token-enrichment-errors` | **Silent** degradation | Handler is fail-open: logins still work, but MCP tools are losing user-identity claims. |
+| `lambda-errors-group-*` / `lambda-throttles-group-*` | At least one Lambda in the group is failing or throttled | The description lists the members; each function's own `Errors` / `Throttles` metric shows which one. If it is token-enrichment, that is **silent** degradation: the handler is fail-open, so logins still work but MCP tools are losing user-identity claims. |
 | `dlq-kb-ingestion-not-empty` | Work accepted then failed every retry | Will **not** self-clear. Inspect, fix, then replay or drain. |
 | `prompt-cache-session-partial-miss` | One conversation re-writing its prefix every turn | Use the "Sessions by partial-miss waste" widget to find which session. |
 

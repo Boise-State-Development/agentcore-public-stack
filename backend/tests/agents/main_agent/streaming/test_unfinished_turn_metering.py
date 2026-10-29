@@ -32,7 +32,16 @@ USER_ID = "user-fake-0001"
 MODEL_ID = "global.fake.model-v1"
 
 # $1 / $5 per million tokens, so one call of 1,000 in + 100 out is $0.0015.
-PRICING = {"inputPricePerMtok": 1.0, "outputPricePerMtok": 5.0, "snapshotAt": "2026-10-01T00:00:00Z"}
+# The cache rates are the real multipliers of the input rate — 1.25x for a
+# write, 0.1x for a read — so an interrupted call's bucket attribution shows
+# up in the dollars the way it does in production.
+PRICING = {
+    "inputPricePerMtok": 1.0,
+    "outputPricePerMtok": 5.0,
+    "cacheWritePricePerMtok": 1.25,
+    "cacheReadPricePerMtok": 0.1,
+    "snapshotAt": "2026-10-01T00:00:00Z",
+}
 CALL_USAGE = {"inputTokens": 1000, "outputTokens": 100, "totalTokens": 1100}
 CALL_COST = 0.0015
 
@@ -87,8 +96,22 @@ class _FakeAgent:
     turn's prompt or its tool results), ``assistant`` while tools run.
     """
 
-    def __init__(self, events: List[Any], session_manager: _SessionManager, tail_role: str) -> None:
+    def __init__(
+        self,
+        events: List[Any],
+        session_manager: _SessionManager,
+        tail_role: str,
+        prior_usage: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.messages = [{"role": tail_role, "content": [{"text": "hi"}]}]
+        if prior_usage is not None:
+            # An earlier call in this conversation whose usage we did see —
+            # what the cut call's cache split is read from.
+            self.messages.insert(0, {
+                "role": "assistant",
+                "content": [{"text": "earlier"}],
+                "metadata": {"usage": prior_usage},
+            })
         self._events = events
         self._session_manager = session_manager
 
@@ -120,12 +143,15 @@ class _ProbeToolCensus:
         return {"probe": {"calls": call_index, "errors": 0}}
 
 
-def _wrapper() -> SimpleNamespace:
+def _wrapper(caching: bool = False) -> SimpleNamespace:
     return SimpleNamespace(
         model_config=SimpleNamespace(
             model_id=MODEL_ID,
             get_provider=lambda: SimpleNamespace(value="bedrock"),
             long_ttl_static_prefix=lambda: False,
+            # The same predicate the request's cachePoints were placed from.
+            bedrock_cache_points_supported=lambda: caching,
+            caching_enabled=caching,
         ),
         tool_census_hook=_ProbeToolCensus(),
     )
@@ -172,6 +198,8 @@ async def _run(
     projected_input_tokens: Optional[int] = None,
     expect: Optional[type] = None,
     recorded: Optional[_Recorded] = None,
+    caching: bool = False,
+    prior_usage: Optional[Dict[str, Any]] = None,
 ) -> _Recorded:
     monkeypatch.setenv("DYNAMODB_SESSIONS_METADATA_TABLE_NAME", "fake-sessions-metadata")
     recorded = recorded or _Recorded()
@@ -201,12 +229,12 @@ async def _run(
 
         async def _drive() -> None:
             async for _sse in coordinator.stream_response(
-                agent=_FakeAgent(events, session_manager, tail_role),
+                agent=_FakeAgent(events, session_manager, tail_role, prior_usage),
                 prompt="look this up",
                 session_manager=session_manager,
                 session_id=SESSION_ID,
                 user_id=USER_ID,
-                main_agent_wrapper=_wrapper(),
+                main_agent_wrapper=_wrapper(caching),
             ):
                 pass
 
@@ -366,6 +394,15 @@ async def test_a_successful_turn_is_metered_exactly_once(monkeypatch):
 PROJECTED_TOKENS = 2000
 PROJECTED_COST = 0.002
 
+# The partial answer the cut call streamed ("partial" from
+# `_failing_call_start`, then the "…" the Stop rides in on): 8 characters, so
+# 2 tokens on the chars/4 fallback — the fake agent carries no model, so there
+# is no native counter to count it exactly. At $5/M that is $0.00001, and its
+# presence is the point: before this it was recorded as zero output.
+PARTIAL_OUTPUT_TOKENS = 2
+PARTIAL_OUTPUT_COST = 0.00001
+CUT_CALL_COST = PROJECTED_COST + PARTIAL_OUTPUT_COST
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -387,10 +424,11 @@ async def test_an_interrupted_turn_meters_every_completed_call_and_the_one_in_fl
 
     rows = recorded.cost_rows
     # Calls 0-2 at their own ids; the cut call at the id its partial reply
-    # was persisted at, priced from the projected input.
+    # was persisted at, priced from the projected input plus the tokens of
+    # the partial it streamed.
     assert [row["messageId"] for row in rows] == [5, 7, 9, 11]
-    assert sum(recorded.session_costs()) == pytest.approx(3 * CALL_COST + PROJECTED_COST)
-    assert sum(recorded.summary_costs()) == pytest.approx(3 * CALL_COST + PROJECTED_COST)
+    assert sum(recorded.session_costs()) == pytest.approx(3 * CALL_COST + CUT_CALL_COST)
+    assert sum(recorded.summary_costs()) == pytest.approx(3 * CALL_COST + CUT_CALL_COST)
     recorded.activity.assert_awaited_once()
     recorded.synthetic_writes.assert_called_once()
 
@@ -425,6 +463,65 @@ async def test_a_stop_before_the_first_token_meters_the_projected_input(monkeypa
 
     assert [row["messageId"] for row in recorded.cost_rows] == [5]
     assert sum(recorded.summary_costs()) == pytest.approx(PROJECTED_COST)
+
+
+@pytest.mark.asyncio
+async def test_the_cut_calls_prompt_is_priced_as_the_cache_write_it_was(monkeypatch):
+    """The reproduction. A first turn stopped mid-answer wrote the cache —
+    proven by the next call in that session reading the same prefix back — and
+    Bedrock bills a write at 1.25x base, not the 1x the plain `inputTokens`
+    bucket prices. Recording the projection as plain input understated the
+    call by 20% and misdescribed what happened."""
+    recorded = await _run([*_failing_call_start(), _STOP], monkeypatch,
+                          projected_input_tokens=PROJECTED_TOKENS, caching=True)
+
+    row = recorded.cost_rows[0]
+    assert int(row["tokenUsage"]["inputTokens"]) == 0
+    assert int(row["tokenUsage"]["cacheWriteInputTokens"]) == PROJECTED_TOKENS
+    assert int(row["tokenUsage"]["cacheReadInputTokens"]) == 0
+    # 2,000 written at $1.25/M plus the 2-token partial at $5/M.
+    assert sum(recorded.summary_costs()) == pytest.approx(0.0025 + PARTIAL_OUTPUT_COST)
+
+
+@pytest.mark.asyncio
+async def test_a_cut_call_after_one_that_reported_usage_is_priced_as_a_read(monkeypatch):
+    """Mid-conversation the prefix is already cached, so the same projection
+    is mostly a read at 0.1x — pricing it as a write would overstate it by
+    12.5x, which is the other way to get this wrong."""
+    recorded = await _run(
+        [*_failing_call_start(), _STOP],
+        monkeypatch,
+        projected_input_tokens=PROJECTED_TOKENS,
+        caching=True,
+        prior_usage={"cacheReadInputTokens": 1500, "cacheWriteInputTokens": 100},
+    )
+
+    usage = recorded.cost_rows[0]["tokenUsage"]
+    assert int(usage["cacheReadInputTokens"]) == 1600
+    assert int(usage["cacheWriteInputTokens"]) == 400
+    assert sum(recorded.summary_costs()) == pytest.approx(
+        1600 * 0.1 / 1e6 + 400 * 1.25 / 1e6 + PARTIAL_OUTPUT_COST
+    )
+
+
+@pytest.mark.asyncio
+async def test_only_the_cut_calls_row_is_marked_estimated(monkeypatch):
+    """Three calls reported their own usage; the fourth was cut off. A reader
+    has to be able to tell the measured rows from the estimated one, and the
+    estimate map names what produced each figure."""
+    recorded = await _run(
+        _three_calls_then([_STOP]), monkeypatch,
+        projected_input_tokens=PROJECTED_TOKENS, caching=True,
+    )
+
+    rows = recorded.cost_rows
+    assert [row.get("usageEstimated") for row in rows[:3]] == [None, None, None]
+    assert rows[3]["usageEstimated"] == {
+        "reason": "interrupted",
+        "inputTokens": "projection",
+        "outputTokens": "chars_per_token",
+        "cacheSplit": "assumed_first_write",
+    }
 
 
 @pytest.mark.asyncio

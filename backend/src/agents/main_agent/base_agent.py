@@ -76,7 +76,8 @@ class BaseAgent(ABC):
         extra_tools: Optional[List[Any]] = None,
         memory_context: Optional[str] = None,
         text_only_model: bool = False,
-        long_term_memory: bool = True,
+        memory_retrieval: bool = True,
+        memory_extraction: bool = True,
         knowledge_context: Optional[str] = None,
         client_surface: Optional[str] = None,
     ):
@@ -105,11 +106,10 @@ class BaseAgent(ABC):
             skip_persistence: If True, don't persist messages (for preview sessions)
             text_only_model: The model's catalog row declares TEXT input only, so
                 it sees history with media blocks replaced by text.
-            long_term_memory: False for a conversation with an Agent: the
-                user's long-term memory is neither retrieved into it nor
-                extracted from it (``SessionFactory.create_session_manager``).
-                Follows from ``assistant_id``, already an agent cache key
-                element and on the construction snapshot.
+            memory_retrieval / memory_extraction: the two halves of long-term
+                memory (``SessionFactory.create_session_manager``), set by
+                ``get_agent`` from the effective memory mode. Both are False
+                for a conversation with an Agent.
             knowledge_context: The assistant's whole knowledge base in
                 full-context mode (``apis.shared.assistants.kb_full_context``).
                 Sent at the end of the system prompt, inside the system cache
@@ -235,7 +235,8 @@ class BaseAgent(ABC):
             session_id=session_id,
             user_id=self.user_id,
             caching_enabled=self.model_config.caching_enabled,
-            long_term_memory=long_term_memory,
+            memory_retrieval=memory_retrieval,
+            memory_extraction=memory_extraction,
         )
         # Conversation restore from AgentCore Memory happens in here, so this
         # is a prime suspect for the cold build and has never been timed.

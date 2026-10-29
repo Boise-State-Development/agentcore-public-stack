@@ -78,7 +78,7 @@ def _admin_route_modules() -> list[pathlib.Path]:
 
 
 def _rel(path: pathlib.Path) -> str:
-    return str(path.relative_to(ADMIN_SRC))
+    return path.relative_to(ADMIN_SRC).as_posix()
 
 
 # ---------------------------------------------------------------------------

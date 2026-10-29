@@ -80,6 +80,7 @@ export interface AppConfig {
   projects: ProjectsConfig;
   userGrants: UserGrantsConfig;
   sessionPrewarm: SessionPrewarmConfig;
+  handoffs: HandoffsConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -461,6 +462,20 @@ export interface UserGrantsConfig {
  * which reclaims idle memory, and billed at peak memory on V1.
  */
 export interface SessionPrewarmConfig {
+  enabled: boolean;
+}
+
+/**
+ * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0). **Opt-in while
+ * the feature is in development**: off unless CDK_HANDOFFS_ENABLED=true (or a
+ * `handoffs.enabled: true` cdk.json context). Sets HANDOFFS_ENABLED on **app-api**,
+ * which serves `/sessions/{id}/handoffs`, and on the **AgentCore Runtime** (only
+ * while on, so the default spends none of the V2 environment budget), which
+ * accepts `handoff_context` on a target's first turn and keeps the source's row
+ * current. No new resources: `HANDOFF#` rows live in sessions-metadata on the
+ * existing SessionLookupIndex.
+ */
+export interface HandoffsConfig {
   enabled: boolean;
 }
 
@@ -1547,6 +1562,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SESSION_PREWARM_ENABLED
         ? process.env.CDK_SESSION_PREWARM_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sessionPrewarm')?.enabled ?? false,
+    },
+    handoffs: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_HANDOFFS_ENABLED
+        ? process.env.CDK_HANDOFFS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('handoffs')?.enabled ?? false,
     },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.

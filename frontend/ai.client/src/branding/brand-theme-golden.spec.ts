@@ -37,7 +37,8 @@ function extractThemeDeclarations(fileContents: string): string {
   const inner = fileContents.slice(blockStart, closeIndex);
 
   return inner
-    .split('\n')
+    // \r?\n: a Windows checkout with core.autocrlf=true has CRLF here.
+    .split(/\r?\n/)
     .filter((line) => line.trim().length > 0)
     .map((line) => line.replace(/^ {4}/, ''))
     .join('\n');

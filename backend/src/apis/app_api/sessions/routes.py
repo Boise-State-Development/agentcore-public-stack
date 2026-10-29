@@ -322,6 +322,16 @@ async def update_session_metadata_endpoint(
             user_id=user_id
         )
 
+        # A deleted conversation can't be edited (#1764). The rebuilt model
+        # below would read as active, so storing it used to return the
+        # conversation to the sidebar. store_session_metadata refuses it too;
+        # the 404 tells the caller.
+        if existing_metadata and (existing_metadata.deleted or existing_metadata.status == "deleted"):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session not found: {session_id}",
+            )
+
         if not existing_metadata:
             # The per-user fetch can return None either because the session
             # is genuinely fresh OR because a row exists for this

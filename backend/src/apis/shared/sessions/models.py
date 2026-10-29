@@ -6,11 +6,12 @@ This module contains all session-related data models including:
 - Session preferences and configuration
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from apis.shared.scheduled_prompts.models import is_headless_session
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 
@@ -196,6 +197,20 @@ class PausedTurnSnapshot(BaseModel):
                     "replays it or the paused agent is orphaned. None when the turn had no "
                     "memory tools and on snapshots written before the field existed.",
     )
+    memory_mode: Optional[str] = Field(
+        default=None,
+        alias="memoryMode",
+        description="Effective long-term-memory mode ('on' | 'read_only' | 'off') of "
+                    "the paused turn. A cache-key element: resume replays it or the paused "
+                    "agent is orphaned. None on snapshots written before the field existed "
+                    "(see resume_memory_mode).",
+    )
+    long_term_memory: Optional[bool] = Field(
+        default=None,
+        alias="longTermMemory",
+        description="Legacy: written by pre-three-mode builds of #114. Read only by "
+                    "resume_memory_mode(); False means off.",
+    )
     memory_context: Optional[str] = Field(
         default=None,
         alias="memoryContext",
@@ -213,6 +228,35 @@ class PausedTurnSnapshot(BaseModel):
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 
+    def resume_memory_mode(self) -> str:
+        """The memory mode a resumed turn replays.
+
+        Snapshots written by the three-mode build carry ``memory_mode``. Older
+        ones carry only the legacy ``long_term_memory`` bool: False resumes off,
+        anything else on.
+        """
+        if self.memory_mode in ("on", "read_only", "off"):
+            return self.memory_mode
+        return "off" if self.long_term_memory is False else "on"
+
+
+#: How long an attended turn's pause stays resumable. The person was watching
+#: when it paused, so an answer an hour later is an answer to a turn they have
+#: moved on from.
+PAUSED_TURN_TTL = timedelta(hours=1)
+
+#: How long a headless run's pause stays resumable. Nobody is watching a
+#: scheduled run when it pauses on a connector's consent, so the owner first
+#: sees the prompt whenever they next open the conversation — routinely hours
+#: later, and days for a weekly schedule. At one hour the Connect button was a
+#: dead end almost every time: consent succeeded, then the resume was refused.
+HEADLESS_PAUSED_TURN_TTL = timedelta(days=7)
+
+
+def paused_turn_ttl(session_id: Optional[str]) -> timedelta:
+    """The resume window for a turn pausing in ``session_id``."""
+    return HEADLESS_PAUSED_TURN_TTL if is_headless_session(session_id) else PAUSED_TURN_TTL
+
 
 class SessionPreferences(BaseModel):
     """User preferences for a session"""
@@ -225,6 +269,11 @@ class SessionPreferences(BaseModel):
     assistant_id: Optional[str] = Field(default=None, alias="assistantId", description="Assistant ID attached to this session")
     project_id: Optional[str] = Field(default=None, alias="projectId", description="Shared Project whose harness this session runs, when assistantId is a project's agent")
     agent_type: Optional[str] = Field(default=None, alias="agentType", description="Agent mode this conversation runs in ('skill' or 'chat'); reopening the session restores it")
+    # Incognito chat (#1738): the conversation reads long-term memory but never
+    # adds to it. Set by the server only when it creates the session row, from
+    # the first turn's request, and never changed after (see
+    # ``session_is_incognito``).
+    incognito: Optional[bool] = Field(default=None, alias="incognito", description="True when this conversation never writes to long-term memory")
 
     # System prompt hash for tracking exact prompt version sent to the model
     # This is a hash of the FINAL rendered system prompt (after date injection, variable substitution, etc.)

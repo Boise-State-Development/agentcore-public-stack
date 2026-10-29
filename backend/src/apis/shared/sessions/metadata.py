@@ -426,7 +426,9 @@ def _derive_cache_observability(
     query) and derives:
 
     - ``cacheStatus``: first_write | hit | partial_miss | miss_ttl_expired |
-      miss_avoidable | uncached (see ``apis.shared.observability.CacheStatus``).
+      miss_avoidable | uncached (see ``apis.shared.observability.CacheStatus``),
+      or ``estimated`` for a row whose usage was never reported — those return
+      early, before the query, and are never classified.
     - ``cacheGapSeconds``: whole seconds since the previous call, when known.
     - ``cachePrefixGapSeconds``: seconds since the last call with the *same*
       prefix, when that is a different (older) call than the previous one.
@@ -476,6 +478,18 @@ def _derive_cache_observability(
             return {}
 
         cache_read, cache_write = _extract_cache_usage(message_metadata)
+
+        # A call whose usage was never reported (an interrupted turn's cut
+        # generation) carries estimated buckets, so there is nothing here to
+        # classify. Say exactly that instead of deriving a status from the
+        # estimate: `cacheStatus` is where a cache investigation starts, and a
+        # confident-looking `first_write` or `miss_avoidable` on numbers nobody
+        # measured would send it after the wrong call. `wastedUsd` stays zero
+        # for the same reason — it is the metric the AvoidableMiss alarm reads.
+        # The buckets themselves are still the row's best estimate of what was
+        # billed, so the next call's own classification keeps its predecessor.
+        if (message_metadata.model_extra or {}).get("usageEstimated"):
+            return {"cacheStatus": CacheStatus.ESTIMATED.value, "wastedUsd": 0.0}
 
         # Recent cost rows for this session, newest first (GSI_SK = C#<timestamp>
         # sorts chronologically). We need a window rather than just the previous
@@ -1082,6 +1096,16 @@ async def _store_session_metadata_cloud(
         # First, check if session exists via GSI to get current SK
         existing_session = await _get_session_by_gsi(session_id, user_id, table)
 
+        # A soft-deleted row is final (#1764). Callers rebuild the row from a
+        # model, and a rebuilt model reads as active, so writing it would put
+        # the recency keys back and return the deleted conversation to the
+        # sidebar. Only SessionService.delete_session writes a tombstone.
+        if existing_session and _row_is_deleted(existing_session):
+            logger.warning(
+                "store_session_metadata: session %s is deleted; write refused", session_id
+            )
+            return
+
         # Prepare item for DynamoDB. A model read back through get_session_metadata
         # carries the row's recency keys as extras; drop them so the keys written
         # below are derived from this write alone.
@@ -1294,13 +1318,33 @@ def _preferences_project_id(row: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def session_is_incognito(row: Optional[Dict[str, Any]], requested: bool = False) -> bool:
+    """Whether a conversation is incognito (#1738): reads memory, never writes it.
+
+    An existing row decides, whatever the request says: the flag is fixed when
+    the row is created, because facts extracted from earlier turns can't be
+    traced back to the conversation and removed. With no row yet (the first
+    turn), the request's choice applies.
+    """
+    if row is None:
+        return bool(requested)
+    prefs = row.get("preferences")
+    return isinstance(prefs, dict) and prefs.get("incognito") is True
+
+
 async def ensure_session_metadata_exists(
-    session_id: str, user_id: str, snapshot: Optional["SessionMetaSnapshot"] = None
+    session_id: str,
+    user_id: str,
+    snapshot: Optional["SessionMetaSnapshot"] = None,
+    incognito: bool = False,
 ) -> bool:
     """Idempotently create a session metadata row if it doesn't exist yet.
 
     Returns ``True`` when a new row was created (caller can use this as the
     "first turn" signal, e.g. to fire title generation).
+
+    ``incognito`` is stamped on the new row's preferences. It has no effect on
+    a row that already exists: a conversation can't become incognito later.
 
     Existence is gated on a ``SessionLookupIndex`` GSI lookup rather than a
     conditional ``put_item``: the main-table SK encodes ``lastMessageAt``
@@ -1380,6 +1424,8 @@ async def ensure_session_metadata_exists(
             "starred": False,
             "tags": [],
         }
+        if incognito:
+            item["preferences"] = {"incognito": True}
 
         # The SK is now deterministic (S#{session_id}), so attribute_not_exists is a
         # real idempotency guard (issue #175): two concurrent first turns compute the
@@ -1683,6 +1729,15 @@ async def update_session_activity(
                     session_id,
                 )
                 return False
+
+        # Deleted mid-turn (#1764): the SET below would restore the recency
+        # keys and bring the conversation back to the sidebar.
+        if _row_is_deleted(existing):
+            logger.warning(
+                "update_session_activity: session %s was deleted; activity not recorded",
+                session_id,
+            )
+            return False
 
         old_sk = existing.get("SK")
         if not old_sk:
@@ -2064,6 +2119,30 @@ async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[
         return None
 
 
+def _row_is_deleted(row: Dict[str, Any]) -> bool:
+    """Whether a raw session row is soft-deleted (either marker counts)."""
+    return row.get('deleted') is True or row.get('status') == 'deleted'
+
+
+async def session_is_deleted(session_id: str, user_id: str) -> bool:
+    """Whether the user's session row exists and is soft-deleted (#1764).
+
+    For writers that run after a turn has started: the user can delete the
+    conversation while it streams, and nothing should be written for it after
+    that. A missing row or a failed lookup reads as not deleted, so callers
+    carry on as they did before this check existed.
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return False
+    try:
+        row = await _get_session_by_gsi(session_id, user_id, get_dynamodb_table(table_name))
+    except Exception:
+        logger.warning("session_is_deleted: lookup failed for %s", session_id, exc_info=True)
+        return False
+    return row is not None and _row_is_deleted(row)
+
+
 
 
 async def _bump_session_aggregates(
@@ -2422,6 +2501,77 @@ async def _backfill_session_aggregates(
         # Non-fatal — frontend just sees the un-aggregated state, badge
         # stays hidden, and we'll try again on the next read.
         logger.warning("backfill_session_aggregates failed for %s: %s", session_id, e)
+
+
+def set_session_spawned_from(session_id: str, user_id: str, source_session_id: str, handoff_id: str) -> bool:
+    """Record on a handoff's target conversation where it came from (handoffs spec §4.2).
+
+    ``spawnedFrom: {sessionId, handoffId}`` on the target's ``META`` row. It is how every later
+    turn of the target finds the source's ``HANDOFF#`` row to keep its status current, from the
+    B1 snapshot, with no extra read. A field-level ``SET`` on the static SK, so the full-row
+    writes elsewhere (which only ``SET`` their own fields) never remove it. Synchronous: callers
+    run it in a worker thread, after the first token. Returns False when the row is missing.
+    """
+    from botocore.exceptions import ClientError
+
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return False
+    try:
+        get_dynamodb_table(table_name).update_item(
+            Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
+            UpdateExpression="SET spawnedFrom = :sf",
+            ConditionExpression="attribute_exists(PK)",
+            ExpressionAttributeValues={":sf": {"sessionId": source_session_id, "handoffId": handoff_id}},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def settle_session_spawned_from(session_id: str, user_id: str) -> None:
+    """Mark a target's ``spawnedFrom`` settled: its handoff is done and stops following its turns.
+
+    Without it, every later turn of a finished handoff's target would make a status write that the
+    row refuses (``done`` is frozen). The link itself stays; Phase 2 reads it.
+    """
+    from botocore.exceptions import ClientError
+
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return
+    try:
+        get_dynamodb_table(table_name).update_item(
+            Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
+            UpdateExpression="SET spawnedFrom.settled = :t",
+            ConditionExpression="attribute_exists(spawnedFrom)",
+            ExpressionAttributeValues={":t": True},
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+
+
+async def get_session_compaction(session_id: str, user_id: str) -> Tuple[int, Optional[str]]:
+    """The applied compaction checkpoint and its summary for a session, or ``(0, None)``.
+
+    ``SessionMetadata`` deliberately carries only ``totalSummarizedTurns`` from
+    the nested ``compaction`` map. A handoff's excerpt needs the applied
+    checkpoint (an absolute message index) and the summary that stands in for
+    the messages before it, which is what the conversation's own model sees.
+    A pending, not yet applied, cut is ignored for the same reason.
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return 0, None
+    item = await _get_session_by_gsi(session_id, user_id, get_dynamodb_table(table_name))
+    compaction = (item or {}).get("compaction")
+    if not isinstance(compaction, dict):
+        return 0, None
+    summary = compaction.get("summary")
+    return int(compaction.get("checkpoint") or 0), summary if isinstance(summary, str) else None
 
 
 async def get_session_metadata(session_id: str, user_id: str) -> Optional[SessionMetadata]:

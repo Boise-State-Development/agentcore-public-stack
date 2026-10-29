@@ -162,8 +162,9 @@ contiguous sites with no early `return` in between:
 1. **Happy path:** the SSE generator (`stream_with_quota_warning`) starts the
    heartbeat before `agent.stream_async`, and in its `finally` cancels the
    heartbeat and releases the lease.
-2. **`except HTTPException`** (e.g. resume/interrupt 400s raised after acquire):
-   release, then re-raise.
+2. **`except ResumeUnavailable` / `except HTTPException`** (an unresumable
+   paused turn, or any HTTP error raised after acquire): release, then stream
+   the refusal / re-raise.
 3. **`except Exception`** (agent build error → conversational error stream):
    release, then return the error stream.
 

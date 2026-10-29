@@ -1059,15 +1059,18 @@ class TestAgentChatLongTermMemory:
 
     @pytest.mark.asyncio
     async def test_an_agent_turn_builds_without_long_term_memory(self, mock_create_agent, mock_freshness_hash):
-        await service.get_agent(session_id="s", user_id="u", assistant_id="ast-1")
+        await service.get_agent(session_id="s", user_id="u", assistant_id="ast-1", memory_mode="on")
 
-        assert mock_create_agent.call_args.kwargs["long_term_memory"] is False
+        kwargs = mock_create_agent.call_args.kwargs
+
+        assert kwargs["memory_retrieval"] is False and kwargs["memory_extraction"] is False
 
     @pytest.mark.asyncio
     async def test_a_plain_turn_passes_nothing(self, mock_create_agent, mock_freshness_hash):
         await service.get_agent(session_id="s", user_id="u")
 
-        assert "long_term_memory" not in mock_create_agent.call_args.kwargs
+        kwargs = mock_create_agent.call_args.kwargs
+        assert "memory_retrieval" not in kwargs and "memory_extraction" not in kwargs
 
     @pytest.mark.asyncio
     async def test_a_mention_turn_does_not_share_the_plain_agents_slot(self, mock_create_agent, mock_freshness_hash):
@@ -1079,6 +1082,18 @@ class TestAgentChatLongTermMemory:
         assert plain is not mention
         assert mock_create_agent.call_count == 2
 
+    @pytest.mark.asyncio
+    async def test_each_memory_mode_gets_its_own_slot(self, mock_create_agent, mock_freshness_hash):
+        agents = [
+            await service.get_agent(session_id="s", user_id="u", memory_mode=m)
+            for m in ("on", "read_only", "off")
+        ]
+        assert len({id(a) for a in agents}) == 3
+        assert mock_create_agent.call_count == 3
+        read_only = mock_create_agent.call_args_list[1].kwargs
+        assert read_only["memory_extraction"] is False and "memory_retrieval" not in read_only
+        off = mock_create_agent.call_args_list[2].kwargs
+        assert off["memory_retrieval"] is False and off["memory_extraction"] is False
 
 class TestClientSurfaceCacheKey:
     """One conversation can be opened from the web app and from the terminal,

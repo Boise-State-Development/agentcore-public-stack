@@ -92,6 +92,14 @@ export class ChatStateService {
      */
     private readonly turnEndedAt = new Map<string, number>();
 
+    /**
+     * Sessions whose resume stream was refused because the paused turn could
+     * no longer be picked up (`error_kind: 'resume_unavailable'`). The refusal
+     * is streamed but not persisted, so the post-resume reload must be skipped
+     * or it would erase the only explanation. Read once, then cleared.
+     */
+    private readonly resumeUnavailable = new Set<string>();
+
     readonly isChatLoading = computed(() => this.viewedState()?.loading() ?? false);
     readonly currentStopReason = computed(() => this.viewedState()?.stopReason() ?? null);
     readonly lastTurnContinuable = computed(() => this.viewedState()?.lastTurnContinuable() ?? false);
@@ -322,6 +330,16 @@ export class ChatStateService {
      */
     setLastTurnContinuable(sessionId: string, continuable: boolean): void {
         this.stateFor(sessionId).lastTurnContinuable.set(continuable);
+    }
+
+    /** Records that a session's resume was refused as unresumable. */
+    markResumeUnavailable(sessionId: string): void {
+        this.resumeUnavailable.add(sessionId);
+    }
+
+    /** Whether the session's last resume was refused; clears the mark. */
+    takeResumeUnavailable(sessionId: string): boolean {
+        return this.resumeUnavailable.delete(sessionId);
     }
 
     /**

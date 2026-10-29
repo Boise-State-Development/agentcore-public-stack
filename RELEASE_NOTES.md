@@ -1,3 +1,256 @@
+# Release Notes — v1.31.0
+
+**Release Date:** October 24, 2026
+**Previous Release:** v1.30.0 (October 18, 2026)
+
+---
+
+## Highlights
+
+This release gives users more control over their conversations and their memory. Conversations can be pinned to the top of the sidebar, from the menu or by dragging. Long-term memory has three modes (On, Read only, Off). A new chat can be started incognito: it still uses memory but adds nothing to it. The sidebar now marks conversations that are waiting on the user. A paused turn that can no longer resume (most often a scheduled run left past its window) now answers in the conversation instead of failing with "Chat Request Failed". Stopped turns are metered for what they actually used. Grouping the DynamoDB and Lambda alarms frees 45 of the stack's 500 resources. Source provenance, structured extraction and the first half of agent handoffs land behind in-development flags, all off by default. Dependency updates resolve 201 of 202 open Dependabot alerts. **Three things need attention:** the backend now needs Python 3.11 or later, resume refusals are no longer HTTP 400s, and every grouped alarm has a new name (see Breaking changes). No special deploy order and no backfill.
+
+---
+
+## Pin conversations
+
+Users can keep a conversation at the top of the sidebar. **Pin** in the conversation menu moves it into a **Pinned** group directly under More, most recently pinned first, with no cap. On a pinned conversation the item reads **Unpin**. Dragging a row onto Pinned pins it, and dragging it back out unpins it (#1711, #1734).
+
+### Backend
+
+- New sparse `PinnedSessionIndex` (GSI6) on sessions-metadata: `GSI6_PK = USER#{userId}`, `GSI6_SK = {pinnedAt}#{sessionId}`. Only pinned rows are indexed, so loading pins is one small query whatever the user's history size.
+- `PUT /sessions/{id}/pin` and `DELETE /sessions/{id}/pin` return 204, or 404 if the caller doesn't own the session. Pinning a project conversation returns 409, because those already list under their project.
+- Pins come back on the first page of `GET /sessions` as a `pinned` array, so there is no extra request. If the index is missing or still building, the sidebar shows no Pinned group; the list itself never fails.
+- `set_session_pinned` is the only writer of the GSI6 keys. Full-row writes strip them, so a stale model can't bring an unpinned conversation back. Soft-delete removes them.
+
+### Frontend
+
+- Pin and unpin are optimistic in `SessionService`. The change is reconciled once the server list agrees, or rolled back with a toast if the call fails. A pinned conversation leaves its time bucket.
+- Drag and drop uses two connected CDK drop lists (Pinned, and the time buckets as one list) with sorting off, so only the drop matters. With no pins, a dashed "Drop here to pin" zone appears when a drag starts. On touch, a drag starts after a 300 ms press-and-hold so it doesn't fight the drawer's scroll. Keyboard users pin and unpin from the menu item.
+- Project conversations and a row being renamed can't be dragged.
+
+## Long-term memory: On, Read only, Off, and incognito chats
+
+The `/memory` dashboard has a new **Long-term Memory Preferences** card with three modes. A new plain chat can also be made incognito, which applies Read only to that one conversation (#1745, #1747, #1754, #1756).
+
+| Mode (`memoryMode`) | Uses existing memories | Learns new memories |
+|---|---|---|
+| `on` (default; missing = on) | Yes | Yes |
+| `read_only` | Yes | No |
+| `off` | No | No |
+
+Short-term history is unaffected in every mode, and existing memories are never deleted. The setting can only reduce memory: Agent and preview chats are always off.
+
+### Backend
+
+- `memoryMode` on `UserSettings` / `UserSettingsUpdate`, read and written through the existing `GET` / `PUT /users/me/settings`. A missing value reads as `on`, so no migration is needed, and an unknown value is refused with 422. (#1745 shipped an on/off `memoryEnabled` first; any value saved under it is ignored and read as `on`.)
+- `read_only` keeps retrieval and writes every event with `extractionMode=SKIP`. Compaction uses the fallback summary.
+- The mode applies on every path that builds a session manager: main chat (which covers scheduled and Run now runs), resume (the effective mode is stored on the paused snapshot), synthetic and metadata messages, MCP App dispatch, and voice. If voice's settings read fails, it keeps memory on.
+- The effective mode is part of the agent cache key, so changing it mid-conversation takes effect on the next turn.
+- **Incognito:** `InvocationRequest.incognito`, read on the first turn only. `ensure_session_metadata_exists` stores `SessionPreferences.incognito` when it creates the row, and from then on the stored flag wins (`session_is_incognito`), so a chat can't switch mid-conversation. An incognito turn caps the mode at `read_only` on every path above.
+
+### Frontend
+
+- The `/memory` dashboard's mode picker saves through `UserSettingsService.updateSettings({ memoryMode })`. The card says that existing memories are kept, and that project and Agent memory are not affected.
+- `IncognitoToggleComponent` sits left of the model picker on a new plain chat. It appears only in memory mode On, because nothing is learned in the other two. It is hidden in Agent chats and project tasks, and it is off at the start of every new chat. The sidebar shows the incognito icon on these chats.
+
+### Known gaps
+
+- If the session row can't be created on the first turn, that turn is incognito but later turns aren't.
+- Forking a shared conversation doesn't carry the incognito flag over.
+
+## Conversations waiting on you, and resumes that can't happen
+
+These two changes come from one production case. A user connected Gmail from a scheduled run's prompt 76 minutes after the run had paused for consent. The paused-turn snapshot had expired after its hard-coded hour, so the resume was refused with a 400. The AgentCore Runtime rewrites any non-2xx response to a bare 424, so the user saw only "Chat Request Failed — Request failed with status 424". In the week before, production logged 32 refused resumes, and each one reached a user that way (#1731, #1732).
+
+### The sidebar shows what's waiting
+
+- `SessionMetadataResponse.awaitingInput` is one of `oauth`, `tool_approval`, `user_question`, `browser_login`, or null. It is derived from the `pendingInterrupts` and `pausedTurn` already on the row, so it costs **no new reads or writes**. It is set only while the pause can still be answered, judged by `pausedTurn.expiresAt`. The breadcrumbs and snapshot themselves are still never returned.
+- The SPA draws an amber dot on these rows, with the screen-reader label "(needs your input)". Precedence is streaming, then awaiting input, then unread.
+
+### A refused resume answers in the conversation
+
+- A missing snapshot, an expired snapshot and an unknown interrupt id now raise `ResumeUnavailable`. The route streams a conversational reply tagged `stream_error.metadata = {error_kind: "resume_unavailable", reason}`. When the refused interrupt was an OAuth consent, the reply says the account is connected and asks the user to send the message again.
+- The dead prompt is retired. A missing or expired snapshot clears the snapshot and every breadcrumb. An unknown interrupt id clears only the breadcrumbs that were submitted.
+- The reply isn't persisted, because the history still ends on the paused `toolUse` and the next fresh turn repairs that. The SPA keeps the reply on screen by skipping its post-resume reload once.
+- **Scheduled runs stay resumable for 7 days.** `paused_turn_ttl` gives `headless-` sessions 7 days. Attended turns keep 1 hour.
+
+Nothing here runs on the normal turn path. A refused resume costs one extra session-row read, before any model call.
+
+## Stopped turns are charged for what they used
+
+When a user stops an answer, the provider never sends its closing `metadata` event, so the cut call's cost row recorded zero output and no cache activity. On a dev repro, about 24% of the call's real cost went unrecorded. That figure also feeds the user's quota, so users who often stop long answers were consistently undercounted (#1701, #1739, #1740, #1741).
+
+- **Estimated from the request actually sent.** `_persist_interruption` now builds the in-flight row from the cut call's own native token count. When the request carried cachePoints, the prompt is attributed to a cache write, or to a read if an earlier call in the process left an entry.
+- **Each model's own minimum cacheable prefix.** Below that minimum Bedrock ignores the cachePoint and bills plain input. The minimum was one constant, 1,024 tokens. `min_cacheable_prefix_tokens(model_id)` now reads it per model: 512 on the Claude 5.x family, 1,024 on Sonnet 4.5/4.6, Sonnet 5 and Opus 4.8, and **4,096 on Haiku 4.5**, the default model. Before this, stopped turns of 1,024–4,095 tokens on Haiku 4.5 were priced as a cache write that never happened.
+- **The partial joins the live conversation.** The partial was written to AgentCore Memory but never added to the cached agent's `agent.messages`, so the follow-up turn answered without it. `_append_interrupted_reply` now appends the same dict in place, on the message list shared by every agent serving the `(session, user)`. In-process and restored history stay byte-identical. This is the same class of bug as #741 and #751.
+- **Metered before the append.** On dev, the first version of the append ran before metering and stopped the cut call's row from being written. The append now runs at the end of the shielded teardown.
+
+All four were validated on dev.
+
+## More headroom under the stack's 500-resource limit
+
+`PlatformStack` is a single CloudFormation stack, capped at 500 resources. With every opt-in flag on it synthesized 494, the same as dev's live count. That left six resources before a deploy would roll back (#1680, #1685, #1708).
+
+### One guard for every platform ceiling
+
+`infrastructure/test/platform-ceilings.test.ts` synthesizes the stack twice, once with the shipped defaults and once with every opt-in flag on. It fails when the 500-resource limit or IAM's 6,144-character managed-policy limit gets close, and prints the headroom on every run, so each PR's test output shows its own change. It is calibrated to dev's live stack: the synth now counts the `AWS::CDK::Metadata` resource and the `tokenExchange` block, which it used to miss. The IAM limit previously had no guard at all, and it rolled back a dev deploy on 2026-10-08.
+
+### Grouped DynamoDB and Lambda alarms
+
+| | Before | After |
+|---|---|---|
+| DynamoDB throttle alarms | 29 (one per table) | **6** (up to 5 tables each) |
+| Lambda error alarms | 10 | **1** |
+| Lambda throttle alarms | 15 | **2** |
+| Shipped defaults | 477/500 | **436/500** |
+| Every opt-in flag on | 494/500 | **449/500** |
+
+- Each group is a metric-math alarm on `MAX([...])` over its members, so the threshold still applies to each table or function on its own. Lambda error groups are split by threshold. The dead-letter-queue alarms and the account-level `ddb-user-errors` alarm are unchanged.
+- **Fixes a blind spot:** the old DynamoDB alarm summed reads and writes, and metric math returns no datapoint when either side is missing. A table that throttled only reads, or only writes, could never alarm. The groups use `FILL(…, 0)`.
+- **What grouping costs:** a notification names the group (its description lists the members), and while one member keeps a group in ALARM, a second member failing sends no new notification. For Lambda errors this is a real loss of signal, accepted in exchange for the headroom.
+
+## In development: source provenance, structured extraction and agent handoffs
+
+Three features land behind in-development flags. All are **off by default** everywhere: only the literal `"true"` turns them on, and each Runtime variable is written only while on, so the defaults use none of the Runtime's 2,560-byte V2 environment budget.
+
+### Source provenance verification
+
+A cited answer today claims a source supports it, and nothing checks that. `verify_sources` checks two things for each asserted value: whether the cited passage is in the document, and whether the value appears in that passage. The result is one of four states, shown under the answer (#1682, #1690, #1696, #1699, #1700).
+
+| State | What the reader sees |
+|---|---|
+| `supported` | `$487,500` — found on page 1 |
+| `quote_unsupported` | `$912,000` — not in the quoted passage on page 1 |
+| `unassessed` | `Yes` — passage found on page 1, value not checked |
+| `unverified` | `$1,000,000` — no matching passage in the document |
+
+A plain page reference appears only for `supported`. A position that is only estimated is hedged ("about page 12"), and the locator names the unit the document actually has (a paragraph for Word, a line for HTML). Anything unconfirmed opens the list by default. The panel is styled like the tool rail.
+
+- Flags: `CDK_SOURCE_PROVENANCE_ENABLED` (Runtime and app-api), `features.sourceProvenance`. The flag is a feature switch, so it stays after rollout.
+- New SSE event `source_provenance`, flushed in the `done` block. Verdicts are stored as `SRCV#` rows on sessions-metadata and replayed on `GET /messages`. No new infrastructure.
+- On dev, the provenance turn's model calls all recorded `cacheStatus=hit`, so the tool doesn't disturb the cached prefix.
+
+### Structured extraction
+
+`document_extract` runs a named field set over one or more documents and returns typed rows, and each value carries a provenance verdict. Field sets are markdown files in a skill's reference bundle, so they reuse the skill's access model and need no new table or GSI (#1691, #1692, #1693).
+
+- **Prompt-cache safe.** The agent-facing tool spec is constant per deployment. The typed schema goes on a dedicated side-channel `BedrockModel(strict_tools=True)` request that has no conversation, so tuning a field set never rewrites the cached prefix.
+- **Gated twice:** the flag, and the turn's active skills must declare a field set. Otherwise the tool isn't built.
+- **Several documents in one call** (`upload_ids`), with bounded concurrency inside the tool, so the answer can compare across the set.
+- Flags: `CDK_DOCUMENT_EXTRACT_ENABLED` (Runtime and app-api), `features.documentExtract`. **`CDK_DOCUMENT_EXTRACT_MODEL_ID` is required when on,** and it must be a model with a catalog row: without one the extraction call costs $0 and counts against no quota. `CDK_DOCUMENT_EXTRACT_CONCURRENCY` is optional. The rows table in the SPA is not built yet.
+
+### Agent handoffs, Phase 0 backend
+
+The first two PRs of `docs/specs/agent-handoffs-and-consults.md`. With `CDK_HANDOFFS_ENABLED=true`, three app-api routes respond, and a target Agent's first turn can take a reviewed context card. There is no SPA yet, so nothing user-visible changes (#1742, #1744).
+
+- `apis.shared.handoff`: a deterministic `<conversation_excerpt>` renderer capped at 4,000 estimated tokens, the `<handoff_context>` wrapper, and the `HANDOFF#` row on sessions-metadata (reusing `SessionLookupIndex`, so no new infrastructure). Every status change is a conditional write, and `accept()` is guarded inside the write so a handoff can be sent only once.
+- `POST /sessions/{id}/handoffs`, `GET .../{handoffId}`, `POST .../{handoffId}/dismiss`. Cookie auth runs before the flag's 404.
+- `InvocationRequest.handoff_context`: the target's first turn checks the row, accepts it once and prepends the wrapped card, byte-identical to the review sheet's preview. Every later turn of the target keeps the source's row current (`needs_input`, `done` or `stopped`).
+
+---
+
+## 🐛 Bug fixes
+
+- **Share editors can open and save the Agents shared with them.** The Agent Designer loads through a route that gated on visibility, while saving gated on share records. An editor of a PUBLIC agent got a read-only form with blank instructions, and an editor of a PRIVATE one got "Could not load this agent". A save also re-checked every binding against the editor, so any owner-bound model, tool or skill the editor lacked turned it into a 403. Existing bindings and an unchanged model are no longer re-checked (#1679).
+- **A knowledge-base upload that never landed fails cleanly instead of dead-lettering.** This set off the prod `kb-ingestion consumer DLQ not empty` alarm on 2026-10-19. A document's browser `PUT` never arrived, but its row was still sent for ingestion against an S3 key with nothing behind it. The consumer now checks the object first. While the upload URL is still valid it waits, and once the URL has expired it fails the row with "Please upload the file again." and releases its byte reservation. The nightly document reconciler makes the same check instead of re-ingesting the row every night (#1676, #1677).
+- **A saved default model applies to the next new chat** without a page reload. It used to apply only on a fresh tab (#1585).
+- **A deleted memory disappears from the `/memory` dashboard at once.** The dashboard reloaded through semantic retrieval, which can still return a just-deleted record, so the record came back. It is now removed locally.
+- **Quota admin cards render on load.** The quota writers emitted `…+00:00Z` timestamps, which make Angular's DatePipe throw. Each throw cut a change-detection pass short, so cards filled in one per click. The writers now use `utc_now_iso()`, and `QuotaHttpService` normalizes rows already stored, so no backfill is needed (#1728).
+- **An MCP App's action count no longer grows on every reload.** An App re-runs its setup calls each time its frame mounts, and each run wrote a new card. GitHub's `issue_write` added five per reload. A card is now keyed by the call itself (session, frame, tool, arguments), so a re-run updates it in place, and older rows are collapsed when read (#1664).
+- **Two roles granting one MCP server no longer fail the agent.** On 2026-10-09 five production scheduled runs died with `Tool name 'whoami' already exists`. `load_external_tools` now opens one client per server (keyed by URL, custom headers and auth mode) and merges the dropped rows' tool filters into the survivor. A disabled catalog row can never win that dedupe, which dev's real Zoom catalog showed it could (#1681, #1686).
+- The shared-conversation page drew a white panel inside the shell's grey padding. It now sits on the shell background like the conversation page (#1709).
+
+## 🔒 Security
+
+- **MCP App tool calls can no longer cross users.** `UIToolCatalog` was process-wide and keyed by tool name alone, and App-initiated `tools/call` and `resources/read` resolved their MCP client from it. With per-user App servers, one user's click could run on another user's client with their credential. Per-session microVMs likely contained this on the Runtime, but it was real in any shared process. Entries are now keyed by `(owner_user_id, tool_name)`. A lookup returns the caller's own entry or a shared one, never another user's, and `clear_user_clients` forgets the user's entries (#1455).
+- **Dependabot: 201 of 202 open alerts resolved**, including all 22 critical. Some were already fixed on `develop` and close when this release reaches `main`. The one left is `opentelemetry-api` (GHSA-xcq7-p3pf-p88h, medium), held at 1.44.0 by `aws-opentelemetry-distro`. It will be fixed by an ADOT bump once upstream releases (#1750, #1736, #1737, #1735).
+
+## ⚠️ Breaking changes
+
+### The backend needs Python 3.11 or later
+
+Pillow 13 dropped Python 3.10, so `backend/pyproject.toml`'s `requires-python` moves from `>=3.10` to `>=3.11` (and mypy's `python_version` with it). Every runtime image is already on 3.12 or 3.13, so deployed services are unaffected. A local environment on 3.10 has to move up. The shared SageMaker `requirements.txt` gates pillow on `python_version >= "3.11"`, so the py3.10 text DLC still installs (#1750).
+
+### Resume refusals are a streamed reply, not HTTP 400
+
+A resume with a missing or expired snapshot, or an unknown interrupt id, now returns 200 with a conversational `stream_error` whose `metadata.error_kind` is `"resume_unavailable"`. In the cloud the 400 always reached clients as a 424, so the SPA could never tell the difference anyway. An API client that matched on the 400 locally should read the tag instead (#1731).
+
+### Grouped alarms have new names
+
+The 54 per-table and per-function alarms are deleted, and 9 grouped alarms are created under new names. Alarms hold no data. The costs are a few minutes without these alarms while the deploy runs, and the old alarms' state history. **Anything subscribed to the old alarm names (a dashboard, a runbook, an external integration) must be pointed at the new ones.** The `.kiro/steering/observability.md` runbook already describes them (#1708).
+
+## 🏗️ Infrastructure
+
+- **`PinnedSessionIndex`** (GSI6, sparse) on the sessions-metadata table. It is the only GSI change in this release, so it fits within DynamoDB's one-index-per-update limit (#1711).
+- **Grouped alarms:** 54 resources become 9; the all-flags-on synth drops from 494 to 449 of 500 (#1708).
+- **Ceilings guard:** `platform-ceilings.test.ts` replaces the old `total < 465` assertion, which ran against the default flag set from inside an alarm test (#1680, #1685). A stale IAM policy size was removed from a code comment (#1688).
+- **New `platform.yml` variables**, all unset (off) by default: `CDK_HANDOFFS_ENABLED`, `CDK_SOURCE_PROVENANCE_ENABLED`, `CDK_DOCUMENT_EXTRACT_ENABLED`, `CDK_DOCUMENT_EXTRACT_MODEL_ID`, `CDK_DOCUMENT_EXTRACT_CONCURRENCY`.
+
+## 🔧 CI/CD
+
+- **Calendar-dependent tests fixed.** The attachment eviction tests used a fixed `NOW` but a wall-clock `created_at`, so they started failing every PR at midnight UTC on 2026-10-21 (#1704).
+- **A test race that opened real AWS connections fixed.** `test_kb_dual_read` left its `patch` block after the first of four metric emits, so the other three reached real CloudWatch clients and failed the deploy gate (#1695).
+- A fake catalog that broke on `develop` once #1455 merged now takes the per-user signature (#1707). Windows-only backend and SPA test failures were also fixed.
+- **Smoke harness:** a `source_provenance` row, and the event is added to the frame contract's allowed tail (#1690).
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend | `strands-agents` / `strands-agents[bidi]` | 1.57.2 | 1.61.1 |
+| Backend | `bedrock-agentcore` | 1.24.0 | 1.24.2 |
+| Backend | `pillow` (uv override) | 12.3.0 | 13.0.0 |
+| Backend | `aiohttp` | 3.14.3 | 3.14.4 |
+| Backend | `yarl` (transitive) | 1.23.0 | 1.25.1 |
+| Backend, tui, scripts | `certifi` | — | 2026.10.19 |
+| Backend, tui | `black` | 26.3.1 | 26.10.1 |
+| Scheduled-runs Lambda | `opentelemetry-api` / `-sdk` | 1.44.0 | 1.45.1 |
+| Frontend | `katex` | 0.16.45 | 0.18.2 |
+| Frontend | `vite` (override) | 8.0.16+ | 8.1.6 |
+| Frontend | `dompurify` (override) | 3.4.13+ | 3.4.17 |
+| Frontend | `vitest`, `@vitest/coverage-v8` | 4.1.11 | 4.1.12 |
+| Infrastructure | `js-yaml` (override for `@istanbuljs/load-nyc-config`) | 3.x | 4.3.2 |
+| docs-site | `astro` / `vite` | — | 7.3.3 / 8.1.6 |
+
+- **Strands 1.61.1 / AgentCore 1.24.2** retire two local workarounds that upstream has absorbed (net −72 lines). They also make the shared boto3 session that `session_factory.py` passes to `MemoryClient` take effect; the SDK used to ignore it. The local OpenAI cache-write recovery was removed separately, because Strands has mapped that field on both OpenAI paths since 1.57 (#1694, #1683).
+- **The `pillow` override** goes past `strands-agents-tools`' `<13` cap. This is safe because we only import `strands_tools.calculator`, which doesn't use PIL. Remove the override once strands-agents/tools#625 ships.
+- **`katex`** is overridden to one copy for `ngx-markdown` and `mermaid`, so no vulnerable nested copy remains.
+
+## 📚 Docs
+
+New specs for structured extraction (`docs/specs/structured-extraction.md`, including the first real-run findings), field-set authoring and source provenance verification. Also a one-pager on the research-admin content gap, prod's V1 AgentCore Runtime GB-hours baseline (1.179 GB-hours per session) with its first V2 days, and a scoping doc for an account MCP server and default-model picker.
+
+---
+
+## 🚀 Deployment notes
+
+### Order: the usual `platform.yml` → `backend.yml` → `frontend-deploy.yml`
+
+There is no ordering hazard this release. New code that reads `PinnedSessionIndex` shows no Pinned group until the index exists, and none of the new Runtime variables is written unless its flag is on.
+
+### One GSI, and nothing to backfill
+
+`PinnedSessionIndex` is the only index added, on the existing sessions-metadata table (the GSI update-limit check passes). It is sparse, and no conversation is pinned yet, so it has nothing to backfill. CloudFormation reporting `UPDATE_COMPLETE` doesn't mean the index is usable. Until it reports `ACTIVE`, pins don't load, and the session list still works.
+
+```bash
+aws dynamodb describe-table --table-name <prefix>-sessions-metadata \
+  --query 'Table.GlobalSecondaryIndexes[?IndexName==`PinnedSessionIndex`].IndexStatus'
+```
+
+### Alarms are recreated
+
+The platform deploy deletes 54 alarms and creates 9. Re-point anything that subscribes to an old alarm name.
+
+### In-development flags stay off
+
+Turning on source provenance, structured extraction or handoffs is a per-environment choice. For each one, set the GitHub variable to `"true"`, re-run `platform.yml`, and for the SPA-facing ones set the matching `features.*` in that environment's build. Structured extraction also needs `CDK_DOCUMENT_EXTRACT_MODEL_ID` set to a model with a catalog row.
+
+### Memory modes and pinning need no setup
+
+Both are on for every deployment, and existing users read as memory mode On with no migration.
+
+---
+
 # Release Notes — v1.30.0
 
 **Release Date:** October 18, 2026

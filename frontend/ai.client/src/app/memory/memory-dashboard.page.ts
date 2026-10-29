@@ -12,6 +12,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { MemoryService } from './services/memory.service';
 import { MemoriesResponse } from './models/memory.model';
+import { MemoryMode, UserSettingsService } from '../services/user-settings.service';
 import { parseIso } from '../utils/date';
 import { SpinnerComponent } from '../components/spinner/spinner.component';
 
@@ -164,6 +165,59 @@ export class ParsePreferencePipe implements PipeTransform {
               </p>
             </div>
           </div>
+
+          <!-- Long-term memory mode -->
+          <section
+            aria-labelledby="memory-mode-label"
+            class="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
+          >
+            <p id="memory-mode-label" class="text-sm/6 font-medium text-gray-900 dark:text-gray-100">
+              Long-term Memory Preferences
+            </p>
+            <p id="memory-mode-description" class="text-sm/6 text-gray-600 dark:text-gray-400">
+              Your existing memories are kept in every mode, and you can view and delete them here.
+              Memory Spaces belonging to projects and agents are separate and aren't affected by this setting.
+            </p>
+            <div
+              role="radiogroup"
+              aria-labelledby="memory-mode-label"
+              aria-describedby="memory-mode-description"
+              class="mt-3 grid gap-2 sm:grid-cols-3"
+            >
+              @for (option of memoryModeOptions; track option.value) {
+                <label
+                  class="flex cursor-pointer flex-col rounded-2xl border border-gray-300 px-4 py-3 transition-colors hover:bg-gray-50 has-checked:border-primary-500 has-checked:bg-gray-100 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-primary-500 has-disabled:cursor-not-allowed has-disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700/40 dark:has-checked:border-primary-400 dark:has-checked:bg-gray-700"
+                >
+                  <span class="flex items-start justify-between gap-3">
+                    <span
+                      [id]="'memory-mode-' + option.value + '-label'"
+                      class="text-sm/6 font-medium text-gray-900 dark:text-white"
+                      >{{ option.label }}</span
+                    >
+                    <input
+                      type="radio"
+                      name="memory-mode"
+                      class="relative mt-1 size-4 shrink-0 appearance-none rounded-full border border-gray-300 bg-white before:absolute before:inset-1 before:rounded-full before:bg-white not-checked:before:hidden checked:border-primary-500 checked:bg-primary-500 focus-visible:outline-none disabled:border-gray-300 disabled:bg-gray-100 disabled:before:bg-gray-400 dark:border-gray-500 dark:bg-gray-800 dark:checked:border-primary-400 dark:checked:bg-primary-400 forced-colors:appearance-auto forced-colors:before:hidden"
+                      [attr.value]="option.value"
+                      [checked]="memoryMode() === option.value"
+                      [disabled]="savingMemorySetting()"
+                      [attr.aria-labelledby]="'memory-mode-' + option.value + '-label'"
+                      [attr.aria-describedby]="'memory-mode-' + option.value + '-hint'"
+                      (change)="setMemoryMode(option.value)"
+                    />
+                  </span>
+                  <span
+                    [id]="'memory-mode-' + option.value + '-hint'"
+                    class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-300"
+                    >{{ option.description }}</span
+                  >
+                </label>
+              }
+            </div>
+            @if (memorySettingError(); as message) {
+              <p role="alert" class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ message }}</p>
+            }
+          </section>
 
           <!-- Search and Refresh Controls -->
           <div class="mb-6 flex flex-wrap items-center gap-4">
@@ -557,6 +611,7 @@ export class ParsePreferencePipe implements PipeTransform {
 })
 export class MemoryDashboardPage {
   private memoryService = inject(MemoryService);
+  private userSettings = inject(UserSettingsService);
 
   // Resources from service
   readonly memoryStatus = this.memoryService.memoryStatus;
@@ -568,6 +623,40 @@ export class MemoryDashboardPage {
   readonly lastSearchQuery = signal('');
   readonly isSearching = signal(false);
   readonly searchResults = signal<MemoriesResponse | null>(null);
+
+  // Long-term memory mode (user setting; missing means on)
+  readonly savingMemorySetting = signal(false);
+  readonly memorySettingError = signal<string | null>(null);
+  readonly memoryModeOptions: ReadonlyArray<{ value: MemoryMode; label: string; description: string }> = [
+    { value: 'on', label: 'On', description: 'Uses your memories and learns new ones.' },
+    { value: 'read_only', label: 'Read only', description: "Uses your existing memories but won't learn new ones." },
+    { value: 'off', label: 'Off', description: "Won't use your memories or learn new ones." },
+  ];
+  private readonly memoryModeSaved = signal<MemoryMode | null>(null);
+  readonly memoryMode = computed<MemoryMode>(
+    () =>
+      this.memoryModeSaved() ??
+      (this.userSettings.settingsResource.hasValue()
+        ? (this.userSettings.settingsResource.value()?.memoryMode ?? 'on')
+        : 'on'),
+  );
+
+  async setMemoryMode(mode: MemoryMode): Promise<void> {
+    if (this.savingMemorySetting() || mode === this.memoryMode()) return;
+    const previous = this.memoryMode();
+    this.savingMemorySetting.set(true);
+    this.memorySettingError.set(null);
+    this.memoryModeSaved.set(mode);
+    try {
+      const result = await this.userSettings.updateSettings({ memoryMode: mode });
+      this.memoryModeSaved.set(result.memoryMode ?? 'on');
+    } catch {
+      this.memoryModeSaved.set(previous);
+      this.memorySettingError.set("Couldn't save this setting. Try again.");
+    } finally {
+      this.savingMemorySetting.set(false);
+    }
+  }
   readonly deletingMemoryId = signal<string | null>(null);
 
   // Computed values

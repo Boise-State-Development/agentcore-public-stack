@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcore-stack"
-version = "1.30.0"
-requires-python = ">=3.10"
+version = "1.31.0"
+requires-python = ">=3.11"
 description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
 readme = "README.md"
 license = {text = "MIT"}
@@ -35,7 +35,7 @@ dependencies = [
     "starlette==1.3.1",
 
     # Security: pin transitive deps to fix Dependabot alerts
-    "pillow==12.3.0",
+    "pillow==13.0.0",
     # Reads .xlsx workbooks into rows for the UI's spreadsheet preview
     # (apis/app_api/files/sheet_preview.py). MIT, pure Python, one
     # dependency (et-xmlfile). Already the library our own
@@ -45,7 +45,7 @@ dependencies = [
     "openpyxl==3.1.5",
     "cryptography==50.0.1",
     "python-multipart==0.0.31",
-    "aiohttp==3.14.3",
+    "aiohttp==3.14.4",
     "urllib3==2.8.0",
     "idna==3.15",
     "pyasn1==0.6.4",
@@ -54,6 +54,10 @@ dependencies = [
     # GHSA-82r6-8w77-94w6 (TLSStream IDNA 2003 host-name encoding allowed
     # TLS certificate spoofing for internationalized domain names).
     "anyio==4.14.2",
+    # Transitive via requests/httpx/botocore. Pinned to 2026.10.19 for
+    # GHSA-6q48-6c7w-9gw2 (bundled emSign root CAs whose intermediate CA keys
+    # were compromised).
+    "certifi==2026.10.19",
 
     # PDF page-1 rasterization for attachment thumbnails (Apache 2.0 / BSD).
     # Bundles PDFium (no system poppler/ghostscript needed).
@@ -102,7 +106,7 @@ dev = [
     "pytest-xdist==3.6.1",
     "hypothesis==6.152.3",
     "moto[dynamodb,cognitoidp]==5.1.22",
-    "black==26.3.1",
+    "black==26.10.1",
     "ruff==0.15.12",
     "mypy==1.20.2",
     "types-aiofiles==25.1.0.20260409",
@@ -152,6 +156,18 @@ all = [
 # Asserted by backend/tests/supply_chain/test_strands_agentcore_pairing.py.
 constraint-dependencies = ["mcp<2"]
 
+# Override, not a constraint: this REPLACES strands-agents-tools' own pillow
+# requirement. Every strands-agents-tools release through 0.8.10 declares
+# `pillow>=12.1.1,<13.0.0`, which would hold us on 12.3.0 and its ~30 open
+# advisories (4 critical, fixed only in 13.0.0). Upstream has the fix open but
+# unmerged (strands-agents/tools#625, #626).
+#
+# Safe because the only module we import from that package is
+# `strands_tools.calculator` (sympy + rich, no PIL). The PIL users,
+# image_reader and use_computer, are never loaded. Remove this once a
+# strands-agents-tools release allows pillow 13, and bump it with that release.
+override-dependencies = ["pillow==13.0.0"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
@@ -169,7 +185,7 @@ line-length = 150
 target-version = "py310"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

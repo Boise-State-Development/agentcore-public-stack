@@ -232,6 +232,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
     projects: { enabled: true },
     userGrants: { enabled: true },
     sessionPrewarm: { enabled: true },
+    handoffs: { enabled: true },
     clientTurnTiming: { enabled: true },
     ttftProbe: { userId: 'ceilings-probe-user', modelId: 'us.anthropic.claude-haiku-4-5' },
     conversationIndex: { enabled: true },

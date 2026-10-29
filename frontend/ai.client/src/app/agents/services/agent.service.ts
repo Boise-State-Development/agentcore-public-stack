@@ -12,6 +12,12 @@ import {
 } from '../models/agent.model';
 import { SkillExposure } from '../models/store.model';
 
+/** Shown after a duplicate: the knowledge base is deliberately not copied. */
+export const AGENT_DUPLICATED_TOAST = {
+  title: 'Agent duplicated',
+  message: 'Knowledge base files were not copied. Add them to the new agent.',
+} as const;
+
 /**
  * Signal-based state for the Agent Designer. Mirrors the assistants / memory-spaces
  * facades: private mutable signals, readonly public views, async methods that
@@ -85,6 +91,13 @@ export class AgentService {
   async createAgent(request: CreateAgentRequest): Promise<Agent> {
     this.error.set(null);
     const agent = await firstValueFrom(this.api.createAgent(request));
+    this.agents.update((current) => [agent, ...current]);
+    return agent;
+  }
+
+  async duplicateAgent(id: string): Promise<Agent> {
+    this.error.set(null);
+    const agent = await firstValueFrom(this.api.duplicateAgent(id));
     this.agents.update((current) => [agent, ...current]);
     return agent;
   }
