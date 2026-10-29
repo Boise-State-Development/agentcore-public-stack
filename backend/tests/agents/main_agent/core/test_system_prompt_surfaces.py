@@ -14,6 +14,8 @@ of web wording, because the web wording is the shared prompt's to own.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from agents.main_agent.core.system_prompt_builder import (
@@ -88,15 +90,23 @@ class TestTerminalSurface:
         assert "Do NOT emit KaTeX" in TERMINAL_SURFACE_GUIDANCE
         assert "Do NOT emit Mermaid" in TERMINAL_SURFACE_GUIDANCE
 
-    @pytest.mark.parametrize(("key", "purpose"), [("F3", "tool"), ("F4", "conversation"), ("F2", "model")])
-    def test_it_names_the_keys_the_tui_actually_binds(self, key: str, purpose: str) -> None:
-        """These must track `ChatScreen.BINDINGS`; a stale key means confidently
-        wrong instructions."""
-        assert key in TERMINAL_SURFACE_GUIDANCE
+    def test_it_points_at_slash_help_and_names_no_keys(self) -> None:
+        """The terminal's features are slash commands and `/help` lists them.
+        The first version hardcoded F2/F3/F4 and went stale the day the client
+        moved to slash commands. A prompt that says "type /help" cannot go
+        stale, so that is the only command it may name."""
+        assert "/help" in TERMINAL_SURFACE_GUIDANCE
+        assert re.search(r"\bF\d\b", TERMINAL_SURFACE_GUIDANCE) is None
+        assert re.search(r"\bCtrl\+\w", TERMINAL_SURFACE_GUIDANCE) is None
+        commands_named = set(re.findall(r"(?<![\w/])/[a-z][\w-]*", TERMINAL_SURFACE_GUIDANCE))
+        assert commands_named == {"/help"}
 
-    def test_it_says_consent_cannot_be_completed_here(self) -> None:
-        assert "web app" in TERMINAL_SURFACE_GUIDANCE
+    def test_it_says_interrupts_are_answered_in_the_terminal(self) -> None:
+        """Approvals, questions and consent pause the turn and resume from a
+        prompt in the client; the agent must not send users to the web app."""
+        assert "answered" in TERMINAL_SURFACE_GUIDANCE and "resumes" in TERMINAL_SURFACE_GUIDANCE
         assert "Never tell the user to click Allow" in TERMINAL_SURFACE_GUIDANCE
+        assert "continuing requires the web app" not in TERMINAL_SURFACE_GUIDANCE
 
     def test_it_warns_about_width(self) -> None:
         assert "80 columns" in TERMINAL_SURFACE_GUIDANCE
@@ -107,8 +117,8 @@ class TestTerminalSurface:
 
 class TestBuilder:
     def test_surface_selects_the_block(self) -> None:
-        assert "F3" in SystemPromptBuilder(surface="terminal").build(include_date=False)
-        assert "F3" not in SystemPromptBuilder(surface="web").build(include_date=False)
+        assert "/help" in SystemPromptBuilder(surface="terminal").build(include_date=False)
+        assert "/help" not in SystemPromptBuilder(surface="web").build(include_date=False)
 
     def test_an_explicit_base_prompt_wins_over_the_surface(self) -> None:
         built = SystemPromptBuilder(base_prompt="just this", surface="terminal").build(include_date=False)
