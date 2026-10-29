@@ -46,6 +46,9 @@ class PendingInterrupt(BaseModel):
       already looking at. Unlike the other two this interrupt is raised by the
       tool itself via ``ToolContext``, not by a hook — the persisted shape and
       the resume path are identical either way.
+    - ``client_tool`` — written for a client-executed tool (``apis.shared.
+      client_tools``). Reuses ``tool_name`` + ``tool_input`` so a terminal that
+      reconnects can re-offer the call it was asked to run.
     - ``browser_login`` — written for ``request_user_login``. Carries
       ``browser_session`` (JSON-encoded :class:`BrowserSessionRef`) so the live
       view can be re-offered after a refresh. Deliberately holds **no URL**:
@@ -60,7 +63,7 @@ class PendingInterrupt(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     interrupt_id: str = Field(..., alias="interruptId", description="Strands interrupt id used to resume the paused turn")
-    kind: Literal["oauth", "tool_approval", "user_question", "browser_login"] = Field(
+    kind: Literal["oauth", "tool_approval", "user_question", "browser_login", "client_tool"] = Field(
         default="oauth",
         description="Discriminator: which variant this interrupt represents",
     )
@@ -144,6 +147,17 @@ class PausedTurnSnapshot(BaseModel):
     caching_enabled: Optional[bool] = Field(default=None, alias="cachingEnabled")
     max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
     agent_type: Optional[str] = Field(default=None, alias="agentType")
+    # Part of the agent cache key, so a resume MUST reuse the value the
+    # paused turn ran with. Resuming under a different surface would rebuild
+    # under a different key and strand the paused agent, which Strands then
+    # reports as "must resume from interrupt with list of interruptResponse's".
+    client_surface: Optional[str] = Field(default=None, alias="clientSurface")
+    # JSON-encoded list of the client-executed tool specs the paused turn was
+    # built with (`apis.shared.client_tools.ClientToolSpec`). Resume MUST
+    # rebuild them: on resume Strands re-enters the paused tool body with the
+    # client's response, so the tool has to exist on the rebuilt agent. Also a
+    # cache-key element via its digest. None for turns without client tools.
+    client_tools: Optional[str] = Field(default=None, alias="clientTools")
     enabled_skills: Optional[List[str]] = Field(
         default=None,
         alias="enabledSkills",
