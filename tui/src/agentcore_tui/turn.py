@@ -474,8 +474,18 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         max_tokens: int | None = None,
         enabled_tools: Sequence[str] | None = None,
         client_tools: Sequence[Mapping[str, Any]] | None = None,
+        enabled_skills: Sequence[str] | None = None,
+        selected_prompt_id: str | None = None,
     ) -> None:
         self._client_supplier = client_supplier
+        # Opt-in: empty means no skills. Sent on every turn, including resumes,
+        # so the paused agent is rebuilt with the same skills.
+        self._enabled_skills: list[str] = list(enabled_skills or [])
+        #: Skill ids named in the next prompt; sent with it and cleared.
+        self._pending_invoked: list[str] = []
+        #: The conversation mode (a system-prompt id), or None. Public and
+        #: mutable: switching modes must not rebuild the controller mid-pause.
+        self.selected_prompt_id: str | None = selected_prompt_id
         # None means "every tool my role grants"; [] means "none". Passed
         # through untouched — see AgentStreamClient._payload.
         self._enabled_tools = enabled_tools
@@ -527,6 +537,8 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
                 enabled_tools=self._enabled_tools,
                 client_tools=self._client_tools or None,
                 assistant_id=self._assistant_id,
+                enabled_skills=self._enabled_skills or None,
+                selected_prompt_id=self.selected_prompt_id,
                 continue_truncated=True,
             )
         if self._pending_responses:
@@ -538,9 +550,12 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
                 enabled_tools=self._enabled_tools,
                 client_tools=self._client_tools or None,
                 assistant_id=self._assistant_id,
+                enabled_skills=self._enabled_skills or None,
+                selected_prompt_id=self.selected_prompt_id,
                 interrupt_responses=responses,
             )
         uploads, self._pending_uploads = self._pending_uploads, []
+        invoked, self._pending_invoked = self._pending_invoked, []
         return self._client_supplier().stream(
             session_id=self._store.session_id,
             message=prompt,
@@ -548,6 +563,9 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
             client_tools=self._client_tools or None,
             file_upload_ids=uploads or None,
             assistant_id=self._assistant_id,
+            enabled_skills=self._enabled_skills or None,
+            invoked_skills=invoked or None,
+            selected_prompt_id=self.selected_prompt_id,
         )
 
     @property
@@ -562,6 +580,14 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         return self._store.bound_agent_id
 
     # -- attachments ---------------------------------------------------------
+
+    def invoke_skills(self, skill_ids: Sequence[str]) -> None:
+        """Mark skills as invoked by the next prompt (its `/slug` tokens)."""
+        self._pending_invoked = [sid for sid in skill_ids if sid in self._enabled_skills]
+
+    @property
+    def enabled_skills(self) -> list[str]:
+        return list(self._enabled_skills)
 
     def attach(self, upload_id: str) -> None:
         """Queue an uploaded file for the next prompt."""

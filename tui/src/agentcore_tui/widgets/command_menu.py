@@ -30,6 +30,8 @@ class CommandMenu(OptionList):
         self._registry = registry
         self._agent = agent
         self._shown: list[SlashCommand] = []
+        #: Enabled skills, offered after the commands. Set by the chat screen.
+        self._skills: list[SlashCommand] = []
         self.can_focus = False
         self.display = False
 
@@ -51,6 +53,16 @@ class CommandMenu(OptionList):
             return None
         return self._shown[self.highlighted]
 
+    def set_skills(self, skills: list[tuple[str, str]]) -> None:
+        """``(slug, display name)`` for each enabled skill. A slug that is also a
+        command name is left out: commands win, so it could never be invoked
+        from the start of a message anyway."""
+        self._skills = [
+            SlashCommand(slug, f"skill · {name}", usage="<message>", skill=True)
+            for slug, name in skills
+            if slug and self._registry.resolve(slug) is None
+        ]
+
     def set_agent(self, agent: bool) -> None:
         """Signing in or out changes which commands are offered."""
         self._agent = agent
@@ -69,6 +81,8 @@ class CommandMenu(OptionList):
             return
         prefix = text[1:]
         matches = self._registry.match(prefix, agent=self._agent)
+        if self._agent:
+            matches += [skill for skill in self._skills if skill.matches(prefix)]
         if not matches:
             self.hide()
             return

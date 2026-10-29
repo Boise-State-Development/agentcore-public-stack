@@ -165,6 +165,10 @@ class Skill:
     description: str = ""
     category: str | None = None
     enabled: bool = False
+    #: The token that invokes it in a message (``/slug``), served by the backend
+    #: so client and server never disagree about the slug rule. Empty from a
+    #: backend that predates it, which means "cannot be invoked by name".
+    slug: str = ""
 
     @classmethod
     def from_wire(cls, payload: dict[str, Any]) -> Skill:
@@ -174,6 +178,7 @@ class Skill:
             description=str(payload.get("description", "")),
             category=payload.get("category"),
             enabled=bool(payload.get("isEnabled", False)),
+            slug=str(payload.get("slug") or ""),
         )
 
 
@@ -219,6 +224,8 @@ class ConversationSummary:
     assistant_id: str | None = None
     #: The Shared Project this conversation belongs to (``preferences.projectId``).
     project_id: str | None = None
+    #: The conversation mode chosen for it (``preferences.selectedPromptId``).
+    selected_prompt_id: str | None = None
 
     @property
     def context_percent(self) -> int | None:
@@ -245,6 +252,7 @@ class ConversationSummary:
             last_turn_continuable=bool(payload.get("lastTurnContinuable", False)),
             assistant_id=_optional_str(preferences.get("assistantId")),
             project_id=_optional_str(preferences.get("projectId")),
+            selected_prompt_id=_optional_str(preferences.get("selectedPromptId")),
         )
 
 
@@ -646,13 +654,36 @@ class CatalogClient:
         payload = await self._get(self._endpoints.tools)
         return [Tool.from_wire(item) for item in _items(payload, "tools")]
 
-    async def skills(self) -> list[Skill]:
-        payload = await self._get(self._endpoints.skills)
+    async def skills(self) -> list[Skill] | None:
+        """Skills the user can reach (granted ∪ authored), with their effective
+        on/off state. None when the deployment has skills switched off (the
+        router is not mounted, so the path 404s)."""
+        try:
+            payload = await self._get(self._endpoints.skills)
+        except ApiError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
         return [Skill.from_wire(item) for item in _items(payload, "skills")]
 
-    async def system_prompts(self) -> list[SystemPromptOption]:
-        payload = await self._get(self._endpoints.system_prompts)
+    async def system_prompts(self) -> list[SystemPromptOption] | None:
+        """Conversation modes the user can pick, or None when the feature is off."""
+        try:
+            payload = await self._get(self._endpoints.system_prompts)
+        except ApiError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
         return [SystemPromptOption.from_wire(item) for item in _items(payload, "prompts")]
+
+    async def set_conversation_mode(self, session_id: str, prompt_id: str | None) -> None:
+        """Persist a conversation's mode; ``None`` clears it.
+
+        Needed only to *clear*: the server persists a chosen id from the turn
+        that carries it, but falls back to the stored id when a turn carries
+        none, so leaving a mode needs an explicit null here.
+        """
+        await self._put(self._endpoints.session_metadata(session_id), {"selectedPromptId": prompt_id})
 
     async def agents(self) -> list[Agent] | None:
         """Agents to talk to: own and shared, then pinned ones not already listed.

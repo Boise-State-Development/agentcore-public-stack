@@ -201,6 +201,9 @@ lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
 | `/conversations [search]` | Browse, open, rename (`r`) or delete saved conversations |
 | `/project [name\|off\|info\|shared]` | Run conversations in a Shared Project: pick one, name one, leave, see its details, or read what teammates shared |
 | `/agent [name\|off\|info]` | Talk to one of your agents (own, shared with you, or pinned) |
+| `/skills` | Choose which skills the agent may use (off unless switched on) |
+| `/<skill> …` | Invoke an enabled skill in a message, e.g. `/xlsx total the NET column` |
+| `/mode [name\|off]` | Set the conversation mode (a named system prompt) |
 | `/attach <path>` | Upload a file and send it with your next message |
 | `/continue` | Let an answer that hit the token limit carry on |
 | `/stop` | Stop the turn in flight |
@@ -325,6 +328,24 @@ name, `/agent info` shows its model and conversation starters, `/agent off`
 stops. An agent and a project are either/or: choosing one leaves the other.
 Opening a conversation you had with an agent rebinds to it. Browsing the store
 and building agents stay in the web app.
+
+### Skills and modes
+
+Skills are opt-in, unlike tools: `/skills` lists every skill you can reach
+with its `/slug`, and only the ones you switch on go with a turn. The choice
+is saved and follows you into the web app. To make the agent use one, name it
+in the message — `/xlsx total the NET column`, or `…using /xlsx` mid-sentence —
+the same rule as the web composer, so paths like `src/xlsx/` stay prose.
+Enabled skills appear at the end of the `/` menu; choosing one completes
+`/slug ` for you to finish the sentence. A command always wins over a skill
+with the same name. Agents and projects bring their own skills.
+
+`/mode` sets the conversation mode, a named system prompt added to the
+agent's instructions (Socratic, Brief, whatever your deployment defines). It
+applies from the next turn, shows as `mode: <name>` in the status bar, and is
+remembered by the conversation, so reopening it restores the mode.
+`/mode off` clears it. Agents and projects ignore modes; their own
+instructions govern.
 
 ### Local tools
 

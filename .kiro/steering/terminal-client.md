@@ -219,6 +219,14 @@ is the single thing the controller sends. Adopting a conversation whose
 summary has `assistantId` but no `projectId` rebinds it as an agent
 conversation; dropping that would get the next turn refused.
 
+**Skills invoked by name share the slash with commands.** `/xlsx …` is a
+prompt, `/new` is a command; `on_composer_submitted` asks the registry first,
+so a command always wins and a skill whose slug collides is not offered in
+the menu. Skills are opt-in on the wire (absent `enabled_skills` means none),
+so the controller sends the enabled set every turn, resumes included.
+`invoked_skills` is detected from the text with the web composer's regex, so a
+typed `/slug` and a menu-completed one behave identically.
+
 `GET /projects` answering 404 means the feature is off for the deployment;
 `CatalogClient.projects()` returns None and the command says so. Refusals
 arrive as a `FORBIDDEN` error event with `recoverable=false`; the server's
@@ -344,7 +352,7 @@ tui/src/agentcore_tui/
 └── widgets/          transcript messages, composer, status bar
 ```
 
-841 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+861 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.

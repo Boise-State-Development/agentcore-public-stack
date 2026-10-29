@@ -15,6 +15,7 @@ knowing what a widget is.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import replace
 from typing import Any, ClassVar
 
@@ -28,7 +29,7 @@ from textual.widgets import Footer, Header
 
 from ..client import AgentStreamClient, ApiConverseClient
 from ..client.agent_events import ToolCallRecord
-from ..client.catalog import Agent, CatalogClient, ConversationSummary, HistoryMessage, Model, Project
+from ..client.catalog import Agent, CatalogClient, ConversationSummary, HistoryMessage, Model, Project, Skill, SystemPromptOption
 from ..client.auth import SessionAuth
 from ..config import Config, config_path, load_session_from_keyring
 from ..conversation import AgentBinding, ConversationStore, Message, ProjectBinding
@@ -60,6 +61,8 @@ from ..widgets.prompts import (
 from .conversations import ConversationList
 from .model_picker import ModelChoice, ModelPicker
 from .agent_picker import AgentPicker
+from .mode_picker import ModePicker
+from .skill_picker import SkillPicker
 from .project_picker import ProjectPicker
 from .shared_conversations import SharedConversationList, SharedConversationView
 from ..commands import COMMANDS, SlashCommand
@@ -109,6 +112,12 @@ class ChatScreen(Screen[None]):
         self._agent_supplier = agent_client_supplier
         #: None means "every tool my role grants". Narrowed by the tool picker.
         self._enabled_tools: list[str] | None = None
+        #: The user's skills (enabled state included). Loaded once on mount when
+        #: signed in, and after /skills; feeds the controller and the `/` menu.
+        self._skills: list[Skill] = []
+        #: The conversation mode, or None. Survives /new like the model does;
+        #: opening a conversation adopts that conversation's stored mode.
+        self._mode: SystemPromptOption | None = None
         #: Runs the local tools and remembers "always" approvals for the session.
         self._executor = ToolExecutor()
         #: Prompts still waiting on the user, by interrupt id. The turn resumes
@@ -170,6 +179,8 @@ class ChatScreen(Screen[None]):
     async def on_mount(self) -> None:
         self.status.set_model(self._config.model_id)
         self.composer.key_interceptor = self._menu_key
+        if self._agent_mode and self._config.is_complete:
+            self._load_skills()
 
         if not self._config.is_complete:
             await self._show_setup_help()
@@ -479,7 +490,9 @@ class ChatScreen(Screen[None]):
 
     async def on_composer_submitted(self, message: Composer.Submitted) -> None:
         self.command_menu.hide()
-        if message.text.startswith("/") and not message.text.startswith("//"):
+        leading = message.text[1:].split(maxsplit=1)[0] if message.text.startswith("/") else ""
+        is_skill_prompt = bool(leading) and COMMANDS.resolve(leading) is None and bool(self._invoked_skill_ids(message.text))
+        if message.text.startswith("/") and not message.text.startswith("//") and not is_skill_prompt:
             self.composer.clear_prompt()
             await self._run_slash_command(message.text[1:])
             return
@@ -488,6 +501,127 @@ class ChatScreen(Screen[None]):
         self.composer.clear_prompt()
         # `//` escapes a leading slash in a real prompt.
         await self._start_turn(message.text[1:] if message.text.startswith("//") else message.text)
+
+    # -- skills and modes ----------------------------------------------------
+
+    @work(exclusive=True, group="skills")
+    async def _load_skills(self) -> None:
+        """Best effort: without the list, skills are simply off this session."""
+        try:
+            skills = await self._catalog_or_create().skills()
+        except AgentCoreTuiError as exc:
+            logger.info("skills unavailable: %s", exc)
+            return
+        self._apply_skills(skills or [])
+
+    def _apply_skills(self, skills: list[Skill]) -> None:
+        self._skills = skills
+        enabled = [skill for skill in skills if skill.enabled]
+        self.command_menu.set_skills([(skill.slug, skill.name) for skill in enabled])
+        if not self._turn.busy:
+            self._rebuild_controller()
+
+    def _invoked_skill_ids(self, text: str) -> list[str]:
+        """Skills named with `/slug` in a message, by the web composer's rule:
+        the token starts a word and is not followed by another `/`, so paths
+        and URLs stay prose. Only enabled skills resolve."""
+        by_slug = {skill.slug.lower(): skill.skill_id for skill in self._skills if skill.enabled and skill.slug}
+        if not by_slug or "/" not in text:
+            return []
+        found: list[str] = []
+        for match in re.finditer(r"(?:^|\s)/([a-z0-9][a-z0-9-]*)(?![\w\-/])", text, re.IGNORECASE):
+            skill_id = by_slug.get(match.group(1).lower())
+            if skill_id and skill_id not in found:
+                found.append(skill_id)
+        return found
+
+    @work
+    async def action_choose_skills(self) -> None:
+        try:
+            skills = await self._catalog_or_create().skills()
+        except AgentCoreTuiError as exc:
+            self.notify(exc.message, title="Could not load skills", severity="error", timeout=8)
+            return
+        if skills is None:
+            self.notify("Skills aren't enabled on this deployment.", severity="warning", timeout=8)
+            return
+        owner = self._store.project.name if self._store.project else (self._store.agent.name if self._store.agent else None)
+        decisions = await self.app.push_screen_wait(SkillPicker(skills, locked_by=owner))
+        if decisions is None:
+            return
+        updated = [Skill(s.skill_id, s.name, s.description, s.category, decisions.get(s.skill_id, s.enabled), s.slug) for s in skills]
+        self._apply_skills(updated)
+        try:
+            await self._catalog_or_create().save_skill_preferences(decisions)
+        except AgentCoreTuiError as exc:
+            self.notify(f"Applied for this session, but not saved: {exc.message}", title="Preferences not saved", severity="warning", timeout=8)
+        on = [s for s in updated if s.enabled]
+        hint = (" Invoke one with " + ", ".join(f"/{s.slug}" for s in on[:3] if s.slug) + ".") if on else ""
+        self.notify(f"{len(on)} of {len(updated)} skills on.{hint}", timeout=6)
+
+    async def _mode_command(self, argument: str) -> None:
+        """`/mode` picks; `/mode <name>` sets by name; `/mode off` clears."""
+        word = argument.strip()
+        if word.lower() in {"off", "none", "clear"}:
+            await self._apply_mode(None)
+            return
+        try:
+            modes = await self._catalog_or_create().system_prompts()
+        except AgentCoreTuiError as exc:
+            await self.transcript.mount(Notice(f"Could not load modes: {exc.message}", hint=exc.hint, error=True))
+            self.transcript.scroll_end(animate=False)
+            return
+        if modes is None:
+            self.notify("Conversation modes aren't enabled on this deployment.", severity="warning", timeout=8)
+            return
+        if not modes:
+            self.notify("There are no conversation modes to choose from.", timeout=5)
+            return
+        if word:
+            needle = word.casefold()
+            matches = [m for m in modes if needle in m.name.casefold()]
+            matches = [m for m in matches if m.name.casefold() == needle] or matches
+            if len(matches) == 1:
+                await self._apply_mode(matches[0])
+            elif not matches:
+                self.notify(f"No mode matching {word!r}. Modes: " + ", ".join(m.name for m in modes[:8]), severity="warning", timeout=8)
+            else:
+                self.notify("Several modes match: " + ", ".join(m.name for m in matches[:6]), severity="warning", timeout=8)
+            return
+        self.action_choose_mode(modes)
+
+    @work
+    async def action_choose_mode(self, modes: list[SystemPromptOption]) -> None:
+        chosen = await self.app.push_screen_wait(ModePicker(modes, current=self._mode.prompt_id if self._mode else None))
+        if chosen is None:
+            return
+        await self._apply_mode(chosen if isinstance(chosen, SystemPromptOption) else None)
+
+    async def _apply_mode(self, mode: SystemPromptOption | None) -> None:
+        """Set the conversation mode for this conversation and the next ones.
+
+        Takes effect on the next turn, mid-conversation included: a mode is a
+        system-prompt addition, not a binding. Clearing has to be written to
+        the session too, because the server falls back to the stored mode when
+        a turn names none.
+        """
+        if mode is None and self._mode is None:
+            self.notify("No mode is set.", timeout=4)
+            return
+        self._mode = mode
+        if isinstance(self._turn, AgentTurnController):
+            self._turn.selected_prompt_id = mode.prompt_id if mode else None
+        self.status.set_mode(mode.name if mode else None)
+        if mode is None and not self._store.is_empty:
+            try:
+                await self._catalog_or_create().set_conversation_mode(self._store.session_id, None)
+            except AgentCoreTuiError as exc:
+                self.notify(f"Cleared here, but the conversation may keep its old mode: {exc.message}", severity="warning", timeout=8)
+                return
+        if self._store.bound_agent_id and mode is not None:
+            self.notify(f"Mode set to {mode.name}. It applies outside agents and projects, which bring their own instructions.", timeout=8)
+        else:
+            self.notify(f"Mode: {mode.name}" if mode else "Mode cleared.", timeout=4)
 
     # -- slash commands ------------------------------------------------------
 
@@ -512,6 +646,11 @@ class ChatScreen(Screen[None]):
                 self._complete_command(menu.current)
             case "enter":
                 command = menu.current
+                if command is not None and command.skill:
+                    # A skill is invoked inside a message, so Enter completes
+                    # the token for the user to finish the sentence.
+                    self._complete_command(command)
+                    return True
                 menu.hide()
                 if command is None:
                     return False
@@ -561,6 +700,10 @@ class ChatScreen(Screen[None]):
                 await self._project_command(argument)
             case "agent":
                 await self._agent_command(argument)
+            case "skills":
+                self.action_choose_skills()
+            case "mode":
+                await self._mode_command(argument)
             case "attach":
                 await self._attach_file(argument)
             case "copy":
@@ -872,7 +1015,7 @@ class ChatScreen(Screen[None]):
                 self.notify("Wait for the current turn to finish first.", severity="warning", timeout=5)
                 return
             self._config = replace(self._config, local_tools=words[1] == "on")
-            self._turn = self._build_controller()
+            self._rebuild_controller()
             if self._config.local_tools:
                 self.notify("Local tools on for this session: the agent may ask to run commands and read files here.", timeout=6)
             else:
@@ -908,6 +1051,8 @@ class ChatScreen(Screen[None]):
             f"Signed in  {source}",
             f"Model      {self._config.model_id}",
             f"Tools      {tools}",
+            f"Skills     {', '.join(f'/{sk.slug}' for sk in self._skills if sk.enabled and sk.slug) or 'none on'}",
+            f"Mode       {self._mode.name if self._mode else 'none'}",
             f"Session    {self._store.session_id or '(none yet)'}",
             f"Log        {active_log_path() or 'not configured'}",
         ]
@@ -988,6 +1133,8 @@ class ChatScreen(Screen[None]):
         self.notify(f"Model set to {candidates[0].model_id}", timeout=5)
 
     async def _start_turn(self, prompt: str) -> None:
+        if isinstance(self._turn, AgentTurnController):
+            self._turn.invoke_skills(self._invoked_skill_ids(prompt))
         await self._turn.begin(prompt)
 
         await self._clear_empty_state()
@@ -1218,6 +1365,7 @@ class ChatScreen(Screen[None]):
         self._store.adopt(summary.session_id, restored, title=summary.title, project=binding, agent=agent_binding)
         self.status.set_project(binding.name if binding else None)
         self.status.set_agent(agent_binding.name if agent_binding else None)
+        await self._adopt_mode(summary.selected_prompt_id)
 
         await self.transcript.remove_children()
         self._tool_widgets.clear()
@@ -1233,6 +1381,21 @@ class ChatScreen(Screen[None]):
         self.transcript.scroll_end(animate=False)
         logger.info("adopted conversation %s with %d message(s), %d tool call(s)", summary.session_id, len(restored), len(records))
         await self._restore_pending(summary.session_id)
+
+    async def _adopt_mode(self, prompt_id: str | None) -> None:
+        """Take on the opened conversation's stored mode (or none)."""
+        mode: SystemPromptOption | None = None
+        if prompt_id:
+            try:
+                modes = await self._catalog_or_create().system_prompts() or []
+            except AgentCoreTuiError as exc:
+                logger.info("modes unavailable: %s", exc)
+                modes = []
+            mode = next((m for m in modes if m.prompt_id == prompt_id), None) or SystemPromptOption(prompt_id, "custom")
+        self._mode = mode
+        if isinstance(self._turn, AgentTurnController):
+            self._turn.selected_prompt_id = prompt_id
+        self.status.set_mode(mode.name if mode else None)
 
     async def _agent_name(self, agent_id: str) -> str:
         try:
@@ -1283,7 +1446,7 @@ class ChatScreen(Screen[None]):
         if isinstance(choice, str):
             choice = ModelChoice(model_id=choice, provider=None)
         self._config = self._config.with_model(choice.model_id, choice.provider)
-        self._turn = self._build_controller()
+        self._rebuild_controller()
         await self._discard_client()
         self.status.set_model(choice.model_id or "System Default")
         if self.is_attached and self._config.is_complete:
@@ -1304,6 +1467,8 @@ class ChatScreen(Screen[None]):
                 max_tokens=self._config.max_tokens,
                 enabled_tools=self._enabled_tools,
                 client_tools=tool_specs() if self._config.local_tools else None,
+                enabled_skills=[skill.skill_id for skill in self._skills if skill.enabled],
+                selected_prompt_id=self._mode.prompt_id if self._mode else None,
             )
         return TurnController(
             self._store,
@@ -1311,6 +1476,11 @@ class ChatScreen(Screen[None]):
             client_supplier=self._supplied_client or self._client_or_create,
             max_tokens=self._config.max_tokens,
         )
+
+    def _rebuild_controller(self) -> None:
+        """Rebuild the controller after a settings change (model, tools,
+        skills, local tools). Only reachable while no turn is running."""
+        self._turn = self._build_controller()
 
     def _set_enabled_tools(self, tool_ids: list[str] | None) -> None:
         """Apply a tool selection to subsequent turns.
@@ -1321,7 +1491,7 @@ class ChatScreen(Screen[None]):
         and no turn is running when this is reachable.
         """
         self._enabled_tools = tool_ids
-        self._turn = self._build_controller()
+        self._rebuild_controller()
 
     def _copy_last_answer(self) -> None:
         message = self._store.last_assistant

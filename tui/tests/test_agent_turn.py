@@ -103,6 +103,9 @@ class TestRequestShape:
                 "client_tools": None,
                 "file_upload_ids": None,
                 "assistant_id": None,
+                "enabled_skills": None,
+                "invoked_skills": None,
+                "selected_prompt_id": None,
             }
         ]
 

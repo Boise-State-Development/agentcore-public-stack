@@ -178,6 +178,9 @@ class AgentStreamClient:
         continue_truncated: bool = False,
         file_upload_ids: Sequence[str] | None = None,
         assistant_id: str | None = None,
+        enabled_skills: Sequence[str] | None = None,
+        invoked_skills: Sequence[str] | None = None,
+        selected_prompt_id: str | None = None,
     ) -> dict[str, Any]:
         """The `InvocationRequest` shape, relayed verbatim by app-api.
 
@@ -244,6 +247,21 @@ class AgentStreamClient:
             # 400. The field is `rag_assistant_id` because the AgentCore Runtime
             # 424s on a request carrying `assistant_id`.
             payload["rag_assistant_id"] = assistant_id
+        if enabled_skills:
+            # Skills are opt-in (absent means none), the reverse of tools, so
+            # the user's enabled set has to be sent for any to be active. An
+            # Agent or project replaces it server-side with its own bindings.
+            payload["enabled_skills"] = list(enabled_skills)
+        if invoked_skills:
+            # Named with `/slug` in this message. A subset of enabled_skills;
+            # the server intersects and appends a directive to activate them.
+            payload["invoked_skills"] = list(invoked_skills)
+        if selected_prompt_id and not assistant_id:
+            # The conversation mode. Sent every turn so a brand-new session's
+            # first turn has it before any metadata row exists; never with an
+            # Agent or project, whose own instructions govern (the server
+            # ignores it there too).
+            payload["selected_prompt_id"] = selected_prompt_id
         return payload
 
     def _map_error(self, response: httpx.Response, model_id: str) -> Exception:
@@ -298,6 +316,9 @@ class AgentStreamClient:
         continue_truncated: bool = False,
         file_upload_ids: Sequence[str] | None = None,
         assistant_id: str | None = None,
+        enabled_skills: Sequence[str] | None = None,
+        invoked_skills: Sequence[str] | None = None,
+        selected_prompt_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Yield parsed events for one agent turn, or for the resume of a paused one.
 
@@ -318,6 +339,9 @@ class AgentStreamClient:
             continue_truncated=continue_truncated,
             file_upload_ids=file_upload_ids,
             assistant_id=assistant_id,
+            enabled_skills=enabled_skills,
+            invoked_skills=invoked_skills,
+            selected_prompt_id=selected_prompt_id,
         )
 
         logger.info(

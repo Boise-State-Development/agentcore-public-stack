@@ -37,6 +37,10 @@ class SlashCommand:
     agent_only: bool = False
     #: Extra words the filter matches on, so ``/his`` finds ``/conversations``.
     keywords: tuple[str, ...] = field(default=())
+    #: A server skill rather than a client command. Never in the registry:
+    #: the popup lists enabled skills after the commands, and choosing one
+    #: completes ``/slug `` for a message instead of running anything.
+    skill: bool = False
 
     @property
     def display(self) -> str:
@@ -128,6 +132,17 @@ COMMANDS = CommandRegistry(
             "agent",
             "Talk to one of your agents (own, shared or pinned): pick one, name one, `off` to stop, `info` for details",
             usage="[name|off|info]",
+            agent_only=True,
+        ),
+        SlashCommand(
+            "skills",
+            "Choose which skills the agent may use; type /<skill> in a message to invoke one",
+            agent_only=True,
+        ),
+        SlashCommand(
+            "mode",
+            "Set this conversation's mode (a named system prompt), `off` to clear it",
+            usage="[name|off]",
             agent_only=True,
         ),
         SlashCommand("attach", "Upload a file and send it with your next message", usage="<path>", agent_only=True),
