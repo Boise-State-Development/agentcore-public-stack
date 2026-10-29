@@ -1,6 +1,7 @@
 """Render every TUI surface to SVG for visual review. Dev tool, not shipped.
 
-    uv run python scripts/ui_gallery.py out/   # writes out/*.svg
+    uv run python scripts/ui_gallery.py out/                        # default theme
+    uv run python scripts/ui_gallery.py out/ textual-light ansi-dark  # one subdir per theme
 
 To rasterise, open the SVGs in a browser, or with Playwright's chromium from
 the frontend's node_modules::
@@ -29,9 +30,14 @@ from conftest import build_app, make_config, ok_handler, sample_models, send, ss
 from agentcore_tui.client.agent_events import (  # noqa: E402
     Artifact,
     CitationEvent,
+    ClientToolCall,
     OAuthRequired,
+    QuestionOption,
     QuotaWarning,
+    ToolApprovalRequired,
     ToolCallRecord,
+    UserQuestion,
+    UserQuestionRequired,
 )
 from agentcore_tui.client.auth import SessionAuth  # noqa: E402
 from agentcore_tui.client.catalog import CatalogClient, Tool  # noqa: E402
@@ -40,6 +46,7 @@ from agentcore_tui.screens.model_picker import ModelPicker  # noqa: E402
 from agentcore_tui.screens.tool_picker import ToolPicker  # noqa: E402
 from agentcore_tui.widgets import Notice, ToolCall  # noqa: E402
 from agentcore_tui.widgets.agent_content import ArtifactCard, Citations, InterruptNotice, QuotaNotice  # noqa: E402
+from agentcore_tui.widgets.prompts import ClientToolPrompt, ToolApprovalPrompt, UserQuestionPrompt  # noqa: E402
 
 SIZE = (110, 34)
 
@@ -64,9 +71,11 @@ Use `pick("fast")` when latency matters more than nuance.
 """
 
 
-async def chat_scenes(out: Path) -> None:
+async def chat_scenes(out: Path, theme: str | None = None) -> None:
     app = build_app(lambda _r: sse_response(text_stream([ANSWER], usage={"inputTokens": 1842, "outputTokens": 236, "cacheReadInputTokens": 1500})))
     async with app.run_test(size=SIZE) as pilot:
+        if theme:
+            app.theme = theme
         await pilot.pause()
         (out / "01-empty.svg").write_text(app.export_screenshot())
 
@@ -90,6 +99,34 @@ async def chat_scenes(out: Path) -> None:
             InterruptNotice(OAuthRequired(provider_id="google", authorization_url="https://accounts.google.com/o/oauth2/auth?x=1"))
         )
         await transcript.mount(Notice("Could not reach the server.", hint="Check your network and try again.", error=True))
+        await transcript.mount(
+            ClientToolPrompt(
+                ClientToolCall(
+                    interrupt_id="i1",
+                    tool_use_id="t9",
+                    tool_name="run_command",
+                    arguments={"command": "git status --short", "reason": "To see what changed before summarising."},
+                )
+            )
+        )
+        settled = ToolApprovalPrompt(ToolApprovalRequired(interrupt_id="i2", tool_use_id="t8", tool_name="canvas_grade"))
+        await transcript.mount(settled)
+        settled.settle("✓ Approved canvas_grade")
+        await transcript.mount(
+            UserQuestionPrompt(
+                UserQuestionRequired(
+                    interrupt_id="i3",
+                    tool_use_id="t7",
+                    questions=(
+                        UserQuestion(
+                            header="Scope",
+                            question="How much of the codebase should this cover?",
+                            options=(QuestionOption("Just the API", "Routes only"), QuestionOption("Everything")),
+                        ),
+                    ),
+                )
+            )
+        )
         await pilot.pause()
         transcript.scroll_home(animate=False)
         await pilot.pause()
@@ -97,6 +134,9 @@ async def chat_scenes(out: Path) -> None:
         transcript.scroll_end(animate=False)
         await pilot.pause()
         (out / "03-transcript-bottom.svg").write_text(app.export_screenshot())
+        app.chat.query_one(ClientToolPrompt).focus()
+        await pilot.pause()
+        (out / "03b-prompt-focused.svg").write_text(app.export_screenshot())
 
         app.chat.composer.text = "Thanks — now summarise that as a table I can paste into Slack.\nKeep it under ten rows."
         app.chat.status.set_state("Thinking…", busy=True)
@@ -183,15 +223,21 @@ async def chat_scenes(out: Path) -> None:
 
     unconfigured = build_app(ok_handler(), config=make_config(api_key="", base_url=""))
     async with unconfigured.run_test(size=SIZE) as pilot:
+        if theme:
+            unconfigured.theme = theme
         await pilot.pause()
         (out / "10-unconfigured.svg").write_text(unconfigured.export_screenshot())
 
 
 def main() -> None:
+    """``ui_gallery.py OUT [THEME ...]``: one subdirectory per theme, or the default."""
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "ui-gallery")
-    out.mkdir(parents=True, exist_ok=True)
-    asyncio.run(chat_scenes(out))
-    print(f"wrote {len(list(out.glob('*.svg')))} screenshots to {out}")
+    themes = sys.argv[2:] or [""]
+    for theme in themes:
+        target = out / theme if theme else out
+        target.mkdir(parents=True, exist_ok=True)
+        asyncio.run(chat_scenes(target, theme or None))
+        print(f"wrote {len(list(target.glob('*.svg')))} screenshots to {target}")
 
 
 if __name__ == "__main__":

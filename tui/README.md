@@ -37,6 +37,16 @@ There are two paths, and which one you get depends on how you sign in.
 - Extended-thinking output in a separate collapsible pane
 - A live context-window gauge
 - `Esc` stops a turn *server-side*, so it stops burning tokens
+- **Local tools**: the agent can run commands and read or write files on your
+  machine. Every call shows you the exact command first — `y` runs it, `n`
+  declines, `a` allows that tool for the rest of the session. Turn it off with
+  `--no-local-tools`.
+- Paused turns are answered here: tool approvals, the agent's clarifying
+  questions, OAuth sign-ins
+- `/attach <path>` sends a file with your next message; `/continue` extends an
+  answer that hit the token limit
+- Slash commands (`/help` lists them) and saved conversations with their tool
+  calls restored
 - RBAC, cost tracking and quota enforcement identical to the web UI
 
 **API key only (`login`) — single-turn chat.** Talks to `/chat/api-converse`, a
@@ -185,8 +195,18 @@ in `/api` — the same origin the SPA calls.
 | `Esc` | Stop the in-flight turn |
 | `Ctrl+N` | New conversation |
 | `F2` | Switch model |
+| `F3` | Choose tools |
+| `F4` | Saved conversations (`/` filters, Enter searches message text) |
 | `F1` | Command palette (themes, and more) |
 | `Ctrl+Q` | Quit |
+
+While a turn is paused on a prompt: `y` / `n` approve or decline, `a` allows a
+local tool for the session, `1`–`9` pick an answer, `o` types a free-text one,
+`s` skips a question, `x` skips them all.
+
+Slash commands, typed into the composer: `/new`, `/model [name]`, `/tools`,
+`/chats`, `/attach <path>`, `/copy [all]`, `/continue`, `/clear`, `/stop`,
+`/help`, `/quit`. Start a message with `//` to send a literal slash.
 
 Three aliases exist for "newline" because terminals disagree: `Shift+Enter`
 requires the Kitty keyboard protocol, while `Alt+Enter` and `Ctrl+O` work
@@ -246,6 +266,16 @@ banner = true
 `api_key` in this file is honoured for environments with no keyring, but the
 client warns on startup because it is plain text on disk. `agentcore-tui login`
 never writes it there.
+
+### Local tools
+
+```toml
+local_tools = false   # never offer the agent tools that run on this machine
+```
+
+Also `--no-local-tools` for one run, or `AGENTCORE_LOCAL_TOOLS=false`. On by
+default: every call is shown and approved before it runs, and the output the
+agent sees is capped (6 000 characters, 60-second timeout, 64 KB reads).
 
 ### Startup banner
 

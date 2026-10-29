@@ -679,3 +679,29 @@ ModalScreen SelectionList:focus {
 #conversation-filter:focus {
     border: tall $primary;
 }
+
+/* ------------------------------------------------------------ ansi themes */
+
+/* ansi-dark / ansi-light map every colour to one of the terminal's sixteen,
+ * so percentage blends and surface-lighten steps collapse: `$primary 12%`
+ * became solid blue behind the focused prompt. Fall back to a rule-only
+ * focus cue and the terminal's own reverse-video for list selection. */
+.prompt:ansi:focus {
+    background: transparent;
+    border-left: wide ansi_bright_blue;
+}
+
+ModalScreen:ansi SelectionList > .option-list--option-highlighted,
+ModalScreen:ansi OptionList > .option-list--option-highlighted {
+    background: ansi_blue;
+    color: ansi_bright_white;
+    text-style: bold;
+}
+
+/* `$surface-lighten-2` is near-white on a light background, so the muted
+ * rules on running tool calls and settled prompts vanished there. */
+.tool-call:light,
+.compaction-notice:light,
+.interrupt-notice.-settled:light {
+    border-left: wide $foreground 30%;
+}

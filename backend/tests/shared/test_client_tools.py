@@ -188,7 +188,13 @@ class TestEvent:
         sse = ClientToolCallEvent(interrupt_id="i1", tool_use_id="tu-1", tool_name="run_command", arguments={"command": "ls"}).to_sse_format()
         assert sse.startswith("event: client_tool_call\n")
         payload = json.loads(sse.split("data: ", 1)[1])
-        assert payload == {"type": "client_tool_call", "interruptId": "i1", "toolUseId": "tu-1", "toolName": "run_command", "arguments": {"command": "ls"}}
+        assert payload == {
+            "type": "client_tool_call",
+            "interruptId": "i1",
+            "toolUseId": "tu-1",
+            "toolName": "run_command",
+            "arguments": {"command": "ls"},
+        }
 
 
 class TestInvocationRequest:
@@ -213,9 +219,16 @@ class TestInvocationRequest:
 
 class TestCacheKey:
     BASE = dict(
-        session_id="s", user_id="u", enabled_tools=["t"], model_id="m",
-        inference_params={}, system_prompt=None, caching_enabled=False,
-        provider="bedrock", freshness_hash="f", agent_type="chat",
+        session_id="s",
+        user_id="u",
+        enabled_tools=["t"],
+        model_id="m",
+        inference_params={},
+        system_prompt=None,
+        caching_enabled=False,
+        provider="bedrock",
+        freshness_hash="f",
+        agent_type="chat",
     )
 
     def test_no_digest_keys_as_before(self):

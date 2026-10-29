@@ -46,11 +46,13 @@ rather than reproducing that hierarchy.
 | Read / unread | `POST /sessions/{id}/read` \| `/unread` | ✅ done |
 | Skills | `GET /skills/`, `PUT /skills/preferences` | ❌ |
 | Conversation modes | `GET /system-prompts/` → `selected_prompt_id` | ❌ |
-| File attachments | `POST /files/presign` → PUT → `POST /files/{id}/complete` | ❌ |
+| File attachments | `POST /files/presign` → PUT → `POST /files/{id}/complete` | ✅ `/attach <path>`; `file_upload_ids` on the next turn |
 | Title generation | `POST /chat/generate-title` | ✅ client done, not yet auto-fired |
 | Sampling overrides | `inference_params` | ❌ |
-| Continue after truncation | `continue_truncated: true` with empty message | ❌ |
-| Resume a paused turn | `interrupt_responses`, `GET .../pending-interrupts` | ❌ |
+| Continue after truncation | `continue_truncated: true` with empty message | ✅ `/continue` |
+| Resume a paused turn | `interrupt_responses`, `GET .../pending-interrupts` | ✅ all five interrupt kinds answered in the transcript; `pending-interrupts` on reconnect pending |
+| Conversation search | `GET /sessions/search` | ✅ Enter in the list's filter; local title filter when the server has it off |
+| **Client-executed tools** | `client_tools` on the request → `client_tool_call` SSE → `interrupt_responses` | ✅ see below — the one capability the terminal has that the web app does not |
 
 ### Tier 2 — structured CRUD, cheap, high value
 
@@ -72,6 +74,51 @@ Agents (list/get/`bindable`/`runnability`/pins, `@`-mention via
 | MCP Apps | Cross-origin iframe + postMessage bridge. Iframe-shaped by construction; show `GET /mcp-apps/cards` metadata only. |
 | Appearance settings | No meaning in a terminal. |
 | `manage-sessions` as a screen | Redundant with the conversation list; fold its bulk actions in. |
+
+## Client-executed tools
+
+The terminal can run commands and read or write files on the user's machine.
+The web app cannot, and the server must not try. The protocol keeps the agent
+loop on the server and only the *execution* on the client, reusing the
+interrupt machinery that already exists for `ask_user_question`.
+
+1. **Declare.** Every `/chat/stream` request carries `client_tools`: a list of
+   `{name, description, inputSchema}` (`apis.shared.client_tools.ClientToolSpec`).
+   The TUI sends the same four every turn (`run_command`, `read_file`,
+   `list_directory`, `write_file`; `tui/src/agentcore_tui/local_tools/specs.py`).
+   The SPA never sends the field, so nothing below runs for a web turn.
+2. **Build.** `build_client_tools` makes one Strands tool per spec, named
+   `local_<name>` so it cannot collide with a registry, gateway or MCP tool. Its
+   body raises an interrupt through `ToolContext` with reason
+   `{"type": "client_tool_call", toolUseId, toolName, arguments}`.
+3. **Pause.** `stream_coordinator._extract_client_tool_call_events` emits one
+   `client_tool_call` SSE event per pending interrupt at `done`, and writes a
+   `PendingInterrupt(kind="client_tool")` breadcrumb. The paused-turn snapshot
+   carries the specs (`PausedTurnSnapshot.client_tools`).
+4. **Approve and run.** The TUI mounts a `ClientToolPrompt` showing the exact
+   command or path. `y` runs it, `n` declines, `a` runs it and remembers the
+   tool for the session. `ToolExecutor` bounds everything: 60 s timeout,
+   6 000-char output (head and tail kept), 64 KB reads, 256 KB writes.
+5. **Resume.** The client POSTs `interrupt_responses: [{interruptId, response}]`
+   with `response` = `{"output", "isError"}` or `{"declined": true}`. Resume
+   rebuilds the client tools from the snapshot — Strands re-enters the paused
+   tool body, so the tool has to exist on the rebuilt agent — and the body
+   returns the client's output as the tool result. A decline tells the model
+   not to retry.
+
+**Cache key.** `client_tools_digest` folds into the tools element of the agent
+cache key, so a changed spec set rebuilds the agent and a turn without the
+field keys exactly as before. The specs are therefore sent identically every
+turn; a per-turn variation would rebuild the agent every turn.
+
+**Bounds, because specs are prompt text and results re-enter the prompt:** 16
+tools, 64-char names, 1 KB descriptions, 8 KB schemas, 32 K result characters
+(server side; the client caps far lower).
+
+**Trust.** The server trusts nothing about the tools beyond size. Whether a
+command is safe is decided by the person at the terminal, with the command in
+front of them. There is no allow-list: one that permits `git` permits
+`git push --force`.
 
 ### OAuth consent needs redesigning, not porting
 

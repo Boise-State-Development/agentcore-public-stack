@@ -60,6 +60,22 @@ against `dev.boisestate.ai` — a signed-in terminal runs tool-using agent turns
 and a second turn answered from server-side memory with only one message sent.
 Optional follow-ups are listed at the end of the spec.
 
+**Interrupts are answered in the terminal.** Every way a turn can pause —
+client tool call, server tool approval, `ask_user_question`, OAuth consent,
+browser login — mounts a focused prompt (`widgets/prompts.py`) and the turn
+*stays busy* until every prompt has an answer; then `AgentTurnController.resume`
+POSTs `interrupt_responses` in the SPA's shapes. Esc still means Stop (it is
+the screen's priority binding), so no prompt binds Esc; `x` skips all
+questions. Cancelling a paused turn does **not** POST `/interrupt` — nothing is
+generating, and the server keeps the paused turn for a later resume.
+
+**Local tools.** The agent can run commands and read/write files on the user's
+machine (`local_tools/`), through the client-tools protocol in
+#[[file:docs/specs/TUI_WEB_PARITY_SPEC.md]]. The specs are sent on every turn
+and must stay byte-stable: the server folds their digest into the agent cache
+key. `--no-local-tools` or `local_tools = false` switches them off. Never add
+an allow-list; the approval prompt showing the exact command is the control.
+
 **Two dialects, one machinery.** `BaseTurnController` owns the delta buffers and
 `flush()`, the busy flag, `begin`/`finish`, and the `stream()` skeleton that must
 never raise. `TurnController` (api-converse) and `AgentTurnController`
@@ -73,7 +89,8 @@ about what `.text` means — the agent's is the **last** assistant message, sinc
 each tool round trip closes one and opens another — so a shared `complete()`
 would need a branch for the difference that matters most.
 
-**`TurnSink` gained exactly two methods**, `on_tool(record)` and `on_title`.
+**`TurnSink`** has `on_tool(record)`, `on_title`, `on_interrupt(event)`,
+`on_context(used, window)`, `on_elapsed(seconds)` and `on_truncated()`.
 `on_tool` takes the mutable `ToolCallRecord` the accumulator folds into, not the
 event, so the widget and the fold are the same object; callers key on
 `tool_use_id` and call `refresh_from_record()` rather than re-mounting. Everything
