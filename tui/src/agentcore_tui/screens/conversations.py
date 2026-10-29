@@ -208,7 +208,7 @@ class ConversationList(Screen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "close", "Back"),
         Binding("enter", "open", "Open", priority=True),
-        Binding("f2", "rename", "Rename"),
+        Binding("r", "rename", "Rename"),
         Binding("delete", "delete", "Delete"),
         Binding("u", "toggle_unread", "Unread"),
         Binding("ctrl+r", "reload", "Reload"),
@@ -216,7 +216,7 @@ class ConversationList(Screen[None]):
         Binding("slash", "focus_filter", "Filter", key_display="/"),
     ]
 
-    def __init__(self, catalog_supplier: CatalogSupplier, *, on_open: OpenHandler) -> None:
+    def __init__(self, catalog_supplier: CatalogSupplier, *, on_open: OpenHandler, initial_query: str | None = None) -> None:
         super().__init__()
         self._catalog_supplier = catalog_supplier
         self._on_open = on_open
@@ -224,13 +224,13 @@ class ConversationList(Screen[None]):
         self._next_token: str | None = None
         self._busy = False
         #: Current filter text; empty shows every loaded row.
-        self._filter = ""
+        self._filter = (initial_query or "").strip()
         #: Rows from a server search, shown instead of the loaded page.
         self._search_results: list[ConversationSummary] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Input(placeholder="Type to filter · Enter to search everything", id="conversation-filter")
+        yield Input(value=self._filter, placeholder="Type to filter · Enter to search everything", id="conversation-filter")
         yield ListView(id="conversation-list")
         yield Label("Loading conversations...", id="conversation-status")
         yield Footer()

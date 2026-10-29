@@ -407,7 +407,7 @@ class TurnController(BaseTurnController[TurnAccumulator]):
             logger.warning("model returned an empty response stop_reason=%s", accumulator.stop_reason)
             await self._sink.on_notice(
                 "The model returned an empty response.",
-                hint="Try rephrasing, or switch models with F2.",
+                hint="Try rephrasing, or switch models with /model.",
                 error=True,
             )
 
@@ -737,7 +737,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
             logger.warning("agent returned an empty response stop_reason=%s", accumulator.stop_reason)
             await self._sink.on_notice(
                 "The agent returned an empty response.",
-                hint="Try rephrasing, or switch models with F2.",
+                hint="Try rephrasing, or switch models with /model.",
                 error=True,
             )
 

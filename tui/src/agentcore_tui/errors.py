@@ -69,7 +69,7 @@ class ModelAccessDeniedError(ApiError):
         super().__init__(
             f"Your account is not permitted to use {model_id}",
             status_code=403,
-            hint="Pick another model with F2, or ask an administrator to grant your role access to this model.",
+            hint="Pick another model with /model, or ask an administrator to grant your role access to this model.",
         )
         self.model_id = model_id
 

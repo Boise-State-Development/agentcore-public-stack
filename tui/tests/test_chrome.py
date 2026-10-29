@@ -109,7 +109,7 @@ class TestEmptyState:
             assert not app.chat.query(Notice)
             frame = rendered_text(app)
             assert "Ask anything" in frame
-            assert "F2" in frame and "F3" in frame and "F4" in frame
+            assert "/help" in frame and "commands" in frame
 
             await send(pilot, app, "hello")
             assert not app.chat.query("#empty-state")
@@ -153,8 +153,11 @@ class TestSlashCommands:
             app.chat.composer.text = "/help"
             await pilot.press("enter")
             await pilot.pause()
+            await pilot.pause()
             frame = rendered_text(app)
-            assert "/model" in frame and "/tools" in frame and "/quit" in frame
+            assert "/model" in frame and "/theme" in frame and "/quit" in frame
+            # An API-key session has no tool picker, so /tools is not offered.
+            assert "/tools" not in frame
             assert app.chat.store.is_empty
             assert app.chat.composer.text == ""
 

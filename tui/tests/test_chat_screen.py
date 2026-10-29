@@ -29,13 +29,11 @@ from .conftest import (
     MODEL_ID,
     Handler,
     build_app,
-    command_titles,
     error_handler,
     make_config,
     ok_handler,
     rendered_text,
     sample_models,
-    run_command,
     send,
     sse_body,
     sse_response,
@@ -451,21 +449,15 @@ class TestActions:
             assert "sonnet" in app.chat.status.line
 
 
-class TestPaletteCommands:
-    async def test_stop_offered_only_while_a_turn_is_in_flight(self) -> None:
+class TestCopyCommands:
+    async def test_copy_with_no_answer_yet_warns_instead_of_copying(self) -> None:
+        copied: list[str] = []
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
             await pilot.pause()
-            assert "Stop response" not in command_titles(app)
-
-    async def test_copy_offered_only_once_there_is_an_answer(self) -> None:
-        app = build_app(ok_handler(["the answer"]))
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            assert "Copy last response" not in command_titles(app)
-
-            await send(pilot, app, "hi")
-            assert "Copy last response" in command_titles(app)
+            app.copy_to_clipboard = copied.append  # type: ignore[method-assign]
+            await send(pilot, app, "/copy")
+            assert copied == []
 
     async def test_copy_last_answer_uses_the_latest_assistant_message(self) -> None:
         copied: list[str] = []
@@ -475,7 +467,7 @@ class TestPaletteCommands:
             app.copy_to_clipboard = copied.append  # type: ignore[method-assign]
 
             await send(pilot, app, "hi")
-            await run_command(app, "Copy last response")
+            await send(pilot, app, "/copy")
 
             assert copied == ["first answer"]
 
@@ -487,7 +479,7 @@ class TestPaletteCommands:
             app.copy_to_clipboard = copied.append  # type: ignore[method-assign]
 
             await send(pilot, app, "a question")
-            await run_command(app, "Copy transcript")
+            await send(pilot, app, "/copy all")
 
             assert len(copied) == 1
             assert "a question" in copied[0]

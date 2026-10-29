@@ -120,6 +120,6 @@ class EmptyState(Vertical):
         else:
             yield Static("Ask anything.", classes="tagline", markup=False)
         yield Static(
-            "[$primary]Enter[/] send   [$primary]Alt+Enter[/] new line   [$primary]F2[/] model   [$primary]F3[/] tools   [$primary]F4[/] chats   [$primary]F1[/] palette",
+            "[$primary]Enter[/] send   [$primary]Alt+Enter[/] new line   [$primary]/[/] commands   [$primary]/help[/] for the list",
             classes="hints",
         )

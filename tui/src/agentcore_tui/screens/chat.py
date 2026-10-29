@@ -15,11 +15,11 @@ knowing what a widget is.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any, ClassVar
 
 from textual import work
-from textual.app import ComposeResult, SystemCommand
+from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
@@ -58,6 +58,8 @@ from ..widgets.prompts import (
 )
 from .conversations import ConversationList
 from .model_picker import ModelChoice, ModelPicker
+from ..commands import COMMANDS, SlashCommand
+from ..widgets.command_menu import CommandMenu
 from .tool_picker import ToolPicker
 
 logger = logging.getLogger(__name__)
@@ -71,13 +73,11 @@ COMPOSER_HINT_BUSY = "Esc to stop"
 class ChatScreen(Screen[None]):
     """Streaming chat against one conversation."""
 
+    #: The only key on this screen. Features are slash commands (steering: "UX
+    #: paradigm"); a binding that opens one is a review rejection. priority so
+    #: it fires while the composer has focus; `check_action` withdraws it when
+    #: idle so Esc keeps its normal behaviour then.
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("ctrl+n", "new_conversation", "New chat"),
-        Binding("f2", "choose_model", "Model"),
-        Binding("f3", "choose_tools", "Tools"),
-        Binding("f4", "conversations", "Chats"),
-        # priority so it fires while the composer has focus; `check_action`
-        # withdraws it when idle so Esc keeps its normal behaviour then.
         Binding("escape", "cancel_turn", "Stop", priority=True),
     ]
 
@@ -147,18 +147,24 @@ class ChatScreen(Screen[None]):
     def status(self) -> StatusBar:
         return self.query_one(StatusBar)
 
+    @property
+    def command_menu(self) -> CommandMenu:
+        return self.query_one(CommandMenu)
+
     # -- layout --------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield VerticalScroll(id="transcript")
         with Vertical(id="composer-area"):
+            yield CommandMenu(agent=self._agent_mode)
             yield Composer()
             yield StatusBar()
         yield Footer()
 
     async def on_mount(self) -> None:
         self.status.set_model(self._config.model_id)
+        self.composer.key_interceptor = self._menu_key
 
         if not self._config.is_complete:
             await self._show_setup_help()
@@ -467,6 +473,7 @@ class ChatScreen(Screen[None]):
     # -- turn lifecycle ------------------------------------------------------
 
     async def on_composer_submitted(self, message: Composer.Submitted) -> None:
+        self.command_menu.hide()
         if message.text.startswith("/") and not message.text.startswith("//"):
             self.composer.clear_prompt()
             await self._run_slash_command(message.text[1:])
@@ -479,28 +486,61 @@ class ChatScreen(Screen[None]):
 
     # -- slash commands ------------------------------------------------------
 
-    SLASH_COMMANDS: ClassVar[dict[str, str]] = {
-        "new": "Start a new conversation",
-        "model [name]": "Pick a model, or switch straight to one whose id contains `name`",
-        "tools": "Choose which tools the agent may use",
-        "chats": "Browse your saved conversations",
-        "copy": "Copy the last answer to the clipboard",
-        "copy all": "Copy the whole conversation as Markdown",
-        "attach <path>": "Upload a file and send it with your next message",
-        "clear": "Clear the screen (the conversation continues)",
-        "continue": "Let an answer that hit the token limit carry on",
-        "stop": "Stop the turn in flight",
-        "help": "Show this list",
-        "quit": "Leave",
-    }
+    def on_text_area_changed(self, event: Composer.Changed) -> None:
+        """Every keystroke in the composer drives the command menu."""
+        if event.text_area is self.composer:
+            self.command_menu.update_for(self.composer.text)
+
+    def _menu_key(self, key: str) -> bool:
+        """Route a navigation key to the open command menu. True if consumed."""
+        menu = self.command_menu
+        if not menu.is_open:
+            return False
+        match key:
+            case "up":
+                menu.move(-1)
+            case "down":
+                menu.move(1)
+            case "escape":
+                menu.hide()
+            case "tab":
+                self._complete_command(menu.current)
+            case "enter":
+                command = menu.current
+                menu.hide()
+                if command is None:
+                    return False
+                # Enter on a highlighted command runs it, through the same
+                # submit path as typing it in full. The menu only shows before
+                # the first space, so there are no arguments yet.
+                self.composer.post_message(Composer.Submitted(f"/{command.name}"))
+            case _:
+                return False
+        return True
+
+    def _complete_command(self, command: SlashCommand | None) -> None:
+        """Tab: fill the composer with the highlighted command, ready for arguments."""
+        if command is None:
+            return
+        self.composer.replace_prompt(f"/{command.name}" + (" " if command.usage else ""))
+        self.command_menu.hide()
 
     async def _run_slash_command(self, line: str) -> None:
-        """Dispatch `/command args`. Unknown commands say so and show the list."""
-        name, _, argument = line.strip().partition(" ")
-        name = name.lower()
+        """Dispatch `/command args`. Unknown commands say so and point at /help."""
+        typed, _, argument = line.strip().partition(" ")
         argument = argument.strip()
-        logger.info("slash command %s", name)
-        match name:
+        command = COMMANDS.resolve(typed)
+        if command is None:
+            await self.transcript.mount(
+                Notice(
+                    f"Unknown command /{typed}.",
+                    hint="Type / to see the commands, or /help. Start a prompt with // to send a literal slash.",
+                )
+            )
+            self.transcript.scroll_end(animate=False)
+            return
+        logger.info("slash command %s", command.name)
+        match command.name:
             case "new":
                 await self.action_new_conversation()
             case "model":
@@ -509,9 +549,9 @@ class ChatScreen(Screen[None]):
                 else:
                     self.action_choose_model()
             case "tools":
-                self.action_choose_tools()
-            case "chats" | "conversations" | "history":
-                self.action_conversations()
+                await self._tools_command(argument)
+            case "conversations":
+                self.action_conversations(argument or None)
             case "attach":
                 await self._attach_file(argument)
             case "copy":
@@ -525,17 +565,87 @@ class ChatScreen(Screen[None]):
                 self.notify("Screen cleared. The conversation continues; /new starts over.", timeout=5)
             case "continue":
                 await self.action_continue()
-            case "stop" | "cancel":
+            case "stop":
                 await self.action_cancel_turn()
-            case "help" | "?":
+            case "theme":
+                self._theme_command(argument)
+            case "status":
+                await self._show_status()
+            case "screenshot":
+                self.app.set_timer(0.1, self.app.deliver_screenshot)
+            case "help":
                 await self._show_help()
-            case "quit" | "exit" | "q":
+            case "quit":
                 await self.app.action_quit()
-            case _:
-                await self.transcript.mount(
-                    Notice(f"Unknown command /{name}.", hint="Type /help for the list. Start a prompt with // to send a literal slash.")
-                )
-                self.transcript.scroll_end(animate=False)
+            case _:  # pragma: no cover - test_commands keeps this unreachable
+                raise AssertionError(f"registered command without a handler: {command.name}")
+
+    async def _tools_command(self, argument: str) -> None:
+        """`/tools` opens the server-tool picker; `/tools local on|off` is the local switch.
+
+        Local tools are not catalogue entries, so they cannot live in the
+        picker: an administrator cannot grant or revoke "run a command on the
+        user's machine". This is the one place they are switched.
+        """
+        words = argument.lower().split()
+        if not words:
+            self.action_choose_tools()
+            return
+        if words[0] == "local" and len(words) == 2 and words[1] in {"on", "off"}:
+            if not self._agent_mode:
+                self.notify("Local tools need a signed-in session.", severity="warning", timeout=5)
+                return
+            if self._turn.busy:
+                self.notify("Wait for the current turn to finish first.", severity="warning", timeout=5)
+                return
+            self._config = replace(self._config, local_tools=words[1] == "on")
+            self._turn = self._build_controller()
+            if self._config.local_tools:
+                self.notify("Local tools on for this session: the agent may ask to run commands and read files here.", timeout=6)
+            else:
+                self.notify("Local tools off for this session.", timeout=4)
+            return
+        self.notify("Usage: /tools, or /tools local on|off", severity="warning", timeout=5)
+
+    def _theme_command(self, argument: str) -> None:
+        """`/theme <name>` switches; `/theme` lists what is available."""
+        names = sorted(self.app.available_themes)
+        if not argument:
+            current = self.app.theme
+            listing = "  ".join(f"[b]{name}[/b]" if name == current else name for name in names)
+            self.notify(f"{listing}\nUse /theme <name>.", title="Themes", timeout=10)
+            return
+        wanted = argument.strip().lower()
+        if wanted not in self.app.available_themes:
+            self.notify(f"No theme called {wanted!r}. One of: {', '.join(names)}", severity="warning", timeout=8)
+            return
+        self.app.theme = wanted
+        self.notify(f"Theme: {wanted}", timeout=3)
+
+    async def _show_status(self) -> None:
+        """Where am I, as whom, on what: the facts a bug report needs."""
+        from ..logging_setup import active_log_path
+
+        source = getattr(self._config.credential_source, "value", str(self._config.credential_source))
+        tools = "all granted" if self._enabled_tools is None else f"{len(self._enabled_tools)} selected"
+        if self._agent_mode:
+            tools += f" · local tools {'on' if self._config.local_tools else 'off'}"
+        lines = [
+            f"Server     {self._config.base_url or 'not configured'}",
+            f"Signed in  {source}",
+            f"Model      {self._config.model_id}",
+            f"Tools      {tools}",
+            f"Session    {self._store.session_id or '(none yet)'}",
+            f"Log        {active_log_path() or 'not configured'}",
+        ]
+        await self.transcript.mount(Notice("\n".join(lines)))
+        self.transcript.scroll_end(animate=False)
+
+    async def _show_help(self) -> None:
+        body = "\n".join(COMMANDS.help_lines(agent=self._agent_mode))
+        keys = "Enter send · Alt+Enter newline · Esc stop · Ctrl+C quit · Tab completes a command"
+        await self.transcript.mount(Notice(body, hint=keys))
+        self.transcript.scroll_end(animate=False)
 
     async def _attach_file(self, raw_path: str) -> None:
         """Upload a local file into the conversation for the next turn."""
@@ -570,13 +680,6 @@ class ChatScreen(Screen[None]):
         await self.transcript.mount(Notice(f"Attached {uploaded.filename} ({size}). It goes with your next message."))
         self.transcript.scroll_end(animate=False)
         self.composer.focus()
-
-    async def _show_help(self) -> None:
-        width = max(len(k) for k in self.SLASH_COMMANDS) + 1
-        lines = "\n".join(f"/{k.ljust(width)} {v}" for k, v in self.SLASH_COMMANDS.items())
-        keys = "F1 palette · F2 model · F3 tools · F4 chats · Ctrl+N new · Esc stop · Ctrl+Q quit · Alt+Enter newline"
-        await self.transcript.mount(Notice(lines, hint=keys))
-        self.transcript.scroll_end(animate=False)
 
     async def _switch_model_by_name(self, needle: str) -> None:
         """`/model haiku` without opening the picker.
@@ -792,8 +895,8 @@ class ChatScreen(Screen[None]):
         self.notify(f"{len(enabled)} of {len(decisions)} tools enabled", timeout=5)
 
     @work
-    async def action_conversations(self) -> None:
-        """Browse the user's conversations and open one."""
+    async def action_conversations(self, query: str | None = None) -> None:
+        """Browse the user's conversations and open one. `query` pre-fills the filter."""
         if not self._agent_mode:
             self.notify(
                 "Saved conversations need a signed-in session. Run `agentcore-tui login --sso`.",
@@ -802,7 +905,7 @@ class ChatScreen(Screen[None]):
                 timeout=8,
             )
             return
-        await self.app.push_screen_wait(ConversationList(self._catalog_or_create, on_open=self._adopt_conversation))
+        await self.app.push_screen_wait(ConversationList(self._catalog_or_create, on_open=self._adopt_conversation, initial_query=query))
 
     async def _adopt_conversation(self, summary: ConversationSummary, messages: list[HistoryMessage]) -> None:
         """Replace the transcript with a stored conversation.
@@ -917,26 +1020,6 @@ class ChatScreen(Screen[None]):
         """
         self._enabled_tools = tool_ids
         self._turn = self._build_controller()
-
-    # -- palette -------------------------------------------------------------
-
-    def system_commands(self) -> Iterable[SystemCommand]:
-        """Chat-specific palette entries, contributed to the App's palette."""
-        yield SystemCommand("New conversation", "Clear the transcript and start over", self.action_new_conversation)
-        yield SystemCommand("Change model", "Pick which model answers the next turn", self.action_choose_model)
-        yield SystemCommand("Choose tools", "Pick which tools the agent may use", self.action_choose_tools)
-        yield SystemCommand("Conversations", "Browse, open, rename or delete saved conversations", self.action_conversations)
-
-        if self._turn.busy:
-            yield SystemCommand("Stop response", "Abandon the turn in flight", self.action_cancel_turn)
-
-        if isinstance(self._turn, AgentTurnController) and self._turn.can_continue:
-            yield SystemCommand("Continue response", "Let the cut-off answer carry on", self.action_continue)
-
-        if self._store.last_assistant is not None:
-            yield SystemCommand("Copy last response", "Copy the most recent answer to the clipboard", self._copy_last_answer)
-
-        yield SystemCommand("Copy transcript", "Copy the whole conversation as Markdown", self._copy_transcript, discover=False)
 
     def _copy_last_answer(self) -> None:
         message = self._store.last_assistant

@@ -346,6 +346,22 @@ Footer {
     background: $background;
 }
 
+/* The slash-command completion popup. Sits directly above the composer and
+ * never takes focus; the composer keeps it and forwards navigation keys. */
+#command-menu {
+    height: auto;
+    max-height: 10;
+    margin: 0 0 0 0;
+    border: round $primary-darken-1;
+    background: $surface;
+    padding: 0;
+}
+
+#command-menu > .option-list--option-highlighted {
+    background: $primary 30%;
+    text-style: none;
+}
+
 #composer {
     border: round $primary;
     border-title-color: $primary;

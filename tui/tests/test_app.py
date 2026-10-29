@@ -1,4 +1,4 @@
-"""App-level tests: wiring, the screen stack, and the command palette.
+"""App-level tests: wiring, the screen stack, and the no-keys-for-features rule.
 
 Chat behaviour lives in ``test_chat_screen.py`` and the turn lifecycle in
 ``test_turn.py``. This file should stay short — if it grows, something has moved
@@ -7,10 +7,12 @@ back into the App that belongs on a screen.
 
 from __future__ import annotations
 
+import re
+
 from agentcore_tui.conversation import ConversationStore
 from agentcore_tui.screens import ChatScreen
 
-from .conftest import BASE_URL, build_app, command_titles, ok_handler, send
+from .conftest import BASE_URL, build_app, ok_handler, send
 
 
 class TestWiring:
@@ -65,51 +67,50 @@ class TestWiring:
             assert [message.content for message in app.store][0] == "remember this"
 
 
-class TestCommandPalette:
-    async def test_offers_screen_and_app_commands_together(self) -> None:
+class TestNoKeysForFeatures:
+    """The UX paradigm (steering): features are slash commands, keys are not a way in.
+
+    These guard the rule structurally so a well-meaning binding does not creep
+    back. Adding one is a review rejection; this makes it a red test too.
+    """
+
+    def test_the_app_has_no_command_palette(self) -> None:
+        from agentcore_tui.app import ChatApp
+
+        assert ChatApp.ENABLE_COMMAND_PALETTE is False
+
+    def test_the_only_app_key_is_quit(self) -> None:
+        from agentcore_tui.app import ChatApp
+
+        assert [(b.key, b.action) for b in ChatApp.BINDINGS] == [("ctrl+q", "quit")]
+
+    def test_the_chat_screen_binds_nothing_but_stop(self) -> None:
+        assert [(b.key, b.action) for b in ChatScreen.BINDINGS] == [("escape", "cancel_turn")]
+
+    def test_no_function_key_is_bound_anywhere(self) -> None:
+        """F-keys are swallowed by VS Code, macOS, tmux and SSH; see steering."""
+        import importlib
+        import inspect
+        import pkgutil
+
+        import agentcore_tui
+
+        offenders: list[str] = []
+        for module_info in pkgutil.walk_packages(agentcore_tui.__path__, "agentcore_tui."):
+            module = importlib.import_module(module_info.name)
+            for _, obj in inspect.getmembers(module, inspect.isclass):
+                if obj.__module__ != module.__name__:
+                    continue  # imported from Textual; its own F-keys are not ours to police
+                for binding in obj.__dict__.get("BINDINGS", []) or []:
+                    key = getattr(binding, "key", None)
+                    if key and re.fullmatch(r"f\d+", key):
+                        offenders.append(f"{obj.__name__}: {key}")
+        assert offenders == []
+
+    async def test_f1_does_nothing(self) -> None:
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
             await pilot.pause()
-            titles = command_titles(app)
-            # Contributed by the chat screen.
-            assert "New conversation" in titles
-            assert "Change model" in titles
-            # Contributed by the app.
-            assert "Theme" in titles
-            assert "Quit" in titles
-            assert "Show log file" in titles
-
-    async def test_drops_builtins_that_make_no_sense_here(self) -> None:
-        """Maximize would fill the screen with the composer and hide the answer."""
-        app = build_app(ok_handler())
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            titles = command_titles(app)
-            assert "Maximize" not in titles
-            assert "Minimize" not in titles
-            assert "Keys" not in titles
-
-    async def test_a_non_chat_screen_contributes_no_chat_commands(self) -> None:
-        """Guards the isinstance check in get_system_commands."""
-        from agentcore_tui.screens import ModelPicker
-
-        app = build_app(ok_handler())
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            picker = ModelPicker([], current="m")
-            app.push_screen(picker)
-            await pilot.pause()
-            titles = [command.title for command in app.get_system_commands(picker)]
-            assert "New conversation" not in titles
-            assert "Quit" in titles
-
-    async def test_f1_opens_the_command_palette(self) -> None:
-        app = build_app(ok_handler())
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            assert "CommandPalette" not in [type(screen).__name__ for screen in app.screen_stack]
-
             await pilot.press("f1")
             await pilot.pause()
-
-            assert "CommandPalette" in [type(screen).__name__ for screen in app.screen_stack]
+            assert [type(screen).__name__ for screen in app.screen_stack] == ["ChatScreen"]

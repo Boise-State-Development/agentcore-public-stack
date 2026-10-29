@@ -17,7 +17,6 @@ current one:
 from __future__ import annotations
 
 import html
-import inspect
 import json
 import re
 import time
@@ -282,25 +281,6 @@ async def wait_for_turn(pilot: Pilot[None], app: ChatApp, *, timeout: float = 10
     if app.chat.turn.busy:  # pragma: no cover - only on a hang
         raise AssertionError(f"turn still in flight after {timeout}s")
     await pilot.pause()
-
-
-def command_titles(app: ChatApp) -> list[str]:
-    return [command.title for command in app.get_system_commands(app.screen)]
-
-
-async def run_command(app: ChatApp, title: str) -> None:
-    """Invoke a palette command by title.
-
-    Goes through ``get_system_commands`` so the test covers the palette wiring
-    as well as the callback, instead of calling a private method directly.
-    """
-    for command in app.get_system_commands(app.screen):
-        if command.title == title:
-            result = command.callback()
-            if inspect.isawaitable(result):
-                await result
-            return
-    raise AssertionError(f"no palette command titled {title!r}")
 
 
 def rendered_text(app: ChatApp) -> str:
