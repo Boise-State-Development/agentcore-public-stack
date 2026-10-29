@@ -199,7 +199,7 @@ lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
 | `/tools` | Choose which server tools the agent may use (signed in) |
 | `/tools local on\|off` | Switch tools that run on this machine for the session |
 | `/conversations [search]` | Browse, open, rename (`r`) or delete saved conversations |
-| `/project [name\|off\|info]` | Run conversations in a Shared Project: pick one, name one, leave, or see its details |
+| `/project [name\|off\|info\|shared]` | Run conversations in a Shared Project: pick one, name one, leave, see its details, or read what teammates shared |
 | `/attach <path>` | Upload a file and send it with your next message |
 | `/continue` | Let an answer that hit the token limit carry on |
 | `/stop` | Stop the turn in flight |
@@ -305,6 +305,11 @@ one that has started — so switching projects mid-conversation starts a new
 one. `/new` inside a project starts another conversation in the same project.
 `/conversations` badges project conversations with `⌂ <name>`, and opening
 one rebinds automatically.
+
+`/project shared` lists the conversations members shared with the project,
+newest first, with who shared it and their note. Enter reads one (a read-only
+snapshot from when it was shared); Enter again continues it as your own
+conversation, a copy in the same project that you can keep talking in.
 
 Managing a project (members, instructions, files, memory, schedules) stays in
 the web app; the terminal is for working inside one.

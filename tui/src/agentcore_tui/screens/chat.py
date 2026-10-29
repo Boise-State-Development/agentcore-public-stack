@@ -60,8 +60,10 @@ from ..widgets.prompts import (
 from .conversations import ConversationList
 from .model_picker import ModelChoice, ModelPicker
 from .project_picker import ProjectPicker
+from .shared_conversations import SharedConversationList, SharedConversationView
 from ..commands import COMMANDS, SlashCommand
 from ..widgets.command_menu import CommandMenu
+from ..widgets.history import render_history
 from .tool_picker import ToolPicker
 
 logger = logging.getLogger(__name__)
@@ -596,6 +598,9 @@ class ChatScreen(Screen[None]):
         if word.lower() == "info":
             await self._show_project_info()
             return
+        if word.lower() == "shared":
+            self.action_shared_conversations()
+            return
         projects = await self._load_projects()
         if projects is None:
             return
@@ -670,6 +675,53 @@ class ChatScreen(Screen[None]):
                 note += " This project is archived, so the server will refuse new turns until it is restored."
             self.notify(note, timeout=8)
         self.composer.focus()
+
+    @work
+    async def action_shared_conversations(self) -> None:
+        """`/project shared`: read what teammates shared with this project."""
+        binding = self._store.project
+        if binding is None:
+            self.notify("Not in a project. `/project` picks one first.", timeout=5)
+            return
+        try:
+            shared = await self._catalog_or_create().shared_conversations(binding.project_id)
+        except AgentCoreTuiError as exc:
+            await self.transcript.mount(Notice(f"Could not load shared conversations: {exc.message}", hint=exc.hint, error=True))
+            self.transcript.scroll_end(animate=False)
+            return
+        chosen = await self.app.push_screen_wait(SharedConversationList(binding.name, shared))
+        if chosen is None:
+            return
+        await self.app.push_screen_wait(
+            SharedConversationView(
+                chosen,
+                self._catalog_or_create,
+                on_continue=self._open_forked_conversation,
+                model_label=self._config.model_id,
+            )
+        )
+
+    async def _open_forked_conversation(self, session_id: str, title: str) -> None:
+        """Open the copy a "Continue" just made, exactly as `/conversations` would."""
+        catalog = self._catalog_or_create()
+        try:
+            summary = await catalog.conversation(session_id)
+            page = await catalog.history(session_id)
+        except AgentCoreTuiError as exc:
+            await self.transcript.mount(
+                Notice(f"Copied to “{title}”, but could not open it: {exc.message}", hint="Find it in /conversations.", error=True)
+            )
+            self.transcript.scroll_end(animate=False)
+            return
+        if self._turn.busy:
+            await self.action_cancel_turn()
+        messages = [item for item in page.items if isinstance(item, HistoryMessage)]
+        project = None
+        if summary.project_id and self._store.project and self._store.project.project_id == summary.project_id:
+            binding = self._store.project
+            project = Project(project_id=binding.project_id, name=binding.name, harness_agent_id=binding.harness_agent_id)
+        await self._adopt_conversation(summary, messages, project)
+        self.notify(f"Continuing “{summary.title or title}” as your own conversation.", timeout=6)
 
     async def _show_project_info(self) -> None:
         binding = self._store.project
@@ -1059,38 +1111,9 @@ class ChatScreen(Screen[None]):
         self._tool_widgets.clear()
         self._pending = None
 
-        records: dict[str, ToolCallRecord] = {}
-        unrendered = 0
-        for message in messages:
-            for result in message.tool_results:
-                record = records.get(result.tool_use_id)
-                if record is not None:
-                    record.result = result.text
-                    record.is_error = result.is_error
-                    widget = self._tool_widgets.get(record.tool_use_id)
-                    if widget is not None:
-                        widget.refresh_from_record()
-            if message.attachments:
-                names = ", ".join(a.name or a.kind for a in message.attachments)
-                await self.transcript.mount(Notice(f"Attached: {names}"))
-            if message.role == "user" and message.text.strip():
-                await self.transcript.mount(UserMessage(message.text))
-            for use in message.tool_uses:
-                record = ToolCallRecord(tool_use_id=use.tool_use_id, name=use.name, arguments=use.arguments)
-                records[use.tool_use_id] = record
-                widget = ToolCall(record)
-                self._tool_widgets[use.tool_use_id] = widget
-                await self.transcript.mount(widget)
-            if message.role == "assistant" and message.text.strip():
-                assistant = AssistantMessage(self._config.model_id)
-                await self.transcript.mount(assistant)
-                if message.reasoning:
-                    await assistant.append_reasoning(message.reasoning)
-                await assistant.append_text(message.text)
-            unrendered += len(message.other_blocks)
-
-        if unrendered:
-            await self.transcript.mount(Notice(f"{unrendered} stored item(s) of a kind this terminal cannot show were skipped."))
+        rendered = await render_history(self.transcript, messages, model_label=self._config.model_id)
+        self._tool_widgets.update(rendered.tool_widgets)
+        records = rendered.records
 
         self.sub_title = summary.title
         self.status.set_turns(self._store.turns)

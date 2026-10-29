@@ -300,6 +300,29 @@ class Project:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SharedConversation:
+    """One row of ``GET /projects/{id}/shared-tasks``."""
+
+    share_id: str
+    title: str
+    shared_by: str
+    shared_at: str = ""
+    note: str = ""
+    is_mine: bool = False
+
+    @classmethod
+    def from_wire(cls, payload: dict[str, Any]) -> SharedConversation:
+        return cls(
+            share_id=str(payload.get("shareId", "")),
+            title=str(payload.get("title") or "Untitled"),
+            shared_by=str(payload.get("sharedByName") or payload.get("sharedByEmail") or "someone"),
+            shared_at=str(payload.get("sharedAt") or ""),
+            note=str(payload.get("note") or ""),
+            is_mine=bool(payload.get("isMine", False)),
+        )
+
+
 def _optional_str(value: Any) -> str | None:
     return str(value) if value else None
 
@@ -598,6 +621,29 @@ class CatalogClient:
     async def project(self, project_id: str) -> Project:
         """One project. 404 maps to ApiError; the caller decides what that means."""
         return Project.from_wire(await self._get(self._endpoints.project(project_id)))
+
+    async def shared_conversations(self, project_id: str) -> list[SharedConversation]:
+        """Conversations shared with a project, most recent first."""
+        payload = await self._get(self._endpoints.project_shared_tasks(project_id))
+        return [SharedConversation.from_wire(item) for item in _items(payload, "tasks")]
+
+    async def shared_snapshot(self, share_id: str) -> list[HistoryMessage]:
+        """The messages of a shared conversation, frozen at share time."""
+        payload = await self._get(self._endpoints.shared_conversation(share_id))
+        return [HistoryMessage.from_wire(item) for item in _items(payload, "messages")]
+
+    async def continue_shared(self, share_id: str) -> tuple[str, str]:
+        """Fork a share into a new conversation of the caller's own.
+
+        Returns ``(session_id, title)``. The copy is an ordinary session in the
+        same project, so opening it afterwards rebinds like any other.
+        """
+        payload = await self._post(self._endpoints.share_export(share_id), {})
+        return str(payload.get("sessionId", "")), str(payload.get("title") or "Shared conversation")
+
+    async def conversation(self, session_id: str) -> ConversationSummary:
+        """One conversation's summary row (``GET /sessions/{id}/metadata``)."""
+        return ConversationSummary.from_wire(await self._get(self._endpoints.session_metadata(session_id)))
 
     # -- preferences ---------------------------------------------------------
 

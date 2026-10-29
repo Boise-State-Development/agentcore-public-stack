@@ -119,8 +119,8 @@ COMMANDS = CommandRegistry(
         ),
         SlashCommand(
             "project",
-            "Run conversations in a Shared Project: pick one, name one, `off` to leave, `info` for its details",
-            usage="[name|off|info]",
+            "Run conversations in a Shared Project: pick one, name one, `off` to leave, `info` for details, `shared` for teammates' conversations",
+            usage="[name|off|info|shared]",
             agent_only=True,
             keywords=("workspace",),
         ),

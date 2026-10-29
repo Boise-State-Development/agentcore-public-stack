@@ -724,3 +724,16 @@ ModalScreen:ansi OptionList > .option-list--option-highlighted {
 .interrupt-notice.-settled:light {
     border-left: wide $foreground 30%;
 }
+
+/* ------------------------------------------------------ shared conversation */
+
+#shared-banner {
+    height: auto;
+    padding: 0 3;
+    color: $text-muted;
+    background: $surface;
+}
+
+#shared-banner.-error {
+    color: $error;
+}

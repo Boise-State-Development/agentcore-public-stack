@@ -332,11 +332,12 @@ tui/src/agentcore_tui/
 │                     ApiKeyAuth/SessionAuth), device_auth.py (CLI sign-in),
 │                     converse.py + events.py (api-converse),
 │                     agent_stream.py + agent_events.py (the agent)
-├── screens/          chat.py, model_picker.py, project_picker.py, conversations.py, splash.py
+├── screens/          chat.py, model_picker.py, project_picker.py, conversations.py,
+│                     shared_conversations.py, splash.py
 └── widgets/          transcript messages, composer, status bar
 ```
 
-819 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+828 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.

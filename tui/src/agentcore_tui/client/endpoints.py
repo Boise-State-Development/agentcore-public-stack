@@ -174,6 +174,20 @@ class Endpoints:
     def project(self, project_id: str) -> str:
         return f"{self.projects}/{quote(project_id, safe='')}"
 
+    def project_shared_tasks(self, project_id: str) -> str:
+        """Conversations members shared with the project. "Task" is the wire
+        name; everything a person reads says "conversation"."""
+        return f"{self.project(project_id)}/shared-tasks"
+
+    def shared_conversation(self, share_id: str) -> str:
+        """A share's read-only snapshot."""
+        return self._join(f"shared/{quote(share_id, safe='')}")
+
+    def share_export(self, share_id: str) -> str:
+        """Copy a shared snapshot into a new conversation of the caller's own
+        (the web app's "Continue"). The copy keeps the project binding."""
+        return self._join(f"shares/{quote(share_id, safe='')}/export")
+
     # -- chat helpers --------------------------------------------------------
 
     @property
