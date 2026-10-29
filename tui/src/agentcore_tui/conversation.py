@@ -88,6 +88,19 @@ class ProjectBinding:
     harness_agent_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class AgentBinding:
+    """Which Agent (outside any project) a conversation talks to.
+
+    The wire fact is the same as a project's — ``rag_assistant_id`` on every
+    turn — so the two are mutually exclusive on the store: a conversation runs
+    in a project *or* with an Agent, never both.
+    """
+
+    agent_id: str
+    name: str
+
+
 class ConversationStore:
     """Owns one conversation.
 
@@ -97,13 +110,14 @@ class ConversationStore:
     letting callers poll.
     """
 
-    __slots__ = ("_messages", "_project", "_session_id", "_title")
+    __slots__ = ("_agent", "_messages", "_project", "_session_id", "_title")
 
     def __init__(self, *, session_id: str | None = None, title: str | None = None) -> None:
         self._session_id = session_id or new_session_id()
         self._title = title
         self._messages: list[Message] = []
         self._project: ProjectBinding | None = None
+        self._agent: AgentBinding | None = None
 
     # -- identity ------------------------------------------------------------
 
@@ -187,6 +201,27 @@ class ConversationStore:
         """The Shared Project this conversation runs in, if any."""
         return self._project
 
+    @property
+    def agent(self) -> AgentBinding | None:
+        """The Agent this conversation talks to outside a project, if any."""
+        return self._agent
+
+    @property
+    def bound_agent_id(self) -> str | None:
+        """What goes on the wire as ``rag_assistant_id``: a project's harness or an Agent."""
+        if self._project is not None:
+            return self._project.harness_agent_id
+        if self._agent is not None:
+            return self._agent.agent_id
+        return None
+
+    def bind_agent(self, binding: AgentBinding | None) -> None:
+        """Talk to an Agent (or to none). Leaves any project, since one turn
+        can carry only one ``rag_assistant_id``."""
+        self._agent = binding
+        if binding is not None:
+            self._project = None
+
     def bind_project(self, binding: ProjectBinding | None) -> None:
         """Run this conversation in a project (or in none).
 
@@ -195,6 +230,8 @@ class ConversationStore:
         screen enforces that; the store just holds the fact.
         """
         self._project = binding
+        if binding is not None:
+            self._agent = None
 
     def reset(self, *, keep_project: bool = True) -> str:
         """Start a fresh conversation, returning the new session id.
@@ -212,6 +249,7 @@ class ConversationStore:
         self._session_id = new_session_id()
         if not keep_project:
             self._project = None
+            self._agent = None
         return self._session_id
 
     def adopt(
@@ -221,6 +259,7 @@ class ConversationStore:
         *,
         title: str | None = None,
         project: ProjectBinding | None = None,
+        agent: AgentBinding | None = None,
     ) -> None:
         """Become an existing server-side conversation.
 
@@ -235,3 +274,4 @@ class ConversationStore:
         self._messages = list(messages)
         self._title = title or None
         self._project = project
+        self._agent = agent if project is None else None

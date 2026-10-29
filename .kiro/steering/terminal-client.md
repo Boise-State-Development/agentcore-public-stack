@@ -212,6 +212,13 @@ the project); `adopt()` replaces it with whatever the opened conversation has,
 using the session's own `preferences.assistantId` when the project itself is
 not listable.
 
+**Agents use the same wire fact** (`rag_assistant_id = agentId`), so the store
+holds an `AgentBinding` beside the `ProjectBinding` and they are mutually
+exclusive: binding one clears the other, and `ConversationStore.bound_agent_id`
+is the single thing the controller sends. Adopting a conversation whose
+summary has `assistantId` but no `projectId` rebinds it as an agent
+conversation; dropping that would get the next turn refused.
+
 `GET /projects` answering 404 means the feature is off for the deployment;
 `CatalogClient.projects()` returns None and the command says so. Refusals
 arrive as a `FORBIDDEN` error event with `recoverable=false`; the server's
@@ -332,12 +339,12 @@ tui/src/agentcore_tui/
 │                     ApiKeyAuth/SessionAuth), device_auth.py (CLI sign-in),
 │                     converse.py + events.py (api-converse),
 │                     agent_stream.py + agent_events.py (the agent)
-├── screens/          chat.py, model_picker.py, project_picker.py, conversations.py,
+├── screens/          chat.py, model_picker.py, project_picker.py, agent_picker.py, conversations.py,
 │                     shared_conversations.py, splash.py
 └── widgets/          transcript messages, composer, status bar
 ```
 
-828 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+841 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.

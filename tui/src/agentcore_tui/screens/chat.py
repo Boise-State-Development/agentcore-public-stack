@@ -28,10 +28,10 @@ from textual.widgets import Footer, Header
 
 from ..client import AgentStreamClient, ApiConverseClient
 from ..client.agent_events import ToolCallRecord
-from ..client.catalog import CatalogClient, ConversationSummary, HistoryMessage, Model, Project
+from ..client.catalog import Agent, CatalogClient, ConversationSummary, HistoryMessage, Model, Project
 from ..client.auth import SessionAuth
 from ..config import Config, config_path, load_session_from_keyring
-from ..conversation import ConversationStore, Message, ProjectBinding
+from ..conversation import AgentBinding, ConversationStore, Message, ProjectBinding
 from ..credentials import CredentialSource
 from ..errors import AgentCoreTuiError, ConfigError
 from ..local_tools import ApprovalDecision, LocalToolResult, ToolExecutor, tool_specs
@@ -59,6 +59,7 @@ from ..widgets.prompts import (
 )
 from .conversations import ConversationList
 from .model_picker import ModelChoice, ModelPicker
+from .agent_picker import AgentPicker
 from .project_picker import ProjectPicker
 from .shared_conversations import SharedConversationList, SharedConversationView
 from ..commands import COMMANDS, SlashCommand
@@ -558,6 +559,8 @@ class ChatScreen(Screen[None]):
                 self.action_conversations(argument or None)
             case "project":
                 await self._project_command(argument)
+            case "agent":
+                await self._agent_command(argument)
             case "attach":
                 await self._attach_file(argument)
             case "copy":
@@ -667,6 +670,8 @@ class ChatScreen(Screen[None]):
             await self.action_new_conversation()
         self._store.bind_project(binding)
         self.status.set_project(binding.name if binding else None)
+        if binding is not None:
+            self.status.set_agent(None)
         if binding is None:
             self.notify("Left the project. New conversations run on the default agent.", timeout=6)
         else:
@@ -675,6 +680,106 @@ class ChatScreen(Screen[None]):
                 note += " This project is archived, so the server will refuse new turns until it is restored."
             self.notify(note, timeout=8)
         self.composer.focus()
+
+    async def _agent_command(self, argument: str) -> None:
+        """`/agent` picks; `/agent <name>` binds by name; `off` stops; `info` describes."""
+        if not self._agent_mode:
+            self.notify("Agents need a signed-in session. Run `agentcore-tui login --sso`.", severity="warning", timeout=8)
+            return
+        word = argument.strip()
+        if word.lower() in {"off", "none", "leave"}:
+            await self._apply_agent(None)
+            return
+        if word.lower() == "info":
+            await self._show_agent_info()
+            return
+        try:
+            agents = await self._catalog_or_create().agents()
+        except AgentCoreTuiError as exc:
+            await self.transcript.mount(Notice(f"Could not load agents: {exc.message}", hint=exc.hint, error=True))
+            self.transcript.scroll_end(animate=False)
+            return
+        if agents is None:
+            self.notify("Agents aren't enabled on this deployment.", severity="warning", timeout=8)
+            return
+        if word:
+            needle = word.casefold()
+            matches = [a for a in agents if needle in a.name.casefold()]
+            exact = [a for a in matches if a.name.casefold() == needle]
+            matches = exact or matches
+            if len(matches) == 1:
+                await self._apply_agent(matches[0])
+            elif not matches:
+                self.notify(f"No agent matching {word!r}.", severity="warning", timeout=6)
+            else:
+                self.notify("Several agents match: " + ", ".join(a.name for a in matches[:6]) + ". Be more specific.", severity="warning", timeout=8)
+            return
+        self.action_choose_agent(agents)
+
+    @work
+    async def action_choose_agent(self, agents: list[Agent]) -> None:
+        current = self._store.agent.agent_id if self._store.agent else None
+        chosen = await self.app.push_screen_wait(AgentPicker(agents, current=current))
+        if chosen is None:
+            return
+        await self._apply_agent(chosen if isinstance(chosen, Agent) else None)
+
+    async def _apply_agent(self, agent: Agent | None) -> None:
+        """Talk to an Agent in new conversations (or stop). Leaves any project.
+
+        Same rule as a project: the server binds a conversation on its first
+        turn, so a change mid-conversation starts a new one — which is what the
+        web app does when an `@`-mention lands in a thread that has messages.
+        """
+        current = self._store.agent
+        if agent is None and current is None:
+            self.notify("Not talking to an agent.", timeout=4)
+            return
+        if agent is not None and current is not None and current.agent_id == agent.agent_id:
+            self.notify(f"Already talking to {agent.name}.", timeout=4)
+            return
+        if self._turn.busy:
+            self.notify("Wait for the current turn to finish first.", severity="warning", timeout=5)
+            return
+        if not self._store.is_empty:
+            await self.action_new_conversation()
+        binding = AgentBinding(agent.agent_id, agent.name) if agent else None
+        self._store.bind_agent(binding)
+        self.status.set_agent(binding.name if binding else None)
+        if binding is not None:
+            self.status.set_project(None)
+            note = f"New conversations talk to {binding.name}: its instructions, model, tools and knowledge apply."
+            if agent is not None and agent.starters:
+                note += " Try: " + " · ".join(f"“{s}”" for s in agent.starters[:3])
+            self.notify(note, timeout=10)
+        else:
+            self.notify("Stopped using the agent. New conversations run on the default agent.", timeout=6)
+        self.composer.focus()
+
+    async def _show_agent_info(self) -> None:
+        binding = self._store.agent
+        if binding is None:
+            self.notify("Not talking to an agent. `/agent` picks one.", timeout=5)
+            return
+        try:
+            agent = await self._catalog_or_create().agent(binding.agent_id)
+        except AgentCoreTuiError as exc:
+            await self.transcript.mount(Notice(f"Could not load {binding.name}: {exc.message}", hint=exc.hint, error=True))
+            self.transcript.scroll_end(animate=False)
+            return
+        lines = [f"Agent     {agent.label}"]
+        if agent.owner:
+            lines.append(f"Owner     {agent.owner}")
+        if agent.permission:
+            lines.append(f"Your role {agent.permission}")
+        if agent.model_label:
+            lines.append(f"Model     {agent.model_label}")
+        if agent.summary:
+            lines.append(f"About     {agent.summary}")
+        if agent.starters:
+            lines.append("Starters  " + "\n          ".join(agent.starters[:5]))
+        await self.transcript.mount(Notice("\n".join(lines)))
+        self.transcript.scroll_end(animate=False)
 
     @work
     async def action_shared_conversations(self) -> None:
@@ -1100,12 +1205,19 @@ class ChatScreen(Screen[None]):
         # from the project record is preferred, the session's own stored
         # assistantId is the fallback when the project is not listable.
         binding: ProjectBinding | None = None
+        agent_binding: AgentBinding | None = None
         if project is not None:
             binding = ProjectBinding(project.project_id, project.name, project.harness_agent_id)
         elif summary.project_id and summary.assistant_id:
             binding = ProjectBinding(summary.project_id, "project", summary.assistant_id)
-        self._store.adopt(summary.session_id, restored, title=summary.title, project=binding)
+        elif summary.assistant_id:
+            # A conversation with an Agent outside any project. Same wire fact,
+            # so it has to be carried or the next turn is refused; the name is
+            # display-only and best-effort.
+            agent_binding = AgentBinding(summary.assistant_id, await self._agent_name(summary.assistant_id))
+        self._store.adopt(summary.session_id, restored, title=summary.title, project=binding, agent=agent_binding)
         self.status.set_project(binding.name if binding else None)
+        self.status.set_agent(agent_binding.name if agent_binding else None)
 
         await self.transcript.remove_children()
         self._tool_widgets.clear()
@@ -1121,6 +1233,13 @@ class ChatScreen(Screen[None]):
         self.transcript.scroll_end(animate=False)
         logger.info("adopted conversation %s with %d message(s), %d tool call(s)", summary.session_id, len(restored), len(records))
         await self._restore_pending(summary.session_id)
+
+    async def _agent_name(self, agent_id: str) -> str:
+        try:
+            return (await self._catalog_or_create().agent(agent_id)).name
+        except AgentCoreTuiError as exc:
+            logger.info("agent %s name unavailable: %s", agent_id, exc)
+            return "agent"
 
     async def _restore_pending(self, session_id: str) -> None:
         """Re-offer the prompts of a turn that paused while nobody was here.

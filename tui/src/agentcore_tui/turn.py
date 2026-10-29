@@ -428,7 +428,7 @@ class TurnController(BaseTurnController[TurnAccumulator]):
         )
 
 
-def refusal_hint(event: AgentErrorEvent, *, in_project: bool) -> str:
+def refusal_hint(event: AgentErrorEvent, *, in_project: bool, in_agent: bool = False) -> str:
     """A next step for a server refusal, in this client's own vocabulary.
 
     The server's message says *what* (the project is archived, the agent is
@@ -445,6 +445,8 @@ def refusal_hint(event: AgentErrorEvent, *, in_project: bool) -> str:
         return "The project may have been deleted or you removed from it. `/project off` leaves it; /project picks another."
     if in_project:
         return "`/project off` leaves this project; /project picks another."
+    if in_agent:
+        return "The agent may have been deleted, unshared, or need a model you lack. `/agent off` leaves it; /agent picks another."
     return ""
 
 
@@ -557,8 +559,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         leaving a project, takes effect on the next turn without rebuilding
         the controller.
         """
-        binding = self._store.project
-        return binding.harness_agent_id if binding else None
+        return self._store.bound_agent_id
 
     # -- attachments ---------------------------------------------------------
 
@@ -709,7 +710,11 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         logger.info("compaction summarized=%s", event.summarized_turns)
 
     async def _handle_error_event(self, event: AgentErrorEvent) -> None:
-        await self._sink.on_notice(event.message, hint=refusal_hint(event, in_project=self._store.project is not None), error=True)
+        await self._sink.on_notice(
+            event.message,
+            hint=refusal_hint(event, in_project=self._store.project is not None, in_agent=self._store.agent is not None),
+            error=True,
+        )
 
     async def _handle_status(self, event: AgentStatus) -> None:
         """Narrate the server's phase in the status bar; nothing is stored."""

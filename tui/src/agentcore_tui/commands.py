@@ -124,6 +124,12 @@ COMMANDS = CommandRegistry(
             agent_only=True,
             keywords=("workspace",),
         ),
+        SlashCommand(
+            "agent",
+            "Talk to one of your agents (own, shared or pinned): pick one, name one, `off` to stop, `info` for details",
+            usage="[name|off|info]",
+            agent_only=True,
+        ),
         SlashCommand("attach", "Upload a file and send it with your next message", usage="<path>", agent_only=True),
         SlashCommand("continue", "Let an answer that hit the token limit carry on", agent_only=True),
         SlashCommand("stop", "Stop the turn in flight", aliases=("cancel",)),

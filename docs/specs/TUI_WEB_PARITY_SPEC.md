@@ -47,6 +47,7 @@ rather than reproducing that hierarchy.
 | Skills | `GET /skills/`, `PUT /skills/preferences` | ❌ |
 | Conversation modes | `GET /system-prompts/` → `selected_prompt_id` | ❌ |
 | Shared Projects (chat in one) | `GET /projects`, `GET /projects/{id}`, `rag_assistant_id = harnessAgentId` on every turn, `preferences.projectId` on sessions | ✅ `/project [name\|off\|info\|shared]`; picker (Mine / Shared with me); status-bar badge; `/conversations` badge + rebind on open; gate refusals carry slash-command hints; `/project shared` reads `GET /projects/{id}/shared-tasks` → `GET /shared/{shareId}` (snapshot) → `POST /shares/{id}/export` (continue as mine, keeps the project). Management surfaces (members, instructions, memory, schedules, outputs) deliberately web-only |
+| Agents (own, shared, pinned) | `GET /agents`, `GET /agents/pins`, `GET /agents/{id}`, `rag_assistant_id = agentId` | ✅ `/agent [name\|off\|info]`; picker grouped Mine / Shared with me / Pinned (the web `@` menu's scope; drafts excluded); `@ <name>` in the status bar; mutually exclusive with a project; reopening an agent conversation rebinds by its stored `assistantId`. Store browsing, pinning and the designer stay web-only |
 | File attachments | `POST /files/presign` → PUT → `POST /files/{id}/complete` | ✅ `/attach <path>`; `file_upload_ids` on the next turn |
 | Title generation | `POST /chat/generate-title` | ✅ client done, not yet auto-fired |
 | Sampling overrides | `inference_params` | ❌ |

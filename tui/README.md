@@ -200,6 +200,7 @@ lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
 | `/tools local on\|off` | Switch tools that run on this machine for the session |
 | `/conversations [search]` | Browse, open, rename (`r`) or delete saved conversations |
 | `/project [name\|off\|info\|shared]` | Run conversations in a Shared Project: pick one, name one, leave, see its details, or read what teammates shared |
+| `/agent [name\|off\|info]` | Talk to one of your agents (own, shared with you, or pinned) |
 | `/attach <path>` | Upload a file and send it with your next message |
 | `/continue` | Let an answer that hit the token limit carry on |
 | `/stop` | Stop the turn in flight |
@@ -313,6 +314,17 @@ conversation, a copy in the same project that you can keep talking in.
 
 Managing a project (members, instructions, files, memory, schedules) stays in
 the web app; the terminal is for working inside one.
+
+### Agents
+
+`/agent` lists the agents you made, those shared with you, and those you or
+your role pinned from the store — the same set the web app's `@` menu offers.
+Choosing one sends new conversations to it (its instructions, model, tools and
+knowledge apply) and the status bar shows `@ <name>`; `/agent grader` binds by
+name, `/agent info` shows its model and conversation starters, `/agent off`
+stops. An agent and a project are either/or: choosing one leaves the other.
+Opening a conversation you had with an agent rebinds to it. Browsing the store
+and building agents stay in the web app.
 
 ### Local tools
 

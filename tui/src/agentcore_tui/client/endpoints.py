@@ -163,6 +163,23 @@ class Endpoints:
         """ "Conversation modes" in the web UI. Selected by ``selected_prompt_id``."""
         return self._join("system-prompts/")
 
+    # -- agents --------------------------------------------------------------
+
+    @property
+    def agents(self) -> str:
+        """The caller's own Agents plus those shared with them. 404 while the
+        Agents feature is off. Project harnesses are never listed."""
+        return self._join("agents")
+
+    @property
+    def agent_pins(self) -> str:
+        """Pinned Agents, including role-seeded ones. 404 while the
+        marketplace is off."""
+        return self._join("agents/pins")
+
+    def agent(self, agent_id: str) -> str:
+        return f"{self.agents}/{quote(agent_id, safe='')}"
+
     # -- projects ------------------------------------------------------------
 
     @property

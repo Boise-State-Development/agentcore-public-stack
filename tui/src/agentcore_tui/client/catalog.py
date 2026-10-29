@@ -301,6 +301,59 @@ class Project:
 
 
 @dataclass(frozen=True, slots=True)
+class Agent:
+    """An Agent the user can talk to, from ``GET /agents`` or ``GET /agents/pins``.
+
+    ``source`` says why it is listed: ``own`` (you made it), ``shared``
+    (someone shared it with you) or ``pinned`` (you or your role pinned it
+    from the store). The same scope as the web app's ``@`` menu: your own plus
+    pinned, not the whole store.
+    """
+
+    agent_id: str
+    name: str
+    source: str = "own"
+    summary: str = ""
+    owner: str = ""
+    emoji: str = ""
+    #: ``owner``, ``editor`` or ``viewer`` for own/shared; empty for pins.
+    permission: str = ""
+    model_label: str = ""
+    starters: tuple[str, ...] = ()
+
+    @property
+    def label(self) -> str:
+        return f"{self.emoji} {self.name}".strip()
+
+    @classmethod
+    def from_agent_wire(cls, payload: dict[str, Any]) -> Agent:
+        shared = bool(payload.get("isSharedWithMe"))
+        return cls(
+            agent_id=str(payload.get("agentId", "")),
+            name=str(payload.get("name") or "Untitled agent"),
+            source="shared" if shared else "own",
+            summary=str(payload.get("tagline") or payload.get("description") or ""),
+            owner=str(payload.get("ownerName") or ""),
+            emoji=str(payload.get("emoji") or ""),
+            permission=str(payload.get("userPermission") or ("owner" if not shared else "")),
+            model_label=str(payload.get("modelLabel") or ""),
+            starters=tuple(str(s) for s in payload.get("starters") or () if s),
+        )
+
+    @classmethod
+    def from_pin_wire(cls, payload: dict[str, Any]) -> Agent:
+        publisher = payload.get("publisher") or {}
+        return cls(
+            agent_id=str(payload.get("agentId", "")),
+            name=str(payload.get("name") or "Untitled agent"),
+            source="pinned",
+            summary=str(payload.get("tagline") or ""),
+            owner=str(publisher.get("label") or "") if isinstance(publisher, dict) else "",
+            emoji=str(payload.get("emoji") or ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SharedConversation:
     """One row of ``GET /projects/{id}/shared-tasks``."""
 
@@ -600,6 +653,39 @@ class CatalogClient:
     async def system_prompts(self) -> list[SystemPromptOption]:
         payload = await self._get(self._endpoints.system_prompts)
         return [SystemPromptOption.from_wire(item) for item in _items(payload, "prompts")]
+
+    async def agents(self) -> list[Agent] | None:
+        """Agents to talk to: own and shared, then pinned ones not already listed.
+
+        None when the deployment has Agents switched off (``GET /agents``
+        404s). Drafts are left out, as in the web app's ``@`` menu: an Agent
+        with half-written instructions should not be handed a turn. Pins are
+        best-effort — the marketplace can be off while Agents are on.
+        """
+        try:
+            payload = await self._get(self._endpoints.agents)
+        except ApiError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        agents = [Agent.from_agent_wire(item) for item in _items(payload, "agents") if item.get("status") != "DRAFT"]
+        agents.sort(key=lambda a: (a.source != "own", a.name.casefold()))
+        seen = {a.agent_id for a in agents}
+        try:
+            pins = await self._get(self._endpoints.agent_pins)
+        except ApiError as exc:
+            logger.info("agent pins unavailable: %s", exc)
+            return agents
+        for item in _items(pins, "pins"):
+            pin = Agent.from_pin_wire(item)
+            if pin.agent_id and pin.agent_id not in seen:
+                agents.append(pin)
+                seen.add(pin.agent_id)
+        return agents
+
+    async def agent(self, agent_id: str) -> Agent:
+        """One Agent's details. 404/403 map to ApiError."""
+        return Agent.from_agent_wire(await self._get(self._endpoints.agent(agent_id)))
 
     async def projects(self) -> list[Project] | None:
         """Projects the user owns or belongs to, or None when the deployment
