@@ -11,7 +11,7 @@ import {
   inject,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowPath, heroArrowTurnDownRight, heroArrowUturnLeft, heroExclamationCircle } from '@ng-icons/heroicons/outline';
+import { heroArrowPath, heroArrowTurnDownRight, heroArrowUturnLeft, heroCheck, heroExclamationCircle, heroSquare2Stack } from '@ng-icons/heroicons/outline';
 import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
 import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
@@ -39,20 +39,10 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon, TooltipDirective],
-  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft, appFork: FORK_ICON })],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft, heroCheck, heroSquare2Stack, appFork: FORK_ICON })],
   template: `
     @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
       <div class="group relative flex w-full flex-col items-end gap-2">
-        <!-- Hover-revealed sent-at subtitle (positioned above the topmost slot) -->
-        @if (formattedSentAt()) {
-          <span
-            class="pointer-events-none absolute -top-5 right-1 text-xs text-gray-400 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none dark:text-gray-500"
-            aria-hidden="true"
-          >
-            {{ formattedSentAt() }}
-          </span>
-        }
-
         <!--
           Mid-turn steer: the user sent this INTO a response that was still
           streaming, and the agent picked it up at its next step. Labelled
@@ -165,16 +155,36 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
         }
 
         <!--
-          Rewind (rewind spec §4): hides this message and everything after it
-          and puts its text back in the composer. Revealed on hover like the
-          sent-at subtitle; opacity only, so it stays in the tab order and
-          group-focus-within can reveal it for a keyboard user.
+          One action row under the bubble: when it was sent, Copy, and (behind
+          their flags) Rewind and Fork. Revealed on hover; opacity only, so the
+          buttons stay in the tab order and group-focus-within can reveal them
+          for a keyboard user. It stays up while an action it started is
+          showing its result.
         -->
-        @if (showRewind() || showFork()) {
+        @if (formattedSentAt() || copyText() || showRewind() || showFork()) {
           <div
             class="flex items-center gap-1 pr-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
-            [class.opacity-100]="rewinding() || forking()"
+            [class.opacity-100]="copied() || rewinding() || forking()"
           >
+            @if (formattedSentAt()) {
+              <span class="mr-1 text-xs text-gray-400 dark:text-gray-500">{{ formattedSentAt() }}</span>
+            }
+            @if (copyText()) {
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              [appTooltip]="copied() ? 'Copied' : 'Copy'"
+              appTooltipPosition="top"
+              [attr.aria-label]="copied() ? 'Copied to clipboard' : 'Copy message'"
+              (click)="copy()"
+            >
+              @if (copied()) {
+                <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
+              } @else {
+                <ng-icon name="heroSquare2Stack" class="size-4" aria-hidden="true" />
+              }
+            </button>
+            }
             @if (showRewind()) {
             <button
               type="button"
@@ -234,6 +244,41 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
     this.failedSends.retry(this.message().id);
   }
 
+  /**
+   * What Copy puts on the clipboard: the words the user typed. `displayText`
+   * when the sent prompt was augmented (attachment markers, folder
+   * manifests), else the message's text blocks. Independent of the debug
+   * setting, which only changes what the bubble shows.
+   */
+  copyText = computed((): string => {
+    const display = this.message().metadata?.['displayText'];
+    if (typeof display === 'string' && display.trim()) return display;
+    return this.message()
+      .content.filter((block: ContentBlock) => block.type === 'text' && block.text)
+      .map((block: ContentBlock) => block.text as string)
+      .join('\n\n');
+  });
+
+  copied = signal(false);
+  private copiedTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async copy(): Promise<void> {
+    const text = this.copyText();
+    if (!text || typeof navigator === 'undefined' || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard unavailable (insecure context, permissions): nothing to show.
+      return;
+    }
+    this.copied.set(true);
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+    this.copiedTimer = setTimeout(() => {
+      this.copied.set(false);
+      this.copiedTimer = null;
+    }, 2000);
+  }
+
   private rewinder = inject(ConversationRewindService);
 
   /** Only on messages the server numbered and could cut before; see ConversationRewindService. */
@@ -279,7 +324,7 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   });
 
   /**
-   * Hover-revealed "sent at" subtitle rendered above the topmost message slot.
+   * The "sent at" label at the start of the hover-revealed action row.
    *
    * - Under 1 minute: "Just now"
    * - Under 1 hour: "{n}m ago"
@@ -378,6 +423,7 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.resizeObserver?.disconnect();
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
   }
 
   toggleExpanded(): void {

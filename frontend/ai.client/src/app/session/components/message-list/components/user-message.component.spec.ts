@@ -94,7 +94,8 @@ describe('UserMessageComponent — overflow measurement', () => {
     fixture.detectChanges();
 
     expect(component.isOverflowing()).toBe(false);
-    expect(fixture.nativeElement.querySelector('button')).toBeNull();
+    const buttons = [...fixture.nativeElement.querySelectorAll('button')] as HTMLButtonElement[];
+    expect(buttons.some((b) => b.textContent?.includes('Show more'))).toBe(false);
   });
 
   it('still shows the affordance for genuinely long content', () => {
@@ -286,5 +287,55 @@ describe('UserMessageComponent — fork', () => {
   it('is disabled while it cannot run and absent with the flag off', async () => {
     expect(forkButton((await render(sent, { canFork: false })).el)?.disabled).toBe(true);
     expect(forkButton((await render(sent, { enabled: false })).el)).toBeNull();
+  });
+});
+
+describe('UserMessageComponent — action row', () => {
+  async function render(message: Message) {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [UserMessageComponent],
+      providers: [{ provide: LocalSettingsService, useValue: { showDebugOutput: signal(false) } }],
+    })
+      .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+    const fixture = TestBed.createComponent(UserMessageComponent);
+    fixture.componentRef.setInput('message', message);
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  const copyButton = (el: HTMLElement) => el.querySelector('button[aria-label="Copy message"]') as HTMLButtonElement | null;
+
+  it('copies what the user typed, not the augmented prompt', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const fixture = await render({
+      id: 'msg-s1-0',
+      role: 'user',
+      content: [{ type: 'text', text: 'summarize this\n\n[Attached files: a.pdf]' }],
+      metadata: { displayText: 'summarize this' },
+    });
+
+    copyButton(fixture.nativeElement)!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(writeText).toHaveBeenCalledWith('summarize this');
+    expect(fixture.nativeElement.querySelector('button[aria-label="Copied to clipboard"]')).not.toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('puts the sent time in the same row as the buttons', async () => {
+    const fixture = await render({
+      id: 'msg-s1-0',
+      role: 'user',
+      content: [{ type: 'text', text: 'hello' }],
+      createdAt: new Date().toISOString(),
+    });
+
+    const button = copyButton(fixture.nativeElement)!;
+    expect(button.parentElement?.textContent).toContain('Just now');
   });
 });
