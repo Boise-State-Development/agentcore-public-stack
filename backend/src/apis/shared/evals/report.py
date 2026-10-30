@@ -15,7 +15,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from apis.shared.evals.cases import FAMILIES, JUDGED_FAMILIES, EvalCase
 from apis.shared.evals.score import FamilyComparison, compare_family, majority
@@ -88,6 +88,7 @@ def build_baseline(
     *,
     cases: Sequence[EvalCase],
     meta: Mapping[str, Any],
+    judgements: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """A promotable baseline from a complete run, or :class:`ReportError` saying why not.
 
@@ -110,7 +111,19 @@ def build_baseline(
         raise ReportError(f"{len(short)} case(s) have fewer than k={k} samples: {preview}")
 
     families = sorted({c.family for c in cases}, key=FAMILIES.index)
-    return {
+    judged = sorted(c.id for c in cases if c.judge.evaluators or c.judge.rubric)
+    scores = judge_means(judgements)
+    # "Judged" means a judge ran, not that it scored: a tool-level judge on a
+    # case that rightly calls no tool returns "nothing to judge".
+    attempted = {str(j["case_id"]) for j in judgements}
+    unjudged = [cid for cid in judged if cid not in attempted]
+    if judgements and unjudged:
+        preview = ", ".join(unjudged[:5]) + (" …" if len(unjudged) > 5 else "")
+        raise ReportError(f"{len(unjudged)} judged case(s) have no judgements: {preview}; run `judge` first")
+    judge_models = sorted({str(j.get("judge_model")) for j in judgements})
+    if len(judge_models) > 1:
+        raise ReportError(f"judgements mix judge models: {judge_models}")
+    baseline: Dict[str, Any] = {
         "schemaVersion": BASELINE_SCHEMA_VERSION,
         "modelId": model_id,
         "k": k,
@@ -128,6 +141,10 @@ def build_baseline(
             for c in cases
         },
     }
+    if scores:
+        baseline["judgeModel"] = judge_models[0]
+        baseline["judgeScores"] = {cid: scores[cid] for cid in sorted(scores)}
+    return baseline
 
 
 def load_baseline(path: Path) -> Dict[str, Any]:
@@ -234,3 +251,82 @@ def explain_family(
 
 def any_gate_failed(comparisons: Iterable[FamilyComparison]) -> bool:
     return any(c.failed for c in comparisons)
+
+
+# --------------------------------------------------------------------------- judges
+
+
+def judge_means(judgements: Iterable[Mapping[str, Any]]) -> Dict[str, Dict[str, float]]:
+    """``{case_id: {evaluator: mean score}}`` over a run's samples, skipping errors and empty verdicts."""
+    sums: Dict[str, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
+    for j in judgements:
+        if j.get("score") is None:
+            continue
+        sums[str(j["case_id"])][str(j["evaluator"])].append(float(j["score"]))
+    return {
+        cid: {ev: round(sum(v) / len(v), 4) for ev, v in sorted(evs.items())}
+        for cid, evs in sums.items()
+    }
+
+
+@dataclass(frozen=True)
+class JudgeComparison:
+    family: str
+    evaluator: str
+    n: int
+    base_mean: float
+    run_mean: float
+
+    @property
+    def delta(self) -> float:
+        return self.run_mean - self.base_mean
+
+
+def compare_judges(
+    baseline: Mapping[str, Any],
+    judgements: Sequence[Mapping[str, Any]],
+    *,
+    judge_model: Optional[str] = None,
+) -> List[JudgeComparison]:
+    """Paired mean judge scores per (family, evaluator), over the cases judged in both. Advisory only.
+
+    A different judge model is a different scale, so it is refused rather than compared.
+    """
+    base_scores: Mapping[str, Mapping[str, float]] = baseline.get("judgeScores") or {}
+    if not base_scores or not judgements:
+        return []
+    base_model = baseline.get("judgeModel")
+    if judge_model and base_model and judge_model != base_model:
+        raise ReportError(f"the baseline was judged by {base_model}, this run by {judge_model}; not comparable")
+    run_scores = judge_means(judgements)
+    family_of = {str(j["case_id"]): str(j["family"]) for j in judgements}
+
+    pairs: Dict[tuple, List[tuple]] = defaultdict(list)
+    for cid, evs in run_scores.items():
+        for ev, run_mean in evs.items():
+            base_mean = (base_scores.get(cid) or {}).get(ev)
+            if base_mean is not None:
+                pairs[(family_of[cid], ev)].append((float(base_mean), run_mean))
+    out = []
+    for (family, ev) in sorted(pairs, key=lambda k: (FAMILIES.index(k[0]) if k[0] in FAMILIES else 99, k[1])):
+        values = pairs[(family, ev)]
+        out.append(
+            JudgeComparison(
+                family=family,
+                evaluator=ev,
+                n=len(values),
+                base_mean=sum(b for b, _ in values) / len(values),
+                run_mean=sum(r for _, r in values) / len(values),
+            )
+        )
+    return out
+
+
+def format_judge_table(comparisons: Sequence[JudgeComparison]) -> str:
+    header = f"{'family':<22} {'judge':<22} {'n':>3} {'base':>6} {'run':>6} {'delta':>7}"
+    lines = [header, "-" * len(header)]
+    for c in comparisons:
+        lines.append(
+            f"{c.family:<22} {c.evaluator:<22} {c.n:>3} {c.base_mean:>6.2f} {c.run_mean:>6.2f} {c.delta:>+7.2f}"
+        )
+    return "\n".join(lines)

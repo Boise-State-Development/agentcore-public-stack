@@ -1,6 +1,6 @@
 # Evaluation harness — phase 1, the release-gate script
 
-**Status:** PR-1 merged and validated on dev (2026-10-30). PR-3 BUILT (2026-10-30): the eval user, its sign-in, the first Haiku 4.5 baseline, and the release and nightly wiring; see §13. PR-2 (the judges) remains. Phase 1 of a three-phase plan; §12 names the other two so nobody designs phase 1 in a way that blocks them.
+**Status:** PR-1 merged and validated on dev (2026-10-30). PR-3 BUILT (2026-10-30): the eval user, its sign-in, the first Haiku 4.5 baseline, and the release and nightly wiring; see §13. PR-2 BUILT (2026-10-30): the judges, pinned to strands-agents-evals 1.7.0, and a re-promoted Haiku baseline with judge scores (54 of 57 cases pass). Phase 1 of a three-phase plan; §12 names the other two so nobody designs phase 1 in a way that blocks them.
 **Refs:** `docs/specs/agentcore-evaluations-spike-findings.md` (the judge spike and its hybrid recommendation), `docs/specs/response-feedback.md` §2 and §11 PR-4 (thumbs as a sampler, the managed-judge adapter), `docs/testing/smoke-regression.md` (the pass this slots into), `backend/scripts/compaction_quality_harness.py` and `backend/scripts/large_document_quality_harness.py` (the two harnesses whose method this generalises), `docs/specs/turn-path-ttft.md` §6 (the regression plan this is the quality half of), `docs/kaizen/scoping/2026-09-21-quality-veto-harness.md` (the scoping that built the compaction harness as slice 1 and deferred the live-arm slices; its §2.3 on what the runner can and cannot vary is load-bearing for §11 here), `docs/kaizen/review-queue.md` [2026-09-21] "The cheap quality veto does not exist".
 
 ## 1. Problem
@@ -174,7 +174,7 @@ cd backend && uv run python scripts/eval_harness.py --help
 |---|---|---|
 | `cases` | no | validate every case file and fixture reference, print the family table and the tools and skills the eval user must be granted |
 | `run` | **yes** | run `--family` (default all) with `--k` samples on `--model-id`, as the headless-grant owner `--user-id` on `--prefix` (or against a local stack with `--invocations-url`); estimate first, stop without `--yes`; resumable into `--out/results.jsonl`; refuses anything that looks like production |
-| `judge` | **yes** | run the case's listed evaluators over the scrubbed sessions in `--out`, with `--judge-model` (default Sonnet 4.6 regional); resumable; skips cases with no evaluators |
+| `judge` | **yes** | run the case's listed evaluators (and `rubric`, through `OutputEvaluator`) over the scrubbed sessions in `--out`, with `--judge-model` (default Sonnet 4.6 regional); estimate first, stop without `--yes`; resumable into `judgements.jsonl`; skips cases with no evaluators. `score` then prints an advisory table of paired mean judge scores against the baseline's, and refuses to compare across judge models |
 | `score` | no | compare `--out` with `baselines/<model-id>.json` per family (§8); exit non-zero on a gating regression |
 | `baseline` | no | promote `--out` to `baselines/<model-id>.json`, refusing unless every case in the golden set ran at full `k`; prints the cases whose outcome changes |
 | `cleanup` | no | delete the sessions and fixture uploads recorded in `--out` |
@@ -264,7 +264,19 @@ As built, `scripts/nightly/eval-harness.sh` seeds the eval user on the ephemeral
 - Tests: the committed set loads and validates on every CI run; scoring, the gate rule, execution against a stand-in runner, baselines, the CLI's exit codes, and the mapper's shape. The shape test validates against the package when it is installed (PR-2); until then it is pinned field by field.
 - Not done: no run against a deployed stack, and no baseline committed. Both need the eval user, which is PR-3.
 
-**PR-2 — the judges.** `strands-agents-evals==1.7.0` in the `dev` extra (approval first), the adapter, `judge`, scrub coverage, `general_chat` cases. Spend gated on `--yes`.
+**PR-2 — the judges. BUILT 2026-10-30.**
+
+- `StrandsEvalsJudge` in `apis/shared/evals/judges.py` maps the six case evaluator names to strands-evals 1.7.0 classes and a case `rubric` to `OutputEvaluator`. It imports the package lazily, records a judge that fails or has nothing to score (a tool-level judge on a turn with no tool calls) as a verdict with no score, and keeps the other verdicts. `judge_row` scrubs before any judge reads a session.
+- The case loader's evaluator list is derived from the adapter, so the two cannot drift.
+- `eval_harness.py judge`; `score` prints judge deltas; `baseline` records per-case mean judge scores and the judge model, refusing a partly judged run or mixed judges.
+- Six `general_chat` cases, three with their own rubric. The `refusal` and `tool_selection` cases gain their advisory judges, as §9 planned.
+- Tests run against a stand-in package with the 1.7.0 shapes.
+
+- `strands-agents-evals==1.7.0` in the `dev` extra, locked with uv 0.7.12 so the lock stays at revision 2. The one other lock change is `rich` 14.3.3 to 15.0.0, which the full backend suite passes on.
+- **The refusal judge is oriented by the case.** strands-evals' `RefusalEvaluator` scores 1.0 for "refused", which is right for a harmful request and wrong for a benign one; a mean across both would let a newly refused benign request cancel a newly answered harmful one. `orient_refusal` inverts the score when the case expects no refusal, and the loader rejects a refusal judge on a case without `expect.refuses`.
+- A case counts as judged when a judge ran, even if it had nothing to score (the tool-selection judge on a case that rightly calls no tool).
+- The re-promoted baseline (dev, 2026-10-30, Haiku 4.5, k=3, judged by Sonnet 4.6) passes 54 of 57 cases. Judge means: tool selection 1.00, refusal 1.00 once oriented, and for `general_chat` helpfulness 0.84, faithfulness 0.86, the case rubrics 0.78 and conciseness 0.44. The last says Haiku answers at more length than the judge thinks the questions need.
+- `instruction_following.word_limit` sits on its 15-word boundary and flips between runs; it is a candidate for a wider margin.
 
 **PR-3 — the eval user and the wiring. BUILT 2026-10-30.** `scripts/seed_eval_user.py` and the `--auth cognito` sign-in (D7); the eval user created on dev; the first baseline, `backend/evals/baselines/us.anthropic.claude-haiku-4-5-20251001-v1_0.json`, from a full k=3 run on dev as that user; the smoke doc's layer table, §4 and §5; the release skill's quality-evidence step; and the nightly step (§10). Not verified: the nightly step has not run yet, and whether the nightly deploy role may write an SSM SecureString is unknown until it does. A failure there is non-blocking and reports exit 2.
 

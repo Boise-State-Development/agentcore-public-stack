@@ -73,6 +73,7 @@ all = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "strands-agents", extra = ["bidi"] },
+    { name = "strands-agents-evals" },
     { name = "strands-agents-tools" },
     { name = "tiktoken" },
     { name = "types-aiofiles" },
@@ -92,6 +93,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "strands-agents-evals" },
     { name = "tiktoken" },
     { name = "types-aiofiles" },
 ]
@@ -138,6 +140,7 @@ requires-dist = [
     { name = "starlette", specifier = "==1.3.1" },
     { name = "strands-agents", marker = "extra == 'agentcore'", specifier = "==1.61.1" },
     { name = "strands-agents", extras = ["bidi"], marker = "extra == 'bidi'", specifier = "==1.61.1" },
+    { name = "strands-agents-evals", marker = "extra == 'dev'", specifier = "==1.7.0" },
     { name = "strands-agents-tools", marker = "extra == 'agentcore'", specifier = "==0.8.8" },
     { name = "tiktoken", marker = "extra == 'dev'", specifier = "==0.12.0" },
     { name = "trafilatura", specifier = "==2.0.0" },
@@ -4150,15 +4153,15 @@ wheels = [
 
 [[package]]
 name = "rich"
-version = "14.3.3"
+version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "markdown-it-py" },
     { name = "pygments" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b3/c6/f3b320c27991c46f43ee9d856302c70dc2d0fb2dba4842ff739d5f46b393/rich-14.3.3.tar.gz", hash = "sha256:b8daa0b9e4eef54dd8cf7c86c03713f53241884e814f4e2f5fb342fe520f639b", size = 230582, upload-time = "2026-02-19T17:23:12.474Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/25/b208c5683343959b670dc001595f2f3737e051da617f66c31f7c4fa93abc/rich-14.3.3-py3-none-any.whl", hash = "sha256:793431c1f8619afa7d3b52b2cdec859562b950ea0d4b6b505397612db8d5362d", size = 310458, upload-time = "2026-02-19T17:23:13.732Z" },
+    { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
 ]
 
 [[package]]
@@ -4496,6 +4499,28 @@ bidi = [
     { name = "smithy-aws-core", marker = "python_full_version >= '3.12'" },
     { name = "smithy-core", marker = "python_full_version >= '3.12'" },
     { name = "smithy-http", extra = ["awscrt"], marker = "python_full_version >= '3.12'" },
+]
+
+[[package]]
+name = "strands-agents-evals"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boto3" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation-threading" },
+    { name = "opentelemetry-sdk" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "strands-agents" },
+    { name = "strands-agents-tools" },
+    { name = "tenacity" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/62/07/8dc3c59250a1a98113063a42fba789d2b6dbeb79a6a9bcd53eb287665bb3/strands_agents_evals-1.7.0.tar.gz", hash = "sha256:7be9618ef61f2a4863f9a87e5862178a9ce9bd8d4a48e4fe520c75bc8f502a8f", size = 693112, upload-time = "2026-10-21T20:54:17.182Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/f0/d52dd67f92c567ca9672f878a38a0381e2ad4b8bde6d6e3def08f184f494/strands_agents_evals-1.7.0-py3-none-any.whl", hash = "sha256:b4f95f2c937c35783e3287459a46ee4477636808e4074d826fd2ecf51e519360", size = 448617, upload-time = "2026-10-21T20:54:15.36Z" },
 ]
 
 [[package]]

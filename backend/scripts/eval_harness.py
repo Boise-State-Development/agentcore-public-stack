@@ -16,6 +16,10 @@ Subcommands:
             Prints the estimate and stops unless --yes. Resumable: samples
             already in --out/results.jsonl are skipped. Deletes its sessions
             and fixture uploads at the end unless --keep.
+  judge     (spends) Score the run's samples with the LLM judges their cases
+            name (strands-agents-evals, a dev extra), over scrubbed sessions.
+            Estimate first, stop without --yes; resumable into judgements.jsonl.
+            Advisory: no family gates on a judge.
   score     Compare --out with baselines/<model>.json. Exit 1 if a gating family
             regressed, 2 if the comparison cannot be made. --explain FAMILY
             prints every flipped case with both answers. No AWS.
@@ -81,8 +85,10 @@ from apis.shared.evals.report import (  # noqa: E402
     baseline_filename,
     build_baseline,
     case_outcomes,
+    compare_judges,
     compare_run,
     explain_family,
+    format_judge_table,
     format_table,
     load_baseline,
     read_rows,
@@ -97,6 +103,11 @@ BASELINES_DIR = BACKEND_DIR / "evals" / "baselines"
 
 RESULTS_FILE = "results.jsonl"
 META_FILE = "meta.json"
+JUDGEMENTS_FILE = "judgements.jsonl"
+#: A judge call carries the scrubbed session plus the evaluator's own prompt.
+#: Sized from strands-evals' built-in prompts; refine from the first run.
+EST_JUDGE_INPUT_TOKENS = 2_500
+EST_JUDGE_OUTPUT_TOKENS = 300
 
 #: Per-MTok input/output, Regional (us.*) rates, only to size the pre-flight
 #: estimate. The catalog (curated-models.ts) is the source of truth.
@@ -469,6 +480,79 @@ async def cmd_cleanup(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- score / baseline
 
 
+def _judge_calls(case: EvalCase, row: Dict[str, Any]) -> int:
+    """Model calls one row costs: one per evaluator, one per tool call for the tool-level judge."""
+    calls = 0
+    for name in case.judge.evaluators:
+        calls += max(1, len(row.get("tool_calls") or [])) if name == "tool_selection" else 1
+    return calls + (1 if case.judge.rubric else 0)
+
+
+async def cmd_judge(args: argparse.Namespace) -> int:
+    out = Path(args.out)
+    try:
+        _read_meta(out)
+        cases = {c.id: c for c in load_cases(Path(args.cases_dir), families=args.family)}
+    except (ReportError, CaseError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    rows = [r for r in read_rows(out / RESULTS_FILE) if r["case_id"] in cases]
+    judgements_path = out / JUDGEMENTS_FILE
+    done = {
+        (j["case_id"], int(j["sample"]))
+        for j in read_rows(judgements_path)
+        if j.get("judge_model") == args.judge_model
+    }
+    todo = [
+        r for r in rows
+        if (cases[r["case_id"]].judge.evaluators or cases[r["case_id"]].judge.rubric)
+        and (r["case_id"], int(r["sample"])) not in done
+    ]
+    calls = sum(_judge_calls(cases[r["case_id"]], r) for r in todo)
+    rate_model = args.judge_model if args.judge_model in RATES else FALLBACK_RATE_MODEL
+    rate_in, rate_out = RATES[rate_model]
+    dollars = calls * (EST_JUDGE_INPUT_TOKENS * rate_in + EST_JUDGE_OUTPUT_TOKENS * rate_out) / 1_000_000
+    print(f"{len(todo)} samples to judge with {args.judge_model}: ~{calls} judge calls, ≈ ${dollars:.2f}")
+    if not todo:
+        print("nothing to judge")
+        return 0
+    if not args.yes:
+        print("estimate only; pass --yes to spend")
+        return 0
+
+    from apis.shared.evals.judges import StrandsEvalsJudge, judge_row
+
+    try:
+        import strands_evals  # noqa: F401 — fail fast with a clear message, not per sample
+    except ImportError:
+        print("strands-agents-evals is not installed; it is a dev extra (`uv sync --extra dev`)", file=sys.stderr)
+        return 2
+
+    judge = StrandsEvalsJudge(args.judge_model)
+    semaphore = asyncio.Semaphore(max(1, args.workers))
+    lock = asyncio.Lock()
+
+    async def one(row: Dict[str, Any]) -> None:
+        case = cases[row["case_id"]]
+        async with semaphore:
+            results = await asyncio.to_thread(
+                judge_row, row, evaluators=case.judge.evaluators, rubric=case.judge.rubric,
+                judge=judge, judge_model=args.judge_model, expected_refusal=case.expect.refuses,
+            )
+        async with lock:
+            with judgements_path.open("a", encoding="utf-8") as fh:
+                for result in results:
+                    fh.write(json.dumps(result) + "\n")
+        summary = ", ".join(
+            f"{j['evaluator']}={j['score']:.2f}" if j["score"] is not None else f"{j['evaluator']}: {j['error']}"
+            for j in results
+        )
+        print(f"{row['case_id']} [{row['sample']}]  {summary}", flush=True)
+
+    await asyncio.gather(*(one(r) for r in todo))
+    return 0
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
@@ -484,6 +568,17 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     print(f"run {out} on {meta['model_id']} (k={meta['k']}) vs baseline promoted {baseline.get('promotedAt')}\n")
     print(format_table(comparisons))
+    judgements = read_rows(out / JUDGEMENTS_FILE)
+    judge_comparisons = []
+    if judgements:
+        models = sorted({str(j.get("judge_model")) for j in judgements})
+        try:
+            judge_comparisons = compare_judges(baseline, judgements, judge_model=models[0] if len(models) == 1 else None)
+        except ReportError as exc:
+            print(f"\njudges not compared: {exc}")
+        if judge_comparisons:
+            print("\nLLM judges (advisory, mean score 0-1, paired cases only):\n")
+            print(format_judge_table(judge_comparisons))
     if args.explain:
         print()
         print(explain_family(args.explain, baseline, rows))
@@ -496,6 +591,11 @@ def cmd_score(args: argparse.Namespace) -> int:
                     "run": {key: meta.get(key) for key in ("startedAt", "target", "gitCommit", "imageTags")},
                     "baselinePromotedAt": baseline.get("promotedAt"),
                     "families": [c.to_dict() for c in comparisons],
+                    "judges": [
+                        {"family": c.family, "evaluator": c.evaluator, "n": c.n,
+                         "baseMean": c.base_mean, "runMean": c.run_mean}
+                        for c in judge_comparisons
+                    ],
                     "gateFailed": any_gate_failed(comparisons),
                 },
                 indent=2,
@@ -513,7 +613,10 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     try:
         meta = _read_meta(out)
         cases = load_cases(Path(args.cases_dir), fixtures_dir=Path(args.fixtures_dir))
-        baseline = build_baseline(read_rows(out / RESULTS_FILE), cases=cases, meta=meta)
+        baseline = build_baseline(
+            read_rows(out / RESULTS_FILE), cases=cases, meta=meta,
+            judgements=read_rows(out / JUDGEMENTS_FILE),
+        )
     except (ReportError, CaseError) as exc:
         print(f"not promoting: {exc}", file=sys.stderr)
         return 2
@@ -570,6 +673,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--keep", action="store_true", help="do not delete the sessions and uploads this run created")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
 
+    s = sub.add_parser("judge", help="(spends) score a run's samples with the LLM judges their cases name")
+    s.add_argument("--out", required=True)
+    s.add_argument("--judge-model", default="us.anthropic.claude-sonnet-4-6", help="Bedrock model id for every judge")
+    s.add_argument("--family", type=families, help="comma-separated families (default: every judged case)")
+    s.add_argument("--workers", type=int, default=4, help="samples judged concurrently")
+    s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
+
     s = sub.add_parser("score", help="compare a run with its model's baseline; exit 1 on a gating regression")
     s.add_argument("--out", required=True)
     s.add_argument("--baseline", help="baseline file (default: baselines/<model>.json)")
@@ -602,6 +712,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return cmd_cases(args)
     if args.command == "run":
         return asyncio.run(cmd_run(args))
+    if args.command == "judge":
+        return asyncio.run(cmd_judge(args))
     if args.command == "score":
         return cmd_score(args)
     if args.command == "baseline":

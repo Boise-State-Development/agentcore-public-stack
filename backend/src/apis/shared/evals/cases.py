@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from apis.shared.evals.judges import EVALUATOR_CLASSES
+
 #: Families in report order. ``general_chat`` is judged, so it never gates
 #: (spec D5); every other family is scored by a pure function and does.
 FAMILIES: Tuple[str, ...] = (
@@ -30,10 +32,8 @@ FAMILIES: Tuple[str, ...] = (
 )
 JUDGED_FAMILIES = frozenset({"general_chat"})
 
-#: The strands-evals evaluators a case may name (wired in PR-2).
-JUDGE_EVALUATORS = frozenset(
-    {"helpfulness", "faithfulness", "instruction_following", "tool_selection", "refusal", "conciseness"}
-)
+#: The strands-evals evaluators a case may name: exactly the ones the judge adapter maps.
+JUDGE_EVALUATORS = frozenset(EVALUATOR_CLASSES)
 
 _ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 
@@ -243,6 +243,9 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     unknown_evaluators = sorted(set(judge.evaluators) - JUDGE_EVALUATORS)
     if unknown_evaluators:
         raise CaseError(f"{where}.judge.evaluators: unknown {unknown_evaluators}")
+
+    if "refusal" in judge.evaluators and expect.refuses is None:
+        raise CaseError(f"{where}: the refusal judge needs expect.refuses to orient its score")
 
     if family in JUDGED_FAMILIES:
         if not judge.evaluators and not judge.rubric:

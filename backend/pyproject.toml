@@ -118,6 +118,12 @@ dev = [
     # and it is the only line compatible with the numpy pin above — pandas 3.x
     # requires numpy>=2.3.3 on py3.14+.
     "pandas==2.3.3",
+    # LLM judges for the eval harness (scripts/eval_harness.py judge;
+    # apis/shared/evals/judges.py imports it lazily, so no service needs it).
+    # 1.7.0 is the version the adapter was written against. It requires
+    # rich>=15, which moves rich for every extra since the lock is shared;
+    # strands-agents-tools allows rich>=14,<16.
+    "strands-agents-evals==1.7.0",
 ]
 
 # All dependencies (convenience)
