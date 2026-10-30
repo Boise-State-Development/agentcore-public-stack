@@ -42,7 +42,7 @@ export class AlbAlarmsConstruct extends Construct {
     alarms.alarm('AlbElb5xxAlarm', {
       name: 'alb-elb-5xx',
       alarmDescription:
-        'ALB returned 5xx responses of its own (not the application) — usually no healthy target to route to',
+        'ALB returned 5xx responses of its own (not the application) — a target just died or none is healthy. Check the stopped ECS task\'s exit code first (139 = crash); a network or security-group fault is the rare cause',
       metric: loadBalancer.metrics.httpCodeElb(
         elbv2.HttpCodeElb.ELB_5XX_COUNT,
         { period: ALARM_PERIOD, statistic: 'Sum' },
@@ -104,7 +104,7 @@ export class AlbAlarmsConstruct extends Construct {
     alarms.alarm('AlbTargetConnectionErrorAlarm', {
       name: 'alb-target-connection-errors',
       alarmDescription:
-        'ALB could not establish connections to App API targets — network path or security group fault',
+        'ALB could not connect to an App API target — almost always a task that just exited (ECS replaces it within ~30 s). Check the stopped task\'s exit code before suspecting the network path or security groups',
       metric: loadBalancer.metrics.targetConnectionErrorCount({
         period: ALARM_PERIOD,
         statistic: 'Sum',
