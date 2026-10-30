@@ -26,6 +26,11 @@ Subcommands:
 Usage (from backend/):
 
     uv run python scripts/eval_harness.py cases
+    # As the eval user (seeded once per environment by scripts/seed_eval_user.py):
+    AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-1 \
+        --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
+        --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 --yes
+    # As any other owner of an active headless grant:
     AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-1 \\
         --user-id <cognito-sub> --prefix dev-boisestateai-v2 \\
         --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0            # estimate only
@@ -40,7 +45,12 @@ headless grant, as in docs/testing/smoke-regression.md. From a worktree, the
 local server must be started with PYTHONPATH set to the worktree's src, or it
 silently runs develop's code.
 
-The user is the owner of an active headless grant (apis/shared/harness/grants.py).
+Two ways to name the user. ``--auth cognito`` (the default for the release
+pass) signs in as the eval user with the scripted Hosted UI login, reading its
+credentials from SSM, and renews that user's headless grant from the fresh
+session (``POST /runs/grant``), so the grant's 30-day window never lapses.
+``--auth headless-grant --user-id <sub>`` runs as the owner of an existing
+grant (apis/shared/harness/grants.py) and writes into that person's account.
 There is deliberately no way to target production: the code under test is the
 same image, and a prod run would spend a user's quota to learn nothing dev
 cannot tell us (spec D8).
@@ -96,11 +106,12 @@ RATES: Dict[str, Tuple[float, float]] = {
     "us.anthropic.claude-sonnet-5": (2.20, 11.00),
 }
 FALLBACK_RATE_MODEL = "us.anthropic.claude-sonnet-4-6"
-#: A platform turn carries the system prompt and toolConfig, so even a short
-#: prompt is ~15k input tokens before caching. Deliberately pessimistic: the
-#: estimate prices every turn as an uncached write.
-EST_INPUT_TOKENS_PER_TURN = 15_000
-EST_OUTPUT_TOKENS_PER_TURN = 400
+#: Base-rate-equivalent tokens per turn, measured: the first full k=3 run on dev
+#: (Haiku 4.5, 2026-10-30, 219 turns) averaged ~2.1k uncached input, ~0.5k cache
+#: write (1.25x), ~1.9k cache read (0.1x) and ~130 output tokens per turn, about
+#: $0.86 in all. These figures add a third on top, so the estimate stays high.
+EST_INPUT_TOKENS_PER_TURN = 4_000
+EST_OUTPUT_TOKENS_PER_TURN = 200
 #: Re-mint the Cognito bearer well inside its one-hour life.
 BEARER_REUSE_SECONDS = 20 * 60
 
@@ -133,7 +144,10 @@ def _image_tags(prefix: str, region: str) -> Dict[str, str]:
     tags: Dict[str, str] = {}
     for service in ("inference-api", "app-api"):
         try:
-            tags[service] = ssm.get_parameter(Name=f"/{prefix}/{service}/image-tag")["Parameter"]["Value"]
+            # The parameter holds the full ECR URI, which names the AWS account;
+            # baselines are committed, so keep only the tag after the last ':'.
+            uri = ssm.get_parameter(Name=f"/{prefix}/{service}/image-tag")["Parameter"]["Value"]
+            tags[service] = uri.rsplit(":", 1)[-1]
         except Exception:  # noqa: BLE001
             continue
     return tags
@@ -176,6 +190,43 @@ class CachedBearerAuth:
                 self._token = await self._inner.mint_bearer_for_user(user_id)
                 self._minted_at = time.monotonic()
             return self._token
+
+
+async def sign_in_eval_user(base_url: str, prefix: str, region: str) -> str:
+    """Sign in as the eval user, renew its headless grant, and return its user id.
+
+    Credentials come from ``EVAL_USERNAME`` / ``EVAL_PASSWORD`` when set, else
+    from the SSM SecureString ``seed_eval_user.py`` wrote. They are never logged.
+    """
+    from seed_eval_user import credentials_parameter
+    from smoke_turns import AppApiTransport
+
+    username = os.environ.get("EVAL_USERNAME")
+    password = os.environ.get("EVAL_PASSWORD")
+    if not (username and password):
+        import boto3
+
+        ssm = boto3.client("ssm", region_name=region)
+        try:
+            raw = ssm.get_parameter(Name=credentials_parameter(prefix), WithDecryption=True)["Parameter"]["Value"]
+        except ssm.exceptions.ParameterNotFound as exc:
+            raise ReportError(
+                f"no eval user credentials at {credentials_parameter(prefix)}; "
+                "run scripts/seed_eval_user.py for this environment first"
+            ) from exc
+        creds = json.loads(raw)
+        username, password = creds["username"], creds["password"]
+
+    transport = AppApiTransport(base_url, label="eval")
+    try:
+        await transport.login_cognito(username, password, "")
+        await transport.enable_headless_grant()
+    finally:
+        await transport.close()
+    user_id = transport.user.get("user_id")
+    if not user_id:
+        raise ReportError("signed in, but GET /auth/session named no user_id")
+    return str(user_id)
 
 
 # --------------------------------------------------------------------------- cases
@@ -221,6 +272,8 @@ def _prepare_meta(out: Path, args: argparse.Namespace, families: List[str]) -> D
                 f"{out} holds a run on {meta.get('model_id')} with k={meta.get('k')}; "
                 "use a new --out for a different model or k"
             )
+        if meta.get("user_id") != args.user_id:
+            raise ReportError(f"{out} holds a run as a different user; use a new --out")
         meta["families"] = sorted(set(meta.get("families") or []) | set(families), key=FAMILIES.index)
     else:
         meta = {
@@ -231,6 +284,7 @@ def _prepare_meta(out: Path, args: argparse.Namespace, families: List[str]) -> D
             "target": f"local:{args.invocations_url}" if args.invocations_url else f"runtime:{args.prefix}",
             "prefix": args.prefix,
             "region": args.region,
+            "auth": args.auth,
             "user_id": args.user_id,
             "gitCommit": _git_commit(),
         }
@@ -241,7 +295,7 @@ def _prepare_meta(out: Path, args: argparse.Namespace, families: List[str]) -> D
 async def cmd_run(args: argparse.Namespace) -> int:
     from smoke_turns import _looks_like_prod
 
-    if _looks_like_prod(args.invocations_url, args.prefix):
+    if _looks_like_prod(args.base_url or args.invocations_url, args.prefix):
         print("refusing: this looks like production; the eval harness targets dev or a local stack (spec D8)",
               file=sys.stderr)
         return 2
@@ -278,6 +332,13 @@ async def cmd_run(args: argparse.Namespace) -> int:
     from apis.shared.harness.runner import run_agent_headless
 
     resolve_runtime_env(args.prefix, args.region)
+    if args.auth == "cognito":
+        try:
+            args.user_id = await sign_in_eval_user(args.base_url, args.prefix, args.region)
+        except (ReportError, RuntimeError) as exc:
+            print(f"could not sign in as the eval user: {exc}", file=sys.stderr)
+            return 2
+        print("signed in as the eval user; headless grant renewed")
     out.mkdir(parents=True, exist_ok=True)
     families = sorted({case.family for case in cases}, key=FAMILIES.index)
     try:
@@ -494,7 +555,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s = sub.add_parser("run", help="(spends) run the golden set against a deployed or local stack")
     s.add_argument("--out", required=True, help="run directory (created; resumable)")
     s.add_argument("--model-id", required=True, help="model under test; the baseline is per model (spec D10)")
-    s.add_argument("--user-id", required=True, help="Cognito sub of the eval user (owner of a headless grant)")
+    s.add_argument("--auth", choices=["cognito", "headless-grant"], default="headless-grant",
+                   help="cognito: sign in as the seeded eval user (needs --base-url); "
+                        "headless-grant: run as --user-id, the owner of an active grant")
+    s.add_argument("--base-url", help="app-api origin for --auth cognito, e.g. https://dev.boisestate.ai/api")
+    s.add_argument("--user-id", help="Cognito sub of the grant owner (--auth headless-grant)")
     s.add_argument("--prefix", required=True, help="CDK project prefix, e.g. dev-boisestateai-v2")
     s.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"))
     s.add_argument("--invocations-url", help="send turns to this inference-api base (local stack) instead of the Runtime")
@@ -522,6 +587,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     if getattr(args, "k", 1) < 1:
         p.error("--k must be at least 1")
+    if args.command == "run":
+        if args.auth == "cognito" and not args.base_url:
+            p.error("--auth cognito needs --base-url (the app-api origin it signs in through)")
+        if args.auth == "headless-grant" and not args.user_id:
+            p.error("--auth headless-grant needs --user-id")
     return args
 
 

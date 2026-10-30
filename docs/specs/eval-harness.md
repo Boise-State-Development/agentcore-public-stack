@@ -1,6 +1,6 @@
 # Evaluation harness — phase 1, the release-gate script
 
-**Status:** PR-1 BUILT (2026-10-29): the shared package, the six deterministic families (51 cases) and the CLI; see §13 for what it covers and what PR-2 and PR-3 still owe. Not yet run against a deployed stack. Phase 1 of a three-phase plan; §12 names the other two so nobody designs phase 1 in a way that blocks them.
+**Status:** PR-1 merged and validated on dev (2026-10-30). PR-3 BUILT (2026-10-30): the eval user, its sign-in, the first Haiku 4.5 baseline, and the release and nightly wiring; see §13. PR-2 (the judges) remains. Phase 1 of a three-phase plan; §12 names the other two so nobody designs phase 1 in a way that blocks them.
 **Refs:** `docs/specs/agentcore-evaluations-spike-findings.md` (the judge spike and its hybrid recommendation), `docs/specs/response-feedback.md` §2 and §11 PR-4 (thumbs as a sampler, the managed-judge adapter), `docs/testing/smoke-regression.md` (the pass this slots into), `backend/scripts/compaction_quality_harness.py` and `backend/scripts/large_document_quality_harness.py` (the two harnesses whose method this generalises), `docs/specs/turn-path-ttft.md` §6 (the regression plan this is the quality half of), `docs/kaizen/scoping/2026-09-21-quality-veto-harness.md` (the scoping that built the compaction harness as slice 1 and deferred the live-arm slices; its §2.3 on what the runner can and cannot vary is load-bearing for §11 here), `docs/kaizen/review-queue.md` [2026-09-21] "The cheap quality veto does not exist".
 
 ## 1. Problem
@@ -55,6 +55,13 @@ One consequence changes the spike's conclusions: its structural objection (the m
 **D6 — Synthetic corpus only.** The judges read every byte we hand them, and a case file is a public artifact. No case may be derived from a recorded conversation, name a real person or organisation, or carry a real identifier (`feedback_no_real_identifiers_in_public_artifacts`). The large-document fixtures (`large_document_quality/fixtures.py`) and the compaction corpus (`compaction_quality/corpus.py`) are already built this way and are reused, not copied.
 
 **D7 — The harness runs as a dedicated eval user, not a developer.** The smoke matrix runs as its author's headless grant and its colour prompts have leaked into that user's long-term memory. Memory is scoped per actor, so a dedicated `eval` Cognito user with its own grant isolates the harness from everyone's LTM and makes "the eval user's RBAC" a fixed thing the baseline can describe. The role is seeded the way `scripts/seed_e2e_role.py` seeds `e2e_user`: explicit tools, explicit models, all through `AppRoleRepository` so the `effective_permissions` rows land.
+
+As built (`backend/scripts/seed_eval_user.py`, idempotent):
+
+- **Role.** `eval_harness`, mapped to the Cognito group `eval-harness`. It grants exactly the tools and skills the golden set offers (`required_grants` over the case files) and every model, so adding a case that needs a new tool means re-running the seed, and the seed test fails until the grant follows.
+- **User.** A Cognito-native `eval-harness` user with a permanent generated password. The password exists only in the SSM SecureString `/<prefix>/eval-harness/credentials`; nobody types or sees it, and a re-run reuses it.
+- **Sign-in.** A headless grant lasts at most 30 days from an attended login, which an account nobody logs into would outlive. So `run --auth cognito` signs in fresh on every run with the smoke matrix's scripted Hosted UI login and renews its own grant from that session (`POST /runs/grant`). The turns then go through `run_agent_headless` exactly as before. This needs the classic Hosted UI and the COGNITO provider on the BFF app client, both defaults.
+- **Long-term memory off.** The seed sets the user's `memoryMode` to `off`. Retention cases plant facts, and a user whose memory kept them would let a later run answer from memory instead of the conversation: a pass that proves nothing. Conversation history still persists within a session, which is what the retention family measures. The trade is that the harness measures a configuration with memory retrieval off; memory quality is a separate question this harness does not answer.
 
 **D8 — The target is dev or a local stack; prod is not a target.** The script has no `--allow-prod`. A prod run would write sessions and spend quota as a user in prod for a question that dev answers identically, because the code under test is the same image. A branch is proved against a local inference-api before it deploys, the way the smoke doc's local recipe does (and with the same worktree caveat: `PYTHONPATH` or the run silently tests `develop`).
 
@@ -218,9 +225,9 @@ Per full run on dev with Haiku 4.5 as the model under test and Sonnet 4.6 as jud
 | item | estimate |
 |---|---|
 | turns | PR-1's 51 cases × 3 samples is 153 samples and 219 turns |
-| agent spend | ≈ $4 by `run`'s own estimate, which prices every turn as an uncached 15k-token write; expect less |
+| agent spend | measured $0.86 for the first full run on Haiku 4.5 (2026-10-30); `run` now estimates $1.20 from that run's token mix |
 | judge spend | ≈ $2–4 (six judged cases × 3 samples × 2 evaluators, plus advisory judges) |
-| wall clock | 15–25 min sequential; `run --workers 4` where the single-flight lease allows (one session per case, so cases parallelise; turns within a case do not) |
+| wall clock | about 7 minutes measured with `run --workers 4` (one session per case, so cases parallelise; turns within a case do not) |
 
 Where it runs, added to `docs/testing/smoke-regression.md` §4:
 
@@ -230,7 +237,7 @@ Where it runs, added to `docs/testing/smoke-regression.md` §4:
 | a release | the full run against dev on the release branch, after L1, before the release PR; `score` output pasted into the release notes' verification section |
 | nightly | `--family tool_selection,instruction_following --k 1` against the nightly stack, `continue-on-error` with the JSON uploaded, as `turn-smoke.sh` does; promoted to blocking once green for two weeks |
 
-The nightly stack needs the eval role (D7) seeded the way `seed-e2e-users.sh` seeds `e2e_user`, and the eval user needs a headless grant, which today is minted from an attended login; the nightly's Cognito password user and `--auth cognito` is the path that already works there.
+As built, `scripts/nightly/eval-harness.sh` seeds the eval user on the ephemeral stack, runs `tool_selection`, `document_qa`, `retention`, `instruction_following` and `refusal` once per case, and scores them against the committed Haiku baseline. `skill_selection` is left out because the nightly stack never runs the bootstrap seeding, so its two skills do not exist there. The credentials parameter outlives the stack's teardown, but the nightly prefix is reused, so the next night overwrites the same one.
 
 ## 11. Non-goals for phase 1
 
@@ -259,10 +266,10 @@ The nightly stack needs the eval role (D7) seeded the way `seed-e2e-users.sh` se
 
 **PR-2 — the judges.** `strands-agents-evals==1.7.0` in the `dev` extra (approval first), the adapter, `judge`, scrub coverage, `general_chat` cases. Spend gated on `--yes`.
 
-**PR-3 — the eval user and the wiring.** The dev eval user, its role seed (granting exactly what `eval_harness.py cases` prints: seven tools, `web_research` and `skill_creator`), its headless grant; the smoke doc's §4 rows; the nightly step; a first promoted baseline on the platform default model, committed with its `score --explain` output in the PR.
+**PR-3 — the eval user and the wiring. BUILT 2026-10-30.** `scripts/seed_eval_user.py` and the `--auth cognito` sign-in (D7); the eval user created on dev; the first baseline, `backend/evals/baselines/us.anthropic.claude-haiku-4-5-20251001-v1_0.json`, from a full k=3 run on dev as that user; the smoke doc's layer table, §4 and §5; the release skill's quality-evidence step; and the nightly step (§10). Not verified: the nightly step has not run yet, and whether the nightly deploy role may write an SSM SecureString is unknown until it does. A failure there is non-blocking and reports exit 2.
 
 ## 14. Open questions
 
-1. **Does the eval user need every tool, or a fixed small set?** A fixed set makes `tool_selection` honest (the model chooses among what a user would have) but hides regressions in tools outside it. Proposal: the `default` role's grant as of the baseline, with the role hash in the baseline file so a drift is visible.
+1. ~~**Does the eval user need every tool, or a fixed small set?**~~ Answered by PR-3: exactly what the golden set offers, derived from the case files. Each case names its own `enabled_tools`, so the model chooses among a fixed set either way; the role only has to make that set reachable.
 2. **Judge model.** Sonnet 4.6 regional is the proposal; the compaction harness judged with Haiku and found it adequate for exact-answer families. Decide on the first `judge` run's disagreement rate with the deterministic gate on the overlapping cases.
 3. **Should `score` read the `C#` rows?** It would let a flip be explained by a cache or compaction status in one place. It also couples the script to the sessions-metadata table shape. Leaning yes, best-effort, behind `--explain`.
