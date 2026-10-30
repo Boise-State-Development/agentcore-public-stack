@@ -60,6 +60,7 @@ from xml.etree import ElementTree
 
 from . import large_document
 from .models import FileMetadata, FileStatus, get_file_format, is_presentation_file, is_tabular_file
+from .pdfium_lock import pdfium_lock, serialized_pdfium
 from .repository import get_file_upload_repository
 from .workspace import (
     WORKSPACE_READ_MAX_BYTES,
@@ -655,6 +656,7 @@ async def _pdf_pages_from_shards(
     return _pages_result(sliced, start, end, count, truncated, base, meta.filename)
 
 
+@serialized_pdfium
 def _assemble_from_shards(shards: Sequence[Tuple[Tuple[int, int], bytes]], start: int, end: int) -> bytes:
     import pypdfium2 as pdfium
 
@@ -676,9 +678,15 @@ def _assemble_from_shards(shards: Sequence[Tuple[Tuple[int, int], bytes]], start
 
 # ---------------------------------------------------------------------------
 # PDF (pypdfium2 — already a dependency for attachment thumbnails)
+#
+# PDFium is not thread-safe, so every function here runs under the process-wide
+# lock in ``pdfium_lock``: the ones that open a document hold it for the
+# document's whole lifetime, and the two per-call helpers take it again (it is
+# re-entrant) so a caller elsewhere is serialized even without the outer guard.
 # ---------------------------------------------------------------------------
 
 
+@serialized_pdfium
 def _open_pdf(raw: bytes):
     import pypdfium2 as pdfium  # lazy: native lib, not needed on non-PDF paths
 
@@ -688,6 +696,7 @@ def _open_pdf(raw: bytes):
         raise DocumentReadError(f"Could not open the PDF: {e}") from e
 
 
+@serialized_pdfium
 def _pdf_page_text(pdf, index: int) -> str:
     page = pdf[index]
     try:
@@ -714,6 +723,7 @@ def _resolve_range(pages: Tuple[int, int], count: int, limit: int) -> Tuple[int,
     return start, end, truncated
 
 
+@serialized_pdfium
 def _pdf_pages(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, Any], filename: str) -> DocumentReadResult:
     import pypdfium2 as pdfium
 
@@ -758,6 +768,7 @@ def _pages_result(
     )
 
 
+@serialized_pdfium
 def _pdf_pages_text(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, Any]) -> DocumentReadResult:
     """``_pdf_pages`` for a text-only model: the same range and the same
     ``max_pages`` cap, returned as each page's text layer in the payload."""
@@ -794,6 +805,7 @@ def _pages_text(
     )
 
 
+@serialized_pdfium
 def _pdf_pattern(raw: bytes, pattern: str, base: Dict[str, Any]) -> DocumentReadResult:
     regex, note = _compile(pattern)
     pdf = _open_pdf(raw)
@@ -855,6 +867,7 @@ def _scan_pages(
     return DocumentReadResult(mode="pattern", payload=payload, pages_returned=0, format="pdf")
 
 
+@serialized_pdfium
 def _pdf_index(raw: bytes, base: Dict[str, Any]) -> DocumentReadResult:
     pdf = _open_pdf(raw)
     try:
@@ -1192,11 +1205,12 @@ def _units_text(fmt: str, raw: bytes) -> List[str]:
     particular is left as-is, because that is what ``pattern`` mode searches.
     """
     if fmt == "pdf":
-        pdf = _open_pdf(raw)
-        try:
-            return [_pdf_page_text(pdf, i) for i in range(len(pdf))]
-        finally:
-            pdf.close()
+        with pdfium_lock():
+            pdf = _open_pdf(raw)
+            try:
+                return [_pdf_page_text(pdf, i) for i in range(len(pdf))]
+            finally:
+                pdf.close()
     if fmt == "docx":
         return docx_paragraphs(raw)
     return raw.decode("utf-8", errors="replace").splitlines()
