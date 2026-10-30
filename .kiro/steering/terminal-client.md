@@ -6,10 +6,36 @@ fileMatchPattern: ["tui/*", "scripts/local-dev/*"]
 # Terminal Client (TUI)
 
 A cross-platform terminal client for the platform, living in `tui/` as its own
-uv project so it can ship independently (`uvx aps-tui`). Built on
-**Textual 8.2.8**, Python 3.11+.
+uv project so it can ship on its own. Built on **Textual 8.2.8**, Python 3.11+.
 
-Branch: `feature/tui-client`. Nothing is deployed and nothing is published.
+Branch: `feature/tui-client`. Nothing is published yet.
+
+## Distribution: a wheel on the GitHub Release, never PyPI
+
+Decided 2026-10-30. The client only works against a deployment of this
+repository, so a public index listing would invite installs that can never
+work, and the team did not want one. `release.yml` gains a `build-tui` job:
+`scripts/tui/build.sh --check` runs the suite, builds the wheel, smoke-installs
+it into an empty environment, and the release job attaches
+`aps_tui-<ver>-py3-none-any.whl`, the sdist and `SHA256SUMS` to the same
+`v<ver>` release as the platform, with the install line appended to the notes.
+Users run `uv tool install <wheel-url>`. The TUI's version is the repo's
+(`sync-version.sh` keeps the three manifests in step; the build script refuses
+a mismatch).
+
+Why a wheel and not a binary: an unsigned `.exe` trips SmartScreen and an
+unsigned, un-notarized Mac binary is refused by Gatekeeper; we cannot sign
+either. A wheel is data, so nothing prompts. Why not `git+https`: it needs
+git on the user's machine and gives no checksum; it stays documented as the
+fallback for a fork that has not made a release.
+
+**Fork neutrality is a requirement, not a nicety.** The wheel names no host
+(`base_url` has no default; `login` refuses without one), the workflow uses
+only `GITHUB_TOKEN` and `github.repository`, and no doc under `tui/` names
+our deployment. `release.yml` still carries the upstream repo guard, so a
+fork that wants its own release page changes that one line. The rename from
+`agentcore-tui` (`2abd8e6a`) was for the same audience: AWS may ship an
+"agentcore" CLI, and a fork's users would confuse the two.
 
 ## UX paradigm: slash commands invoke features, keys do not
 

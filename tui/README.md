@@ -61,38 +61,42 @@ reports that an artifact exists and points you at the web app). See
 
 ## Install
 
-You need an API key. Create one in the web app under **Settings → API Keys**.
-The raw key is shown exactly once, keys expire after 90 days, and creating a new
-key revokes the previous one.
+The client is not on PyPI. Each release of this repository attaches the
+`aps-tui` wheel to its [GitHub Release](../../releases/latest), and you install
+it from there. The wheel is the same for every deployment of the platform:
+nothing in it names a host. You point it at yours when you sign in.
 
 ### Recommended: uv (all platforms)
 
-[uv](https://docs.astral.sh/uv/) runs the client without installing anything
-permanently:
+Install [uv](https://docs.astral.sh/uv/installation/) once, then copy the
+install line from the release page. It has this shape:
 
 ```bash
-uvx --from /path/to/repo/tui aps-tui
+uv tool install https://github.com/<org>/<repo>/releases/download/v<version>/aps_tui-<version>-py3-none-any.whl
+aps-tui login --sso --base-url https://<your-deployment>/api
 ```
 
-Once this package is published to an index, that becomes `uvx aps-tui`.
+To upgrade, run the same line for the new release with `--force`. To try it
+without installing anything permanently, replace `uv tool install` with
+`uvx --from <wheel-url> aps-tui`.
 
-To install it persistently:
+Prefer `pipx`? `pipx install <wheel-url>` works the same way.
+
+A wheel is plain data, not an executable, so no operating system prompts about
+unsigned software; the only installer that has to be trusted is uv's own,
+which Astral signs.
+
+### From a fork without releases
 
 ```bash
-uv tool install /path/to/repo/tui
-```
-
-### pipx
-
-```bash
-pipx install /path/to/repo/tui
+uv tool install "git+https://github.com/<org>/<repo>@<branch-or-tag>#subdirectory=tui"
 ```
 
 ### From source
 
 ```bash
 cd tui
-uv sync --extra dev
+uv sync --all-extras --all-groups
 uv run aps-tui
 ```
 
