@@ -934,6 +934,94 @@ async def row_tool_turn(ctx: Context) -> RowResult:
     return RowResult("tool_turn", "PASS", f"tools used: {names}; {len(turn.all('tool_result'))} result(s)", warnings, {"tools": names})
 
 
+EMPTY_FINAL_PROMPTS = (
+    "First write one short sentence with your own estimate of 1234*5678. Then call the {tool} tool to "
+    "check it. When the tool result comes back your turn is already finished: reply with an empty "
+    "message containing no text at all.",
+    "Call the {tool} tool to compute 17*23. Write no text at all, neither before nor after the tool "
+    "call. After the tool result arrives, end your turn immediately without writing anything.",
+)
+
+
+def _calls_from_frames(turn: TurnResult) -> List[Dict[str, Any]]:
+    """One entry per model call: each ``message_stop`` and the first usage-bearing
+    ``metadata`` after it.
+
+    Stops count the calls, not starts: Bedrock sends no ``messageStart`` for an
+    empty response, only ``messageStop`` + ``metadata``. The coordinator's
+    turn-level ``metadata`` before ``done`` repeats the last call's usage, and
+    pairing only the first one after each stop leaves it out.
+    """
+    calls: List[Dict[str, Any]] = []
+    awaiting: Optional[Dict[str, Any]] = None
+    for f in turn.frames:
+        if f.name == "message_stop":
+            awaiting = {"usage": None}
+            calls.append(awaiting)
+        elif f.name == "metadata" and awaiting is not None and f.data.get("usage"):
+            awaiting["usage"] = f.data["usage"]
+            awaiting = None
+    return calls
+
+
+async def row_empty_final_call(ctx: Context) -> RowResult:
+    """A model call that streams no ``message_start`` still gets its own ``C#`` row.
+
+    Before PR #1785 the empty call's usage overwrote the previous call's slot:
+    that call went unbilled and the session showed one row fewer than calls.
+    """
+    tool = ctx.args.tool
+    sid = ""
+    turn: Optional[TurnResult] = None
+    calls: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    for attempt, template in enumerate(EMPTY_FINAL_PROMPTS, start=1):
+        sid = ctx.new_session()
+        turn = await ctx.transport.stream_turn(ctx.base_payload(sid, template.format(tool=tool), enabled_tools=[tool]))
+        ctx.note(turn)
+        warnings = assert_frame_contract(turn)
+        calls = _calls_from_frames(turn)
+        if len(calls) > len(turn.all("message_start")):
+            break
+    else:
+        return RowResult(
+            "empty_final_call",
+            "OBSERVED",
+            f"the model wrote text on all {len(EMPTY_FINAL_PROMPTS)} attempts; no empty call to meter",
+            warnings,
+        )
+
+    body: Optional[Dict[str, Any]] = None
+    code = 0
+    for _ in range(8):
+        code, body = await ctx.transport.get_calls(sid)
+        if body and len(body.get("calls") or []) >= len(calls):
+            break
+        await asyncio.sleep(1.5)
+    if code in (401, 403):
+        raise RowSkip(f"cost rows unreadable (admin endpoint -> {code}); run as system_admin")
+    if not body:
+        raise RowSkip(f"cost anatomy unavailable (HTTP {code})")
+
+    rows = sorted(body.get("calls") or [], key=lambda r: r.get("messageId") or 0)
+    if len(rows) != len(calls):
+        raise RowFailure(
+            f"{len(calls)} model calls streamed (one with no message_start) but {len(rows)} C# rows: "
+            "the unannounced call's usage merged into a neighbour's row"
+        )
+    for idx, (call, row) in enumerate(zip(calls, rows)):
+        usage = call["usage"] or {}
+        streamed = (usage.get("inputTokens"), usage.get("outputTokens"))
+        recorded = (row.get("inputTokens"), row.get("outputTokens"))
+        if call["usage"] and streamed != recorded:
+            raise RowFailure(f"call {idx} streamed in/out {streamed} but its row (messageId {row.get('messageId')}) holds {recorded}")
+    ids = [r.get("messageId") for r in rows]
+    if len(set(ids)) != len(ids):
+        raise RowFailure(f"rows share message ids: {ids}")
+    data = {"attempt": attempt, "calls": len(calls), "messageIds": ids, "outputTokens": [r.get("outputTokens") for r in rows]}
+    return RowResult("empty_final_call", "PASS", f"{len(calls)} calls -> {len(rows)} rows, each with its own usage (ids {ids})", warnings, data)
+
+
 ASK_PROMPT = (
     "Do not answer this message directly. Your first and only action is to call the ask_user_question "
     "tool once, with a single question: header 'Color', question 'Which color do you prefer?', options "
@@ -1447,6 +1535,7 @@ ROWS: List[Tuple[str, Callable[[Context], Awaitable[Any]]]] = [
     ("second_turn_cache", row_second_turn_cache),
     ("restore_after_reload", row_restore),
     ("tool_turn", row_tool_turn),
+    ("empty_final_call", row_empty_final_call),
     ("ask_user_question_resume", row_ask_user_question),
     ("tool_approval_resume", row_tool_approval),
     ("client_tool_call_resume", row_client_tool_call),
