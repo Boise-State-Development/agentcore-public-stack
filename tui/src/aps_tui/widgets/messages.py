@@ -107,7 +107,7 @@ class EmptyState(Vertical):
         self._local_tools = local_tools
 
     def compose(self) -> ComposeResult:
-        yield Static("AgentCore", classes="wordmark", markup=False)
+        yield Static("aps-tui", classes="wordmark", markup=False)
         if self._agent and self._local_tools:
             yield Static(
                 "Ask anything — tools, memory and your saved conversations are here.\n"

@@ -21,6 +21,7 @@ from aps_tui.app import ChatApp
 from aps_tui.config import Config
 from aps_tui.screens import Splash
 from aps_tui.screens.splash import (
+    WORDMARK,
     CROSS_DURATION,
     HINT_DELAY,
     HINT_FADE,
@@ -265,3 +266,38 @@ class TestRendering:
         assert HINT_DELAY + HINT_FADE < CROSS_DURATION + HOLD
         # The wordmark must finish fading before the mascot leaves.
         assert WORDMARK_DELAY + WORDMARK_FADE <= CROSS_DURATION
+
+
+WORDMARK_WIDTH = max(len(line) for line in WORDMARK)
+
+
+class TestDecode:
+    async def test_the_reveal_has_three_states_and_ends_whole(self, isolated_state: Path) -> None:
+        """Blank before the mascot arrives, noise in the band ahead of it,
+        letters behind it; and once the crossing is over the whole wordmark
+        is back with the decode timer stopped."""
+        app = build_banner_app(animate=True)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, Splash)
+            blank = str(screen._wordmark_text(resolved=0))
+            assert blank.strip() == ""
+            partial = str(screen._wordmark_text(resolved=4, scrambling=6))
+            assert "|____/" not in partial  # the last letters are not reached
+            assert partial.strip()  # but something (letters + noise) is drawn
+            whole = str(screen._wordmark_text(resolved=WORDMARK_WIDTH))
+            assert "|____/" in whole
+            # The test harness crosses in well under a second, so by now the
+            # sweep has finished and the real widget shows every letter.
+            await pilot.pause(CROSS_DURATION + 0.3)
+            assert "|____/" in str(screen.query_one("#splash-wordmark").render())
+            assert screen._decode_timer is None
+            await pilot.press("space")
+            await pilot.pause()
+
+    async def test_the_version_is_shown(self, isolated_state: Path) -> None:
+        app = build_banner_app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert f"v{__version__}" in rendered_text(app)

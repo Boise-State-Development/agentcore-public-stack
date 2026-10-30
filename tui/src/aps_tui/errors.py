@@ -1,4 +1,4 @@
-"""Typed errors for the AgentCore terminal client.
+"""Typed errors for the aps-tui terminal client.
 
 Every error carries a ``hint`` — the actionable next step shown to the user in
 the TUI's status bar. A raw HTTP status is useless in a terminal; "your API key

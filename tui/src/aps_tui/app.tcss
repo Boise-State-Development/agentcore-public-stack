@@ -1,4 +1,4 @@
-/* AgentCore TUI stylesheet.
+/* aps-tui stylesheet.
  *
  * Aesthetic direction: technical/utilitarian. Left rule-marks instead of chat
  * bubbles, generous vertical rhythm, and no decoration that does not carry
@@ -450,6 +450,13 @@ Splash #splash-subtitle {
     width: auto;
     height: auto;
     color: $text-muted;
+}
+
+Splash #splash-version {
+    width: auto;
+    height: auto;
+    color: $text-muted;
+    text-style: dim;
 }
 
 Splash #splash-hint {

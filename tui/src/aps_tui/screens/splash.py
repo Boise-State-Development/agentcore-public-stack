@@ -1,4 +1,5 @@
-"""Startup banner: a mascot crosses the viewport, then the wordmark lands.
+"""Startup banner: a mascot streaks across the viewport, decoding the wordmark
+in its wake.
 
 Shown once per installed version (see :mod:`..state`) or on demand with
 ``--banner``. Three properties matter more than the animation itself:
@@ -19,16 +20,23 @@ any size without touching the animation.
 from __future__ import annotations
 
 import logging
+import random
 from collections.abc import Callable
 from typing import ClassVar
 
+from rich.style import Style
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Center, Middle
+from textual.color import Color
 from textual.css.scalar import ScalarOffset
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import Static
+
+from .. import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +64,17 @@ WORDMARK: tuple[str, ...] = (
     r"/_/   \_\_|   |____/ ",
 )
 
-SUBTITLE = "A g e n t C o r e   P u b l i c   S t a c k"
+SUBTITLE = "t e r m i n a l   c l i e n t"
+
+#: Glyphs the wordmark cycles through before each letter resolves. ASCII only,
+#: for the same reason as the wordmark: this is the one frame every user sees.
+NOISE = r"#%&@*+=-:;<>/\|~^"
+
+#: How many columns ahead of the mascot's nose are still scrambling, and how
+#: often the scramble redraws. 30 fps is plenty for a flicker and cheap enough
+#: that the chat screen building underneath never notices.
+DECODE_BAND = 6
+DECODE_FPS = 30
 
 # ---------------------------------------------------------------------------
 # Timing
@@ -124,15 +142,67 @@ class Splash(Screen[None]):
         # otherwise dismiss twice.
         self._finished = False
 
+        self._decode_timer: Timer | None = None
+        self._rng = random.Random()
+
     def compose(self) -> ComposeResult:
         with Middle():
-            yield Static("\n".join(MASCOT), id="splash-mascot")
+            yield Static(self._mascot_text(), id="splash-mascot")
             with Center():
-                yield Static("\n".join(WORDMARK), id="splash-wordmark")
+                yield Static(self._wordmark_text(resolved=_art_width(WORDMARK)), id="splash-wordmark")
             with Center():
                 yield Static(SUBTITLE, id="splash-subtitle")
             with Center():
+                yield Static(f"v{__version__}", id="splash-version")
+            with Center():
                 yield Static("press any key", id="splash-hint")
+
+    # -- art -----------------------------------------------------------------
+
+    def _palette(self) -> tuple[Color, Color, Color]:
+        """(primary, accent, background) from the active theme, so a fork's
+        theme colours the banner without touching this file."""
+        variables = self.app.theme_variables
+        return (
+            Color.parse(variables.get("primary", "#0178D4")),
+            Color.parse(variables.get("accent", "#FEA62B")),
+            Color.parse(variables.get("background", "#000000")),
+        )
+
+    def _mascot_text(self) -> Text:
+        """The mascot with a motion trail: each column fades from the accent at
+        the nose towards the background at the tail, so the streak reads as
+        speed rather than as a row of punctuation."""
+        _, accent, background = self._palette()
+        width = _art_width(MASCOT)
+        text = Text(no_wrap=True)
+        for row, line in enumerate(MASCOT):
+            for col, char in enumerate(line.ljust(width)):
+                # 1.0 at the nose (rightmost), fading to 0.25 at the tail.
+                heat = 0.25 + 0.75 * (col / max(width - 1, 1))
+                text.append(char, Style(color=background.blend(accent, heat).hex, bold=heat > 0.6))
+            if row < len(MASCOT) - 1:
+                text.append("\n")
+        return text
+
+    def _wordmark_text(self, *, resolved: int, scrambling: int = 0) -> Text:
+        """The wordmark with `resolved` columns showing their letters, the next
+        `scrambling` columns showing noise, and the rest blank. Letters carry a
+        left-to-right gradient from the primary colour to the accent."""
+        primary, accent, _ = self._palette()
+        width = _art_width(WORDMARK)
+        text = Text(no_wrap=True)
+        for row, line in enumerate(WORDMARK):
+            for col, char in enumerate(line.ljust(width)):
+                if char == " " or col >= resolved + scrambling:
+                    text.append(" ")
+                elif col < resolved:
+                    text.append(char, Style(color=primary.blend(accent, col / max(width - 1, 1)).hex, bold=True))
+                else:
+                    text.append(self._rng.choice(NOISE), Style(color=accent.hex, dim=True))
+            if row < len(WORDMARK) - 1:
+                text.append("\n")
+        return text
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -153,12 +223,16 @@ class Splash(Screen[None]):
             self.set_timer(self._static_hold, self._finish)
             return
 
-        for widget in (wordmark, subtitle, hint):
+        version = self.query_one("#splash-version", Static)
+        for widget in (wordmark, subtitle, version, hint):
             widget.styles.opacity = 0.0
+        # Nothing is decoded until the mascot reaches it.
+        wordmark.update(self._wordmark_text(resolved=0))
 
         width = self.size.width or 80
         travel = _art_width(MASCOT) + 4
         mascot.styles.offset = (-travel, 0)
+        self._decode_timer = self.set_interval(1 / DECODE_FPS, self._decode_step)
         # Must be a ScalarOffset, not a plain tuple: `Styles.__textual_animation__`
         # only builds an animation for Scalar/ScalarOffset values, and anything
         # else falls through to the generic path and raises AnimationError.
@@ -183,7 +257,7 @@ class Splash(Screen[None]):
             on_complete=self._hold_then_finish,
         )
 
-        for widget in (wordmark, subtitle):
+        for widget in (wordmark, subtitle, version):
             widget.styles.animate(
                 "opacity",
                 value=1.0,
@@ -198,8 +272,32 @@ class Splash(Screen[None]):
         # become a modal screen the user cannot escape.
         self.set_timer(self._cross_duration + self._hold + WATCHDOG_MARGIN, self._finish)
 
+    def _decode_step(self) -> None:
+        """One frame of the reveal, driven by where the animator has actually
+        put the mascot. A parallel clock ran a few columns ahead, because the
+        animation starts on Textual's next frame, not at `on_mount`."""
+        if self._finished:
+            return
+        width = self.size.width or 80
+        mascot = self.query_one("#splash-mascot", Static)
+        nose = mascot.styles.offset.x.value + _art_width(MASCOT)
+        left = (width - _art_width(WORDMARK)) // 2
+        resolved = int(nose - left)
+        if resolved >= _art_width(WORDMARK) + DECODE_BAND:
+            self._stop_decoding()
+            return
+        self.query_one("#splash-wordmark", Static).update(self._wordmark_text(resolved=max(0, resolved), scrambling=DECODE_BAND))
+
+    def _stop_decoding(self) -> None:
+        if self._decode_timer is not None:
+            self._decode_timer.stop()
+            self._decode_timer = None
+        if self.is_running:
+            self.query_one("#splash-wordmark", Static).update(self._wordmark_text(resolved=_art_width(WORDMARK)))
+
     def _hold_then_finish(self) -> None:
         """Let the wordmark sit for a beat once the mascot has left."""
+        self._stop_decoding()
         if not self._finished:
             self.set_timer(self._hold, self._finish)
 
@@ -208,6 +306,9 @@ class Splash(Screen[None]):
         if self._finished:
             return
         self._finished = True
+        if self._decode_timer is not None:
+            self._decode_timer.stop()
+            self._decode_timer = None
         if self._on_finished is not None:
             self._on_finished()
         # Guard against dismissing after the app has already moved on (quit

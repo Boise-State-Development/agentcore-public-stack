@@ -1,13 +1,13 @@
-# AgentCore TUI
+# aps-tui
 
-A terminal client for the AgentCore platform. Streaming AI chat in your shell —
+The APS terminal client. Streaming AI chat in your shell —
 same models, same RBAC, same quotas, and the same cost tracking as the web app.
 
 Built with [Textual](https://textual.textualize.io/). Runs on Windows, macOS,
 and Linux.
 
 ```
-┌─ AgentCore ──────────────────────────────────── https://your-host/api ─┐
+┌─ aps-tui ────────────────────────────────────── https://your-host/api ─┐
 │ ▌You                                                                   │
 │  explain the difference between a thread and a process                 │
 │                                                                        │

@@ -1,4 +1,4 @@
-"""AgentCore terminal client — streaming AI chat for the command line.
+"""aps-tui, the APS terminal client — streaming AI chat for the command line.
 
 Phase 1 targets the API-key authenticated ``/chat/api-converse`` endpoint on
 app-api. See ``tui/README.md`` for the capability boundary and what a later

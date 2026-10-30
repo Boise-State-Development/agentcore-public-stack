@@ -34,10 +34,10 @@ AgentClientFactory = Callable[[Config], AgentStreamClient]
 
 
 class ChatApp(App[None]):
-    """Terminal client for the AgentCore platform."""
+    """The APS terminal client."""
 
     CSS_PATH = "app.tcss"
-    TITLE = "AgentCore"
+    TITLE = "aps-tui"
 
     #: No command palette: every feature is a slash command typed into the
     #: composer (steering: "UX paradigm"), and a second way in is the mixing
