@@ -43,6 +43,7 @@ from .models import ExportReceipt, MessageMetadata, PausedTurnSnapshot, PendingI
 # The headless delivery path (ensure_session_metadata_exists) calls
 # is_preview_session, so a lazy import would only defer the crash.
 from .preview import is_preview_session
+from .rewind import RewindState
 
 # Stdlib-only normalizer for the conversation-search attributes written beside
 # the title (titleLower, firstPrompt).
@@ -439,6 +440,8 @@ def _derive_cache_observability(
       different Agent / model than the previous call — an explained re-write
       (an ``@``-mention, a mid-conversation model switch). The waste stays in
       ``wastedUsd``; the flags let readers subtract it.
+    - ``rewound``: set on the first call after a rewind (its ``rewindEpoch``
+      is newer than the previous call's), the same kind of explanation.
 
     ⚠️ The predecessor that decides ``miss_avoidable`` vs ``miss_ttl_expired``
     is the last call with the **same toolConfig + system-prompt fingerprints**,
@@ -640,6 +643,16 @@ def _derive_cache_observability(
         prev_agent = (prev_row or {}).get("turnAgentId")
         if prev_row is not None and own_agent != prev_agent:
             result["agentSwitched"] = True
+
+        # And for a rewind (rewind spec §6): the first call after one re-sends
+        # a shorter history than the call before it, so past the cache TTL it
+        # re-writes the history while reading tools + system, which classifies
+        # as `partial_miss`. Unavoidable, and the user's choice; the flag says
+        # so. Same discipline again: the spend stays in `wastedUsd`.
+        own_epoch = (message_metadata.model_extra or {}).get("rewindEpoch") or 0
+        prev_epoch = (prev_row or {}).get("rewindEpoch") or 0
+        if prev_row is not None and own_epoch > prev_epoch:
+            result["rewound"] = True
 
         # The same question for the model. Each model has its own cache, so a
         # call on a different model than the one before it re-writes the whole
@@ -2572,6 +2585,20 @@ async def get_session_compaction(session_id: str, user_id: str) -> Tuple[int, Op
         return 0, None
     summary = compaction.get("summary")
     return int(compaction.get("checkpoint") or 0), summary if isinstance(summary, str) else None
+
+
+async def get_session_rewind(session_id: str, user_id: str) -> RewindState:
+    """The session's rewind state, or the never-rewound default.
+
+    Read from the same static row as ``compaction``. Unconfigured tables and
+    read failures return the default, which shows every message: the same view
+    a session had before rewind existed.
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return RewindState()
+    item = await _get_session_by_gsi(session_id, user_id, get_dynamodb_table(table_name))
+    return RewindState.from_row(item)
 
 
 async def get_session_metadata(session_id: str, user_id: str) -> Optional[SessionMetadata]:

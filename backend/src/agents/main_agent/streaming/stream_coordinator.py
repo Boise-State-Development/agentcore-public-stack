@@ -371,6 +371,17 @@ class StreamCoordinator:
         if session_manager is not None:
             session_manager.turn_lease = turn_lease
 
+        # Rewind (rewind spec §4.3): a rewind app-api recorded since the last
+        # turn cuts the live list in place, before anything else reads it, so
+        # the retained prefix stays byte-identical and is read from the prompt
+        # cache. Its row read is reused by the compaction re-read just below.
+        # Best-effort: never blocks the turn.
+        if session_manager is not None and hasattr(session_manager, "apply_rewind"):
+            try:
+                session_manager.apply_rewind(agent)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"apply_rewind failed, continuing: {e}")
+
         # Paid-when-free compaction (spec §3.5): if a cut is parked, apply it
         # to the live list now — before the first model call — only when the
         # prefix re-write is free (cache expired, model/agent switched) or
@@ -4363,6 +4374,22 @@ class StreamCoordinator:
                 # else on the row distinguishes them.
                 if turn_agent_id:
                     metadata_kwargs["turnAgentId"] = turn_agent_id
+                # The rewind epoch this call ran at (rewind spec §6). The
+                # metadata writer compares it with the previous call's to stamp
+                # `rewound`, which explains the history re-write a rewind past
+                # the cache TTL causes, the way `agentSwitched` explains a mention.
+                turn_session_manager = getattr(agent, "session_manager", None)
+                rewind_epoch = getattr(turn_session_manager, "_rewind_epoch", 0)
+                if isinstance(rewind_epoch, int) and rewind_epoch > 0:
+                    metadata_kwargs["rewindEpoch"] = rewind_epoch
+                # A fork's first call says where it came from and whether its
+                # history was seeded from the parent's live list (a cache hit is
+                # possible) or restored from the stored copy (it is not), so the
+                # spec's warm/cold claim is a row query. Consumed once.
+                fork_marker = getattr(turn_session_manager, "_pending_fork_marker", None)
+                if isinstance(fork_marker, dict) and fork_marker:
+                    metadata_kwargs.update(fork_marker)
+                    turn_session_manager._pending_fork_marker = None
                 # Shared Projects: which project this call is billed to. The metadata
                 # writer reads it back to bump PROJECT#{id}/COST#{YYYY-MM}.
                 if turn_project_id:

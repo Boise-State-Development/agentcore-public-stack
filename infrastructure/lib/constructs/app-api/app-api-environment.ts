@@ -385,6 +385,12 @@ export function buildAppApiEnvironment(
     SESSION_PREWARM_ENABLED: config.sessionPrewarm.enabled ? 'true' : 'false',
     // Handoffs (opt-in while in development): gates /sessions/{id}/handoffs.
     HANDOFFS_ENABLED: config.handoffs.enabled ? 'true' : 'false',
+    // Conversation rewind (opt-in while in development): gates
+    // POST /sessions/{id}/rewind and GET /messages' hiding of rewound turns.
+    SESSION_REWIND_ENABLED: config.sessionRewind.enabled ? 'true' : 'false',
+    // Conversation fork (opt-in while in development): gates
+    // POST /sessions/{id}/fork and a fork's pinning to its root's microVM.
+    SESSION_FORK_ENABLED: config.sessionFork.enabled ? 'true' : 'false',
     // Client-measured time to first token (default on): gates
     // POST /telemetry/turn-timing, which records the SPA's own measurement.
     CLIENT_TURN_TIMING_ENABLED: config.clientTurnTiming.enabled ? 'true' : 'false',
