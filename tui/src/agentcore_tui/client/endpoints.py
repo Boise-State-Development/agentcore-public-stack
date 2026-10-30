@@ -213,6 +213,15 @@ class Endpoints:
     # -- chat helpers --------------------------------------------------------
 
     @property
+    def artifacts(self) -> str:
+        """``GET ?session_id=`` lists every version of a session's artifacts."""
+        return self._join("artifacts")
+
+    def artifact_content(self, artifact_id: str) -> str:
+        """``GET ?version=N`` returns one version's source (JSON, ≤ 2 MB; 413 beyond)."""
+        return f"{self.artifacts}/{quote(artifact_id, safe='')}/content"
+
+    @property
     def generate_title(self) -> str:
         """Names a conversation. The SPA fires this alongside the first turn."""
         return self._join("chat/generate-title")

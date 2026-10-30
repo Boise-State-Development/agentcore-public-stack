@@ -14,9 +14,11 @@ knowing what a widget is.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, ClassVar
 
 from textual import work
@@ -71,6 +73,7 @@ from ..widgets.prompts import (
 from .conversations import ConversationList
 from .model_picker import ModelChoice, ModelPicker
 from .agent_picker import AgentPicker
+from .artifact_picker import ArtifactPicker
 from .mode_picker import ModePicker
 from .skill_picker import SkillPicker
 from .project_picker import ProjectPicker
@@ -539,6 +542,46 @@ class ChatScreen(Screen[None]):
         self.sub_title = title
         self.notify(f"Renamed to “{title}”.", timeout=4)
 
+    @work
+    async def action_save_artifact(self, directory: str) -> None:
+        """`/artifacts [dir]`: pick one of this conversation's artifacts and
+        write its source to a file. Never overwrites: a taken name gets a
+        numeric suffix."""
+        if self._store.is_empty:
+            self.notify("No conversation yet, so no artifacts.", severity="warning", timeout=5)
+            return
+        target = Path(directory.strip().strip("'\"") or ".").expanduser()
+        if not target.is_dir():
+            self.notify(f"Not a directory: {target}", severity="error", timeout=6)
+            return
+        try:
+            artifacts = await self._catalog_or_create().artifacts(self._store.session_id)
+        except AgentCoreTuiError as exc:
+            self.notify(exc.message, title="Could not list artifacts", severity="error", timeout=8)
+            return
+        if not artifacts:
+            self.notify("The agent has not made any artifacts in this conversation.", timeout=6)
+            return
+        chosen = await self.app.push_screen_wait(ArtifactPicker(artifacts, target=str(target.resolve())))
+        if chosen is None:
+            return
+        try:
+            content = await self._catalog_or_create().artifact_content(chosen.artifact_id, chosen.version)
+        except AgentCoreTuiError as exc:
+            hint = "Download it from the web app instead." if getattr(exc, "status_code", None) == 413 else exc.hint
+            await self.transcript.mount(Notice(f"Could not fetch “{chosen.title}”: {exc.message}", hint=hint or "", error=True))
+            self.transcript.scroll_end(animate=False)
+            return
+        path = _free_path(target / chosen.file_name())
+        try:
+            await asyncio.to_thread(path.write_text, content, "utf-8")
+        except OSError as exc:
+            self.notify(f"Could not write {path}: {exc.strerror or exc}", severity="error", timeout=8)
+            return
+        await self.transcript.mount(Notice(f"Saved “{chosen.title}” (v{chosen.version}) to {path}", hint=""))
+        self.transcript.scroll_end(animate=False)
+        self.composer.focus()
+
     # -- skills and modes ----------------------------------------------------
 
     @work(exclusive=True, group="skills")
@@ -739,6 +782,8 @@ class ChatScreen(Screen[None]):
                 await self._agent_command(argument)
             case "rename":
                 await self._rename_command(argument)
+            case "artifacts":
+                self.action_save_artifact(argument)
             case "skills":
                 self.action_choose_skills()
             case "mode":
@@ -1112,7 +1157,6 @@ class ChatScreen(Screen[None]):
 
     async def _attach_file(self, raw_path: str) -> None:
         """Upload a local file into the conversation for the next turn."""
-        from pathlib import Path
 
         turn = self._turn
         if not isinstance(turn, AgentTurnController):
@@ -1646,3 +1690,14 @@ class ChatScreen(Screen[None]):
             return
         self.app.copy_to_clipboard(self._store.to_markdown())
         self.notify(f"Copied {len(self._store)} messages.")
+
+
+def _free_path(path: Path) -> Path:
+    """`path`, or the first `name-2.ext`, `name-3.ext`... that does not exist."""
+    if not path.exists():
+        return path
+    for n in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{n}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(str(path))

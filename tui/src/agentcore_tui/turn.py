@@ -857,7 +857,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         for artifact in accumulator.artifacts:
             await self._sink.on_notice(
                 f"Created an artifact: {artifact.title or artifact.artifact_id}",
-                hint="Open it in the web app; a terminal cannot render it.",
+                hint="/artifacts saves its source to disk; the web app renders it.",
             )
 
         await self.finish("Ready")

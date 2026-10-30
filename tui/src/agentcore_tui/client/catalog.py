@@ -107,6 +107,53 @@ class EffortControl:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactVersion:
+    """One version of an artifact the agent made in a conversation.
+
+    The content lives in S3; the web app renders it in a sandboxed frame. A
+    terminal cannot, so the TUI saves the source to disk instead.
+    """
+
+    artifact_id: str
+    version: int
+    title: str
+    content_type: str = ""
+    updated_at: str = ""
+
+    @property
+    def extension(self) -> str:
+        base = self.content_type.split(";", 1)[0].strip().lower()
+        return {
+            "text/html": ".html",
+            "text/markdown": ".md",
+            "image/svg+xml": ".svg",
+            "application/json": ".json",
+            "text/css": ".css",
+            "text/javascript": ".js",
+            "application/javascript": ".js",
+            "text/csv": ".csv",
+        }.get(base, ".txt")
+
+    def file_name(self) -> str:
+        """A safe file name from the title: ``Budget Q3`` -> ``budget-q3-v2.html``."""
+        slug = "".join(ch if ch.isalnum() else "-" for ch in self.title.lower()).strip("-")
+        while "--" in slug:
+            slug = slug.replace("--", "-")
+        slug = slug[:60].strip("-") or self.artifact_id[:12] or "artifact"
+        return f"{slug}-v{self.version}{self.extension}"
+
+    @classmethod
+    def from_wire(cls, payload: Mapping[str, Any]) -> ArtifactVersion:
+        return cls(
+            artifact_id=str(payload.get("artifact_id") or payload.get("artifactId") or ""),
+            version=int(payload.get("version") or 1),
+            title=str(payload.get("title") or ""),
+            content_type=str(payload.get("content_type") or payload.get("contentType") or ""),
+            updated_at=str(payload.get("updated_at") or payload.get("updatedAt") or ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Model:
     """One model the signed-in user is allowed to use.
 
@@ -936,6 +983,20 @@ class CatalogClient:
             return False
         return True
 
+    async def artifacts(self, session_id: str) -> list[ArtifactVersion]:
+        """Every version of every artifact in a conversation, newest first.
+        An artifact-free conversation is an empty list, not an error."""
+        payload = await self._get(self._endpoints.artifacts, params={"session_id": session_id})
+        rows = [ArtifactVersion.from_wire(row) for row in payload.get("artifacts") or [] if isinstance(row, dict)]
+        rows = [row for row in rows if row.artifact_id]
+        return sorted(rows, key=lambda r: (r.updated_at, r.version), reverse=True)
+
+    async def artifact_content(self, artifact_id: str, version: int) -> str:
+        """One version's source. The server answers 413 above 2 MB; that
+        surfaces as an error whose hint points at the web app."""
+        payload = await self._get(self._endpoints.artifact_content(artifact_id), params={"version": version})
+        return str(payload.get("content") or "")
+
     async def generate_title(self, session_id: str, message: str) -> str | None:
         """Ask the server to name a conversation. None when it declines.
 
@@ -1084,6 +1145,9 @@ def _map_error(response: httpx.Response, method: str, url: str) -> Exception:
                 status_code=404,
                 hint="It may have been deleted in the web app, or from another terminal.",
             )
+        case 413:
+            # Retrying cannot help; the thing itself is too big for this path.
+            return ApiError(detail or "Too large for this request", status_code=413)
         case 429:
             return RateLimitedError(detail or "Rate limited")
         case 400 | 422:

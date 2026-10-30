@@ -72,7 +72,7 @@ Agents (list/get/`bindable`/`runnability`/pins, `@`-mention via
 | Feature | Why not |
 |---|---|
 | Voice mode | `wss://…/voice/stream` needs an allowlisted `Origin`, a single-use ticket, **and the session cookie read off the handshake** — WebSockets skip `SessionRefreshMiddleware`, so there is no `Authorization: BFF` branch to use. The audio layer (`getUserMedia` + AudioWorklet at 16 kHz) has no terminal equivalent either. |
-| Artifact rendering | A sandboxed iframe with a render token. Partly salvageable: `GET /artifacts/{id}/content` can download to disk, which is what we will do. |
+| Artifact rendering | A sandboxed iframe with a render token. `/artifacts [dir]` lists the conversation's artifacts (`GET /artifacts?session_id=`) and saves the chosen version's source (`GET /artifacts/{id}/content?version=`) as `<title-slug>-vN.<ext>`, never overwriting. Above the server's 2 MB preview cap (413) the user is sent to the web app's download. |
 | MCP Apps | Cross-origin iframe + postMessage bridge. Iframe-shaped by construction; show `GET /mcp-apps/cards` metadata only. |
 | Appearance settings | No meaning in a terminal. |
 | `manage-sessions` as a screen | Redundant with the conversation list; its bulk delete is folded in (Space marks, Delete). |

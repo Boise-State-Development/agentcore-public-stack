@@ -207,6 +207,7 @@ lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
 | `/mode [name\|off]` | Set the conversation mode (a named system prompt) |
 | `/effort [level\|off]` | How hard the model thinks, for models that offer a choice |
 | `/attach <path>` | Upload a file and send it with your next message |
+| `/artifacts [dir]` | Save an artifact the agent made (HTML, Markdown, SVG…) to disk |
 | `/continue` | Let an answer that hit the token limit carry on |
 | `/stop` | Stop the turn in flight |
 | `/copy [all]` | Copy the last answer, or the whole conversation as Markdown |

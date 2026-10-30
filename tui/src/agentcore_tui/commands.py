@@ -153,6 +153,12 @@ COMMANDS = CommandRegistry(
             agent_only=True,
         ),
         SlashCommand("attach", "Upload a file and send it with your next message", usage="<path>", agent_only=True),
+        SlashCommand(
+            "artifacts",
+            "Save an artifact the agent made in this conversation to disk (default: the current directory)",
+            usage="[directory]",
+            agent_only=True,
+        ),
         SlashCommand("continue", "Let an answer that hit the token limit carry on", agent_only=True),
         SlashCommand("stop", "Stop the turn in flight", aliases=("cancel",)),
         SlashCommand("copy", "Copy the last answer, or `all` for the whole conversation as Markdown", usage="[all]"),
