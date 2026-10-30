@@ -2913,4 +2913,58 @@ describe('ChatInputComponent — a project conversation', () => {
     setProject();
     expect(hints()).toContain('Type / to run one of your skills');
   });
+
+  // A project's harness dictates the skills, to none when it binds none, so a member's
+  // own skills are never offered in one. These pin what the composer says instead.
+  function lockToProjectWithNoSkills(): SkillCommandServiceStub {
+    const commands = TestBed.inject(SkillCommandService) as unknown as SkillCommandServiceStub;
+    commands.agentLocked.set(true);
+    commands.commands.set([]);
+    setProject();
+    return commands;
+  }
+
+  it('says where skills come from when the project binds none', () => {
+    lockToProjectWithNoSkills();
+    expect(hints()).toContain('Skills for this project are chosen on its Skills page');
+    expect(hints().some((hint) => hint.startsWith('Type /'))).toBe(false);
+  });
+
+  it('does not repeat that hint when the project has skills to run', () => {
+    (TestBed.inject(SkillCommandService) as unknown as SkillCommandServiceStub).agentLocked.set(true);
+    setProject();
+    expect(hints()).not.toContain('Skills for this project are chosen on its Skills page');
+  });
+
+  it('keeps that hint out of a plain conversation with no skills', () => {
+    (TestBed.inject(SkillCommandService) as unknown as SkillCommandServiceStub).commands.set([]);
+    fixture.detectChanges();
+    expect(hints()).not.toContain('Skills for this project are chosen on its Skills page');
+  });
+
+  it('opens the `/` menu in a project that binds no skills, so its empty state can point at the Skills page', () => {
+    lockToProjectWithNoSkills();
+    type('/');
+    expect(fixture.componentInstance.isSkillMenuOpen()).toBe(true);
+    expect(fixture.componentInstance.projectSkillsLocked()).toBe(true);
+  });
+
+  it('keeps the `/` menu shut outside a project when there are no skills', () => {
+    (TestBed.inject(SkillCommandService) as unknown as SkillCommandServiceStub).commands.set([]);
+    type('/');
+    expect(fixture.componentInstance.isSkillMenuOpen()).toBe(false);
+  });
+
+  it("sends Browse to the project's Skills page, not Customize, in a project", () => {
+    const router = TestBed.inject(Router);
+    const navigate = vi.spyOn(router, 'navigate');
+    lockToProjectWithNoSkills();
+    fixture.componentInstance.onSkillBrowseAll();
+    expect(navigate).toHaveBeenCalledWith(['/projects', 'p1', 'skills']);
+
+    fixture.componentRef.setInput('project', null);
+    fixture.detectChanges();
+    fixture.componentInstance.onSkillBrowseAll();
+    expect(navigate).toHaveBeenLastCalledWith(['/customize/skills']);
+  });
 });

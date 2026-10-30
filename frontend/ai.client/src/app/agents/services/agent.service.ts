@@ -147,4 +147,17 @@ export class AgentService {
       return [];
     }
   }
+
+  /**
+   * Forget the memoised palette for a kind, so the next `loadBindable` re-fetches.
+   *
+   * The cache lives for the whole tab, and a palette can go stale without any
+   * Agent Designer page knowing: a skill written under Customize → Skills joins
+   * the caller's accessible set the moment it is saved, but a project's Skills
+   * page (or an Agent form) opened earlier would keep offering the old list until
+   * a reload. Whatever changes the set calls this, and the pickers stay dumb.
+   */
+  invalidateBindable(kind: BindableKind): void {
+    this.bindableCache.delete(kind);
+  }
 }
