@@ -1249,46 +1249,18 @@ async def _register_upload(
 ) -> str:
     """Register *data* as a READY session file and return its upload_id.
 
-    The SPA presigns, PUTs to S3 and completes the upload, then sends
-    ``file_upload_ids`` — never base64 ``files`` (`chat-request.service.ts`).
-    That difference decides whether ``document_read`` and ``verify_sources``
-    exist on the turn: ``turn_has_document`` is classified from the *resolved
-    uploads* only (`routes.py`, `_resolved_files_include_a_document`), and
-    inline base64 never produces an upload row — `inline_persist` writes rows
-    for spreadsheets and decks, not documents.
-
-    So a row that needs the document tools cannot use the base64 path, and this
-    writes the same two things a completed upload does: the S3 object at the
-    conventional key, and a READY row. Needs AWS credentials, so it is only
-    reachable where the harness already resolved the deployed environment.
+    A row that needs ``document_read`` / ``verify_sources`` must send a real
+    upload, not base64 ``files``: see ``apis/shared/evals/fixtures.py``, which
+    the eval harness shares. An environment with nowhere to store it skips the
+    row rather than failing it.
     """
-    import boto3
+    from apis.shared.evals.fixtures import FixtureError, register_upload
 
-    from apis.shared.files.models import FileMetadata, FileStatus
-    from apis.shared.files.repository import get_file_upload_repository
+    try:
+        return await register_upload(user_id, session_id, filename, mime_type, data)
+    except FixtureError as exc:
+        raise RowSkip(str(exc)) from exc
 
-    bucket = os.environ.get("S3_USER_FILES_BUCKET_NAME", "")
-    if not bucket:
-        raise RowSkip("S3_USER_FILES_BUCKET_NAME is not set; needs --prefix (deployed) or a local stack")
-    upload_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:12]}"
-    key = f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
-    await asyncio.to_thread(
-        boto3.client("s3").put_object, Bucket=bucket, Key=key, Body=data, ContentType=mime_type
-    )
-    await get_file_upload_repository().create_file(
-        FileMetadata(
-            upload_id=upload_id,
-            user_id=user_id,
-            session_id=session_id,
-            filename=filename,
-            mime_type=mime_type,
-            size_bytes=len(data),
-            s3_key=key,
-            s3_bucket=bucket,
-            status=FileStatus.READY,
-        )
-    )
-    return upload_id
 
 async def row_source_provenance(ctx: Context) -> RowResult:
     """`verify_sources` answers both questions and emits `source_provenance`.
