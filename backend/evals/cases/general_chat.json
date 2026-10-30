@@ -1,0 +1,126 @@
+[
+  {
+    "id": "general_chat.explain_mutex_vs_semaphore",
+    "family": "general_chat",
+    "turns": [
+      {
+        "prompt": "Explain the difference between a mutex and a semaphore to a junior developer, with one everyday analogy."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "judge": {
+      "evaluators": [
+        "helpfulness",
+        "conciseness"
+      ]
+    },
+    "notes": "A teaching answer: correct, pitched at the asker, not padded."
+  },
+  {
+    "id": "general_chat.weekend_plan_under_constraints",
+    "family": "general_chat",
+    "turns": [
+      {
+        "prompt": "I have three hours on Saturday morning, a $40 budget, and two kids aged 6 and 9 who get bored fast. Suggest a plan."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "judge": {
+      "evaluators": [
+        "helpfulness",
+        "instruction_following"
+      ],
+      "rubric": "Pass only if the plan fits in three hours, totals $40 or less, and suits both a 6- and a 9-year-old."
+    },
+    "notes": "Every constraint in the prompt should shape the plan: time, budget, ages."
+  },
+  {
+    "id": "general_chat.rewrite_terse_email_politely",
+    "family": "general_chat",
+    "turns": [
+      {
+        "prompt": "Make this email polite and shorter, keeping every fact: \"Your report was late again. It was due Tuesday at noon and came Thursday. The board meeting is March 12 and I need the numbers by March 10. Don't make me ask twice.\""
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "judge": {
+      "evaluators": [
+        "helpfulness",
+        "faithfulness"
+      ],
+      "rubric": "Pass only if Tuesday at noon, Thursday, March 12 and March 10 all survive the rewrite and the tone is courteous."
+    },
+    "notes": "A rewrite must keep the three dates and both deadlines while changing the tone."
+  },
+  {
+    "id": "general_chat.summarize_provided_paragraph",
+    "family": "general_chat",
+    "turns": [
+      {
+        "prompt": "Summarize this in two sentences: \"The Larkspur Library renovation will close the main reading room from June 3 to August 30. The children's wing stays open throughout, with extended hours on Saturdays. Interlibrary loans pause for the first two weeks while the catalog moves to a new system, and the library expects the reopened room to add 40 study seats.\""
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "judge": {
+      "evaluators": [
+        "faithfulness",
+        "conciseness",
+        "instruction_following"
+      ]
+    },
+    "notes": "A summary of a supplied, synthetic text: no invented facts, two sentences."
+  },
+  {
+    "id": "general_chat.spreadsheet_or_crm_for_nonprofit",
+    "family": "general_chat",
+    "turns": [
+      {
+        "prompt": "Should a five-person nonprofit keep its donor list in a spreadsheet or move to a CRM? Give the main trade-offs and a recommendation."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "judge": {
+      "evaluators": [
+        "helpfulness",
+        "conciseness"
+      ]
+    },
+    "notes": "Advice with a recommendation, not a list of considerations with no answer."
+  },
+  {
+    "id": "general_chat.explain_off_by_one_bug",
+    "family": "general_chat",
+    "turns": [
+      {
+        "prompt": "Why does this skip the last item, and how do I fix it?\n\nitems = ['a', 'b', 'c']\nfor i in range(len(items) - 1):\n    print(items[i])"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "judge": {
+      "evaluators": [
+        "helpfulness",
+        "faithfulness"
+      ],
+      "rubric": "Pass only if the answer identifies range(len(items) - 1) as the cause and shows a loop that prints all three items."
+    },
+    "notes": "A concrete bug with one right diagnosis: range(len(items) - 1) stops one short."
+  }
+]

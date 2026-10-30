@@ -27,7 +27,12 @@
         ]
       }
     },
-    "notes": "Exact five-by-three digit product: a model that answers from memory is often wrong, so the calculator is the right tool."
+    "notes": "Exact five-by-three digit product: a model that answers from memory is often wrong, so the calculator is the right tool.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   },
   {
     "id": "tool_selection.square_root_reaches_for_calculator",
@@ -53,7 +58,12 @@
         ]
       }
     },
-    "notes": "Perfect square, so the expected value is unambiguous."
+    "notes": "Perfect square, so the expected value is unambiguous.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   },
   {
     "id": "tool_selection.identity_question_uses_whoami",
@@ -80,7 +90,12 @@
         ]
       }
     },
-    "notes": "Only the whoami tool can answer; the model must not guess an identity."
+    "notes": "Only the whoami tool can answer; the model must not guess an identity.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   },
   {
     "id": "tool_selection.usage_question_uses_quota_tool",
@@ -104,7 +119,12 @@
         ]
       }
     },
-    "notes": "Quota, not settings: the two tools sit side by side and their descriptions must keep them apart."
+    "notes": "Quota, not settings: the two tools sit side by side and their descriptions must keep them apart.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   },
   {
     "id": "tool_selection.read_settings_without_changing_them",
@@ -131,7 +151,12 @@
         ]
       }
     },
-    "notes": "Guard case: a read question must never reach the write tool next to it."
+    "notes": "Guard case: a read question must never reach the write tool next to it.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   },
   {
     "id": "tool_selection.general_knowledge_needs_no_tool",
@@ -159,7 +184,12 @@
         ]
       }
     },
-    "notes": "Over-eager tool use is a regression too: nothing here needs a tool."
+    "notes": "Over-eager tool use is a regression too: nothing here needs a tool.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   },
   {
     "id": "tool_selection.chart_request_uses_visualization",
@@ -183,7 +213,12 @@
         ]
       }
     },
-    "notes": "A chart request should produce a chart, not a text table."
+    "notes": "A chart request should produce a chart, not a text table.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   },
   {
     "id": "tool_selection.url_question_fetches_the_page",
@@ -215,7 +250,12 @@
         ]
       }
     },
-    "notes": "example.com is a stable public page; the model should fetch it rather than describe it from memory."
+    "notes": "example.com is a stable public page; the model should fetch it rather than describe it from memory.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   },
   {
     "id": "tool_selection.two_part_request_calls_both_tools",
@@ -243,6 +283,11 @@
         ]
       }
     },
-    "notes": "Both halves need a different tool; dropping either is a regression."
+    "notes": "Both halves need a different tool; dropping either is a regression.",
+    "judge": {
+      "evaluators": [
+        "tool_selection"
+      ]
+    }
   }
 ]

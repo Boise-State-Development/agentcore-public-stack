@@ -151,3 +151,32 @@ class TestRunAuthArguments:
             "--auth", "cognito", "--base-url", "https://boisestate.ai/api",
         ])
         assert code == 2 and "production" in capsys.readouterr().err
+
+
+class TestJudgeCommand:
+    def _run_dir(self, tmp_path):
+        out = tmp_path / "run"
+        out.mkdir()
+        (out / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 1}), encoding="utf-8")
+        rows = [
+            {"case_id": "general_chat.explain_mutex_vs_semaphore", "family": "general_chat", "sample": 0,
+             "model_id": MODEL, "passed": True, "final_message": "ok", "tool_calls": [], "session": {}},
+            {"case_id": "tool_selection.square_root_reaches_for_calculator", "family": "tool_selection",
+             "sample": 0, "model_id": MODEL, "passed": True, "final_message": "87",
+             "tool_calls": [{"name": "calculator"}, {"name": "calculator"}], "session": {}},
+        ]
+        (out / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        return out
+
+    def test_estimates_one_call_per_evaluator_and_per_tool_call(self, tmp_path, capsys):
+        out = self._run_dir(tmp_path)
+        assert eval_harness.main(["judge", "--out", str(out)]) == 0
+        printed = capsys.readouterr().out
+        # general_chat case: helpfulness + conciseness = 2; tool case: two tool calls = 2.
+        assert "2 samples to judge" in printed and "~4 judge calls" in printed and "estimate only" in printed
+
+    def test_spending_without_the_package_is_a_clear_setup_error(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setitem(sys.modules, "strands_evals", None)  # import now raises ImportError
+        out = self._run_dir(tmp_path)
+        assert eval_harness.main(["judge", "--out", str(out), "--yes"]) == 2
+        assert "dev extra" in capsys.readouterr().err
