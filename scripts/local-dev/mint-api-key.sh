@@ -19,7 +19,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="${REPO_ROOT}/backend/src/.env"
 BASE_URL="${APP_API_URL:-http://127.0.0.1:8000}"
 KEY_NAME="${KEY_NAME:-local-tui}"
-KEY_FILE="${AGENTCORE_KEY_FILE:-${HOME}/.config/agentcore-tui/local-api-key}"
+KEY_FILE="${AGENTCORE_KEY_FILE:-${HOME}/.config/aps-tui/local-api-key}"
 
 # See the note in start-app-api.sh: written with a character class so this line
 # does not trip .github/workflows/skip-auth-guard.yml.

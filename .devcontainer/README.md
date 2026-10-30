@@ -22,6 +22,7 @@ For agent execution rules and the workspace-path map, see
 | actionlint (workflow linter) | 1.7.12     | sha256-verified GitHub release            |
 | ShellCheck (shell linter)    | 0.9.0      | Ubuntu 24.04 apt package                  |
 | Playwright chromium runtime  | n/a        | Apt deps for Playwright 1.59.x            |
+| OS keyring (gnome-keyring)   | n/a        | Apt, from the base image's snapshot       |
 
 > All artifacts downloaded over the network during the build are verified
 > against either a pinned sha256 or a PGP signature. Apt packages installed

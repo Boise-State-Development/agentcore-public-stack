@@ -42,15 +42,17 @@ rather than reproducing that hierarchy.
 | Model choice | `GET /models` | ✅ done — real catalogue, provider carried |
 | Tool choice | `GET /tools/`, `PUT /tools/preferences` | ✅ done (`discover` pending) |
 | Conversation list & resume | `GET /sessions`, `GET /sessions/{id}/messages` | ✅ done |
-| Rename / delete / bulk delete | `PUT /sessions/{id}/metadata`, `DELETE`, `POST /sessions/bulk-delete` | ✅ rename + delete; bulk pending |
+| Rename / delete / bulk delete | `PUT /sessions/{id}/metadata`, `DELETE`, `POST /sessions/bulk-delete` | ✅ `r` and Delete in `/conversations`, `/rename <title>` in chat; Space marks rows and Delete removes every marked one in one request (chunked at the server's 20; failures stay marked) |
 | Read / unread | `POST /sessions/{id}/read` \| `/unread` | ✅ done |
-| Skills | `GET /skills/`, `PUT /skills/preferences` | ❌ |
-| Conversation modes | `GET /system-prompts/` → `selected_prompt_id` | ❌ |
+| Shared Projects (chat in one) | `GET /projects`, `GET /projects/{id}`, `rag_assistant_id = harnessAgentId` on every turn, `preferences.projectId` on sessions | ✅ `/project [name\|off\|info\|shared]`; picker (Mine / Shared with me); status-bar badge; `/conversations` badge + rebind on open; gate refusals carry slash-command hints; `/project shared` reads `GET /projects/{id}/shared-tasks` → `GET /shared/{shareId}` (snapshot) → `POST /shares/{id}/export` (continue as mine, keeps the project). Management surfaces (members, instructions, memory, schedules, outputs) deliberately web-only |
+| Agents (own, shared, pinned) | `GET /agents`, `GET /agents/pins`, `GET /agents/{id}`, `rag_assistant_id = agentId` | ✅ `/agent [name\|off\|info]`; picker grouped Mine / Shared with me / Pinned (the web `@` menu's scope; drafts excluded); `@ <name>` in the status bar; mutually exclusive with a project; reopening an agent conversation rebinds by its stored `assistantId`. Store browsing, pinning and the designer stay web-only |
+| Skills | `GET /skills/`, `PUT /skills/preferences`, `enabled_skills`, `invoked_skills` | ✅ `/skills` picker (opt-in; shows each `/slug`); `/<slug>` in a message invokes it by the web composer's token rule; enabled skills listed in the `/` menu after commands (a command name always wins) |
+| Conversation modes | `GET /system-prompts/`, `selected_prompt_id`, `PUT /sessions/{id}/metadata {selectedPromptId: null}` to clear | ✅ `/mode [name\|off]`; sent every non-agent turn; restored when a conversation opens; clearing writes null because the server falls back to the stored mode |
 | File attachments | `POST /files/presign` → PUT → `POST /files/{id}/complete` | ✅ `/attach <path>`; `file_upload_ids` on the next turn |
-| Title generation | `POST /chat/generate-title` | ✅ client done, not yet auto-fired |
-| Sampling overrides | `inference_params` | ❌ |
+| Title generation | `session_title` on the first turn's stream; `POST /chat/generate-title` is only for voice sessions | ✅ shown as the screen's subtitle and in `/conversations`; `/rename <title>` overrides it. The web app has no regenerate action, so neither does the TUI |
+| Sampling overrides | `inference_params` | ✅ `/effort [level\|off]`, the one knob the web app still exposes (its Advanced form with temperature/top_p/max_tokens was removed). Control exists when the model's `supportedParams` declares `allowed` levels for `effort` or `reasoning_effort` and is not locked; kept per model for the run, sent as `{key: level}` on every request of a turn |
 | Continue after truncation | `continue_truncated: true` with empty message | ✅ `/continue` |
-| Resume a paused turn | `interrupt_responses`, `GET .../pending-interrupts` | ✅ all five interrupt kinds answered in the transcript; `pending-interrupts` on reconnect pending |
+| Resume a paused turn | `interrupt_responses`; `pendingInterrupts` on `GET /sessions/{id}/messages`; `POST /connectors/{id}/initiate-consent` | ✅ all five interrupt kinds answered in the transcript, live or on reopening a conversation that paused while nobody was there (OAuth rows get a fresh URL; there is no GET on `/pending-interrupts`, only DELETE) |
 | Conversation search | `GET /sessions/search` | ✅ Enter in the list's filter; local title filter when the server has it off |
 | **Client-executed tools** | `client_tools` on the request → `client_tool_call` SSE → `interrupt_responses` | ✅ see below — the one capability the terminal has that the web app does not |
 
@@ -70,10 +72,10 @@ Agents (list/get/`bindable`/`runnability`/pins, `@`-mention via
 | Feature | Why not |
 |---|---|
 | Voice mode | `wss://…/voice/stream` needs an allowlisted `Origin`, a single-use ticket, **and the session cookie read off the handshake** — WebSockets skip `SessionRefreshMiddleware`, so there is no `Authorization: BFF` branch to use. The audio layer (`getUserMedia` + AudioWorklet at 16 kHz) has no terminal equivalent either. |
-| Artifact rendering | A sandboxed iframe with a render token. Partly salvageable: `GET /artifacts/{id}/content` can download to disk, which is what we will do. |
+| Artifact rendering | A sandboxed iframe with a render token. `/artifacts [dir]` lists the conversation's artifacts (`GET /artifacts?session_id=`) and saves the chosen version's source (`GET /artifacts/{id}/content?version=`) as `<title-slug>-vN.<ext>`, never overwriting. Above the server's 2 MB preview cap (413) the user is sent to the web app's download. |
 | MCP Apps | Cross-origin iframe + postMessage bridge. Iframe-shaped by construction; show `GET /mcp-apps/cards` metadata only. |
 | Appearance settings | No meaning in a terminal. |
-| `manage-sessions` as a screen | Redundant with the conversation list; fold its bulk actions in. |
+| `manage-sessions` as a screen | Redundant with the conversation list; its bulk delete is folded in (Space marks, Delete). |
 
 ## Client-executed tools
 
@@ -84,8 +86,9 @@ interrupt machinery that already exists for `ask_user_question`.
 
 1. **Declare.** Every `/chat/stream` request carries `client_tools`: a list of
    `{name, description, inputSchema}` (`apis.shared.client_tools.ClientToolSpec`).
-   The TUI sends the same four every turn (`run_command`, `read_file`,
-   `list_directory`, `write_file`; `tui/src/agentcore_tui/local_tools/specs.py`).
+   The TUI sends the same five every turn (`workspace_info`, `run_command`,
+   `read_file`, `list_directory`, `write_file`;
+   `tui/src/aps_tui/local_tools/specs.py`).
    The SPA never sends the field, so nothing below runs for a web turn.
 2. **Build.** `build_client_tools` makes one Strands tool per spec, named
    `local_<name>` so it cannot collide with a registry, gateway or MCP tool. Its
@@ -127,6 +130,31 @@ from `/oauth-complete`. A terminal cannot. The replacement mirrors the device
 flow that already works: print the authorization URL, let the user complete it in
 any browser, then send `interrupt_responses: [{interruptId, response}]` to resume.
 Same shape for `POST /connectors/{id}/initiate-consent`.
+
+## How features are reached: slash commands only
+
+Decided 2026-10-29, modelled on Kiro CLI. Every feature in the terminal is a
+slash command typed into the composer; `/` opens a completion popup; `/help`
+is generated from the same registry (`tui/src/aps_tui/commands.py`).
+There are no function keys and no command palette, so a parity row below
+maps to a *command*, never a key. The web app's gear icon, sidebar and panels
+become `/model`, `/tools`, `/conversations`, `/attach`, and later `/project`
+and `/agent`. Keys are reserved for Enter, Esc, Ctrl+Q, newline and
+navigation. Rationale and the rule set live in
+`.kiro/steering/terminal-client.md`.
+
+**Projects (next).** A project conversation is an ordinary session whose first
+turn sends `rag_assistant_id = project.harnessAgentId`; the server derives
+`projectId`, applies the harness's instructions, model, tools, skills,
+knowledge and memory, and persists `preferences.projectId`. The terminal
+therefore needs: `/project [name]` over `GET /projects` (Mine / Shared with
+me), the harness id on the first turn, the project name in the status bar and
+grouped in `/conversations`, the gate refusals (archived, deleted, no access)
+as typed errors, and `GET /projects/{id}/tasks|shared-tasks` to open a
+teammate's shared conversation read-only. Read-only `/project info`
+(instructions, model, tools, members, memory files) follows. Member
+management, instruction versions, the memory editor, proposals, schedules
+and outputs stay in the web app.
 
 ## Phases
 
@@ -209,7 +237,7 @@ that has it defaults to web for clients that omit it.
   calls `get_current_user_from_session`.
 * **`POST /runs/now`** is a complete non-streaming agent turn in one request,
   returning `finalMessage`, `toolTrace`, `usage` and `oauthRequired` — a natural
-  fit for a scriptable `agentcore-tui run "prompt"`.
+  fit for a scriptable `aps-tui run "prompt"`.
 * **Most reads are cheap and pollable.** `/tools/` is backed by a 10-second TTL
   cache. Every `/memory/*` read is a vector search and is *not* cheap; neither is
   `/costs/*`, `/tools/{id}/discover`, or anything that starts an agent turn.
