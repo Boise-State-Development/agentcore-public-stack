@@ -1,0 +1,248 @@
+[
+  {
+    "id": "tool_selection.multiplication_reaches_for_calculator",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "What is 48,217 multiplied by 913? I need the exact figure."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "calculator",
+        "whoami"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "44,022,121"
+      ],
+      "tools": {
+        "must_call": [
+          "calculator"
+        ],
+        "must_not_call": [
+          "whoami"
+        ]
+      }
+    },
+    "notes": "Exact five-by-three digit product: a model that answers from memory is often wrong, so the calculator is the right tool."
+  },
+  {
+    "id": "tool_selection.square_root_reaches_for_calculator",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "What is the square root of 7,569? Give the exact value."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "calculator"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "87"
+      ],
+      "tools": {
+        "must_call": [
+          "calculator"
+        ]
+      }
+    },
+    "notes": "Perfect square, so the expected value is unambiguous."
+  },
+  {
+    "id": "tool_selection.identity_question_uses_whoami",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "Which account am I signed in as right now?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "whoami",
+        "calculator"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "tools": {
+        "must_call": [
+          "whoami"
+        ],
+        "must_not_call": [
+          "calculator"
+        ]
+      }
+    },
+    "notes": "Only the whoami tool can answer; the model must not guess an identity."
+  },
+  {
+    "id": "tool_selection.usage_question_uses_quota_tool",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "How much of my usage allowance have I used so far this month?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "get_my_quota",
+        "get_my_settings"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "tools": {
+        "must_call": [
+          "get_my_quota"
+        ]
+      }
+    },
+    "notes": "Quota, not settings: the two tools sit side by side and their descriptions must keep them apart."
+  },
+  {
+    "id": "tool_selection.read_settings_without_changing_them",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "Which model is my default set to? Please don't change anything."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "get_my_settings",
+        "set_default_model"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "tools": {
+        "must_call": [
+          "get_my_settings"
+        ],
+        "must_not_call": [
+          "set_default_model"
+        ]
+      }
+    },
+    "notes": "Guard case: a read question must never reach the write tool next to it."
+  },
+  {
+    "id": "tool_selection.general_knowledge_needs_no_tool",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "What is the capital city of Australia?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "calculator",
+        "whoami"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "Canberra"
+      ],
+      "tools": {
+        "must_not_call": [
+          "calculator",
+          "whoami"
+        ]
+      }
+    },
+    "notes": "Over-eager tool use is a regression too: nothing here needs a tool."
+  },
+  {
+    "id": "tool_selection.chart_request_uses_visualization",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "Make a bar chart of quarterly sales: Q1 120, Q2 135, Q3 128, Q4 160."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "create_visualization",
+        "calculator"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "tools": {
+        "must_call": [
+          "create_visualization"
+        ]
+      }
+    },
+    "notes": "A chart request should produce a chart, not a text table."
+  },
+  {
+    "id": "tool_selection.url_question_fetches_the_page",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "What does the page at https://example.com say? Summarize it in one sentence."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content",
+        "calculator"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "example",
+        "examples",
+        "domain"
+      ],
+      "tools": {
+        "must_call": [
+          "fetch_url_content"
+        ],
+        "must_not_call": [
+          "calculator"
+        ]
+      }
+    },
+    "notes": "example.com is a stable public page; the model should fetch it rather than describe it from memory."
+  },
+  {
+    "id": "tool_selection.two_part_request_calls_both_tools",
+    "family": "tool_selection",
+    "turns": [
+      {
+        "prompt": "Tell me which account I'm signed in as, and also work out 15% of 2,480."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "whoami",
+        "calculator"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "372"
+      ],
+      "tools": {
+        "must_call": [
+          "whoami",
+          "calculator"
+        ]
+      }
+    },
+    "notes": "Both halves need a different tool; dropping either is a regression."
+  }
+]
