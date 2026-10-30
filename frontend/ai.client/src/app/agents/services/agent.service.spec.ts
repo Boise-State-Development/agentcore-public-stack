@@ -35,6 +35,7 @@ describe('AgentService', () => {
     deleteAgent: ReturnType<typeof vi.fn>;
     getBindable: ReturnType<typeof vi.fn>;
     getShareSkillExposure: ReturnType<typeof vi.fn>;
+    getSkills: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -48,6 +49,7 @@ describe('AgentService', () => {
       deleteAgent: vi.fn(),
       getBindable: vi.fn(),
       getShareSkillExposure: vi.fn(),
+      getSkills: vi.fn(),
     };
     TestBed.configureTestingModule({
       providers: [AgentService, { provide: AgentApiService, useValue: mockApi }],
@@ -130,6 +132,19 @@ describe('AgentService', () => {
     // The dialog decides what a failure means; the facade must not swallow it into "none".
     mockApi.getShareSkillExposure.mockReturnValueOnce(throwError(() => ({ status: 500 })));
     await expect(service.getShareSkillExposure('ast-001')).rejects.toEqual({ status: 500 });
+  });
+
+  it('unwraps the bound skills resolved for the viewer, and lets a failure reach the caller', async () => {
+    const skills = [{ skillId: 'sk_rubric', displayName: 'Rubric', description: 'Grade it', slug: 'sk-rubric' }];
+    mockApi.getSkills.mockReturnValueOnce(of({ agentId: 'ast-001', skills }));
+
+    expect(await service.getBoundSkills('ast-001')).toEqual(skills);
+    expect(mockApi.getSkills).toHaveBeenCalledWith('ast-001');
+
+    // The session page decides what a failure means (an older backend: fall back to the
+    // viewer's own list); the facade must not turn it into "no skills".
+    mockApi.getSkills.mockReturnValueOnce(throwError(() => ({ status: 404 })));
+    await expect(service.getBoundSkills('ast-001')).rejects.toEqual({ status: 404 });
   });
 
   it('memoises the bindable palette per kind and returns [] on failure', async () => {

@@ -320,7 +320,7 @@ describe('CustomizeSkillsPage', () => {
     // matching block in customize-tools.page.spec.ts.
 
     it('shows the user their own catalog, not the Agent’s bound subset', async () => {
-      skills.lockToAgentSkills(['sk_apa']);
+      skills.lockToAgentSkillIds(['sk_apa']);
       const fixture = await create();
       toDiscover(fixture);
 
@@ -329,7 +329,7 @@ describe('CustomizeSkillsPage', () => {
     });
 
     it('still saves a toggle while a lock is held', async () => {
-      skills.lockToAgentSkills(['sk_apa']);
+      skills.lockToAgentSkillIds(['sk_apa']);
       const fixture = await create();
       toDiscover(fixture);
 

@@ -1061,12 +1061,38 @@ export class ConversationPage implements OnDestroy {
     }
 
     const skillIds = agent.bindings.filter(b => b.kind === 'skill').map(b => b.ref);
-    this.skillService.lockToAgentSkills(skillIds);
-    // Load the accessible skills so the locked rows can render their names.
-    // Only fires when an Agent actually binds skills (a skills-enabled
-    // context), so there is no /skills fetch in flag-off environments.
-    if (skillIds.length > 0 && !this.skillService.initialized()) {
-      void this.skillService.loadSkills();
+    this.skillService.lockToAgentSkillIds(skillIds, { resolving: skillIds.length > 0 });
+    // Resolve the bound skills for this viewer. Only fires when an Agent actually
+    // binds skills (a skills-enabled context), so there is no fetch in flag-off
+    // environments.
+    if (skillIds.length > 0) {
+      void this.resolveAgentSkills(agent.agentId);
+    }
+  }
+
+  /**
+   * Replace the id lock with the Agent's skills as the backend resolved them for this
+   * viewer (`GET /agents/{id}/skills`), which is what the `/` menu and the picker rows
+   * are built from. The viewer's own `/skills/` list cannot do it: a skill another
+   * project member authored is not in it, so for every member but the author the
+   * locked set used to intersect to nothing and the menu never opened.
+   *
+   * Best-effort. A failure (an older backend without the route) keeps the id lock and
+   * loads the viewer's own list so the rows it can name still render, which is exactly
+   * the previous behaviour. A result for an Agent that is no longer the conversation's
+   * is dropped.
+   */
+  private async resolveAgentSkills(agentId: string): Promise<void> {
+    try {
+      const skills = await this.agentService.getBoundSkills(agentId);
+      if (this.agent()?.agentId !== agentId || !this.skillService.agentLocked()) return;
+      this.skillService.lockToAgentSkills(skills);
+    } catch {
+      if (this.agent()?.agentId !== agentId || !this.skillService.agentLocked()) return;
+      this.skillService.settleAgentLock();
+      if (!this.skillService.initialized()) {
+        void this.skillService.loadSkills();
+      }
     }
   }
 

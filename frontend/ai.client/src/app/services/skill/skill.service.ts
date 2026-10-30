@@ -37,6 +37,34 @@ export interface SkillsResponse {
 }
 
 /**
+ * One of an Agent's bound skills as the Agent resolved it for this viewer
+ * (`GET /agents/{id}/skills`): the shape the lock takes, independent of the
+ * user's own `/skills/` list.
+ */
+export interface AgentLockedSkill {
+  skillId: string;
+  displayName: string;
+  description: string;
+  slug: string;
+}
+
+/**
+ * The skill set an Agent dictates for the active conversation.
+ *
+ * `ids` are the Agent's bound skill ids. `skills` are those ids resolved by the
+ * backend for *this viewer* (names, descriptions and the server's slug), or
+ * null while they are still being fetched or when the fetch failed; then the
+ * rows are whatever the viewer's own list can name, which is the pre-resolution
+ * behaviour and what a backend without the route implies. `resolving` is true
+ * only in the gap between locking and the resolved list arriving.
+ */
+interface AgentSkillLock {
+  ids: string[];
+  skills: UserSkill[] | null;
+  resolving: boolean;
+}
+
+/**
  * Service for the user's accessible skills and per-skill preferences.
  *
  * The sibling of ToolService: the backend returns the ACTIVE skills the user
@@ -76,9 +104,9 @@ export class SkillService {
 
   // Agent Designer: when the active conversation is bound to an Agent that binds
   // skills, the picker is locked to exactly that set — the backend governs skills
-  // (and forces skill-mode) at invocation regardless of the client. Holds the
-  // bound skill ids, or null when not agent-bound.
-  private readonly _agentLockedSkillIds = signal<string[] | null>(null);
+  // (and forces skill-mode) at invocation regardless of the client. Null when
+  // not agent-bound.
+  private readonly _agentLock = signal<AgentSkillLock | null>(null);
 
   // Public readonly signals
   readonly skills = this._skills.asReadonly();
@@ -87,7 +115,14 @@ export class SkillService {
   readonly initialized = this._initialized.asReadonly();
 
   /** True when the skill set is dictated by the active Agent and toggles are locked. */
-  readonly agentLocked = computed(() => this._agentLockedSkillIds() !== null);
+  readonly agentLocked = computed(() => this._agentLock() !== null);
+
+  /**
+   * True while an Agent lock is in place but its per-viewer resolution has not
+   * arrived. A composer that reads "no skills" in that gap would say something
+   * wrong (there are none to run / they are chosen elsewhere), so it waits.
+   */
+  readonly agentSkillsResolving = computed(() => this._agentLock()?.resolving ?? false);
 
   // Computed signals
   readonly enabledSkills = computed(() =>
@@ -98,17 +133,17 @@ export class SkillService {
   readonly enabledSkillIds = computed(() => {
     // Agent-bound: the Agent's skills are the effective set (the backend enforces
     // the same, replace semantics, and forces skill-mode). Toggling is disabled.
-    const locked = this._agentLockedSkillIds();
-    if (locked !== null) {
-      return [...locked];
+    const lock = this._agentLock();
+    if (lock !== null) {
+      return [...lock.ids];
     }
     return this.enabledSkills().map(s => s.skillId);
   });
 
   readonly enabledCount = computed(() => {
-    const locked = this._agentLockedSkillIds();
-    if (locked !== null) {
-      return locked.length;
+    const lock = this._agentLock();
+    if (lock !== null) {
+      return lock.ids.length;
     }
     return this.enabledSkills().length;
   });
@@ -117,13 +152,18 @@ export class SkillService {
 
   /**
    * The skills the picker should render. Agent-locked → only the bound skills
-   * (the agent dictates a fixed set, so hide the rest); otherwise every
-   * accessible skill.
+   * (the agent dictates a fixed set, so hide the rest), as the backend resolved
+   * them for this viewer once that list is in; otherwise every accessible skill.
+   *
+   * The resolved list matters because the viewer's own list is their catalog
+   * grants and the skills they authored. A skill another member of a project
+   * authored is in neither, so intersecting the Agent's ids with it left every
+   * member but the author with no rows and no `/` menu.
    */
   readonly visibleSkills = computed(() => {
-    const locked = this._agentLockedSkillIds();
-    if (locked !== null) {
-      return this._skills().filter(s => locked.includes(s.skillId));
+    const lock = this._agentLock();
+    if (lock !== null) {
+      return lock.skills ?? this._skills().filter(s => lock.ids.includes(s.skillId));
     }
     return this._skills();
   });
@@ -133,21 +173,55 @@ export class SkillService {
    * bound set; otherwise the user's own enabled state.
    */
   isSkillShownEnabled(skill: UserSkill): boolean {
-    const locked = this._agentLockedSkillIds();
-    if (locked !== null) {
-      return locked.includes(skill.skillId);
+    const lock = this._agentLock();
+    if (lock !== null) {
+      return lock.ids.includes(skill.skillId);
     }
     return skill.isEnabled;
   }
 
-  /** Lock the picker to an Agent's bound skills (Agent Designer). */
-  lockToAgentSkills(skillIds: string[]): void {
-    this._agentLockedSkillIds.set([...skillIds]);
+  /**
+   * Lock the picker to an Agent's bound skill ids (Agent Designer). Rows are
+   * whatever the viewer's own list can name until {@link lockToAgentSkills}
+   * supplies the resolved entries; pass `resolving` while that fetch is out.
+   */
+  lockToAgentSkillIds(skillIds: string[], options?: { resolving?: boolean }): void {
+    this._agentLock.set({ ids: [...skillIds], skills: null, resolving: options?.resolving ?? false });
+  }
+
+  /**
+   * Lock the picker to an Agent's bound skills as the backend resolved them for
+   * this viewer (`GET /agents/{id}/skills`): the rows, the `/` commands and the
+   * ids all come from these entries, not from the viewer's own list.
+   */
+  lockToAgentSkills(skills: AgentLockedSkill[]): void {
+    this._agentLock.set({
+      ids: skills.map(s => s.skillId),
+      skills: skills.map(s => ({
+        skillId: s.skillId,
+        displayName: s.displayName,
+        description: s.description,
+        category: null,
+        userEnabled: null,
+        isEnabled: true,
+        slug: s.slug,
+      })),
+      resolving: false,
+    });
+  }
+
+  /**
+   * The per-viewer resolution did not arrive (the route is absent on an older
+   * backend, or failed): keep the lock, stop waiting, and let the rows fall
+   * back to what the viewer's own list can name.
+   */
+  settleAgentLock(): void {
+    this._agentLock.update(lock => (lock && lock.resolving ? { ...lock, resolving: false } : lock));
   }
 
   /** Release an Agent skill lock. */
   clearAgentLock(): void {
-    this._agentLockedSkillIds.set(null);
+    this._agentLock.set(null);
   }
 
   /**
@@ -209,7 +283,7 @@ export class SkillService {
    */
   async toggleSkill(skillId: string, options?: ToggleOptions): Promise<void> {
     // Agent-locked: the skill set is dictated by the Agent; ignore toggles.
-    if ((options?.respectAgentLock ?? true) && this._agentLockedSkillIds() !== null) return;
+    if ((options?.respectAgentLock ?? true) && this._agentLock() !== null) return;
     const skill = this._skills().find(s => s.skillId === skillId);
     if (!skill) return;
 

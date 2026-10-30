@@ -95,6 +95,7 @@ class SkillCommandServiceStub {
   readonly commands = signal<SkillCommand[]>(SKILLS);
   readonly loading = signal(false);
   readonly agentLocked = signal(false);
+  readonly resolving = signal(false);
   async load(): Promise<void> {}
   search(query: string): SkillCommand[] {
     const needle = query.trim().toLowerCase();
@@ -2947,6 +2948,22 @@ describe('ChatInputComponent — a project conversation', () => {
     type('/');
     expect(fixture.componentInstance.isSkillMenuOpen()).toBe(true);
     expect(fixture.componentInstance.projectSkillsLocked()).toBe(true);
+  });
+
+  it('says nothing about the Skills page while the project\'s skills are still resolving', () => {
+    // A member's commands are empty until the Agent resolves its bound skills for them.
+    // That gap is not "the project has no skills", so the hint and the menu wait.
+    const commands = lockToProjectWithNoSkills();
+    commands.resolving.set(true);
+    fixture.detectChanges();
+    expect(hints()).not.toContain('Skills for this project are chosen on its Skills page');
+    type('/');
+    expect(fixture.componentInstance.isSkillMenuOpen()).toBe(false);
+
+    commands.resolving.set(false);
+    fixture.detectChanges();
+    expect(hints()).toContain('Skills for this project are chosen on its Skills page');
+    expect(fixture.componentInstance.isSkillMenuOpen()).toBe(true);
   });
 
   it('keeps the `/` menu shut outside a project when there are no skills', () => {

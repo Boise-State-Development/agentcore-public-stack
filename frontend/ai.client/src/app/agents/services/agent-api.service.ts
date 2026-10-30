@@ -5,6 +5,8 @@ import { ConfigService } from '../../services/config.service';
 import {
   Agent,
   AgentRunnability,
+  AgentBoundSkill,
+  AgentSkillsResponse,
   AgentsListResponse,
   AgentSharesResponse,
   BindableKind,
@@ -75,6 +77,11 @@ export class AgentApiService {
    */
   getRunnability(id: string): Observable<AgentRunnability> {
     return this.http.get<AgentRunnability>(`${this.baseUrl()}/${id}/runnability`);
+  }
+
+  /** The Agent's bound skills that will run for the signed-in user, in binding order. */
+  getSkills(id: string): Observable<AgentSkillsResponse> {
+    return this.http.get<AgentSkillsResponse>(`${this.baseUrl()}/${id}/skills`);
   }
 
   updateAgent(id: string, request: UpdateAgentRequest): Observable<Agent> {

@@ -4,6 +4,7 @@ import { AgentApiService } from './agent-api.service';
 import {
   Agent,
   AgentRunnability,
+  AgentBoundSkill,
   BindableItem,
   BindableKind,
   CreateAgentDraftRequest,
@@ -76,6 +77,18 @@ export class AgentService {
    * rather than as an error worth showing. */
   getRunnability(id: string): Promise<AgentRunnability> {
     return firstValueFrom(this.api.getRunnability(id));
+  }
+
+  /**
+   * The Agent's bound skills that will run for the signed-in user, in binding order.
+   *
+   * The session page locks the composer's `/` menu to these. Not memoised and not
+   * swallowed: the caller decides what a failure means (it falls back to the viewer's
+   * own list, which is what a backend without this route implies).
+   */
+  async getBoundSkills(id: string): Promise<AgentBoundSkill[]> {
+    const response = await firstValueFrom(this.api.getSkills(id));
+    return response.skills;
   }
 
   /** The skills the owner wrote that sharing this Agent hands over (§6/D7). Owner only. */

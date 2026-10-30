@@ -901,7 +901,7 @@ export class ChatInputComponent {
           ? "Type / to run one of this project's skills"
           : 'Type / to run one of your skills',
       );
-    } else if (this.showSkillCommands() && this.projectSkillsLocked()) {
+    } else if (this.showSkillCommands() && this.projectSkillsSettled()) {
       // A project that binds no skills offers none, the member's own included — a
       // skill written under Customize never reaches a project on its own. Say where
       // it does, or the member who just wrote one is left looking for it here.
@@ -1221,6 +1221,16 @@ export class ChatInputComponent {
   );
 
   /**
+   * The project's skills are locked *and* resolved for this member. An empty command
+   * list before that means "not here yet", not "none", so the empty-state hint and the
+   * menu that carries it wait for this rather than telling a member their project has
+   * no skills while the list is still on its way.
+   */
+  readonly projectSkillsSettled = computed(
+    () => this.projectSkillsLocked() && !this.skillCommandService.resolving(),
+  );
+
+  /**
    * The menu opens only when there is something to offer.
    *
    * `/` is far more common in prose than `@` — dates, fractions, "and/or", paths, URLs —
@@ -1234,7 +1244,7 @@ export class ChatInputComponent {
     () =>
       this.showSkillCommands() &&
       this.skillToken() !== null &&
-      (this.skillCommandService.commands().length > 0 || this.projectSkillsLocked()),
+      (this.skillCommandService.commands().length > 0 || this.projectSkillsSettled()),
   );
 
   readonly skillQuery = computed(() => this.skillToken()?.query ?? '');
