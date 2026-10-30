@@ -326,6 +326,8 @@ class AppApiTransport:
             follow_redirects=False,
         )
         self._csrf: Optional[str] = None
+        #: The signed-in user as ``GET /auth/session`` reports it (``user_id``, ``email``…).
+        self.user: Dict[str, Any] = {}
 
     # -- auth -------------------------------------------------------------
 
@@ -386,7 +388,23 @@ class AppApiTransport:
         self._csrf = body.get("csrf_token") or body.get("csrfToken")
         if not self._csrf:
             raise RuntimeError("GET /auth/session returned no csrf_token")
-        logger.info("signed in (cognito) as %s", (body.get("user") or {}).get("email", "?"))
+        # The session payload is flat (user_id, email, name, roles, csrf_token).
+        self.user = {k: body.get(k) for k in ("user_id", "email", "name", "roles") if k in body}
+        logger.info("signed in (cognito) as %s", self.user.get("email") or "?")
+
+    async def enable_headless_grant(self) -> Dict[str, Any]:
+        """Pin a headless grant from this live session (``POST /runs/grant``).
+
+        The eval harness signs in fresh on every run and renews its grant this
+        way, so the grant's 30-day login-recency window never lapses on an
+        account nobody logs into by hand.
+        """
+        r = await self._client.post("/runs/grant", headers=self._headers())
+        if r.status_code == 404:
+            raise RuntimeError("POST /runs/grant -> 404: scheduled runs are off in this environment")
+        if r.status_code != 200:
+            raise RuntimeError(f"POST /runs/grant -> {r.status_code}: {r.text[:200]}")
+        return r.json()
 
     def _headers(self) -> Dict[str, str]:
         h = {"Content-Type": "application/json"}

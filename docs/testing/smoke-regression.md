@@ -18,6 +18,7 @@ The three layers are cumulative. Run as many as the change warrants (§4).
 | **L0 Hermetic** | the branch's code compiles and its unit/contract tests pass | free, ~8 min backend | `pytest`, `ng test`, `jest` |
 | **L1 Turn matrix (API/SDK)** | the deployed or local stack streams every response code path with the right frames, resumes, 409s, restores | real model calls, cents | `backend/scripts/smoke_turns.py` |
 | **L2 Browser** | the SPA renders what L1 proved the wire carries: consent, question picker, Stop, steer, attachment cards, reload | real model calls, minutes of agent time | in-app browser against dev |
+| **Eval (quality)** | the answers are as good as the last promoted baseline: tool choice, facts from documents, retention, format, refusals, skill loading | real model calls, under $1 for the full set at k=3 | `backend/scripts/eval_harness.py`; spec `docs/specs/eval-harness.md` |
 
 ---
 
@@ -228,7 +229,8 @@ conversations afterwards from Manage Conversations.
 | `inference_api/chat/*`, `agents/main_agent/**`, `apis/shared/harness/**`, the SSE table | L0 + L1 against dev once the branch is deployed there (merge to `develop` auto-deploys dev), or against a local stack before |
 | an interrupt flow (OAuth, approval, question, browser login, client tool) | + L1's resume rows + the matching L2 row |
 | the composer, loader, tool rail, pickers, banners | + L2 rows for the surface |
-| a release | L0 + full L1 against dev + the L2 checklist, once, on the release branch |
+| the system prompt, a tool description in the catalog, skills or their disclosure, history or compaction code, document delivery, a model default | + the eval harness on the affected families against dev (or a local stack), `score` output in the PR |
+| a release | L0 + full L1 against dev + the L2 checklist + the full eval golden set at k=3 as the eval user, once, on the release branch |
 
 Model-call-path changes also owe the prompt-cache and TTFT evidence described
 in CLAUDE.md ("Token cost effectiveness", "TTFT is a hard budget");
@@ -254,6 +256,13 @@ first look, not the whole proof.
   models), because the nightly stack never runs the bootstrap seeding and its
   `default` role grants nothing. The pool must serve the classic Hosted UI
   login page (managed login v2 exits 2, "could not start").
+- The same job then runs the eval harness's nightly subset through
+  `scripts/nightly/eval-harness.sh`: it seeds the eval user
+  (`backend/scripts/seed_eval_user.py`), runs five families once per case as
+  that user, and scores them against the committed Haiku baseline. It is
+  `continue-on-error` and uploads `eval-harness-report-<label>`; one sample per
+  case is a smoke signal, and the gate is the k=3 run on dev. Skill selection is
+  left out because the nightly stack never seeds the skills it loads.
 - L2 is agent-run, not CI.
 
 ---

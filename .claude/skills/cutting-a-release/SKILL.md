@@ -285,6 +285,23 @@ Open a PR `release/x.y.z` → `main`. After prerequisites (§1) + code review pa
 **squash-merged** into `main` (the version-check gate passes because `VERSION`
 changed). Then do the backmerge (§7).
 
+**Quality evidence before the PR.** `develop` is what dev runs, so the release
+branch's code is already deployed there. Run the smoke pass
+(`docs/testing/smoke-regression.md`, the `/smoke-regression` skill) and the eval
+harness's full golden set as the eval user, then paste the `score` table into the
+PR body. A `GATE: FAIL` is a release blocker until `--explain` shows why:
+
+```bash
+cd backend
+AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-release-x.y.z \
+    --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
+    --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 --yes
+uv run python scripts/eval_harness.py score --out /tmp/eval-release-x.y.z
+```
+
+Re-promote the baseline (`eval_harness.py baseline`) only on purpose — after a
+deliberate model or prompt change — in its own PR with the score output.
+
 ---
 
 ## 3. Version bump

@@ -129,3 +129,25 @@ def test_run_without_yes_only_estimates(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "estimate only" in out
     assert not (tmp_path / "r").exists()
+
+
+class TestRunAuthArguments:
+    BASE = ["run", "--out", "x", "--model-id", MODEL, "--prefix", "dev-example"]
+
+    def test_headless_grant_needs_a_user_id(self):
+        with pytest.raises(SystemExit):
+            eval_harness.parse_args(self.BASE)
+        assert eval_harness.parse_args(self.BASE + ["--user-id", "u"]).auth == "headless-grant"
+
+    def test_cognito_needs_a_base_url_and_no_user_id(self):
+        with pytest.raises(SystemExit):
+            eval_harness.parse_args(self.BASE + ["--auth", "cognito"])
+        args = eval_harness.parse_args(self.BASE + ["--auth", "cognito", "--base-url", "https://dev.example/api"])
+        assert args.user_id is None and args.base_url == "https://dev.example/api"
+
+    def test_a_production_base_url_is_refused(self, tmp_path, capsys):
+        code = eval_harness.main([
+            "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--prefix", "dev-example",
+            "--auth", "cognito", "--base-url", "https://boisestate.ai/api",
+        ])
+        assert code == 2 and "production" in capsys.readouterr().err
