@@ -86,6 +86,11 @@ variable, an IAM permission, or a code error.
 CloudWatch output. Confirm the required environment variables are passed through
 CDK and that the task role has the IAM permissions the service needs.
 
+A task that stops with exit code **139** (or 134) died on a native fault, not a
+Python exception. Both images set `PYTHONFAULTHANDLER=1`, so the Python stack of
+every thread at the moment of the fault is in the same log stream, just before
+the end, and names the native call that crashed.
+
 ### CloudFront returns 403 Forbidden
 
 **Cause:** CloudFront can't reach the S3 bucket, or the distribution hasn't
@@ -102,6 +107,12 @@ OAC access and that the distribution's origin points at the correct bucket.
 **Fix:** confirm tasks are running, that the ALB target group shows **healthy**
 targets, and that the service's security group allows traffic from the ALB.
 Check the App API CloudWatch logs for startup errors.
+
+A task that was healthy and then stopped answering was usually blocked by
+synchronous work on its single event loop. The `{prefix}-app-api-event-loop-lag`
+alarm fires when a task's loop was stalled for more than 2 s in two of three
+minutes, and the App API log has an `Event loop blocked for N ms` warning for
+every stall over 1 s, timestamped so you can see what ran just before it.
 
 ## After deploy
 

@@ -101,6 +101,13 @@ LABEL org.agentcore-public-stack.runtime-env-contract="derived-names-v1"
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+# Print every thread's Python stack to stderr when the interpreter dies on a
+# native fault (SIGSEGV, SIGABRT, SIGBUS, SIGFPE). Without it a segfault leaves
+# only "exit 139" in the task's stopped reason and nothing in the logs: that is
+# how the 2026-10-30 pypdfium2 crash (two PDF digests parsed concurrently on
+# threads) had to be reconstructed from timing alone. stderr reaches CloudWatch
+# like stdout does. Free: it costs nothing until a fault happens.
+ENV PYTHONFAULTHANDLER=1
 ENV PYTHONPATH=/app/src
 ENV PATH="/app/.venv/bin:$PATH"
 
