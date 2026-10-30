@@ -53,7 +53,7 @@ from .endpoints import Endpoints
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = f"agentcore-tui/{__version__}"
+USER_AGENT = f"aps-tui/{__version__}"
 
 #: Conversations per page. The server caps `limit` at 1000; this is a screenful
 #: of history at a time so a long list opens promptly.
@@ -709,7 +709,7 @@ class CatalogClient:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not base_url:
-            raise ConfigError("No base URL configured", hint="Run `agentcore-tui login --base-url https://your-host/api`.")
+            raise ConfigError("No base URL configured", hint="Run `aps-tui login --base-url https://your-host/api`.")
         self._auth = auth
         self._endpoints = endpoints or Endpoints(base_url)
         self._owns_client = client is None

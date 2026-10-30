@@ -1,4 +1,4 @@
-"""Allow ``python -m agentcore_tui``."""
+"""Allow ``python -m aps_tui``."""
 
 from __future__ import annotations
 

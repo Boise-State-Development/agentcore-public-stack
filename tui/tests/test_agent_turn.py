@@ -1,4 +1,4 @@
-"""Tests for :class:`~agentcore_tui.turn.AgentTurnController`.
+"""Tests for :class:`~aps_tui.turn.AgentTurnController`.
 
 Driven with a fake client and a ``RecordingSink``, so there is no Textual app
 and no socket. The assertions are about the ways an agent turn can end that its
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from agentcore_tui.client.agent_events import (
+from aps_tui.client.agent_events import (
     AgentNotice,
     AgentStatus,
     Artifact,
@@ -37,10 +37,10 @@ from agentcore_tui.client.agent_events import (
     ToolResult,
     ToolUse,
 )
-from agentcore_tui.conversation import ConversationStore
-from agentcore_tui.errors import UpstreamError
-from agentcore_tui.turn import AgentTurnController
-from agentcore_tui.usage import Usage
+from aps_tui.conversation import ConversationStore
+from aps_tui.errors import UpstreamError
+from aps_tui.turn import AgentTurnController
+from aps_tui.usage import Usage
 
 from .conftest import RecordingSink
 

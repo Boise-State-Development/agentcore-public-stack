@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 
-from agentcore_tui.conversation import ConversationStore
-from agentcore_tui.screens import ChatScreen
+from aps_tui.conversation import ConversationStore
+from aps_tui.screens import ChatScreen
 
 from .conftest import BASE_URL, build_app, ok_handler, send
 
@@ -47,7 +47,7 @@ class TestWiring:
 
     async def test_an_empty_store_is_not_replaced(self) -> None:
         """The narrow version of the above, without needing an app at all."""
-        from agentcore_tui.screens import ChatScreen
+        from aps_tui.screens import ChatScreen
 
         from .conftest import make_config
 
@@ -56,7 +56,7 @@ class TestWiring:
         assert ChatScreen(make_config(), store=store).store is store
 
     async def test_the_store_survives_a_screen_being_pushed_over_chat(self) -> None:
-        from agentcore_tui.screens import ModelPicker
+        from aps_tui.screens import ModelPicker
 
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
@@ -75,12 +75,12 @@ class TestNoKeysForFeatures:
     """
 
     def test_the_app_has_no_command_palette(self) -> None:
-        from agentcore_tui.app import ChatApp
+        from aps_tui.app import ChatApp
 
         assert ChatApp.ENABLE_COMMAND_PALETTE is False
 
     def test_the_only_app_key_is_quit(self) -> None:
-        from agentcore_tui.app import ChatApp
+        from aps_tui.app import ChatApp
 
         assert [(b.key, b.action) for b in ChatApp.BINDINGS] == [("ctrl+q", "quit")]
 
@@ -93,10 +93,10 @@ class TestNoKeysForFeatures:
         import inspect
         import pkgutil
 
-        import agentcore_tui
+        import aps_tui
 
         offenders: list[str] = []
-        for module_info in pkgutil.walk_packages(agentcore_tui.__path__, "agentcore_tui."):
+        for module_info in pkgutil.walk_packages(aps_tui.__path__, "aps_tui."):
             module = importlib.import_module(module_info.name)
             for _, obj in inspect.getmembers(module, inspect.isclass):
                 if obj.__module__ != module.__name__:

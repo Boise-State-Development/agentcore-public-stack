@@ -88,7 +88,7 @@ interrupt machinery that already exists for `ask_user_question`.
    `{name, description, inputSchema}` (`apis.shared.client_tools.ClientToolSpec`).
    The TUI sends the same five every turn (`workspace_info`, `run_command`,
    `read_file`, `list_directory`, `write_file`;
-   `tui/src/agentcore_tui/local_tools/specs.py`).
+   `tui/src/aps_tui/local_tools/specs.py`).
    The SPA never sends the field, so nothing below runs for a web turn.
 2. **Build.** `build_client_tools` makes one Strands tool per spec, named
    `local_<name>` so it cannot collide with a registry, gateway or MCP tool. Its
@@ -135,7 +135,7 @@ Same shape for `POST /connectors/{id}/initiate-consent`.
 
 Decided 2026-10-29, modelled on Kiro CLI. Every feature in the terminal is a
 slash command typed into the composer; `/` opens a completion popup; `/help`
-is generated from the same registry (`tui/src/agentcore_tui/commands.py`).
+is generated from the same registry (`tui/src/aps_tui/commands.py`).
 There are no function keys and no command palette, so a parity row below
 maps to a *command*, never a key. The web app's gear icon, sidebar and panels
 become `/model`, `/tools`, `/conversations`, `/attach`, and later `/project`
@@ -237,7 +237,7 @@ that has it defaults to web for clients that omit it.
   calls `get_current_user_from_session`.
 * **`POST /runs/now`** is a complete non-streaming agent turn in one request,
   returning `finalMessage`, `toolTrace`, `usage` and `oauthRequired` — a natural
-  fit for a scriptable `agentcore-tui run "prompt"`.
+  fit for a scriptable `aps-tui run "prompt"`.
 * **Most reads are cheap and pollable.** `/tools/` is backed by a 10-second TTL
   cache. Every `/memory/*` read is a vector search and is *not* cheap; neither is
   `/costs/*`, `/tools/{id}/discover`, or anything that starts an agent turn.

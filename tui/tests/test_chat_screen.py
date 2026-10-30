@@ -16,13 +16,13 @@ import json
 import httpx
 import pytest
 
-from agentcore_tui.app import ChatApp
-from agentcore_tui.client import AgentStreamClient
-from agentcore_tui.client.auth import SessionAuth
-from agentcore_tui.config import Config
-from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.turn import AgentTurnController, TurnController
-from agentcore_tui.widgets import AssistantMessage, Notice, StatusBar, ToolCall, UserMessage
+from aps_tui.app import ChatApp
+from aps_tui.client import AgentStreamClient
+from aps_tui.client.auth import SessionAuth
+from aps_tui.config import Config
+from aps_tui.credentials import CredentialSource
+from aps_tui.turn import AgentTurnController, TurnController
+from aps_tui.widgets import AssistantMessage, Notice, StatusBar, ToolCall, UserMessage
 
 from .conftest import (
     MODEL_B,
@@ -492,7 +492,7 @@ class TestModelPicker:
         the difference between two similarly-named models."""
         from textual.widgets import OptionList
 
-        from agentcore_tui.screens import ModelPicker
+        from aps_tui.screens import ModelPicker
 
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
@@ -517,7 +517,7 @@ class TestModelPicker:
         """
         from textual.widgets import OptionList
 
-        from agentcore_tui.screens.model_picker import ModelChoice, ModelPicker
+        from aps_tui.screens.model_picker import ModelChoice, ModelPicker
 
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
@@ -536,7 +536,7 @@ class TestModelPicker:
     async def test_system_default_sends_neither_field(self) -> None:
         from textual.widgets import OptionList
 
-        from agentcore_tui.screens.model_picker import SYSTEM_DEFAULT, ModelPicker
+        from aps_tui.screens.model_picker import SYSTEM_DEFAULT, ModelPicker
 
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
@@ -557,7 +557,7 @@ class TestModelPicker:
         """A failed `/models` fetch must not leave a dead keybinding."""
         from textual.widgets import OptionList
 
-        from agentcore_tui.screens import ModelPicker
+        from aps_tui.screens import ModelPicker
 
         app = build_app(ok_handler())
         async with app.run_test() as pilot:
@@ -664,7 +664,7 @@ class TestRendering:
             await pilot.pause()
             frame = rendered_text(app)
             assert "Not configured" in frame
-            assert "agentcore-tui login" in frame
+            assert "aps-tui login" in frame
 
 
 @pytest.mark.parametrize(

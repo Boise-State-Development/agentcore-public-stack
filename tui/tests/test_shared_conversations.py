@@ -8,15 +8,15 @@ from typing import Any
 import httpx
 from textual.widgets import OptionList
 
-from agentcore_tui.client.catalog import SharedConversation
-from agentcore_tui.conversation import ProjectBinding
-from agentcore_tui.screens.shared_conversations import SharedConversationList, SharedConversationView
-from agentcore_tui.widgets import AssistantMessage, UserMessage
+from aps_tui.client.catalog import SharedConversation
+from aps_tui.conversation import ProjectBinding
+from aps_tui.screens.shared_conversations import SharedConversationList, SharedConversationView
+from aps_tui.widgets import AssistantMessage, UserMessage
 
 from .conftest import make_config, rendered_text, send, sse_response
 from .test_chat_screen import agent_turn, build_agent_app
 from .test_pickers import Host, catalog_for, project_wire, session_wire
-from agentcore_tui.credentials import CredentialSource
+from aps_tui.credentials import CredentialSource
 
 
 def shared_wire(share_id: str, title: str, *, by: str = "Dana Reyes", mine: bool = False, note: str | None = None) -> dict[str, Any]:

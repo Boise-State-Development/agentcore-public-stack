@@ -5,7 +5,7 @@ display. All diagnostics therefore go to a rotating file.
 
 Defaults:
 
-* Path — ``<user log dir>/agentcore-tui.log``, overridable with
+* Path — ``<user log dir>/aps-tui.log``, overridable with
   ``AGENTCORE_LOG_FILE`` or ``--log-file``.
 * Level — ``INFO``, overridable with ``AGENTCORE_LOG_LEVEL`` or ``--log-level``.
 * Rotation — 1 MB × 3 backups, so a long session cannot fill a disk.
@@ -43,7 +43,7 @@ _active_path: Path | None = None
 
 def default_log_path() -> Path:
     """Platform-correct log file location."""
-    return user_log_path(APP_NAME, appauthor=False, ensure_exists=False) / "agentcore-tui.log"
+    return user_log_path(APP_NAME, appauthor=False, ensure_exists=False) / "aps-tui.log"
 
 
 def log_path(override: Path | str | None = None) -> Path:
@@ -89,7 +89,7 @@ def configure_logging(*, level: str | None = None, path: Path | str | None = Non
     target = log_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    package_logger = logging.getLogger("agentcore_tui")
+    package_logger = logging.getLogger("aps_tui")
     for handler in list(package_logger.handlers):
         package_logger.removeHandler(handler)
         handler.close()

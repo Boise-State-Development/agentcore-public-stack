@@ -6,7 +6,7 @@ fileMatchPattern: ["tui/*", "scripts/local-dev/*"]
 # Terminal Client (TUI)
 
 A cross-platform terminal client for the platform, living in `tui/` as its own
-uv project so it can ship independently (`uvx agentcore-tui`). Built on
+uv project so it can ship independently (`uvx aps-tui`). Built on
 **Textual 8.2.8**, Python 3.11+.
 
 Branch: `feature/tui-client`. Nothing is deployed and nothing is published.
@@ -165,7 +165,7 @@ event, so the widget and the fold are the same object; callers key on
 else the agent carries (citations, artifacts, quota, compaction, interrupts) goes
 through `on_notice`, because all of it is end-of-turn fact rather than live state.
 
-**Dead code removed:** `tui/src/agentcore_tui/auth/` and `tests/test_auth.py`
+**Dead code removed:** `tui/src/aps_tui/auth/` and `tests/test_auth.py`
 (1,314 lines), plus `cognito_domain_url`, `cli_client_id`, `callback_ports`,
 `sso_configured` and `--provider`. `BearerAuth` went too — it existed for a CLI
 that minted its own tokens, which is the design #850 reverted. `AuthProvider` is
@@ -328,7 +328,7 @@ Facts established by research, worth not rediscovering:
 ## Layout
 
 ```
-tui/src/agentcore_tui/
+tui/src/aps_tui/
 ├── cli.py            argparse entry: chat, login [--sso], logout, status
 ├── config.py         CLI flags > env > TOML file > keyring > defaults
 ├── credentials.py    which credential is held (API key / BFF session) + capabilities

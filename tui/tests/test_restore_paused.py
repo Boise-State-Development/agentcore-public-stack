@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from agentcore_tui.client.agent_events import (
+from aps_tui.client.agent_events import (
     BrowserLoginRequired,
     ClientToolCall,
     OAuthRequired,
@@ -24,9 +24,9 @@ from agentcore_tui.client.agent_events import (
     UserQuestionRequired,
     interrupt_from_pending,
 )
-from agentcore_tui.client.catalog import ConversationSummary
-from agentcore_tui.local_tools import ToolExecutor
-from agentcore_tui.widgets.prompts import ClientToolPrompt, OAuthPrompt
+from aps_tui.client.catalog import ConversationSummary
+from aps_tui.local_tools import ToolExecutor
+from aps_tui.widgets.prompts import ClientToolPrompt, OAuthPrompt
 
 from .conftest import rendered_text, sse_response, wait_for_turn
 from .test_agent_turn import answer, build

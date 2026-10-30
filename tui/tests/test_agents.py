@@ -12,12 +12,12 @@ from typing import Any
 
 import httpx
 
-from agentcore_tui.client.agent_events import ErrorEvent
-from agentcore_tui.client.catalog import Agent, ConversationSummary
-from agentcore_tui.conversation import AgentBinding, ConversationStore, ProjectBinding
-from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.screens.agent_picker import AgentPicker
-from agentcore_tui.turn import refusal_hint
+from aps_tui.client.agent_events import ErrorEvent
+from aps_tui.client.catalog import Agent, ConversationSummary
+from aps_tui.conversation import AgentBinding, ConversationStore, ProjectBinding
+from aps_tui.credentials import CredentialSource
+from aps_tui.screens.agent_picker import AgentPicker
+from aps_tui.turn import refusal_hint
 
 from .conftest import make_config, rendered_text, send, sse_response
 from .test_chat_screen import agent_turn, build_agent_app

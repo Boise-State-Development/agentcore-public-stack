@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentcore-tui"
+name = "aps-tui"
 version = "1.31.0"
 requires-python = ">=3.11"
 description = "Terminal client for the AgentCore Public Stack — streaming AI chat in your terminal"
@@ -44,17 +44,17 @@ dev = [
 ]
 
 [project.scripts]
-agentcore-tui = "agentcore_tui.cli:main"
+aps-tui = "aps_tui.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["agentcore_tui*"]
+include = ["aps_tui*"]
 
 [tool.setuptools.package-data]
-agentcore_tui = ["*.tcss"]
+aps_tui = ["*.tcss"]
 
 [tool.black]
 line-length = 150

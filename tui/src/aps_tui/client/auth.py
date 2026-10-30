@@ -81,7 +81,7 @@ class ApiKeyAuth:
 
 class SessionAuth:
     """``Authorization: BFF <sealed>`` — a real BFF session, obtained by the
-    device-authorization flow in :mod:`agentcore_tui.client.device_auth`.
+    device-authorization flow in :mod:`aps_tui.client.device_auth`.
 
     This is the credential that reaches the session-authenticated surface of
     app-api: ``/sessions``, ``/models``, ``/tools``, and the tool-using agent

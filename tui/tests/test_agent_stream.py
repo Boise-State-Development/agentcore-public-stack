@@ -19,11 +19,11 @@ from typing import Any
 import httpx
 import pytest
 
-from agentcore_tui.client.agent_events import Done, TextDelta, ToolResult, ToolUse
-from agentcore_tui.client.agent_stream import AgentStreamClient
-from agentcore_tui.client.auth import ApiKeyAuth, SessionAuth
-from agentcore_tui.config import Config
-from agentcore_tui.errors import (
+from aps_tui.client.agent_events import Done, TextDelta, ToolResult, ToolUse
+from aps_tui.client.agent_stream import AgentStreamClient
+from aps_tui.client.auth import ApiKeyAuth, SessionAuth
+from aps_tui.config import Config
+from aps_tui.errors import (
     AuthError,
     BadRequestError,
     ConfigError,
@@ -423,8 +423,8 @@ class TestLifecycle:
     async def test_the_sealed_session_never_reaches_the_log(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
         import logging
 
-        monkeypatch.setattr(logging.getLogger("agentcore_tui"), "propagate", True)
-        caplog.set_level(logging.DEBUG, logger="agentcore_tui.client.agent_stream")
+        monkeypatch.setattr(logging.getLogger("aps_tui"), "propagate", True)
+        caplog.set_level(logging.DEBUG, logger="aps_tui.client.agent_stream")
         async with build(lambda _r: sse_response(agent_body()), auth=SessionAuth("SEALEDSECRET")) as client:
             await drain(client)
         assert "SEALEDSECRET" not in caplog.text

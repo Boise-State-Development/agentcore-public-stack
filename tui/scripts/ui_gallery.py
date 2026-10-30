@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
 from conftest import build_app, make_config, ok_handler, sample_models, send, sse_response, text_stream  # noqa: E402
 
-from agentcore_tui.client.agent_events import (  # noqa: E402
+from aps_tui.client.agent_events import (  # noqa: E402
     Artifact,
     CitationEvent,
     ClientToolCall,
@@ -39,14 +39,14 @@ from agentcore_tui.client.agent_events import (  # noqa: E402
     UserQuestion,
     UserQuestionRequired,
 )
-from agentcore_tui.client.auth import SessionAuth  # noqa: E402
-from agentcore_tui.client.catalog import CatalogClient, Tool  # noqa: E402
-from agentcore_tui.screens.conversations import ConfirmDelete, ConversationList, RenameConversation  # noqa: E402
-from agentcore_tui.screens.model_picker import ModelPicker  # noqa: E402
-from agentcore_tui.screens.tool_picker import ToolPicker  # noqa: E402
-from agentcore_tui.widgets import Notice, ToolCall  # noqa: E402
-from agentcore_tui.widgets.agent_content import ArtifactCard, Citations, InterruptNotice, QuotaNotice  # noqa: E402
-from agentcore_tui.widgets.prompts import ClientToolPrompt, ToolApprovalPrompt, UserQuestionPrompt  # noqa: E402
+from aps_tui.client.auth import SessionAuth  # noqa: E402
+from aps_tui.client.catalog import CatalogClient, Tool  # noqa: E402
+from aps_tui.screens.conversations import ConfirmDelete, ConversationList, RenameConversation  # noqa: E402
+from aps_tui.screens.model_picker import ModelPicker  # noqa: E402
+from aps_tui.screens.tool_picker import ToolPicker  # noqa: E402
+from aps_tui.widgets import Notice, ToolCall  # noqa: E402
+from aps_tui.widgets.agent_content import ArtifactCard, Citations, InterruptNotice, QuotaNotice  # noqa: E402
+from aps_tui.widgets.prompts import ClientToolPrompt, ToolApprovalPrompt, UserQuestionPrompt  # noqa: E402
 
 SIZE = (110, 34)
 
@@ -161,8 +161,8 @@ async def chat_scenes(out: Path, theme: str | None = None) -> None:
         (out / "05-model-picker.svg").write_text(app.export_screenshot())
         app.pop_screen()
 
-        from agentcore_tui.client.catalog import Project
-        from agentcore_tui.screens.project_picker import ProjectPicker
+        from aps_tui.client.catalog import Project
+        from aps_tui.screens.project_picker import ProjectPicker
 
         def _project(pid: str, name: str, role: str = "owner", status: str = "active", owner: str = "You") -> Project:
             return Project(project_id=pid, name=name, harness_agent_id=f"h-{pid}", role=role, status=status, owner_name=owner, member_count=4)

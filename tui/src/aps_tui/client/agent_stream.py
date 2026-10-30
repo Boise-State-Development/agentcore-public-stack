@@ -1,6 +1,6 @@
 """Transport for ``POST /chat/stream`` — the tool-using agent.
 
-The sibling of :mod:`agentcore_tui.client.converse`, and the same relationship
+The sibling of :mod:`aps_tui.client.converse`, and the same relationship
 its dialect has to ``events``: that module speaks ``/chat/api-converse``, a bare
 Converse wrapper with one LLM call, no tools, no memory and no server-side
 session. This one speaks to the agent, where a single turn may hold several LLM
@@ -16,7 +16,7 @@ the transcript. Sending the transcript would duplicate every previous turn.
 
 **It is session-authenticated.** There is no API-key path to the agent; the only
 credential that works is a real BFF session (see
-:class:`~agentcore_tui.client.auth.SessionAuth`). A caller holding only an API
+:class:`~aps_tui.client.auth.SessionAuth`). A caller holding only an API
 key cannot reach this endpoint at all, which is why the constructor refuses to
 guess an auth provider.
 
@@ -25,7 +25,7 @@ already committed the user's message to memory and may have executed tools, so a
 second attempt double-runs them and corrupts the conversation. Failures are
 surfaced, never papered over — there is deliberately no retry logic here.
 
-Parsing belongs to :mod:`agentcore_tui.client.agent_events`; this module is
+Parsing belongs to :mod:`aps_tui.client.agent_events`; this module is
 transport only.
 """
 
@@ -72,7 +72,7 @@ from .endpoints import Endpoints
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = f"agentcore-tui/{__version__}"
+USER_AGENT = f"aps-tui/{__version__}"
 
 #: Sent as ``client_surface`` on every turn. The server keys its interface
 #: guidance off this, and also its agent cache — see the note in
@@ -122,7 +122,7 @@ class AgentStreamClient:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not config.base_url:
-            raise ConfigError("No base URL configured", hint="Run `agentcore-tui login --base-url https://your-host/api`.")
+            raise ConfigError("No base URL configured", hint="Run `aps-tui login --base-url https://your-host/api`.")
 
         # `auth` is required rather than derived from Config, unlike
         # ApiConverseClient. There is exactly one credential this endpoint
@@ -329,8 +329,8 @@ class AgentStreamClient:
         """Yield parsed events for one agent turn, or for the resume of a paused one.
 
         HTTP-level failures raise the typed errors in
-        :mod:`agentcore_tui.errors`. A failure *inside* the stream arrives as an
-        :class:`~agentcore_tui.client.agent_events.ErrorEvent`, because the
+        :mod:`aps_tui.errors`. A failure *inside* the stream arrives as an
+        :class:`~aps_tui.client.agent_events.ErrorEvent`, because the
         server has already committed a 200 by then.
         """
         target = model_id or self._config.model_id

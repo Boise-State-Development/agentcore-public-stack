@@ -7,11 +7,11 @@ from typing import Any
 
 import httpx
 
-from agentcore_tui.client.catalog import ConversationSummary, Skill
-from agentcore_tui.conversation import AgentBinding
-from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.screens.mode_picker import ModePicker
-from agentcore_tui.screens.skill_picker import SkillPicker
+from aps_tui.client.catalog import ConversationSummary, Skill
+from aps_tui.conversation import AgentBinding
+from aps_tui.credentials import CredentialSource
+from aps_tui.screens.mode_picker import ModePicker
+from aps_tui.screens.skill_picker import SkillPicker
 
 from .conftest import make_config, rendered_text, send, sse_response
 from .test_chat_screen import agent_turn, build_agent_app
@@ -319,7 +319,7 @@ class TestModes:
             assert app.chat._mode is None
 
     async def test_the_picker_returns_false_for_no_mode(self) -> None:
-        from agentcore_tui.client.catalog import SystemPromptOption
+        from aps_tui.client.catalog import SystemPromptOption
 
         app = Host()
         results: list[object] = []

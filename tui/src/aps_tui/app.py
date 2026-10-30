@@ -3,9 +3,9 @@
 Deliberately thin: the quit binding, the screen stack, and startup.
 Everything else belongs to a screen or to the domain layer —
 
-* conversation contents → :mod:`agentcore_tui.conversation`
-* one in-flight turn → :mod:`agentcore_tui.turn`
-* the chat layout and its actions → :mod:`agentcore_tui.screens.chat`
+* conversation contents → :mod:`aps_tui.conversation`
+* one in-flight turn → :mod:`aps_tui.turn`
+* the chat layout and its actions → :mod:`aps_tui.screens.chat`
 
 Keeping this file small is the point. It was 418 lines holding all of the above,
 which is the shape that makes a second screen impossible to add.

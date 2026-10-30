@@ -2,7 +2,7 @@
 
 Every error carries a ``hint`` — the actionable next step shown to the user in
 the TUI's status bar. A raw HTTP status is useless in a terminal; "your API key
-expired, run `agentcore-tui login`" is not.
+expired, run `aps-tui login`" is not.
 
 The status mapping mirrors what ``/chat/api-converse`` actually returns (see
 ``backend/src/apis/app_api/chat/converse_routes.py``):
@@ -56,7 +56,7 @@ class ApiError(AgentCoreTuiError):
 class AuthError(ApiError):
     """401 — the API key was rejected."""
 
-    hint = "Keys expire after 90 days. Mint a new one in Settings -> API Keys, then run `agentcore-tui login`."
+    hint = "Keys expire after 90 days. Mint a new one in Settings -> API Keys, then run `aps-tui login`."
 
     def __init__(self, message: str = "API key was rejected") -> None:
         super().__init__(message, status_code=401)
@@ -136,7 +136,7 @@ class ConnectionFailedError(AgentCoreTuiError):
     def __init__(self, base_url: str, detail: str) -> None:
         super().__init__(
             f"Could not reach {base_url}: {detail}",
-            hint="Check the base URL and your network or VPN. Set it with `agentcore-tui login --base-url ...`.",
+            hint="Check the base URL and your network or VPN. Set it with `aps-tui login --base-url ...`.",
         )
         self.base_url = base_url
 
@@ -157,7 +157,7 @@ class DeviceAuthDeniedError(DeviceAuthError):
     def __init__(self) -> None:
         super().__init__(
             "The sign-in was declined in the browser",
-            hint="Run `agentcore-tui login --sso` again and choose Approve if you meant to sign in.",
+            hint="Run `aps-tui login --sso` again and choose Approve if you meant to sign in.",
         )
 
 
@@ -172,7 +172,7 @@ class DeviceAuthExpiredError(DeviceAuthError):
     def __init__(self, message: str = "The sign-in request expired before it was approved") -> None:
         super().__init__(
             message,
-            hint="Codes are valid for about 10 minutes. Run `agentcore-tui login --sso` and complete the browser step.",
+            hint="Codes are valid for about 10 minutes. Run `aps-tui login --sso` and complete the browser step.",
         )
 
 
@@ -188,5 +188,5 @@ class DeviceAuthRejectedError(DeviceAuthError):
     def __init__(self, message: str = "This sign-in request is no longer valid") -> None:
         super().__init__(
             message,
-            hint="Each code can be used once. Run `agentcore-tui login --sso` to start a new sign-in.",
+            hint="Each code can be used once. Run `aps-tui login --sso` to start a new sign-in.",
         )

@@ -329,7 +329,7 @@ class InterruptNotice(Vertical):
     """The turn is paused waiting on the user.
 
     Both cases are actionable and neither is an error, so they get a distinct
-    look from :class:`~agentcore_tui.widgets.messages.Notice`. The consent URL is
+    look from :class:`~aps_tui.widgets.messages.Notice`. The consent URL is
     rendered unwrapped on its own line so a terminal's click-to-open works and a
     copy-paste picks up the whole thing.
     """

@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 import pytest
 
-from agentcore_tui.client.agent_events import (
+from aps_tui.client.agent_events import (
     BrowserLoginRequired,
     ClientToolCall,
     OAuthRequired,
@@ -24,11 +24,11 @@ from agentcore_tui.client.agent_events import (
     UserQuestion,
     UserQuestionRequired,
 )
-from agentcore_tui.config import Config
-from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.local_tools import ToolExecutor
-from agentcore_tui.widgets import AssistantMessage
-from agentcore_tui.widgets.prompts import ClientToolPrompt, ToolApprovalPrompt, UserQuestionPrompt
+from aps_tui.config import Config
+from aps_tui.credentials import CredentialSource
+from aps_tui.local_tools import ToolExecutor
+from aps_tui.widgets import AssistantMessage
+from aps_tui.widgets.prompts import ClientToolPrompt, ToolApprovalPrompt, UserQuestionPrompt
 
 from .conftest import make_config, rendered_text, sse_body, sse_response, wait_for_turn
 from .test_chat_screen import build_agent_app
@@ -360,7 +360,7 @@ class TestParsing:
     """The dialect parses the three new interrupt events."""
 
     def test_shapes(self) -> None:
-        from agentcore_tui.client.agent_events import parse_agent_event
+        from aps_tui.client.agent_events import parse_agent_event
 
         ct = parse_agent_event("client_tool_call", json.dumps(CLIENT_TOOL))
         assert isinstance(ct, ClientToolCall) and ct.tool_name == "run_command" and ct.arguments["command"] == "echo hi"
@@ -381,7 +381,7 @@ class TestParsing:
         assert isinstance(ta, ToolApprovalRequired)
 
     def test_a_question_without_options_is_dropped(self) -> None:
-        from agentcore_tui.client.agent_events import parse_agent_event
+        from aps_tui.client.agent_events import parse_agent_event
 
         uq = parse_agent_event(
             "user_question_required", json.dumps({"interruptId": "q", "questions": [{"header": "X", "question": "?", "options": []}]})

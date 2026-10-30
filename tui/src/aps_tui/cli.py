@@ -1,6 +1,6 @@
 """Command-line entrypoint.
 
-``agentcore-tui`` with no subcommand launches the chat UI. The subcommands cover
+``aps-tui`` with no subcommand launches the chat UI. The subcommands cover
 credential and diagnostic tasks that do not need a full-screen app.
 """
 
@@ -76,11 +76,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser = argparse.ArgumentParser(
-        prog="agentcore-tui",
+        prog="aps-tui",
         parents=[common],
         description="Terminal client for the AgentCore platform. Run with no arguments to start chatting.",
     )
-    parser.add_argument("--version", action="version", version=f"agentcore-tui {__version__}")
+    parser.add_argument("--version", action="version", version=f"aps-tui {__version__}")
     # Banner flags are on the root parser only: they affect the chat UI, which
     # is the no-subcommand path. A mutually exclusive group means
     # `--banner --no-banner` is rejected rather than silently resolved.
@@ -199,7 +199,7 @@ def _command_login_sso(args: argparse.Namespace) -> int:
         print(f"Signed in as {who}.")
         print(f"Session stored in the OS keyring; valid for about {session.expires_in // 3600} hours of inactivity.")
         print(f"Wrote base URL to {written}.")
-        print("Run `agentcore-tui` to start chatting.")
+        print("Run `aps-tui` to start chatting.")
         return 0
 
     return asyncio.run(run())
@@ -252,7 +252,7 @@ def _command_login_api_key(args: argparse.Namespace) -> int:
     written = write_config_file({"base_url": config.base_url}, args.config_file)
     print(f"Stored key for {config.base_url} in the OS keyring.")
     print(f"Wrote base URL to {written}.")
-    print("Run `agentcore-tui` to start chatting.")
+    print("Run `aps-tui` to start chatting.")
     return 0
 
 
@@ -305,7 +305,7 @@ def _describe_session(base_url: str) -> str:
 
 def _command_status(args: argparse.Namespace) -> int:
     config = resolve_config(base_url=args.base_url, model_id=args.model_id, config_file=args.config_file)
-    print(f"agentcore-tui {__version__}")
+    print(f"aps-tui {__version__}")
     print(f"config file : {args.config_file or config_path()}")
     print(f"base URL    : {config.base_url or 'missing'}")
     print(f"credential  : {config.credential_source.label}")
@@ -365,7 +365,7 @@ def _normalise(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point for the ``agentcore-tui`` console script."""
+    """Entry point for the ``aps-tui`` console script."""
     parser = _build_parser()
     args = _normalise(parser.parse_args(argv))
 

@@ -71,10 +71,10 @@ key revokes the previous one.
 permanently:
 
 ```bash
-uvx --from /path/to/repo/tui agentcore-tui
+uvx --from /path/to/repo/tui aps-tui
 ```
 
-Once this package is published to an index, that becomes `uvx agentcore-tui`.
+Once this package is published to an index, that becomes `uvx aps-tui`.
 
 To install it persistently:
 
@@ -93,7 +93,7 @@ pipx install /path/to/repo/tui
 ```bash
 cd tui
 uv sync --extra dev
-uv run agentcore-tui
+uv run aps-tui
 ```
 
 ### Terminal requirements
@@ -112,7 +112,7 @@ deployment has enabled.
 ### Browser sign-in (recommended)
 
 ```bash
-agentcore-tui login --sso --base-url https://your-host/api
+aps-tui login --sso --base-url https://your-host/api
 ```
 
 Prints a short code and a URL, opens your browser if it can, and waits:
@@ -162,7 +162,7 @@ immediately.
 ### API key
 
 ```bash
-agentcore-tui login --base-url https://your-host/api
+aps-tui login --base-url https://your-host/api
 ```
 
 You will be prompted for the key without echo, so it never lands in your shell
@@ -173,14 +173,14 @@ the previous one.
 Either way:
 
 ```bash
-agentcore-tui
+aps-tui
 ```
 
 Check your setup at any time:
 
 ```bash
-agentcore-tui status     # resolved config, credential state, health probe
-agentcore-tui logout     # clear stored credentials for this deployment
+aps-tui status     # resolved config, credential state, health probe
+aps-tui logout     # clear stored credentials for this deployment
 ```
 
 The base URL is the app-api root. On a CloudFront deployment that usually ends
@@ -267,9 +267,9 @@ Config file location:
 
 | OS | Path |
 |---|---|
-| Linux | `~/.config/agentcore-tui/config.toml` |
-| macOS | `~/Library/Application Support/agentcore-tui/config.toml` |
-| Windows | `%APPDATA%\agentcore-tui\config.toml` |
+| Linux | `~/.config/aps-tui/config.toml` |
+| macOS | `~/Library/Application Support/aps-tui/config.toml` |
+| Windows | `%APPDATA%\aps-tui\config.toml` |
 
 ```toml
 base_url = "https://your-host/api"
@@ -295,7 +295,7 @@ banner = true
 ```
 
 `api_key` in this file is honoured for environments with no keyring, but the
-client warns on startup because it is plain text on disk. `agentcore-tui login`
+client warns on startup because it is plain text on disk. `aps-tui login`
 never writes it there.
 
 ### Projects
@@ -386,9 +386,9 @@ client never rewrites something you hand-edit:
 
 | OS | Path |
 |---|---|
-| Linux | `~/.local/state/agentcore-tui/state.json` |
-| macOS | `~/Library/Application Support/agentcore-tui/state.json` |
-| Windows | `%LOCALAPPDATA%\agentcore-tui\state.json` |
+| Linux | `~/.local/state/aps-tui/state.json` |
+| macOS | `~/Library/Application Support/aps-tui/state.json` |
+| Windows | `%LOCALAPPDATA%\aps-tui\state.json` |
 
 | Control | Effect |
 |---|---|
@@ -405,7 +405,7 @@ read-only home, for instance) the only consequence is that the banner replays.
 ## Troubleshooting
 
 **"API key was rejected" (401).** Keys expire after 90 days, and creating a new
-key revokes the old one. Mint a fresh key and run `agentcore-tui login` again.
+key revokes the old one. Mint a fresh key and run `aps-tui login` again.
 
 **"Your account is not permitted to use ..." (403).** RBAC is enforced
 server-side against your role's model grants. Use `/model` to pick another model,
@@ -415,7 +415,7 @@ or ask an administrator to grant your role access.
 minute per key. This is also what an exhausted cost quota looks like.
 
 **No keyring on this host.** Headless Linux boxes, containers, and CI often have
-no Secret Service. The client degrades rather than crashing — `agentcore-tui
+no Secret Service. The client degrades rather than crashing — `aps-tui
 status` reports the reason. Use `AGENTCORE_API_KEY` there instead.
 
 **A long answer looks like it stopped mid-sentence.** Check the log: if
@@ -437,16 +437,16 @@ A full-screen TUI owns stdout, so all diagnostics go to a rotating file
 
 | OS | Default log path |
 |---|---|
-| Linux | `~/.local/state/agentcore-tui/log/agentcore-tui.log` |
-| macOS | `~/Library/Logs/agentcore-tui/agentcore-tui.log` |
-| Windows | `%LOCALAPPDATA%\agentcore-tui\Logs\agentcore-tui.log` |
+| Linux | `~/.local/state/aps-tui/log/aps-tui.log` |
+| macOS | `~/Library/Logs/aps-tui/aps-tui.log` |
+| Windows | `%LOCALAPPDATA%\aps-tui\Logs\aps-tui.log` |
 
-`agentcore-tui status` prints the active path. Controls:
+`aps-tui status` prints the active path. Controls:
 
 ```bash
-agentcore-tui --log-level DEBUG          # per-event SSE tracing
-agentcore-tui --log-file /tmp/tui.log    # or AGENTCORE_LOG_FILE
-AGENTCORE_LOG_LEVEL=DEBUG agentcore-tui
+aps-tui --log-level DEBUG          # per-event SSE tracing
+aps-tui --log-file /tmp/tui.log    # or AGENTCORE_LOG_FILE
+AGENTCORE_LOG_LEVEL=DEBUG aps-tui
 ```
 
 **Prompts and model output are not logged** unless you opt in with
@@ -457,12 +457,12 @@ A healthy turn at INFO looks like this — enough to tell a server problem from 
 rendering problem without reproducing anything:
 
 ```
-INFO agentcore_tui.app              turn start model=...claude-haiku-4-5... history_turns=0 prompt_chars=86
-INFO agentcore_tui.client.converse  stream start model=... turns=1 prompt_chars=86 max_tokens=4096 url=...
-INFO agentcore_tui.client.converse  message_stop reason=end_turn
-INFO agentcore_tui.client.converse  usage input=24 output=171 cache_read=None cache_write=None
-INFO agentcore_tui.client.converse  stream end model=... elapsed=3.43s text_chars=359 events={'TextDelta': 25, ...}
-INFO agentcore_tui.app              turn rendered chars=359 reasoning=0 viewport_h=17 content_h=29 max_scroll_y=12 scroll_y=12
+INFO aps_tui.app              turn start model=...claude-haiku-4-5... history_turns=0 prompt_chars=86
+INFO aps_tui.client.converse  stream start model=... turns=1 prompt_chars=86 max_tokens=4096 url=...
+INFO aps_tui.client.converse  message_stop reason=end_turn
+INFO aps_tui.client.converse  usage input=24 output=171 cache_read=None cache_write=None
+INFO aps_tui.client.converse  stream end model=... elapsed=3.43s text_chars=359 events={'TextDelta': 25, ...}
+INFO aps_tui.app              turn rendered chars=359 reasoning=0 viewport_h=17 content_h=29 max_scroll_y=12 scroll_y=12
 ```
 
 Reading it:
@@ -604,7 +604,7 @@ For live debugging, Textual's devtools console is useful:
 
 ```bash
 uvx textual-dev console          # in one pane
-uv run textual run --dev agentcore_tui.app:ChatApp    # in another
+uv run textual run --dev aps_tui.app:ChatApp    # in another
 ```
 
 ### Layout
@@ -612,7 +612,7 @@ uv run textual run --dev agentcore_tui.app:ChatApp    # in another
 ```
 tui/
 ├── pyproject.toml               # deps, pins, console script
-└── src/agentcore_tui/
+└── src/aps_tui/
     ├── cli.py                   # argparse entrypoint: chat, login, logout, status
     ├── config.py                # config file + env + keyring resolution
     ├── credentials.py           # which credential is held, and what it can reach

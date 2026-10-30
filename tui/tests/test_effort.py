@@ -7,8 +7,8 @@ from typing import Any
 
 import httpx
 
-from agentcore_tui.client.catalog import EffortControl, Model
-from agentcore_tui.credentials import CredentialSource
+from aps_tui.client.catalog import EffortControl, Model
+from aps_tui.credentials import CredentialSource
 
 from .conftest import make_config, send, sse_response
 from .test_chat_screen import agent_turn, build_agent_app

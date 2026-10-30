@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from agentcore_tui.state import (
+from aps_tui.state import (
     BANNER_VERSION_KEY,
     banner_shown_version,
     read_state,
@@ -33,7 +33,7 @@ class TestStatePath:
         them apart means launching never rewrites a hand-edited file."""
         path = state_path()
         assert path.name == "state.json"
-        assert "agentcore-tui" in path.parts
+        assert "aps-tui" in path.parts
 
 
 class TestReadState:

@@ -6,9 +6,9 @@ all: a conversation list, a history browser and an assistant preview each need
 their own layout while sharing the conversation store.
 
 The screen owns the *view* and nothing else. Conversation contents live in
-:class:`~agentcore_tui.conversation.ConversationStore`; the in-flight turn lives
-in :class:`~agentcore_tui.turn.TurnController`. This class implements
-:class:`~agentcore_tui.turn.TurnSink`, so the controller drives it without
+:class:`~aps_tui.conversation.ConversationStore`; the in-flight turn lives
+in :class:`~aps_tui.turn.TurnController`. This class implements
+:class:`~aps_tui.turn.TurnSink`, so the controller drives it without
 knowing what a widget is.
 """
 
@@ -221,7 +221,7 @@ class ChatScreen(Screen[None]):
 
         if self._config.api_key_from_plaintext_file:
             self.notify(
-                f"Your API key is stored in plain text in {config_path()}. Prefer `agentcore-tui login`, which uses the OS keyring.",
+                f"Your API key is stored in plain text in {config_path()}. Prefer `aps-tui login`, which uses the OS keyring.",
                 title="Key stored in plain text",
                 severity="warning",
                 timeout=12,
@@ -254,11 +254,7 @@ class ChatScreen(Screen[None]):
         await self.transcript.mount(
             Notice(
                 f"Signed in, but chat needs a credential this build can send ({self._config.credential_source.label}).",
-                hint=(
-                    "Run `agentcore-tui login --sso` for a session, or store an API key with "
-                    "`agentcore-tui login`.\n"
-                    f"Config file: {config_path()}"
-                ),
+                hint=("Run `aps-tui login --sso` for a session, or store an API key with " "`aps-tui login`.\n" f"Config file: {config_path()}"),
                 error=True,
             )
         )
@@ -274,7 +270,7 @@ class ChatScreen(Screen[None]):
                 f"Not configured — no {missing}.",
                 hint=(
                     "Create an API key in the web app under Settings -> API Keys, then run:\n"
-                    "  agentcore-tui login --base-url https://your-host/api\n"
+                    "  aps-tui login --base-url https://your-host/api\n"
                     f"Config file: {config_path()}"
                 ),
                 error=True,
@@ -327,7 +323,7 @@ class ChatScreen(Screen[None]):
         if not sealed:
             raise ConfigError(
                 "No stored session",
-                hint=f"Run `agentcore-tui login --sso`. ({unavailable})" if unavailable else "Run `agentcore-tui login --sso`.",
+                hint=f"Run `aps-tui login --sso`. ({unavailable})" if unavailable else "Run `aps-tui login --sso`.",
             )
         return sealed
 
@@ -821,7 +817,7 @@ class ChatScreen(Screen[None]):
     async def _project_command(self, argument: str) -> None:
         """`/project` picks; `/project <name>` binds by name; `off` leaves; `info` describes."""
         if not self._agent_mode:
-            self.notify("Projects need a signed-in session. Run `agentcore-tui login --sso`.", severity="warning", timeout=8)
+            self.notify("Projects need a signed-in session. Run `aps-tui login --sso`.", severity="warning", timeout=8)
             return
         word = argument.strip()
         if word.lower() in {"off", "none", "leave"}:
@@ -914,7 +910,7 @@ class ChatScreen(Screen[None]):
     async def _agent_command(self, argument: str) -> None:
         """`/agent` picks; `/agent <name>` binds by name; `off` stops; `info` describes."""
         if not self._agent_mode:
-            self.notify("Agents need a signed-in session. Run `agentcore-tui login --sso`.", severity="warning", timeout=8)
+            self.notify("Agents need a signed-in session. Run `aps-tui login --sso`.", severity="warning", timeout=8)
             return
         word = argument.strip()
         if word.lower() in {"off", "none", "leave"}:
@@ -1160,7 +1156,7 @@ class ChatScreen(Screen[None]):
 
         turn = self._turn
         if not isinstance(turn, AgentTurnController):
-            self.notify("Attachments need a signed-in session. Run `agentcore-tui login --sso`.", severity="warning", timeout=8)
+            self.notify("Attachments need a signed-in session. Run `aps-tui login --sso`.", severity="warning", timeout=8)
             return
         if not raw_path:
             self.notify("Usage: /attach <path>", severity="warning", timeout=5)
@@ -1355,7 +1351,7 @@ class ChatScreen(Screen[None]):
                 error = f"Could not load models: {exc.message}"
                 logger.warning("model catalogue unavailable: %s", exc)
         else:
-            error = "Sign in with `agentcore-tui login --sso` to see your deployment's models."
+            error = "Sign in with `aps-tui login --sso` to see your deployment's models."
 
         if self._pinned_model and not error:
             error = (
@@ -1375,7 +1371,7 @@ class ChatScreen(Screen[None]):
         """Open the tool picker, then apply and persist the choice."""
         if not self._agent_mode:
             self.notify(
-                "Tools need a signed-in session. Run `agentcore-tui login --sso`.",
+                "Tools need a signed-in session. Run `aps-tui login --sso`.",
                 title="Not available",
                 severity="warning",
                 timeout=8,
@@ -1413,7 +1409,7 @@ class ChatScreen(Screen[None]):
         """Browse the user's conversations and open one. `query` pre-fills the filter."""
         if not self._agent_mode:
             self.notify(
-                "Saved conversations need a signed-in session. Run `agentcore-tui login --sso`.",
+                "Saved conversations need a signed-in session. Run `aps-tui login --sso`.",
                 title="Not available",
                 severity="warning",
                 timeout=8,

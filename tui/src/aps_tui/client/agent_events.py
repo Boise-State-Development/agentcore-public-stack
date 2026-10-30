@@ -1,6 +1,6 @@
 """Typed representation of the ``POST /chat/stream`` agent SSE event stream.
 
-A **sibling** of :mod:`agentcore_tui.client.events`, not an extension of it. That
+A **sibling** of :mod:`aps_tui.client.events`, not an extension of it. That
 module speaks the ``/chat/api-converse`` dialect: eleven events, one LLM call,
 no tools. This one speaks the agent dialect, where a single turn may contain
 several LLM calls, tool invocations, RAG citations, quota notices, compaction
@@ -249,7 +249,7 @@ class ClientToolCall(AgentEvent):
     """The model called one of the tools *this client* declared.
 
     The turn is paused until the client resumes with the result. See
-    :mod:`agentcore_tui.local_tools` for what runs and the approval that
+    :mod:`aps_tui.local_tools` for what runs and the approval that
     precedes it.
     """
 

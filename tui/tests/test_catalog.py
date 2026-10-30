@@ -20,8 +20,8 @@ from typing import Any
 import httpx
 import pytest
 
-from agentcore_tui.client.auth import SessionAuth
-from agentcore_tui.client.catalog import (
+from aps_tui.client.auth import SessionAuth
+from aps_tui.client.catalog import (
     CatalogClient,
     ConversationSummary,
     HistoryMessage,
@@ -30,7 +30,7 @@ from agentcore_tui.client.catalog import (
     SystemPromptOption,
     Tool,
 )
-from agentcore_tui.errors import ApiError, AuthError, BadRequestError, ConfigError, ConnectionFailedError
+from aps_tui.errors import ApiError, AuthError, BadRequestError, ConfigError, ConnectionFailedError
 
 BASE_URL = "https://catalog.invalid/api"
 
@@ -502,7 +502,7 @@ class TestUploadFile:
         assert uploaded.upload_id == "up-1" and uploaded.filename == "notes.md" and uploaded.size_bytes == 5
 
     async def test_unsupported_extension_never_touches_the_network(self, tmp_path) -> None:
-        from agentcore_tui.errors import UploadError
+        from aps_tui.errors import UploadError
 
         seen: list[httpx.Request] = []
         target = tmp_path / "x.exe"
@@ -513,7 +513,7 @@ class TestUploadFile:
         assert seen == []
 
     async def test_storage_rejection_is_an_upload_error(self, tmp_path) -> None:
-        from agentcore_tui.errors import UploadError
+        from aps_tui.errors import UploadError
 
         def respond(request: httpx.Request) -> httpx.Response:
             if request.url.path.endswith("/presign"):

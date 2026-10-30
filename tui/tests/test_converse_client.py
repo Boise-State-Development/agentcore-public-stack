@@ -8,12 +8,12 @@ from collections.abc import AsyncIterator, Callable
 import httpx
 import pytest
 
-from agentcore_tui.client import ApiConverseClient
-from agentcore_tui.conversation import Message
-from agentcore_tui.client.events import ConverseEvent, Done, ErrorEvent, MessageStop, TextDelta, TurnAccumulator
-from agentcore_tui.config import Config
-from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.errors import (
+from aps_tui.client import ApiConverseClient
+from aps_tui.conversation import Message
+from aps_tui.client.events import ConverseEvent, Done, ErrorEvent, MessageStop, TextDelta, TurnAccumulator
+from aps_tui.config import Config
+from aps_tui.credentials import CredentialSource
+from aps_tui.errors import (
     AuthError,
     BadRequestError,
     ConfigError,
@@ -75,7 +75,7 @@ class TestRequestShape:
         assert seen["url"] == f"{BASE_URL}/chat/api-converse"
         assert seen["api_key"] == "test-key"
         assert seen["accept"] == "text/event-stream"
-        assert str(seen["user_agent"]).startswith("agentcore-tui/")
+        assert str(seen["user_agent"]).startswith("aps-tui/")
         body = seen["body"]
         assert isinstance(body, dict)
         assert body["model_id"] == MODEL_ID

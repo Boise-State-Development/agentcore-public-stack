@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from agentcore_tui.local_tools import ApprovalDecision, LocalToolCall, LocalToolResult, ToolExecutor, describe_call, tool_specs
-from agentcore_tui.local_tools.executor import MAX_DIRECTORY_ENTRIES, MAX_FILE_BYTES, MAX_OUTPUT_CHARS
+from aps_tui.local_tools import ApprovalDecision, LocalToolCall, LocalToolResult, ToolExecutor, describe_call, tool_specs
+from aps_tui.local_tools.executor import MAX_DIRECTORY_ENTRIES, MAX_FILE_BYTES, MAX_OUTPUT_CHARS
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell semantics")
 
@@ -250,7 +250,7 @@ class TestWorkspaceInfo:
         assert "Project files: none" in result.output  # markers are looked for in the cwd
 
     async def test_many_changes_are_capped(self, tmp_path: Path) -> None:
-        from agentcore_tui.local_tools.executor import MAX_CHANGED_FILES
+        from aps_tui.local_tools.executor import MAX_CHANGED_FILES
 
         repo = _repo(tmp_path)
         for i in range(MAX_CHANGED_FILES + 5):

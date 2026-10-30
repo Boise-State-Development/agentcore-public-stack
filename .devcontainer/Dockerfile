@@ -146,7 +146,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # of backend/Dockerfile.app-api and backend/Dockerfile.inference-api.
 #
 # Pass 1 — Core developer tooling, build chain, locale, networking utils.
-# Pass 2 — A real OS keyring. `agentcore-tui login --sso` stores a live
+# Pass 2 — A real OS keyring. `aps-tui login --sso` stores a live
 #          platform session, and the alternative to a keyring is a credential
 #          in plaintext on disk or in an environment variable. gnome-keyring
 #          provides the SecretService D-Bus interface that Python's `keyring`

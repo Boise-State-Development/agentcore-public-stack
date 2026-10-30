@@ -7,8 +7,8 @@ chat UI is rebuilt around them.
 
 from __future__ import annotations
 
-from agentcore_tui.conversation import ConversationStore, Message, new_session_id
-from agentcore_tui.usage import Usage
+from aps_tui.conversation import ConversationStore, Message, new_session_id
+from aps_tui.usage import Usage
 
 
 class TestSessionId:

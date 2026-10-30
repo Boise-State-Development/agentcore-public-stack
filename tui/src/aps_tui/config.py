@@ -16,9 +16,9 @@ have no keyring) but the loader flags it so the UI can warn.
 Config file locations, courtesy of ``platformdirs``:
 
 ========= ==================================================================
-Linux     ``~/.config/agentcore-tui/config.toml``
-macOS     ``~/Library/Application Support/agentcore-tui/config.toml``
-Windows   ``%APPDATA%\\agentcore-tui\\config.toml``
+Linux     ``~/.config/aps-tui/config.toml``
+macOS     ``~/Library/Application Support/aps-tui/config.toml``
+Windows   ``%APPDATA%\\aps-tui\\config.toml``
 ========= ==================================================================
 """
 
@@ -157,7 +157,7 @@ class Config:
 # Keyring access
 # ---------------------------------------------------------------------------
 #
-# Thin wrappers over :mod:`agentcore_tui.keyring_store`, which owns the
+# Thin wrappers over :mod:`aps_tui.keyring_store`, which owns the
 # degradation behaviour shared with the SSO token store.
 
 
@@ -242,7 +242,7 @@ def write_config_file(settings: dict[str, object], path: Path | None = None) -> 
     merged = {**read_config_file(target), **settings}
     merged.pop("api_key", None)
 
-    lines = ["# agentcore-tui configuration", "# Managed by `agentcore-tui login`; safe to hand-edit.", ""]
+    lines = ["# aps-tui configuration", "# Managed by `aps-tui login`; safe to hand-edit.", ""]
     for key, value in sorted(merged.items()):
         if isinstance(value, bool):
             lines.append(f"{key} = {str(value).lower()}")

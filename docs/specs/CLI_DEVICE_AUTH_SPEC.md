@@ -183,7 +183,7 @@ blocked the previous approach in a containerised dev environment.
 
 **User-visible consequence of the session-ownership choice:** signing out in the
 browser does **not** sign out the CLI, and vice versa. This matches `gh` and
-`aws`. `agentcore-tui logout` deletes the CLI session server-side.
+`aws`. `aps-tui logout` deletes the CLI session server-side.
 
 ### The `user_code` is low-entropy on purpose
 
@@ -257,7 +257,7 @@ existing code was explicitly waiting for them — `turn.py`'s docstring says its
 handler registry "has to grow to roughly thirty-five when the agent stream
 lands".
 
-**`tui/src/agentcore_tui/client/agent_events.py`** — the agent-stream dialect, a
+**`tui/src/aps_tui/client/agent_events.py`** — the agent-stream dialect, a
 *sibling* of `client/events.py` rather than an extension of it. Typed events for
 the 23 the SPA handles plus `metadata_summary`, `tool_error` and `tool_progress`,
 `parse_agent_event()`, and `AgentTurnAccumulator` (with `ToolCallRecord`) folding
@@ -266,7 +266,7 @@ and interrupts. 87 tests, no network. Wire shapes were taken from the SPA's
 `stream-parser-types.ts` + `session/services/models/message.model.ts`, the
 backend's `apis/shared/harness/sse.py`, and the SSE table in `CLAUDE.MD`.
 
-**`tui/src/agentcore_tui/widgets/agent_content.py`** — `ToolCall`, `Citations`,
+**`tui/src/aps_tui/widgets/agent_content.py`** — `ToolCall`, `Citations`,
 `QuotaNotice`, `CompactionNotice`, `ArtifactCard`, `InterruptNotice`, plus a new
 "agent-stream content" section in `app.tcss`. 41 tests, mounted into the real
 transcript through `run_test` so the stylesheet is parsed and exercised.
@@ -378,7 +378,7 @@ to sign in, and it is the place we sign in most.
 
 Verified in a clean container built from the changed image: `fail.Keyring` before
 init, `SecretService.Keyring` after, a session written in one `docker exec` and
-read in another, `agentcore-tui status` reporting `credential  : signed in`, the
+read in another, `aps-tui status` reporting `credential  : signed in`, the
 value absent from the keyring file on disk, and the session still readable after
 a `docker restart` when `~/.local/share/keyrings` is a named volume.
 

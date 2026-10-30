@@ -12,14 +12,14 @@ import re
 
 import pytest
 
-from agentcore_tui.commands import COMMANDS, CommandRegistry, SlashCommand
-from agentcore_tui.screens.chat import ChatScreen
-from agentcore_tui.widgets.messages import Notice
+from aps_tui.commands import COMMANDS, CommandRegistry, SlashCommand
+from aps_tui.screens.chat import ChatScreen
+from aps_tui.widgets.messages import Notice
 
 from .conftest import build_app, ok_handler, rendered_text, send
 from .conftest import make_config, sse_response
 from .test_chat_screen import agent_turn, build_agent_app
-from agentcore_tui.credentials import CredentialSource
+from aps_tui.credentials import CredentialSource
 
 
 def agent_app(*, local_tools: bool = True):  # type: ignore[no-untyped-def]

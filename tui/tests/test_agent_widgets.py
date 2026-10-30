@@ -12,7 +12,7 @@ on rendered text alone would not catch it.
 
 from __future__ import annotations
 
-from agentcore_tui.client.agent_events import (
+from aps_tui.client.agent_events import (
     Artifact,
     CitationEvent,
     OAuthRequired,
@@ -22,7 +22,7 @@ from agentcore_tui.client.agent_events import (
     ToolApprovalRequired,
     ToolCallRecord,
 )
-from agentcore_tui.widgets import (
+from aps_tui.widgets import (
     ArtifactCard,
     Citations,
     CompactionNotice,

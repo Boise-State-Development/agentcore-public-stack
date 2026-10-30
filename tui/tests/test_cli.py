@@ -7,10 +7,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agentcore_tui import cli
-from agentcore_tui.client.device_auth import DeviceAuthorization, DeviceSession
-from agentcore_tui.config import ENV_API_KEY, ENV_BASE_URL, read_config_file
-from agentcore_tui.errors import ConfigError, DeviceAuthDeniedError
+from aps_tui import cli
+from aps_tui.client.device_auth import DeviceAuthorization, DeviceSession
+from aps_tui.config import ENV_API_KEY, ENV_BASE_URL, read_config_file
+from aps_tui.errors import ConfigError, DeviceAuthDeniedError
 
 BASE_URL = "https://example.test/api"
 
@@ -127,7 +127,7 @@ class FakeDeviceAuthClient:
     """Stands in for the real device-flow client.
 
     Constructed by ``cli`` rather than injected, so tests replace the class in
-    :mod:`agentcore_tui.client.device_auth` and record what it was asked to do.
+    :mod:`aps_tui.client.device_auth` and record what it was asked to do.
     """
 
     #: Set by each test: either a DeviceSession, or an exception to raise.
@@ -166,7 +166,7 @@ class FakeDeviceAuthClient:
 @pytest.fixture
 def device_flow(monkeypatch: pytest.MonkeyPatch) -> type[FakeDeviceAuthClient]:
     """Replace the device-flow client, and keep the keyring out of it."""
-    from agentcore_tui.client import device_auth
+    from aps_tui.client import device_auth
 
     FakeDeviceAuthClient.instances = []
     FakeDeviceAuthClient.outcome = DeviceSession(

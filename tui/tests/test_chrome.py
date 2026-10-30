@@ -8,10 +8,10 @@ frame.
 
 from __future__ import annotations
 
-from agentcore_tui.client.agent_events import ToolCallRecord
-from agentcore_tui.usage import Usage
-from agentcore_tui.widgets import Notice, StatusBar, ToolCall, short_model
-from agentcore_tui.widgets.agent_content import SUMMARY_CHARS, summarize_arguments
+from aps_tui.client.agent_events import ToolCallRecord
+from aps_tui.usage import Usage
+from aps_tui.widgets import Notice, StatusBar, ToolCall, short_model
+from aps_tui.widgets.agent_content import SUMMARY_CHARS, summarize_arguments
 
 from .conftest import build_app, ok_handler, rendered_text, send
 
@@ -225,7 +225,7 @@ class TestSlashCommands:
 
 class TestGauges:
     def test_elapsed_formatting(self) -> None:
-        from agentcore_tui.widgets.status import format_elapsed
+        from aps_tui.widgets.status import format_elapsed
 
         assert format_elapsed(4.26) == "4.3s"
         assert format_elapsed(65) == "1m 05s"
@@ -276,8 +276,8 @@ class TestAttach:
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             # The catalog client shares the handler through the same mock transport.
-            from agentcore_tui.client.auth import SessionAuth
-            from agentcore_tui.client.catalog import CatalogClient
+            from aps_tui.client.auth import SessionAuth
+            from aps_tui.client.catalog import CatalogClient
 
             app.chat._catalog = CatalogClient(
                 app.chat.config.base_url, auth=SessionAuth("s"), client=httpx.AsyncClient(transport=httpx.MockTransport(handler))

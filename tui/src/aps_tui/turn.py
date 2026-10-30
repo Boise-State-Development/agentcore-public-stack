@@ -153,7 +153,7 @@ class BaseTurnController(ABC, Generic[AccumulatorT]):
     """Runs one turn at a time against a conversation.
 
     Owns only in-flight state. Everything that outlives a turn belongs to the
-    :class:`~agentcore_tui.conversation.ConversationStore`.
+    :class:`~aps_tui.conversation.ConversationStore`.
     """
 
     def __init__(

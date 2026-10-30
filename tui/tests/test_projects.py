@@ -16,13 +16,13 @@ import httpx
 from textual.app import App
 from textual.widgets import OptionList
 
-from agentcore_tui.client.agent_events import ErrorEvent
-from agentcore_tui.client.catalog import ConversationSummary, Project
-from agentcore_tui.conversation import ConversationStore, ProjectBinding
-from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.screens.conversations import ConversationList, ConversationRow
-from agentcore_tui.screens.project_picker import ProjectPicker
-from agentcore_tui.turn import refusal_hint
+from aps_tui.client.agent_events import ErrorEvent
+from aps_tui.client.catalog import ConversationSummary, Project
+from aps_tui.conversation import ConversationStore, ProjectBinding
+from aps_tui.credentials import CredentialSource
+from aps_tui.screens.conversations import ConversationList, ConversationRow
+from aps_tui.screens.project_picker import ProjectPicker
+from aps_tui.turn import refusal_hint
 
 from .conftest import make_config, rendered_text, send, sse_response
 from .test_chat_screen import agent_turn, build_agent_app

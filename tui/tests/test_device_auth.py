@@ -23,7 +23,7 @@ from typing import Any
 import httpx
 import pytest
 
-from agentcore_tui.client.device_auth import (
+from aps_tui.client.device_auth import (
     MAX_INTERVAL_SECONDS,
     MIN_INTERVAL_SECONDS,
     SLOW_DOWN_INCREMENT_SECONDS,
@@ -31,7 +31,7 @@ from agentcore_tui.client.device_auth import (
     DeviceAuthorization,
     DeviceSession,
 )
-from agentcore_tui.errors import (
+from aps_tui.errors import (
     ConnectionFailedError,
     DeviceAuthDeniedError,
     DeviceAuthError,
@@ -395,8 +395,8 @@ class TestSecrets:
         # handler lives on the root logger, so without re-enabling propagation
         # this test passes vacuously the moment any other test has configured
         # logging — which is exactly how it first "passed".
-        monkeypatch.setattr(logging.getLogger("agentcore_tui"), "propagate", True)
-        caplog.set_level(logging.DEBUG, logger="agentcore_tui.client.device_auth")
+        monkeypatch.setattr(logging.getLogger("aps_tui"), "propagate", True)
+        caplog.set_level(logging.DEBUG, logger="aps_tui.client.device_auth")
 
         client, _ = make_client([granted()])
         async with client:

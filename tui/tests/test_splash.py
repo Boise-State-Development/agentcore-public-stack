@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from agentcore_tui import __version__, state
-from agentcore_tui.app import ChatApp
-from agentcore_tui.config import Config
-from agentcore_tui.screens import Splash
-from agentcore_tui.screens.splash import (
+from aps_tui import __version__, state
+from aps_tui.app import ChatApp
+from aps_tui.config import Config
+from aps_tui.screens import Splash
+from aps_tui.screens.splash import (
     CROSS_DURATION,
     HINT_DELAY,
     HINT_FADE,
@@ -30,7 +30,7 @@ from agentcore_tui.screens.splash import (
     WORDMARK_DELAY,
     WORDMARK_FADE,
 )
-from agentcore_tui.widgets import Composer
+from aps_tui.widgets import Composer
 
 from .conftest import build_app, make_config, ok_handler, rendered_text
 

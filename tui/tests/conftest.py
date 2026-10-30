@@ -10,7 +10,7 @@ current one:
   ``/chat/api-converse`` and ``/sessions`` in the same transport. A single
   handler callable answers every request identically, which stops working the
   moment a screen fetches something in the background.
-* :class:`RecordingSink` implements :class:`~agentcore_tui.turn.TurnSink`, so
+* :class:`RecordingSink` implements :class:`~aps_tui.turn.TurnSink`, so
   the turn lifecycle can be exercised with no Textual app at all.
 """
 
@@ -28,13 +28,13 @@ import httpx
 import pytest
 from textual.pilot import Pilot
 
-from agentcore_tui.app import ChatApp
-from agentcore_tui.client import ApiConverseClient
-from agentcore_tui.config import Config
-from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.client.agent_events import ToolCallRecord
-from agentcore_tui.client.catalog import Model
-from agentcore_tui.usage import Usage
+from aps_tui.app import ChatApp
+from aps_tui.client import ApiConverseClient
+from aps_tui.config import Config
+from aps_tui.credentials import CredentialSource
+from aps_tui.client.agent_events import ToolCallRecord
+from aps_tui.client.catalog import Model
+from aps_tui.usage import Usage
 
 BASE_URL = "https://example.test/api"
 MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -133,7 +133,7 @@ def converse_routes(body: bytes) -> RouteTable:
 
 @dataclass
 class RecordingSink:
-    """A :class:`~agentcore_tui.turn.TurnSink` that records instead of rendering."""
+    """A :class:`~aps_tui.turn.TurnSink` that records instead of rendering."""
 
     text: str = ""
     reasoning: str = ""

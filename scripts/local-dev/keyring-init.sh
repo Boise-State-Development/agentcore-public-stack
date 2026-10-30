@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Bring up the container's OS keyring, so `agentcore-tui login --sso` has an
+# Bring up the container's OS keyring, so `aps-tui login --sso` has an
 # encrypted place to keep a live platform session.
 #
 # Why this exists at all: a container has no login session, so it has no D-Bus
@@ -161,7 +161,7 @@ sleep 1
 if keyring_works; then
     log ""
     log "Keyring is up. Now sign in:"
-    log "  docker exec -it agentcore-dev bash -lc 'cd /workspace/tui && uv run agentcore-tui login --sso --base-url <your-host>/api'"
+    log "  docker exec -it agentcore-dev bash -lc 'cd /workspace/tui && uv run aps-tui login --sso --base-url <your-host>/api'"
 else
     log ""
     log "error: the keyring did not come up."

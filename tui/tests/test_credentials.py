@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from agentcore_tui.client.auth import ApiKeyAuth, AuthProvider, NoAuth, SessionAuth
-from agentcore_tui.client.endpoints import Endpoints
-from agentcore_tui.credentials import CAPABILITIES, Capability, CredentialSource, resolve_source
+from aps_tui.client.auth import ApiKeyAuth, AuthProvider, NoAuth, SessionAuth
+from aps_tui.client.endpoints import Endpoints
+from aps_tui.credentials import CAPABILITIES, Capability, CredentialSource, resolve_source
 
 
 class TestResolution:

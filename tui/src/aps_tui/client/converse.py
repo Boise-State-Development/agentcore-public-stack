@@ -1,8 +1,8 @@
 """HTTP client for the API-key authenticated ``/chat/api-converse`` endpoint.
 
-Transport only: SSE frames are handed to :mod:`agentcore_tui.client.events` for
+Transport only: SSE frames are handed to :mod:`aps_tui.client.events` for
 parsing, and HTTP failures are translated into the typed errors in
-:mod:`agentcore_tui.errors` so the UI layer never inspects a status code.
+:mod:`aps_tui.errors` so the UI layer never inspects a status code.
 
 The client is constructor-injectable with an ``httpx.AsyncClient`` so tests can
 drive it with ``httpx.MockTransport`` and never open a socket.
@@ -39,7 +39,7 @@ from .events import ConverseEvent, ErrorEvent, Metadata, MessageStop, TextDelta,
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = f"agentcore-tui/{__version__}"
+USER_AGENT = f"aps-tui/{__version__}"
 
 #: Event names this client understands. Anything else is logged once as a
 #: warning — a newer server adding events should be visible, not silent.
@@ -63,7 +63,7 @@ _KNOWN_EVENT_NAMES = frozenset(
 def message_payloads(messages: Sequence[Message]) -> list[dict[str, str]]:
     """Domain messages in the shape this endpoint expects.
 
-    Here rather than on :class:`~agentcore_tui.conversation.Message` so the
+    Here rather than on :class:`~aps_tui.conversation.Message` so the
     domain type carries no endpoint's wire format. A second endpoint with a
     different message shape gets its own mapping beside its own client.
     """
@@ -126,10 +126,10 @@ class ApiConverseClient:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not config.base_url:
-            raise ConfigError("No base URL configured", hint="Run `agentcore-tui login --base-url https://your-host/api`.")
+            raise ConfigError("No base URL configured", hint="Run `aps-tui login --base-url https://your-host/api`.")
         if auth is None:
             if not config.api_key:
-                raise ConfigError("No API key configured", hint="Run `agentcore-tui login` to store a key.")
+                raise ConfigError("No API key configured", hint="Run `aps-tui login` to store a key.")
             auth = ApiKeyAuth(config.api_key)
 
         self._config = config
@@ -208,9 +208,9 @@ class ApiConverseClient:
     ) -> AsyncIterator[ConverseEvent]:
         """Yield parsed events for one turn.
 
-        Raises the typed errors from :mod:`agentcore_tui.errors` for HTTP-level
+        Raises the typed errors from :mod:`aps_tui.errors` for HTTP-level
         failures. A failure *inside* the stream arrives as an
-        :class:`~agentcore_tui.client.events.ErrorEvent` instead, because the
+        :class:`~aps_tui.client.events.ErrorEvent` instead, because the
         server has already committed a 200 by then.
         """
         target = model_id or self._config.model_id

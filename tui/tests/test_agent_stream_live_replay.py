@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from agentcore_tui.client.agent_events import (
+from aps_tui.client.agent_events import (
     AgentTurnAccumulator,
     IgnoredEvent,
     UnknownEvent,

@@ -54,7 +54,7 @@ from .endpoints import Endpoints
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = f"agentcore-tui/{__version__}"
+USER_AGENT = f"aps-tui/{__version__}"
 
 #: Fallbacks for a server that omits them. The real server always sends both.
 DEFAULT_INTERVAL_SECONDS = 5
@@ -297,7 +297,7 @@ class DeviceAuthClient:
                 # report a timeout instead of what the server actually said.
                 raise DeviceAuthError(
                     _detail(response) or f"The sign-in failed ({error or f'HTTP {response.status_code}'})",
-                    hint="Run `agentcore-tui login --sso` to start a new sign-in.",
+                    hint="Run `aps-tui login --sso` to start a new sign-in.",
                 )
 
     # -- transport -----------------------------------------------------------

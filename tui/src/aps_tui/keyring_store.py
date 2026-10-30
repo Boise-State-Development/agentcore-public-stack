@@ -9,8 +9,8 @@ Two secrets are stored under two *services* rather than two accounts, so
 revoking one cannot disturb the other:
 
 ============================ =========================================
-``agentcore-tui``            API keys
-``agentcore-tui-session``    Sealed BFF sessions (CLI device auth)
+``aps-tui``            API keys
+``aps-tui-session``    Sealed BFF sessions (CLI device auth)
 ============================ =========================================
 
 Every operation degrades rather than raising on read. ``keyring`` raises on
@@ -28,7 +28,7 @@ from __future__ import annotations
 from .errors import ConfigError
 
 #: Application identity, used for keyring services and every platformdirs path.
-APP_NAME = "agentcore-tui"
+APP_NAME = "aps-tui"
 
 #: Keyring service under which API keys are stored.
 API_KEY_SERVICE = APP_NAME

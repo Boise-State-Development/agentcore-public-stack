@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agentcore_tui import config as config_module
-from agentcore_tui import keyring_store
-from agentcore_tui.config import (
+from aps_tui import config as config_module
+from aps_tui import keyring_store
+from aps_tui.config import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODELS,
     ENV_API_KEY,
@@ -19,8 +19,8 @@ from agentcore_tui.config import (
     resolve_config,
     write_config_file,
 )
-from agentcore_tui.credentials import Capability, CredentialSource
-from agentcore_tui.errors import ConfigError
+from aps_tui.credentials import Capability, CredentialSource
+from aps_tui.errors import ConfigError
 
 MODEL_A = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 MODEL_B = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"

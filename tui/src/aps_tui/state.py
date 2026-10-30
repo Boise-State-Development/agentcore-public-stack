@@ -13,9 +13,9 @@ the startup banner is shown again.
 Location, courtesy of ``platformdirs``:
 
 ========= ==============================================================
-Linux     ``~/.local/state/agentcore-tui/state.json``
-macOS     ``~/Library/Application Support/agentcore-tui/state.json``
-Windows   ``%LOCALAPPDATA%\\agentcore-tui\\state.json``
+Linux     ``~/.local/state/aps-tui/state.json``
+macOS     ``~/Library/Application Support/aps-tui/state.json``
+Windows   ``%LOCALAPPDATA%\\aps-tui\\state.json``
 ========= ==============================================================
 """
 

@@ -10,11 +10,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from agentcore_tui.client import ApiConverseClient
-from agentcore_tui.conversation import ConversationStore
-from agentcore_tui.errors import AuthError
-from agentcore_tui.turn import TurnController
-from agentcore_tui.usage import Usage
+from aps_tui.client import ApiConverseClient
+from aps_tui.conversation import ConversationStore
+from aps_tui.errors import AuthError
+from aps_tui.turn import TurnController
+from aps_tui.usage import Usage
 
 from .conftest import Handler, RecordingSink, make_config, sse_body, sse_response, text_stream
 

@@ -130,7 +130,7 @@ Today A2A is **client-only** — `A2AAgentConfig` (`apis/shared/tools/models.py`
 
 - Backend route handlers define the API shape; frontend TypeScript interfaces must match
 - Breaking changes to an endpoint require updating both packages in the same PR
-- SSE event types are part of the contract — changes must be coordinated. **Two clients consume it:** the Angular SPA and the terminal client in `tui/` (`agentcore_tui/client/agent_events.py` is its parser). A new event is harmless to the TUI (it logs unknown names once per turn) but a renamed or reshaped one breaks it, so check both when changing the table
+- SSE event types are part of the contract — changes must be coordinated. **Two clients consume it:** the Angular SPA and the terminal client in `tui/` (`aps_tui/client/agent_events.py` is its parser). A new event is harmless to the TUI (it logs unknown names once per turn) but a renamed or reshaped one breaks it, so check both when changing the table
 - Two request fields exist only for the terminal client and must stay optional with web-identical defaults: `client_surface` (prompt guidance for the surface; `"web"`/absent is byte-for-byte the default prompt) and `client_tools` (tools the *client* executes via the `client_tool_call` interrupt; `apis.shared.client_tools`). `docs/specs/TUI_WEB_PARITY_SPEC.md` is the contract for both
 - `app_api`, `inference_api`, and `agents/` are independent consumers of `apis.shared`. They must never import from each other — only from `apis.shared`. If something is needed by more than one of them, move it to `apis.shared`. This is enforced by `tests/architecture/test_import_boundaries.py`.
 

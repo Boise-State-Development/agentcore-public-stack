@@ -6,11 +6,11 @@ from pathlib import Path
 
 import httpx
 
-from agentcore_tui.client.catalog import ArtifactVersion
-from agentcore_tui.credentials import CredentialSource
-from agentcore_tui.screens.artifact_picker import ArtifactPicker
-from agentcore_tui.screens.chat import _free_path
-from agentcore_tui.widgets.messages import Notice
+from aps_tui.client.catalog import ArtifactVersion
+from aps_tui.credentials import CredentialSource
+from aps_tui.screens.artifact_picker import ArtifactPicker
+from aps_tui.screens.chat import _free_path
+from aps_tui.widgets.messages import Notice
 
 from .conftest import make_config, rendered_text, send, sse_response
 from .test_chat_screen import agent_turn, build_agent_app

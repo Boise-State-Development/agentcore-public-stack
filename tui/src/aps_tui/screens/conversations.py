@@ -2,7 +2,7 @@
 
 A screen rather than a permanent pane because a terminal has less room than a
 browser and the transcript deserves the width. It shares the App's
-:class:`~agentcore_tui.conversation.ConversationStore`, so opening a conversation
+:class:`~aps_tui.conversation.ConversationStore`, so opening a conversation
 replaces what the chat screen is showing rather than handing it a private copy.
 
 Grouping matches the web app — Today / Yesterday / Last 7 days / Last 30 days /

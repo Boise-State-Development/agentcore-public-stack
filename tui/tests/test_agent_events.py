@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from agentcore_tui.client.agent_events import (
+from aps_tui.client.agent_events import (
     LIFECYCLE_EVENT_NAMES,
     PASSTHROUGH_EVENT_NAMES,
     TOOL_RESULT_PREVIEW_CHARS,
@@ -489,7 +489,7 @@ class TestToolFolding:
 class TestUsageFolding:
     def test_summary_wins_over_per_call_metadata(self) -> None:
         """`metadata` fires per LLM call; only the summary is a turn total."""
-        from agentcore_tui.usage import Usage
+        from aps_tui.usage import Usage
 
         acc = fold(
             Metadata(usage=Usage(input_tokens=10, output_tokens=5)),
@@ -499,7 +499,7 @@ class TestUsageFolding:
         assert acc.usage == Usage(input_tokens=30, output_tokens=13)
 
     def test_summary_wins_regardless_of_arrival_order(self) -> None:
-        from agentcore_tui.usage import Usage
+        from aps_tui.usage import Usage
 
         acc = fold(
             MetadataSummary(usage=Usage(input_tokens=30, output_tokens=13)),
@@ -508,7 +508,7 @@ class TestUsageFolding:
         assert acc.usage.input_tokens == 30
 
     def test_last_call_metadata_is_the_fallback(self) -> None:
-        from agentcore_tui.usage import Usage
+        from aps_tui.usage import Usage
 
         acc = fold(
             Metadata(usage=Usage(input_tokens=10, output_tokens=5)),
@@ -517,7 +517,7 @@ class TestUsageFolding:
         assert acc.usage == Usage(input_tokens=20, output_tokens=8)
 
     def test_context_window_is_retained(self) -> None:
-        from agentcore_tui.usage import Usage
+        from aps_tui.usage import Usage
 
         acc = fold(Metadata(usage=Usage(), context_window=200_000), Metadata(usage=Usage()))
         assert acc.context_window == 200_000
@@ -616,7 +616,7 @@ class TestRealisticToolTurn:
     """An end-to-end fold of the shape a real tool-using turn takes."""
 
     def test_full_turn(self) -> None:
-        from agentcore_tui.usage import Usage
+        from aps_tui.usage import Usage
 
         acc = fold(
             MessageStart(),

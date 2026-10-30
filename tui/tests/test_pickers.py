@@ -16,9 +16,9 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Input, SelectionList
 
-from agentcore_tui.client.auth import SessionAuth
-from agentcore_tui.client.catalog import CatalogClient, ConversationSummary, HistoryMessage, StoredAttachment, StoredToolUse, Tool
-from agentcore_tui.screens.conversations import (
+from aps_tui.client.auth import SessionAuth
+from aps_tui.client.catalog import CatalogClient, ConversationSummary, HistoryMessage, StoredAttachment, StoredToolUse, Tool
+from aps_tui.screens.conversations import (
     GROUP_ORDER,
     ConfirmDelete,
     ConversationList,
@@ -26,7 +26,7 @@ from agentcore_tui.screens.conversations import (
     RenameConversation,
     group_for,
 )
-from agentcore_tui.screens.tool_picker import ToolPicker
+from aps_tui.screens.tool_picker import ToolPicker
 
 from .conftest import rendered_text
 
@@ -67,7 +67,7 @@ def status_text(screen: ConversationList) -> str:
 class Host(App[None]):
     """A bare App to push a screen onto."""
 
-    CSS_PATH = "../src/agentcore_tui/app.tcss"
+    CSS_PATH = "../src/aps_tui/app.tcss"
 
     def compose(self) -> ComposeResult:
         yield from ()
@@ -577,8 +577,8 @@ class TestStoredToolBlocks:
         assert m5.other_blocks == ("video",)
 
     async def test_adopting_renders_tool_calls_and_attachments(self) -> None:
-        from agentcore_tui.widgets import ToolCall
-        from agentcore_tui.widgets.messages import Notice
+        from aps_tui.widgets import ToolCall
+        from aps_tui.widgets.messages import Notice
 
         from .conftest import rendered_text, sse_response
         from .test_chat_screen import agent_turn, build_agent_app
