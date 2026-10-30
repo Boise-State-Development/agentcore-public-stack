@@ -651,3 +651,118 @@ async def test_a_stop_while_a_retry_is_pending_projects_onto_the_right_call(monk
     assert [row["messageId"] for row in rows] == [5, 7]
     assert _hook_indices(rows) == [0, 2]
     assert sum(recorded.summary_costs()) == pytest.approx(CALL_COST + PROJECTED_COST)
+
+
+# ---------------------------------------------------------------------------
+# Calls that never announce themselves. Bedrock ConverseStream sends no
+# `messageStart` for an EMPTY response, only `messageStop` + `metadata`
+# (reproduced with Haiku 4.5: ~2 output tokens). The coordinator opened a
+# slot only on `message_start`, so the empty call's usage overwrote the
+# previous call's: that call went unbilled and the empty call's row carried
+# its message id (dev, eval session with 3 rows for 4 calls, 2026-10-30).
+# ---------------------------------------------------------------------------
+
+EMPTY_CALL_USAGE = {"inputTokens": 6141, "outputTokens": 2, "totalTokens": 6143}
+EMPTY_CALL_COST = 0.006151  # 6,141 in at $1/M + 2 out at $5/M
+
+
+def _empty_call() -> List[Dict[str, Any]]:
+    return [
+        {"event": {"messageStop": {"stopReason": "end_turn"}}},
+        {"event": {"metadata": {"usage": dict(EMPTY_CALL_USAGE), "metrics": {"latencyMs": 300}}}},
+    ]
+
+
+def _row_usage(row: Dict[str, Any]) -> Dict[str, int]:
+    usage = row["tokenUsage"]
+    return {key: int(usage[key]) for key in ("inputTokens", "outputTokens")}
+
+
+@pytest.mark.asyncio
+async def test_an_empty_call_after_a_tool_gets_its_own_row(monkeypatch):
+    """call → tool → empty call: two calls, two rows, each its own usage."""
+    recorded = await _run([*_completed_call("looking it up"), *_empty_call()], monkeypatch)
+
+    rows = recorded.cost_rows
+    assert [row["messageId"] for row in rows] == [5, 7]
+    assert [_row_usage(row) for row in rows] == [
+        {"inputTokens": 1000, "outputTokens": 100},
+        {"inputTokens": 6141, "outputTokens": 2},
+    ]
+    assert _hook_indices(rows) == [0, 1]
+    assert sum(recorded.summary_costs()) == pytest.approx(CALL_COST + EMPTY_CALL_COST)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_last_call_keeps_every_earlier_calls_usage(monkeypatch):
+    """The eval shape: three tool rounds, then an empty answer. Four rows."""
+    recorded = await _run(
+        [*_completed_call("one"), *_completed_call("two"), *_completed_call("three"), *_empty_call()],
+        monkeypatch,
+    )
+
+    rows = recorded.cost_rows
+    assert [row["messageId"] for row in rows] == [5, 7, 9, 11]
+    assert [_row_usage(row)["outputTokens"] for row in rows] == [100, 100, 100, 2]
+    assert sum(recorded.summary_costs()) == pytest.approx(3 * CALL_COST + EMPTY_CALL_COST)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_first_call_is_metered(monkeypatch):
+    """No slot exists yet when the turn's only call is empty."""
+    recorded = await _run(_empty_call(), monkeypatch)
+
+    rows = recorded.cost_rows
+    assert [row["messageId"] for row in rows] == [5]
+    assert [_row_usage(row) for row in rows] == [{"inputTokens": 6141, "outputTokens": 2}]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_call_after_a_retry_keeps_ids_and_hook_indices(monkeypatch):
+    recorded = await _run(
+        [
+            *_completed_call("one"),
+            {"event": {"messageStart": {"role": "assistant"}}},  # abandoned attempt
+            _RETRY,
+            *_empty_call(),
+            *_completed_call("three"),
+        ],
+        monkeypatch,
+    )
+
+    rows = recorded.cost_rows
+    assert [row["messageId"] for row in rows] == [5, 7, 9]
+    assert [_row_usage(row)["outputTokens"] for row in rows] == [100, 2, 100]
+    assert _hook_indices(rows) == [0, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_usage_with_no_message_boundary_at_all_gets_its_own_row(monkeypatch):
+    """Usage arriving after a finished, already-metered call opens a slot even
+    without a `messageStop` to announce it."""
+    recorded = await _run(
+        [
+            *_completed_call("one"),
+            {"event": {"metadata": {"usage": dict(EMPTY_CALL_USAGE), "metrics": {"latencyMs": 300}}}},
+        ],
+        monkeypatch,
+    )
+
+    rows = recorded.cost_rows
+    assert [row["messageId"] for row in rows] == [5, 7]
+    assert [_row_usage(row)["outputTokens"] for row in rows] == [100, 2]
+
+
+@pytest.mark.asyncio
+async def test_a_stop_after_an_empty_call_meters_both_finished_calls(monkeypatch):
+    """The interruption arm reads the same slots: the empty call is finished,
+    so the Stop projects nothing onto it."""
+    recorded = await _run(
+        [*_completed_call("one"), *_empty_call(), _STOP],
+        monkeypatch,
+        tail_role="assistant",
+    )
+
+    rows = recorded.cost_rows
+    assert [row["messageId"] for row in rows] == [5, 7]
+    assert [_row_usage(row)["outputTokens"] for row in rows] == [100, 2]
