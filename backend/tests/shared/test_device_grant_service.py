@@ -269,9 +269,36 @@ class TestApprove:
         assert stored.session_id == record.session_id
 
     @pytest.mark.asyncio
-    async def test_concurrent_approvals_yield_one_winner(self, service, seeded_session) -> None:
+    async def test_concurrent_approvals_yield_one_winner(self, service, grants, seeded_session, monkeypatch) -> None:
+        """Six browsers answer one code together; the write's condition picks the winner.
+
+        Every caller is held until all six have read the grant as ``pending``,
+        so none can be turned away by the read-side status check and the only
+        thing left to settle the race is ``approve``'s conditional update.
+        The writes are then serialized. moto's ``update_item`` evaluates the
+        condition and applies the update as two unlocked steps, so concurrent
+        threads can all see ``pending`` and all write — 7 of 10 runs did on
+        macOS — which DynamoDB's per-item atomicity never allows. The lock
+        stands in for that atomicity; ``test_concurrent_approvals_are_decided_by_the_writes_condition``
+        in the repository tests pins that the guard really is in the write.
+        """
         await seeded_session()
         auth = await service.authorize()
+
+        callers = 6
+        everyone_has_read_pending = asyncio.Barrier(callers)
+        one_write_at_a_time = asyncio.Lock()
+        real_approve = grants.approve
+        write_results: list[bool] = []
+
+        async def approve_once_everyone_has_read(*args, **kwargs) -> bool:
+            await everyone_has_read_pending.wait()
+            async with one_write_at_a_time:
+                won = await real_approve(*args, **kwargs)
+            write_results.append(won)
+            return won
+
+        monkeypatch.setattr(grants, "approve", approve_once_everyone_has_read)
 
         outcomes = await asyncio.gather(
             *(
@@ -280,10 +307,20 @@ class TestApprove:
                     session_id=f"sess-{i}",
                     user_id=f"user-{i}",
                 )
-                for i in range(6)
+                for i in range(callers)
             )
         )
+
         assert outcomes.count(ApprovalOutcome.APPROVED) == 1
+        assert outcomes.count(ApprovalOutcome.ALREADY_RESOLVED) == callers - 1
+        # Every loser reached the write and lost there, not at the read before it.
+        assert sorted(write_results) == [False] * (callers - 1) + [True]
+
+        winner = outcomes.index(ApprovalOutcome.APPROVED)
+        stored = await grants.get_by_device_code_hash(hash_device_code(auth.device_code))
+        assert stored is not None
+        assert stored.session_id == f"sess-{winner}"
+        assert stored.user_id == f"user-{winner}"
 
     @pytest.mark.asyncio
     async def test_lookup_pending_hides_a_resolved_grant(self, service, seeded_session) -> None:

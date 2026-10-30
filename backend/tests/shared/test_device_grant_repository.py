@@ -248,6 +248,62 @@ class TestApprove:
 
         assert not await repository.approve(grant.device_code_hash, session_id="sess-001", user_id="user-1")
 
+    @pytest.mark.asyncio
+    async def test_concurrent_approvals_are_decided_by_the_writes_condition(self) -> None:
+        """Two browsers racing are settled by DynamoDB evaluating the condition with the write.
+
+        moto does not serialize ``update_item`` across threads (it reads the
+        item, evaluates the condition, then mutates it, with no lock), so the
+        race cannot be driven faithfully against it. What this pins is that the
+        guard lives in the write itself — one ``update_item`` conditioned on
+        ``status = pending`` and an unexpired ``expires_at`` — and never in a
+        read before it, which is what makes the real race safe. The service
+        test holds six callers past their reads and serializes the writes to
+        show that condition alone picking the winner.
+        """
+        calls: list[dict] = []
+
+        class _Table:
+            def update_item(self, **kwargs):
+                calls.append(kwargs)
+                return {}
+
+            def get_item(self, **kwargs):  # pragma: no cover - a read here would be the bug
+                raise AssertionError("approval must not read before writing")
+
+        repository = DeviceGrantRepository(table_name=TABLE_NAME)
+        repository._table = _Table()
+
+        assert await repository.approve("hash", session_id="sess-001", user_id="user-1", now=1_000)
+
+        assert len(calls) == 1
+        call = calls[0]
+        assert call["ConditionExpression"] == "attribute_exists(PK) AND #s = :pending AND expires_at > :now"
+        assert call["ExpressionAttributeNames"] == {"#s": "status"}
+        assert call["ExpressionAttributeValues"][":pending"] == "pending"
+        assert call["ExpressionAttributeValues"][":now"] == 1_000
+
+    @pytest.mark.asyncio
+    async def test_a_lost_race_is_reported_as_not_approved(self) -> None:
+        """The condition failing is the loser's signal, and only that error is swallowed."""
+
+        class _Table:
+            def update_item(self, **kwargs):
+                raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+
+        repository = DeviceGrantRepository(table_name=TABLE_NAME)
+        repository._table = _Table()
+
+        assert not await repository.approve("hash", session_id="sess-001", user_id="user-1")
+
+        class _Broken:
+            def update_item(self, **kwargs):
+                raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "UpdateItem")
+
+        repository._table = _Broken()
+        with pytest.raises(ClientError):
+            await repository.approve("hash", session_id="sess-001", user_id="user-1")
+
 
 # =====================================================================
 # claim — the single-use gate
