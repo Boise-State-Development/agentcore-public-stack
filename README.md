@@ -106,6 +106,19 @@ Enable programmatic access to the platform's AI models via REST API. Users gener
 
 **Built-in code examples:** The API Keys settings page includes a code generator with cURL, Python, and JavaScript examples, a model selector, and configurable parameters (temperature, max tokens, system prompt) so users can start integrating immediately.
 
+### 💻 Terminal Client
+
+`aps-tui` brings the same assistant to the shell: the agent, your models, tools, projects, skills, conversation modes and saved conversations, streamed into a terminal UI. Every feature is a slash command (`/model`, `/tools`, `/project`, `/skills`, `/attach`…) with a completion menu on `/`, so there is nothing to memorise. It signs in through your browser and holds a real platform session, so the same roles, quotas and MCP connections apply as in the web app.
+
+What the terminal adds: **local tools**. With your approval, shown command by command, the agent can read and write files, list directories and run commands on your machine, and it sees your working directory and git state when that helps. The client is one Python wheel attached to each [GitHub Release](../../releases/latest); install it with [uv](https://docs.astral.sh/uv/) and point it at your deployment:
+
+```bash
+uv tool install https://github.com/<org>/<repo>/releases/download/v<version>/aps_tui-<version>-py3-none-any.whl
+aps-tui
+```
+
+First launch walks you through the address of your deployment and signing in. See [tui/README.md](tui/README.md) for the full command list.
+
 ### 🎙️ Voice Mode
 
 Have natural, real-time spoken conversations with the assistant. Voice Mode streams audio bidirectionally over WebSockets to an AgentCore-hosted voice agent, using **Amazon Nova Sonic** for low-latency speech-to-speech interaction. Users can speak their questions and hear responses aloud — no typing required — while the same RBAC, quotas, and model access rules as the chat interface apply.
@@ -147,7 +160,7 @@ Every request, browser or API key, enters through one CloudFront distribution. S
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                  Browser (Angular v21 SPA) · API-key clients                │
+│      Browser (Angular v21 SPA) · Terminal client (aps-tui) · API keys       │
 └─────────────────────────────────────┬───────────────────────────────────────┘
                                       │ HTTPS
                                       v
@@ -190,6 +203,7 @@ Artifacts and the MCP Apps sandbox are served from their own CloudFront distribu
 |-------|-------------|
 | **Frontend** | Angular v21, TypeScript, Tailwind CSS v4.2+ |
 | **Backend** | Python 3.13+, FastAPI |
+| **Terminal Client** | Python 3.11+, Textual, httpx; distributed as a wheel on each GitHub Release |
 | **Agent Framework** | Strands Agents SDK |
 | **Cloud Services** | AWS Bedrock AgentCore (Runtime, Memory, Gateway, Code Interpreter, Browser), Amazon SageMaker |
 | **Infrastructure** | AWS CDK (TypeScript), ECS Fargate, CloudFront, DynamoDB |
@@ -233,6 +247,8 @@ The fastest path to production is the **GitHub Actions pipeline**. The platform 
 |-----------|--------------|
 | Angular SPA | S3 sync + CloudFront invalidation |
 
+**Terminal client (via `release.yml`):** built and attached to the GitHub Release for each version. Nothing to deploy; users install the wheel and point it at your deployment's URL.
+
 CDK deploys only run when infrastructure changes (new tables, IAM grants, etc.) — which is rare. Day-to-day code changes deploy in ~2 minutes via the backend workflow.
 
 <!-- IMAGE PLACEHOLDER: Screenshot of the GitHub Actions tab showing all deployment workflows with green checkmarks — Infrastructure, App API, Inference API, Frontend, Gateway, RAG Ingestion, and Bootstrap Data pipelines all passing. Dimensions: ~800x400px. -->
@@ -263,6 +279,7 @@ agentcore-public-stack/
 │           ├── app_api/             # Application API (port 8000)
 │           ├── inference_api/       # AgentCore Runtime API (port 8001)
 │           └── shared/              # Auth, RBAC, shared utilities
+├── tui/                             # Terminal client (aps-tui); talks to the App API only
 ├── frontend/ai.client/              # Angular SPA
 │   └── src/app/
 │       ├── auth/                    # OIDC authentication
