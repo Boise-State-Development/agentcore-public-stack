@@ -113,7 +113,10 @@ def build_baseline(
     families = sorted({c.family for c in cases}, key=FAMILIES.index)
     judged = sorted(c.id for c in cases if c.judge.evaluators or c.judge.rubric)
     scores = judge_means(judgements)
-    unjudged = [cid for cid in judged if cid not in scores]
+    # "Judged" means a judge ran, not that it scored: a tool-level judge on a
+    # case that rightly calls no tool returns "nothing to judge".
+    attempted = {str(j["case_id"]) for j in judgements}
+    unjudged = [cid for cid in judged if cid not in attempted]
     if judgements and unjudged:
         preview = ", ".join(unjudged[:5]) + (" …" if len(unjudged) > 5 else "")
         raise ReportError(f"{len(unjudged)} judged case(s) have no judgements: {preview}; run `judge` first")

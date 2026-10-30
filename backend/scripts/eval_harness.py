@@ -537,7 +537,7 @@ async def cmd_judge(args: argparse.Namespace) -> int:
         async with semaphore:
             results = await asyncio.to_thread(
                 judge_row, row, evaluators=case.judge.evaluators, rubric=case.judge.rubric,
-                judge=judge, judge_model=args.judge_model,
+                judge=judge, judge_model=args.judge_model, expected_refusal=case.expect.refuses,
             )
         async with lock:
             with judgements_path.open("a", encoding="utf-8") as fh:

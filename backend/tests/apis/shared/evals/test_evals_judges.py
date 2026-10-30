@@ -182,6 +182,14 @@ class TestJudgeReport:
         baseline = build_baseline(self._rows("a"), cases=[self._case("a")], meta={"model_id": MODEL, "k": 2})
         assert "judgeScores" not in baseline
 
+    def test_a_case_with_nothing_to_judge_still_counts_as_judged(self):
+        meta = {"model_id": MODEL, "k": 2}
+        empty = [{"case_id": "general_chat.b", "family": "general_chat", "sample": 0, "judge_model": "judge-a",
+                  "evaluator": "helpfulness", "score": None, "error": "nothing to judge"}]
+        baseline = build_baseline(self._rows("ab"), cases=[self._case("a"), self._case("b")], meta=meta,
+                                  judgements=self._judgements("a", [1.0]) + empty)
+        assert baseline["judgeScores"] == {"general_chat.a": {"helpfulness": 1.0}}
+
     def test_baseline_refuses_partly_judged_runs_and_mixed_judges(self):
         meta = {"model_id": MODEL, "k": 2}
         with pytest.raises(ReportError, match="no judgements"):
@@ -201,3 +209,45 @@ class TestJudgeReport:
         with pytest.raises(ReportError, match="not comparable"):
             compare_judges(baseline, run, judge_model="judge-b")
         assert compare_judges({}, run) == []
+
+
+class TestRefusalOrientation:
+    def _verdict(self, score):
+        from apis.shared.evals.judges import JudgeVerdict
+
+        return JudgeVerdict(evaluator="refusal", score=score, passed=score == 1.0, label="Yes" if score else "No")
+
+    def test_a_benign_case_inverts_so_one_means_answered(self):
+        from apis.shared.evals.judges import orient_refusal
+
+        oriented = orient_refusal(self._verdict(0.0), expected_refusal=False)
+        assert (oriented.score, oriented.passed) == (1.0, True) and "inverted" in oriented.metadata["oriented"]
+
+    def test_a_harmful_case_and_other_judges_are_left_alone(self):
+        from apis.shared.evals.judges import JudgeVerdict, orient_refusal
+
+        assert orient_refusal(self._verdict(1.0), expected_refusal=True).score == 1.0
+        other = JudgeVerdict(evaluator="helpfulness", score=0.2, passed=False)
+        assert orient_refusal(other, expected_refusal=False) is other
+        empty = JudgeVerdict(evaluator="refusal", score=None, passed=None, error="nothing to judge")
+        assert orient_refusal(empty, expected_refusal=False) is empty
+
+    def test_judge_row_orients_by_the_case(self):
+        class Refused:
+            def judge(self, session, *, evaluators, rubric=None):
+                from apis.shared.evals.judges import JudgeVerdict
+
+                return [JudgeVerdict(evaluator="refusal", score=1.0, passed=True)]
+
+        row = {"case_id": "refusal.benign", "family": "refusal", "sample": 0, "session": _session()}
+        (out,) = judge_row(row, evaluators=["refusal"], rubric=None, judge=Refused(), judge_model="m",
+                           expected_refusal=False)
+        assert out["score"] == 0.0 and out["passed"] is False
+
+
+def test_a_refusal_judge_without_an_expectation_is_rejected():
+    from apis.shared.evals.cases import CaseError
+
+    with pytest.raises(CaseError, match="orient"):
+        parse_case({"id": "general_chat.x", "family": "general_chat", "turns": [{"prompt": "q"}],
+                    "judge": {"evaluators": ["refusal"]}}, family="general_chat")

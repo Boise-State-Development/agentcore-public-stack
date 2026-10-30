@@ -244,6 +244,9 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     if unknown_evaluators:
         raise CaseError(f"{where}.judge.evaluators: unknown {unknown_evaluators}")
 
+    if "refusal" in judge.evaluators and expect.refuses is None:
+        raise CaseError(f"{where}: the refusal judge needs expect.refuses to orient its score")
+
     if family in JUDGED_FAMILIES:
         if not judge.evaluators and not judge.rubric:
             raise CaseError(f"{where}: a judged family's case must name an evaluator or a rubric")
