@@ -96,14 +96,23 @@ async def lifespan(app: FastAPI):
 
     reconcile_task = asyncio.create_task(run_reconcile_loop())
 
+    # Event-loop lag watchdog: one uvicorn worker means synchronous work on the
+    # loop stalls every request on this task, /health included. This measures
+    # the stall (EventLoopLagMs, alarmed in CDK) so a hang is a number and a
+    # WARNING line, not a gap in the access log. Nothing it does is per request.
+    from apis.app_api.telemetry.event_loop_lag import run_event_loop_lag_monitor
+
+    lag_task = asyncio.create_task(run_event_loop_lag_monitor())
+
     yield  # Application is running
 
     # Shutdown
     logger.info("=== Agent Core Service Shutting Down ===")
     reconcile_task.cancel()
-    # return_exceptions swallows the task's CancelledError, so shutdown waits
-    # for the loop to finish without re-raising it.
-    await asyncio.gather(reconcile_task, return_exceptions=True)
+    lag_task.cancel()
+    # return_exceptions swallows the tasks' CancelledError, so shutdown waits
+    # for the loops to finish without re-raising it.
+    await asyncio.gather(reconcile_task, lag_task, return_exceptions=True)
     # TODO: Cleanup agent pool, MCP clients, etc.
 
 # Create FastAPI app with lifespan

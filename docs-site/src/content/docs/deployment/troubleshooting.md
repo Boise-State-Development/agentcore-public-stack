@@ -108,6 +108,12 @@ OAC access and that the distribution's origin points at the correct bucket.
 targets, and that the service's security group allows traffic from the ALB.
 Check the App API CloudWatch logs for startup errors.
 
+A task that was healthy and then stopped answering was usually blocked by
+synchronous work on its single event loop. The `{prefix}-app-api-event-loop-lag`
+alarm fires when a task's loop was stalled for more than 2 s in two of three
+minutes, and the App API log has an `Event loop blocked for N ms` warning for
+every stall over 1 s, timestamped so you can see what ran just before it.
+
 ## After deploy
 
 ### Login or first-boot page won't load
