@@ -346,6 +346,10 @@ async def _find_managed_model(model_id: str | None):
 # tools, but the base prompt's missing-tool advice sent a faculty member to Customize →
 # Tools, where turning Canvas on changes nothing for a project. It names the project's
 # Tools page instead and says so over the base advice.
+# The files paragraph is the 2026-10-29 faculty report: a project with 41 .docx submissions was
+# told "I have no function that reads Files-area attachments", because retrieval sees passages
+# and the conversation's document tools see only the conversation's uploads; `project_files`
+# is the harness-only tool that lists and reads Files by name.
 # Constant text, so it costs one cache write per harness, on deploy.
 PROJECT_WORKSPACE_GUIDANCE = (
     "## Project Workspace\n\n"
@@ -356,6 +360,13 @@ PROJECT_WORKSPACE_GUIDANCE = (
     "When a member asks you to remember something, for the team or just for them, call `memory_save` "
     "in that same turn. Nothing carries into a later conversation until it succeeds, so never say "
     "you've saved, noted or recorded something you haven't saved.\n\n"
+    "The project's files are searched for each message automatically, and the best-matching passages "
+    "are given to you; that search sees passages, not files. To see what is in Files, or to work on one "
+    "file a member names (grade a submission, review a draft, compare two documents), call "
+    "`project_files`: with no arguments it lists every file, and with `filename` it reads that file "
+    "whole, in pages. The Word, PowerPoint, spreadsheet and `document_read` tools see only files attached "
+    "to this conversation, so an empty listing from them says nothing about the project's Files. Never say "
+    "you cannot read the project's files.\n\n"
     "This project's tools are set on the project, for everyone in it: a member's own choices under "
     "Customize → Tools do not reach project conversations. When a request needs a tool you don't have, "
     "say this project doesn't include it, and that someone who can edit the project can add it from "
@@ -3562,10 +3573,12 @@ async def _build_turn_tools(
     project_memory,
     turn_has_document: bool,
     text_only_model: bool = False,
+    turn_project_id: Optional[str] = None,
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
-    gate, which is memoized per session once it answers yes."""
+    gate, which is memoized per session once it answers yes. ``turn_project_id``
+    marks a project-harness turn, which also gets ``project_files``."""
     extra_tools = _build_spreadsheet_tools(
         enabled_tools=effective_enabled_tools,
         assistant_id=input_data.rag_assistant_id,
@@ -3612,6 +3625,18 @@ async def _build_turn_tools(
             extra_tools
             + build_project_memory_tools(project_memory, current_user)
             + build_shared_task_tools(project_memory.project_id, current_user)
+        )
+
+    # A project harness lists the project's Files and reads one by name
+    # (`project_files`). Retrieval sees passages, never files, so "grade
+    # submission 7" needs this. Gated on the turn being a project's, not on
+    # memory spaces, and placed after the memory family so those specs keep
+    # their place in the cached toolConfig.
+    if turn_project_id and input_data.rag_assistant_id:
+        from apis.inference_api.chat.project_memory import build_project_files_tools
+
+        extra_tools = extra_tools + build_project_files_tools(
+            turn_project_id, input_data.rag_assistant_id, current_user
         )
 
     # document_read for any session that carries a readable attachment
@@ -5152,6 +5177,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 project_memory=project_memory,
                 turn_has_document=attachments.turn_has_document,
                 text_only_model=turn_model.text_only,
+                turn_project_id=turn_project_id,
             )
             # Client-executed tools (terminal only; the SPA never declares any).
             # Key-described by construction: the digest is a cache-key element,
