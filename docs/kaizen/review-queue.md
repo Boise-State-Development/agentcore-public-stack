@@ -5,6 +5,91 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-10-23] Take Strands 1.62.0, then curate Claude Haiku 5.5 at a 100K effective window — the probe becomes a check of #5171
+- **Source**: research/2026-10-23.md ▸ Top 5 #1
+- **Surface**: backend + catalog (`pyproject.toml`, `uv.lock`, Lambda requirements; `curated-models.ts`; `probe_bedrock_cache_point_support.py`)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — retires the preserved-thinking probe as a standing item (supersedes [2026-10-16] Haiku 5.5 and [2026-10-09] probe entries); no hand-built thinking-binding handling; starts Haiku 4.5's retirement path (never a hard delete)
+- **Unlocks**:
+  - a default ~7.7× cheaper than Haiku 4.5 on the same text below 100K (card + Price List now agree: $0.11 / $0.55 Regional; tokenizer ~30% heavier)
+  - safe compaction on every preserved-thinking model (Opus 5.5 is curated today): Strands #5171 retries the Bedrock "block is bound to a different conversation" 400 with `drop_block`
+- **Notes**: bump strands alone (hold strands-agents-tools 0.8.10, possible `bedrock-agentcore<1.24` conflict). Verify on dev: compact an Opus 5.5 thinking conversation, send one more turn, record 400/recovery, `cacheStatus`, and add a metric when `drop_block` engages. Row: `maxInputTokens: 100_000`, no sampling params, bracket the 512-token cache minimum, note CountTokens is unsupported on bedrock-runtime. Not the default in the same PR.
+- **Status**: open
+
+### [2026-10-23] Require the test checks, on an up-to-date branch (or a merge queue), before merging into `develop`
+- **Source**: research/2026-10-23.md ▸ Top 5 #2
+- **Surface**: CI / repo settings (`protect-develop` ruleset 14253197)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — fix-forward commits (`76ce5402`, `68118d61`) and red `develop` Backend Deploys from skewed or stale merges (4 of 5 failures this window; #1455 merged on a PR CI run from 10-06)
+- **Notes**: the ruleset has no `required_status_checks`. Path-filtered jobs that skip will block a required check — likely needs an always-run aggregator job. Strict vs. merge queue is Phil's call at ~90 PRs/week.
+- **Status**: open
+
+### [2026-10-23] Price 1h cache writes from Bedrock's `cacheDetails` — contribute harness-sdk #5257, then delete the inference
+- **Source**: research/2026-10-23.md ▸ Top 5 #3
+- **Surface**: backend + upstream (`strands/models/bedrock.py` usage mapping; `apis/shared/costs/calculator.py:100-106`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — the read-based inference of the 1h share and the `long_ttl_static_prefix_tokens` plumbing
+- **Unlocks**: exact per-TTL write cost on `C#` rows, for judging the [2026-09-16] PR-5 1h-TTL decision
+- **Notes**: confirm the `cacheDetails` shape on one live dev Converse call first (only seen via LibreChat #17208 and #5257's text).
+- **Status**: open
+
+### [2026-10-23] Spike: register OAuth-gated MCP tools from the admin allowlist and ask consent on first use, not at pre-flight
+- **Source**: research/2026-10-23.md ▸ Top 5 #4 (LibreChat #17225)
+- **Surface**: backend (`external_mcp_client.py`, tool build pre-flight, `OAuthConsentHook`)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes — the failing pre-flight and per-turn `oauth_required` re-emit for allowlisted servers; `toolConfig` no longer changes when consent lands
+- **Unlocks**: first turns that don't wait on an unconnected OAuth server (5.8 s p50 today)
+- **Notes**: allowlist schemas can go stale; check freshness after consent, on first use. Measure TTFT and one consent → resume on dev before deciding.
+- **Status**: open
+
+### [2026-10-23] Correct `CLAUDE.md`'s Price List note (GPT-6 Astra is listed) and record Astra's rates beside the 10-03 decision
+- **Source**: research/2026-10-23.md ▸ Top 5 #5
+- **Surface**: docs (`CLAUDE.md:49`, `decisions.md` ▸ [2026-10-03] Astra)
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — a false "cards are the only source" rule for the OpenAI family
+- **Notes**: 16 Astra SKUs in `AmazonBedrockFoundationModels` (us-west-2): $11 / $55 Regional, 30m write $13.75, read $1.10, long-context $22 / $82.50. Re-check GPT-5.6 and `openai.gpt-5.4` in the same query.
+- **Status**: open
+
+### [2026-10-23] Spec sync: agent-handoffs-and-consults.md header (Status line)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — a stale "Draft proposal. Not scheduled." (`:3`)
+- **Notes**: → "Phase 0 in progress (PR-0.1 and PR-0.2 merged 2026-10-22, behind `HANDOFFS_ENABLED`). Phases 1 and 2 not scheduled." Evidence `90b461fc`, `fed88f5a`.
+- **Status**: open
+
+### [2026-10-23] Spec sync: agent-handoffs-and-consults.md §4.2 step 1 (create response shape)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — a response shape missing `prompt` (`:206`)
+- **Notes**: add `prompt` (contextBlock joined to the request by `build_handoff_message`). Evidence `app_api/handoffs/routes.py:79,205`.
+- **Status**: open
+
+### [2026-10-23] Spec sync: agent-handoffs-and-consults.md §4.5 (excerpt tool line, displayText)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — "`[tool: list_assignments → 14 items]`" (`:606`) and "User and assistant text blocks go in verbatim." (`:612`)
+- **Notes**: → "`[tool: list_assignments]`"; add that a user message's `displayText` wins over its model text. Evidence `apis/shared/handoff/excerpt.py:14-15,218`.
+- **Status**: open
+
+### [2026-10-23] Spec sync: multi-agent-patterns.md §3, §4.2, §10 (pinned Strands version)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — three "1.57.2" references (`:57`, `:126`, `:274`)
+- **Notes**: → 1.61.1 (`961b8f7a`). The §10 trigger fired; re-read §3's tool list against vended `subagent`. Also update the queued [2026-10-16] #3675 row's "our 1.57.2 pin" wording.
+- **Status**: open
+
+### [2026-10-23] Spec sync: multi-agent-patterns.md §8 (sequence step 1)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — "1. **Handoffs Phase 0** as specced." (`:235`) with no progress
+- **Notes**: → "(PR-0.1 and PR-0.2 merged 2026-10-22; PR-0.3 in review as #1748)."
+- **Status**: open
+
 ### [2026-10-20] Evaluate Strands Decider as a measurement instrument first, starting with the §17.8 grader
 - **Source**: session exploration 2026-10-20 (follow-up to the Vandalizer parity work, alongside `docs/one-pagers/research-admin-content-gap.md`) — **not** from a weekly research doc, so it has had no research-doc scrutiny. External: AWS announced Strands Decider 2B on 2026-10-01 ([InfoQ](https://infoq.com/news/2026/10/aws-strands-agents), [AWS Builder](https://builder.aws.com/content/3KkFqSBRfZxjCnMBYzIkGabGBWc/act-when-certain-ask-when-not-building-safer-ai-agents-with-local-decision-models), [The New Stack](https://thenewstack.io/aws-strands-decider-model/?p=22839054))
 - **Surface**: `backend/scripts/` (the §17.8 measurement harness) first; `apis/shared/` interventions only if the measurement earns it
