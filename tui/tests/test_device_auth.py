@@ -55,7 +55,7 @@ TOKEN_BODY = {
     "session": "sealed-envelope-value",
     "expires_in": 28783,
     "user_id": "28d1d380-e051-708d-c10e-b460df161c04",
-    "username": "colin",
+    "username": "jordan",
 }
 
 
@@ -308,7 +308,7 @@ class TestDeadline:
         client, _ = make_client([granted()])
         async with client:
             session = await client.poll_for_session(authorization(interval=600, expires_in=1))
-        assert session.username == "colin"
+        assert session.username == "jordan"
 
     @pytest.mark.asyncio
     async def test_interval_has_a_floor(self) -> None:
@@ -382,7 +382,7 @@ class TestSecrets:
     def test_session_repr_hides_the_sealed_value(self) -> None:
         rendered = repr(DeviceSession(**TOKEN_BODY))
         assert TOKEN_BODY["session"] not in rendered
-        assert "colin" in rendered
+        assert "jordan" in rendered
 
     @pytest.mark.asyncio
     async def test_nothing_secret_reaches_the_log(

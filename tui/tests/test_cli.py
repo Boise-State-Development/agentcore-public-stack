@@ -173,7 +173,7 @@ def device_flow(monkeypatch: pytest.MonkeyPatch) -> type[FakeDeviceAuthClient]:
         session="sealed-envelope-value",
         expires_in=28783,
         user_id="28d1d380",
-        username="colin",
+        username="jordan",
     )
     monkeypatch.setattr(device_auth, "DeviceAuthClient", FakeDeviceAuthClient)
     # Never launch a real browser from a test run.
@@ -199,7 +199,7 @@ class TestLoginSso:
         assert stored == {BASE_URL: "sealed-envelope-value"}
         assert read_config_file(config_file)["base_url"] == BASE_URL
         out = capsys.readouterr().out
-        assert "Signed in as colin" in out
+        assert "Signed in as jordan" in out
 
     def test_shows_the_code_and_url_even_when_a_browser_opens(
         self,

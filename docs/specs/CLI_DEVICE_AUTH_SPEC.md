@@ -1,7 +1,7 @@
 # CLI Device Authorization
 
 **Status:** **complete and proven live end to end** against
-`dev.boisestate.ai`. The backend was verified 2026-08-07; the TUI's auth leg and
+a deployed dev environment. The backend was verified 2026-08-07; the TUI's auth leg and
 its session-native chat on 2026-08-08. A signed-in terminal now runs tool-using
 agent turns with server-side memory.
 **Audience:** platform maintainers, auth owners
@@ -34,7 +34,7 @@ message**, with no transcript sent. That is server-side memory working through t
 terminal client. Detail in "What is left in the TUI" below.
 
 **The backend is no longer just "tested" — it is proven.** All seven steps of
-"Verifying after a deploy" were executed against `dev.boisestate.ai` on
+"Verifying after a deploy" were executed against a deployed dev environment on
 2026-08-07, including the browser leg. Results are recorded inline in that
 section. Nothing failed. The one-line summary: a CLI-obtained sealed session
 reaches `/auth/session`, `/models`, `/sessions` and a full tool-using turn on
@@ -445,7 +445,7 @@ protocol, which is why the protocol stopped at two.
 
 ## Verified after deploy — 2026-08-07
 
-All seven steps below were executed against `https://dev.boisestate.ai` after a
+All seven steps below were executed against a deployed dev environment after a
 `backend.yml` code deploy of `8a616d43`. **Every one passed.** No infrastructure
 deploy was needed, exactly as predicted.
 
@@ -464,7 +464,7 @@ environment; the ✅ notes record what the deployment actually did.
    whose routing does not put `/auth/cli/verify` beside `/auth/callback` needs
    `BFF_CLI_VERIFICATION_URL` set explicitly.
    → ✅ 200 with all six fields; `expires_in` 600, `interval` 5. The derivation
-   landed on `https://dev.boisestate.ai/api/auth/cli/verify`, so **no
+   landed on `https://<dev-host>/api/auth/cli/verify`, so **no
    `BFF_CLI_VERIFICATION_URL` override is needed on this deployment.**
 3. **Poll once before approving.** `POST /auth/cli/token` with the `device_code`
    → expect HTTP **400** with `{"error": "authorization_pending"}`. Poll again
@@ -543,8 +543,6 @@ branches, both of which are inert without a `BFF` header.
   code exchange must happen in app-api and not in the CLI.
 - Native Cognito users exist alongside federated `ms-entra-id_*` users. Native
   users lack `custom:provider_sub`.
-- The dev environment is prefix `dev-boisestateai-v2`, API base
-  `https://dev.boisestate.ai/api`.
 - `CSRFMiddleware` keys off `request.state.bff_session`, **not** the cookie.
   Any future way of populating that state must decide explicitly whether it is
   CSRF-relevant. `.kiro/steering/terminal-client.md` still carries the older,

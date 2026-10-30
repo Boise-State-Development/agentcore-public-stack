@@ -53,7 +53,7 @@ Rules that follow:
 
 **Phase 1 — done, working against a live sandbox.** Streaming chat over the
 API-key authenticated `POST /chat/api-converse`. Verified end to end against a
-local app-api pointed at the `dev-boisestateai-v2` tables, on both Bedrock and
+local app-api pointed at a deployed dev environment's tables, on both Bedrock and
 Mantle (OpenAI-wire) models.
 
 **Phase 2 — direction changed. See #[[file:docs/specs/CLI_DEVICE_AUTH_SPEC.md]].**
@@ -79,7 +79,7 @@ and none reads a cookie. So the integration point is one branch in one
 middleware — not `get_current_user_from_session`, despite its docstring.
 
 **Landed so far:** the **entire backend**, deployed and verified end-to-end
-against `dev.boisestate.ai` on 2026-08-07 — domain layer, repository, service,
+against a deployed dev environment on 2026-08-07 — domain layer, repository, service,
 the three `/auth/cli/*` routes, the device branch in `GET /auth/callback`, rate
 limiting, and the `SessionRefreshMiddleware` header branch (141 tests). On the
 TUI side, the agent-stream SSE dialect (`client/agent_events.py`) and the
@@ -104,7 +104,7 @@ squash-merged so dev could be tested while the TUI is finished. Consequences:
 - Because #1770 was squashed, merging develop here produced add/add conflicts
   on every backend file. Resolve with `git checkout origin/develop -- backend
   CLAUDE.MD docs/...`; develop's copy is always the right one.
-- Verified live on dev the same day: `login --sso` end to end (PKCE + nonce +
+- Verified live on a dev deployment the same day: `login --sso` end to end (PKCE + nonce +
   binding cookie against real Cognito), `/chat/stream` over `Authorization:
   BFF`, title generation, tool rendering, `/attach`. The model saw and called
   `local_list_directory`, which proves the inference image carried
@@ -112,7 +112,7 @@ squash-merged so dev could be tested while the TUI is finished. Consequences:
 
 **Still pending:** nothing in the original plan. The device-polling flow, the
 `/chat/stream` transport and the turn wiring are all **done and proven live**
-against `dev.boisestate.ai` — a signed-in terminal runs tool-using agent turns,
+against a deployed dev environment — a signed-in terminal runs tool-using agent turns,
 and a second turn answered from server-side memory with only one message sent.
 Optional follow-ups are listed at the end of the spec.
 
