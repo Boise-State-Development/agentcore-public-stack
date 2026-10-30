@@ -14,6 +14,12 @@ someone who merely edited the instructions.
 Skills are pinned (shared-projects 3.1). A skill added here is pinned to its content
 as of the save, a skill already bound keeps its pin, and ``pin_skill`` moves one pin
 to the skill's current content. Every pin change is a settings version.
+
+A skill also records **who added it** (``config.addedBy``, the saver's user id), so a
+skill an editor authored runs for every member, not only for the editor (§9.6, clause 4
+of ``resolve_invocable_skill_ids``). The route writes it; a client cannot set it, and a
+skill already bound keeps its original adder across every later save. The id never
+leaves the API: the responses strip it, like ``createdBy`` on a version.
 """
 
 from __future__ import annotations
@@ -48,7 +54,7 @@ from apis.shared.projects.service import (
 )
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.pinning import PinStatus, SkillPinError, pin_current, pin_status
-from apis.shared.skills.pins import PIN_CONFIG_KEY, binding_pin
+from apis.shared.skills.pins import ADDED_BY_CONFIG_KEY, PIN_CONFIG_KEY, binding_adder, binding_pin
 from apis.shared.skills.resource_store import SkillResourceChangedError, SkillResourceStoreError
 from apis.shared.skills.versions import SkillVersion
 from apis.shared.timestamps import utc_now_iso
@@ -148,7 +154,7 @@ class HarnessSettingsService:
             current = list(harness.bindings or [])
             wanted = [AgentBinding(kind=kind, ref=b.ref, config=b.config) for b in bindings]
             if kind == SKILL:
-                wanted = _keep_skill_pins(wanted, current)
+                wanted = _keep_skill_adders(_keep_skill_pins(wanted, current), current)
             existing = _dumps([b for b in current if b.kind == kind])
             added = [b for b in wanted if b.model_dump(by_alias=True) not in existing]
             new_bindings = [b for b in current if b.kind != kind] + wanted
@@ -168,7 +174,12 @@ class HarnessSettingsService:
 
         await validate_agent_write(user, bindings=added or None, model_settings=model_settings)
         if kind == SKILL and new_bindings is not None:
-            new_bindings = await _pin_added_skills(new_bindings, added, user)
+            # ``added`` is every binding the save changed (a moved pin included, so the
+            # saver is re-checked against the skill); the adder is recorded only for a
+            # skill that was not bound before, so updating a pin never re-attributes it.
+            bound_before = {b.ref for b in harness.bindings or [] if b.kind == SKILL}
+            newly_bound = [b for b in added if b.ref not in bound_before]
+            new_bindings = await _pin_and_attribute_added_skills(new_bindings, added, newly_bound, user)
 
         # The first save also records the state the project was created with, so the
         # first change in its history has something to be compared against.
@@ -270,22 +281,48 @@ def _keep_skill_pins(wanted: List[AgentBinding], current: List[AgentBinding]) ->
     ]
 
 
-async def _pin_added_skills(
-    bindings: List[AgentBinding], added: List[AgentBinding], user: User
+def _keep_skill_adders(wanted: List[AgentBinding], current: List[AgentBinding]) -> List[AgentBinding]:
+    """``addedBy`` is the route's to write: a skill already bound keeps its recorded
+    adder whatever the request says, and a skill not yet bound arrives with none (the
+    save stamps the saver below). A client-sent value is dropped either way, so nobody
+    can claim another author's skill was added by that author.
+    """
+    prior = {b.ref: binding_adder(b.config) for b in current if b.kind == SKILL}
+    out: List[AgentBinding] = []
+    for binding in wanted:
+        config = {k: v for k, v in binding.config.items() if k != ADDED_BY_CONFIG_KEY}
+        adder = prior.get(binding.ref)
+        if adder:
+            config[ADDED_BY_CONFIG_KEY] = adder
+        out.append(AgentBinding(kind=SKILL, ref=binding.ref, config=config))
+    return out
+
+
+async def _pin_and_attribute_added_skills(
+    bindings: List[AgentBinding],
+    added: List[AgentBinding],
+    newly_bound: List[AgentBinding],
+    user: User,
 ) -> List[AgentBinding]:
-    """Pin each newly added skill that names no version to its content as of now.
+    """Pin each added skill that names no version to its content as of now, and record
+    the saver as the adder of each skill that was not bound before.
 
     Runs after ``validate_agent_write``, so nothing is pinned (no version cut, no file
-    copied) for a skill the saver may not use.
+    copied) and nothing is attributed for a skill the saver may not use. The adder is
+    what lets a skill the saver authored run for every member (module docstring).
     """
     to_pin = {b.ref for b in added if b.kind == SKILL and binding_pin(b.config) is None}
+    to_attribute = {b.ref for b in newly_bound if b.kind == SKILL}
     out: List[AgentBinding] = []
     for binding in bindings:
-        if binding.kind == SKILL and binding.ref in to_pin:
-            version = await _pin(binding.ref, user)
-            binding = AgentBinding(
-                kind=SKILL, ref=binding.ref, config={**binding.config, PIN_CONFIG_KEY: version.version}
-            )
+        if binding.kind == SKILL and (binding.ref in to_pin or binding.ref in to_attribute):
+            config = dict(binding.config)
+            if binding.ref in to_attribute:
+                config[ADDED_BY_CONFIG_KEY] = user.user_id
+            if binding.ref in to_pin:
+                version = await _pin(binding.ref, user)
+                config[PIN_CONFIG_KEY] = version.version
+            binding = AgentBinding(kind=SKILL, ref=binding.ref, config=config)
         out.append(binding)
     return out
 

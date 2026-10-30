@@ -39,11 +39,19 @@ export class SkillCommandService {
   readonly agentLocked = this.skillService.agentLocked;
 
   /**
+   * True while the Agent's skills are locked but not yet resolved for this viewer:
+   * `commands()` is empty then for a reason that is not "there are none".
+   */
+  readonly resolving = this.skillService.agentSkillsResolving;
+
+  /**
    * Enabled skills, ordered by name.
    *
    * Agent-locked conversations resolve through `visibleSkills`/`isSkillShownEnabled` like
    * every other skill surface, so a conversation bound to an Agent offers exactly that
-   * Agent's bound skills as commands — the set the turn will actually disclose.
+   * Agent's bound skills as commands — the set the turn will actually disclose, as the
+   * backend resolved it for this viewer (`GET /agents/{id}/skills`), which is how a
+   * project member gets the skills another member authored.
    */
   readonly commands = computed<SkillCommand[]>(() =>
     this.skillService

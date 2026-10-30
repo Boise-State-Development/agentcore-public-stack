@@ -24,5 +24,7 @@ export const environment = {
         folderSync: true,
         sourceProvenance: true,
         documentExtract: false,
+        sessionRewind: false,
+        sessionFork: false,
     } satisfies FeatureFlags,
 };

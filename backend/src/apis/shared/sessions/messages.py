@@ -565,6 +565,20 @@ async def get_messages_from_cloud(
                 user_id=user_id,
             )
 
+        async def fetch_rewind():
+            """Which stored messages a rewind has hidden (rewind spec §4).
+
+            ``None`` while the flag is off, so the response carries no
+            ``nextMessageIndex`` and every message shows, exactly as before.
+            """
+            from apis.shared.feature_flags import session_rewind_enabled
+
+            if not session_rewind_enabled():
+                return None
+            from .metadata import get_session_rewind
+
+            return await get_session_rewind(session_id, user_id)
+
         # Run fetches in parallel
         (
             messages_raw,
@@ -574,6 +588,7 @@ async def get_messages_from_cloud(
             tool_summary_rows,
             source_provenance_rows,
             extraction_rows,
+            rewind_state,
         ) = await asyncio.gather(
             fetch_messages(),
             fetch_metadata(),
@@ -582,6 +597,7 @@ async def get_messages_from_cloud(
             fetch_tool_summaries(),
             fetch_source_provenance(),
             fetch_extractions(),
+            fetch_rewind(),
         )
 
         messages_raw = list(messages_raw or [])
@@ -595,9 +611,15 @@ async def get_messages_from_cloud(
         logger.info(f"Metadata index contains {len(metadata_index)} entries")
         logger.info(f"🔑 Metadata index keys: {sorted(metadata_index.keys())}")
 
+        # Hidden messages keep their physical index out of the response but
+        # never out of the numbering: ids stay ``msg-{session}-{physical}``, so
+        # a rewound message's feedback, cost row and displayText can never
+        # attach to the message that later takes its place on screen.
+        visible_raw = rewind_state.visible(messages_raw) if rewind_state is not None else list(enumerate(messages_raw))
+
         # Convert to our Message model
         messages = []
-        for idx, msg in enumerate(messages_raw):
+        for idx, msg in visible_raw:
             try:
                 # Look up metadata: try plain index first (text chat),
                 # then "voice:<idx>" prefix (voice chat metadata).
@@ -614,7 +636,7 @@ async def get_messages_from_cloud(
                 else:
                     logger.warning(f"⚠️ No metadata found for assistant message {idx}")
 
-                messages.append(_convert_message(msg, metadata=metadata))
+                messages.append((idx, _convert_message(msg, metadata=metadata)))
             except Exception as e:
                 logger.error(f"Error converting message {idx}: {e}", exc_info=True)
                 continue
@@ -624,16 +646,10 @@ async def get_messages_from_cloud(
         # Apply pagination
         paginated_messages, next_page_token = _apply_pagination(messages, limit, next_token)
 
-        # Convert to MessageResponse format
-        start_seq = 0
-        if next_token:
-            try:
-                decoded = base64.b64decode(next_token).decode("utf-8")
-                start_seq = int(decoded)
-            except Exception:
-                start_seq = 0
-
-        message_responses = [_convert_message_to_response(msg, session_id, start_seq + idx) for idx, msg in enumerate(paginated_messages)]
+        # Convert to MessageResponse format. Each message carries its own
+        # physical index, which is the page offset plus its position only
+        # while nothing is hidden.
+        message_responses = [_convert_message_to_response(msg, session_id, idx) for idx, msg in paginated_messages]
 
         # MCP Apps (SEP-1865): replay persisted UI resources so the
         # `mcp-app-frame` survives a reload. The inline `ui_resource` event
@@ -714,11 +730,43 @@ async def get_messages_from_cloud(
             tool_summaries=tool_summaries,
             source_provenance=source_provenance,
             extractions=extractions,
+            next_message_index=len(messages_raw) if rewind_state is not None else None,
         )
 
     except Exception as e:
         logger.error(f"Error retrieving messages from AgentCore Memory: {e}")
         raise
+
+
+def list_stored_messages(session_id: str, user_id: str) -> List[Dict[str, Any]]:
+    """Every stored message of a session as ``{role, content}``, in physical order. Blocking.
+
+    The same ``list_messages`` read ``get_messages_from_cloud`` does, without
+    the metadata joins, so its positions are the message ids' indices. Raises
+    on misconfiguration; a failed read comes back empty, as the SDK swallows it.
+    """
+    if not AGENTCORE_MEMORY_AVAILABLE:
+        raise RuntimeError("bedrock_agentcore package is required")
+    memory_id = os.environ.get("AGENTCORE_MEMORY_ID")
+    if not memory_id:
+        raise ValueError("AGENTCORE_MEMORY_ID environment variable not set")
+    config = AgentCoreMemoryConfig(
+        memory_id=memory_id,
+        session_id=session_id,
+        actor_id=user_id,
+        enable_prompt_caching=False,
+    )
+    session_manager = AgentCoreMemorySessionManager(
+        agentcore_memory_config=config, region_name=os.environ.get("AWS_REGION", "us-west-2")
+    )
+    stored: List[Dict[str, Any]] = []
+    for msg in session_manager.list_messages(session_id, "default"):
+        inner = msg if isinstance(msg, dict) else getattr(msg, "message", None)
+        if isinstance(inner, dict):
+            stored.append({"role": inner.get("role"), "content": inner.get("content") or []})
+        else:
+            stored.append({"role": getattr(inner, "role", None), "content": getattr(inner, "content", None) or []})
+    return stored
 
 
 # The Memory SDK keeps its own records in a session's event stream beside the

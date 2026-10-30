@@ -5,6 +5,8 @@ import { UserMessageComponent } from './user-message.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import type { Message } from '../../../services/models/message.model';
 import { FailedSendService } from '../../../services/chat/failed-send.service';
+import { ConversationRewindService } from '../../../services/session/conversation-rewind.service';
+import { ConversationForkService } from '../../../services/session/conversation-fork.service';
 
 /**
  * The "Show more" affordance on a user bubble is driven by ONE measurement of
@@ -92,7 +94,8 @@ describe('UserMessageComponent — overflow measurement', () => {
     fixture.detectChanges();
 
     expect(component.isOverflowing()).toBe(false);
-    expect(fixture.nativeElement.querySelector('button')).toBeNull();
+    const buttons = [...fixture.nativeElement.querySelectorAll('button')] as HTMLButtonElement[];
+    expect(buttons.some((b) => b.textContent?.includes('Show more'))).toBe(false);
   });
 
   it('still shows the affordance for genuinely long content', () => {
@@ -178,5 +181,161 @@ describe('UserMessageComponent — a message that was not sent', () => {
     const el = await render(delivered);
 
     expect(el.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+describe('UserMessageComponent — rewind', () => {
+  let rewinder: {
+    enabled: boolean;
+    canRewind: ReturnType<typeof vi.fn>;
+    rewind: ReturnType<typeof vi.fn>;
+    pendingMessageId: ReturnType<typeof signal<string | null>>;
+  };
+
+  const sent = (overrides: Partial<Message> = {}): Message => ({
+    id: 'msg-s1-2',
+    role: 'user',
+    content: [{ type: 'text', text: 'what about the second draft?' }],
+    ...overrides,
+  });
+
+  async function render(message: Message, { enabled = true, canRewind = true } = {}): Promise<HTMLElement> {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    rewinder = {
+      enabled,
+      canRewind: vi.fn().mockReturnValue(canRewind),
+      rewind: vi.fn().mockResolvedValue(true),
+      pendingMessageId: signal<string | null>(null),
+    };
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [UserMessageComponent],
+      providers: [
+        { provide: LocalSettingsService, useValue: { showDebugOutput: signal(false) } },
+        { provide: ConversationRewindService, useValue: rewinder },
+      ],
+    })
+      .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+    const fixture = TestBed.createComponent(UserMessageComponent);
+    fixture.componentRef.setInput('message', message);
+    fixture.detectChanges();
+    return fixture.nativeElement;
+  }
+
+  const rewindButton = (el: HTMLElement) =>
+    el.querySelector('button[aria-label="Rewind to here"]') as HTMLButtonElement | null;
+
+  it('offers "Rewind to here" and hands the message to the rewind service', async () => {
+    const el = await render(sent());
+
+    const button = rewindButton(el);
+    expect(button).not.toBeNull();
+    button!.click();
+    expect(rewinder.rewind).toHaveBeenCalledWith(expect.objectContaining({ id: 'msg-s1-2' }));
+  });
+
+  it('is disabled, not hidden, while it cannot run', async () => {
+    const el = await render(sent(), { canRewind: false });
+
+    expect(rewindButton(el)?.disabled).toBe(true);
+  });
+
+  it('is absent with the flag off, on a steer and on an unsent message', async () => {
+    expect(rewindButton(await render(sent(), { enabled: false }))).toBeNull();
+    expect(rewindButton(await render(sent({ steering: true })))).toBeNull();
+    expect(rewindButton(await render(sent({ sendFailure: { reason: 'x' } })))).toBeNull();
+  });
+});
+
+describe('UserMessageComponent — fork', () => {
+  async function render(message: Message, { enabled = true, canFork = true } = {}) {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const forker = {
+      enabled,
+      canFork: vi.fn().mockReturnValue(canFork),
+      fork: vi.fn().mockResolvedValue('child'),
+      pendingMessageId: signal<string | null>(null),
+    };
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [UserMessageComponent],
+      providers: [
+        { provide: LocalSettingsService, useValue: { showDebugOutput: signal(false) } },
+        { provide: ConversationForkService, useValue: forker },
+      ],
+    })
+      .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+    const fixture = TestBed.createComponent(UserMessageComponent);
+    fixture.componentRef.setInput('message', message);
+    fixture.detectChanges();
+    return { el: fixture.nativeElement as HTMLElement, forker };
+  }
+
+  const sent: Message = { id: 'msg-s1-2', role: 'user', content: [{ type: 'text', text: 'again' }] };
+  const forkButton = (el: HTMLElement) =>
+    el.querySelector('button[aria-label="Fork from here"]') as HTMLButtonElement | null;
+
+  it('offers "Fork from here" and hands the message to the fork service', async () => {
+    const { el, forker } = await render(sent);
+
+    forkButton(el)!.click();
+    expect(forker.fork).toHaveBeenCalledWith(expect.objectContaining({ id: 'msg-s1-2' }));
+  });
+
+  it('is disabled while it cannot run and absent with the flag off', async () => {
+    expect(forkButton((await render(sent, { canFork: false })).el)?.disabled).toBe(true);
+    expect(forkButton((await render(sent, { enabled: false })).el)).toBeNull();
+  });
+});
+
+describe('UserMessageComponent — action row', () => {
+  async function render(message: Message) {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [UserMessageComponent],
+      providers: [{ provide: LocalSettingsService, useValue: { showDebugOutput: signal(false) } }],
+    })
+      .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+    const fixture = TestBed.createComponent(UserMessageComponent);
+    fixture.componentRef.setInput('message', message);
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  const copyButton = (el: HTMLElement) => el.querySelector('button[aria-label="Copy message"]') as HTMLButtonElement | null;
+
+  it('copies what the user typed, not the augmented prompt', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const fixture = await render({
+      id: 'msg-s1-0',
+      role: 'user',
+      content: [{ type: 'text', text: 'summarize this\n\n[Attached files: a.pdf]' }],
+      metadata: { displayText: 'summarize this' },
+    });
+
+    copyButton(fixture.nativeElement)!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(writeText).toHaveBeenCalledWith('summarize this');
+    expect(fixture.nativeElement.querySelector('button[aria-label="Copied to clipboard"]')).not.toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('puts the sent time in the same row as the buttons', async () => {
+    const fixture = await render({
+      id: 'msg-s1-0',
+      role: 'user',
+      content: [{ type: 'text', text: 'hello' }],
+      createdAt: new Date().toISOString(),
+    });
+
+    const button = copyButton(fixture.nativeElement)!;
+    expect(button.parentElement?.textContent).toContain('Just now');
   });
 });

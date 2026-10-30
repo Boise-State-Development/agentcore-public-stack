@@ -28,7 +28,16 @@ Turning a skill on stays where it belongs: the Customize page, which the menu li
 
 An Agent-bound conversation resolves through `visibleSkills` / `isSkillShownEnabled` like
 every other skill surface, so it offers that Agent's bound skills — again, exactly the set
-the turn will disclose.
+the turn will disclose. **That set comes from the Agent, not from the user's list**
+(`GET /agents/{id}/skills`, 2026-10-30): the bound skills resolved for the viewer by the
+run-time predicate, each with its name, description and served `slug`. The user's own
+`GET /skills/` is their catalog grants and the skills they authored, and a skill another
+member of a project authored is in neither, so intersecting the Agent's ids with it left
+every member but the author with no rows and no menu (the prod report on "Cloud
+Architecture & Development"). While that fetch is out the lock is *resolving*, and a
+project's empty-state hint waits for it rather than saying the project has no skills. If
+the route is absent (an older backend) the lock settles to the id intersection, which is
+the previous behaviour.
 
 ## The text is the binding
 

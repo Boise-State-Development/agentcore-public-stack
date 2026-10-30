@@ -1,0 +1,199 @@
+[
+  {
+    "id": "instruction_following.number_only",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "Reply with only the number, no words: how many days are in a leap year?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "fullmatch": "366\\.?"
+      }
+    },
+    "notes": "Nothing but the number."
+  },
+  {
+    "id": "instruction_following.exactly_three_bullets",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "List three primary colours as exactly three bullet points that each start with '- ', with no other text before or after."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "fullmatch": "(?:- [^\\n]+\\n?){3}"
+      }
+    },
+    "notes": "No preamble, no closing line, exactly three bullets."
+  },
+  {
+    "id": "instruction_following.all_lowercase",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "answer in all lowercase letters only, with no capital letters anywhere: what is the capital of japan?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "search": [
+          "tokyo"
+        ],
+        "absent": [
+          "[A-Z]"
+        ]
+      }
+    },
+    "notes": "A casing constraint the model's own style fights against."
+  },
+  {
+    "id": "instruction_following.one_word_answer",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "Give a one-word answer: what colour is a ripe banana?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "fullmatch": "\\W*[A-Za-z]+\\W*"
+      },
+      "contains_any": [
+        "yellow"
+      ]
+    },
+    "notes": "One word, punctuation allowed."
+  },
+  {
+    "id": "instruction_following.bare_json_object",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "Return a JSON object with the keys \"city\" and \"country\" for where the Eiffel Tower is. Output only the JSON, with no code fences and no other text."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "fullmatch": "\\{.*\\}",
+        "search": [
+          "\"city\"\\s*:\\s*\"Paris\""
+        ],
+        "absent": [
+          "```"
+        ]
+      }
+    },
+    "notes": "Machine-readable output: a code fence or a sentence around it breaks a parser."
+  },
+  {
+    "id": "instruction_following.word_limit",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "In fewer than 15 words, explain what photosynthesis is."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "fullmatch": "\\W*(?:\\S+\\s+){0,13}\\S+\\W*"
+      }
+    },
+    "notes": "At most 14 whitespace-separated words."
+  },
+  {
+    "id": "instruction_following.no_tool_when_told_not_to",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "Without using any tools, what is 12 times 12?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "calculator"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "144"
+      ],
+      "tools": {
+        "must_not_call": [
+          "calculator"
+        ]
+      }
+    },
+    "notes": "An explicit instruction must beat the tool description's pull."
+  },
+  {
+    "id": "instruction_following.reply_in_spanish",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "Reply in Spanish only: what day of the week comes after Monday?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "martes"
+      ],
+      "regex": {
+        "absent": [
+          "\\bTuesday\\b"
+        ]
+      }
+    },
+    "notes": "Output language set by the instruction, not the question's language."
+  },
+  {
+    "id": "instruction_following.exactly_four_numbered_steps",
+    "family": "instruction_following",
+    "turns": [
+      {
+        "prompt": "Give exactly 4 numbered steps for boiling an egg, numbered 1. to 4., and nothing else."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "fullmatch": "1\\.[^\\n]+\\n+2\\.[^\\n]+\\n+3\\.[^\\n]+\\n+4\\.[^\\n]+"
+      }
+    },
+    "notes": "A fixed count and a fixed format, with no preamble."
+  }
+]

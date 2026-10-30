@@ -87,9 +87,13 @@ class TestTool:
         with pytest.raises(ValueError):
             make_verify_sources_tool("s1", "")
 
-    def test_the_spec_takes_a_document_and_a_claim_list(self):
+    def test_the_spec_takes_a_claim_list_and_an_optional_document(self):
+        """An inline attachment carries no upload id the model can see, so a
+        required one is an invitation to guess (dev, Haiku 4.5: `"0"`, five
+        samples of five)."""
         schema = make_verify_sources_tool("s1", "u1").tool_spec["inputSchema"]["json"]
-        assert set(schema["required"]) == {"upload_id", "claims"}
+        assert set(schema["required"]) == {"claims"}
+        assert "upload_id" in schema["properties"]
         # `tool_context` is plumbing, not model input: it must not appear.
         assert "tool_context" not in schema["properties"]
 
@@ -279,6 +283,114 @@ class TestRefusals:
         assert _states(result) == {"x": STATE_UNVERIFIED}
         [payload] = take_provenance("u1", "s1")
         assert payload["claims"][0]["method"] == "document_unreadable"
+
+
+# ---------------------------------------------------------------------------
+# Which document: an id, a filename, or the only one there is
+# ---------------------------------------------------------------------------
+
+
+def _doc(upload_id: str, filename: str) -> dict:
+    return {"upload_id": upload_id, "filename": filename, "format": "md", "size_bytes": 1, "modes": []}
+
+
+@pytest.fixture
+def session_documents(monkeypatch):
+    """Owned rows by id, plus the session listing the fallback reads.
+
+    Returns the listing so a test can set what the session holds, and the list
+    of listing calls so a test can prove the happy path never pays for one.
+    """
+    from apis.shared.files.workspace import WorkspaceFileNotFoundError
+
+    documents: list = []
+    listing_calls: list = []
+
+    async def _units(user_id, session_id, upload_id):
+        match = [d for d in documents if d["upload_id"] == upload_id]
+        if not match:
+            raise WorkspaceFileNotFoundError(f"No file with id '{upload_id}' found in your workspace")
+        return _Meta(upload_id=upload_id, filename=match[0]["filename"]), "pdf", [PAGE_1, PAGE_2]
+
+    async def _listing(user_id, session_id):
+        listing_calls.append((user_id, session_id))
+        return {"documents": list(documents), "count": len(documents)}
+
+    monkeypatch.setattr(f"{TOOL_MODULE}.document_provenance_units", _units)
+    monkeypatch.setattr(f"{TOOL_MODULE}.list_session_documents", _listing)
+    return SimpleNamespace(documents=documents, listing_calls=listing_calls)
+
+
+_CLAIM = {"id": "total", "value": "$487,500", "quote": "The total approved budget is $487,500"}
+
+
+class TestWhichDocument:
+    @pytest.mark.asyncio
+    async def test_a_real_upload_id_never_pays_for_the_listing(self, session_documents):
+        session_documents.documents.extend([_doc("up-1", "award.pdf"), _doc("up-2", "budget.pdf")])
+        result = await _call(
+            make_verify_sources_tool("s1", "u1"), upload_id="up-2", claims=[_CLAIM], tool_context=_ctx()
+        )
+        assert _states(result) == {"total": STATE_SUPPORTED}
+        assert take_provenance("u1", "s1")[0]["claims"][0]["uploadId"] == "up-2"
+        assert session_documents.listing_calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("upload_id", ["", "0", "facilities_policy.md"])
+    async def test_one_document_is_the_document(self, session_documents, upload_id):
+        """The eval-harness failure: a guessed id against a session holding one
+        document must verify against it, not cost two recovery rounds."""
+        session_documents.documents.append(_doc("up-1", "award.pdf"))
+        kwargs = {"upload_id": upload_id} if upload_id else {}
+        result = await _call(
+            make_verify_sources_tool("s1", "u1"), claims=[_CLAIM], tool_context=_ctx(), **kwargs
+        )
+        assert result["status"] == "success"
+        assert take_provenance("u1", "s1")[0]["claims"][0]["uploadId"] == "up-1"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "name", ["budget.pdf", "budget_pdf", "BUDGET", "Budget.PDF"]
+    )
+    async def test_a_filename_picks_among_several(self, session_documents, name):
+        """The inline block is named `budget_pdf`, the attachment marker says
+        `budget.pdf`; either, in any case, with or without the extension."""
+        session_documents.documents.extend([_doc("up-1", "award.pdf"), _doc("up-2", "budget.pdf")])
+        result = await _call(
+            make_verify_sources_tool("s1", "u1"), upload_id=name, claims=[_CLAIM], tool_context=_ctx()
+        )
+        assert result["status"] == "success"
+        assert take_provenance("u1", "s1")[0]["claims"][0]["uploadId"] == "up-2"
+
+    @pytest.mark.asyncio
+    async def test_an_ambiguous_name_lists_the_choices_instead_of_picking(self, session_documents):
+        session_documents.documents.extend([_doc("up-1", "award.pdf"), _doc("up-2", "budget.pdf")])
+        result = await _call(
+            make_verify_sources_tool("s1", "u1"), upload_id="0", claims=[_CLAIM], tool_context=_ctx()
+        )
+        assert result["status"] == "error"
+        text = result["content"][0]["text"]
+        assert "'up-1' (award.pdf)" in text and "'up-2' (budget.pdf)" in text
+        assert take_provenance("u1", "s1") == []
+
+    @pytest.mark.asyncio
+    async def test_a_long_listing_is_bounded(self, session_documents):
+        from agents.builtin_tools.verify_sources_tool import MAX_LISTED_DOCUMENTS
+
+        session_documents.documents.extend(
+            _doc(f"up-{i}", f"doc{i}.pdf") for i in range(MAX_LISTED_DOCUMENTS + 5)
+        )
+        result = await _call(make_verify_sources_tool("s1", "u1"), claims=[_CLAIM], tool_context=_ctx())
+        text = result["content"][0]["text"]
+        assert f"up-{MAX_LISTED_DOCUMENTS - 1}'" in text
+        assert f"up-{MAX_LISTED_DOCUMENTS}'" not in text
+        assert "5 more" in text
+
+    @pytest.mark.asyncio
+    async def test_a_session_with_no_document_says_so(self, session_documents):
+        result = await _call(make_verify_sources_tool("s1", "u1"), claims=[_CLAIM], tool_context=_ctx())
+        assert result["status"] == "error"
+        assert "no readable document" in result["content"][0]["text"]
 
 
 # ---------------------------------------------------------------------------

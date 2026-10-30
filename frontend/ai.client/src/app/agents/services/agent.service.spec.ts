@@ -35,6 +35,7 @@ describe('AgentService', () => {
     deleteAgent: ReturnType<typeof vi.fn>;
     getBindable: ReturnType<typeof vi.fn>;
     getShareSkillExposure: ReturnType<typeof vi.fn>;
+    getSkills: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -48,6 +49,7 @@ describe('AgentService', () => {
       deleteAgent: vi.fn(),
       getBindable: vi.fn(),
       getShareSkillExposure: vi.fn(),
+      getSkills: vi.fn(),
     };
     TestBed.configureTestingModule({
       providers: [AgentService, { provide: AgentApiService, useValue: mockApi }],
@@ -132,6 +134,19 @@ describe('AgentService', () => {
     await expect(service.getShareSkillExposure('ast-001')).rejects.toEqual({ status: 500 });
   });
 
+  it('unwraps the bound skills resolved for the viewer, and lets a failure reach the caller', async () => {
+    const skills = [{ skillId: 'sk_rubric', displayName: 'Rubric', description: 'Grade it', slug: 'sk-rubric' }];
+    mockApi.getSkills.mockReturnValueOnce(of({ agentId: 'ast-001', skills }));
+
+    expect(await service.getBoundSkills('ast-001')).toEqual(skills);
+    expect(mockApi.getSkills).toHaveBeenCalledWith('ast-001');
+
+    // The session page decides what a failure means (an older backend: fall back to the
+    // viewer's own list); the facade must not turn it into "no skills".
+    mockApi.getSkills.mockReturnValueOnce(throwError(() => ({ status: 404 })));
+    await expect(service.getBoundSkills('ast-001')).rejects.toEqual({ status: 404 });
+  });
+
   it('memoises the bindable palette per kind and returns [] on failure', async () => {
     const items: BindableItem[] = [
       { kind: 'model', ref: 'us.anthropic.claude', label: 'Claude', description: 'Bedrock', meta: {} },
@@ -148,5 +163,33 @@ describe('AgentService', () => {
     mockApi.getBindable.mockReturnValue(throwError(() => new Error('boom')));
     const skills = await service.loadBindable('skill');
     expect(skills).toEqual([]); // degrades gracefully
+  });
+
+  it('re-fetches one kind after invalidateBindable and leaves the others cached', async () => {
+    const before: BindableItem[] = [
+      { kind: 'skill', ref: 'house_style', label: 'House style', description: '', meta: {} },
+    ];
+    const after: BindableItem[] = [
+      ...before,
+      { kind: 'skill', ref: 'grant_writing', label: 'Grant Writing', description: '', meta: {} },
+    ];
+    const models: BindableItem[] = [
+      { kind: 'model', ref: 'us.anthropic.claude', label: 'Claude', description: '', meta: {} },
+    ];
+    mockApi.getBindable.mockImplementation((kind: string) =>
+      of({ kind, items: kind === 'skill' ? before : models }),
+    );
+    await service.loadBindable('skill');
+    await service.loadBindable('model');
+
+    // A skill authored elsewhere joins the accessible set; the palette must follow.
+    mockApi.getBindable.mockImplementation((kind: string) =>
+      of({ kind, items: kind === 'skill' ? after : models }),
+    );
+    service.invalidateBindable('skill');
+
+    expect(await service.loadBindable('skill')).toEqual(after);
+    expect(await service.loadBindable('model')).toEqual(models);
+    expect(mockApi.getBindable).toHaveBeenCalledTimes(3); // skill twice, model once
   });
 });

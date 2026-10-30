@@ -1,0 +1,232 @@
+[
+  {
+    "id": "document_qa.policy_booking_lead_time",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "According to the attached policy, how many hours ahead must a room booking be submitted? Reply with just the number of hours."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "72"
+      ],
+      "forbidden": [
+        "48"
+      ]
+    },
+    "files": [
+      "facilities_policy.md"
+    ],
+    "notes": "Literal wording. 48 hours is the planted distractor (the AV-equipment rule)."
+  },
+  {
+    "id": "document_qa.policy_room_capacity_paraphrase",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached policy: if I book the small seminar room B214, what's the most people I can bring? Just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "38"
+      ],
+      "forbidden": [
+        "52"
+      ]
+    },
+    "files": [
+      "facilities_policy.md"
+    ],
+    "notes": "Paraphrased. B241 holding 52 is the distractor one transposition away."
+  },
+  {
+    "id": "document_qa.policy_after_hours_form",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Per the attached policy, which form do I need to get into the building late at night? Give only the form code."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "FAC-17"
+      ],
+      "forbidden": [
+        "FAC-71"
+      ]
+    },
+    "files": [
+      "facilities_policy.md"
+    ],
+    "notes": "Paraphrased ('late at night' for 'outside opening hours'); FAC-71 is the key-loan distractor."
+  },
+  {
+    "id": "document_qa.policy_late_cancellation_fee",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "What does the attached policy charge for cancelling a booking at the last minute? Just the amount."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "$35",
+        "35"
+      ],
+      "forbidden": [
+        "53"
+      ]
+    },
+    "files": [
+      "facilities_policy.md"
+    ],
+    "notes": "Paraphrased; $53 is the damage-charge distractor."
+  },
+  {
+    "id": "document_qa.budget_submission_deadline",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "From the attached memo: when is the sponsor's submission deadline? Just the date."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "March 14",
+        "14 March"
+      ],
+      "forbidden": [
+        "March 4",
+        "4 March"
+      ]
+    },
+    "files": [
+      "grant_budget_memo.md"
+    ],
+    "notes": "March 4 is the internal review deadline, planted in the same sentence pair."
+  },
+  {
+    "id": "document_qa.budget_indirect_rate",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "What indirect cost rate does the attached memo apply? Just the percentage."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "26.5%",
+        "26.5"
+      ],
+      "forbidden": [
+        "24%"
+      ]
+    },
+    "files": [
+      "grant_budget_memo.md"
+    ],
+    "notes": "The superseded 24% rate is mentioned once as no longer applying."
+  },
+  {
+    "id": "document_qa.log_highest_temperature",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "In the attached field log, what was the highest water temperature recorded? Just the value in C."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "18.6"
+      ],
+      "forbidden": [
+        "16.8"
+      ]
+    },
+    "files": [
+      "field_station_log.txt"
+    ],
+    "notes": "16.8 is the digit-swapped distractor two entries earlier."
+  },
+  {
+    "id": "document_qa.log_sensor_replacement_date",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "According to the attached log, on what date was sensor S-7 replaced? Just the date."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "June 9",
+        "9 June"
+      ]
+    },
+    "files": [
+      "field_station_log.txt"
+    ],
+    "notes": "Reading a fact out of a dense line-per-day log."
+  },
+  {
+    "id": "document_qa.absent_fact_is_not_invented",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Does the attached policy say how much it costs to book room B214 for a day? If the document doesn't say, reply exactly: NOT IN DOCUMENT"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "search": [
+          "NOT IN DOCUMENT"
+        ]
+      },
+      "forbidden": [
+        "$35",
+        "$53"
+      ]
+    },
+    "files": [
+      "facilities_policy.md"
+    ],
+    "notes": "Hallucination guard: the policy has no booking price, and the two dollar figures it does have must not be offered as one."
+  }
+]

@@ -353,3 +353,68 @@ def test_the_trail_records_which_version_a_skill_moved_to(pid, project, skills, 
     assert (added["before"]["versions"], added["after"]["versions"]) == ({}, {"skill_one": 1})
     assert updated["before"] == {"refs": ["skill_one"], "versions": {"skill_one": 1}}
     assert (updated["after"]["refs"], updated["after"]["versions"]) == (["skill_one"], {"skill_one": 2})
+
+
+# --- Who added a skill (shared-projects §9.6, clause 4 of the invoke-through rule) ---
+
+
+def _harness_skill_configs(project, pid) -> dict:
+    service, _ = project
+    harness = asyncio.run(harness_settings.load_harness(service.get_project(pid, OWNER)[0]))
+    return {b.ref: b.config for b in harness.bindings if b.kind == "skill"}
+
+
+def test_adding_a_skill_records_the_saver_as_its_adder(pid, project, skills):
+    body = client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]}).json()
+    assert _harness_skill_configs(project, pid)["skill_one"] == {"version": 1, "addedBy": EDITOR.user_id}
+    # A user id, so no response carries it: not the save, not a read, not the history.
+    assert _skill(body)["config"] == {"version": 1}
+    assert _skill(client(VIEWER).get(f"/projects/{pid}/skills").json())["config"] == {"version": 1}
+    detail = client(VIEWER).get(f"/projects/{pid}/instructions/versions/{body['version']}").json()
+    assert detail["skills"] == [{"ref": "skill_one", "config": {"version": 1}}]
+    bindings_change = next(c for c in detail["fieldChanges"] if c["field"] == "bindings")
+    assert "addedBy" not in str(bindings_change)
+
+
+def test_a_bound_skill_keeps_its_adder_across_later_saves(pid, project, skills):
+    client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
+    # The owner re-saves the list (toggling nothing, naming a version, pinning): the
+    # editor who added the skill stays its adder, so it keeps running for members.
+    client(OWNER).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
+    assert _harness_skill_configs(project, pid)["skill_one"]["addedBy"] == EDITOR.user_id
+    client(OWNER).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one", "config": {"version": 1}}]})
+    assert _harness_skill_configs(project, pid)["skill_one"]["addedBy"] == EDITOR.user_id
+    asyncio.run(skills.update_skill("skill_one", {"instructions": "Do two things."}))
+    client(OWNER).post(f"/projects/{pid}/skills/skill_one/pin")
+    assert _harness_skill_configs(project, pid)["skill_one"] == {"version": 2, "addedBy": EDITOR.user_id}
+
+
+def test_a_client_cannot_name_the_adder(pid, project, skills):
+    # Only the route writes it: a request claiming another user added the skill is
+    # ignored, both on add and on a re-save of a skill already bound.
+    client(EDITOR).put(
+        f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one", "config": {"addedBy": "u-someone-else"}}]}
+    )
+    assert _harness_skill_configs(project, pid)["skill_one"]["addedBy"] == EDITOR.user_id
+    client(OWNER).put(
+        f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one", "config": {"addedBy": OWNER.user_id}}]}
+    )
+    assert _harness_skill_configs(project, pid)["skill_one"]["addedBy"] == EDITOR.user_id
+
+
+def test_a_skill_bound_before_adders_were_recorded_has_none(pid, project, skills):
+    from apis.shared.assistants.models import AgentBinding
+    from apis.shared.assistants.service import update_assistant
+
+    service, created = project
+    harness = asyncio.run(harness_settings.load_harness(service.get_project(created.project_id, OWNER)[0]))
+    asyncio.run(update_assistant(
+        assistant_id=harness.assistant_id, owner_id=harness.owner_id,
+        bindings=[AgentBinding(kind="skill", ref="skill_one")],
+    ))
+    # A re-save never guesses who added it; removing and re-adding the skill records the saver.
+    client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
+    assert "addedBy" not in _harness_skill_configs(project, pid)["skill_one"]
+    client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": []})
+    client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
+    assert _harness_skill_configs(project, pid)["skill_one"]["addedBy"] == EDITOR.user_id
