@@ -256,3 +256,81 @@ class TestInvokeThroughPredicate:
                 _user(), ["alices_style"], AGENT_OWNER
             )
         assert "alices_style" not in allowed
+
+
+ADDER = "user-erin"
+
+
+class TestAddedByClause:
+    """Clause 4 — on a project harness, a skill resolves for every member when the
+    editor who *added* it authored it (shared-projects §9.6).
+
+    The harness's ``ownerId`` is the project's creator, so clause 3 alone covered the
+    creator's skills: a skill an editor wrote and added ran for the editor (clause 2)
+    and was silently dropped for everyone else.
+    """
+
+    async def test_a_skill_its_adder_authored_resolves_for_a_member(self):
+        repo_patch, _ = _repo(records=[("erins_rubric", ADDER)])
+        with _roles(), repo_patch:
+            allowed = await resolve_invocable_skill_ids(
+                _user(), ["erins_rubric"], AGENT_OWNER, adders={"erins_rubric": ADDER}
+            )
+        assert "erins_rubric" in allowed
+
+    async def test_the_adder_must_have_authored_it(self):
+        # Chain-sharing guard, same shape as clause 3: a skill merely reachable by the
+        # adder is not laundered to the project by adding it.
+        repo_patch, _ = _repo(records=[("carols_skill", "user-carol")])
+        with _roles(), repo_patch:
+            allowed = await resolve_invocable_skill_ids(
+                _user(), ["carols_skill"], AGENT_OWNER, adders={"carols_skill": ADDER}
+            )
+        assert "carols_skill" not in allowed
+
+    async def test_an_adder_only_vouches_for_the_skill_they_added(self):
+        # The map is per skill: Erin adding one skill does not make another skill of
+        # hers, bound by someone else without a recorded adder, resolve.
+        repo_patch, _ = _repo(records=[("erins_rubric", ADDER), ("erins_other", ADDER)])
+        with _roles(), repo_patch:
+            allowed = await resolve_invocable_skill_ids(
+                _user(), ["erins_rubric", "erins_other"], AGENT_OWNER, adders={"erins_rubric": ADDER}
+            )
+        assert allowed == {"erins_rubric"}
+
+    async def test_a_catalog_skill_is_not_widened_by_its_adder(self):
+        # An admin skill stays per-member RBAC on a project, like tools: a role-granted
+        # editor adding it does not hand it to members outside the role. "system" is
+        # never an adder match, whatever the binding says.
+        repo_patch, _ = _repo(records=[("payroll_runbook", "system")])
+        with _roles(), repo_patch:
+            allowed = await resolve_invocable_skill_ids(
+                _user(), ["payroll_runbook"], AGENT_OWNER, adders={"payroll_runbook": "system"}
+            )
+        assert "payroll_runbook" not in allowed
+
+    async def test_owner_clause_still_applies_beside_the_adders(self):
+        repo_patch, _ = _repo(records=[("alices_style", AGENT_OWNER), ("erins_rubric", ADDER)])
+        with _roles(), repo_patch:
+            allowed = await resolve_invocable_skill_ids(
+                _user(), ["alices_style", "erins_rubric"], AGENT_OWNER, adders={"erins_rubric": ADDER}
+            )
+        assert allowed == {"alices_style", "erins_rubric"}
+
+    async def test_adders_resolve_even_on_a_system_owned_agent(self):
+        # Clause 3 is off for a system-owned Agent; clause 4 is judged per adder and
+        # still excludes system-owned skills, so it can run on its own.
+        repo_patch, repo = _repo(records=[("erins_rubric", ADDER)])
+        with _roles(), repo_patch:
+            allowed = await resolve_invocable_skill_ids(
+                _user(), ["erins_rubric"], "system", adders={"erins_rubric": ADDER}
+            )
+        assert "erins_rubric" in allowed
+        repo.batch_get_skills.assert_awaited_once()
+
+    async def test_no_adders_and_no_owner_makes_no_batch_read(self):
+        repo_patch, repo = _repo(records=[("erins_rubric", ADDER)])
+        with _roles(), repo_patch:
+            allowed = await resolve_invocable_skill_ids(_user(), ["erins_rubric"], None, adders={})
+        assert "erins_rubric" not in allowed
+        repo.batch_get_skills.assert_not_awaited()

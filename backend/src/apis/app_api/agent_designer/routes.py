@@ -41,6 +41,7 @@ from apis.app_api.agent_designer.services.bindable_catalog import (
     list_bindable,
 )
 from apis.app_api.agent_designer.services.agent_detail import (
+    resolve_bound_skills,
     resolve_capabilities,
     resolve_listing_display,
     resolve_model_retirement,
@@ -55,6 +56,7 @@ from apis.shared.assistants.models import (
     AgentResponse,
     AgentRunnabilityResponse,
     AgentSharesResponse,
+    AgentSkillsResponse,
     AgentsListResponse,
     BindableListResponse,
     CreateAssistantDraftRequest,
@@ -69,6 +71,7 @@ from apis.shared.assistants.models import (
 from apis.shared.assistants.version_resolution import (
     AgentVersionUnavailableError,
     resolve_display_agent,
+    resolve_invocation_agent,
 )
 from apis.shared.assistants.service import (
     PROJECT_HARNESS_EDIT_MESSAGE,
@@ -463,6 +466,45 @@ async def get_agent_runnability_endpoint(
     except Exception as e:
         logger.error(f"Error resolving agent runnability: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to resolve runnability: {str(e)}")
+
+
+@router.get("/{agent_id}/skills", response_model=AgentSkillsResponse)
+async def get_agent_skills_endpoint(agent_id: str, current_user: User = Depends(require_agents_enabled)):
+    """The Agent's bound skills that will run for the requesting user, in binding order.
+
+    What the composer's ``/`` menu is built from in an Agent conversation (a project's
+    included): the viewer's own ``GET /skills/`` cannot list a skill another member
+    authored, so the menu has to ask the Agent. Resolved against the configuration that
+    actually runs for this caller (``resolve_invocation_agent``: the published version
+    for a store Agent, the live record for its owner and for every project member), by
+    the same predicate the turn uses, so the menu and the turn agree. Access-gated
+    exactly like the detail read.
+    """
+    try:
+        if not await assistant_exists(agent_id):
+            raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+        assistant, _ = await get_assistant_with_access_check(
+            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email,
+            resolve_public_share=True,
+        )
+        if not assistant:
+            raise HTTPException(status_code=403, detail="Access denied: you do not have permission to access this agent")
+        try:
+            assistant, _ = await resolve_invocation_agent(assistant, current_user.user_id)
+        except AgentVersionUnavailableError as unavailable:
+            logger.error(f"Published version unavailable for skills read: {unavailable}")
+            raise HTTPException(
+                status_code=503,
+                detail="This agent's published version could not be loaded. Please try again.",
+            ) from unavailable
+        return AgentSkillsResponse(
+            agent_id=agent_id, skills=await resolve_bound_skills(assistant, current_user)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving agent skills: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to resolve agent skills: {str(e)}")
 
 
 @router.put("/{agent_id}", response_model=AgentResponse, response_model_exclude_none=True)

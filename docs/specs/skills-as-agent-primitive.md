@@ -271,13 +271,28 @@ A skill binding on an Agent resolves for an invoker when **any** of:
 1. **Catalog grant** — RBAC `granted_skills` reaches the skill; or
 2. **Ownership** — the invoker owns the skill; or
 3. **Invoke-through** — `skill.owner_id == agent.owner_id` **and** the invoker
-   has share-access to the agent.
+   has share-access to the agent; or
+4. **Added by its author** (a Shared Project's harness only, 2026-10-30) —
+   `skill.owner_id == binding.config.addedBy` **and** the invoker is a member.
+   The project settings route records the saver's user id on each skill it
+   adds; the harness's `ownerId` is the project's creator, so clause 3 alone
+   covered the creator's skills, and a skill an editor wrote and added ran for
+   the editor (clause 2) and was silently dropped for everyone else (§9.6
+   degrade). Only a harness supplies `addedBy` to the predicate
+   (`pins.project_skill_adders`); an ordinary Agent's binding config is
+   client-writable through `PUT /agents/{id}`, so it is never honoured there.
 
 Clause 3's owner-match blocks **chain-sharing**: a skill shared *to* A cannot
 be laundered to a wider audience by binding it to A's agent and sharing the
-agent — invoke-through only extends the agent owner's *own* skills.
+agent — invoke-through only extends the agent owner's *own* skills. Clause 4
+keeps the same guard with the adder in the owner's place: the adder must have
+*authored* the skill. Neither clause widens a **catalog** skill: `system` never
+matches an owner or an adder, so an admin skill a role-granted editor adds to a
+project stays per-member RBAC, like tools, and a member without the role has it
+dropped with an `agent_notice` (shared-projects §9.6).
 
-Failing all three → the existing D5 block-with-message behavior.
+Failing all four → the existing D5 block-with-message behavior (a project
+harness degrades instead).
 
 `read_skill_file` applies the same predicate on every call (the tool is the
 only read path for reference bytes at runtime).
