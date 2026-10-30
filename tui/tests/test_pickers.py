@@ -28,6 +28,8 @@ from agentcore_tui.screens.conversations import (
 )
 from agentcore_tui.screens.tool_picker import ToolPicker
 
+from .conftest import rendered_text
+
 BASE_URL = "https://screens.invalid/api"
 
 
@@ -704,4 +706,117 @@ class TestConversationFilter:
             await pilot.pause()
             assert len(screen.query(ConversationRow)) == 2
             assert "message search is off" in status_text(screen)
+        await api.aclose()
+
+
+class TestBulkDelete:
+    @staticmethod
+    def _handler(captured: list[httpx.Request], sessions: list[dict[str, Any]], *, fail: set[str] = frozenset()) -> Any:
+        base = routing_handler(sessions=sessions, capture=captured)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/sessions/bulk-delete"):
+                captured.append(request)
+                ids = json.loads(request.content)["sessionIds"]
+                results = [{"sessionId": i, "success": i not in fail, "error": None if i not in fail else "boom"} for i in ids]
+                ok = sum(1 for r in results if r["success"])
+                return httpx.Response(200, json={"deletedCount": ok, "failedCount": len(ids) - ok, "results": results})
+            return base(request)
+
+        return handler
+
+    async def test_space_marks_rows_and_delete_removes_all_marked_in_one_request(self) -> None:
+        captured: list[httpx.Request] = []
+        sessions = [session_wire("s1", "One"), session_wire("s2", "Two"), session_wire("s3", "Three")]
+        api = catalog_for(self._handler(captured, sessions))
+        screen = ConversationList(lambda: api, on_open=Opened())
+        app = Host()
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+            screen.list_view.index = 1
+            screen.list_view.focus()
+            await pilot.press("space")  # marks One, moves to Two
+            await pilot.press("space")  # marks Two, moves to Three
+            await pilot.pause()
+            assert "2 marked" in rendered_text(app)
+            assert [item.marked for item in screen.query(ConversationRow)] == [True, True, False]
+
+            screen.action_delete()
+            await answer_modal(pilot, ConfirmDelete, True)
+
+            bulk = [r for r in captured if r.url.path.endswith("/bulk-delete")]
+            assert (
+                len(bulk) == 1
+                and json.loads(bulk[0].content) == {"sessionIds": ["s1", "s2"]}
+                or json.loads(bulk[0].content) == {"sessionIds": ["s2", "s1"]}
+            )
+            assert not [r for r in captured if r.method == "DELETE"]
+            assert [item.summary.title for item in screen.query(ConversationRow)] == ["Three"]
+            assert "marked" not in rendered_text(app)
+        await api.aclose()
+
+    async def test_space_again_unmarks(self) -> None:
+        api = catalog_for(routing_handler(sessions=[session_wire("s1", "One"), session_wire("s2", "Two")]))
+        screen = ConversationList(lambda: api, on_open=Opened())
+        app = Host()
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+            screen.list_view.index = 1
+            screen.list_view.focus()
+            await pilot.press("space")
+            await pilot.press("up")
+            await pilot.press("space")
+            await pilot.pause()
+            assert not any(item.marked for item in screen.query(ConversationRow))
+            assert "marked" not in rendered_text(app)
+        await api.aclose()
+
+    async def test_the_confirmation_names_the_count(self) -> None:
+        app = Host()
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.push_screen(ConfirmDelete(["A", "B", "C"]))
+            await pilot.pause()
+            text = rendered_text(app)
+            assert "Delete these 3 conversations?" in text and "A" in text and "C" in text
+
+    async def test_failures_stay_marked_and_are_reported(self) -> None:
+        captured: list[httpx.Request] = []
+        sessions = [session_wire("s1", "One"), session_wire("s2", "Two")]
+        api = catalog_for(self._handler(captured, sessions, fail={"s2"}))
+        screen = ConversationList(lambda: api, on_open=Opened())
+        app = Host()
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            await pilot.pause()
+            screen.list_view.index = 1
+            screen.list_view.focus()
+            await pilot.press("space")
+            await pilot.press("space")
+            screen.action_delete()
+            await answer_modal(pilot, ConfirmDelete, True)
+            assert [item.summary.title for item in screen.query(ConversationRow)] == ["Two"]
+            assert screen._marked == {"s2"}
+        await api.aclose()
+
+
+class TestDeleteManyCatalog:
+    async def test_chunks_at_the_server_limit_and_returns_deleted_ids(self) -> None:
+        bodies: list[list[str]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            ids = json.loads(request.content)["sessionIds"]
+            bodies.append(ids)
+            results = [{"sessionId": i, "success": i != "x7"} for i in ids]
+            return httpx.Response(200, json={"deletedCount": 0, "failedCount": 0, "results": results})
+
+        api = catalog_for(handler)
+        ids = [f"x{i}" for i in range(25)]
+        deleted = await api.delete_many(ids)
+        assert [len(b) for b in bodies] == [20, 5]
+        assert deleted == set(ids) - {"x7"}
         await api.aclose()

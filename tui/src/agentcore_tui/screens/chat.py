@@ -521,6 +521,24 @@ class ChatScreen(Screen[None]):
         # `//` escapes a leading slash in a real prompt.
         await self._start_turn(message.text[1:] if message.text.startswith("//") else message.text)
 
+    async def _rename_command(self, title: str) -> None:
+        """`/rename <title>` for the open conversation. Titles are otherwise the
+        server's, generated on the first turn."""
+        title = " ".join(title.split())
+        if not title:
+            self.notify("Usage: /rename <title>", severity="warning", timeout=5)
+            return
+        if self._store.is_empty:
+            self.notify("Nothing to rename yet; send a message first.", severity="warning", timeout=5)
+            return
+        try:
+            await self._catalog_or_create().rename(self._store.session_id, title)
+        except AgentCoreTuiError as exc:
+            self.notify(exc.message, title="Could not rename", severity="error", timeout=8)
+            return
+        self.sub_title = title
+        self.notify(f"Renamed to “{title}”.", timeout=4)
+
     # -- skills and modes ----------------------------------------------------
 
     @work(exclusive=True, group="skills")
@@ -719,6 +737,8 @@ class ChatScreen(Screen[None]):
                 await self._project_command(argument)
             case "agent":
                 await self._agent_command(argument)
+            case "rename":
+                await self._rename_command(argument)
             case "skills":
                 self.action_choose_skills()
             case "mode":

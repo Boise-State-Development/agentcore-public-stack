@@ -134,6 +134,7 @@ COMMANDS = CommandRegistry(
             usage="[name|off|info]",
             agent_only=True,
         ),
+        SlashCommand("rename", "Give this conversation a title of your own", usage="<title>", agent_only=True),
         SlashCommand(
             "skills",
             "Choose which skills the agent may use; type /<skill> in a message to invoke one",

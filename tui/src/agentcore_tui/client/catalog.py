@@ -896,8 +896,29 @@ class CatalogClient:
     async def delete(self, session_id: str) -> None:
         await self._request("DELETE", self._endpoints.session(session_id))
 
-    async def delete_many(self, session_ids: list[str]) -> None:
-        await self._post(self._endpoints.sessions_bulk_delete, {"sessionIds": session_ids})
+    #: The server caps one bulk-delete request at this many ids.
+    BULK_DELETE_LIMIT = 20
+
+    async def delete_many(self, session_ids: list[str]) -> set[str]:
+        """Delete several conversations; returns the ids the server deleted.
+
+        The server answers per id (``results[].success``) and caps a request
+        at 20, so a longer list goes in chunks and a failure in one chunk
+        stops there, leaving the rest for the caller to report as not done.
+        """
+        deleted: set[str] = set()
+        for start in range(0, len(session_ids), self.BULK_DELETE_LIMIT):
+            chunk = session_ids[start : start + self.BULK_DELETE_LIMIT]
+            payload = await self._post(self._endpoints.sessions_bulk_delete, {"sessionIds": chunk})
+            results = payload.get("results")
+            if not isinstance(results, list):
+                deleted.update(chunk)
+                continue
+            for row in results:
+                if isinstance(row, dict) and row.get("success"):
+                    deleted.add(str(row.get("sessionId") or row.get("session_id") or ""))
+        deleted.discard("")
+        return deleted
 
     async def mark_read(self, session_id: str, *, read: bool = True) -> bool:
         """Best-effort, like the web UI: a failure here must not block anything.

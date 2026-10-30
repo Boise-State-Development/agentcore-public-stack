@@ -198,9 +198,10 @@ lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
 | `/model [name]` | Pick a model, or switch straight to one whose name contains `name` |
 | `/tools` | Choose which server tools the agent may use (signed in) |
 | `/tools local on\|off` | Switch tools that run on this machine for the session |
-| `/conversations [search]` | Browse, open, rename (`r`) or delete saved conversations |
+| `/conversations [search]` | Browse, open, rename (`r`) or delete saved conversations; Space marks several, Delete removes them |
 | `/project [name\|off\|info\|shared]` | Run conversations in a Shared Project: pick one, name one, leave, see its details, or read what teammates shared |
 | `/agent [name\|off\|info]` | Talk to one of your agents (own, shared with you, or pinned) |
+| `/rename <title>` | Give the open conversation a title of your own |
 | `/skills` | Choose which skills the agent may use (off unless switched on) |
 | `/<skill> …` | Invoke an enabled skill in a message, e.g. `/xlsx total the NET column` |
 | `/mode [name\|off]` | Set the conversation mode (a named system prompt) |

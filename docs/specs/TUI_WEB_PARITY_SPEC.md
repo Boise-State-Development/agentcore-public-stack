@@ -42,14 +42,14 @@ rather than reproducing that hierarchy.
 | Model choice | `GET /models` | ✅ done — real catalogue, provider carried |
 | Tool choice | `GET /tools/`, `PUT /tools/preferences` | ✅ done (`discover` pending) |
 | Conversation list & resume | `GET /sessions`, `GET /sessions/{id}/messages` | ✅ done |
-| Rename / delete / bulk delete | `PUT /sessions/{id}/metadata`, `DELETE`, `POST /sessions/bulk-delete` | ✅ rename + delete; bulk pending |
+| Rename / delete / bulk delete | `PUT /sessions/{id}/metadata`, `DELETE`, `POST /sessions/bulk-delete` | ✅ `r` and Delete in `/conversations`, `/rename <title>` in chat; Space marks rows and Delete removes every marked one in one request (chunked at the server's 20; failures stay marked) |
 | Read / unread | `POST /sessions/{id}/read` \| `/unread` | ✅ done |
 | Shared Projects (chat in one) | `GET /projects`, `GET /projects/{id}`, `rag_assistant_id = harnessAgentId` on every turn, `preferences.projectId` on sessions | ✅ `/project [name\|off\|info\|shared]`; picker (Mine / Shared with me); status-bar badge; `/conversations` badge + rebind on open; gate refusals carry slash-command hints; `/project shared` reads `GET /projects/{id}/shared-tasks` → `GET /shared/{shareId}` (snapshot) → `POST /shares/{id}/export` (continue as mine, keeps the project). Management surfaces (members, instructions, memory, schedules, outputs) deliberately web-only |
 | Agents (own, shared, pinned) | `GET /agents`, `GET /agents/pins`, `GET /agents/{id}`, `rag_assistant_id = agentId` | ✅ `/agent [name\|off\|info]`; picker grouped Mine / Shared with me / Pinned (the web `@` menu's scope; drafts excluded); `@ <name>` in the status bar; mutually exclusive with a project; reopening an agent conversation rebinds by its stored `assistantId`. Store browsing, pinning and the designer stay web-only |
 | Skills | `GET /skills/`, `PUT /skills/preferences`, `enabled_skills`, `invoked_skills` | ✅ `/skills` picker (opt-in; shows each `/slug`); `/<slug>` in a message invokes it by the web composer's token rule; enabled skills listed in the `/` menu after commands (a command name always wins) |
 | Conversation modes | `GET /system-prompts/`, `selected_prompt_id`, `PUT /sessions/{id}/metadata {selectedPromptId: null}` to clear | ✅ `/mode [name\|off]`; sent every non-agent turn; restored when a conversation opens; clearing writes null because the server falls back to the stored mode |
 | File attachments | `POST /files/presign` → PUT → `POST /files/{id}/complete` | ✅ `/attach <path>`; `file_upload_ids` on the next turn |
-| Title generation | `POST /chat/generate-title` | ✅ client done, not yet auto-fired |
+| Title generation | `session_title` on the first turn's stream; `POST /chat/generate-title` is only for voice sessions | ✅ shown as the screen's subtitle and in `/conversations`; `/rename <title>` overrides it. The web app has no regenerate action, so neither does the TUI |
 | Sampling overrides | `inference_params` | ✅ `/effort [level\|off]`, the one knob the web app still exposes (its Advanced form with temperature/top_p/max_tokens was removed). Control exists when the model's `supportedParams` declares `allowed` levels for `effort` or `reasoning_effort` and is not locked; kept per model for the run, sent as `{key: level}` on every request of a turn |
 | Continue after truncation | `continue_truncated: true` with empty message | ✅ `/continue` |
 | Resume a paused turn | `interrupt_responses`; `pendingInterrupts` on `GET /sessions/{id}/messages`; `POST /connectors/{id}/initiate-consent` | ✅ all five interrupt kinds answered in the transcript, live or on reopening a conversation that paused while nobody was there (OAuth rows get a fresh URL; there is no GET on `/pending-interrupts`, only DELETE) |
@@ -75,7 +75,7 @@ Agents (list/get/`bindable`/`runnability`/pins, `@`-mention via
 | Artifact rendering | A sandboxed iframe with a render token. Partly salvageable: `GET /artifacts/{id}/content` can download to disk, which is what we will do. |
 | MCP Apps | Cross-origin iframe + postMessage bridge. Iframe-shaped by construction; show `GET /mcp-apps/cards` metadata only. |
 | Appearance settings | No meaning in a terminal. |
-| `manage-sessions` as a screen | Redundant with the conversation list; fold its bulk actions in. |
+| `manage-sessions` as a screen | Redundant with the conversation list; its bulk delete is folded in (Space marks, Delete). |
 
 ## Client-executed tools
 

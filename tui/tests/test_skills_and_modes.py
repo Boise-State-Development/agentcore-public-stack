@@ -331,3 +331,19 @@ class TestModes:
             await pilot.press("enter")
             await pilot.pause()
         assert results == [False]
+
+
+class TestRename:
+    async def test_rename_puts_the_title_and_updates_the_subtitle(self) -> None:
+        backend = Backend()
+        app = app_for(backend)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await send(pilot, app, "/rename  Budget   notes ")
+            await pilot.pause()
+            assert backend.metadata_puts == []  # nothing to rename before a turn
+            await send(pilot, app, "hello")
+            await send(pilot, app, "/rename  Budget   notes ")
+            await pilot.pause()
+            assert app.chat.sub_title == "Budget notes"
+        assert backend.metadata_puts == [{"title": "Budget notes"}]

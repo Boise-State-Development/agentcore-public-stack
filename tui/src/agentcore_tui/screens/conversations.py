@@ -100,19 +100,23 @@ def _relative_day(timestamp: str, *, now: datetime | None = None) -> str:
 
 
 class ConfirmDelete(ModalScreen[bool]):
-    """Confirms one deletion. Destructive and not undoable from here."""
+    """Confirms a deletion of one or several conversations. Destructive and
+    not undoable from here."""
 
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, title: str) -> None:
+    def __init__(self, titles: str | list[str]) -> None:
         super().__init__()
-        self._title = title
+        self._titles = [titles] if isinstance(titles, str) else list(titles)
 
     def compose(self) -> ComposeResult:
+        count = len(self._titles)
+        shown = self._titles[:6]
+        subject = "\n".join(shown) + (f"\n…and {count - len(shown)} more" if count > len(shown) else "")
         with Vertical(id="confirm-frame") as frame:
             frame.border_title = "Delete"
-            yield Label("Delete this conversation?", id="picker-title")
-            yield Static(self._title, id="confirm-subject", markup=False)
+            yield Label("Delete this conversation?" if count == 1 else f"Delete these {count} conversations?", id="picker-title")
+            yield Static(subject, id="confirm-subject", markup=False)
             yield Label("This also removes it from the web app. It cannot be undone.", id="picker-help")
             with Horizontal(id="confirm-actions"):
                 yield Button("Delete", id="confirm-yes", variant="error")
@@ -161,10 +165,11 @@ class RenameConversation(ModalScreen[str | None]):
 class ConversationRow(ListItem):
     """One conversation. Holds its summary so actions need no lookup."""
 
-    def __init__(self, summary: ConversationSummary, *, project_name: str | None = None) -> None:
+    def __init__(self, summary: ConversationSummary, *, project_name: str | None = None, marked: bool = False) -> None:
         super().__init__(classes="conversation-row")
         self._project_name = project_name
         self.summary = summary
+        self.marked = marked
 
     def compose(self) -> ComposeResult:
         yield Static(self._row_text(), classes="conversation-title")
@@ -177,7 +182,10 @@ class ConversationRow(ListItem):
         """
         from rich.markup import escape
 
-        marker = "[$accent]●[/] " if self.summary.unread else "  "
+        if self.marked:
+            marker = "[$warning]✓[/] "
+        else:
+            marker = "[$accent]●[/] " if self.summary.unread else "  "
         counts = f"{self.summary.message_count} messages" if self.summary.message_count != 1 else "1 message"
         if not self.summary.message_count:
             counts = "empty"
@@ -213,6 +221,7 @@ class ConversationList(Screen[None]):
         Binding("escape", "close", "Back"),
         Binding("enter", "open", "Open", priority=True),
         Binding("r", "rename", "Rename"),
+        Binding("space", "toggle_mark", "Mark"),
         Binding("delete", "delete", "Delete"),
         Binding("u", "toggle_unread", "Unread"),
         Binding("ctrl+r", "reload", "Reload"),
@@ -235,6 +244,12 @@ class ConversationList(Screen[None]):
         self._filter = (initial_query or "").strip()
         #: Rows from a server search, shown instead of the loaded page.
         self._search_results: list[ConversationSummary] | None = None
+        #: Conversations marked with Space, for one Delete. Survives filtering
+        #: and reloads; cleared when the deletion goes through.
+        self._marked: set[str] = set()
+        #: The status line without the marked-count suffix, so the suffix can
+        #: be re-applied as marks change without re-deriving the line.
+        self._status_base = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -342,7 +357,9 @@ class ConversationList(Screen[None]):
             await self.list_view.append(GroupHeading(heading))
             for summary in group:
                 project = self.project_for(summary)
-                await self.list_view.append(ConversationRow(summary, project_name=project.name if project else None))
+                await self.list_view.append(
+                    ConversationRow(summary, project_name=project.name if project else None, marked=summary.session_id in self._marked)
+                )
 
         # Land on the first conversation, not the heading above it, so Enter
         # opens something straight away. Focus moves to the list only when the
@@ -356,12 +373,13 @@ class ConversationList(Screen[None]):
 
         self.status.remove_class("-error")
         if self._search_results is not None:
-            self.status.update(f"{len(rows)} result(s) for '{self._filter}' · Ctrl+U clears")
+            self._status_base = f"{len(rows)} result(s) for '{self._filter}' · Ctrl+U clears"
         elif self._filter:
-            self.status.update(f"{len(rows)} of {len(self._rows)} match '{self._filter}' · Enter searches message text")
+            self._status_base = f"{len(rows)} of {len(self._rows)} match '{self._filter}' · Enter searches message text"
         else:
             more = " · press m for more" if self._next_token else ""
-            self.status.update(f"{len(self._rows)} conversation(s){more}")
+            self._status_base = f"{len(self._rows)} conversation(s){more}"
+        self._refresh_status_count()
 
     # -- filtering -----------------------------------------------------------
 
@@ -459,21 +477,63 @@ class ConversationList(Screen[None]):
             return
         self._replace(summary, replace(summary, title=title))
 
+    def action_toggle_mark(self) -> None:
+        """Space marks the highlighted conversation for one Delete of several."""
+        item = self.list_view.highlighted_child
+        if not isinstance(item, ConversationRow):
+            return
+        session_id = item.summary.session_id
+        if session_id in self._marked:
+            self._marked.discard(session_id)
+            item.marked = False
+        else:
+            self._marked.add(session_id)
+            item.marked = True
+        item.refresh_title()
+        self._refresh_status_count()
+        if self.list_view.index is not None and self.list_view.index < len(self.list_view.children) - 1:
+            self.list_view.action_cursor_down()
+
+    def _refresh_status_count(self) -> None:
+        suffix = f" · {len(self._marked)} marked · Delete removes them" if self._marked else ""
+        self.status.update(self._status_base + suffix)
+
     @work
     async def action_delete(self) -> None:
-        summary = self.selected()
-        if summary is None:
+        """Delete the marked conversations, or the highlighted one when none
+        are marked."""
+        known = {row.session_id: row for row in self._rows + (self._search_results or [])}
+        targets = [known[sid] for sid in self._marked if sid in known]
+        if not targets:
+            summary = self.selected()
+            if summary is None:
+                return
+            targets = [summary]
+        if not await self.app.push_screen_wait(ConfirmDelete([t.title for t in targets])):
             return
-        if not await self.app.push_screen_wait(ConfirmDelete(summary.title)):
-            return
+        deleted: set[str] = set()
         try:
-            await self._catalog_supplier().delete(summary.session_id)
+            if len(targets) == 1:
+                await self._catalog_supplier().delete(targets[0].session_id)
+                deleted = {targets[0].session_id}
+            else:
+                deleted = await self._catalog_supplier().delete_many([t.session_id for t in targets])
         except AgentCoreTuiError as exc:
             self.notify(exc.message, title="Delete failed", severity="error", timeout=8)
-            return
-        self._rows = [row for row in self._rows if row.session_id != summary.session_id]
+        self._rows = [row for row in self._rows if row.session_id not in deleted]
+        if self._search_results is not None:
+            self._search_results = [row for row in self._search_results if row.session_id not in deleted]
+        self._marked -= deleted
         await self._rebuild()
-        self.notify(f"Deleted {summary.title}", timeout=5)
+        if not deleted:
+            return
+        failed = len(targets) - len(deleted)
+        if len(targets) == 1:
+            self.notify(f"Deleted {targets[0].title}", timeout=5)
+        elif failed:
+            self.notify(f"Deleted {len(deleted)}; {failed} could not be deleted and stay marked.", severity="warning", timeout=8)
+        else:
+            self.notify(f"Deleted {len(deleted)} conversations", timeout=5)
 
     async def action_toggle_unread(self) -> None:
         summary = self.selected()
