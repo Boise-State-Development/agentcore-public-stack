@@ -340,16 +340,24 @@ def _command_chat(args: argparse.Namespace) -> int:
     # `--banner` both enables and forces: asking for it implies wanting to see
     # it now, not "enable it for the next version bump".
     banner = getattr(args, "banner", None)
-    config = resolve_config(
-        base_url=args.base_url,
-        model_id=args.model_id,
-        config_file=args.config_file,
-        banner=banner,
-        force_banner=banner is True,
-        local_tools=getattr(args, "local_tools", None),
-    )
-    ChatApp(config).run()
-    return 0
+    from .screens.setup import RESTART
+
+    force_banner = banner is True
+    while True:
+        config = resolve_config(
+            base_url=args.base_url,
+            model_id=args.model_id,
+            config_file=args.config_file,
+            banner=banner,
+            force_banner=force_banner,
+            local_tools=getattr(args, "local_tools", None),
+        )
+        result = ChatApp(config, config_file=args.config_file).run()
+        if result != RESTART:
+            return 0
+        # First-run setup stored a base URL and a credential; start again from
+        # them. The banner was already shown (or already seen), so not again.
+        force_banner = False
 
 
 def _normalise(args: argparse.Namespace) -> argparse.Namespace:

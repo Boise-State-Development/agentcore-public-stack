@@ -744,3 +744,56 @@ ModalScreen:ansi OptionList > .option-list--option-highlighted {
 #shared-banner.-error {
     color: $error;
 }
+
+/* ------------------------------------------------------------------- setup */
+
+SetupScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#setup-frame {
+    width: 84;
+    max-width: 94%;
+    height: auto;
+    border: round $primary;
+    padding: 1 2;
+    background: $surface;
+}
+
+#setup-title {
+    width: 100%;
+    height: auto;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#setup-body {
+    width: 100%;
+    height: auto;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#setup-input {
+    margin-bottom: 1;
+}
+
+#setup-choices {
+    height: auto;
+    max-height: 8;
+    margin-bottom: 1;
+}
+
+#setup-error {
+    width: 100%;
+    height: auto;
+    color: $error;
+    margin-bottom: 1;
+}
+
+#setup-help {
+    width: 100%;
+    height: auto;
+    color: $text-muted;
+}

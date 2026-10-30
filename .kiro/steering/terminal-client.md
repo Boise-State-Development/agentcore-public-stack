@@ -223,6 +223,17 @@ The bus-address rejoin lives in **`/etc/profile.d/`**, not `~/.bashrc`:
 returns early for exactly that. The Dockerfile's pre-existing `~/.bashrc` PATH
 block has the same latent problem.
 
+## First-run setup restarts the app
+
+`SetupScreen` (pushed by `ChatApp` when `config.is_complete` is false and no
+transport was injected) collects the base URL and a credential through the
+same functions `aps-tui login` uses, so the two cannot disagree. On success the
+app exits with `RESTART` and `cli._command_chat` loops: re-resolve the
+config, run again. Rebuilding every screen from the stored configuration is
+simpler and safer than teaching `ChatScreen` to swap its config and
+controller mid-life. The URL is probed with `GET /health` and retried with
+`/api` appended, because users type the web app's address.
+
 ## Projects: one wire fact, four places it must hold
 
 A project conversation is an ordinary session whose **every** turn carries
@@ -375,11 +386,11 @@ tui/src/aps_tui/
 │                     agent_stream.py + agent_events.py (the agent)
 ├── screens/          chat.py, model_picker.py, project_picker.py, agent_picker.py, conversations.py,
 │                     shared_conversations.py, skill_picker.py, mode_picker.py,
-│                     artifact_picker.py, splash.py
+│                     artifact_picker.py, splash.py, setup.py (first run)
 └── widgets/          transcript messages, composer, status bar
 ```
 
-887 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
+900 tests, no network required: `httpx.MockTransport` for HTTP, Textual's
 `run_test()` pilot for the UI, a `RecordingSink` for the turn lifecycle with no
 app at all, real loopback round-trips for the OAuth receiver, and one replay of a
 real captured agent stream.

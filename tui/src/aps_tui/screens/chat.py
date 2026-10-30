@@ -269,8 +269,8 @@ class ChatScreen(Screen[None]):
             Notice(
                 f"Not configured — no {missing}.",
                 hint=(
-                    "Create an API key in the web app under Settings -> API Keys, then run:\n"
-                    "  aps-tui login --base-url https://your-host/api\n"
+                    "Start `aps-tui` again to be walked through setup, or from a shell:\n"
+                    "  aps-tui login --sso --base-url https://your-host/api\n"
                     f"Config file: {config_path()}"
                 ),
                 error=True,

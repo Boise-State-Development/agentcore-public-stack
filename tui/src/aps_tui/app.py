@@ -14,6 +14,7 @@ which is the shape that makes a second screen impossible to add.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from collections.abc import Callable
 from typing import ClassVar
 
@@ -33,7 +34,7 @@ ClientFactory = Callable[[Config], ApiConverseClient]
 AgentClientFactory = Callable[[Config], AgentStreamClient]
 
 
-class ChatApp(App[None]):
+class ChatApp(App[str | None]):
     """The APS terminal client."""
 
     CSS_PATH = "app.tcss"
@@ -58,9 +59,11 @@ class ChatApp(App[None]):
         *,
         client_factory: ClientFactory | None = None,
         agent_client_factory: AgentClientFactory | None = None,
+        config_file: Path | None = None,
     ) -> None:
         super().__init__()
         self._config = config
+        self._config_file = config_file
         self._client_factory = client_factory
         self._agent_client_factory = agent_client_factory
         self._store = ConversationStore()
@@ -106,21 +109,47 @@ class ChatApp(App[None]):
 
     async def on_mount(self) -> None:
         self.sub_title = self._config.base_url or "not configured"
-        self._maybe_show_banner()
+        if not self._maybe_show_banner():
+            self._maybe_show_setup()
+
+    # -- first-run setup -----------------------------------------------------
+
+    #: Setup is skipped when a transport was injected: a test providing its own
+    #: client has answered "configured" for itself.
+    def _maybe_show_setup(self) -> None:
+        """Collect the base URL and a credential when either is missing.
+
+        Pushed over the chat screen, which is showing its not-configured notice
+        underneath. On success the app exits with ``RESTART`` and the CLI starts
+        it again from the stored configuration; rebuilding every screen is
+        simpler and safer than teaching each one to take a new config.
+        """
+        if self._config.is_complete or self._client_factory is not None or self._agent_client_factory is not None:
+            return
+        from .screens.setup import SetupScreen
+
+        self.push_screen(SetupScreen(base_url=self._config.base_url, config_file=self._config_file), callback=self._after_setup)
+
+    def _after_setup(self, base_url: str | None) -> None:
+        if base_url:
+            from .screens.setup import RESTART
+
+            self.exit(RESTART)
 
     # -- startup banner ------------------------------------------------------
 
-    def _maybe_show_banner(self) -> None:
-        """Push the splash if it is due. Deliberately not awaited.
+    def _maybe_show_banner(self) -> bool:
+        """Push the splash if it is due, returning whether it was. Deliberately
+        not awaited.
 
         Called after the chat screen is built so the banner covers a finished
         UI, and dismissing it reveals a composer that is already focused.
         Awaiting the animation would delay first paint for decoration.
         """
         if not self._config.banner:
-            return
+            return False
         if not (self._config.force_banner or should_show_banner(__version__)):
-            return
+            return False
 
         # Recorded when the banner starts rather than when it ends, so a user
         # who quits mid-animation is not shown it again next launch.
@@ -129,12 +158,15 @@ class ChatApp(App[None]):
                 logger.debug("banner shown but not recorded; it will replay next launch")
 
         self.push_screen(Splash(on_finished=on_finished), callback=self._after_banner)
+        return True
 
     def _after_banner(self, _result: None) -> None:
-        """Return focus to the composer once the banner is gone.
+        """Return focus to the composer once the banner is gone, or start setup.
 
         Focus was on the splash screen; without this the first keystroke after
         the banner would go nowhere.
         """
         if self._config.is_complete:
             self.chat.composer.focus()
+        else:
+            self._maybe_show_setup()

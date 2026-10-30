@@ -110,6 +110,16 @@ uv run aps-tui
 
 ## First run
 
+Start `aps-tui`. With nothing configured it walks you through setup: the
+address of your deployment (checked before you go on; `/api` is added if you
+typed the web app's address), then a browser sign-in or an API key. The
+result is stored exactly where `aps-tui login` would store it, so the two
+are interchangeable, and the client restarts into chat. Esc backs out; the
+same setup appears again next launch until a credential exists.
+
+The shell commands below do the same thing without the screen, for scripts
+and for a terminal with no keyring.
+
 There are two ways to authenticate. Which one you use depends on what your
 deployment has enabled.
 
