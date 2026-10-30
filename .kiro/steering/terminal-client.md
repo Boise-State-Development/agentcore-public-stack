@@ -271,7 +271,7 @@ hard toward them unless told no.
 `backend/src/agents/main_agent/core/system_prompt_builder.py` must name **no
 keys and no specific commands beyond `/help`**: "features are slash commands;
 `/help` lists them". The version that shipped in #1770 hardcoded F2/F3/F4, which
-went stale the same day; `fix/terminal-guidance-slash` replaces it. A prompt
+went stale the same day; `fix/terminal-guidance-slash` replaced it (merged into this branch for the develop PR, 2026-10-30). A prompt
 that says "type `/help`" cannot go stale as long as `/help` exists.
 
 The surface is a dimension of the **agent cache key**, and a paused turn records
