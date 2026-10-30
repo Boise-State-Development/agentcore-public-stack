@@ -31,6 +31,7 @@ import json
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -70,6 +71,41 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 # ---------------------------------------------------------------------------
 
 
+#: The canonical parameter names an "effort" control can live under. Checked in
+#: this order, as the web app does, so a model declaring both gets one control.
+EFFORT_PARAM_KEYS: tuple[str, ...] = ("effort", "reasoning_effort")
+
+
+@dataclass(frozen=True, slots=True)
+class EffortControl:
+    """The one inference parameter a user may tune: how hard a model thinks.
+
+    Exists only when the administrator enumerated the model's ``allowed``
+    levels and did not lock the parameter. ``default`` is the admin's default
+    level when it is one of the levels, else None (the provider's own default
+    applies and we do not claim to know it).
+    """
+
+    key: str
+    levels: tuple[str, ...]
+    default: str | None = None
+
+    @classmethod
+    def from_supported_params(cls, payload: Mapping[str, Any] | None) -> EffortControl | None:
+        params = (payload or {}).get("params") or {}
+        for key in EFFORT_PARAM_KEYS:
+            spec = params.get(key) or {}
+            if not spec.get("supported", True) or spec.get("locked"):
+                continue
+            levels = tuple(str(level) for level in spec.get("allowed") or [])
+            if not levels:
+                continue
+            default = spec.get("default")
+            default_level = str(default) if default is not None else None
+            return cls(key, levels, default_level if default_level in levels else None)
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class Model:
     """One model the signed-in user is allowed to use.
@@ -89,6 +125,8 @@ class Model:
     input_price_per_million: float = 0.0
     output_price_per_million: float = 0.0
     supports_images: bool = False
+    #: Present when the user may choose this model's effort level.
+    effort: EffortControl | None = None
 
     @property
     def label(self) -> str:
@@ -113,6 +151,7 @@ class Model:
             input_price_per_million=float(payload.get("inputPricePerMillionTokens") or 0.0),
             output_price_per_million=float(payload.get("outputPricePerMillionTokens") or 0.0),
             supports_images=any(str(m).lower() == "image" for m in modalities),
+            effort=EffortControl.from_supported_params(payload.get("supportedParams")),
         )
 
 

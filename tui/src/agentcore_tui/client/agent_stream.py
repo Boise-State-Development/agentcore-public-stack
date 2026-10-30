@@ -181,6 +181,7 @@ class AgentStreamClient:
         enabled_skills: Sequence[str] | None = None,
         invoked_skills: Sequence[str] | None = None,
         selected_prompt_id: str | None = None,
+        inference_params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """The `InvocationRequest` shape, relayed verbatim by app-api.
 
@@ -221,6 +222,10 @@ class AgentStreamClient:
             payload["system_prompt"] = self._config.system_prompt
         if self._config.temperature is not None:
             payload["temperature"] = self._config.temperature
+        if inference_params:
+            # Canonical names; the server merges them with the model's admin
+            # spec, clamping or dropping what the model does not allow.
+            payload["inference_params"] = dict(inference_params)
         if enabled_tools is not None:
             payload["enabled_tools"] = list(enabled_tools)
         if client_tools:
@@ -319,6 +324,7 @@ class AgentStreamClient:
         enabled_skills: Sequence[str] | None = None,
         invoked_skills: Sequence[str] | None = None,
         selected_prompt_id: str | None = None,
+        inference_params: Mapping[str, Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Yield parsed events for one agent turn, or for the resume of a paused one.
 
@@ -342,6 +348,7 @@ class AgentStreamClient:
             enabled_skills=enabled_skills,
             invoked_skills=invoked_skills,
             selected_prompt_id=selected_prompt_id,
+            inference_params=inference_params,
         )
 
         logger.info(

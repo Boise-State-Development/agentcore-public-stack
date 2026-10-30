@@ -476,6 +476,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         client_tools: Sequence[Mapping[str, Any]] | None = None,
         enabled_skills: Sequence[str] | None = None,
         selected_prompt_id: str | None = None,
+        inference_params: Mapping[str, Any] | None = None,
     ) -> None:
         self._client_supplier = client_supplier
         # Opt-in: empty means no skills. Sent on every turn, including resumes,
@@ -486,6 +487,9 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
         #: The conversation mode (a system-prompt id), or None. Public and
         #: mutable: switching modes must not rebuild the controller mid-pause.
         self.selected_prompt_id: str | None = selected_prompt_id
+        #: Per-request inference overrides (today: the effort level). Sent on
+        #: every request of the turn, resumes included, as the web app does.
+        self.inference_params: dict[str, Any] | None = dict(inference_params) if inference_params else None
         # None means "every tool my role grants"; [] means "none". Passed
         # through untouched — see AgentStreamClient._payload.
         self._enabled_tools = enabled_tools
@@ -539,6 +543,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
                 assistant_id=self._assistant_id,
                 enabled_skills=self._enabled_skills or None,
                 selected_prompt_id=self.selected_prompt_id,
+                inference_params=self.inference_params,
                 continue_truncated=True,
             )
         if self._pending_responses:
@@ -552,6 +557,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
                 assistant_id=self._assistant_id,
                 enabled_skills=self._enabled_skills or None,
                 selected_prompt_id=self.selected_prompt_id,
+                inference_params=self.inference_params,
                 interrupt_responses=responses,
             )
         uploads, self._pending_uploads = self._pending_uploads, []
@@ -566,6 +572,7 @@ class AgentTurnController(BaseTurnController[AgentTurnAccumulator]):
             enabled_skills=self._enabled_skills or None,
             invoked_skills=invoked or None,
             selected_prompt_id=self.selected_prompt_id,
+            inference_params=self.inference_params,
         )
 
     @property

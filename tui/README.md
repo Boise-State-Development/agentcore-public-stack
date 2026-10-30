@@ -204,6 +204,7 @@ lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
 | `/skills` | Choose which skills the agent may use (off unless switched on) |
 | `/<skill> …` | Invoke an enabled skill in a message, e.g. `/xlsx total the NET column` |
 | `/mode [name\|off]` | Set the conversation mode (a named system prompt) |
+| `/effort [level\|off]` | How hard the model thinks, for models that offer a choice |
 | `/attach <path>` | Upload a file and send it with your next message |
 | `/continue` | Let an answer that hit the token limit carry on |
 | `/stop` | Stop the turn in flight |
@@ -346,6 +347,14 @@ applies from the next turn, shows as `mode: <name>` in the status bar, and is
 remembered by the conversation, so reopening it restores the mode.
 `/mode off` clears it. Agents and projects ignore modes; their own
 instructions govern.
+
+`/effort` is the one sampling knob, as in the web app: some models let you
+choose how hard they think (`low`, `medium`, `high`, …; the levels are the
+administrator's). `/effort` shows the choice for the current model,
+`/effort high` sets it, `/effort off` returns to the default. The choice is
+remembered per model for this run and shows as `effort: <level>` in the
+status bar. Temperature and the like are governed by the administrator per
+model and are not user-tunable here or in the web app.
 
 ### Local tools
 

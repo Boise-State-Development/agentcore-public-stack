@@ -50,7 +50,7 @@ rather than reproducing that hierarchy.
 | Conversation modes | `GET /system-prompts/`, `selected_prompt_id`, `PUT /sessions/{id}/metadata {selectedPromptId: null}` to clear | ✅ `/mode [name\|off]`; sent every non-agent turn; restored when a conversation opens; clearing writes null because the server falls back to the stored mode |
 | File attachments | `POST /files/presign` → PUT → `POST /files/{id}/complete` | ✅ `/attach <path>`; `file_upload_ids` on the next turn |
 | Title generation | `POST /chat/generate-title` | ✅ client done, not yet auto-fired |
-| Sampling overrides | `inference_params` | ❌ |
+| Sampling overrides | `inference_params` | ✅ `/effort [level\|off]`, the one knob the web app still exposes (its Advanced form with temperature/top_p/max_tokens was removed). Control exists when the model's `supportedParams` declares `allowed` levels for `effort` or `reasoning_effort` and is not locked; kept per model for the run, sent as `{key: level}` on every request of a turn |
 | Continue after truncation | `continue_truncated: true` with empty message | ✅ `/continue` |
 | Resume a paused turn | `interrupt_responses`; `pendingInterrupts` on `GET /sessions/{id}/messages`; `POST /connectors/{id}/initiate-consent` | ✅ all five interrupt kinds answered in the transcript, live or on reopening a conversation that paused while nobody was there (OAuth rows get a fresh URL; there is no GET on `/pending-interrupts`, only DELETE) |
 | Conversation search | `GET /sessions/search` | ✅ Enter in the list's filter; local title filter when the server has it off |

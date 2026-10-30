@@ -77,6 +77,7 @@ class StatusBar(Horizontal):
         self._project = ""
         self._agent = ""
         self._mode = ""
+        self._effort = ""
         #: Who chose the model shown, when it is not the user ("Grants").
         self._model_owner = ""
         self._state = "Ready"
@@ -111,6 +112,8 @@ class StatusBar(Horizontal):
             segments.append(f"@ {self._agent}")
         if self._mode:
             segments.append(f"mode: {self._mode}")
+        if self._effort:
+            segments.append(f"effort: {self._effort}")
         if self._model_id:
             label = short_model(self._model_id)
             segments.append(f"{label} (set by {self._model_owner})" if self._model_owner else label)
@@ -138,6 +141,12 @@ class StatusBar(Horizontal):
     def _tick(self) -> None:
         self._spinner_index = (self._spinner_index + 1) % len(SPINNER_FRAMES)
         self._state_widget.update(self._state_text())
+
+    def set_effort(self, level: str | None) -> None:
+        """The effort level the user chose for the current model; None when
+        the model's default applies."""
+        self._effort = level or ""
+        self.refresh_line()
 
     def set_mode(self, name: str | None) -> None:
         """Name of the conversation mode; None for none."""

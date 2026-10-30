@@ -106,6 +106,7 @@ class TestRequestShape:
                 "enabled_skills": None,
                 "invoked_skills": None,
                 "selected_prompt_id": None,
+                "inference_params": None,
             }
         ]
 

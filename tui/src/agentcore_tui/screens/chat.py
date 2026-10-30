@@ -29,7 +29,17 @@ from textual.widgets import Footer, Header
 
 from ..client import AgentStreamClient, ApiConverseClient
 from ..client.agent_events import ToolCallRecord
-from ..client.catalog import Agent, CatalogClient, ConversationSummary, HistoryMessage, Model, Project, Skill, SystemPromptOption
+from ..client.catalog import (
+    Agent,
+    CatalogClient,
+    ConversationSummary,
+    EffortControl,
+    HistoryMessage,
+    Model,
+    Project,
+    Skill,
+    SystemPromptOption,
+)
 from ..client.auth import SessionAuth
 from ..config import Config, config_path, load_session_from_keyring
 from ..conversation import AgentBinding, ConversationStore, Message, ProjectBinding
@@ -122,6 +132,11 @@ class ChatScreen(Screen[None]):
         #: model. The server applies the pin regardless of what the turn sends
         #: (as for the web app), so this only changes what the user is shown.
         self._pinned_model: tuple[str, str] | None = None
+        #: Effort level chosen per model id, for this run of the client. Kept
+        #: per model as the web app does, so switching models sends that
+        #: model's own choice. Nothing is sent for a model with no choice made.
+        self._effort_by_model: dict[str, str] = {}
+        self._effort_controls: dict[str, EffortControl | None] = {}
         #: Runs the local tools and remembers "always" approvals for the session.
         self._executor = ToolExecutor()
         #: Prompts still waiting on the user, by interrupt id. The turn resumes
@@ -708,6 +723,8 @@ class ChatScreen(Screen[None]):
                 self.action_choose_skills()
             case "mode":
                 await self._mode_command(argument)
+            case "effort":
+                await self._effort_command(argument)
             case "attach":
                 await self._attach_file(argument)
             case "copy":
@@ -1060,6 +1077,7 @@ class ChatScreen(Screen[None]):
             f"Tools      {tools}",
             f"Skills     {', '.join(f'/{sk.slug}' for sk in self._skills if sk.enabled and sk.slug) or 'none on'}",
             f"Mode       {self._mode.name if self._mode else 'none'}",
+            f"Effort     {self._effort_by_model.get(self._display_model) or 'model default'}",
             f"Session    {self._store.session_id or '(none yet)'}",
             f"Log        {active_log_path() or 'not configured'}",
         ]
@@ -1410,6 +1428,62 @@ class ChatScreen(Screen[None]):
             self._turn.selected_prompt_id = prompt_id
         self.status.set_mode(mode.name if mode else None)
 
+    def _inference_params(self) -> dict[str, Any] | None:
+        """The effort override for the model that will answer, if any."""
+        level = self._effort_by_model.get(self._display_model)
+        if not level:
+            return None
+        control = self._effort_controls.get(self._display_model)
+        return {control.key if control else "effort": level}
+
+    async def _effort_control_for(self, model_id: str) -> EffortControl | None:
+        """The effort control of a model, from the catalogue. None when the
+        model offers no choice (the common case) or is unknown."""
+        if model_id in self._effort_controls:
+            return self._effort_controls[model_id]
+        for model in await self._catalog_or_create().models():
+            self._effort_controls[model.model_id] = model.effort
+        return self._effort_controls.get(model_id)
+
+    async def _effort_command(self, argument: str) -> None:
+        """`/effort` shows the choice; `/effort high` sets; `/effort off` clears."""
+        model_id = self._display_model
+        if not model_id:
+            self.notify("Pick a model first (/model); the system default has no effort choice.", severity="warning", timeout=8)
+            return
+        try:
+            control = await self._effort_control_for(model_id)
+        except AgentCoreTuiError as exc:
+            self.notify(f"Could not load models: {exc.message}", severity="error", timeout=8)
+            return
+        word = argument.strip().casefold()
+        if control is None:
+            self.notify(f"{short_model(model_id)} does not offer an effort choice.", timeout=6)
+            return
+        if word in {"off", "default", "none", "clear"}:
+            self._effort_by_model.pop(model_id, None)
+            self._refresh_effort()
+            default = f" (default: {control.default})" if control.default else ""
+            self.notify(f"Effort back to the model's default{default}.", timeout=5)
+            return
+        levels = " · ".join(f"[{lvl}]" if lvl == self._effort_by_model.get(model_id) else lvl for lvl in control.levels)
+        if not word:
+            current = self._effort_by_model.get(model_id) or (f"default ({control.default})" if control.default else "default")
+            self.notify(f"Effort for {short_model(model_id)}: {current}. Levels: {levels}", timeout=10)
+            return
+        if word not in control.levels:
+            self.notify(f"{short_model(model_id)} offers: {levels}", severity="warning", timeout=8)
+            return
+        self._effort_by_model[model_id] = word
+        self._refresh_effort()
+        self.notify(f"Effort: {word} for {short_model(model_id)}. Applies from the next turn.", timeout=5)
+
+    def _refresh_effort(self) -> None:
+        """Push the current model's effort to the controller and status bar."""
+        self.status.set_effort(self._effort_by_model.get(self._display_model))
+        if isinstance(self._turn, AgentTurnController):
+            self._turn.inference_params = self._inference_params()
+
     @property
     def _display_model(self) -> str:
         """The model that will actually answer, for labels."""
@@ -1435,6 +1509,7 @@ class ChatScreen(Screen[None]):
             self.status.set_model(pinned[0], set_by=pinned[1])
         else:
             self.status.set_model(self._config.model_id or "System Default")
+        self._refresh_effort()
 
     async def _agent_name(self, agent_id: str) -> str:
         try:
@@ -1491,6 +1566,7 @@ class ChatScreen(Screen[None]):
             self.status.set_model(self._pinned_model[0], set_by=self._pinned_model[1])
         else:
             self.status.set_model(choice.model_id or "System Default")
+        self._refresh_effort()
         if self.is_attached and self._config.is_complete:
             self._set_composer_chrome(busy=self._turn.busy)
 
@@ -1511,6 +1587,7 @@ class ChatScreen(Screen[None]):
                 client_tools=tool_specs() if self._config.local_tools else None,
                 enabled_skills=[skill.skill_id for skill in self._skills if skill.enabled],
                 selected_prompt_id=self._mode.prompt_id if self._mode else None,
+                inference_params=self._inference_params(),
             )
         return TurnController(
             self._store,

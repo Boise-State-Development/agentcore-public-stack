@@ -140,6 +140,12 @@ COMMANDS = CommandRegistry(
             agent_only=True,
         ),
         SlashCommand(
+            "effort",
+            "How hard the model thinks, for models that offer a choice; `off` returns to the default",
+            usage="[level|off]",
+            agent_only=True,
+        ),
+        SlashCommand(
             "mode",
             "Set this conversation's mode (a named system prompt), `off` to clear it",
             usage="[name|off]",
