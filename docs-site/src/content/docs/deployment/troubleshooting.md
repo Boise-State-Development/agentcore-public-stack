@@ -86,6 +86,11 @@ variable, an IAM permission, or a code error.
 CloudWatch output. Confirm the required environment variables are passed through
 CDK and that the task role has the IAM permissions the service needs.
 
+A task that stops with exit code **139** (or 134) died on a native fault, not a
+Python exception. Both images set `PYTHONFAULTHANDLER=1`, so the Python stack of
+every thread at the moment of the fault is in the same log stream, just before
+the end, and names the native call that crashed.
+
 ### CloudFront returns 403 Forbidden
 
 **Cause:** CloudFront can't reach the S3 bucket, or the distribution hasn't
