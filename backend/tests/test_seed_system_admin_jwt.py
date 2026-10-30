@@ -14,6 +14,7 @@ sys.path.insert(
 
 from seed_bootstrap_data import (  # noqa: E402
     DEFAULT_TOOLS,
+    EXAMPLE_SKILL_DESCRIPTION,
     EXAMPLE_SKILL_ID,
     seed_default_role,
     seed_example_skills,
@@ -418,7 +419,7 @@ class TestSeedExampleSkills:
 
         assert body.startswith("---")
         assert "name: web-research" in body
-        assert "Fetch web pages and turn them into accurate, citable notes." in body
+        assert f"description: {EXAMPLE_SKILL_DESCRIPTION}" in body
         assert "# Web Research Assistant" in body
 
     def test_seeded_instructions_name_no_retired_v1_tools(self):
