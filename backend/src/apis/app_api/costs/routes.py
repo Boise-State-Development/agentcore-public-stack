@@ -69,7 +69,13 @@ async def get_quota_status(
     logger.info("GET /costs/quota-status")
 
     try:
-        resolved = await get_quota_resolver().resolve_user_quota(current_user)
+        # Fresh, not the resolver's 5-minute cache: an approval or revoke
+        # clears only the cache of the app-api task that made it, so on a
+        # multi-task deployment a cached read would keep showing the old limit
+        # for minutes after the user's decision notification arrives. This is
+        # the Usage page, not the turn path; the few extra reads are cheap, and
+        # bypassing also refreshes the cached entry for this task.
+        resolved = await get_quota_resolver().resolve_user_quota(current_user, bypass_cache=True)
     except Exception as e:  # noqa: BLE001 - status read must not surface 500s
         logger.warning(f"Quota resolution failed for quota-status: {e}")
         resolved = None

@@ -22,7 +22,9 @@ period (usually a month). Managed under `/admin/quota`, scope `admin.quota`.
 Enforcement is computed on every turn from live spend, so nothing has to be
 "unblocked". Tier resolution is cached for five minutes per user, except when a
 turn would be blocked: that turn re-reads the user's quota before refusing, so
-an approval or a new override takes effect on the user's next message.
+an approval or a new override takes effect on the user's next message. The
+Usage page's status read (`GET /costs/quota-status`) always reads fresh, so it
+shows a decision as soon as the user's notification arrives.
 
 ## Overrides
 
