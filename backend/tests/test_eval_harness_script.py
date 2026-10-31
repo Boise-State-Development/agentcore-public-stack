@@ -208,3 +208,19 @@ class TestJudgeCommand:
         out = self._run_dir(tmp_path)
         assert eval_harness.main(["judge", "--out", str(out), "--yes"]) == 2
         assert "dev extra" in capsys.readouterr().err
+
+
+def test_cleaned_up_staged_samples_are_forgotten_so_a_resume_stages_them_again(tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    staged = [
+        {"case_id": "document_qa.a", "sample": 0, "session_id": "eval-ran", "upload_ids": ["u1"], "documents": ["manual"]},
+        {"case_id": "document_qa.a", "sample": 1, "session_id": "eval-unrun", "upload_ids": ["u2"], "documents": ["manual"]},
+    ]
+    (out / eval_harness.STAGED_FILE).write_text("".join(json.dumps(e) + "\n" for e in staged), encoding="utf-8")
+    unrun = eval_harness._unrun_staged(out, [{"session_id": "eval-ran"}])
+    assert [e["session_id"] for e in unrun] == ["eval-unrun"]
+
+    eval_harness._forget_staged(out, unrun)
+    remaining = eval_harness.read_rows(out / eval_harness.STAGED_FILE)
+    assert [e["session_id"] for e in remaining] == ["eval-ran"]

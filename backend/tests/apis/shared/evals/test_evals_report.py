@@ -126,7 +126,7 @@ class TestCompareRun:
         text = explain_family("tool_selection", baseline, rows, calls_by_session=calls)
         lines = text.splitlines()
         assert "  calls:" in lines
-        assert any(l.startswith("    [0] FAIL") and "compaction applied 1" in l for l in lines)
+        assert any(line.startswith("    [0] FAIL") and "compaction applied 1" in line for line in lines)
         assert "    [1] FAIL  unavailable" in lines
         assert "    [2] pass  no cost rows" in lines
 

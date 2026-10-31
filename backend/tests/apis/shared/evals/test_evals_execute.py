@@ -7,7 +7,7 @@ import json
 import pytest
 
 from apis.shared.evals.cases import parse_case
-from apis.shared.evals.execute import EVAL_SESSION_PREFIX, OAuthRequiredError, run_sample, sum_usage
+from apis.shared.evals.execute import EVAL_SESSION_PREFIX, OAuthRequiredError, StagedSample, run_sample, sum_usage
 from apis.shared.harness.models import OAuthConsentRequired, RunResult, ToolTraceEntry
 
 
@@ -125,6 +125,39 @@ async def test_fixtures_are_registered_in_the_session_and_sent_with_the_first_tu
 async def test_a_case_with_files_needs_a_registrar():
     with pytest.raises(ValueError, match="registrar"):
         await run_sample(_doc_case(), sample=0, model_id="m", run_turn=FakeRunner(["a", "b"]))
+
+
+def _large_case():
+    return parse_case(
+        {
+            "id": "document_qa.large",
+            "family": "document_qa",
+            "turns": [{"prompt": "What is the notice period?"}],
+            "expect": {"contains_any": ["34 days"]},
+            "large_documents": ["manual"],
+        },
+        family="document_qa",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_staged_sample_runs_in_its_session_with_its_documents_and_records_their_state():
+    state = {"name": "manual", "preparation": "ready", "kbIndex": "indexed", "textIndexed": False,
+             "settled": True, "waitedSeconds": 140}
+    staged = StagedSample(session_id="eval-staged", upload_ids=("up-large",), documents=(state,))
+    runner = FakeRunner(["34 days."])
+    row = await run_sample(_large_case(), sample=1, model_id="m", run_turn=runner, staged=staged)
+
+    assert runner.calls[0]["session_id"] == "eval-staged"
+    assert runner.calls[0]["file_upload_ids"] == ["up-large"]
+    assert row["session_id"] == "eval-staged" and row["upload_ids"] == ["up-large"]
+    assert row["documents"] == [state] and row["passed"]
+
+
+@pytest.mark.asyncio
+async def test_a_large_document_case_without_staging_is_refused():
+    with pytest.raises(ValueError, match="staged"):
+        await run_sample(_large_case(), sample=0, model_id="m", run_turn=FakeRunner(["a"]))
 
 
 def test_sum_usage_ignores_non_numeric_values():

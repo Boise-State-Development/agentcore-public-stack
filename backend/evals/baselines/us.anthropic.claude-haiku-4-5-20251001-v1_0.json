@@ -420,6 +420,62 @@
       "passes": 3,
       "samples": 3,
       "answer": "The issue is in this line:\n\n```python\nfor i in range(len(items) - 1):\n```\n\n**Why it skips the last item:**\n\n- `len(items)` returns `3`\n- `len(items) - 1` equals `2`\n- `range(2)` generates `[0, 1]` — it stops *before* reaching 2\n- So the loop only accesses `items[0]` and `items[1]`, skipping `items[2]` (the `'c'`)\n\n**How to fix it:**\n\nRemove the `- 1`:\n\n```python\nfor i in range(len(items)):\n    print(items[i])\n```\n\nThis generates `range(3)` = `[0, 1, 2]`, which accesses all three items.\n\n**Even better alternatives:**\n\nIf you just want to iterate through items, skip the index entirely:\n\n```pytho"
+    },
+    "document_qa.large_brochure_silver_price": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Perfect! I found the membership pricing table on page 5.\n\n$61"
+    },
+    "document_qa.large_brochure_studio_rate": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Perfect! I found the information in the room hire table on page 20.\n\n$27"
+    },
+    "document_qa.large_handbook_borrow_limit": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "17"
+    },
+    "document_qa.large_handbook_fines_age": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Perfect! I found the answer in the search results.\n\n**12**"
+    },
+    "document_qa.large_manual_notice_period": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**34 calendar days**"
+    },
+    "document_qa.large_manual_per_diem": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Perfect! I found the information on page 88 of the document.\n\n$47.50"
+    },
+    "document_qa.large_scanned_abutment_cost": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$418,600"
+    },
+    "document_qa.large_scanned_survey_reference": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "HV-SR-5512"
     }
   },
   "judgeModel": "us.anthropic.claude-sonnet-4-6",
