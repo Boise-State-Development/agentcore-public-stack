@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aps-tui"
-version = "1.31.0"
+version = "1.32.0"
 requires-python = ">=3.11"
 description = "aps-tui — the APS terminal client: streaming AI chat in your terminal"
 readme = "README.md"
