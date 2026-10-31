@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { findSkillCommands, removeSkillCommand } from './skill-command.service';
+import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
+import { ConfigService } from '../config.service';
+import { SkillService } from './skill.service';
+import { SkillCommandService, findSkillCommands, removeSkillCommand } from './skill-command.service';
 
 const SLUGS = ['brand-deck', 'web-research', 'usr'];
 
@@ -88,5 +94,43 @@ describe('removeSkillCommand', () => {
 
   it('leaves text with no such command untouched', () => {
     expect(removeSkillCommand('nothing to remove', 'brand-deck')).toBe('nothing to remove');
+  });
+});
+
+describe('SkillCommandService under an Agent lock', () => {
+  function setup(): { commands: SkillCommandService; skills: SkillService } {
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
+      ],
+    });
+    return { commands: TestBed.inject(SkillCommandService), skills: TestBed.inject(SkillService) };
+  }
+
+  it('offers the resolved entries as commands, with the server slug, without any /skills/ load', () => {
+    const { commands, skills } = setup();
+    // Nothing loaded from /skills/: the viewer's own list is empty, and the owner's
+    // skill below would never be in it anyway.
+    skills.lockToAgentSkills([
+      { skillId: 'web_research', displayName: 'Web Research', description: 'Research the web', slug: 'web-research' },
+      { skillId: 'owners_style', displayName: "Owner's Style", description: 'House style', slug: 'owners-style' },
+    ]);
+    expect(commands.agentLocked()).toBe(true);
+    expect(commands.resolving()).toBe(false);
+    expect(commands.commands().map((c) => [c.slug, c.name])).toEqual([
+      ['owners-style', "Owner's Style"],
+      ['web-research', 'Web Research'],
+    ]);
+    expect(commands.bySlugOrUndefined('owners-style')?.skillId).toBe('owners_style');
+  });
+
+  it('reports resolving, with no commands, while the id lock waits for the resolved list', () => {
+    const { commands, skills } = setup();
+    skills.lockToAgentSkillIds(['owners_style'], { resolving: true });
+    expect(commands.agentLocked()).toBe(true);
+    expect(commands.resolving()).toBe(true);
+    expect(commands.commands()).toEqual([]);
   });
 });

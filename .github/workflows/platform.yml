@@ -170,6 +170,7 @@ jobs:
       # a different AWS account (records are then created manually from the
       # deploy's CfnOutputs). Defaults to true.
       CDK_MANAGE_DNS_RECORDS: ${{ vars.CDK_MANAGE_DNS_RECORDS }}
+      CDK_ALB_RESTRICT_TO_CLOUDFRONT: ${{ vars.CDK_ALB_RESTRICT_TO_CLOUDFRONT }}
       # AgentCore Gateway inbound authorizer: "iam" (default) or "jwt".
       # The authorizer is IMMUTABLE after Gateway creation — the AgentCore
       # control plane rejects a change on an existing Gateway. Leave unset (or
@@ -275,6 +276,18 @@ jobs:
       # environment to turn it on there. Sets it on app-api and on the AgentCore
       # Runtime (only while on).
       CDK_HANDOFFS_ENABLED: ${{ vars.CDK_HANDOFFS_ENABLED }}
+      # Conversation rewind: "Rewind to here" on a user message
+      # (docs/specs/conversation-rewind-and-fork.md §4). Opt-in while in
+      # development: set `CDK_SESSION_REWIND_ENABLED` to "true" in an environment
+      # to turn it on there. Sets it on app-api and on the AgentCore Runtime (only
+      # while on). The SPA's matching switch is `features.sessionRewind`.
+      CDK_SESSION_REWIND_ENABLED: ${{ vars.CDK_SESSION_REWIND_ENABLED }}
+      # Conversation fork: "Fork from here" on a user message
+      # (docs/specs/conversation-rewind-and-fork.md §7). Opt-in while in
+      # development: set `CDK_SESSION_FORK_ENABLED` to "true" in an environment to
+      # turn it on there. Sets it on app-api and on the AgentCore Runtime (only
+      # while on). The SPA's matching switch is `features.sessionFork`.
+      CDK_SESSION_FORK_ENABLED: ${{ vars.CDK_SESSION_FORK_ENABLED }}
       # Client-measured time to first token: POST /telemetry/turn-timing records the
       # SPA's own send-to-first-token in AgentCoreStack/TurnLatency
       # (docs/specs/turn-path-ttft.md §6). Default ON with a kill switch: set

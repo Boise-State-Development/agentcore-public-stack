@@ -421,6 +421,13 @@ export class InferenceAgentCoreConstruct extends Construct {
         // target's first turn and keeps the source's HANDOFF# row current. Written
         // only while ON, so the default costs nothing against the V2 payload budget.
         ...(config.handoffs.enabled ? { HANDOFFS_ENABLED: 'true' } : {}),
+        // Conversation rewind (in development): the Runtime filters rewound
+        // messages at restore and cuts a warm agent's list in place. Written
+        // only while ON, so the default costs nothing against the V2 payload budget.
+        ...(config.sessionRewind.enabled ? { SESSION_REWIND_ENABLED: 'true' } : {}),
+        // Conversation fork (in development): a fork's first turn starts from
+        // its parent's live history. Written only while ON (V2 payload budget).
+        ...(config.sessionFork.enabled ? { SESSION_FORK_ENABLED: 'true' } : {}),
         // Typed structured extraction: the Runtime mounts `document_extract`,
         // makes the constrained side-channel call, verifies each value through
         // source_provenance and emits `document_extraction`. Written only while

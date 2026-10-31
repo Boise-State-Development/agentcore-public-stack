@@ -2,10 +2,18 @@ import * as cdk from 'aws-cdk-lib';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 
 import { AppConfig, getRemovalPolicy, getResourceName } from '../../config';
+
+/**
+ * AWS managed prefix list of CloudFront's origin-facing IPv4 addresses —
+ * the source addresses CloudFront uses when it connects to an origin.
+ */
+export const CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST = 'com.amazonaws.global.cloudfront.origin-facing';
 
 /**
  * How long ALB access logs are kept. Long enough to investigate a pattern
@@ -23,7 +31,9 @@ export interface AlbConstructProps {
  * AlbConstruct — internet-facing ALB + security group + primary listener.
  *
  * Provisions:
- *   - ALB security group permitting :80 and :443 from anywhere
+ *   - ALB security group admitting only CloudFront's origin-facing ranges
+ *     on the port CloudFront dials (or :80 and :443 from anywhere when
+ *     `albRestrictToCloudFront` is false)
  *   - Internet-facing ALB in the VPC's public subnets
  *   - Access-log bucket (30-day expiry) with delivery enabled, which is
  *     what makes a mid-stream SSE disconnect attributable to the client,
@@ -52,7 +62,31 @@ export class AlbConstruct extends Construct {
 
     const { config, vpc } = props;
 
-    // ALB Security Group - Allow HTTP/HTTPS from internet
+    // ALB Security Group.
+    //
+    // By default ingress is CloudFront-only. Every legitimate request
+    // reaches app-api through the SPA distribution's `/api/*` behavior
+    // (browser BFF and API-key callers alike), so an ALB that answers the
+    // whole internet only serves callers who bypass CloudFront — and its
+    // security headers, its access log, and any future edge controls. A
+    // 30-day prod log audit found ~5% of ALB requests arriving that way,
+    // almost all scanners.
+    //
+    // The peer is the AWS managed prefix list of CloudFront's
+    // origin-facing addresses, which AWS keeps current. Its ID differs per
+    // region and CloudFormation cannot look it up by name, so a custom
+    // resource resolves it at deploy time (re-run on every update).
+    //
+    // One port only: the prefix list counts as ~55 rules against the
+    // default 60-rule security-group quota, so it cannot be repeated. It
+    // is the port CloudFront actually dials — 443 when the ALB has a
+    // certificate (origin protocol HTTPS_ONLY), otherwise 80. With a
+    // certificate the :80 redirect listener stays, unreachable, which is
+    // harmless.
+    //
+    // This does not stop someone pointing *their own* distribution at the
+    // ALB hostname; a CloudFront-to-ALB shared-secret header is the
+    // control for that.
     this.albSecurityGroup = new ec2.SecurityGroup(this, 'AlbSecurityGroup', {
       vpc,
       securityGroupName: getResourceName(config, 'alb-sg'),
@@ -60,17 +94,46 @@ export class AlbConstruct extends Construct {
       allowAllOutbound: true,
     });
 
-    this.albSecurityGroup.addIngressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(80),
-      'Allow HTTP traffic from internet',
-    );
+    if (config.albRestrictToCloudFront) {
+      const lookup = new cr.AwsCustomResource(this, 'CloudFrontOriginFacingPrefixList', {
+        onUpdate: {
+          service: 'EC2',
+          action: 'describeManagedPrefixLists',
+          parameters: {
+            Filters: [{ Name: 'prefix-list-name', Values: [CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST] }],
+          },
+          physicalResourceId: cr.PhysicalResourceId.of(CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST),
+          outputPaths: ['PrefixLists.0.PrefixListId'],
+        },
+        // DescribeManagedPrefixLists does not support resource-level
+        // permissions, so `*` is the only resource it accepts.
+        policy: cr.AwsCustomResourcePolicy.fromStatements([
+          new iam.PolicyStatement({
+            actions: ['ec2:DescribeManagedPrefixLists'],
+            resources: ['*'],
+          }),
+        ]),
+        installLatestAwsSdk: false,
+      });
+      const cloudFrontPort = config.certificateArn ? 443 : 80;
+      this.albSecurityGroup.addIngressRule(
+        ec2.Peer.prefixList(lookup.getResponseField('PrefixLists.0.PrefixListId')),
+        ec2.Port.tcp(cloudFrontPort),
+        `Allow ${cloudFrontPort === 443 ? 'HTTPS' : 'HTTP'} from CloudFront origin-facing ranges only`,
+      );
+    } else {
+      this.albSecurityGroup.addIngressRule(
+        ec2.Peer.anyIpv4(),
+        ec2.Port.tcp(80),
+        'Allow HTTP traffic from internet',
+      );
 
-    this.albSecurityGroup.addIngressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(443),
-      'Allow HTTPS traffic from internet',
-    );
+      this.albSecurityGroup.addIngressRule(
+        ec2.Peer.anyIpv4(),
+        ec2.Port.tcp(443),
+        'Allow HTTPS traffic from internet',
+      );
+    }
 
     // Export ALB Security Group ID to SSM
 
@@ -119,6 +182,12 @@ export class AlbConstruct extends Construct {
 
 
 
+    // `open` defaults to true on an ALB listener, and an open listener has
+    // CDK add its own 0.0.0.0/0 ingress rule for the listener port — which
+    // would silently undo the CloudFront-only rule above. Leave it on only
+    // when the ALB is deliberately public, so that template is unchanged.
+    const openToInternet = !config.albRestrictToCloudFront;
+
     // ALB Listeners (HTTP and optional HTTPS)
     if (config.certificateArn) {
       const certificate = acm.Certificate.fromCertificateArn(
@@ -130,6 +199,7 @@ export class AlbConstruct extends Construct {
       // Create HTTPS listener - this is where backend services attach
       this.albListener = this.alb.addListener('HttpsListener', {
         port: 443,
+        open: openToInternet,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [certificate],
         // Pin to the 2021 TLS-1.3 policy: TLS 1.2 minimum, all CBC
@@ -147,6 +217,7 @@ export class AlbConstruct extends Construct {
       // HTTP listener only redirects to HTTPS (no target groups here)
       this.alb.addListener('HttpListener', {
         port: 80,
+        open: openToInternet,
         protocol: elbv2.ApplicationProtocol.HTTP,
         defaultAction: elbv2.ListenerAction.redirect({
           protocol: 'HTTPS',
@@ -158,6 +229,7 @@ export class AlbConstruct extends Construct {
       // No certificate — single HTTP listener serves as the primary.
       this.albListener = this.alb.addListener('HttpListener', {
         port: 80,
+        open: openToInternet,
         protocol: elbv2.ApplicationProtocol.HTTP,
         defaultAction: elbv2.ListenerAction.fixedResponse(404, {
           contentType: 'text/plain',

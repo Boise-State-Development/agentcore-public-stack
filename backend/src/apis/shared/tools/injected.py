@@ -57,10 +57,11 @@ SKILL_AUTHORING_TOOL_IDS = frozenset({"my_skill_create"})
 # Memory-Space tools it never reaches ``ToolFilter``.
 DOCUMENT_TOOL_IDS = frozenset({"document_read"})
 
-# Every id owned by a per-request factory. Memory-Space and document tools are
-# deliberately absent: they are gated on an Agent's memory binding (or a
-# project harness) / the session's attachments rather than on
-# ``enabled_tools``, so they never reach the filter.
+# Every id owned by a per-request factory. Memory-Space, project-harness
+# (``shared_conversations_list``, ``shared_conversation_read``, ``project_files``)
+# and document tools are deliberately absent: they are gated on an Agent's
+# memory binding / the turn being a project's / the session's attachments
+# rather than on ``enabled_tools``, so they never reach the filter.
 INJECTED_TOOL_IDS = frozenset(
     SPREADSHEET_TOOL_IDS
     | ARTIFACT_TOOL_IDS

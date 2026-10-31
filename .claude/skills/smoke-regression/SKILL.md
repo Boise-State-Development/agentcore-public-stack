@@ -23,7 +23,9 @@ From the diff, pick per §4 of the doc:
 
 - **L0** always, for the packages touched.
 - **L1** when the change touches `inference_api/chat/*`, `agents/main_agent/**`,
-  `apis/shared/harness/**`, the SSE table, or any interrupt flow.
+  `apis/shared/harness/**`, `apis/shared/client_tools/**`, the SSE table, or
+  any interrupt flow (the `client_tool_call_resume` row covers the terminal
+  client's local-tools protocol without needing the TUI).
 - **L2** when the change touches a rendered surface (composer, loader, tool
   rail, pickers, banners) or an interrupt flow.
 

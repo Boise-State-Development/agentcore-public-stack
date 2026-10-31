@@ -25,6 +25,7 @@ from typing import List
 
 from apis.shared.assistants.icons import icon_url
 from apis.shared.assistants.models import AgentBinding, Assistant
+from apis.shared.skills.pins import public_skill_config
 
 
 def effective_bindings(assistant: Assistant) -> List[AgentBinding]:
@@ -46,12 +47,20 @@ def effective_bindings(assistant: Assistant) -> List[AgentBinding]:
     ]
 
 
+def _public_binding(binding: AgentBinding) -> dict:
+    dumped = binding.model_dump(by_alias=True)
+    if binding.kind == "skill":
+        dumped["config"] = public_skill_config(binding.config)
+    return dumped
+
+
 def to_agent_view(assistant: Assistant) -> dict:
     """Project an Assistant into the resolved Agent read-shape.
 
     Returns a plain dict (camelCase keys) — the HTTP response model is a route concern
     (Phase 3). ``agentId`` aliases ``assistantId``; legacy ids remain valid. ``owner_id``
-    is deliberately omitted (never returned to clients), matching ``AssistantResponse``.
+    is deliberately omitted (never returned to clients), matching ``AssistantResponse``,
+    and so is the user id a project records on a skill binding (``config.addedBy``).
 
     ``instructions`` is projected here and **dropped by the route** for anyone who is not
     an owner or editor (Marketplace Phase 3). The gate lives at the route because that is
@@ -64,7 +73,7 @@ def to_agent_view(assistant: Assistant) -> dict:
         "description": assistant.description,
         "instructions": assistant.instructions,
         "modelConfig": assistant.model_settings.model_dump(by_alias=True) if assistant.model_settings else None,
-        "bindings": [b.model_dump(by_alias=True) for b in effective_bindings(assistant)],
+        "bindings": [_public_binding(b) for b in effective_bindings(assistant)],
         "visibility": assistant.visibility,
         "tags": assistant.tags or [],
         "starters": assistant.starters or [],

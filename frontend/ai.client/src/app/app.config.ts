@@ -5,6 +5,7 @@ import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { csrfInterceptor } from './auth/csrf.interceptor';
 import { errorInterceptor } from './auth/error.interceptor';
+import { gatewayRetryInterceptor } from './auth/retry.interceptor';
 import { withCredentialsInterceptor } from './auth/with-credentials.interceptor';
 import { MARKED_OPTIONS, MarkedOptions, MarkedRenderer, provideMarkdown } from 'ngx-markdown';
 import { SessionService } from './auth/session.service';
@@ -49,8 +50,16 @@ export const appConfig: ApplicationConfig = {
       // withCredentialsInterceptor flips the cookie-attaching flag on app-api
       // requests (cross-origin in local dev; no-op same-origin in prod).
       // csrfInterceptor attaches the X-CSRF-Token header on unsafe-method
-      // requests; errorInterceptor stays last so it sees the final response.
-      withInterceptors([withCredentialsInterceptor, csrfInterceptor, errorInterceptor]),
+      // requests. gatewayRetryInterceptor is innermost (closest to the
+      // backend) so a GET that hit a dying app-api task is retried once
+      // before errorInterceptor, outside it, decides whether anything
+      // failed: the toast and the 401 redirect see only the final outcome.
+      withInterceptors([
+        withCredentialsInterceptor,
+        csrfInterceptor,
+        errorInterceptor,
+        gatewayRetryInterceptor,
+      ]),
     ),
     provideMarkdown({
       markedOptions: {

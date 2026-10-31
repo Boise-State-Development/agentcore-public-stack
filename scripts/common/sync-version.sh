@@ -51,7 +51,7 @@ INFRA_PKG="${REPO_ROOT}/infrastructure/package.json"
 README="${REPO_ROOT}/README.md"
 # TUI client (optional: guarded everywhere so branches without tui/ still work)
 TUI_PYPROJECT="${REPO_ROOT}/tui/pyproject.toml"
-TUI_INIT="${REPO_ROOT}/tui/src/agentcore_tui/__init__.py"
+TUI_INIT="${REPO_ROOT}/tui/src/aps_tui/__init__.py"
 TUI_UV_LOCK="${REPO_ROOT}/tui/uv.lock"
 # iOS client (optional, same guard). MARKETING_VERSION must be plain dotted
 # numbers (CFBundleShortVersionString), so a SemVer pre-release suffix is
@@ -111,7 +111,7 @@ if [ -f "${TUI_INIT}" ]; then
     TUI_INIT_VER=$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${TUI_INIT}" | head -1 || echo "")
 fi
 if [ -f "${TUI_UV_LOCK}" ]; then
-    TUI_UV_LOCK_VER=$(awk -F'"' '/name = "agentcore-tui"/{f=1} f && /^version = /{print $2; exit}' "${TUI_UV_LOCK}" || echo "")
+    TUI_UV_LOCK_VER=$(awk -F'"' '/name = "aps-tui"/{f=1} f && /^version = /{print $2; exit}' "${TUI_UV_LOCK}" || echo "")
 fi
 
 # iOS client version (empty when the ios/ tree is not present)
@@ -132,7 +132,7 @@ if [ "${CHECK_MODE}" = true ]; then
     fi
     if [ -f "${TUI_PYPROJECT}" ]; then
         sync_or_check "${TUI_PYPROJECT}" "${TUI_VER}" "tui/pyproject.toml"
-        sync_or_check "${TUI_INIT}" "${TUI_INIT_VER}" "tui/src/agentcore_tui/__init__.py"
+        sync_or_check "${TUI_INIT}" "${TUI_INIT_VER}" "tui/src/aps_tui/__init__.py"
     fi
     if [ -f "${TUI_UV_LOCK}" ]; then
         sync_or_check "${TUI_UV_LOCK}" "${TUI_UV_LOCK_VER}" "tui/uv.lock" "${PEP440_VERSION}"
@@ -163,7 +163,7 @@ fi
 
 if [ -f "${TUI_INIT}" ]; then
     sed_inplace "s/^__version__ = \"[^\"]*\"/__version__ = \"${VERSION}\"/" "${TUI_INIT}"
-    echo -e "${GREEN}[UPDATED]${NC} tui/src/agentcore_tui/__init__.py"
+    echo -e "${GREEN}[UPDATED]${NC} tui/src/aps_tui/__init__.py"
 fi
 
 if [ -f "${IOS_XCCONFIG}" ]; then

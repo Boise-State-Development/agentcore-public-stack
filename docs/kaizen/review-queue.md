@@ -5,6 +5,91 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-10-23] Take Strands 1.62.0, then curate Claude Haiku 5.5 at a 100K effective window — the probe becomes a check of #5171
+- **Source**: research/2026-10-23.md ▸ Top 5 #1
+- **Surface**: backend + catalog (`pyproject.toml`, `uv.lock`, Lambda requirements; `curated-models.ts`; `probe_bedrock_cache_point_support.py`)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — retires the preserved-thinking probe as a standing item (supersedes [2026-10-16] Haiku 5.5 and [2026-10-09] probe entries); no hand-built thinking-binding handling; starts Haiku 4.5's retirement path (never a hard delete)
+- **Unlocks**:
+  - a default ~7.7× cheaper than Haiku 4.5 on the same text below 100K (card + Price List now agree: $0.11 / $0.55 Regional; tokenizer ~30% heavier)
+  - safe compaction on every preserved-thinking model (Opus 5.5 is curated today): Strands #5171 retries the Bedrock "block is bound to a different conversation" 400 with `drop_block`
+- **Notes**: bump strands alone (hold strands-agents-tools 0.8.10, possible `bedrock-agentcore<1.24` conflict). Verify on dev: compact an Opus 5.5 thinking conversation, send one more turn, record 400/recovery, `cacheStatus`, and add a metric when `drop_block` engages. Row: `maxInputTokens: 100_000`, no sampling params, bracket the 512-token cache minimum, note CountTokens is unsupported on bedrock-runtime. Not the default in the same PR.
+- **Status**: open
+
+### [2026-10-23] Require the test checks, on an up-to-date branch (or a merge queue), before merging into `develop`
+- **Source**: research/2026-10-23.md ▸ Top 5 #2
+- **Surface**: CI / repo settings (`protect-develop` ruleset 14253197)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — fix-forward commits (`76ce5402`, `68118d61`) and red `develop` Backend Deploys from skewed or stale merges (4 of 5 failures this window; #1455 merged on a PR CI run from 10-06)
+- **Notes**: the ruleset has no `required_status_checks`. Path-filtered jobs that skip will block a required check — likely needs an always-run aggregator job. Strict vs. merge queue is Phil's call at ~90 PRs/week.
+- **Status**: open
+
+### [2026-10-23] Price 1h cache writes from Bedrock's `cacheDetails` — contribute harness-sdk #5257, then delete the inference
+- **Source**: research/2026-10-23.md ▸ Top 5 #3
+- **Surface**: backend + upstream (`strands/models/bedrock.py` usage mapping; `apis/shared/costs/calculator.py:100-106`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — the read-based inference of the 1h share and the `long_ttl_static_prefix_tokens` plumbing
+- **Unlocks**: exact per-TTL write cost on `C#` rows, for judging the [2026-09-16] PR-5 1h-TTL decision
+- **Notes**: confirm the `cacheDetails` shape on one live dev Converse call first (only seen via LibreChat #17208 and #5257's text).
+- **Status**: open
+
+### [2026-10-23] Spike: register OAuth-gated MCP tools from the admin allowlist and ask consent on first use, not at pre-flight
+- **Source**: research/2026-10-23.md ▸ Top 5 #4 (LibreChat #17225)
+- **Surface**: backend (`external_mcp_client.py`, tool build pre-flight, `OAuthConsentHook`)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes — the failing pre-flight and per-turn `oauth_required` re-emit for allowlisted servers; `toolConfig` no longer changes when consent lands
+- **Unlocks**: first turns that don't wait on an unconnected OAuth server (5.8 s p50 today)
+- **Notes**: allowlist schemas can go stale; check freshness after consent, on first use. Measure TTFT and one consent → resume on dev before deciding.
+- **Status**: open
+
+### [2026-10-23] Correct `CLAUDE.md`'s Price List note (GPT-6 Astra is listed) and record Astra's rates beside the 10-03 decision
+- **Source**: research/2026-10-23.md ▸ Top 5 #5
+- **Surface**: docs (`CLAUDE.md:49`, `decisions.md` ▸ [2026-10-03] Astra)
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — a false "cards are the only source" rule for the OpenAI family
+- **Notes**: 16 Astra SKUs in `AmazonBedrockFoundationModels` (us-west-2): $11 / $55 Regional, 30m write $13.75, read $1.10, long-context $22 / $82.50. Re-check GPT-5.6 and `openai.gpt-5.4` in the same query.
+- **Status**: open
+
+### [2026-10-23] Spec sync: agent-handoffs-and-consults.md header (Status line)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — a stale "Draft proposal. Not scheduled." (`:3`)
+- **Notes**: → "Phase 0 in progress (PR-0.1 and PR-0.2 merged 2026-10-22, behind `HANDOFFS_ENABLED`). Phases 1 and 2 not scheduled." Evidence `90b461fc`, `fed88f5a`.
+- **Status**: open
+
+### [2026-10-23] Spec sync: agent-handoffs-and-consults.md §4.2 step 1 (create response shape)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — a response shape missing `prompt` (`:206`)
+- **Notes**: add `prompt` (contextBlock joined to the request by `build_handoff_message`). Evidence `app_api/handoffs/routes.py:79,205`.
+- **Status**: open
+
+### [2026-10-23] Spec sync: agent-handoffs-and-consults.md §4.5 (excerpt tool line, displayText)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — "`[tool: list_assignments → 14 items]`" (`:606`) and "User and assistant text blocks go in verbatim." (`:612`)
+- **Notes**: → "`[tool: list_assignments]`"; add that a user message's `displayText` wins over its model text. Evidence `apis/shared/handoff/excerpt.py:14-15,218`.
+- **Status**: open
+
+### [2026-10-23] Spec sync: multi-agent-patterns.md §3, §4.2, §10 (pinned Strands version)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — three "1.57.2" references (`:57`, `:126`, `:274`)
+- **Notes**: → 1.61.1 (`961b8f7a`). The §10 trigger fired; re-read §3's tool list against vended `subagent`. Also update the queued [2026-10-16] #3675 row's "our 1.57.2 pin" wording.
+- **Status**: open
+
+### [2026-10-23] Spec sync: multi-agent-patterns.md §8 (sequence step 1)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — "1. **Handoffs Phase 0** as specced." (`:235`) with no progress
+- **Notes**: → "(PR-0.1 and PR-0.2 merged 2026-10-22; PR-0.3 in review as #1748)."
+- **Status**: open
+
 ### [2026-10-20] Evaluate Strands Decider as a measurement instrument first, starting with the §17.8 grader
 - **Source**: session exploration 2026-10-20 (follow-up to the Vandalizer parity work, alongside `docs/one-pagers/research-admin-content-gap.md`) — **not** from a weekly research doc, so it has had no research-doc scrutiny. External: AWS announced Strands Decider 2B on 2026-10-01 ([InfoQ](https://infoq.com/news/2026/10/aws-strands-agents), [AWS Builder](https://builder.aws.com/content/3KkFqSBRfZxjCnMBYzIkGabGBWc/act-when-certain-ask-when-not-building-safer-ai-agents-with-local-decision-models), [The New Stack](https://thenewstack.io/aws-strands-decider-model/?p=22839054))
 - **Surface**: `backend/scripts/` (the §17.8 measurement harness) first; `apis/shared/` interventions only if the measurement earns it
@@ -199,6 +284,17 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **q1 is answered (measured on dev, 2026-10-07): raising `eventExpiryDuration` does NOT extend events already written.** All 35 dev sessions whose last turn was 90.09–93.86 days old had zero events; the one at exactly 90.00 days still had its 23. So prod sessions keep falling off the cliff on the old clock until 90 days after #1450's prod deploy, and **the second run in step (5) is required, not conditional.** PR-3's backfill is the only rescue for the sessions still alive. Dev rehearsal on 2026-10-07: `--user` + `--limit 3`, then everything: 100 deleted through the cascade, 0 failures, the one session with a pending interrupt kept; dev's cliff grows by a few sessions a day until ~2027-01-04.
 - **How to run it**: (1) Once #1450 is in prod, dry-run with `--out` and read the report: the count should be the 1,439 order and growing daily, and `held.has_events` should be small. (2) `--apply --user <one owner>`, then confirm in the app that their empty sessions are gone and nothing else is. (3) `--apply` in batches of 500. (4) Put the second run on the calendar for the #1450 prod deploy + 90 days, when the cliff stops growing. (5) Run PR-3's backfill on prod as early as possible, so sessions still inside the 90 days are archived before their events expire; the script never deletes an archived session. (6) Separately, read a few daily pruner dry-run reports from prod logs (app-api log group, `conversation retention prune:`; the SSM record is `/{prefix}/conversation-retention/prune-dry-run`). If they look right, set `CDK_CONVERSATION_RETENTION_PRUNE_ARMED=true` in prod.
 - **Status**: open. The daily pruner's schedule is enabled in production but `CONVERSATION_RETENTION_PRUNE_ARMED=false`, so it deletes nothing (2026-10-22). Whether the one-off script has run is unconfirmed. Unblocked since 1.27.0; Phil runs the `--apply` steps
+
+### [2026-10-30] Standing: promote flags that are on in prod but off by default, once per release cycle
+- **Source**: Phil-initiated, at the 1.32.0 cut, when rewind and fork went on in prod with the default left off: *"I'm worried I'll forget and then a fresh install won't have all the features."* Tracked in #1798, which has the per-flag checklist and each flag's promotion condition; tick it off there. The sibling of the rollout-switch review below: that one retires switches nobody flips, this one promotes features we run and never ship on.
+- **Surface**: `apis/shared/feature_flags.py` (the reader's `== "true"` becomes `!= "false"`), `infrastructure/lib/config.ts` (default `true`), all three `environment*.ts`, the docs-site flag reference (default and **Kind**), CHANGELOG **Changed**, release notes **Default changes**
+- **Effort × Impact**: S per flag × H. A fresh deployment gets only what defaults on; every release a flag stays opt-in is a release the public stack lacks a finished feature.
+- **Subtracts**: no. It adds a default, and usually nothing else changes.
+- **How to run it**: `node scripts/release/check-new-feature-flags.mjs` lists the SPA half (`true` in `environment.production.ts`, `false` in `environment.ts`); #1798 adds the backend-only flags the script cannot see. For each, check the condition: shipped in a `main` release, on in prod at least two weeks with no flip and no incident traced to it, and the readout it was waiting on (if any) recorded. Recommend **Ship** for each one that passes, as its own PR into `develop`. Recommend **Defer** with the reason for the rest. A flag that is deliberately opt-in because it costs money or retains data (`ATTACHMENT_KB_ENABLED`, `CONVERSATION_INDEX_ENABLED`) is a decision to revisit, not a promotion to recommend by default.
+- **Status**: open, recurring. **First pass (any review after 1.32.0 reaches prod):**
+  - **Eligible two weeks after 1.32.0 reaches prod**: `SESSION_REWIND_ENABLED` / `features.sessionRewind`, `SESSION_FORK_ENABLED` / `features.sessionFork`.
+  - **Gated on something else**: `SESSION_PREWARM_ENABLED` / `features.sessionPrewarm` (the Runtime V2 readout of what turnless warms cost, `docs/specs/agentcore-runtime-v2.md` §5a).
+  - **Deliberately opt-in, revisit**: `ATTACHMENT_KB_ENABLED` / `features.attachmentKb` ($5/GB-month), `CONVERSATION_INDEX_ENABLED` (retention).
 
 ### [2026-10-03] Standing: rollout-switch retirement review, once per release cycle
 - **Source**: Phil-initiated. Tracked in #1422, which has the per-switch checklist; tick it off there. The retirement rule is in #1420 (`CLAUDE.MD`, Feature Flags, *Feature switches stay; rollout switches retire*). We had added about six default-on switches per release and never retired one.

@@ -56,6 +56,7 @@ class SeedResult:
     created: int = 0
     skipped: int = 0
     failed: int = 0
+    updated: int = 0
     details: list[str] = field(default_factory=list)
 
 
@@ -1019,6 +1020,31 @@ def seed_default_tools(
 
 EXAMPLE_SKILL_ID = "web_research"
 
+# The Level-1 catalog line the model chooses skills by. It says what the skill
+# does, when to load it (in the user's words, not ours), and why it is worth
+# loading before acting. The first seeded description said only what it does,
+# and with ``fetch_url_content`` available a model has no reason to load a skill
+# whose job it can already see how to do: on dev, Haiku 4.5 loaded it in 0 of 9
+# research requests (the eval harness's ``skill_selection`` family). Keep it
+# free of ": ", which the My Skills importer reads as a frontmatter key.
+EXAMPLE_SKILL_DESCRIPTION = (
+    "Research a topic from web pages and write accurate notes with a citation "
+    "(page title and URL) for every point. Use this whenever the user gives you "
+    "a URL or web page to read, summarize, research or take notes from, asks "
+    "what a page or site says, wants sources or citations for information from "
+    "the web, or asks for research backed by links, even if they never say the "
+    "word research. Read it before fetching a page or writing up what one says, "
+    "because it holds the rules for quoting, citing, and handling blocked, "
+    "paywalled or thin pages that you cannot otherwise know."
+)
+
+#: Descriptions earlier seeds wrote. A row that still carries one exactly has
+#: never been edited by an admin, so a re-run refreshes it to the current text;
+#: any other description is an admin's choice and is left alone.
+PREVIOUS_EXAMPLE_SKILL_DESCRIPTIONS = (
+    "Fetch web pages and turn them into accurate, citable notes.",
+)
+
 EXAMPLE_SKILL_REFERENCE_FILENAME = "extraction_tips.md"
 
 EXAMPLE_SKILL_REFERENCE_BODY = b"""# Extraction Tips
@@ -1271,10 +1297,7 @@ def seed_example_skills(
     try:
         existing = table.get_item(Key={"PK": pk, "SK": sk})
         if "Item" in existing:
-            msg = f"Example skill '{skill_id}' already exists — skipped"
-            logger.info(msg)
-            result.skipped += 1
-            result.details.append(msg)
+            _refresh_example_skill_description(table, existing["Item"], region, result)
             # Still (idempotently) ensure the default-role grant is present.
             _grant_skill_to_default_role(table, skill_id)
             return result
@@ -1299,7 +1322,7 @@ def seed_example_skills(
 
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    description = "Fetch web pages and turn them into accurate, citable notes."
+    description = EXAMPLE_SKILL_DESCRIPTION
 
     item: dict[str, Any] = {
         "PK": pk,
@@ -1342,6 +1365,64 @@ def seed_example_skills(
 
     _grant_skill_to_default_role(table, skill_id)
     return result
+
+
+def _refresh_example_skill_description(
+    table: Any, item: dict[str, Any], region: str, result: SeedResult
+) -> None:
+    """Bring an untouched seeded row up to the current description, or skip it.
+
+    Only a system-owned row whose description is exactly one an earlier seed
+    wrote is changed, and the write is conditional on that description, so an
+    admin edit landing between the read and the write wins. ``updatedAt`` moves
+    with it: the runtime's skills freshness hash keys the agent cache on it, so
+    cached agents rebuild with the new catalog line within one TTL window.
+    """
+    skill_id = EXAMPLE_SKILL_ID
+    current = item.get("description")
+    if item.get("ownerId") != "system" or current not in PREVIOUS_EXAMPLE_SKILL_DESCRIPTIONS:
+        msg = f"Example skill '{skill_id}' already exists — skipped"
+        logger.info(msg)
+        result.skipped += 1
+        result.details.append(msg)
+        return
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    try:
+        table.update_item(
+            Key={"PK": f"SKILL#{skill_id}", "SK": "METADATA"},
+            UpdateExpression="SET description = :new, updatedAt = :now",
+            ConditionExpression="description = :old AND ownerId = :system",
+            ExpressionAttributeValues={
+                ":new": EXAMPLE_SKILL_DESCRIPTION,
+                ":now": now,
+                ":old": current,
+                ":system": "system",
+            },
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            msg = f"Example skill '{skill_id}' was edited while seeding — skipped"
+            logger.info(msg)
+            result.skipped += 1
+            result.details.append(msg)
+            return
+        msg = f"Failed to refresh example skill '{skill_id}': {e}"
+        logger.error(msg)
+        result.failed += 1
+        result.details.append(msg)
+        return
+
+    _write_skill_md(
+        skill_id,
+        EXAMPLE_SKILL_DESCRIPTION,
+        str(item.get("instructions") or EXAMPLE_SKILL_INSTRUCTIONS),
+        region,
+    )
+    msg = f"Example skill '{skill_id}' description refreshed to the current seed text"
+    logger.info(msg)
+    result.updated += 1
+    result.details.append(msg)
 
 
 # =============================================================================
@@ -1522,7 +1603,8 @@ def print_summary(results: list[SeedResult]) -> None:
     print("  Bootstrap Data Seeding Summary")
     print("=" * 60)
     for r in results:
-        print(f"  {r.category:<20s}  created={r.created}  skipped={r.skipped}  failed={r.failed}")
+        updated = f"  updated={r.updated}" if r.updated else ""
+        print(f"  {r.category:<20s}  created={r.created}{updated}  skipped={r.skipped}  failed={r.failed}")
         for detail in r.details:
             print(f"    - {detail}")
     print("=" * 60)
@@ -1532,8 +1614,9 @@ def print_summary(results: list[SeedResult]) -> None:
         print(f"  RESULT: {total_failed} operation(s) failed")
     else:
         total_created = sum(r.created for r in results)
+        total_updated = sum(r.updated for r in results)
         total_skipped = sum(r.skipped for r in results)
-        print(f"  RESULT: OK ({total_created} created, {total_skipped} skipped)")
+        print(f"  RESULT: OK ({total_created} created, {total_updated} updated, {total_skipped} skipped)")
     print()
 
 

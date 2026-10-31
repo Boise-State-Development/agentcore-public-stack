@@ -43,6 +43,7 @@ from .models import ExportReceipt, MessageMetadata, PausedTurnSnapshot, PendingI
 # The headless delivery path (ensure_session_metadata_exists) calls
 # is_preview_session, so a lazy import would only defer the crash.
 from .preview import is_preview_session
+from .rewind import RewindState
 
 # Stdlib-only normalizer for the conversation-search attributes written beside
 # the title (titleLower, firstPrompt).
@@ -439,6 +440,8 @@ def _derive_cache_observability(
       different Agent / model than the previous call — an explained re-write
       (an ``@``-mention, a mid-conversation model switch). The waste stays in
       ``wastedUsd``; the flags let readers subtract it.
+    - ``rewound``: set on the first call after a rewind (its ``rewindEpoch``
+      is newer than the previous call's), the same kind of explanation.
 
     ⚠️ The predecessor that decides ``miss_avoidable`` vs ``miss_ttl_expired``
     is the last call with the **same toolConfig + system-prompt fingerprints**,
@@ -640,6 +643,16 @@ def _derive_cache_observability(
         prev_agent = (prev_row or {}).get("turnAgentId")
         if prev_row is not None and own_agent != prev_agent:
             result["agentSwitched"] = True
+
+        # And for a rewind (rewind spec §6): the first call after one re-sends
+        # a shorter history than the call before it, so past the cache TTL it
+        # re-writes the history while reading tools + system, which classifies
+        # as `partial_miss`. Unavoidable, and the user's choice; the flag says
+        # so. Same discipline again: the spend stays in `wastedUsd`.
+        own_epoch = (message_metadata.model_extra or {}).get("rewindEpoch") or 0
+        prev_epoch = (prev_row or {}).get("rewindEpoch") or 0
+        if prev_row is not None and own_epoch > prev_epoch:
+            result["rewound"] = True
 
         # The same question for the model. Each model has its own cache, so a
         # call on a different model than the one before it re-writes the whole
@@ -1095,6 +1108,16 @@ async def _store_session_metadata_cloud(
 
         # First, check if session exists via GSI to get current SK
         existing_session = await _get_session_by_gsi(session_id, user_id, table)
+
+        # A soft-deleted row is final (#1764). Callers rebuild the row from a
+        # model, and a rebuilt model reads as active, so writing it would put
+        # the recency keys back and return the deleted conversation to the
+        # sidebar. Only SessionService.delete_session writes a tombstone.
+        if existing_session and _row_is_deleted(existing_session):
+            logger.warning(
+                "store_session_metadata: session %s is deleted; write refused", session_id
+            )
+            return
 
         # Prepare item for DynamoDB. A model read back through get_session_metadata
         # carries the row's recency keys as extras; drop them so the keys written
@@ -1720,6 +1743,15 @@ async def update_session_activity(
                 )
                 return False
 
+        # Deleted mid-turn (#1764): the SET below would restore the recency
+        # keys and bring the conversation back to the sidebar.
+        if _row_is_deleted(existing):
+            logger.warning(
+                "update_session_activity: session %s was deleted; activity not recorded",
+                session_id,
+            )
+            return False
+
         old_sk = existing.get("SK")
         if not old_sk:
             logger.warning("update_session_activity: session %s has no SK", session_id)
@@ -2098,6 +2130,30 @@ async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[
         # failure - the session might not exist, or we're in a transitional state.
         logger.debug(f"GSI lookup failed (may not exist yet): {e}")
         return None
+
+
+def _row_is_deleted(row: Dict[str, Any]) -> bool:
+    """Whether a raw session row is soft-deleted (either marker counts)."""
+    return row.get('deleted') is True or row.get('status') == 'deleted'
+
+
+async def session_is_deleted(session_id: str, user_id: str) -> bool:
+    """Whether the user's session row exists and is soft-deleted (#1764).
+
+    For writers that run after a turn has started: the user can delete the
+    conversation while it streams, and nothing should be written for it after
+    that. A missing row or a failed lookup reads as not deleted, so callers
+    carry on as they did before this check existed.
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return False
+    try:
+        row = await _get_session_by_gsi(session_id, user_id, get_dynamodb_table(table_name))
+    except Exception:
+        logger.warning("session_is_deleted: lookup failed for %s", session_id, exc_info=True)
+        return False
+    return row is not None and _row_is_deleted(row)
 
 
 
@@ -2529,6 +2585,20 @@ async def get_session_compaction(session_id: str, user_id: str) -> Tuple[int, Op
         return 0, None
     summary = compaction.get("summary")
     return int(compaction.get("checkpoint") or 0), summary if isinstance(summary, str) else None
+
+
+async def get_session_rewind(session_id: str, user_id: str) -> RewindState:
+    """The session's rewind state, or the never-rewound default.
+
+    Read from the same static row as ``compaction``. Unconfigured tables and
+    read failures return the default, which shows every message: the same view
+    a session had before rewind existed.
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        return RewindState()
+    item = await _get_session_by_gsi(session_id, user_id, get_dynamodb_table(table_name))
+    return RewindState.from_row(item)
 
 
 async def get_session_metadata(session_id: str, user_id: str) -> Optional[SessionMetadata]:

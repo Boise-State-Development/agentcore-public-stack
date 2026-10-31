@@ -6,6 +6,7 @@ import {
 import { inject } from '@angular/core';
 import { catchError, throwError } from 'rxjs';
 import { ErrorService } from '../services/error/error.service';
+import { isStreamingRequest } from './retry.interceptor';
 import { SessionService } from './session.service';
 
 /**
@@ -36,13 +37,9 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
   // These are handled by fetchEventSource's onerror callback.
   // Only `/chat/stream` (the BFF proxy on app-api) is reachable from
   // the SPA — `/invocations` was removed when the public PKCE client
-  // was retired in Phase 7.
-  const streamingEndpoints = ['/chat/stream'];
-  const isStreamingRequest = streamingEndpoints.some(endpoint =>
-    req.url.includes(endpoint)
-  );
-
-  if (isStreamingRequest) {
+  // was retired in Phase 7. The predicate is shared with the gateway
+  // retry interceptor so the two never disagree on what a stream is.
+  if (isStreamingRequest(req)) {
     // Let streaming requests handle their own errors
     return next(req);
   }

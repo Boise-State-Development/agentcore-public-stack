@@ -39,6 +39,7 @@ from apis.shared.projects.service import (
 )
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.sessions.metadata import list_project_sessions
+from apis.shared.skills.pins import public_skill_config
 from apis.shared.sessions.models import SessionMetadataResponse, SessionsListResponse
 
 from .harness_gateway import AppApiHarnessGateway
@@ -210,8 +211,25 @@ def transfer_project(
 # ---- settings (instructions, model, tools, skills) ---------------------
 
 
+def _wire_change(field: str, value: Any) -> Any:
+    """A version diff value for the wire; a skill binding's adder (a user id) stays out."""
+    wired = wire_value(value)
+    if field != "bindings" or not isinstance(wired, list):
+        return wired
+    return [
+        {**b, "config": public_skill_config(b.get("config"))}
+        if isinstance(b, dict) and b.get("kind") == SKILL
+        else b
+        for b in wired
+    ]
+
+
 def _refs(harness_bindings, kind: str) -> list:
-    return [BindingRef(ref=b.ref, config=b.config) for b in (harness_bindings or []) if b.kind == kind]
+    return [
+        BindingRef(ref=b.ref, config=public_skill_config(b.config) if kind == SKILL else b.config)
+        for b in (harness_bindings or [])
+        if b.kind == kind
+    ]
 
 
 async def _save(project_id: str, user: User, **changes) -> HarnessView:
@@ -289,7 +307,7 @@ async def _skills(view: HarnessView) -> SkillBindingsResponse:
         bindings=[
             SkillBindingRef(
                 ref=b.ref,
-                config=b.config,
+                config=public_skill_config(b.config),
                 version=pins[b.ref].version if b.ref in pins else None,
                 pinned_at=pins[b.ref].pinned_at if b.ref in pins else None,
                 update_available=pins[b.ref].update_available if b.ref in pins else False,
@@ -392,8 +410,8 @@ async def get_settings_version(
         field_changes=[
             VersionFieldChange(
                 field=wire_field_name(f),
-                before=wire_value(before),
-                after=wire_value(after),
+                before=_wire_change(f, before),
+                after=_wire_change(f, after),
                 behavior=f in ("instructions", "bindings", "model_settings"),
             )
             for f, before, after in changes

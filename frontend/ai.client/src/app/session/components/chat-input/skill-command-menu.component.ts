@@ -25,6 +25,12 @@ import { SkillCommand } from '../../../services/skill/skill-command.service';
  * discloses to the model. "Browse skills →" is the last row: turning a skill on belongs on
  * the Customize page, not in an autocomplete.
  *
+ * In a project (`projectScoped`) the rows are the project's skills, and the last row is
+ * "Project skills →", because a project's skills are chosen on its Skills page and Customize
+ * cannot change them. The menu also opens there with nothing bound: its empty state says
+ * where the skills come from, which is what a member who just wrote one under Customize and
+ * cannot find it here needs to read.
+ *
  * Surfaces are neutral and the brand blue lives in the glyph and the slug. Do not reach for
  * `bg-primary-50/100/200` as a tint here — the primary scale is derived from #0033a0 by
  * lightness offset alone and keeps full chroma, so those steps are saturated mid-blues, not
@@ -43,7 +49,7 @@ import { SkillCommand } from '../../../services/skill/skill-command.service';
         #listbox
         [id]="listboxId"
         role="listbox"
-        aria-label="Skills you can run"
+        [attr.aria-label]="projectScoped() ? 'Skills this project can run' : 'Skills you can run'"
         class="max-h-72 overflow-y-auto py-1"
       >
         <li
@@ -55,7 +61,11 @@ import { SkillCommand } from '../../../services/skill/skill-command.service';
 
         @if (items().length === 0) {
           <li class="px-4 py-3 text-sm/6 text-gray-500 dark:text-gray-400" role="presentation">
-            No skills match “{{ query() }}”.
+            @if (projectScoped() && !query()) {
+              This project's skills are chosen on its Skills page.
+            } @else {
+              No skills match “{{ query() }}”.
+            }
           </li>
         }
 
@@ -100,7 +110,7 @@ import { SkillCommand } from '../../../services/skill/skill-command.service';
         (mousedown)="onBrowseAll($event)"
         class="flex w-full items-center justify-between gap-2 border-t border-gray-200 px-4 py-2.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700/50"
       >
-        Browse skills
+        {{ projectScoped() ? 'Project skills' : 'Browse skills' }}
         <ng-icon name="heroArrowRight" class="size-4" aria-hidden="true" />
       </button>
     </div>
@@ -110,6 +120,8 @@ export class SkillCommandMenuComponent {
   readonly items = input.required<SkillCommand[]>();
   readonly activeIndex = input<number>(0);
   readonly query = input<string>('');
+  /** The conversation runs in a project: the rows, the empty state and the last row are the project's. */
+  readonly projectScoped = input<boolean>(false);
 
   readonly picked = output<SkillCommand>();
   readonly browseAll = output<void>();

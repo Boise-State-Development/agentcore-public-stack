@@ -342,6 +342,14 @@ async def _find_managed_model(model_id: str | None):
 # remember a preference "just for me", Haiku 4.5 said it had saved or noted it without
 # calling `memory_save` (2 of 10 on dev before; the tool spec alone left 1 of 10). An empty
 # personal space renders no memory block, so this is the one place always in the prompt.
+# The tools paragraph is a 2026-10 support ticket: a harness runs only on the project's bound
+# tools, but the base prompt's missing-tool advice sent a faculty member to Customize →
+# Tools, where turning Canvas on changes nothing for a project. It names the project's
+# Tools page instead and says so over the base advice.
+# The files paragraph is the 2026-10-29 faculty report: a project with 41 .docx submissions was
+# told "I have no function that reads Files-area attachments", because retrieval sees passages
+# and the conversation's document tools see only the conversation's uploads; `project_files`
+# is the harness-only tool that lists and reads Files by name.
 # Constant text, so it costs one cache write per harness, on deploy.
 PROJECT_WORKSPACE_GUIDANCE = (
     "## Project Workspace\n\n"
@@ -351,7 +359,18 @@ PROJECT_WORKSPACE_GUIDANCE = (
     "relevant shared conversations, not only memory.\n\n"
     "When a member asks you to remember something, for the team or just for them, call `memory_save` "
     "in that same turn. Nothing carries into a later conversation until it succeeds, so never say "
-    "you've saved, noted or recorded something you haven't saved."
+    "you've saved, noted or recorded something you haven't saved.\n\n"
+    "The project's files are searched for each message automatically, and the best-matching passages "
+    "are given to you; that search sees passages, not files. To see what is in Files, or to work on one "
+    "file a member names (grade a submission, review a draft, compare two documents), call "
+    "`project_files`: with no arguments it lists every file, and with `filename` it reads that file "
+    "whole, in pages. The Word, PowerPoint, spreadsheet and `document_read` tools see only files attached "
+    "to this conversation, so an empty listing from them says nothing about the project's Files. Never say "
+    "you cannot read the project's files.\n\n"
+    "This project's tools are set on the project, for everyone in it: a member's own choices under "
+    "Customize → Tools do not reach project conversations. When a request needs a tool you don't have, "
+    "say this project doesn't include it, and that someone who can edit the project can add it from "
+    "the project's page under Tools. This replaces the Customize → Tools advice above for this project."
 )
 
 
@@ -366,8 +385,13 @@ def compose_agent_system_prompt(base_prompt: str, instructions: str, *, project_
     Deliberately takes nothing about the invoking user: this text is the head of the
     cacheable system block, and two members of one project must render it identically or
     each member pays a cache write for the same project (the prompt-cache contract).
+
+    A project with no instructions still gets the guidance, with no instructions heading:
+    a new project has none, and its harness runs on the project's tools all the same.
     """
     guidance = f"\n\n{PROJECT_WORKSPACE_GUIDANCE}" if project_harness else ""
+    if not instructions:
+        return f"{base_prompt}{guidance}"
     return f"{base_prompt}{guidance}\n\n## {_instructions_heading(project_harness)}\n\n{instructions}"
 
 
@@ -2478,6 +2502,7 @@ async def _agent_for_app_dispatch(
         mantle_region=mantle_region,
         agent_type=agent_type,
         is_resume=False,
+        client_surface=input_data.client_surface,
         accessible_skill_ids=accessible_skill_ids,
         # This path builds no injected tools, but shares a cache slot
         # with the real turns that do. Read the slot; never seed it.
@@ -3548,10 +3573,12 @@ async def _build_turn_tools(
     project_memory,
     turn_has_document: bool,
     text_only_model: bool = False,
+    turn_project_id: Optional[str] = None,
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
-    gate, which is memoized per session once it answers yes."""
+    gate, which is memoized per session once it answers yes. ``turn_project_id``
+    marks a project-harness turn, which also gets ``project_files``."""
     extra_tools = _build_spreadsheet_tools(
         enabled_tools=effective_enabled_tools,
         assistant_id=input_data.rag_assistant_id,
@@ -3600,6 +3627,18 @@ async def _build_turn_tools(
             + build_shared_task_tools(project_memory.project_id, current_user)
         )
 
+    # A project harness lists the project's Files and reads one by name
+    # (`project_files`). Retrieval sees passages, never files, so "grade
+    # submission 7" needs this. Gated on the turn being a project's, not on
+    # memory spaces, and placed after the memory family so those specs keep
+    # their place in the cached toolConfig.
+    if turn_project_id and input_data.rag_assistant_id:
+        from apis.inference_api.chat.project_memory import build_project_files_tools
+
+        extra_tools = extra_tools + build_project_files_tools(
+            turn_project_id, input_data.rag_assistant_id, current_user
+        )
+
     # document_read for any session that carries a readable attachment
     # (this turn's uploads count). Gated on session state, not the
     # picker; its presence goes into the cache key below rather than
@@ -3633,6 +3672,55 @@ async def _build_turn_tools(
         extra_tools_key_described=extra_tools_key_described,
         memory_binding_key=memory_binding_key,
     )
+
+
+def _build_client_tools(input_data: InvocationRequest) -> list:
+    """Interrupting tools for the request's declared client tools, or []."""
+    if not input_data.client_tools:
+        return []
+    from apis.shared.client_tools import build_client_tools
+
+    return build_client_tools(input_data.client_tools)
+
+
+def _record_client_tools_on(agent, input_data: InvocationRequest) -> None:
+    snapshot = getattr(agent, "_construction_snapshot", None)
+    if isinstance(snapshot, dict) and input_data.client_tools:
+        snapshot["client_tools"] = json.dumps([spec.model_dump(by_alias=True) for spec in input_data.client_tools])
+
+
+def _client_tools_digest(input_data: InvocationRequest) -> str:
+    if not input_data.client_tools:
+        return ""
+    from apis.shared.client_tools import client_tools_digest
+
+    return client_tools_digest(input_data.client_tools)
+
+
+def _client_tools_from_snapshot(snapshot) -> Optional[list]:
+    """Rebuild the paused turn's client tools from its snapshot, or None."""
+    if not getattr(snapshot, "client_tools", None):
+        return None
+    from apis.shared.client_tools import ClientToolSpec, build_client_tools
+
+    try:
+        specs = [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)]
+    except Exception as e:  # noqa: BLE001 - a bad snapshot should miss, not 500
+        logger.warning("Paused-turn snapshot carries unreadable client_tools: %s", e)
+        return None
+    return build_client_tools(specs) or None
+
+
+def _client_tools_digest_from_snapshot(snapshot) -> str:
+    if not getattr(snapshot, "client_tools", None):
+        return ""
+    from apis.shared.client_tools import ClientToolSpec, client_tools_digest
+
+    try:
+        specs = [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)]
+    except Exception:  # noqa: BLE001
+        return ""
+    return client_tools_digest(specs)
 
 
 ResumeUnavailableReason = Literal["missing", "expired", "unknown_interrupt"]
@@ -4694,7 +4782,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
             # Build the base prompt with date
-            base_prompt_builder = SystemPromptBuilder()
+            base_prompt_builder = SystemPromptBuilder(surface=input_data.client_surface)
             base_prompt = base_prompt_builder.build(include_date=True)
 
             # Append assistant instructions to the base prompt.
@@ -4716,8 +4804,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if not system_prompt:
                 from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
-                base_prompt_builder = SystemPromptBuilder()
+                base_prompt_builder = SystemPromptBuilder(surface=input_data.client_surface)
                 system_prompt = base_prompt_builder.build(include_date=True)
+            if turn_project_id:
+                # A new project has no instructions; its harness still needs the
+                # project guidance (memory, shared conversations, where tools are set).
+                system_prompt = compose_agent_system_prompt(system_prompt, "", project_harness=True)
             logger.info(
                 "Assistant has no instructions - using fallback system prompt"
             )
@@ -4838,7 +4930,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # path can leave system_prompt unset).
             if not system_prompt:
                 from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
-                system_prompt = SystemPromptBuilder().build(include_date=True)
+                system_prompt = SystemPromptBuilder(surface=input_data.client_surface).build(include_date=True)
             system_prompt = append_active_prompt(system_prompt, prompt_name, prompt_text)
             logger.info(f"Appended custom system prompt: {prompt_name!r}")
 
@@ -4972,6 +5064,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 mantle_region=snapshot.mantle_region,
                 agent_type=snapshot.agent_type,
                 is_resume=True,
+                # A key dimension for non-web surfaces; replay the paused turn's.
+                client_surface=snapshot.client_surface or input_data.client_surface,
+                # Client-executed tools are the one injected family a resume
+                # MUST rebuild: Strands re-enters the paused tool body with the
+                # client's response, so the tool has to exist on the rebuilt
+                # agent or the resume fails. The specs ride the snapshot; the
+                # digest is replayed so the key lands on the paused agent.
+                extra_tools=_client_tools_from_snapshot(snapshot),
+                client_tools_digest=_client_tools_digest_from_snapshot(snapshot),
                 # The original turn's key carried whether the session had a
                 # readable document; the gate is monotonic, so re-asking it
                 # rebuilds the same key (an orphaned paused agent otherwise).
@@ -5076,7 +5177,17 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 project_memory=project_memory,
                 turn_has_document=attachments.turn_has_document,
                 text_only_model=turn_model.text_only,
+                turn_project_id=turn_project_id,
             )
+            # Client-executed tools (terminal only; the SPA never declares any).
+            # Key-described by construction: the digest is a cache-key element,
+            # so they do not veto caching the way an undescribed injected tool
+            # would. Appended last so the registry's and the other injected
+            # tools keep their positions in toolConfig.
+            client_tools = _build_client_tools(input_data)
+            client_tools_digest = _client_tools_digest(input_data)
+            if client_tools:
+                turn_tools.extra_tools = turn_tools.extra_tools + client_tools
             document_read_available = bool(turn_tools.document_tools)
             extracted_documents_section = _build_extracted_documents_section(
                 attachments.extracted_documents,
@@ -5114,7 +5225,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     # of the build was done: ~0 on a warm turn, its downloads on a
                     # conversation's first.
                     prelude.mark("agent_build.kb_full_context")
-                return await get_agent(
+                built_agent = await get_agent(
                     session_id=input_data.session_id,
                     user_id=user_id,
                     auth_token=auth_token,
@@ -5129,6 +5240,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     agent_type=effective_agent_type,
                     extra_tools=turn_tools.extra_tools,
                     is_resume=False,
+                    client_surface=input_data.client_surface,
+                    client_tools_digest=client_tools_digest,
                     accessible_skill_ids=effective_skill_ids,
                     extra_tools_key_described=turn_tools.extra_tools_key_described,
                     has_document_tools=bool(turn_tools.document_tools),
@@ -5141,6 +5254,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     knowledge_context=knowledge_context,
                     memory_mode=turn_memory_mode,
                 )
+                if client_tools:
+                    # The paused-turn snapshot is written from this dict; a
+                    # resume rebuilds the client tools from it (see
+                    # `_client_tools_from_snapshot`). Same specs for a cache hit
+                    # by construction — the digest is in the key.
+                    _record_client_tools_on(built_agent, input_data)
+                return built_agent
 
             # Defer the build into the stream so it can be narrated.
             #

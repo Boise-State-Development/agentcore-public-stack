@@ -100,6 +100,7 @@ TAIL_ALLOWED = frozenset(
         "tool_approval_required",
         "user_question_required",
         "browser_login_required",
+        "client_tool_call",
         "metadata",
         "metadata_summary",
         "compaction",
@@ -160,6 +161,7 @@ INTERRUPT_EVENTS = frozenset(
         "tool_approval_required",
         "user_question_required",
         "browser_login_required",
+        "client_tool_call",
     }
 )
 
@@ -324,6 +326,8 @@ class AppApiTransport:
             follow_redirects=False,
         )
         self._csrf: Optional[str] = None
+        #: The signed-in user as ``GET /auth/session`` reports it (``user_id``, ``email``…).
+        self.user: Dict[str, Any] = {}
 
     # -- auth -------------------------------------------------------------
 
@@ -384,7 +388,23 @@ class AppApiTransport:
         self._csrf = body.get("csrf_token") or body.get("csrfToken")
         if not self._csrf:
             raise RuntimeError("GET /auth/session returned no csrf_token")
-        logger.info("signed in (cognito) as %s", (body.get("user") or {}).get("email", "?"))
+        # The session payload is flat (user_id, email, name, roles, csrf_token).
+        self.user = {k: body.get(k) for k in ("user_id", "email", "name", "roles") if k in body}
+        logger.info("signed in (cognito) as %s", self.user.get("email") or "?")
+
+    async def enable_headless_grant(self) -> Dict[str, Any]:
+        """Pin a headless grant from this live session (``POST /runs/grant``).
+
+        The eval harness signs in fresh on every run and renews its grant this
+        way, so the grant's 30-day login-recency window never lapses on an
+        account nobody logs into by hand.
+        """
+        r = await self._client.post("/runs/grant", headers=self._headers())
+        if r.status_code == 404:
+            raise RuntimeError("POST /runs/grant -> 404: scheduled runs are off in this environment")
+        if r.status_code != 200:
+            raise RuntimeError(f"POST /runs/grant -> {r.status_code}: {r.text[:200]}")
+        return r.json()
 
     def _headers(self) -> Dict[str, str]:
         h = {"Content-Type": "application/json"}
@@ -932,6 +952,94 @@ async def row_tool_turn(ctx: Context) -> RowResult:
     return RowResult("tool_turn", "PASS", f"tools used: {names}; {len(turn.all('tool_result'))} result(s)", warnings, {"tools": names})
 
 
+EMPTY_FINAL_PROMPTS = (
+    "First write one short sentence with your own estimate of 1234*5678. Then call the {tool} tool to "
+    "check it. When the tool result comes back your turn is already finished: reply with an empty "
+    "message containing no text at all.",
+    "Call the {tool} tool to compute 17*23. Write no text at all, neither before nor after the tool "
+    "call. After the tool result arrives, end your turn immediately without writing anything.",
+)
+
+
+def _calls_from_frames(turn: TurnResult) -> List[Dict[str, Any]]:
+    """One entry per model call: each ``message_stop`` and the first usage-bearing
+    ``metadata`` after it.
+
+    Stops count the calls, not starts: Bedrock sends no ``messageStart`` for an
+    empty response, only ``messageStop`` + ``metadata``. The coordinator's
+    turn-level ``metadata`` before ``done`` repeats the last call's usage, and
+    pairing only the first one after each stop leaves it out.
+    """
+    calls: List[Dict[str, Any]] = []
+    awaiting: Optional[Dict[str, Any]] = None
+    for f in turn.frames:
+        if f.name == "message_stop":
+            awaiting = {"usage": None}
+            calls.append(awaiting)
+        elif f.name == "metadata" and awaiting is not None and f.data.get("usage"):
+            awaiting["usage"] = f.data["usage"]
+            awaiting = None
+    return calls
+
+
+async def row_empty_final_call(ctx: Context) -> RowResult:
+    """A model call that streams no ``message_start`` still gets its own ``C#`` row.
+
+    Before PR #1785 the empty call's usage overwrote the previous call's slot:
+    that call went unbilled and the session showed one row fewer than calls.
+    """
+    tool = ctx.args.tool
+    sid = ""
+    turn: Optional[TurnResult] = None
+    calls: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    for attempt, template in enumerate(EMPTY_FINAL_PROMPTS, start=1):
+        sid = ctx.new_session()
+        turn = await ctx.transport.stream_turn(ctx.base_payload(sid, template.format(tool=tool), enabled_tools=[tool]))
+        ctx.note(turn)
+        warnings = assert_frame_contract(turn)
+        calls = _calls_from_frames(turn)
+        if len(calls) > len(turn.all("message_start")):
+            break
+    else:
+        return RowResult(
+            "empty_final_call",
+            "OBSERVED",
+            f"the model wrote text on all {len(EMPTY_FINAL_PROMPTS)} attempts; no empty call to meter",
+            warnings,
+        )
+
+    body: Optional[Dict[str, Any]] = None
+    code = 0
+    for _ in range(8):
+        code, body = await ctx.transport.get_calls(sid)
+        if body and len(body.get("calls") or []) >= len(calls):
+            break
+        await asyncio.sleep(1.5)
+    if code in (401, 403):
+        raise RowSkip(f"cost rows unreadable (admin endpoint -> {code}); run as system_admin")
+    if not body:
+        raise RowSkip(f"cost anatomy unavailable (HTTP {code})")
+
+    rows = sorted(body.get("calls") or [], key=lambda r: r.get("messageId") or 0)
+    if len(rows) != len(calls):
+        raise RowFailure(
+            f"{len(calls)} model calls streamed (one with no message_start) but {len(rows)} C# rows: "
+            "the unannounced call's usage merged into a neighbour's row"
+        )
+    for idx, (call, row) in enumerate(zip(calls, rows)):
+        usage = call["usage"] or {}
+        streamed = (usage.get("inputTokens"), usage.get("outputTokens"))
+        recorded = (row.get("inputTokens"), row.get("outputTokens"))
+        if call["usage"] and streamed != recorded:
+            raise RowFailure(f"call {idx} streamed in/out {streamed} but its row (messageId {row.get('messageId')}) holds {recorded}")
+    ids = [r.get("messageId") for r in rows]
+    if len(set(ids)) != len(ids):
+        raise RowFailure(f"rows share message ids: {ids}")
+    data = {"attempt": attempt, "calls": len(calls), "messageIds": ids, "outputTokens": [r.get("outputTokens") for r in rows]}
+    return RowResult("empty_final_call", "PASS", f"{len(calls)} calls -> {len(rows)} rows, each with its own usage (ids {ids})", warnings, data)
+
+
 ASK_PROMPT = (
     "Do not answer this message directly. Your first and only action is to call the ask_user_question "
     "tool once, with a single question: header 'Color', question 'Which color do you prefer?', options "
@@ -998,6 +1106,82 @@ async def row_ask_user_question(ctx: Context) -> RowResult:
         f"paused with {len(questions)} question(s), resumed with {pick!r}, answer: {resume.final_text[:40]!r}",
         warnings,
         {"options": options},
+    )
+
+
+CLIENT_TOOL_PROMPT = (
+    "Use the local_echo_marker tool exactly once, with marker set to 'smoke-7731', "
+    "and then tell me verbatim what it returned."
+)
+
+
+async def row_client_tool_call(ctx: Context) -> RowResult:
+    """The terminal client's protocol: declare a tool, the model calls it, the
+    turn pauses on `client_tool_call`, the client resumes with the output.
+
+    The declared tool here is a stub nobody runs — this script *is* the client,
+    so it answers the interrupt itself. What this proves is the server half:
+    the spec reaches toolConfig, the pause lands after the final message_stop,
+    and the resume rebuilds the tool from the snapshot and returns our output
+    as the tool result (the answer should echo it).
+    """
+    spec = {
+        "name": "echo_marker",
+        "description": "Runs on the user's machine and returns the marker string it was given, prefixed with OK.",
+        "inputSchema": {"type": "object", "properties": {"marker": {"type": "string"}}, "required": ["marker"]},
+    }
+    warnings: List[str] = []
+    turn: Optional[TurnResult] = None
+    call: Optional[Frame] = None
+    sid = ""
+    for attempt in range(1, 4):
+        sid = ctx.new_session()
+        turn = await ctx.transport.stream_turn(ctx.base_payload(sid, CLIENT_TOOL_PROMPT, client_tools=[spec]))
+        ctx.note(turn)
+        warnings += assert_frame_contract(turn, allow_interrupt=True)
+        call = turn.first("client_tool_call")
+        if call is not None:
+            if attempt > 1:
+                warnings.append(f"model only called the client tool on attempt {attempt}")
+            break
+    assert turn is not None
+    if call is None:
+        raise RowFailure(f"no client_tool_call frame in 3 attempts; frames={sorted(set(turn.names))}; answer: {turn.final_text[:60]!r}")
+    names = turn.names
+    if names.index("client_tool_call") < len(names) - 1 - names[::-1].index("message_stop"):
+        raise RowFailure("client_tool_call arrived before the final message_stop")
+    if call.data.get("toolName") != "echo_marker":
+        raise RowFailure(f"client_tool_call names {call.data.get('toolName')!r}, expected the bare declared name 'echo_marker'")
+    marker = (call.data.get("arguments") or {}).get("marker", "")
+    interrupt_id = call.data.get("interruptId")
+    if not interrupt_id:
+        raise RowFailure(f"client_tool_call lacks interruptId: {call.data}")
+
+    resume = await ctx.transport.stream_turn(
+        {
+            "session_id": sid,
+            "message": "",
+            "enabled_tools": [],
+            "client_tools": [spec],
+            **({"model_id": ctx.args.model_id} if ctx.args.model_id else {}),
+            "interrupt_responses": [{"interruptId": interrupt_id, "response": {"output": f"OK {marker}", "isError": False}}],
+        }
+    )
+    ctx.note(resume)
+    warnings += assert_frame_contract(resume, resume=True)
+    if resume.all("client_tool_call"):
+        raise RowFailure("the resumed turn re-raised client_tool_call (the tool was not rebuilt from the snapshot, or the answer was rejected)")
+    if "7731" not in resume.final_text:
+        warnings.append(f"resumed answer did not echo the marker: {resume.final_text[:60]!r}")
+    code, body = await ctx.transport.get_messages(sid)
+    if code == 200 and body is not None and body.get("pendingInterrupts"):
+        raise RowFailure("pendingInterrupts still non-empty after a successful resume")
+    return RowResult(
+        "client_tool_call_resume",
+        "PASS",
+        f"paused on echo_marker(marker={marker!r}), resumed; answer: {resume.final_text[:40]!r}",
+        warnings,
+        {},
     )
 
 
@@ -1171,46 +1355,18 @@ async def _register_upload(
 ) -> str:
     """Register *data* as a READY session file and return its upload_id.
 
-    The SPA presigns, PUTs to S3 and completes the upload, then sends
-    ``file_upload_ids`` — never base64 ``files`` (`chat-request.service.ts`).
-    That difference decides whether ``document_read`` and ``verify_sources``
-    exist on the turn: ``turn_has_document`` is classified from the *resolved
-    uploads* only (`routes.py`, `_resolved_files_include_a_document`), and
-    inline base64 never produces an upload row — `inline_persist` writes rows
-    for spreadsheets and decks, not documents.
-
-    So a row that needs the document tools cannot use the base64 path, and this
-    writes the same two things a completed upload does: the S3 object at the
-    conventional key, and a READY row. Needs AWS credentials, so it is only
-    reachable where the harness already resolved the deployed environment.
+    A row that needs ``document_read`` / ``verify_sources`` must send a real
+    upload, not base64 ``files``: see ``apis/shared/evals/fixtures.py``, which
+    the eval harness shares. An environment with nowhere to store it skips the
+    row rather than failing it.
     """
-    import boto3
+    from apis.shared.evals.fixtures import FixtureError, register_upload
 
-    from apis.shared.files.models import FileMetadata, FileStatus
-    from apis.shared.files.repository import get_file_upload_repository
+    try:
+        return await register_upload(user_id, session_id, filename, mime_type, data)
+    except FixtureError as exc:
+        raise RowSkip(str(exc)) from exc
 
-    bucket = os.environ.get("S3_USER_FILES_BUCKET_NAME", "")
-    if not bucket:
-        raise RowSkip("S3_USER_FILES_BUCKET_NAME is not set; needs --prefix (deployed) or a local stack")
-    upload_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:12]}"
-    key = f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
-    await asyncio.to_thread(
-        boto3.client("s3").put_object, Bucket=bucket, Key=key, Body=data, ContentType=mime_type
-    )
-    await get_file_upload_repository().create_file(
-        FileMetadata(
-            upload_id=upload_id,
-            user_id=user_id,
-            session_id=session_id,
-            filename=filename,
-            mime_type=mime_type,
-            size_bytes=len(data),
-            s3_key=key,
-            s3_bucket=bucket,
-            status=FileStatus.READY,
-        )
-    )
-    return upload_id
 
 async def row_source_provenance(ctx: Context) -> RowResult:
     """`verify_sources` answers both questions and emits `source_provenance`.
@@ -1397,8 +1553,10 @@ ROWS: List[Tuple[str, Callable[[Context], Awaitable[Any]]]] = [
     ("second_turn_cache", row_second_turn_cache),
     ("restore_after_reload", row_restore),
     ("tool_turn", row_tool_turn),
+    ("empty_final_call", row_empty_final_call),
     ("ask_user_question_resume", row_ask_user_question),
     ("tool_approval_resume", row_tool_approval),
+    ("client_tool_call_resume", row_client_tool_call),
     ("duplicate_send_409+stop_mid_answer", row_duplicate_and_stop),
     ("preview_session", row_preview_session),
     ("steer_mid_turn", row_steer_observed),

@@ -4,6 +4,7 @@ import { fromEvent } from 'rxjs';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { SessionService } from '../../session/services/session/session.service';
 import { ChatStateService } from '../../session/services/chat/chat-state.service';
+import { PreflightDismissalStorageService } from './preflight-dismissal-storage.service';
 
 /**
  * Pending OAuth consent request surfaced by the backend when an external
@@ -106,6 +107,14 @@ export class OAuthConsentService {
   private readonly sessionService = inject(SessionService);
   private readonly chatState = inject(ChatStateService);
 
+  /** Providers whose *pre-flight* consent prompt the user dismissed. Those
+   *  prompts carry no interruptId and the backend re-emits them every turn
+   *  the agent is rebuilt, in every conversation, so `seenInterruptIds`
+   *  can't suppress them. Per user and persisted, so the dismissal survives
+   *  conversation changes and reloads; lifted by a successful consent and by
+   *  sign-out. */
+  private readonly preflightDismissals = inject(PreflightDismissalStorageService);
+
   /** Map of providerId → request. A provider only appears once, even if
    *  the backend emits duplicates mid-stream. */
   private readonly requests = signal<Map<string, OAuthConsentRequest>>(new Map());
@@ -117,13 +126,6 @@ export class OAuthConsentService {
    *  tool calls always carry a fresh interrupt id (Strands generates it
    *  from `toolUseId`), so legitimate prompts are never suppressed. */
   private readonly seenInterruptIds = new Set<string>();
-
-  /** Providers whose *pre-flight* consent prompt the user dismissed. Those
-   *  prompts carry no interruptId and the backend re-emits them every turn
-   *  the agent is rebuilt, so `seenInterruptIds` can't suppress them.
-   *  Cleared by {@link clear} on session change / logout, and by a
-   *  successful consent, so this only silences the current tab session. */
-  private readonly dismissedPreflightProviders = new Set<string>();
 
   /** ProviderIds whose popup is currently open. */
   private readonly inFlight = signal<Set<string>>(new Set());
@@ -235,7 +237,7 @@ export class OAuthConsentService {
     // an explicit dismissal so declining once doesn't mean answering the
     // same prompt after every message. Interrupt-driven prompts are exempt:
     // there a turn is genuinely paused and the user must be able to act.
-    if (!interruptId && this.dismissedPreflightProviders.has(providerId)) {
+    if (!interruptId && this.preflightDismissals.has(providerId)) {
       return;
     }
     this.requests.update((map) => {
@@ -330,7 +332,7 @@ export class OAuthConsentService {
           // any — fire so the agent can finish the turn.
           this.dismiss(providerId);
           // Connected, not declined — same reasoning as handleCompletion.
-          this.dismissedPreflightProviders.delete(providerId);
+          this.preflightDismissals.forget(providerId);
           if (request.interruptId && this.resumeHandler) {
             void Promise.resolve(
               this.resumeHandler([request.interruptId], { sessionId: request.sessionId }),
@@ -533,7 +535,7 @@ export class OAuthConsentService {
     // only way to make the dismissal stick against next turn's re-emission
     // is to remember it here.
     if (entry && !interruptId && !entry.userInitiated) {
-      this.dismissedPreflightProviders.add(providerId);
+      this.preflightDismissals.add(providerId);
     }
 
     this.requests.update((map) => {
@@ -579,14 +581,17 @@ export class OAuthConsentService {
       });
   }
 
-  /** Reset all state (new session, logout). */
+  /**
+   * Reset per-conversation state on a conversation change. Pre-flight
+   * dismissals are the user's, not the conversation's, and survive this;
+   * sign-out clears them through {@link PreflightDismissalStorageService}.
+   */
   clear(): void {
     this.requests.set(new Map());
     this.inFlight.set(new Set());
     this.blocked.set(new Set());
     this.lastCompletion.set(null);
     this.seenInterruptIds.clear();
-    this.dismissedPreflightProviders.clear();
   }
 
   /** Acknowledge the last completion signal after the UI has reacted. */
@@ -617,7 +622,7 @@ export class OAuthConsentService {
     // suppresses future pre-flight prompts. This path is the opposite —
     // consent succeeded — so undo that: if the user later disconnects the
     // connector, the prompt must be able to come back.
-    this.dismissedPreflightProviders.delete(message.providerId);
+    this.preflightDismissals.forget(message.providerId);
 
     if (!request?.interruptId || !this.resumeHandler) {
       return;

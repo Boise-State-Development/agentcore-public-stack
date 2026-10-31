@@ -178,6 +178,7 @@
         [items]="skillResults()"
         [activeIndex]="skillActiveIndex()"
         [query]="skillQuery()"
+        [projectScoped]="projectSkillsLocked()"
         (picked)="onSkillPicked($event)"
         (browseAll)="onSkillBrowseAll()"
       />

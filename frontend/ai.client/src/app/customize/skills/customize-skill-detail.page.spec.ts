@@ -213,7 +213,7 @@ describe('CustomizeSkillDetailPage', () => {
   });
 
   it('writes the toggle globally, never through the agent lock', async () => {
-    skills.lockToAgentSkills([]);
+    skills.lockToAgentSkillIds([]);
     const fixture = await create(
       'web_research',
       detail({ skillId: 'web_research', displayName: 'Web Research' }),

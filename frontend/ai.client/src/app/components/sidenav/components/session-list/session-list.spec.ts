@@ -9,8 +9,10 @@ import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
 import { ProjectsService } from '../../../../projects/services/projects.service';
 import { FEATURES } from '../../../../services/features';
+import { AgentPinService } from '../../../../agents/services/agent-pin.service';
 
 describe('SessionList', () => {
+  let mockAgentPinService: any;
   let mockSessionService: any;
   let mockSidenavService: any;
   let mockToastService: any;
@@ -57,8 +59,15 @@ describe('SessionList', () => {
       load: vi.fn().mockResolvedValue(undefined),
     };
 
+    mockAgentPinService = {
+      pins: signal([]),
+      load: vi.fn().mockResolvedValue([]),
+      unpin: vi.fn().mockResolvedValue(undefined),
+    };
+
     TestBed.configureTestingModule({
       providers: [
+        { provide: AgentPinService, useValue: mockAgentPinService },
         { provide: SessionService, useValue: mockSessionService },
         { provide: SidenavService, useValue: mockSidenavService },
         { provide: ToastService, useValue: mockToastService },
@@ -391,6 +400,28 @@ describe('SessionList', () => {
       const component = await createComponent();
       (component as any).onUnpinnedDrop(drop(pinnedList, unpinnedList));
       expect(mockSessionService.setSessionPinned).toHaveBeenCalledWith('test-session', false);
+    });
+  });
+
+  describe('pinned agents', () => {
+    const agent = { agentId: 'ast-1', name: 'Canvas Helper', category: 'general', source: 'user' as const, locked: false };
+
+    it('lists pinned agents in Pinned', async () => {
+      mockAgentPinService.pins.set([agent]);
+      const component = await createComponent();
+      expect(component.pinnedAgents()).toEqual([agent]);
+      expect(component.hasPins()).toBe(true);
+    });
+
+    it('unpins an agent dragged out of Pinned', async () => {
+      const component = await createComponent();
+      (component as any).onUnpinnedDrop({
+        previousContainer: { id: 'session-list-pinned' },
+        container: { id: 'session-list-unpinned' },
+        item: { data: agent },
+      });
+      expect(mockAgentPinService.unpin).toHaveBeenCalledWith('ast-1');
+      expect(mockSessionService.setSessionPinned).not.toHaveBeenCalled();
     });
   });
 

@@ -6,6 +6,7 @@ import { ConfigService } from '../services/config.service';
 import { BffLogoutResponse, BffSessionResponse, BffSessionUser } from './bff-session.model';
 import { ComposerDraftStorageService } from '../session/services/session/composer-draft-storage.service';
 import { QuotaWarningService } from '../services/quota/quota-warning.service';
+import { PreflightDismissalStorageService } from '../services/oauth-consent/preflight-dismissal-storage.service';
 
 /**
  * SessionService — backs the BFF Token-Handler cookie session.
@@ -41,6 +42,9 @@ export class SessionService {
 
   /** Holds a persisted quota-warning dismissal, which is also this user's. */
   private readonly quotaWarnings = inject(QuotaWarningService);
+
+  /** Connector sign-in prompts this user declined; same lifetime as drafts. */
+  private readonly preflightDismissals = inject(PreflightDismissalStorageService);
 
   private readonly _user = signal<BffSessionUser | null>(null);
   private readonly _csrfToken = signal<string | null>(null);
@@ -105,6 +109,7 @@ export class SessionService {
       // Picks up drafts the previous person left behind by closing the
       // browser instead of signing out — see `adopt`.
       this.composerDrafts.adopt(user.user_id);
+      this.preflightDismissals.adopt(user.user_id);
     } catch (error) {
       this._user.set(null);
       this._csrfToken.set(null);
@@ -173,6 +178,7 @@ export class SessionService {
       // Picks up drafts the previous person left behind by closing the
       // browser instead of signing out — see `adopt`.
       this.composerDrafts.adopt(user.user_id);
+      this.preflightDismissals.adopt(user.user_id);
     } catch (error) {
       if (error instanceof HttpErrorResponse && error.status === 401) {
         this.handleUnauthorized();
@@ -261,6 +267,7 @@ export class SessionService {
       this._csrfToken.set(null);
       this.composerDrafts.clear();
       this.quotaWarnings.resetForSignOut();
+      this.preflightDismissals.clear();
     }
     if (postLogoutUrl) {
       window.location.href = postLogoutUrl;

@@ -8,7 +8,7 @@
 **An open-source, production-ready Generative AI platform for institutions**
 *Built by Boise State University, designed for everyone.*
 
-[![Release](https://img.shields.io/badge/Release-v1.31.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+[![Release](https://img.shields.io/badge/Release-v1.32.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
 [![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
 
 ![Python](https://img.shields.io/badge/Python-3.13+-3776AB?style=flat&logo=python&logoColor=white)
@@ -106,6 +106,19 @@ Enable programmatic access to the platform's AI models via REST API. Users gener
 
 **Built-in code examples:** The API Keys settings page includes a code generator with cURL, Python, and JavaScript examples, a model selector, and configurable parameters (temperature, max tokens, system prompt) so users can start integrating immediately.
 
+### 💻 Terminal Client
+
+`aps-tui` brings the same assistant to the shell: the agent, your models, tools, projects, skills, conversation modes and saved conversations, streamed into a terminal UI. Every feature is a slash command (`/model`, `/tools`, `/project`, `/skills`, `/attach`…) with a completion menu on `/`, so there is nothing to memorise. It signs in through your browser and holds a real platform session, so the same roles, quotas and MCP connections apply as in the web app.
+
+What the terminal adds: **local tools**. With your approval, shown command by command, the agent can read and write files, list directories and run commands on your machine, and it sees your working directory and git state when that helps. The client is one Python wheel attached to each [GitHub Release](../../releases/latest); install it with [uv](https://docs.astral.sh/uv/) and point it at your deployment:
+
+```bash
+uv tool install https://github.com/<org>/<repo>/releases/download/v<version>/aps_tui-<version>-py3-none-any.whl
+aps-tui
+```
+
+First launch walks you through the address of your deployment and signing in. See [tui/README.md](tui/README.md) for the full command list.
+
 ### 🎙️ Voice Mode
 
 Have natural, real-time spoken conversations with the assistant. Voice Mode streams audio bidirectionally over WebSockets to an AgentCore-hosted voice agent, using **Amazon Nova Sonic** for low-latency speech-to-speech interaction. Users can speak their questions and hear responses aloud — no typing required — while the same RBAC, quotas, and model access rules as the chat interface apply.
@@ -143,37 +156,43 @@ The admin dashboard gives institutional administrators full control over the pla
 
 ## 🏗️ Architecture
 
+Every request, browser or API key, enters through one CloudFront distribution. Static assets come from S3; everything under `/api/*` is proxied to the App API, which is the only caller of the agent runtime. The load balancer accepts connections from CloudFront only.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              User Interface                                 │
-│                     Angular v21 + Tailwind CSS v4.2+                        │
-└──────────┬──────────────────────────────────────────────┬───────────────────┘
-           │ REST (auth, sessions, admin, files)          │ SSE Streaming
-           v                                              │
-┌──────────────────────────────┐                          │
-│       App API (FastAPI)      │                          │
-│  Auth · RBAC · Sessions      │  /auth/runtime-endpoint  │
-│  Admin · Costs · Quotas      │── returns runtime URL ───┘
-└──────────────────────────────┘                          │
-                                                          v
-                                        ┌─────────────────────────────────┐
-                                        │  AgentCore Runtime (AWS Managed)│
-                                        │  Inference API + Strands Agent  │
-                                        │  /invocations (SSE streaming)   │
-                                        └───────┬─────────┬───────┬───────┘
-                                                │         │       │
-                    ┌───────────────────────────┘         │       └───────────┐
-                    v                                     v                   v
-          ┌──────────────────┐              ┌──────────────────┐  ┌──────────────────┐
-          │   Local Tools    │              │  AgentCore Tools │  │  AgentCore       │
-          │   (Direct)       │              │  (AWS Managed)   │  │  Gateway (MCP)   │
-          │                  │              │                  │  │                  │
-          │ Weather, Search, │              │ Code Interpreter │  │ Lambda Functions │
-          │ Visualization    │              │ Browser (Nova)   │  │ Wikipedia, ArXiv │
-          └──────────────────┘              │ Memory           │  │ Google, Tavily,  │
-                                            └──────────────────┘  │ Finance          │
-                                                                  └──────────────────┘
+│      Browser (Angular v21 SPA) · Terminal client (aps-tui) · API keys       │
+└─────────────────────────────────────┬───────────────────────────────────────┘
+                                      │ HTTPS
+                                      v
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         CloudFront (SPA distribution)                       │
+│      /*  → S3 (SPA bundle, Origin Access Control)                           │
+│  /api/*  → ALB, prefix stripped, uncached; cookies, CSRF, SSE pass through  │
+└─────────────────────────────────────┬───────────────────────────────────────┘
+                                      │ ALB ingress: CloudFront origin-facing
+                                      v  ranges only
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     App API (FastAPI on ECS Fargate) · BFF                  │
+│   Cookie sessions · API keys · RBAC · Quotas · Costs · Admin · Files        │
+│   POST /chat/stream (SSE proxy)        POST /chat/api-converse (API keys)   │
+└──────────────┬─────────────────────────────────┬────────────────────────────┘
+               │ /invocations (SSE)              │ DynamoDB · S3 · Cognito
+               v                                 v
+┌──────────────────────────────────┐   ┌──────────────────────────────────────┐
+│  AgentCore Runtime (AWS managed) │   │  App state: sessions, users, roles,  │
+│  Inference API + Strands Agent   │   │  quotas, costs, files, knowledge     │
+└───────┬───────────┬──────────┬───┘   └──────────────────────────────────────┘
+        │           │          │
+        v           v          v
+┌────────────┐ ┌────────────┐ ┌───────────────────────┐ ┌───────────────────┐
+│ Amazon     │ │ Built-in & │ │ AgentCore services    │ │ MCP servers       │
+│ Bedrock    │ │ local tools│ │ Memory · Code Interp. │ │ Gateway targets & │
+│ (+ external│ │ docs, files│ │ Browser · Gateway     │ │ registered remote │
+│ providers) │ │ charts, web│ │                       │ │ MCP servers       │
+└────────────┘ └────────────┘ └───────────────────────┘ └───────────────────┘
 ```
+
+Artifacts and the MCP Apps sandbox are served from their own CloudFront distributions on separate origins. See the [architecture overview](docs-site/src/content/docs/getting-started/architecture-overview.md) for the full reference diagram.
 
 <!-- IMAGE PLACEHOLDER: A polished, designed version of the architecture diagram above — using a tool like Excalidraw, draw.io, or Figma. Use color-coded boxes, clean arrows, and icons for each layer. This would replace or complement the ASCII diagram for a more professional look. Dimensions: ~900x500px. -->
 <!-- Example: ![Architecture Diagram](docs/images/architecture-diagram.png) -->
@@ -184,6 +203,7 @@ The admin dashboard gives institutional administrators full control over the pla
 |-------|-------------|
 | **Frontend** | Angular v21, TypeScript, Tailwind CSS v4.2+ |
 | **Backend** | Python 3.13+, FastAPI |
+| **Terminal Client** | Python 3.11+, Textual, httpx; distributed as a wheel on each GitHub Release |
 | **Agent Framework** | Strands Agents SDK |
 | **Cloud Services** | AWS Bedrock AgentCore (Runtime, Memory, Gateway, Code Interpreter, Browser), Amazon SageMaker |
 | **Infrastructure** | AWS CDK (TypeScript), ECS Fargate, CloudFront, DynamoDB |
@@ -227,6 +247,8 @@ The fastest path to production is the **GitHub Actions pipeline**. The platform 
 |-----------|--------------|
 | Angular SPA | S3 sync + CloudFront invalidation |
 
+**Terminal client (via `release.yml`):** built and attached to the GitHub Release for each version. Nothing to deploy; users install the wheel and point it at your deployment's URL.
+
 CDK deploys only run when infrastructure changes (new tables, IAM grants, etc.) — which is rare. Day-to-day code changes deploy in ~2 minutes via the backend workflow.
 
 <!-- IMAGE PLACEHOLDER: Screenshot of the GitHub Actions tab showing all deployment workflows with green checkmarks — Infrastructure, App API, Inference API, Frontend, Gateway, RAG Ingestion, and Bootstrap Data pipelines all passing. Dimensions: ~800x400px. -->
@@ -257,6 +279,7 @@ agentcore-public-stack/
 │           ├── app_api/             # Application API (port 8000)
 │           ├── inference_api/       # AgentCore Runtime API (port 8001)
 │           └── shared/              # Auth, RBAC, shared utilities
+├── tui/                             # Terminal client (aps-tui); talks to the App API only
 ├── frontend/ai.client/              # Angular SPA
 │   └── src/app/
 │       ├── auth/                    # OIDC authentication
@@ -269,7 +292,7 @@ agentcore-public-stack/
 │   └── lib/
 │       ├── platform-stack.ts        # The one stack — all infrastructure
 │       ├── config.ts                # Configuration loader & validator
-│       └── constructs/              # 39 reusable CDK constructs
+│       └── constructs/              # Reusable CDK constructs, grouped by domain
 │           ├── network/             # VPC, ALB, ECS cluster
 │           ├── identity/            # Cognito, secrets, KMS, OAuth
 │           ├── data/                # DynamoDB tables, file uploads
@@ -296,7 +319,7 @@ agentcore-public-stack/
 
 See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full changelog, including new features, bug fixes, platform upgrades, and deployment notes for each release.
 
-**Current release:** v1.31.0
+**Current release:** v1.32.0
 
 ---
 

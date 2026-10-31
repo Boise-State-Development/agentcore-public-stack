@@ -113,8 +113,7 @@ that isn't currently available to you, don't just say "I can't do that."
 Instead:
 
 1. Identify which capability they're asking for in plain language
-   (e.g. "spreadsheet analysis", "web browsing", "Python execution",
-   "knowledge base search").
+   (e.g. "spreadsheet analysis", "web browsing", "Python execution").
 2. Tell them that capability isn't active in the current session and suggest
    they enable the matching tool from Customize → Tools in the sidebar, then
    retry the request.
@@ -128,7 +127,14 @@ Common user intents and the tools to point at:
 - Running Python code, generating charts or diagrams from data → "Code Interpreter"
 - Live web searches, news, current events → the web search tools
 - Fetching a specific URL's contents → the URL fetch tool
-- Questions answerable from the assistant's knowledge base → the knowledge base search tool
+
+An Agent's or a project's knowledge base is not a tool and has nothing to
+enable: its files are searched for every message automatically, and the
+matching passages arrive with the message (or the whole knowledge base sits in
+this prompt when it is small). Answer from what arrived. If nothing relevant
+arrived, say what you could not see and suggest naming the subject or the file;
+never send the user to Customize → Tools for it, and never ask them to relay
+a message to an administrator.
 
 Example response when spreadsheet analysis is disabled and a user asks for a
 column total:
@@ -184,17 +190,127 @@ listing one CSV target per sheet (e.g. `Budget.summary.csv`,
 Your goal is to be helpful, accurate, and efficient in completing user requests using the available tools."""
 
 
+# ─── Client surfaces ───────────────────────────────────────────────────
+# The web app is the primary client and DEFAULT_SYSTEM_PROMPT is written for it.
+# A web turn receives that prompt byte-for-byte, so nothing here can change the
+# web app's behaviour or its prompt-cache prefix.
+#
+# Other clients adapt by APPENDING a block that overrides the web-specific
+# instructions above it. They never edit the shared prompt. If the web prompt
+# gains another browser-only instruction, the matching override belongs in the
+# surface block below, not in a rewrite of DEFAULT_SYSTEM_PROMPT.
+
+#: What a terminal client can do. Deliberately explicit about what NOT to emit:
+#: a browser-shaped answer is not merely suboptimal here, it is unreadable.
+#: The TUI's keybindings are hardcoded here; moving one means editing this.
+TERMINAL_SURFACE_GUIDANCE = """INTERFACE — TERMINAL CLIENT (overrides the web-app instructions above):
+This conversation is NOT in the web app. The user is in a terminal client:
+no mouse, no sidebar, no Customize menu, no Preview button, and no HTML, KaTeX
+or Mermaid renderer. Wherever the instructions above describe a web-app control
+or rendering feature, follow this section instead. Never refer the user to a
+control that does not exist here.
+
+- Every feature of the terminal client is a slash command typed into the
+  prompt; `/help` lists them. When the instructions above point at a web
+  control (Customize → Tools, the model dropdown, the sidebar), tell the user
+  the feature is a slash command and to type `/help` to find it. Do not name
+  specific commands or keys beyond `/help`: the set changes and you cannot
+  see it.
+- Do NOT emit KaTeX or LaTeX math delimiters. Neither renders — they arrive as
+  literal characters and obscure the answer. Write mathematics in plain text
+  using Unicode where it helps: x², √2, ≤, ≈, π, 1/2. Use $ normally for
+  currency.
+- Do NOT emit Mermaid, PlantUML, or any other diagram source expecting it to be
+  drawn. It renders as an unreadable code block. For structure, use a short
+  indented tree, an arrow chain (A → B → C), or a table. If a request genuinely
+  needs a rendered diagram, produce it with a tool and say it opens in the web
+  app.
+- There is no Preview button. If the user asks to look at a .docx or .pptx,
+  say it can be previewed in the web app; reading it for its content is still
+  fine.
+- Markdown that does render: headings, bold and italic, bullet and numbered
+  lists, block quotes, tables, and fenced code blocks with syntax highlighting.
+  Prefer fenced code with a language tag — it is highlighted and is the most
+  useful thing you can emit here.
+- Keep tables narrow. A terminal is often 80 columns; a table wider than that
+  wraps and becomes unreadable. Beyond three or four short columns, prefer a
+  list.
+- You cannot display images, artifacts, or interactive panels. If you create
+  one with a tool, say what it is and that it opens in the web app rather than
+  describing it as though the user can see it.
+- Tool approvals, your questions to the user, and OAuth consent are answered
+  in the terminal: the client shows a prompt and the turn resumes when it is
+  answered. OAuth consent itself happens in a browser the client opens or
+  links to. Never tell the user to click Allow in a popup or to go to the web
+  app for these.
+- Favour short, scannable answers with the conclusion first. The reader has a
+  viewport rather than a page, and scrolling back costs them more than it costs
+  a browser user.
+
+Example response when spreadsheet analysis is disabled and a user asks for a
+column total:
+
+> I can compute that for you, but the Spreadsheet Analysis tool isn't
+> currently enabled. Tools are a slash command here — type `/help` to find
+> it, enable "Spreadsheet Analysis", and send the request again; I'll run
+> the aggregation directly on the file.
+> Alternatively, you can open the file in Excel and use `=SUM(NET_AMOUNT)`
+> on the column."""
+
+#: Used when a request omits the surface, or names one this build does not know.
+#: Web, because it is the overwhelming majority of traffic and because an older
+#: client that predates the field is by definition the browser.
+DEFAULT_CLIENT_SURFACE = "web"
+
+#: Block appended after the base prompt, per surface. Keys are the wire values
+#: accepted in ``InvocationRequest.client_surface``. Web appends nothing.
+SURFACE_GUIDANCE: dict[str, str] = {
+    "web": "",
+    "terminal": TERMINAL_SURFACE_GUIDANCE,
+}
+
+
+def resolve_surface(surface: Optional[str]) -> str:
+    """Known surface, or :data:`DEFAULT_CLIENT_SURFACE`.
+
+    Degrades rather than raising: a client sending a value this build has not
+    heard of gets the web prompt, not a failed turn.
+    """
+    if surface in SURFACE_GUIDANCE:
+        return surface  # type: ignore[return-value]
+    if surface:
+        # Client-supplied: strip line breaks and bound it before it reaches a log line.
+        shown = str(surface).replace("\r", " ").replace("\n", " ")[:64]
+        logger.warning("Unknown client_surface %r; falling back to %r", shown, DEFAULT_CLIENT_SURFACE)
+    return DEFAULT_CLIENT_SURFACE
+
+
+def _with_surface(prompt: str, surface: Optional[str]) -> str:
+    """``prompt`` unchanged for web; otherwise the surface block appended."""
+    guidance = SURFACE_GUIDANCE[resolve_surface(surface)]
+    return f"{prompt}\n\n{guidance}" if guidance else prompt
+
+
+def compose_base_prompt(surface: Optional[str] = None) -> str:
+    """The default prompt for ``surface``. Exactly DEFAULT_SYSTEM_PROMPT for web."""
+    return _with_surface(DEFAULT_SYSTEM_PROMPT, surface)
+
+
 class SystemPromptBuilder:
     """Builds system prompts with optional date injection"""
 
-    def __init__(self, base_prompt: Optional[str] = None):
+    def __init__(self, base_prompt: Optional[str] = None, surface: Optional[str] = None):
         """
         Initialize prompt builder
 
         Args:
-            base_prompt: Custom base prompt (if None, uses DEFAULT_SYSTEM_PROMPT)
+            base_prompt: Custom base prompt. When given it is used verbatim and
+                ``surface`` is ignored — a caller supplying its own text has
+                already decided what the agent should be told.
+            surface: Which client the user is on (``"web"``, ``"terminal"``).
+                ``None`` or ``"web"`` yields DEFAULT_SYSTEM_PROMPT unchanged.
         """
-        self.base_prompt = base_prompt or DEFAULT_SYSTEM_PROMPT
+        self.base_prompt = base_prompt or compose_base_prompt(surface)
 
     def build(self, include_date: bool = True) -> str:
         """
@@ -218,7 +334,7 @@ class SystemPromptBuilder:
             return self.base_prompt
 
     @classmethod
-    def from_user_prompt(cls, user_prompt: str) -> "SystemPromptBuilder":
+    def from_user_prompt(cls, user_prompt: str, surface: Optional[str] = None) -> "SystemPromptBuilder":
         """
         Create a builder that wraps a user-supplied prompt with the platform
         safety floor.
@@ -234,9 +350,15 @@ class SystemPromptBuilder:
         characters before assembly. Length validation also happens at the
         API layer so callers normally won't see truncation here.
 
+        For a non-web ``surface`` the interface block is appended **after** the
+        user portion: it describes what the client can physically render, so an
+        assistant author's instructions must not be able to talk the agent into
+        emitting KaTeX to a terminal. For web nothing is appended.
+
         Args:
             user_prompt: User-provided system-prompt text. The platform
                 safety floor is added regardless of what this contains.
+            surface: Which client the user is on. See :meth:`__init__`.
 
         Returns:
             SystemPromptBuilder: Builder configured with the assembled
@@ -256,7 +378,10 @@ class SystemPromptBuilder:
         # caller can't close the wrapper and inject text outside it.
         sanitized = truncated.replace("<user_instructions>", "").replace("</user_instructions>", "")
 
-        assembled = f"{PLATFORM_SAFETY_FLOOR}\n" f"<user_instructions>\n{sanitized}\n</user_instructions>"
+        assembled = _with_surface(
+            f"{PLATFORM_SAFETY_FLOOR}\n" f"<user_instructions>\n{sanitized}\n</user_instructions>",
+            surface,
+        )
 
         logger.info(
             "Assembled system prompt with platform safety floor (user portion: %d chars)",

@@ -1,0 +1,243 @@
+[
+  {
+    "id": "retention.project_code_recalled",
+    "family": "retention",
+    "turns": [
+      {
+        "prompt": "For this conversation, my project code is QX-4471. Just acknowledge it."
+      },
+      {
+        "prompt": "Unrelated: suggest three names for a neighbourhood book club."
+      },
+      {
+        "prompt": "What project code did I give you earlier? Reply with just the code."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "QX-4471"
+      ]
+    },
+    "notes": "A fact from the first turn, asked after an unrelated turn."
+  },
+  {
+    "id": "retention.corrected_budget_wins",
+    "family": "retention",
+    "turns": [
+      {
+        "prompt": "Our event budget is $4,200."
+      },
+      {
+        "prompt": "Correction: the budget is now $5,750 because the sponsor came through."
+      },
+      {
+        "prompt": "Give me two quick tips for choosing a venue."
+      },
+      {
+        "prompt": "What's our current event budget? Just the amount."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "5,750"
+      ],
+      "forbidden": [
+        "4,200"
+      ]
+    },
+    "notes": "Superseded value: answering with the original, or with both, fails."
+  },
+  {
+    "id": "retention.celsius_constraint_holds",
+    "family": "retention",
+    "turns": [
+      {
+        "prompt": "Whenever you give me a temperature in this conversation, give it in Celsius only, never Fahrenheit."
+      },
+      {
+        "prompt": "What's a good houseplant for a dim room?"
+      },
+      {
+        "prompt": "What's a comfortable bedroom temperature for sleeping?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "regex": {
+        "search": [
+          "°C|Celsius|\\d+\\s?C\\b"
+        ],
+        "absent": [
+          "°F|Fahrenheit|\\d+\\s?F\\b"
+        ]
+      }
+    },
+    "notes": "A standing constraint from turn one, applied two turns later."
+  },
+  {
+    "id": "retention.name_and_branch_recalled",
+    "family": "retention",
+    "turns": [
+      {
+        "prompt": "Hi, I'm Tamsin and I manage the Westbrook branch."
+      },
+      {
+        "prompt": "Can you suggest a short agenda for a weekly team stand-up?"
+      },
+      {
+        "prompt": "Which branch did I say I manage?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "Westbrook"
+      ]
+    },
+    "notes": "Personal context offered in passing."
+  },
+  {
+    "id": "retention.running_stock_count",
+    "family": "retention",
+    "turns": [
+      {
+        "prompt": "Note for later: the warehouse holds 1,240 units of SKU A."
+      },
+      {
+        "prompt": "We just shipped 315 units of SKU A to the north depot."
+      },
+      {
+        "prompt": "How many units of SKU A are left in the warehouse? Just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "925"
+      ],
+      "forbidden": [
+        "1,240"
+      ]
+    },
+    "notes": "Two facts from two turns combined by simple subtraction."
+  },
+  {
+    "id": "retention.rescheduled_meeting_date",
+    "family": "retention",
+    "turns": [
+      {
+        "prompt": "The board meeting has moved from October 3 to October 17."
+      },
+      {
+        "prompt": "Draft a one-line reminder I can post in the team channel."
+      },
+      {
+        "prompt": "Write me a haiku about autumn leaves."
+      },
+      {
+        "prompt": "When is the board meeting? Just the date."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "October 17",
+        "17 October",
+        "Oct 17"
+      ],
+      "forbidden": [
+        "October 3",
+        "3 October",
+        "Oct 3"
+      ]
+    },
+    "notes": "The moved-from date sits in the same sentence as the answer."
+  },
+  {
+    "id": "retention.panel_membership_after_swap",
+    "family": "retention",
+    "turns": [
+      {
+        "prompt": "The three people on the review panel are Ines, Mateo and Priya."
+      },
+      {
+        "prompt": "Swap Mateo out for Kofi, please."
+      },
+      {
+        "prompt": "What's a fair way to split 30 applications between three reviewers?"
+      },
+      {
+        "prompt": "Who is on the review panel now? Reply with just the three names."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_all": [
+        "Ines",
+        "Priya",
+        "Kofi"
+      ],
+      "forbidden": [
+        "Mateo"
+      ]
+    },
+    "notes": "A list edited mid-conversation; every current member must be named and the removed one must not."
+  },
+  {
+    "id": "retention.gate_code_after_long_gap",
+    "family": "retention",
+    "turns": [
+      {
+        "prompt": "The gate code for the offsite venue is 7319. Remember it for later."
+      },
+      {
+        "prompt": "Suggest an icebreaker for a group of twelve."
+      },
+      {
+        "prompt": "What's a quick vegetarian lunch we could cater?"
+      },
+      {
+        "prompt": "Give me a packing checklist for a one-day offsite."
+      },
+      {
+        "prompt": "How long should we schedule for lunch?"
+      },
+      {
+        "prompt": "What was the gate code for the offsite venue? Just the code."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "7319"
+      ]
+    },
+    "notes": "Four unrelated turns between the plant and the question."
+  }
+]

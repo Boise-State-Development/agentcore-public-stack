@@ -1,13 +1,13 @@
-# AgentCore TUI
+# aps-tui
 
-A terminal client for the AgentCore platform. Streaming AI chat in your shell —
+The APS terminal client. Streaming AI chat in your shell —
 same models, same RBAC, same quotas, and the same cost tracking as the web app.
 
 Built with [Textual](https://textual.textualize.io/). Runs on Windows, macOS,
 and Linux.
 
 ```
-┌─ AgentCore ──────────────────────────────────── https://your-host/api ─┐
+┌─ aps-tui ────────────────────────────────────── https://your-host/api ─┐
 │ ▌You                                                                   │
 │  explain the difference between a thread and a process                 │
 │                                                                        │
@@ -24,58 +24,80 @@ and Linux.
 
 ## What it does today
 
-This is Phase 1. It talks to the API-key authenticated `/chat/api-converse`
-endpoint on app-api, which is a direct Bedrock Converse wrapper. That means you
-get:
+There are two paths, and which one you get depends on how you sign in.
 
-- Streaming responses rendered as live Markdown, with syntax-highlighted code
-- Multi-turn conversation with full history sent on each turn
-- Extended-thinking (reasoning) output in a separate collapsible pane
-- Per-turn token usage, including prompt-cache hits
-- Model switching, RBAC-enforced server-side
-- Server-side cost tracking and quota enforcement, identical to the web UI
+**Signed in (`login --sso`) — the agent.** Talks to the session-authenticated
+`/chat/stream`, the same endpoint the web app uses:
 
-**What it does not do yet.** The API-key endpoint has no access to tools,
-memory, sessions, or assistants — those live behind the cookie-authenticated
-agent path. So there is no tool use, no persistent conversation storage, no
-file upload, and no session list. Conversations exist only in the running
-process; quitting discards them. See [Roadmap](#roadmap).
+- The real agent, with **tools** (they appear in the transcript as they run),
+  MCP servers, and memory
+- **Server-side conversations**, so history survives quitting and is shared with
+  the web app — each turn sends only your new message
+- Streaming Markdown with syntax-highlighted code
+- Extended-thinking output in a separate collapsible pane
+- A live context-window gauge
+- `Esc` stops a turn *server-side*, so it stops burning tokens
+- **Local tools**: the agent can run commands and read or write files on your
+  machine. Every call shows you the exact command first — `y` runs it, `n`
+  declines, `a` allows that tool for the rest of the session. Turn it off with
+  `--no-local-tools`.
+- Paused turns are answered here: tool approvals, the agent's clarifying
+  questions, OAuth sign-ins
+- `/attach <path>` sends a file with your next message; `/continue` extends an
+  answer that hit the token limit
+- Slash commands (`/help` lists them) and saved conversations with their tool
+  calls restored
+- RBAC, cost tracking and quota enforcement identical to the web UI
+
+**API key only (`login`) — single-turn chat.** Talks to `/chat/api-converse`, a
+direct Bedrock Converse wrapper. Streaming, multi-turn-by-resending, reasoning
+and usage all work, but that endpoint has no access to tools, memory, sessions or
+assistants, and conversations exist only in the running process.
+
+**What neither does yet:** file upload, a conversation-list screen, a tool
+picker, and artifact rendering (a terminal cannot frame an iframe — the agent
+reports that an artifact exists and points you at the web app). See
+[Roadmap](#roadmap).
 
 ## Install
 
-You need an API key. Create one in the web app under **Settings → API Keys**.
-The raw key is shown exactly once, keys expire after 90 days, and creating a new
-key revokes the previous one.
+The client is not on PyPI. Each release of this repository attaches the
+`aps-tui` wheel to its [GitHub Release](../../releases/latest), and you install
+it from there. The wheel is the same for every deployment of the platform:
+nothing in it names a host. You point it at yours when you sign in.
 
 ### Recommended: uv (all platforms)
 
-[uv](https://docs.astral.sh/uv/) runs the client without installing anything
-permanently:
+Install [uv](https://docs.astral.sh/uv/installation/) once, then copy the
+install line from the release page. It has this shape:
 
 ```bash
-uvx --from /path/to/repo/tui agentcore-tui
+uv tool install https://github.com/<org>/<repo>/releases/download/v<version>/aps_tui-<version>-py3-none-any.whl
+aps-tui login --sso --base-url https://<your-deployment>/api
 ```
 
-Once this package is published to an index, that becomes `uvx agentcore-tui`.
+To upgrade, run the same line for the new release with `--force`. To try it
+without installing anything permanently, replace `uv tool install` with
+`uvx --from <wheel-url> aps-tui`.
 
-To install it persistently:
+Prefer `pipx`? `pipx install <wheel-url>` works the same way.
+
+A wheel is plain data, not an executable, so no operating system prompts about
+unsigned software; the only installer that has to be trusted is uv's own,
+which Astral signs.
+
+### From a fork without releases
 
 ```bash
-uv tool install /path/to/repo/tui
-```
-
-### pipx
-
-```bash
-pipx install /path/to/repo/tui
+uv tool install "git+https://github.com/<org>/<repo>@<branch-or-tag>#subdirectory=tui"
 ```
 
 ### From source
 
 ```bash
 cd tui
-uv sync --extra dev
-uv run agentcore-tui
+uv sync --all-extras --all-groups
+uv run aps-tui
 ```
 
 ### Terminal requirements
@@ -88,41 +110,148 @@ uv run agentcore-tui
 
 ## First run
 
+Start `aps-tui`. With nothing configured it walks you through setup: the
+address of your deployment (checked before you go on; `/api` is added if you
+typed the web app's address), then a browser sign-in or an API key. The
+result is stored exactly where `aps-tui login` would store it, so the two
+are interchangeable, and the client restarts into chat. Esc backs out; the
+same setup appears again next launch until a credential exists.
+
+The shell commands below do the same thing without the screen, for scripts
+and for a terminal with no keyring.
+
+There are two ways to authenticate. Which one you use depends on what your
+deployment has enabled.
+
+### Browser sign-in (recommended)
+
 ```bash
-agentcore-tui login --base-url https://your-host/api
+aps-tui login --sso --base-url https://your-host/api
+```
+
+Prints a short code and a URL, opens your browser if it can, and waits:
+
+```
+Signing in to https://your-host/api
+
+  Your code:  Y4GN-WKY3
+  Open:       https://your-host/api/auth/cli/verify?user_code=Y4GN-WKY3
+
+Opened your browser. Waiting for you to approve the sign-in...
+  9m 41s left to approve...
+```
+
+You sign in normally in the browser — SSO and MFA both apply, because it is the
+same login page the web app uses. Approve, and the CLI picks up a **real
+platform session**. That is what unlocks conversations, the model and tool
+catalogues, memory, and the tool-using agent; an API key reaches none of those.
+
+The URL is always printed, even when a browser opens, because launching one
+fails silently over SSH and on headless hosts. You can open it on a different
+device — a phone, or your laptop while the CLI runs in a container.
+
+Configuration: **just the base URL.** Nothing else to set up.
+
+Two consequences of how this works, both deliberate:
+
+- **The CLI never talks to your identity provider.** It has no client id, no
+  client secret, and no redirect URI, because it is not an OAuth client. It asks
+  app-api to start a sign-in and then polls for the result, so the credential it
+  ends up holding is one app-api minted. Cognito needs no configuration at all.
+- **There is no loopback listener,** so nothing needs to bind a port or receive
+  a redirect. This is why it works unchanged inside a container, over SSH, and
+  in WSL — the cases where a redirect-based flow cannot work, since Cognito
+  matches redirect URIs byte-for-byte and does not honour RFC 8252's rule that
+  loopback ports be treated as variable.
+
+The session is stored in the OS keyring and stays alive as long as you keep
+using it — the server slides its expiry on each request, exactly as it does for
+a browser tab. When it does lapse, sign in again; there is no refresh token to
+rotate.
+
+`logout` clears the local copy. It cannot revoke server-side — the session value
+is opaque to the CLI — so sign out in the web app if you need it dead
+immediately.
+
+### API key
+
+```bash
+aps-tui login --base-url https://your-host/api
 ```
 
 You will be prompted for the key without echo, so it never lands in your shell
-history. The key goes into your OS keyring; only the base URL is written to the
-config file.
+history. Create one in the web app under **Settings → API Keys**; the raw value
+is shown exactly once, keys expire after 90 days, and creating a new key revokes
+the previous one.
 
-Then:
+Either way:
 
 ```bash
-agentcore-tui
+aps-tui
 ```
 
 Check your setup at any time:
 
 ```bash
-agentcore-tui status     # resolved config (key never printed) + health probe
-agentcore-tui logout     # remove the stored key
+aps-tui status     # resolved config, credential state, health probe
+aps-tui logout     # clear stored credentials for this deployment
 ```
 
 The base URL is the app-api root. On a CloudFront deployment that usually ends
 in `/api` — the same origin the SPA calls.
 
-## Key bindings
+## Commands
+
+Everything is a slash command typed into the composer. Type `/` and a menu
+lists them; keep typing to filter, `Up`/`Down` to move, `Tab` to complete,
+`Enter` to run, `Esc` to close. `/help` prints the same list.
+
+| Command | What it does |
+|---|---|
+| `/new` | Start a new conversation |
+| `/model [name]` | Pick a model, or switch straight to one whose name contains `name` |
+| `/tools` | Choose which server tools the agent may use (signed in) |
+| `/tools local on\|off` | Switch tools that run on this machine for the session |
+| `/conversations [search]` | Browse, open, rename (`r`) or delete saved conversations; Space marks several, Delete removes them |
+| `/project [name\|off\|info\|shared]` | Run conversations in a Shared Project: pick one, name one, leave, see its details, or read what teammates shared |
+| `/agent [name\|off\|info]` | Talk to one of your agents (own, shared with you, or pinned) |
+| `/rename <title>` | Give the open conversation a title of your own |
+| `/skills` | Choose which skills the agent may use (off unless switched on) |
+| `/<skill> …` | Invoke an enabled skill in a message, e.g. `/xlsx total the NET column` |
+| `/mode [name\|off]` | Set the conversation mode (a named system prompt) |
+| `/effort [level\|off]` | How hard the model thinks, for models that offer a choice |
+| `/attach <path>` | Upload a file and send it with your next message |
+| `/artifacts [dir]` | Save an artifact the agent made (HTML, Markdown, SVG…) to disk |
+| `/continue` | Let an answer that hit the token limit carry on |
+| `/stop` | Stop the turn in flight |
+| `/copy [all]` | Copy the last answer, or the whole conversation as Markdown |
+| `/clear` | Clear the screen; the conversation continues |
+| `/theme [name]` | Switch the colour theme, or list them |
+| `/status` | Server, sign-in, model, tools, session id, log file |
+| `/screenshot` | Save an SVG snapshot of the screen |
+| `/help` | List the commands |
+| `/quit` | Leave |
+
+Start a message with `//` to send a literal slash. There are no function keys
+and no command palette: the only keys are the ones every terminal user already
+has.
 
 | Key | Action |
 |---|---|
-| `Enter` | Send |
+| `Enter` | Send, or run the highlighted command |
 | `Alt+Enter`, `Shift+Enter`, `Ctrl+O` | Insert a newline |
-| `Esc` | Stop the in-flight turn |
-| `Ctrl+N` | New conversation |
-| `F2` | Switch model |
-| `F1` | Command palette (themes, and more) |
+| `Esc` | Stop the in-flight turn; close the command menu |
+| `Up` / `Down`, `Tab` | Move in the command menu; complete |
 | `Ctrl+Q` | Quit |
+
+A turn that paused while you were away (you quit at a prompt, the connection
+dropped, or a browser tab never answered) is still waiting on the server.
+Opening that conversation from `/conversations` shows its prompts again; answer
+them and the turn finishes. Esc leaves it paused.
+
+While a turn is paused on a prompt: `y` / `n` approve or decline, `a` allows a
+local tool for the session, `1`–`9` pick an answer, `o` types a free-text one,
+`s` skips a question, `x` skips them all.
 
 Three aliases exist for "newline" because terminals disagree: `Shift+Enter`
 requires the Kitty keyboard protocol, while `Alt+Enter` and `Ctrl+O` work
@@ -152,15 +281,15 @@ Config file location:
 
 | OS | Path |
 |---|---|
-| Linux | `~/.config/agentcore-tui/config.toml` |
-| macOS | `~/Library/Application Support/agentcore-tui/config.toml` |
-| Windows | `%APPDATA%\agentcore-tui\config.toml` |
+| Linux | `~/.config/aps-tui/config.toml` |
+| macOS | `~/Library/Application Support/aps-tui/config.toml` |
+| Windows | `%APPDATA%\aps-tui\config.toml` |
 
 ```toml
 base_url = "https://your-host/api"
 model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
-# The model picker (F2) reads this list. `GET /models` is cookie-session
+# The model picker (/model) reads this list. `GET /models` is cookie-session
 # authenticated, so an API-key client cannot discover the catalogue — set the
 # models your deployment actually grants your role.
 models = [
@@ -173,26 +302,134 @@ temperature = 0.7
 max_tokens = 4096
 top_p = 0.9
 timeout_seconds = 300
+
+# Startup banner. Shown once per installed version, then not again until you
+# upgrade. Set to false to never show it; `--banner` replays it on demand.
+banner = true
 ```
 
 `api_key` in this file is honoured for environments with no keyring, but the
-client warns on startup because it is plain text on disk. `agentcore-tui login`
+client warns on startup because it is plain text on disk. `aps-tui login`
 never writes it there.
+
+### Projects
+
+`/project` lists the Shared Projects you own or belong to (Mine, then Shared
+with me, with your role and the owner). Choosing one binds *new*
+conversations to the project: its instructions, model, tools, skills,
+knowledge and memory apply, exactly as in the web app, and the status bar
+shows `⌂ <name>`. `/project grants` binds by name without the picker;
+`/project off` leaves; `/project info` describes the current one.
+
+A conversation belongs to its project for life — the server refuses to rebind
+one that has started — so switching projects mid-conversation starts a new
+one. `/new` inside a project starts another conversation in the same project.
+`/conversations` badges project conversations with `⌂ <name>`, and opening
+one rebinds automatically.
+
+`/project shared` lists the conversations members shared with the project,
+newest first, with who shared it and their note. Enter reads one (a read-only
+snapshot from when it was shared); Enter again continues it as your own
+conversation, a copy in the same project that you can keep talking in.
+
+Managing a project (members, instructions, files, memory, schedules) stays in
+the web app; the terminal is for working inside one.
+
+### Agents
+
+`/agent` lists the agents you made, those shared with you, and those you or
+your role pinned from the store — the same set the web app's `@` menu offers.
+Choosing one sends new conversations to it (its instructions, model, tools and
+knowledge apply) and the status bar shows `@ <name>`; `/agent grader` binds by
+name, `/agent info` shows its model and conversation starters, `/agent off`
+stops. An agent and a project are either/or: choosing one leaves the other.
+Opening a conversation you had with an agent rebinds to it. Browsing the store
+and building agents stay in the web app.
+
+### Skills and modes
+
+Skills are opt-in, unlike tools: `/skills` lists every skill you can reach
+with its `/slug`, and only the ones you switch on go with a turn. The choice
+is saved and follows you into the web app. To make the agent use one, name it
+in the message — `/xlsx total the NET column`, or `…using /xlsx` mid-sentence —
+the same rule as the web composer, so paths like `src/xlsx/` stay prose.
+Enabled skills appear at the end of the `/` menu; choosing one completes
+`/slug ` for you to finish the sentence. A command always wins over a skill
+with the same name. Agents and projects bring their own skills.
+
+`/mode` sets the conversation mode, a named system prompt added to the
+agent's instructions (Socratic, Brief, whatever your deployment defines). It
+applies from the next turn, shows as `mode: <name>` in the status bar, and is
+remembered by the conversation, so reopening it restores the mode.
+`/mode off` clears it. Agents and projects ignore modes; their own
+instructions govern.
+
+`/effort` is the one sampling knob, as in the web app: some models let you
+choose how hard they think (`low`, `medium`, `high`, …; the levels are the
+administrator's). `/effort` shows the choice for the current model,
+`/effort high` sets it, `/effort off` returns to the default. The choice is
+remembered per model for this run and shows as `effort: <level>` in the
+status bar. Temperature and the like are governed by the administrator per
+model and are not user-tunable here or in the web app.
+
+### Local tools
+
+```toml
+local_tools = false   # never offer the agent tools that run on this machine
+```
+
+Also `--no-local-tools` for one run, or `AGENTCORE_LOCAL_TOOLS=false`, or
+`/tools local off` for the rest of a session. On by default: every call is
+shown and approved before it runs, and the output the agent sees is capped
+(6 000 characters, 60-second timeout, 64 KB reads).
+
+The agent gets five: `workspace_info`, `run_command`, `read_file`,
+`list_directory` and `write_file`. `workspace_info` is how "fix the failing
+test" works without you naming a file: it tells the agent the directory you
+started in, the git root, branch and upstream, which files have uncommitted
+changes, the last three commits, and which project files are present
+(`pyproject.toml`, `package.json`, …). Names only, never file contents, and it
+runs `git` directly rather than through a shell. Press `a` at its prompt once
+and it stops asking for the session.
+
+### Startup banner
+
+The banner runs once per installed version. Which version was last shown is
+recorded in a state file, kept separate from the config file so launching the
+client never rewrites something you hand-edit:
+
+| OS | Path |
+|---|---|
+| Linux | `~/.local/state/aps-tui/state.json` |
+| macOS | `~/Library/Application Support/aps-tui/state.json` |
+| Windows | `%LOCALAPPDATA%\aps-tui\state.json` |
+
+| Control | Effect |
+|---|---|
+| `--banner` | Replay it now, even if already seen for this version |
+| `--no-banner` | Skip it for this run |
+| `banner = false` | Never show it |
+| `AGENTCORE_BANNER=0` | Same, via the environment |
+| `TEXTUAL_ANIMATIONS=none` | Show the static frame, no motion |
+
+Any key or click skips it, and it never blocks startup — the composer is focused
+and ready underneath while it plays. If the state file cannot be written (a
+read-only home, for instance) the only consequence is that the banner replays.
 
 ## Troubleshooting
 
 **"API key was rejected" (401).** Keys expire after 90 days, and creating a new
-key revokes the old one. Mint a fresh key and run `agentcore-tui login` again.
+key revokes the old one. Mint a fresh key and run `aps-tui login` again.
 
 **"Your account is not permitted to use ..." (403).** RBAC is enforced
-server-side against your role's model grants. Press `F2` to pick another model,
+server-side against your role's model grants. Use `/model` to pick another model,
 or ask an administrator to grant your role access.
 
 **"Rate limit or quota exceeded" (429).** The endpoint allows 60 requests per
 minute per key. This is also what an exhausted cost quota looks like.
 
 **No keyring on this host.** Headless Linux boxes, containers, and CI often have
-no Secret Service. The client degrades rather than crashing — `agentcore-tui
+no Secret Service. The client degrades rather than crashing — `aps-tui
 status` reports the reason. Use `AGENTCORE_API_KEY` there instead.
 
 **A long answer looks like it stopped mid-sentence.** Check the log: if
@@ -214,16 +451,16 @@ A full-screen TUI owns stdout, so all diagnostics go to a rotating file
 
 | OS | Default log path |
 |---|---|
-| Linux | `~/.local/state/agentcore-tui/log/agentcore-tui.log` |
-| macOS | `~/Library/Logs/agentcore-tui/agentcore-tui.log` |
-| Windows | `%LOCALAPPDATA%\agentcore-tui\Logs\agentcore-tui.log` |
+| Linux | `~/.local/state/aps-tui/log/aps-tui.log` |
+| macOS | `~/Library/Logs/aps-tui/aps-tui.log` |
+| Windows | `%LOCALAPPDATA%\aps-tui\Logs\aps-tui.log` |
 
-`agentcore-tui status` prints the active path. Controls:
+`aps-tui status` prints the active path. Controls:
 
 ```bash
-agentcore-tui --log-level DEBUG          # per-event SSE tracing
-agentcore-tui --log-file /tmp/tui.log    # or AGENTCORE_LOG_FILE
-AGENTCORE_LOG_LEVEL=DEBUG agentcore-tui
+aps-tui --log-level DEBUG          # per-event SSE tracing
+aps-tui --log-file /tmp/tui.log    # or AGENTCORE_LOG_FILE
+AGENTCORE_LOG_LEVEL=DEBUG aps-tui
 ```
 
 **Prompts and model output are not logged** unless you opt in with
@@ -234,12 +471,12 @@ A healthy turn at INFO looks like this — enough to tell a server problem from 
 rendering problem without reproducing anything:
 
 ```
-INFO agentcore_tui.app              turn start model=...claude-haiku-4-5... history_turns=0 prompt_chars=86
-INFO agentcore_tui.client.converse  stream start model=... turns=1 prompt_chars=86 max_tokens=4096 url=...
-INFO agentcore_tui.client.converse  message_stop reason=end_turn
-INFO agentcore_tui.client.converse  usage input=24 output=171 cache_read=None cache_write=None
-INFO agentcore_tui.client.converse  stream end model=... elapsed=3.43s text_chars=359 events={'TextDelta': 25, ...}
-INFO agentcore_tui.app              turn rendered chars=359 reasoning=0 viewport_h=17 content_h=29 max_scroll_y=12 scroll_y=12
+INFO aps_tui.app              turn start model=...claude-haiku-4-5... history_turns=0 prompt_chars=86
+INFO aps_tui.client.converse  stream start model=... turns=1 prompt_chars=86 max_tokens=4096 url=...
+INFO aps_tui.client.converse  message_stop reason=end_turn
+INFO aps_tui.client.converse  usage input=24 output=171 cache_read=None cache_write=None
+INFO aps_tui.client.converse  stream end model=... elapsed=3.43s text_chars=359 events={'TextDelta': 25, ...}
+INFO aps_tui.app              turn rendered chars=359 reasoning=0 viewport_h=17 content_h=29 max_scroll_y=12 scroll_y=12
 ```
 
 Reading it:
@@ -381,7 +618,7 @@ For live debugging, Textual's devtools console is useful:
 
 ```bash
 uvx textual-dev console          # in one pane
-uv run textual run --dev agentcore_tui.app:ChatApp    # in another
+uv run textual run --dev aps_tui.app:ChatApp    # in another
 ```
 
 ### Layout
@@ -389,31 +626,73 @@ uv run textual run --dev agentcore_tui.app:ChatApp    # in another
 ```
 tui/
 ├── pyproject.toml               # deps, pins, console script
-└── src/agentcore_tui/
+└── src/aps_tui/
     ├── cli.py                   # argparse entrypoint: chat, login, logout, status
     ├── config.py                # config file + env + keyring resolution
+    ├── credentials.py           # which credential is held, and what it can reach
+    ├── keyring_store.py         # OS keyring access + the app-identity constant
+    ├── state.py                 # local bookkeeping the client writes (banner version)
+    ├── conversation.py          # domain: Message + ConversationStore
+    ├── turn.py                  # one in-flight turn, behind a TurnSink protocol
+    ├── usage.py                 # token counts, shared by wire/domain/view
     ├── errors.py                # typed errors, each with an actionable hint
-    ├── app.py                   # the Textual App and turn lifecycle
+    ├── app.py                   # quit binding, screen stack, startup
+    ├── commands.py              # the slash-command registry (popup, /help, dispatch)
     ├── app.tcss                 # stylesheet
     ├── client/
-    │   ├── converse.py          # HTTP/SSE transport, error mapping
-    │   └── events.py            # typed SSE events + turn accumulator
-    ├── screens/model_picker.py
+    │   ├── endpoints.py         # every app-api URL
+    │   ├── auth.py              # AuthProvider: ApiKeyAuth / BearerAuth / NoAuth
+    │   ├── converse.py          # api-converse transport + payload shape
+    │   └── events.py            # api-converse SSE dialect + turn accumulator
+    ├── screens/
+    │   ├── chat.py              # the chat screen (implements TurnSink)
+    │   ├── model_picker.py
+    │   └── splash.py            # startup banner (art lives in module constants)
     └── widgets/                 # transcript messages, composer, status bar
 ```
+
+### How it fits together
+
+Four layers, each testable without the one above it:
+
+```
+screens/  ── view. Implements TurnSink; owns no conversation state.
+turn.py   ── one in-flight turn. Event dispatch is a registry, not a match.
+client/   ── transport. endpoints + auth are separate from any one endpoint.
+conversation.py, usage.py, credentials.py ── domain. No Textual, no httpx.
+```
+
+Rules worth keeping as this grows:
+
+- **State does not live on the App.** `ConversationStore` is App-owned and passed
+  to screens, so a conversation list and the chat screen read one conversation
+  rather than two copies.
+- **A new feature area is a new `Screen`**, sharing the store — not more widgets
+  on the App. `app.py` stays at wiring size.
+- **A second endpoint is a module in `client/`** pairing its payload shape with
+  its event dialect. `events.py` is the api-converse dialect; the agent stream is
+  a *sibling* dialect, not an extension of it — it has roughly 35 event types to
+  api-converse's 11.
+- **Ask `credential_source`, never `api_key`,** to decide what the client can do.
+  `Config.can(Capability.SESSIONS)` exists so the UI can disable a feature rather
+  than issue a request that is certain to 401.
+
 
 The version is kept in step with the monorepo `VERSION` file by
 `scripts/common/sync-version.sh`.
 
 ## Roadmap
 
-Phase 2 is where this gets interesting. Every rich surface on app-api — the
-tool-using agent (`POST /chat/stream`), sessions, the tool catalogue, cost
-dashboards, assistants — is authenticated with an OIDC browser session, not an
-API key. Adding a loopback PKCE login (open the browser, catch the redirect on
-`127.0.0.1`, keep the session in the OS keyring) is what unlocks:
+Every rich surface on app-api — the tool-using agent (`POST /chat/stream`),
+sessions, the tool catalogue, cost dashboards, assistants — is authenticated with
+a platform session, not an API key. `login --sso` obtains one, and the chat
+interface now uses it:
 
-- The real agent, with tools, MCP servers, and memory
-- Persistent sessions shared with the web UI
+- ✅ **The real agent**, with tools, MCP servers, and memory. Sign in and chat;
+  tool calls appear in the transcript as they run, and the conversation continues
+  across turns because history lives on the server rather than in the request.
+- ✅ **Conversations shared with the web app** — same session id, same memory.
 - Model discovery via `GET /models` instead of a hand-maintained list
+- A tool picker, so `enabled_tools` is yours to choose rather than always "all"
+- A conversation-list screen, now that `/sessions` is reachable
 - Cost and quota dashboards in the terminal

@@ -218,6 +218,21 @@ class TestPrompt:
         assert prompt.index("## Project Workspace") < prompt.index("## Project Instructions")
         assert "shared_conversations_list" not in compose_agent_system_prompt("BASE", "Do X.", project_harness=False)
 
+    def test_the_guidance_sends_missing_tools_to_the_project_not_customize(self):
+        """A 2026-10 support ticket: the base prompt's Customize → Tools advice does nothing in a project,
+        whose harness runs only on the project's bound tools."""
+        assert "set on the project, for everyone in it" in PROJECT_WORKSPACE_GUIDANCE
+        assert "the project's page under Tools" in PROJECT_WORKSPACE_GUIDANCE
+        assert "replaces the Customize → Tools advice above" in PROJECT_WORKSPACE_GUIDANCE
+        assert "Customize → Tools" not in compose_agent_system_prompt("BASE", "Do X.", project_harness=False)
+
+    def test_a_project_without_instructions_still_gets_the_guidance(self):
+        """A new project has no instructions; its harness still needs the guidance, and
+        no empty instructions heading."""
+        assert compose_agent_system_prompt("BASE", "", project_harness=True) == (
+            f"BASE\n\n{PROJECT_WORKSPACE_GUIDANCE}"
+        )
+
     def test_two_members_render_the_same_prefix(self):
         """Nothing about the invoker can reach this text — the signature takes no user —
         so the Bedrock prefix cache is shared across a project's members."""

@@ -11,6 +11,11 @@
 - **State Management**: Angular Signals (`signal()`, `computed()`)
 - **Package Manager**: npm 11.2.0
 
+## Terminal Client
+
+- **Location**: `tui/` (own `pyproject.toml`; Textual + httpx). Consumes app-api only.
+- **Backend surface it depends on**: `/auth/cli/*` device authorization, `Authorization: BFF` sessions, `client_surface` and `client_tools` on `/chat/stream`. All additive; the web app sends none of them. Contract: `docs/specs/TUI_WEB_PARITY_SPEC.md`.
+
 ## Backend
 
 - **Language**: Python 3.13+

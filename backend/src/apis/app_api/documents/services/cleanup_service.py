@@ -15,6 +15,8 @@ from typing import Optional
 
 import boto3
 
+from apis.shared.kb_backend.records import ENGINE_MANAGED
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,9 +72,17 @@ async def cleanup_document_resources(
     Returns:
         True if all resources were cleaned up successfully, False otherwise
     """
+    # One engine lookup for both phases. A managed-KB document never had
+    # vectors in the S3 Vectors index, so the legacy phase below must not fall
+    # back to scanning the whole index for it — that scan is what blocked the
+    # event loop for minutes on a 41-document agent deletion. An unreadable
+    # record (``None``) keeps the conservative scan and lets the managed phase
+    # resolve (and fail) on its own terms.
+    engine = await _resolve_engine(assistant_id, document_id)
+
     try:
         vectors_deleted = await _delete_vectors_with_retries(
-            document_id, chunk_count, max_retries, base_delay
+            document_id, chunk_count, max_retries, base_delay, scan_index=engine != ENGINE_MANAGED
         )
     except Exception as e:
         logger.error(f"Unexpected error in vector deletion for {document_id}: {e}", exc_info=True)
@@ -80,7 +90,7 @@ async def cleanup_document_resources(
 
     try:
         managed_deleted = await _delete_managed_documents_with_retries(
-            assistant_id, document_id, max_retries, base_delay
+            assistant_id, document_id, max_retries, base_delay, engine=engine
         )
     except Exception as e:
         logger.error(
@@ -213,16 +223,36 @@ async def _list_surviving_web_source_file_ids(assistant_id: str) -> list[str]:
     return urls
 
 
+async def _resolve_engine(assistant_id: str, document_id: str) -> Optional[str]:
+    """The knowledge base's retrieval engine, or ``None`` when its record
+    cannot be read. Off the loop: it is a DynamoDB read."""
+    from apis.shared.kb_backend.records import get_kb_record, resolve_engine
+
+    try:
+        # App_KB_Id == assistant_id in this phase, so one value serves both.
+        record = await asyncio.to_thread(get_kb_record, assistant_id, assistant_id)
+        return resolve_engine(record)
+    except Exception as e:  # noqa: BLE001 - each phase decides what an unknown engine means
+        logger.error(
+            f"could not resolve the retrieval engine for assistant {assistant_id} "
+            f"while deleting {document_id}: {e}"
+        )
+        return None
+
+
 async def _delete_vectors_with_retries(
     document_id: str,
     chunk_count: Optional[int],
     max_retries: int,
     base_delay: float,
+    scan_index: bool = True,
 ) -> bool:
     """Delete vectors with exponential backoff + jitter retries.
 
-    Uses deterministic deletion when chunk_count is available,
-    falls back to probe-and-scan otherwise.
+    Uses deterministic deletion when chunk_count is available, falls back to
+    probe-and-scan otherwise. ``scan_index=False`` (a managed-KB document)
+    keeps the probe, which still removes any copy left from before the
+    knowledge base was promoted, but never the full-index scan behind it.
     """
     from apis.shared.embeddings.bedrock_embeddings import (
         delete_vectors_for_document,
@@ -234,7 +264,7 @@ async def _delete_vectors_with_retries(
             if chunk_count is not None:
                 await delete_vectors_for_document_deterministic(document_id, chunk_count)
             else:
-                await delete_vectors_for_document(document_id)
+                await delete_vectors_for_document(document_id, scan_index=scan_index)
             return True
         except Exception as e:
             delay = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
@@ -254,8 +284,13 @@ async def _delete_managed_documents_with_retries(
     document_id: str,
     max_retries: int,
     base_delay: float,
+    engine: Optional[str] = None,
 ) -> bool:
     """Remove the document from the managed knowledge base, if there is one.
+
+    ``engine`` is the already-resolved retrieval engine when the caller has
+    it (``cleanup_document_resources`` reads the record once for both
+    phases); left ``None``, the record is read here.
 
     The mirror of the legacy vector deletion above, and the reason it exists:
     before this, deletion removed the S3 Vectors copy and the ``DOC#`` row but
@@ -285,20 +320,17 @@ async def _delete_managed_documents_with_retries(
     ``DeleteKnowledgeBaseDocuments`` on an absent document is not an error, so a
     retry after a partial failure is safe and needs no bookkeeping.
     """
-    from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
-
-    try:
-        # App_KB_Id == assistant_id in this phase, so one value serves both.
-        engine = resolve_engine(get_kb_record(assistant_id, assistant_id))
-    except Exception as e:
+    if engine is None:
+        engine = await _resolve_engine(assistant_id, document_id)
+    if engine is None:
         # Unlike the ingestion gate — where an unreadable record resolves to
         # legacy so the upload still gets indexed — an unreadable record HERE
         # must fail. If this knowledge base is in fact promoted, reporting
         # success would hard-delete the row that keeps its chunks unserved.
         logger.error(
-            f"could not resolve the retrieval engine for assistant {assistant_id} "
-            f"while deleting {document_id}; treating the managed deletion as failed "
-            f"so the document record survives for a retry: {e}"
+            f"retrieval engine for assistant {assistant_id} is unknown while deleting "
+            f"{document_id}; treating the managed deletion as failed so the document "
+            f"record survives for a retry"
         )
         return False
 

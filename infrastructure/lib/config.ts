@@ -56,6 +56,13 @@ export interface AppConfig {
   // target for each origin so an operator can create the records by hand.
   manageDnsRecords: boolean;
   albSubdomain?: string; // Subdomain for ALB (e.g., 'api' for api.yourdomain.com)
+  // Restrict ALB ingress to CloudFront's origin-facing IP ranges (the AWS
+  // managed prefix list `com.amazonaws.global.cloudfront.origin-facing`).
+  // Defaults to `true`: every browser and API-key request already arrives
+  // through the SPA distribution's `/api/*` behavior, so a directly
+  // reachable ALB only serves callers who skip CloudFront. Set to `false`
+  // only if something outside AWS must call the ALB hostname directly.
+  albRestrictToCloudFront: boolean;
   certificateArn?: string; // ACM certificate ARN for HTTPS on the ALB (MUST be in the stack's own region)
   // Shared ACM certificate ARN for ALL CloudFront origins (SPA / artifacts /
   // mcp-sandbox). MUST be in us-east-1 (CloudFront requirement) and SHOULD be
@@ -81,6 +88,8 @@ export interface AppConfig {
   userGrants: UserGrantsConfig;
   sessionPrewarm: SessionPrewarmConfig;
   handoffs: HandoffsConfig;
+  sessionRewind: SessionRewindConfig;
+  sessionFork: SessionForkConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -476,6 +485,33 @@ export interface SessionPrewarmConfig {
  * existing SessionLookupIndex.
  */
 export interface HandoffsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4). **Opt-in
+ * while the feature is in development**: off unless CDK_SESSION_REWIND_ENABLED=true
+ * (or a `sessionRewind.enabled: true` cdk.json context). Sets SESSION_REWIND_ENABLED
+ * on **app-api**, which serves `POST /sessions/{id}/rewind` and filters rewound
+ * messages out of `GET /messages`, and on the **AgentCore Runtime** (only while
+ * on, so the default spends none of the V2 environment budget), which filters
+ * them at restore and cuts a warm agent's history in place. No new resources: the
+ * state is one attribute on the existing session metadata row.
+ */
+export interface SessionRewindConfig {
+  enabled: boolean;
+}
+
+/**
+ * Conversation fork (docs/specs/conversation-rewind-and-fork.md §7). **Opt-in
+ * while the feature is in development**: off unless CDK_SESSION_FORK_ENABLED=true
+ * (or a `sessionFork.enabled: true` cdk.json context). Sets SESSION_FORK_ENABLED
+ * on **app-api**, which serves `POST /sessions/{id}/fork` and lets a fork's turns
+ * pin to their root conversation's microVM, and on the **AgentCore Runtime**
+ * (only while on), which starts a fork's first turn from its parent's live
+ * history so the shared prefix reads from the prompt cache. No new resources.
+ */
+export interface SessionForkConfig {
   enabled: boolean;
 }
 
@@ -1296,6 +1332,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
       ?? scope.node.tryGetContext('manageDnsRecords')
       ?? true,
     albSubdomain: process.env.CDK_ALB_SUBDOMAIN || scope.node.tryGetContext('albSubdomain'),
+    albRestrictToCloudFront: parseBooleanEnv(process.env.CDK_ALB_RESTRICT_TO_CLOUDFRONT)
+      // Context may arrive as a boolean (cdk.context.json) or a string
+      // (`--context albRestrictToCloudFront=false`); normalise to a string.
+      ?? parseBooleanEnv(
+        scope.node.tryGetContext('albRestrictToCloudFront') === undefined
+          ? undefined
+          : String(scope.node.tryGetContext('albRestrictToCloudFront')),
+      )
+      ?? true,
     certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
     cloudfrontCertificateArn: process.env.CDK_CLOUDFRONT_CERTIFICATE_ARN || scope.node.tryGetContext('cloudfrontCertificateArn'),
     cognito: {
@@ -1568,6 +1613,18 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_HANDOFFS_ENABLED
         ? process.env.CDK_HANDOFFS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('handoffs')?.enabled ?? false,
+    },
+    sessionRewind: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_SESSION_REWIND_ENABLED
+        ? process.env.CDK_SESSION_REWIND_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('sessionRewind')?.enabled ?? false,
+    },
+    sessionFork: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_SESSION_FORK_ENABLED
+        ? process.env.CDK_SESSION_FORK_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('sessionFork')?.enabled ?? false,
     },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.
@@ -2032,6 +2089,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   Production: ${config.production}`);
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
   console.log(`   Manage DNS Records: ${config.manageDnsRecords}`);
+  console.log(`   ALB ingress: ${config.albRestrictToCloudFront ? 'CloudFront origin-facing only' : 'internet (0.0.0.0/0)'}`);
   console.log(`   App Version: ${config.appVersion}`);
   // Printed so a deploy log shows which values actually took effect.
   console.log(

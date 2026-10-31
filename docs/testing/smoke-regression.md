@@ -18,6 +18,7 @@ The three layers are cumulative. Run as many as the change warrants (§4).
 | **L0 Hermetic** | the branch's code compiles and its unit/contract tests pass | free, ~8 min backend | `pytest`, `ng test`, `jest` |
 | **L1 Turn matrix (API/SDK)** | the deployed or local stack streams every response code path with the right frames, resumes, 409s, restores | real model calls, cents | `backend/scripts/smoke_turns.py` |
 | **L2 Browser** | the SPA renders what L1 proved the wire carries: consent, question picker, Stop, steer, attachment cards, reload | real model calls, minutes of agent time | in-app browser against dev |
+| **Eval (quality)** | the answers are as good as the last promoted baseline: tool choice, facts from documents, retention, format, refusals, skill loading | real model calls, under $1 for the full set at k=3 | `backend/scripts/eval_harness.py`; spec `docs/specs/eval-harness.md` |
 
 ---
 
@@ -102,8 +103,10 @@ new-event-name notes that do not change the status.
 | `second_turn_cache` | second prompt, same session | I1 again; then `GET /admin/costs/sessions/{id}/calls`: last row not `partial_miss`, `toolConfigHash`/`systemPromptHash` equal across the two rows. `uncached` is normal for prompts this small. Warns if `agent_status.preparing` fired on a warm session | admin scope to read the rows; otherwise PASS on the frame contract alone |
 | `restore_after_reload` | `GET /sessions/{id}/messages` | both user prompts and both streamed assistant texts come back byte-for-byte; ≥2 messages per turn | — |
 | `tool_turn` | prompt forcing `--tool` (default `calculator`) | a `tool_use` and a `tool_result`; `agent_status` carries `tool_start`/`tool_end` when present; warns if the arithmetic is wrong | the tool granted to the user |
+| `empty_final_call` | prompt asking for `--tool`, then an empty reply (two phrasings, one retry) | a model call that streams **no `message_start`** gets its own `C#` row: one row per `message_stop`, each holding the usage its own `metadata` frame streamed, with distinct message ids. Bedrock sends only `messageStop` + `metadata` for an empty response; before PR #1785 that usage overwrote the previous call's row, which then went unbilled while still looking metered (`UnmeteredModelCall` cannot see it). OBSERVED, not FAIL, if the model writes text on both attempts. Dev-validated 2026-10-30 (Haiku 4.5, empty on the first attempt) | the tool granted to the user; admin scope to read the rows (SKIP otherwise) |
 | `ask_user_question_resume` | prompt forcing `ask_user_question` | `user_question_required` **after** the final `message_stop` with `interruptId` + `questions`; resume with `{answers: {<header>: {selected, text}}}` finishes without re-raising; `pendingInterrupts` empty afterwards | `ASK_USER_QUESTION_ENABLED` (default on), tool granted |
 | `tool_approval_resume` | prompt forcing `--approval-tool` | `tool_approval_required`, resume with `"approved"`, a `tool_result` follows | `--approval-tool <id>` for a tool flagged `needsApproval` (dev has an MCP server whose hello tool is) |
+| `client_tool_call_resume` | declare one `client_tools` spec (`echo_marker`), prompt forcing it | `client_tool_call` **after** the final `message_stop` with `interruptId`, the bare `toolName`, `arguments`; resume with `{output, isError}` finishes without re-raising (proves the snapshot rebuilt the tool) and the answer echoes the output; `pendingInterrupts` empty afterwards. This is the terminal client's local-tools protocol with the script standing in as the client | none — the field is request-only |
 | `duplicate_send_409` | second POST while the first streams | HTTP 409 with the single-flight detail | app-api target |
 | `stop_mid_answer` | abort the stream after 12 deltas, `POST /sessions/{id}/interrupt {reason: user_stopped}` | the next send is accepted within 45 s (lease released); reports whether the partial answer persisted. A short turn can finish server-side before the heartbeat and clear its own marker, which is by design | app-api target |
 | `preview_session` | `preview-…` session id | completes; `GET /messages` empty or 404; absent from `GET /sessions` | — |
@@ -133,6 +136,9 @@ contract. Three traps that look like product bugs:
 
 - `tool_turn` with no `tool_use`: the tool is not granted to the user, or the
   model declined. Check `GET /tools` for the user before filing anything.
+- `empty_final_call` FAIL with one row fewer than calls: that is the metering
+  bug itself, not a race. The rows are written after the stream closes, and
+  the row polls for 12 s before comparing.
 - `second_turn_cache` unreadable: the admin endpoint 403'd. Locally that is
   `SKIP_AUTH_ROLES=DotNetDevelopers`; set it to `system_admin`.
 - `stop_mid_answer` says the partial answer did not persist: the turn finished
@@ -221,9 +227,10 @@ conversations afterwards from Manage Conversations.
 |---|---|
 | anything | L0 for the packages touched |
 | `inference_api/chat/*`, `agents/main_agent/**`, `apis/shared/harness/**`, the SSE table | L0 + L1 against dev once the branch is deployed there (merge to `develop` auto-deploys dev), or against a local stack before |
-| an interrupt flow (OAuth, approval, question, browser login) | + L1's resume rows + the matching L2 row |
+| an interrupt flow (OAuth, approval, question, browser login, client tool) | + L1's resume rows + the matching L2 row |
 | the composer, loader, tool rail, pickers, banners | + L2 rows for the surface |
-| a release | L0 + full L1 against dev + the L2 checklist, once, on the release branch |
+| the system prompt, a tool description in the catalog, skills or their disclosure, history or compaction code, document delivery, a model default | + the eval harness on the affected families against dev (or a local stack), `score` output in the PR |
+| a release | L0 + full L1 against dev + the L2 checklist + the full eval golden set at k=3 as the eval user, once, on the release branch |
 
 Model-call-path changes also owe the prompt-cache and TTFT evidence described
 in CLAUDE.md ("Token cost effectiveness", "TTFT is a hard budget");
@@ -249,6 +256,13 @@ first look, not the whole proof.
   models), because the nightly stack never runs the bootstrap seeding and its
   `default` role grants nothing. The pool must serve the classic Hosted UI
   login page (managed login v2 exits 2, "could not start").
+- The same job then runs the eval harness's nightly subset through
+  `scripts/nightly/eval-harness.sh`: it seeds the eval user
+  (`backend/scripts/seed_eval_user.py`), runs five families once per case as
+  that user, and scores them against the committed Haiku baseline. It is
+  `continue-on-error` and uploads `eval-harness-report-<label>`; one sample per
+  case is a smoke signal, and the gate is the k=3 run on dev. Skill selection is
+  left out because the nightly stack never seeds the skills it loads.
 - L2 is agent-run, not CI.
 
 ---

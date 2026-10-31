@@ -283,6 +283,7 @@ cannot be quietly reversed.
 | `alb-rejected-connections` | ALB connection limit hit | Users were turned away *before* reaching the app, so nothing is in app logs. Check request volume. |
 | `app-api-running-tasks-low` | Fewer tasks than desired | Task failing to start: check stopped-task reason, image pull, subnet IPs. |
 | `app-api-memory-high` | Sustained memory pressure | Fargate **kills** a task that exhausts memory. Raise memory or find the leak. |
+| `app-api-event-loop-lag` | A task's asyncio loop was blocked > 2 s in 2 of 3 minutes | Synchronous work on the single uvicorn worker; every request on that task, `/health` included, waited with it. Find the `Event loop blocked` WARNING in the app-api log group and what ran just before it. The ALB pulls the task after 2 failed 10 s probes, so by the time this fires it has probably already been replaced; the alarm is the explanation, not the recovery. |
 | `agentcore-system-errors` | AgentCore's fault | Escalate to AWS. Not application code. |
 | `agentcore-high-error-rate` | `UserErrors` — our requests are malformed | Recent inference-api deploy? Check payload shape and IAM. |
 | `agentcore-throttles` | At the TPS or session quota | Request a quota increase. Will not self-resolve. |

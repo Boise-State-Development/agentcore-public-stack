@@ -18,6 +18,15 @@ Single source of truth for cutting a release. Three concerns move together: the
 (`RELEASE_NOTES.md` + `CHANGELOG.md`). Do the steps in order, all on one
 `release/x.y.z` branch cut from `develop`.
 
+Three pre-merge gates run in CI on every PR into `main`, and each has a local
+command. Run all three before you open the PR (§1, §1b, §1c):
+
+```bash
+node scripts/release/check-gsi-update-limit.mjs      # one GSI per existing table
+node scripts/release/check-pending-backfills.mjs     # every new backfill named in the notes
+node scripts/release/check-new-feature-flags.mjs     # every new flag named in the notes
+```
+
 Detailed format templates live in reference files — load them when you reach §6:
 
 - Release-notes structure, section order, and spotlight template →
@@ -257,6 +266,72 @@ hand-builds its items rather than going through the model.
 
 ---
 
+## 1c. Pre-merge prerequisite — new feature flags
+
+**Does this release add a feature flag?** A new `*_ENABLED` reader in
+`backend/src/apis/shared/feature_flags.py`, a new field on `FeatureFlags` in
+`frontend/ai.client/src/environments/feature-flags.ts`, or a new `CDK_*_ENABLED`
+variable in `platform.yml`. **If yes, the release notes must name every one**,
+in its own **Feature flags** table (see the release-notes format), with:
+
+| Column | What goes there |
+|---|---|
+| Flag | the backend variable, the `CDK_*` variable and the SPA field, so an operator can type all three |
+| Default | `OFF (in development)`, `OFF`, or `ON` (and what unset means) |
+| Set on | app-api, the AgentCore Runtime, a Lambda, the SPA build — and whether both sides must match |
+| Kind | feature switch (permanent) or rollout switch (retires; name the condition and the tracking issue) |
+| What on does | one sentence, benefit first |
+
+Also list any flag whose **default changed** in this release (in-development →
+default-on is a product change for every deployment) and any flag **retired**
+(as a CHANGELOG `Removed` entry naming the variable, because a deployment that
+set it `=false` loses that opt-out).
+
+**And account for every flag that is on in prod but still off by default**, in a
+**Still opt-in** line under the table, whether or not this release touched it.
+These are the features a fresh install does not get, and "promote it later" is
+the step that gets forgotten. The gate derives the SPA half of the list from the
+environment files (`true` in `environment.production.ts`, `false` in
+`environment.ts`) and fails the release unless the **newest** notes entry names
+each one; the full list, including backend-only flags it cannot see, with each
+flag's promotion condition, is issue #1798. For each flag write one of: promoted
+to default-on in this release (then it also goes under **Default changes**), or
+the reason it stays opt-in (waiting on a readout; a cost or retention decision
+each deployment makes). Turning a flag on in prod in this release adds it to the
+line and to #1798.
+
+### Why this is its own gate
+
+New or in-development features default **off** (CLAUDE.md "Feature flags") so
+half-finished work never switches itself on for the organizations that deploy
+this stack. The other half of that rule is that a finished feature nobody is
+told about never gets turned on. An un-set flag is not an error, it is the
+default, so nothing goes red. And dev cannot surface it: whoever built the
+feature set the variable on the `development` GitHub environment the day they
+built it. Prod and every other deployment are the environments nobody told.
+
+### How to check
+
+CI enforces this on every PR into `main`
+(`.github/workflows/new-feature-flags.yml`). Locally:
+
+```bash
+node scripts/release/check-new-feature-flags.mjs
+```
+
+It diffs `feature_flags.py` and `feature-flags.ts` between `origin/main` and
+your branch and fails when an added flag is not named in `RELEASE_NOTES.md`, and
+it compares `environment.production.ts` with `environment.ts` and fails when a
+flag on in prod but off by default is not named in the newest notes entry. It
+checks the literal variable name and the literal SPA field, because that is what
+an operator has to type. It cannot check that the note says the right default or
+services — read the reader's docstring and `infrastructure/lib/config.ts` for
+each one, and copy what they say. The docs-site flags page
+(`docs-site/src/content/docs/configuration/feature-flags.md`) should already
+have the row; if it does not, add it in the release PR.
+
+---
+
 ## 2. Branch workflow
 
 ```bash
@@ -269,14 +344,18 @@ The branch name **corresponds to the version being pushed** (`release/1.2.0` shi
 `1.2.0`) and carries **all commits currently on `develop`**.
 
 Then, on the release branch: create a task list, determine the bump (§4), bump
-`VERSION` + sync (§3), write both docs (§5–§6). Keep every edit on the release
-branch — `develop` stays untouched. Commit and push:
+`VERSION` + sync (§3), write both docs (§5–§6), run the three gates (§1–§1c).
+Keep every edit on the release branch — `develop` stays untouched. Commit and
+push (the sync also writes the TUI and iOS manifests, so add those too):
 
 ```bash
 git add VERSION backend/pyproject.toml backend/uv.lock \
         frontend/ai.client/package.json frontend/ai.client/package-lock.json \
         infrastructure/package.json infrastructure/package-lock.json \
+        tui/pyproject.toml tui/uv.lock tui/src/aps_tui/__init__.py \
+        ios/Config/Version.xcconfig \
         CHANGELOG.md RELEASE_NOTES.md README.md
+git status --short      # must be empty after the add: the sync touches every manifest
 git commit -m "Release/x.y.z" -m "<one-paragraph summary + bullet notes>"
 git push -u origin release/x.y.z
 ```
@@ -284,6 +363,23 @@ git push -u origin release/x.y.z
 Open a PR `release/x.y.z` → `main`. After prerequisites (§1) + code review pass, it is
 **squash-merged** into `main` (the version-check gate passes because `VERSION`
 changed). Then do the backmerge (§7).
+
+**Quality evidence before the PR.** `develop` is what dev runs, so the release
+branch's code is already deployed there. Run the smoke pass
+(`docs/testing/smoke-regression.md`, the `/smoke-regression` skill) and the eval
+harness's full golden set as the eval user, then paste the `score` table into the
+PR body. A `GATE: FAIL` is a release blocker until `--explain` shows why:
+
+```bash
+cd backend
+AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-release-x.y.z \
+    --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
+    --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 --yes
+uv run python scripts/eval_harness.py score --out /tmp/eval-release-x.y.z
+```
+
+Re-promote the baseline (`eval_harness.py baseline`) only on purpose — after a
+deliberate model or prompt change — in its own PR with the score output.
 
 ---
 
@@ -298,9 +394,10 @@ Single `VERSION` file at the repo root is the source of truth. Format:
 4. Commit `VERSION` **and every file the sync touched, including lockfiles**.
 
 The sync script propagates the version into `backend/pyproject.toml`,
-`frontend/ai.client/package.json`, `infrastructure/package.json`, the `README.md`
-badge + "Current release" line, and **regenerates** `backend/uv.lock` and both
-`package-lock.json`. Run it inside the dev container (needs `uv` + `npm` at pinned
+`frontend/ai.client/package.json`, `infrastructure/package.json`,
+`tui/pyproject.toml`, `tui/src/aps_tui/__init__.py`, `ios/Config/Version.xcconfig`,
+the `README.md` badge + "Current release" line, and **regenerates**
+`backend/uv.lock`, `tui/uv.lock` and both `package-lock.json`. Run it inside the dev container (needs `uv` + `npm` at pinned
 versions).
 
 - **PR gate:** PRs to `main` fail CI if `VERSION` is unchanged vs `main` or the
@@ -363,6 +460,17 @@ Bucket each change:
 | CI/CD | 🔧 | Workflow/pipeline/tooling changes |
 | Docs | 📚 | Documentation worth calling out |
 
+Then sweep for the two things a commit list hides, because each is one line in a
+big diff and each is a step somebody has to take:
+
+```bash
+git diff <cut>..develop -- backend/src/apis/shared/feature_flags.py \
+    frontend/ai.client/src/environments/ infrastructure/lib/config.ts \
+    .github/workflows/platform.yml                      # new / changed flags (§1c)
+git diff --name-status <cut>..develop -- backend/scripts/   # new backfill_*.py (§1b)
+git diff <cut>..develop -- backend/scripts/seed_bootstrap_data.py  # seed changes = a re-seed step
+```
+
 **Include** user/operator-facing changes, bug fixes people hit, security updates,
 breaking changes, dependency upgrades. **Changelog-only:** minor dep bumps with no
 behavior change, internal test additions. **Exclude from both:** pure internal
@@ -392,8 +500,10 @@ Backed by a TTL-cached DynamoDB snapshot."
 **Link hygiene:** GitHub renders `{#custom-anchor}` heading suffixes literally —
 don't use them; prefer plain text over fragile intra-doc anchors.
 
-**Before finalizing:** `sync-version.sh --check` passes, and both docs lead with
-the new version above the untouched previous entries.
+**Before finalizing:** `sync-version.sh --check` passes, the three gate scripts
+pass (§1–§1c), the notes carry a **Feature flags** table and a **Manual steps**
+section (each may say "none"), and both docs lead with the new version above the
+untouched previous entries.
 
 ---
 
@@ -453,6 +563,11 @@ anyway (VERSION + both docs correct, feature code intact) before committing.
 - **Committing straight to `develop`/`main`** — both are PR-only.
 - **Padding a patch / starving a feature** — size the notes to the release (§4).
 - **Inventing PR numbers or fragile `{#anchor}` links** — omit / use plain text.
+- **Shipping a flag or a backfill the notes don't name** — an un-set flag and an
+  unrun backfill both fail silently, as a default and a short list (§1b, §1c).
+  The gates catch the omission; only reading the diff catches a wrong default.
+- **Forgetting the TUI and iOS manifests** — `sync-version.sh` writes them too;
+  `git status --short` after the add must be empty.
 - **Skipping the backmerge** — the #1 cause of next-release conflict pain.
 
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
