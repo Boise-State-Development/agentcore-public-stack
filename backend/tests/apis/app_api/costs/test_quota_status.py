@@ -129,3 +129,14 @@ def test_status_read_records_no_quota_events(client) -> None:
 
     assert resp.status_code == 200
     recorder.assert_not_called()
+
+
+def test_status_read_bypasses_the_resolver_cache(client) -> None:
+    """An approval on another app-api task must show without waiting out the cache."""
+    resolved = ResolvedQuota(user_id="user-1", tier=_tier(), matched_by="default_tier")
+    p_res, p_agg = _patch_quota(resolved)
+    with p_res as get_resolver, p_agg:
+        assert client.get("/costs/quota-status").status_code == 200
+
+    get_resolver.return_value.resolve_user_quota.assert_awaited_once()
+    assert get_resolver.return_value.resolve_user_quota.await_args.kwargs == {"bypass_cache": True}
