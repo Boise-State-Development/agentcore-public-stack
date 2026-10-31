@@ -12,6 +12,10 @@ import { Construct } from 'constructs';
 import { AppConfig, getResourceName } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import { grantManagedKbRetrieval } from '../managed-kb/managed-kb-role-construct';
+import {
+  otherDeploymentsTablesDeny,
+  TABLE_READ_WRITE_ACTIONS,
+} from '../data/deployment-table-grants';
 
 /**
  * Create the AgentCore Runtime execution role with all required
@@ -257,6 +261,15 @@ export function createRuntimeExecutionRole(
   }));
 
   // ── DynamoDB tables (Users, Roles, OAuth, Quotas, Costs, etc.) ──
+  // Named table by table, unlike app-api's one `table/{prefix}-*` statement:
+  // the Runtime reads only 20 of the stack's 29 tables, and the ones it never
+  // touches include bff-sessions (a write there is a forged login), oidc-state
+  // and audit-log. Each table's entry is `<tableArn>*`, which IAM matches
+  // against the table AND its `/index/*`, so one entry does what a table ARN
+  // plus an index ARN did. The trailing `*` would also match a future table
+  // whose name extends one of these (`{prefix}-users-archive`), so
+  // dynamodb-table-grants.test.ts requires every such entry to match exactly
+  // one synthesized table.
   const tableArns = [
     refs.usersTable.tableArn,
     refs.appRolesTable.tableArn,
@@ -273,17 +286,16 @@ export function createRuntimeExecutionRole(
     refs.authProvidersTable.tableArn,
     refs.fileUploadTable.tableArn,
   ];
-  const tableResources = tableArns.flatMap(arn => [arn, `${arn}/index/*`]);
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'DynamoDBTableAccess',
     effect: iam.Effect.ALLOW,
-    actions: [
-      'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-      'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-      'dynamodb:BatchGetItem', 'dynamodb:BatchWriteItem',
-    ],
-    resources: tableResources,
+    actions: [...TABLE_READ_WRITE_ACTIONS],
+    resources: tableArns.map((arn) => `${arn}*`),
   }));
+  // The `*` entries in this file can match another deployment's tables when
+  // its prefix extends this one's; deployment-table-grants.ts explains the
+  // collision and this Deny.
+  role.addToPolicy(otherDeploymentsTablesDeny(config, 'OtherDeploymentsTablesDeny'));
 
   // ── User settings table (read + write) ──
   // inference_api/chat/routes.py resolves the user's saved defaultModelId via
@@ -361,7 +373,7 @@ export function createRuntimeExecutionRole(
     sid: 'ArtifactsTableWrite',
     effect: iam.Effect.ALLOW,
     actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query'],
-    resources: [artifactsTableArn, `${artifactsTableArn}/index/*`],
+    resources: [`${artifactsTableArn}*`],
   }));
 
   // ── Skill reference files (S3, read-only) ──
@@ -419,7 +431,7 @@ export function createRuntimeExecutionRole(
     effect: iam.Effect.ALLOW,
     actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:DeleteItem',
               'dynamodb:Query', 'dynamodb:BatchWriteItem'],
-    resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
+    resources: [`${memorySpacesTableArn}*`],
   }));
   // A project harness's `memory_read` counts each file it returns in the
   // file's `STATS#{slug}` row (Shared Projects 2.6b): one UpdateItem that adds
@@ -480,7 +492,7 @@ export function createRuntimeExecutionRole(
     effect: iam.Effect.ALLOW,
     actions: ['dynamodb:GetItem', 'dynamodb:BatchGetItem', 'dynamodb:Query',
               'dynamodb:UpdateItem'],
-    resources: [projectsTableArn, `${projectsTableArn}/index/*`],
+    resources: [`${projectsTableArn}*`],
   }));
   // A member's `memory_propose` tells the project's editors (Shared Projects
   // 2.5a). Notifications are `INBOX#{email}` rows on this table, so the
