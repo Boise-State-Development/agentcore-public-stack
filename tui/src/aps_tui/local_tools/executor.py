@@ -101,6 +101,8 @@ def describe_call(call: LocalToolCall) -> tuple[str, str]:
     command itself, or the path, never a paraphrase.
     """
     args = call.arguments
+    headline = ""
+    detail = ""
     match call.tool_name:
         case "run_command":
             headline = str(args.get("command", "")).strip() or "(empty command)"

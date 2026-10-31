@@ -279,7 +279,9 @@ def resolve_surface(surface: Optional[str]) -> str:
     if surface in SURFACE_GUIDANCE:
         return surface  # type: ignore[return-value]
     if surface:
-        logger.warning("Unknown client_surface %r; falling back to %r", surface, DEFAULT_CLIENT_SURFACE)
+        # Client-supplied: strip line breaks and bound it before it reaches a log line.
+        shown = str(surface).replace("\r", " ").replace("\n", " ")[:64]
+        logger.warning("Unknown client_surface %r; falling back to %r", shown, DEFAULT_CLIENT_SURFACE)
     return DEFAULT_CLIENT_SURFACE
 
 

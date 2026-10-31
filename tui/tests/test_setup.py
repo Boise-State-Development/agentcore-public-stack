@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -139,7 +140,7 @@ class TestSetupScreen:
             await pilot.press(*"good.example.edu")
             await pilot.press("enter")
             await settle(pilot, lambda: "How do you want to sign in" in rendered_text(app))
-            assert "https://good.example.edu" in rendered_text(app)
+            assert re.search(r"https://good\.example\.edu\b", rendered_text(app))
             await pilot.press("enter")  # browser sign-in is highlighted first
             await settle(pilot, lambda: bool(results))
         assert results == ["https://good.example.edu"]

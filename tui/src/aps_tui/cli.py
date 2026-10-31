@@ -15,7 +15,6 @@ import httpx
 
 from . import __version__
 from .config import (
-    ENV_API_KEY,
     ENV_BASE_URL,
     Config,
     config_path,
@@ -317,7 +316,8 @@ def _command_status(args: argparse.Namespace) -> int:
     print(f"log content : {'yes' if content_logging_enabled() else f'no (set {ENV_LOG_CONTENT}=1)'}")
     if config.keyring_unavailable_reason:
         print(f"keyring     : unavailable ({config.keyring_unavailable_reason})")
-        print(f"              set {ENV_API_KEY} in your environment instead")
+        # The variable's NAME (config.ENV_API_KEY), never a key value.
+        print("              set AGENTCORE_API_KEY in your environment instead")
 
     if not config.base_url:
         return 1
