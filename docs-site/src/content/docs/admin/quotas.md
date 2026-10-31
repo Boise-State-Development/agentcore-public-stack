@@ -43,6 +43,15 @@ Users ask from the composer's quota tab (from 80% used, and when blocked) or
 from **Settings → Usage**, which also lists their requests and splits the quota
 bar into the central allowance and each extension.
 
+Admins work in **Quota Requests** (`/admin/quota-requests`, its own nav entry
+under Usage & Spend, badged with the pending count): **Requests** is the queue
+and each request's detail (approve, ask for info, deny), **Extensions** lists
+active and past extensions with a *Standing* filter and Revoke, and **Settings**
+is the policy, including the funding-field schema with a live preview. A user's
+admin page also offers **Extend Quota** beside Create Override, and its quota
+card lists the user's active extensions. People are always picked from the
+users directory, never typed as an id.
+
 - **Requests.** A user asks for an amount per period, through a date, with a
   justification and, if the deployment collects one, a funding source
   (`POST /quota/requests`). One open request per user. An admin approves
