@@ -202,6 +202,13 @@ class TestJudgeCommand:
         printed = capsys.readouterr().out
         # general_chat case: helpfulness + conciseness = 2; tool case: two tool calls = 2.
         assert "2 samples to judge" in printed and "~4 judge calls" in printed and "estimate only" in printed
+        assert "judge its own answers" not in capsys.readouterr().err
+
+    def test_warns_when_the_judge_is_the_model_under_test(self, tmp_path, capsys):
+        out = self._run_dir(tmp_path)
+        same = "global." + MODEL.removeprefix("us.")
+        assert eval_harness.main(["judge", "--out", str(out), "--judge-model", same]) == 0
+        assert "would judge its own answers" in capsys.readouterr().err
 
     def test_spending_without_the_package_is_a_clear_setup_error(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setitem(sys.modules, "strands_evals", None)  # import now raises ImportError

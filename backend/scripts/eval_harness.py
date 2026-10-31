@@ -82,6 +82,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from apis.shared.evals.cases import FAMILIES, CaseError, EvalCase, load_cases, required_grants  # noqa: E402
+from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
     ReportError,
     any_gate_failed,
@@ -494,7 +495,7 @@ def _judge_calls(case: EvalCase, row: Dict[str, Any]) -> int:
 async def cmd_judge(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
-        _read_meta(out)
+        meta = _read_meta(out)
         cases = {c.id: c for c in load_cases(Path(args.cases_dir), families=args.family)}
     except (ReportError, CaseError) as exc:
         print(str(exc), file=sys.stderr)
@@ -516,6 +517,12 @@ async def cmd_judge(args: argparse.Namespace) -> int:
     rate_in, rate_out = RATES[rate_model]
     dollars = calls * (EST_JUDGE_INPUT_TOKENS * rate_in + EST_JUDGE_OUTPUT_TOKENS * rate_out) / 1_000_000
     print(f"{len(todo)} samples to judge with {args.judge_model}: ~{calls} judge calls, ≈ ${dollars:.2f}")
+    if same_base_model(args.judge_model, str(meta.get("model_id") or "")):
+        print(
+            f"warning: {args.judge_model} would judge its own answers; a judge tends to favour its own model "
+            "(docs/specs/eval-harness.md §14, question 2), so pick a different --judge-model",
+            file=sys.stderr,
+        )
     if not todo:
         print("nothing to judge")
         return 0
@@ -711,7 +718,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
     s = sub.add_parser("judge", help="(spends) score a run's samples with the LLM judges their cases name")
     s.add_argument("--out", required=True)
-    s.add_argument("--judge-model", default="us.anthropic.claude-sonnet-4-6", help="Bedrock model id for every judge")
+    s.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL, help="Bedrock model id for every judge")
     s.add_argument("--family", type=families, help="comma-separated families (default: every judged case)")
     s.add_argument("--workers", type=int, default=4, help="samples judged concurrently")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")

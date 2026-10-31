@@ -283,5 +283,14 @@ As built, `scripts/nightly/eval-harness.sh` re-seeds the eval user (idempotent: 
 ## 14. Open questions
 
 1. ~~**Does the eval user need every tool, or a fixed small set?**~~ Answered by PR-3: exactly what the golden set offers, derived from the case files. Each case names its own `enabled_tools`, so the model chooses among a fixed set either way; the role only has to make that set reachable.
-2. **Judge model.** Sonnet 4.6 regional is the proposal; the compaction harness judged with Haiku and found it adequate for exact-answer families. Decide on the first `judge` run's disagreement rate with the deterministic gate on the overlapping cases.
+2. ~~**Judge model.**~~ Sonnet 4.6, measured 2026-10-31. One k=3 run of the three judged families on dev (Haiku 4.5 under test, 69 samples, every one passing its deterministic checks) was judged by both Sonnet 4.6 and Haiku 4.5. Because real samples that all pass only test agreement, the same judges also scored 22 planted-bad samples built from that run: a refusal case answered the wrong way (an acceptance with no harmful content, or a refusal of a benign request), every tool call redirected to an unrelated tool, and each `general_chat` answer swapped for another case's.
+
+   | | Sonnet 4.6 | Haiku 4.5 |
+   |---|---|---|
+   | agrees with the deterministic outcome (real `refusal` + `tool_selection`) | 48/48 | 47/48 |
+   | planted-bad verdicts scored failing | 30/32 | 31/31 |
+   | errors | 0 | 1 Bedrock read timeout |
+   | `judge` estimate for these 91 samples | $1.79 | $0.60 |
+
+   The two agree on pass/fail for 89 of 96 real verdicts, with a mean score gap of 0.06. Both misses are noise rather than blind spots. Haiku's one disagreement is a refusal followed by lawful alternatives, which it read as "not a genuine refusal". Sonnet's two are one planted sample on which it described a "recovery response" that is not in the session; re-judged three times, it scored helpfulness 1.0 once and 0.0 twice, and faithfulness 0.0 all three times. Accuracy is a tie at this sample size. What separates them is where judgement is softest: Haiku scored Haiku's own answers higher than Sonnet did on conciseness (+0.17) and on the case rubrics (+0.09), the direction a judge favouring its own model's output would move, though nine verdicts each cannot prove it. The default model under test is Haiku, and the cost gap is under a dollar per release run, so the default judge stays Sonnet 4.6. `judge` now warns when the judge and the model under test are the same model (ignoring the `us.` / `global.` prefix). A run of a different model under test should pick a judge that is neither.
 3. ~~**Should `score` read the `C#` rows?**~~ Yes, best-effort, behind `--explain` (§8). The coupling to the table shape is the admin cost anatomy's reader and projection, not a second one, so a change to the row is made in one place.
