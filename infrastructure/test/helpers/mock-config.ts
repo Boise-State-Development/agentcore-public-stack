@@ -182,6 +182,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     sessionPrewarm: {
       enabled: false,
     },
+    quotaRequests: {
+      enabled: false,
+    },
     handoffs: {
       enabled: false,
     },

@@ -97,6 +97,16 @@ async def _read_quota_snapshot(user: User) -> Dict[str, Any]:
             limit = float(daily_limit)
         else:
             limit = float(monthly_limit)
+        # Quota extensions stack on the tier (quota-requests spec §4.1). An
+        # uncapped standing one has no limit to report, so the tier's stands.
+        from agents.main_agent.quota.extensions import active_extensions, effective_limit
+        from apis.shared.timestamps import utc_now_iso
+
+        extended = effective_limit(
+            limit, active_extensions(getattr(resolved, "extensions", []) or [], utc_now_iso())
+        )
+        if extended is not None:
+            limit = extended
 
         period = _current_period(period_type)
         summary = await get_cost_aggregator().get_user_cost_summary(

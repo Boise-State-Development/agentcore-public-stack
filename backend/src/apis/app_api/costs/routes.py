@@ -12,7 +12,22 @@ from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.costs.models import UserCostSummary
 from apis.shared.costs.aggregator import CostAggregator
-from apis.app_api.costs.models import UserQuotaStatusResponse
+from apis.app_api.costs.models import (
+    QuotaStatusCharged,
+    QuotaStatusExtension,
+    QuotaStatusOpenRequest,
+    UserQuotaStatusResponse,
+)
+from apis.shared.feature_flags import quota_requests_enabled
+from apis.shared.timestamps import utc_now_iso
+from agents.main_agent.quota.extensions import (
+    active_extensions,
+    build_funding_notice,
+    effective_limit,
+    funding_label,
+    is_unlimited,
+    period_base_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +84,7 @@ async def get_quota_status(
     has_override = resolved.override is not None
 
     # Unlimited tier/override: usage without a denominator.
-    monthly_limit = tier.monthly_cost_limit
-    if monthly_limit == float("inf") or monthly_limit >= 999999:
+    if is_unlimited(tier):
         return UserQuotaStatusResponse(
             configured=True,
             unlimited=True,
@@ -80,14 +94,12 @@ async def get_quota_status(
             has_active_override=has_override,
         )
 
-    # Determine the effective limit + the period to aggregate spend over.
+    # Determine the base limit + the period to aggregate spend over.
     now = datetime.now(timezone.utc)
-    if period_type == "daily" and tier.daily_cost_limit is not None:
-        limit = float(tier.daily_cost_limit)
-        period = now.strftime("%Y-%m-%d")
-    else:
-        limit = float(monthly_limit)
-        period = now.strftime("%Y-%m")
+    period = now.strftime("%Y-%m-%d") if period_type == "daily" else now.strftime("%Y-%m")
+    base_limit = period_base_limit(tier)
+    extensions = active_extensions(resolved.extensions, utc_now_iso())
+    limit = effective_limit(base_limit, extensions)
 
     try:
         summary = await get_cost_aggregator().get_user_cost_summary(
@@ -99,21 +111,68 @@ async def get_quota_status(
         logger.warning(f"Cost aggregation failed for quota-status: {e}")
         current_usage = 0.0
 
-    usage_pct = (current_usage / limit * 100) if limit > 0 else 0.0
-    remaining = max(0.0, limit - current_usage)
+    # The bar runs on the effective limit (base + extensions), so a granted
+    # extension shows up in the existing UI before it learns the split.
+    denominator = limit if limit is not None else base_limit
+    usage_pct = (current_usage / denominator * 100) if denominator > 0 else 0.0
+    notice = build_funding_notice(current_usage, base_limit, extensions)
 
     return UserQuotaStatusResponse(
         configured=True,
         unlimited=False,
         tier_name=tier.tier_name,
         matched_by=resolved.matched_by,
-        monthly_limit=limit,
+        monthly_limit=denominator,
         current_usage=current_usage,
-        remaining=remaining,
+        remaining=max(0.0, limit - current_usage) if limit is not None else None,
         usage_percentage=round(usage_pct, 1),
         period_type=period_type,
         reset_info=_reset_info(period_type),
         has_active_override=has_override,
+        base_limit=base_limit,
+        effective_limit=limit,
+        extensions=[
+            QuotaStatusExtension(
+                amount=float(e.amount) if e.amount is not None else None,
+                valid_until=e.valid_until,
+                funding_mode=e.funding_mode,
+                standing=e.standing,
+                funding_label=funding_label(e.funding_source) if e.funding_source else None,
+            )
+            for e in extensions
+        ],
+        charged=(
+            QuotaStatusCharged(
+                label=notice.label,
+                this_period=float(notice.charged_this_period),
+                cap=float(notice.cap) if notice.cap is not None else None,
+            )
+            if notice
+            else None
+        ),
+        open_request=await _open_request(current_user),
+    )
+
+
+async def _open_request(user: User) -> Optional[QuotaStatusOpenRequest]:
+    """The caller's open quota request, while requests are switched on. Never raises."""
+    if not quota_requests_enabled():
+        return None
+    try:
+        from apis.shared.quota_requests.service import get_quota_request_service
+
+        request = await get_quota_request_service().open_request_for(user.user_id)
+    except Exception as e:  # noqa: BLE001 - a status read must not surface 500s
+        logger.warning(f"Open quota request read failed for quota-status: {e}")
+        return None
+    if request is None:
+        return None
+    return QuotaStatusOpenRequest(
+        request_id=request.request_id,
+        status=request.status,
+        requested_amount=float(request.requested_amount),
+        created_at=request.created_at,
+        admin_note=request.admin_note,
     )
 
 

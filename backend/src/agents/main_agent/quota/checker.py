@@ -1,11 +1,20 @@
 """Quota checker for enforcing hard limits."""
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Union
 from datetime import datetime, timezone
 import logging
 from apis.shared.auth.models import User
 from apis.shared.costs.aggregator import CostAggregator
-from .models import QuotaCheckResult, QuotaTier
+from apis.shared.timestamps import utc_now_iso
+from .extensions import (
+    active_extensions,
+    build_funding_notice,
+    effective_limit,
+    is_unlimited,
+    period_base_limit,
+)
+from .models import QuotaCheckResult, QuotaExtension, QuotaTier, ResolvedQuota
 from .resolver import QuotaResolver
 from .event_recorder import QuotaEventRecorder
 from .thresholds import (
@@ -16,6 +25,21 @@ from .thresholds import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _Measurement:
+    """What one resolution says about this turn, before any event is recorded."""
+
+    resolved: ResolvedQuota
+    tier: QuotaTier
+    period: str
+    current_usage: float
+    base_limit: float
+    extensions: List[QuotaExtension]
+    # Effective limit: base + every active extension; None when uncapped.
+    limit: Optional[float]
+    would_block: bool
 
 
 class QuotaChecker:
@@ -60,56 +84,42 @@ class QuotaChecker:
         """
         # Resolve user's quota tier
         resolved = await self.resolver.resolve_user_quota(user)
+        measured = await self._measure(user, resolved, usage_by_period={})
+        if isinstance(measured, QuotaCheckResult):
+            return measured
 
-        if not resolved:
-            # No quota configured - block request (fail-closed)
-            logger.warning(f"No quota tier configured for user {user.user_id}, blocking request")
-            return QuotaCheckResult(
-                allowed=False,
-                message="No quota tier configured. Please contact your administrator.",
-                current_usage=0.0,
-                percentage_used=0.0
-            )
+        # Fresh-on-block (quota-requests spec §8.3). The resolution above may
+        # be up to five minutes old, and the one user that staleness hurts is
+        # the blocked one: approved a minute ago, still refused. A turn that is
+        # about to be refused re-resolves once, bypassing the cache, and is
+        # decided on the fresh result. Every other turn keeps the cached path.
+        if measured.would_block:
+            usage_by_period = {measured.period: measured.current_usage}
+            fresh = await self.resolver.resolve_user_quota(user, bypass_cache=True)
+            measured = await self._measure(user, fresh, usage_by_period=usage_by_period)
+            if isinstance(measured, QuotaCheckResult):
+                return measured
 
-        tier = resolved.tier
+        resolved = measured.resolved
+        tier = measured.tier
+        current_usage = measured.current_usage
+        base_limit = measured.base_limit
+        extensions = measured.extensions
+        limit = measured.limit
 
-        # Handle unlimited tier (float('inf') support)
-        if tier.monthly_cost_limit == float('inf') or tier.monthly_cost_limit >= 999999:
-            return QuotaCheckResult(
-                allowed=True,
-                message="Unlimited quota",
+        if limit is None:
+            return await self._check_uncapped(
+                user=user,
+                resolved=resolved,
                 tier=tier,
-                current_usage=0.0,
-                quota_limit=tier.monthly_cost_limit,
-                percentage_used=0.0,
-                warning_level="none"
+                current_usage=current_usage,
+                base_limit=base_limit,
+                extensions=extensions,
+                session_id=session_id,
+                session_total_cost=session_total_cost,
             )
 
-        # Get current usage for the period
-        period = self._get_current_period(tier.period_type)
-        try:
-            summary = await self.cost_aggregator.get_user_cost_summary(
-                user_id=user.user_id,
-                period=period
-            )
-            current_usage = summary.total_cost
-        except Exception as e:
-            logger.error(f"Error getting cost summary for user {user.user_id}: {e}")
-            # On error, allow request but log warning
-            return QuotaCheckResult(
-                allowed=True,
-                message="Error checking quota, allowing request",
-                tier=tier,
-                current_usage=0.0,
-                percentage_used=0.0
-            )
-
-        # Determine limit based on period type
-        # Convert to float for consistent arithmetic with current_usage
-        if tier.period_type == "daily" and tier.daily_cost_limit is not None:
-            limit = float(tier.daily_cost_limit)
-        else:
-            limit = float(tier.monthly_cost_limit)
+        funding_notice = build_funding_notice(current_usage, base_limit, extensions)
 
         percentage_used = (current_usage / limit * 100) if limit > 0 else 0
         remaining = max(0.0, limit - current_usage)
@@ -161,6 +171,7 @@ class QuotaChecker:
                     tier=tier,
                     current_usage=current_usage,
                     quota_limit=limit,
+                    base_limit=base_limit,
                     percentage_used=percentage_used,
                     remaining=0.0,
                     warning_level=warning_level
@@ -190,9 +201,11 @@ class QuotaChecker:
                 tier=tier,
                 current_usage=current_usage,
                 quota_limit=limit,
+                base_limit=base_limit,
                 percentage_used=percentage_used,
                 remaining=0.0,
                 warning_level=warning_level,
+                funding_notice=funding_notice,
                 **session_fields
             )
 
@@ -212,9 +225,133 @@ class QuotaChecker:
             tier=tier,
             current_usage=current_usage,
             quota_limit=limit,
+            base_limit=base_limit,
             percentage_used=percentage_used,
             remaining=remaining,
             warning_level=warning_level,
+            funding_notice=funding_notice,
+            **session_fields
+        )
+
+    async def _measure(
+        self,
+        user: User,
+        resolved: Optional[ResolvedQuota],
+        usage_by_period: Dict[str, float],
+    ) -> Union[QuotaCheckResult, "_Measurement"]:
+        """Resolve the limit and read the period's spend.
+
+        Returns a finished ``QuotaCheckResult`` for the cases that need no
+        arithmetic (no tier, unlimited, a failed spend read), else the numbers
+        the rest of the check runs on. ``usage_by_period`` lets the
+        fresh-on-block pass reuse the spend it already read.
+        """
+        if not resolved:
+            # No quota configured - block request (fail-closed)
+            logger.warning(f"No quota tier configured for user {user.user_id}, blocking request")
+            return QuotaCheckResult(
+                allowed=False,
+                message="No quota tier configured. Please contact your administrator.",
+                current_usage=0.0,
+                percentage_used=0.0
+            )
+
+        tier = resolved.tier
+
+        # Unlimited tier or override. Short-circuits before extensions, which
+        # are inert on top of it (spec §4.1).
+        if is_unlimited(tier):
+            return QuotaCheckResult(
+                allowed=True,
+                message="Unlimited quota",
+                tier=tier,
+                current_usage=0.0,
+                quota_limit=tier.monthly_cost_limit,
+                percentage_used=0.0,
+                warning_level="none"
+            )
+
+        period = self._get_current_period(tier.period_type)
+        if period in usage_by_period:
+            current_usage = usage_by_period[period]
+        else:
+            try:
+                summary = await self.cost_aggregator.get_user_cost_summary(
+                    user_id=user.user_id,
+                    period=period
+                )
+                current_usage = summary.total_cost
+            except Exception as e:
+                logger.error(f"Error getting cost summary for user {user.user_id}: {e}")
+                # On error, allow request but log warning
+                return QuotaCheckResult(
+                    allowed=True,
+                    message="Error checking quota, allowing request",
+                    tier=tier,
+                    current_usage=0.0,
+                    percentage_used=0.0
+                )
+
+        # Convert to float for consistent arithmetic with current_usage
+        base_limit = period_base_limit(tier)
+        extensions = active_extensions(resolved.extensions, utc_now_iso())
+        limit = effective_limit(base_limit, extensions)
+
+        return _Measurement(
+            resolved=resolved,
+            tier=tier,
+            period=period,
+            current_usage=current_usage,
+            base_limit=base_limit,
+            extensions=extensions,
+            limit=limit,
+            would_block=(
+                limit is not None
+                and current_usage >= limit
+                and tier.action_on_limit == "block"
+            ),
+        )
+
+    async def _check_uncapped(
+        self,
+        *,
+        user: User,
+        resolved: ResolvedQuota,
+        tier: QuotaTier,
+        current_usage: float,
+        base_limit: float,
+        extensions: List[QuotaExtension],
+        session_id: Optional[str],
+        session_total_cost: Optional[float],
+    ) -> QuotaCheckResult:
+        """An uncapped standing extension: never block, keep measuring (§8.2).
+
+        Not the unlimited short-circuit. The spend is still read, the
+        per-session notice still fires (scaled to the base limit, the only
+        denominator there is), and the funding notice names the fund once the
+        central allowance is used. There is no warning ladder: with no cap
+        there is nothing to approach.
+        """
+        assignment_id = resolved.assignment.assignment_id if resolved.assignment else None
+        session_fields = await self._resolve_session_notice(
+            user=user,
+            tier=tier,
+            limit=base_limit,
+            session_id=session_id,
+            assignment_id=assignment_id,
+            session_total_cost=session_total_cost,
+        )
+        return QuotaCheckResult(
+            allowed=True,
+            message="Within quota (standing chargeback, no cap)",
+            tier=tier,
+            current_usage=current_usage,
+            quota_limit=None,
+            base_limit=base_limit,
+            percentage_used=(current_usage / base_limit * 100) if base_limit > 0 else 0.0,
+            remaining=None,
+            warning_level="none",
+            funding_notice=build_funding_notice(current_usage, base_limit, extensions),
             **session_fields
         )
 

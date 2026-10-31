@@ -2,9 +2,10 @@
 
 from typing import Optional, Dict, Tuple, List
 from datetime import datetime, timedelta, timezone
+import asyncio
 import logging
 from apis.shared.auth.models import User
-from .models import QuotaTier, QuotaAssignment, ResolvedQuota
+from .models import QuotaTier, QuotaAssignment, QuotaExtension, ResolvedQuota
 from .repository import QuotaRepository
 from apis.shared.security.log_sanitize import scrub_log
 
@@ -45,7 +46,9 @@ class QuotaResolver:
         self._cache: Dict[str, Tuple[Optional[ResolvedQuota], datetime]] = {}
         self._domain_assignments_cache: Optional[Tuple[list, datetime]] = None
 
-    async def resolve_user_quota(self, user: User) -> Optional[ResolvedQuota]:
+    async def resolve_user_quota(
+        self, user: User, *, bypass_cache: bool = False
+    ) -> Optional[ResolvedQuota]:
         """
         Resolve quota tier for a user using priority-based matching with caching.
 
@@ -56,11 +59,20 @@ class QuotaResolver:
         4. JWT role assignment (priority ~200)
         5. Email domain assignment (priority ~150)
         6. Default tier (priority ~100)
+
+        Active quota extensions are attached to whichever tier wins; they stack
+        on it rather than competing with it.
+
+        ``bypass_cache`` re-resolves from DynamoDB and refreshes the cached
+        entry. The checker uses it only on a turn that would otherwise be
+        blocked (fresh-on-block, quota-requests spec §8.3), so an approval
+        takes effect on the user's next send instead of up to five minutes
+        later.
         """
         cache_key = self._get_cache_key(user)
 
         # Check cache
-        if cache_key in self._cache:
+        if not bypass_cache and cache_key in self._cache:
             resolved, cached_at = self._cache[cache_key]
             if datetime.now(timezone.utc) - cached_at < timedelta(seconds=self.cache_ttl):
                 logger.debug(f"Cache hit for user {user.user_id}")
@@ -76,6 +88,35 @@ class QuotaResolver:
         return resolved
 
     async def _resolve_from_db(self, user: User) -> Optional[ResolvedQuota]:
+        """
+        Resolve quota from database, then attach the user's active extensions.
+
+        The extension read runs concurrently with the override read, the one
+        query every resolution makes first, so a cache fill costs one more
+        DynamoDB query and no more wall time (quota-requests spec §8.1).
+        """
+        extensions_task = asyncio.create_task(self._load_active_extensions(user.user_id))
+        try:
+            resolved = await self._resolve_tier_from_db(user)
+        finally:
+            extensions = await extensions_task
+        if resolved is not None and extensions:
+            resolved.extensions = extensions
+        return resolved
+
+    async def _load_active_extensions(self, user_id: str) -> List[QuotaExtension]:
+        """Active extensions, or none if the read fails.
+
+        Extensions only ever add quota, so a failed read degrades to the base
+        limit: the user is held to their tier, never let past it.
+        """
+        try:
+            return list(await self.repository.get_active_extensions(user_id))
+        except Exception as e:
+            logger.warning(f"Could not read quota extensions for user {scrub_log(user_id)}: {scrub_log(e)}")
+            return []
+
+    async def _resolve_tier_from_db(self, user: User) -> Optional[ResolvedQuota]:
         """
         Resolve quota from database using targeted GSI queries.
         ZERO table scans (uses overrides and email domains).

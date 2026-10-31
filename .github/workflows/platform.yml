@@ -270,6 +270,12 @@ jobs:
       # "true" in an environment to turn it on there. app-api only. The SPA's
       # matching switch is `features.sessionPrewarm` in src/environments/*.ts.
       CDK_SESSION_PREWARM_ENABLED: ${{ vars.CDK_SESSION_PREWARM_ENABLED }}
+      # Quota requests and extensions: users ask for more quota, admins grant
+      # additive extensions (docs/specs/quota-requests-and-extensions.md).
+      # Opt-in while in development: set `CDK_QUOTA_REQUESTS_ENABLED` to "true"
+      # in an environment to turn it on there. app-api only. The SPA's matching
+      # switch will be `features.quotaRequests` in src/environments/*.ts.
+      CDK_QUOTA_REQUESTS_ENABLED: ${{ vars.CDK_QUOTA_REQUESTS_ENABLED }}
       # Handoffs: a mid-thread @-mention hands off to an Agent with reviewed
       # context (docs/specs/agent-handoffs-and-consults.md, Phase 0). Opt-in
       # while in development: set `CDK_HANDOFFS_ENABLED` to "true" in an

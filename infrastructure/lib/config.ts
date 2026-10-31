@@ -90,6 +90,7 @@ export interface AppConfig {
   handoffs: HandoffsConfig;
   sessionRewind: SessionRewindConfig;
   sessionFork: SessionForkConfig;
+  quotaRequests: QuotaRequestsConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -471,6 +472,21 @@ export interface UserGrantsConfig {
  * which reclaims idle memory, and billed at peak memory on V1.
  */
 export interface SessionPrewarmConfig {
+  enabled: boolean;
+}
+
+/**
+ * Quota requests and extensions (docs/specs/quota-requests-and-extensions.md).
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_QUOTA_REQUESTS_ENABLED=true (or a `quotaRequests.enabled: true` cdk.json
+ * context). Sets QUOTA_REQUESTS_ENABLED on **app-api only**, which serves the
+ * `/quota/*` request routes and `/admin/quota-requests` + `/admin/quota-extensions`.
+ * The Runtime needs no copy: quota resolution reads extensions wherever it runs,
+ * so turning this off stops new grants without revoking existing ones, and it
+ * spends none of the Runtime's environment-variable budget. No new resources:
+ * requests, extensions and the policy live in the existing user-quotas table.
+ */
+export interface QuotaRequestsConfig {
   enabled: boolean;
 }
 
@@ -1625,6 +1641,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SESSION_FORK_ENABLED
         ? process.env.CDK_SESSION_FORK_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sessionFork')?.enabled ?? false,
+    },
+    quotaRequests: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_QUOTA_REQUESTS_ENABLED
+        ? process.env.CDK_QUOTA_REQUESTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('quotaRequests')?.enabled ?? false,
     },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.

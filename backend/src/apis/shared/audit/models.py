@@ -104,6 +104,17 @@ class AuditAction:
     USER_GRANT_UPDATED = "user_grant.updated"
     USER_GRANT_DELETED = "user_grant.deleted"
 
+    # Quota requests and extensions (docs/specs/quota-requests-and-extensions.md
+    # §11.2), targets ``quota_request`` / ``quota_extension`` keyed by id. A
+    # user's own submission is not an admin mutation; the request row is its
+    # record. ``mutation_denied`` is a refused self-decision.
+    QUOTA_REQUEST_APPROVED = "quota_request.approved"
+    QUOTA_REQUEST_DENIED = "quota_request.denied"
+    QUOTA_REQUEST_INFO_REQUESTED = "quota_request.info_requested"
+    QUOTA_REQUEST_MUTATION_DENIED = "quota_request.mutation_denied"
+    QUOTA_EXTENSION_CREATED = "quota_extension.created"
+    QUOTA_EXTENSION_REVOKED = "quota_extension.revoked"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -118,6 +129,8 @@ class AuditOutcome:
 TARGET_APP_ROLE = "app_role"
 TARGET_PROJECT = "project"
 TARGET_USER_GRANT = "user_grant"
+TARGET_QUOTA_REQUEST = "quota_request"
+TARGET_QUOTA_EXTENSION = "quota_extension"
 
 
 @dataclass

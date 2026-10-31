@@ -87,6 +87,16 @@ describe('buildAppApiEnvironment — session prewarm', () => {
   });
 });
 
+describe('buildAppApiEnvironment — quota requests', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.QUOTA_REQUESTS_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ quotaRequests: { enabled: true } }), stubParams());
+    expect(on.QUOTA_REQUESTS_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — handoffs', () => {
   it('forwards the flag, off by default', () => {
     const off = buildAppApiEnvironment(createMockConfig(), stubParams());
