@@ -15,6 +15,12 @@ name: "New Feature Flags"
 #
 # The failure mode is silent. An un-set flag is not an error; it is the default.
 #
+# The same job also lists every SPA flag that is on in prod but off by default
+# (environment.production.ts vs environment.ts) and requires the newest
+# RELEASE_NOTES.md entry to account for each one, so a feature we turned on for
+# ourselves and meant to promote "later" is asked about at every release. The
+# list and each flag's promotion condition live in issue #1798.
+#
 # See .claude/skills/cutting-a-release/SKILL.md §1c.
 
 on:
@@ -88,17 +94,20 @@ jobs:
             echo '```'
             echo ""
             if [ "${STATUS}" != "success" ]; then
-              echo "This release adds a feature flag that the release notes do not name."
-              echo "Add it, with its default, the services it is set on, the CDK_* variable"
-              echo "and SPA field that set it, and whether it is a feature switch or a rollout"
-              echo "switch. An unannounced flag is a feature nobody turns on."
+              echo "Either this release adds a feature flag that the release notes do not name,"
+              echo "or a flag that is on in prod but off by default is not accounted for in the"
+              echo "newest release-notes entry. For a new flag: add it with its default, the"
+              echo "services it is set on, the CDK_* variable and SPA field that set it, and"
+              echo "whether it is a feature switch or a rollout switch. For a promotion candidate:"
+              echo "promote it in this release, or name it under 'Still opt-in' with the reason"
+              echo "(tracking issue #1798). Read the output above for which."
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Evaluate result
         run: |
           if [ "${{ steps.flag-check.outcome }}" != "success" ]; then
-            echo "::error::This release adds a feature flag that RELEASE_NOTES.md does not name. Add it with its default, services and the variables that set it — see .claude/skills/cutting-a-release/SKILL.md §1c."
+            echo "::error::RELEASE_NOTES.md does not name a new feature flag, or does not account for a flag that is on in prod but off by default (#1798). See the step output and .claude/skills/cutting-a-release/SKILL.md §1c."
             exit 1
           fi
           echo "New-feature-flag check passed."

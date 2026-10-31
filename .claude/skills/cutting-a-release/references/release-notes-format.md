@@ -86,7 +86,14 @@ guess. A two-sided flag (backend + SPA) is one row naming both.
 
 **Default changes:** <flag> went from OFF to ON (now `=false` opts out) — or "none".
 **Retired:** <flag> (its off path is gone; a deployment that set it `=false` loses that opt-out) — or "none".
+**Still opt-in, on in our prod** (#1798): `sessionRewind`, `sessionFork` (promote after two weeks in prod); `sessionPrewarm` (waits on the V2 readout); `attachmentKb`, `CONVERSATION_INDEX_ENABLED` (a cost decision each deployment makes) — or "none".
 ```
+
+The **Still opt-in** line is required whenever any flag is on in prod but off by
+default, even in a release that touched none of them: the gate fails the release
+PR unless the newest entry names each SPA flag in that state. Write what
+happens to each one this release — promoted (then it moves to **Default
+changes**), or why it stays opt-in.
 
 ## Manual steps template
 

@@ -6,7 +6,9 @@
  * reader in `feature_flags.py`, an SPA field on `FeatureFlags` — to be named in
  * RELEASE_NOTES.md. New features default off so that half-finished work never
  * switches itself on for a deployment; the other half of that rule is that a
- * finished feature nobody is told about never gets turned on.
+ * finished feature nobody is told about never gets turned on. It also requires
+ * every SPA flag that is on in prod but off by default to be accounted for in
+ * the newest notes entry, so "promote it later" cannot be forgotten (#1798).
  *
  * Lives here, next to `pending-backfills.test.ts`, because it is the same idea:
  * a release-only hazard that dev soak time cannot surface (whoever built the
@@ -28,15 +30,25 @@ describe('check-new-feature-flags.mjs', () => {
     dir = mkdtempSync(join(tmpdir(), 'flag-check-'));
   });
 
-  /** Run the real CLI the way CI does; returns its exit code and output. */
-  function run(added: string[], notes: string) {
+  /**
+   * Run the real CLI the way CI does; returns its exit code and output.
+   * `prodOnly` stands in for the environment-file comparison; it defaults to
+   * none so the "new flag" cases are not coloured by this branch's real
+   * promotion candidates.
+   */
+  function run(added: string[], notes: string, prodOnly: string[] = []) {
     const notesPath = join(dir, `notes-${Math.random().toString(36).slice(2)}.md`);
     writeFileSync(notesPath, notes);
 
     try {
       const stdout = execFileSync(
         process.execPath,
-        [CHECKER, '--added', added.join(','), '--notes-file', notesPath],
+        [
+          CHECKER,
+          '--added', added.join(','),
+          '--prod-only', prodOnly.join(','),
+          '--notes-file', notesPath,
+        ],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
       );
       return { code: 0, output: stdout };
@@ -82,6 +94,40 @@ describe('check-new-feature-flags.mjs', () => {
     expect(output).not.toMatch(/✗ SESSION_REWIND_ENABLED/);
   });
 
+  describe('flags on in prod but off by default', () => {
+    const TWO_ENTRIES =
+      '# Release Notes — v1.33.0\n\nNewest.\n\n# Release Notes — v1.32.0\n\nStill opt-in: `sessionRewind`.\n';
+
+    it('fails when a promotion candidate is named only in an OLDER entry — the forgetting case', () => {
+      // The release that turned it on named it. The next release did not. That
+      // is exactly the release in which "promote it later" gets lost.
+      const { code, output } = run([], TWO_ENTRIES, ['features.sessionRewind']);
+      expect(code).toBe(1);
+      expect(output).toContain('features.sessionRewind');
+      expect(output).toContain('#1798');
+    });
+
+    it('passes when the newest entry accounts for it', () => {
+      const notes =
+        '# Release Notes — v1.33.0\n\nStill opt-in: `sessionRewind` (promote after two weeks in prod).\n\n' +
+        '# Release Notes — v1.32.0\n\nOlder.\n';
+      expect(run([], notes, ['features.sessionRewind']).code).toBe(0);
+    });
+
+    it('treats a notes file with no entry headings as one entry', () => {
+      expect(run([], '# 1.2.3\n\nStill opt-in: `sessionRewind`.\n', ['features.sessionRewind']).code).toBe(0);
+    });
+
+    it('reports both failures at once when a new flag and a candidate are both missing', () => {
+      const { code, output } = run(['NEW_THING_ENABLED'], '# Release Notes — v1.33.0\n\nNothing.\n', [
+        'features.sessionFork',
+      ]);
+      expect(code).toBe(1);
+      expect(output).toContain('NEW_THING_ENABLED');
+      expect(output).toContain('features.sessionFork');
+    });
+  });
+
   it('matches the live diff against this branch without crashing', () => {
     // Exercises the git path. We cannot assert on the result (it depends on what
     // this branch adds), only that the script runs and reports one of its
@@ -98,5 +144,8 @@ describe('check-new-feature-flags.mjs', () => {
       output = `${e.stdout}${e.stderr}`;
     }
     expect(output).toMatch(/No feature flags added|Feature flags added since|SKIPPED/);
+    // The live environment files are compared too; this branch's candidates are
+    // all accounted for in the newest RELEASE_NOTES.md entry, or the gate fails.
+    expect(output).toMatch(/promotion candidates|No SPA flags are on in prod/);
   });
 });

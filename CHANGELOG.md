@@ -71,7 +71,7 @@ The terminal client becomes a first-class way in: `aps-tui` signs in with the sa
 
 ### 🔧 CI/CD
 
-- **New release gate: every new feature flag must be named in the release notes.** `scripts/release/check-new-feature-flags.mjs` and `.github/workflows/new-feature-flags.yml` diff `feature_flags.py` and `feature-flags.ts` against `main` on every PR into `main`, like the backfill gate. The release skill gains a Feature flags table and a Manual steps section
+- **New release gate: every new feature flag must be named in the release notes, and every SPA flag on in prod but off by default must be accounted for in the newest entry.** `scripts/release/check-new-feature-flags.mjs` and `.github/workflows/new-feature-flags.yml` diff `feature_flags.py` and `feature-flags.ts` against `main` and compare `environment.production.ts` with `environment.ts` on every PR into `main`, like the backfill gate. The release skill gains a Feature flags table, a Still opt-in line and a Manual steps section; #1798 tracks each opt-in flag's promotion condition
 - `release.yml`: `build-tui` job attaches the `aps_tui` wheel and `SHA256SUMS` to the release and appends an install section (#1788)
 - Nightly pipeline seeds the eval user on the ephemeral stack and runs five families at k=1, non-blocking (#1794)
 - Concurrent device-grant approval test made deterministic (#1778)

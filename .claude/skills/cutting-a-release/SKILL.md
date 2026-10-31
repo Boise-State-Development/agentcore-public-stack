@@ -287,6 +287,19 @@ default-on is a product change for every deployment) and any flag **retired**
 (as a CHANGELOG `Removed` entry naming the variable, because a deployment that
 set it `=false` loses that opt-out).
 
+**And account for every flag that is on in prod but still off by default**, in a
+**Still opt-in** line under the table, whether or not this release touched it.
+These are the features a fresh install does not get, and "promote it later" is
+the step that gets forgotten. The gate derives the SPA half of the list from the
+environment files (`true` in `environment.production.ts`, `false` in
+`environment.ts`) and fails the release unless the **newest** notes entry names
+each one; the full list, including backend-only flags it cannot see, with each
+flag's promotion condition, is issue #1798. For each flag write one of: promoted
+to default-on in this release (then it also goes under **Default changes**), or
+the reason it stays opt-in (waiting on a readout; a cost or retention decision
+each deployment makes). Turning a flag on in prod in this release adds it to the
+line and to #1798.
+
 ### Why this is its own gate
 
 New or in-development features default **off** (CLAUDE.md "Feature flags") so
@@ -307,7 +320,9 @@ node scripts/release/check-new-feature-flags.mjs
 ```
 
 It diffs `feature_flags.py` and `feature-flags.ts` between `origin/main` and
-your branch and fails when an added flag is not named in `RELEASE_NOTES.md`. It
+your branch and fails when an added flag is not named in `RELEASE_NOTES.md`, and
+it compares `environment.production.ts` with `environment.ts` and fails when a
+flag on in prod but off by default is not named in the newest notes entry. It
 checks the literal variable name and the literal SPA field, because that is what
 an operator has to type. It cannot check that the note says the right default or
 services — read the reader's docstring and `infrastructure/lib/config.ts` for
