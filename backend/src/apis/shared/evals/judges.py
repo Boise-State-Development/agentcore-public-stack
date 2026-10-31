@@ -30,7 +30,13 @@ EVALUATOR_CLASSES: Dict[str, str] = {
 }
 #: The verdict name a case's ``judge.rubric`` is reported under (``OutputEvaluator``).
 RUBRIC_EVALUATOR = "rubric"
+#: Measured against Haiku 4.5 as judge on 2026-10-31 (spec §14, question 2): the
+#: two were equally accurate at that sample size, and Haiku scored Haiku's own
+#: answers higher where judgement is softest. The default model under test is
+#: Haiku, so the judge stays a different model.
 DEFAULT_JUDGE_MODEL = "us.anthropic.claude-sonnet-4-6"
+#: Cross-region inference-profile prefixes: ``us.x`` and ``global.x`` are one model.
+_INFERENCE_PROFILE_PREFIXES = ("us.", "eu.", "apac.", "global.")
 MAX_REASON_CHARS = 600
 
 
@@ -71,6 +77,18 @@ class Judge(Protocol):
         rubric: Optional[str] = None,
     ) -> List[JudgeVerdict]:
         """Score one scrubbed session with each named evaluator (and the rubric, when given)."""
+
+
+def same_base_model(a: str, b: str) -> bool:
+    """Whether two Bedrock model ids name one model, ignoring the inference-profile prefix."""
+
+    def base(model_id: str) -> str:
+        for prefix in _INFERENCE_PROFILE_PREFIXES:
+            if model_id.startswith(prefix):
+                return model_id[len(prefix):]
+        return model_id
+
+    return bool(a) and base(a) == base(b)
 
 
 def last_turn(session: Mapping[str, Any]) -> tuple:
