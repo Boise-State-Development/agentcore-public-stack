@@ -1,0 +1,39 @@
+{
+  "_comment": "Public, synthetic queries for compare_web_search.py. No user ids or real query logs. `since`/`until` (ISO dates) are passed to a tool's native published-date filter when its schema has one; the date is also in the query text so a tool without one still gets the hint the model would give it.",
+  "queries": [
+    {"id": "news-01", "category": "current_events", "query": "AWS re:Invent 2026 major announcements"},
+    {"id": "news-02", "category": "current_events", "query": "latest Federal Reserve interest rate decision"},
+    {"id": "news-03", "category": "current_events", "query": "NASA Artemis program latest mission status"},
+    {"id": "news-04", "category": "current_events", "query": "Idaho wildfire season 2026 summary"},
+    {"id": "news-05", "category": "current_events", "query": "US Department of Education federal student aid changes this year"},
+    {"id": "news-06", "category": "current_events", "query": "Anthropic Claude newest model release"},
+
+    {"id": "edu-01", "category": "campus_edu", "query": "Boise State University spring 2027 academic calendar"},
+    {"id": "edu-02", "category": "campus_edu", "query": "Boise State University tuition and fees for Idaho residents"},
+    {"id": "edu-03", "category": "campus_edu", "query": "Boise State Albertsons Library hours"},
+    {"id": "edu-04", "category": "campus_edu", "query": "Boise State computer science bachelor degree requirements"},
+    {"id": "edu-05", "category": "campus_edu", "query": "FAFSA deadline Idaho 2027-28 school year"},
+    {"id": "edu-06", "category": "campus_edu", "query": "Idaho State Board of Education Opportunity Scholarship eligibility"},
+
+    {"id": "tech-01", "category": "niche_technical", "query": "Strands Agents MCPClient tool_filters example"},
+    {"id": "tech-02", "category": "niche_technical", "query": "Bedrock Converse API cachePoint in toolConfig"},
+    {"id": "tech-03", "category": "niche_technical", "query": "Angular signal-based forms experimental API"},
+    {"id": "tech-04", "category": "niche_technical", "query": "DynamoDB TransactWriteItems ConditionalCheckFailed cancellation reasons"},
+    {"id": "tech-05", "category": "niche_technical", "query": "Model Context Protocol streamable HTTP session id header"},
+    {"id": "tech-06", "category": "niche_technical", "query": "AWS CDK CfnGateway bedrock agentcore authorizerType"},
+
+    {"id": "fact-01", "category": "entity_facts", "query": "who is the current president of Boise State University"},
+    {"id": "fact-02", "category": "entity_facts", "query": "population of Boise Idaho"},
+    {"id": "fact-03", "category": "entity_facts", "query": "when was Amazon Web Services founded"},
+    {"id": "fact-04", "category": "entity_facts", "query": "height of Borah Peak"},
+    {"id": "fact-05", "category": "entity_facts", "query": "who wrote the Model Context Protocol specification"},
+    {"id": "fact-06", "category": "entity_facts", "query": "Idaho state capital building architect"},
+
+    {"id": "date-01", "category": "date_bounded", "query": "Amazon Bedrock new features October 2026", "since": "2026-10-01", "until": "2026-10-31"},
+    {"id": "date-02", "category": "date_bounded", "query": "Boise State football results October 2026", "since": "2026-10-01", "until": "2026-10-31"},
+    {"id": "date-03", "category": "date_bounded", "query": "Python release news September 2026", "since": "2026-09-01", "until": "2026-09-30"},
+    {"id": "date-04", "category": "date_bounded", "query": "higher education AI policy news this month", "since": "2026-10-01", "until": "2026-10-31"},
+    {"id": "date-05", "category": "date_bounded", "query": "Idaho legislature higher education budget 2026", "since": "2026-01-01", "until": "2026-10-31"},
+    {"id": "date-06", "category": "date_bounded", "query": "AWS outage us-east-1 2026", "since": "2026-01-01", "until": "2026-10-31"}
+  ]
+}
