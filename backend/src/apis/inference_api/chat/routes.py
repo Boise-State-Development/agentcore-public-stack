@@ -72,6 +72,7 @@ from apis.shared.quota import (
     QuotaExceededEvent,
     build_no_quota_configured_event,
     build_quota_exceeded_event,
+    build_quota_funding_notice_event,
     build_quota_session_notice_event,
     build_quota_warning_event,
     get_quota_checker,
@@ -3276,6 +3277,7 @@ class TurnQuota:
 
     warning_event: Any = None
     session_notice_event: Any = None
+    funding_notice_event: Any = None
     exceeded_event: Any = None
 
 
@@ -3292,6 +3294,7 @@ async def _check_turn_quota(
     # Check quota if enforcement is enabled
     quota_warning_event = None
     quota_session_notice_event = None
+    quota_funding_notice_event = None
     quota_exceeded_event = None
     if is_quota_enforcement_enabled() and not is_resume and not is_continuation:
         try:
@@ -3337,6 +3340,10 @@ async def _check_turn_quota(
                 if quota_session_notice_event:
                     logger.info("Quota session notice for user")
 
+                # Spend past the central allowance is landing on a fund (quota
+                # extensions §8.2). Built from numbers the check already has.
+                quota_funding_notice_event = build_quota_funding_notice_event(quota_result)
+
         except Exception as e:
             # Log error but don't block request - fail open for quota errors
             logger.error("Error checking quota for user", exc_info=True)
@@ -3344,6 +3351,7 @@ async def _check_turn_quota(
     return TurnQuota(
         warning_event=quota_warning_event,
         session_notice_event=quota_session_notice_event,
+        funding_notice_event=quota_funding_notice_event,
         exceeded_event=quota_exceeded_event,
     )
 
@@ -4309,6 +4317,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     )
     quota_warning_event = quota.warning_event
     quota_session_notice_event = quota.session_notice_event
+    quota_funding_notice_event = quota.funding_notice_event
     quota_exceeded_event = quota.exceeded_event
 
     # The quota check: a cached tier resolve, a cached O(1) cost-summary
@@ -5341,6 +5350,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # quarter of your month" are different actions for the user.
             if quota_session_notice_event:
                 yield quota_session_notice_event.to_sse_format()
+
+            # …then whose money the turn is spending, once past the central
+            # allowance (quota extensions §8.2). SSE only, never the prompt.
+            if quota_funding_notice_event:
+                yield quota_funding_notice_event.to_sse_format()
 
             # …then what a project's harness is running without for this member (§9.6).
             if agent_notice_event:
