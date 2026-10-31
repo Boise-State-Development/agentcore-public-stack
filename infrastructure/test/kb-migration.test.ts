@@ -1159,17 +1159,4 @@ describe('KbMigration wiring on PlatformStack', () => {
       });
     }
   });
-
-  it('never reads the service-role ARN back from the SSM path this stack publishes', () => {
-    // Passing the ManagedKbRoleConstruct by ref is not a style choice:
-    // CloudFormation resolves AWS::SSM::Parameter::Value template
-    // parameters BEFORE any stack resource exists, so a same-stack read
-    // is unsatisfiable on first deploy.
-    const params = t.toJSON().Parameters ?? {};
-    for (const param of Object.values(params) as Array<Record<string, unknown>>) {
-      const type = param.Type as string | undefined;
-      if (!type?.startsWith('AWS::SSM::Parameter::Value')) continue;
-      expect(param.Default).not.toBe('/test-project/managed-kb/service-role-arn');
-    }
-  });
 });

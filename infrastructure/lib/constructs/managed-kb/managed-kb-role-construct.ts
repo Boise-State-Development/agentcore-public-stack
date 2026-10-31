@@ -1,6 +1,5 @@
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
@@ -426,12 +425,14 @@ export interface ManagedKbRoleConstructProps {
  * `kms:Decrypt` on the key and the KB config needs the key ARN.
  *
  * Additive by design: instantiating this construct creates one IAM role
- * and one SSM parameter and changes no existing resource. The
- * provisioning and direct-ingestion grants are defined but attached to
- * nothing until task 2.1 creates the migration Lambda roles.
+ * and changes no existing resource. The provisioning and
+ * direct-ingestion grants are defined but attached to nothing until
+ * task 2.1 creates the migration Lambda roles.
  *
- * SSM publications (consumed by the migration/provisioner backend code):
- *   /{prefix}/managed-kb/service-role-arn
+ * The role ARN reaches the backend as `MANAGED_KB_SERVICE_ROLE_ARN` on
+ * the compute that provisions (`kb_backend/provisioning.py`), not
+ * through SSM: the `/{prefix}/managed-kb/service-role-arn` parameter
+ * this once published was read by nothing.
  */
 export class ManagedKbRoleConstruct extends Construct {
   public readonly serviceRole: iam.Role;
@@ -447,7 +448,7 @@ export class ManagedKbRoleConstruct extends Construct {
 
     // ── The service role Bedrock assumes per knowledge base ──
     // Explicit, stable roleName: the ARN is handed to Bedrock in every
-    // CreateKnowledgeBase call and read back from SSM by backend code,
+    // CreateKnowledgeBase call and handed to backend code as an env var,
     // so an auto-generated name that churns on refactor would be a
     // liability. Same trade-off as agentcore-runtime-role — an orphaned
     // role of this name from a failed deploy must be deleted before a
@@ -495,14 +496,6 @@ export class ManagedKbRoleConstruct extends Construct {
     // as the reserved-namespace bug documented on `managedKbMetricNamespace`:
     // it reads as correct, deploys cleanly, and is simply inert. Left ungranted
     // so that least privilege is legible rather than assumed.
-
-    new ssm.StringParameter(this, 'ManagedKbServiceRoleArnParameter', {
-      parameterName: `/${config.projectPrefix}/managed-kb/service-role-arn`,
-      stringValue: this.serviceRoleArn,
-      description:
-        'Bedrock managed knowledge base service role ARN (consumed by the Managed_KB provisioner/migrator backend code)',
-      tier: ssm.ParameterTier.STANDARD,
-    });
   }
 
   /**
