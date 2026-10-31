@@ -136,7 +136,11 @@ describe('Shared Projects compute wiring', () => {
       'dynamodb:Query',
       'dynamodb:UpdateItem',
     ]);
-    expect(statement.Resource).toHaveLength(2);
+    // One `<tableArn>*` entry: IAM matches it against the table and its
+    // `/index/*` (dynamodb-table-grants.test.ts holds it to this one table).
+    expect(statement.Resource).toEqual({
+      'Fn::Join': ['', [{ 'Fn::GetAtt': [expect.stringMatching(/^ProjectsProjectsTable/), 'Arn'] }, '*']],
+    });
   });
 
   it('lets the Runtime put notification rows on the projects table and nothing else (2.5a)', () => {
@@ -169,10 +173,14 @@ describe('Shared Projects compute wiring', () => {
         }),
       ]),
     });
-    const statement = findStatement(template, 'ProjectsTableAccess');
+    // The projects table is one of the tables app-api's prefix-scoped grant
+    // covers; dynamodb-table-grants.test.ts evaluates it against every table.
+    const statement = findStatement(template, 'DeploymentTablesReadWrite');
     expect(statement.Action).toEqual(
       expect.arrayContaining(['dynamodb:PutItem', 'dynamodb:DeleteItem', 'dynamodb:Query']),
     );
-    expect(statement.Resource).toHaveLength(2);
+    expect(statement.Resource).toBe(
+      `arn:aws:dynamodb:${MOCK_REGION}:${MOCK_ACCOUNT}:table/${MOCK_PREFIX}-*`,
+    );
   });
 });
