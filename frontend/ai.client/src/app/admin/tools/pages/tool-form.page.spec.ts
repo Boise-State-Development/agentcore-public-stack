@@ -615,3 +615,108 @@ describe('AWS endpoint derivation helpers', () => {
     expect(extractAwsRegionFromUrl('https://mcp.example.com/mcp')).toBe('');
   });
 });
+
+/**
+ * AgentCore Web Search: a built-in connector registered through the same
+ * protocol='mcp' section — no endpoint, the catalog fields preset, and the
+ * target type fixed once the target exists.
+ */
+describe('ToolFormPage — AgentCore Web Search connector', () => {
+  let adminToolService: {
+    createTool: ReturnType<typeof vi.fn>;
+    updateTool: ReturnType<typeof vi.fn>;
+    fetchTool: ReturnType<typeof vi.fn>;
+  };
+
+  function makeComponent(): ToolFormPage {
+    adminToolService = {
+      createTool: vi.fn().mockResolvedValue({}),
+      updateTool: vi.fn().mockResolvedValue({}),
+      fetchTool: vi.fn(),
+    };
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      imports: [ToolFormPage],
+      providers: [
+        provideRouter([]),
+        { provide: AdminToolService, useValue: adminToolService },
+        { provide: ConnectorsService, useValue: { getEnabledConnectors: () => [] } },
+      ],
+    });
+    const cmp = TestBed.createComponent(ToolFormPage).componentInstance;
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    return cmp;
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('presets the empty catalog fields without overwriting typed ones', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    cmp.form.patchValue({ protocol: 'mcp', displayName: 'Campus Web Search' });
+
+    cmp.form.patchValue({ gwTargetKind: 'web-search' });
+
+    expect(cmp.gatewayTargetKind()).toBe('web-search');
+    expect(cmp.form.get('toolId')?.value).toBe('agentcore_web_search');
+    expect(cmp.form.get('gwTargetName')?.value).toBe('web-search');
+    expect(cmp.form.get('category')?.value).toBe('search');
+    expect(cmp.form.get('displayName')?.value).toBe('Campus Web Search');
+  });
+
+  it('submits a connector config with parsed domain lists and no endpoint', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    cmp.form.patchValue({ protocol: 'mcp', gwTargetKind: 'web-search' });
+    cmp.form.patchValue({
+      gwEndpointUrl: 'https://left-over.example.com/mcp',
+      gwDomainInclude: 'boisestate.edu\nnih.gov, nsf.gov',
+      gwDomainExclude: '',
+    });
+
+    await cmp.onSubmit();
+
+    expect(adminToolService.createTool).toHaveBeenCalledTimes(1);
+    const cfg = adminToolService.createTool.mock.calls[0][0].mcpGatewayConfig;
+    expect(cfg.connectorId).toBe('web-search');
+    expect(cfg.endpointUrl).toBe('');
+    expect(cfg.connectorVersion).toBeNull();
+    expect(cfg.domainInclude).toEqual(['boisestate.edu', 'nih.gov', 'nsf.gov']);
+    expect(cfg.domainExclude).toEqual([]);
+    expect(cfg.tools).toEqual([]);
+  });
+
+  it('loads an existing connector tool with the target type locked', async () => {
+    const cmp = makeComponent();
+    adminToolService.fetchTool.mockResolvedValue({
+      toolId: 'agentcore_web_search',
+      displayName: 'Web Search',
+      description: 'Search the web',
+      category: 'search',
+      protocol: 'mcp',
+      status: 'active',
+      isPublic: false,
+      enabledByDefault: false,
+      mcpGatewayConfig: {
+        targetName: 'web-search',
+        endpointUrl: '',
+        connectorId: 'web-search',
+        connectorVersion: '1.3.0',
+        domainInclude: [],
+        domainExclude: ['example.com'],
+        listingMode: 'default',
+        credentialType: 'gateway_iam_role',
+        oauthScopes: [],
+        grantType: 'authorization_code',
+        tools: [{ name: 'WebSearch', needsApproval: false, alwaysOn: true }],
+        targetId: 'TGT1',
+      },
+    });
+    TestBed.inject(Router);
+    await (cmp as unknown as { loadTool(id: string): Promise<void> }).loadTool('agentcore_web_search');
+
+    expect(cmp.gatewayTargetKind()).toBe('web-search');
+    expect(cmp.form.get('gwTargetKind')?.disabled).toBe(true);
+    expect(cmp.form.get('gwDomainExclude')?.value).toBe('example.com');
+  });
+});

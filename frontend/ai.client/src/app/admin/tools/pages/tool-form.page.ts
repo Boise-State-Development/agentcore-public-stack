@@ -46,6 +46,10 @@ import {
   MCPToolEntry,
   A2AAgentConfig,
   MCPGatewayConfig,
+  GatewayTargetKind,
+  WEB_SEARCH_CONNECTOR_PRESET,
+  WEB_SEARCH_DEFAULT_VERSION,
+  parseDomainList,
   ToolProtocol,
   detectAwsServiceFromUrl,
   extractAwsRegionFromUrl,
@@ -580,9 +584,37 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
                   <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Gateway target configuration</h2>
                 </div>
                 <p class="text-sm/6 text-gray-600 dark:text-gray-400">
-                  Registers an externally deployed MCP server as a target on the centralized AgentCore Gateway.
-                  Saving creates the live Gateway target in AWS; if that fails the catalog entry is not saved.
+                  Registers a target on the centralized AgentCore Gateway: an externally deployed MCP server, or a
+                  built-in AgentCore connector. Saving creates the live Gateway target in AWS; if that fails the
+                  catalog entry is not saved.
                 </p>
+
+                <fieldset>
+                  <legend class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Target type</legend>
+                  <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    @for (kind of gatewayTargetKinds; track kind.value) {
+                      <label
+                        class="flex cursor-pointer items-start gap-2 rounded-2xl border border-gray-200 bg-white p-3 has-checked:border-primary-500 has-checked:ring-1 has-checked:ring-primary-500 has-disabled:cursor-not-allowed has-disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800"
+                      >
+                        <input
+                          type="radio"
+                          formControlName="gwTargetKind"
+                          [value]="kind.value"
+                          class="mt-1 size-4 border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                        />
+                        <span>
+                          <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">{{ kind.label }}</span>
+                          <span class="block text-xs/5 text-gray-500 dark:text-gray-400">{{ kind.description }}</span>
+                        </span>
+                      </label>
+                    }
+                  </div>
+                  @if (isEditMode()) {
+                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                      The target type can't change on an existing target; delete and recreate the tool instead.
+                    </p>
+                  }
+                </fieldset>
 
                 <!-- Target name and endpoint -->
                 <div>
@@ -601,274 +633,341 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
                   </p>
                 </div>
 
-                <div>
-                  <label for="gwEndpointUrl" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Endpoint URL <span class="text-state-danger-600">*</span>
-                  </label>
-                  <input
-                    id="gwEndpointUrl"
-                    type="url"
-                    formControlName="gwEndpointUrl"
-                    placeholder="https://your-mcp-server.example.com/mcp"
-                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                  />
-                  <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                    The external MCP server endpoint the Gateway will call.
-                  </p>
-                </div>
-
-                <!-- Listing mode and credential type -->
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                @if (gatewayTargetKind() === 'server') {
                   <div>
-                    <label for="gwListingMode" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                      Listing mode
-                    </label>
-                    <select
-                      id="gwListingMode"
-                      formControlName="gwListingMode"
-                      [attr.disabled]="form.get('gwCredentialType')?.value === 'oauth' ? '' : null"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                    >
-                      @for (mode of gatewayListingModes; track mode.value) {
-                        <option [value]="mode.value">{{ mode.label }}</option>
-                      }
-                    </select>
-                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                      @if (form.get('gwCredentialType')?.value === 'oauth') {
-                        OAuth requires Default listing (Dynamic disables 3LO + semantic search).
-                      } @else {
-                        Dynamic resolves tools at call time but disables semantic search.
-                      }
-                    </p>
-                  </div>
-
-                  <div>
-                    <label for="gwCredentialType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                      Outbound credential
-                    </label>
-                    <select
-                      id="gwCredentialType"
-                      formControlName="gwCredentialType"
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                    >
-                      @for (cred of gatewayCredentialTypes; track cred.value) {
-                        <option [value]="cred.value">{{ cred.label }}</option>
-                      }
-                    </select>
-                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                      How the Gateway authenticates to the target endpoint.
-                    </p>
-                    @if (showIamRecommendation()) {
-                      <p class="mt-1 flex items-start gap-1.5 text-xs/5 text-state-warning-700 dark:text-state-warning-400">
-                        <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                        <span>This looks like an AWS-hosted endpoint (Lambda / API Gateway /
-                        AgentCore). It likely requires IAM — pick <strong>Gateway IAM Role
-                        (SigV4)</strong>, or the gateway will get a 403 when it lists the
-                        target's tools.</span>
-                      </p>
-                    }
-                  </div>
-                </div>
-
-                <!-- AWS service + region (for gateway IAM role) -->
-                @if (form.get('gwCredentialType')?.value === 'gateway_iam_role') {
-                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                      <label for="gwAwsService" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                        AWS service <span class="text-state-danger-600">*</span>
-                      </label>
-                      <input
-                        id="gwAwsService"
-                        type="text"
-                        formControlName="gwAwsService"
-                        placeholder="lambda, execute-api, bedrock-agentcore"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                      />
-                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                        Auto-detected from the endpoint URL for Lambda / API Gateway /
-                        AgentCore hosts. Override only for a custom domain.
-                      </p>
-                    </div>
-                    <div>
-                      <label for="gwAwsRegion" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                        AWS region
-                      </label>
-                      <input
-                        id="gwAwsRegion"
-                        type="text"
-                        formControlName="gwAwsRegion"
-                        placeholder="defaults to the gateway's region"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                      />
-                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                        Optional — auto-detected from the endpoint URL; AWS defaults it
-                        to the gateway's region.
-                      </p>
-                    </div>
-                  </div>
-
-                  @if (isLambdaUrlEndpoint()) {
-                    <div>
-                      <label for="gwLambdaFunctionName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                        Lambda function name <span class="text-state-danger-600">*</span>
-                      </label>
-                      <input
-                        id="gwLambdaFunctionName"
-                        type="text"
-                        formControlName="gwLambdaFunctionName"
-                        placeholder="mcp-class-search-dev"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                      />
-                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                        The Lambda behind this Function URL. We grant the gateway
-                        permission to invoke it at save — no infra change needed.
-                        <strong>Same-account only</strong>; a cross-account function is
-                        rejected at save (make it public or use a credential provider).
-                      </p>
-                    </div>
-                  }
-                }
-
-                <!-- Credential provider ARN (for oauth / api_key) -->
-                @if (form.get('gwCredentialType')?.value === 'oauth' || form.get('gwCredentialType')?.value === 'api_key') {
-                  <div>
-                    <label for="gwCredentialProviderArn" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                      Credential provider ARN <span class="text-state-danger-600">*</span>
+                    <label for="gwEndpointUrl" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Endpoint URL <span class="text-state-danger-600">*</span>
                     </label>
                     <input
-                      id="gwCredentialProviderArn"
-                      type="text"
-                      formControlName="gwCredentialProviderArn"
-                      placeholder="arn:aws:bedrock-agentcore:...:token-vault/default/oauth2credentialprovider/..."
-                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      id="gwEndpointUrl"
+                      type="url"
+                      formControlName="gwEndpointUrl"
+                      placeholder="https://your-mcp-server.example.com/mcp"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                     />
                     <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                      An existing AgentCore credential provider. Provisioning providers is out of scope here — manage them in
-                      <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
+                      The external MCP server endpoint the Gateway will call.
                     </p>
                   </div>
-                }
 
-                <!-- OAuth scopes + grant type (for oauth) -->
-                @if (form.get('gwCredentialType')?.value === 'oauth') {
+                  <!-- Listing mode and credential type -->
                   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
-                      <label for="gwOauthScopes" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                        OAuth scopes
-                      </label>
-                      <input
-                        id="gwOauthScopes"
-                        type="text"
-                        formControlName="gwOauthScopes"
-                        placeholder="openid profile email"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                      />
-                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                        Space- or comma-separated.
-                      </p>
-                    </div>
-                    <div>
-                      <label for="gwGrantType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                        Grant type
+                      <label for="gwListingMode" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Listing mode
                       </label>
                       <select
-                        id="gwGrantType"
-                        formControlName="gwGrantType"
-                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                        id="gwListingMode"
+                        formControlName="gwListingMode"
+                        [attr.disabled]="form.get('gwCredentialType')?.value === 'oauth' ? '' : null"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                       >
-                        @for (grant of gatewayOauthGrantTypes; track grant.value) {
-                          <option [value]="grant.value">{{ grant.label }}</option>
+                        @for (mode of gatewayListingModes; track mode.value) {
+                          <option [value]="mode.value">{{ mode.label }}</option>
                         }
                       </select>
                       <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                        Authorization Code (3LO) requires the user to connect the provider first.
+                        @if (form.get('gwCredentialType')?.value === 'oauth') {
+                          OAuth requires Default listing (Dynamic disables 3LO + semantic search).
+                        } @else {
+                          Dynamic resolves tools at call time but disables semantic search.
+                        }
+                      </p>
+                    </div>
+
+                    <div>
+                      <label for="gwCredentialType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Outbound credential
+                      </label>
+                      <select
+                        id="gwCredentialType"
+                        formControlName="gwCredentialType"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      >
+                        @for (cred of gatewayCredentialTypes; track cred.value) {
+                          <option [value]="cred.value">{{ cred.label }}</option>
+                        }
+                      </select>
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        How the Gateway authenticates to the target endpoint.
+                      </p>
+                      @if (showIamRecommendation()) {
+                        <p class="mt-1 flex items-start gap-1.5 text-xs/5 text-state-warning-700 dark:text-state-warning-400">
+                          <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                          <span>This looks like an AWS-hosted endpoint (Lambda / API Gateway /
+                          AgentCore). It likely requires IAM — pick <strong>Gateway IAM Role
+                          (SigV4)</strong>, or the gateway will get a 403 when it lists the
+                          target's tools.</span>
+                        </p>
+                      }
+                    </div>
+                  </div>
+
+                  <!-- AWS service + region (for gateway IAM role) -->
+                  @if (form.get('gwCredentialType')?.value === 'gateway_iam_role') {
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label for="gwAwsService" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                          AWS service <span class="text-state-danger-600">*</span>
+                        </label>
+                        <input
+                          id="gwAwsService"
+                          type="text"
+                          formControlName="gwAwsService"
+                          placeholder="lambda, execute-api, bedrock-agentcore"
+                          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        />
+                        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                          Auto-detected from the endpoint URL for Lambda / API Gateway /
+                          AgentCore hosts. Override only for a custom domain.
+                        </p>
+                      </div>
+                      <div>
+                        <label for="gwAwsRegion" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                          AWS region
+                        </label>
+                        <input
+                          id="gwAwsRegion"
+                          type="text"
+                          formControlName="gwAwsRegion"
+                          placeholder="defaults to the gateway's region"
+                          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        />
+                        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                          Optional — auto-detected from the endpoint URL; AWS defaults it
+                          to the gateway's region.
+                        </p>
+                      </div>
+                    </div>
+
+                    @if (isLambdaUrlEndpoint()) {
+                      <div>
+                        <label for="gwLambdaFunctionName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                          Lambda function name <span class="text-state-danger-600">*</span>
+                        </label>
+                        <input
+                          id="gwLambdaFunctionName"
+                          type="text"
+                          formControlName="gwLambdaFunctionName"
+                          placeholder="mcp-class-search-dev"
+                          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        />
+                        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                          The Lambda behind this Function URL. We grant the gateway
+                          permission to invoke it at save — no infra change needed.
+                          <strong>Same-account only</strong>; a cross-account function is
+                          rejected at save (make it public or use a credential provider).
+                        </p>
+                      </div>
+                    }
+                  }
+
+                  <!-- Credential provider ARN (for oauth / api_key) -->
+                  @if (form.get('gwCredentialType')?.value === 'oauth' || form.get('gwCredentialType')?.value === 'api_key') {
+                    <div>
+                      <label for="gwCredentialProviderArn" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Credential provider ARN <span class="text-state-danger-600">*</span>
+                      </label>
+                      <input
+                        id="gwCredentialProviderArn"
+                        type="text"
+                        formControlName="gwCredentialProviderArn"
+                        placeholder="arn:aws:bedrock-agentcore:...:token-vault/default/oauth2credentialprovider/..."
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      />
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        An existing AgentCore credential provider. Provisioning providers is out of scope here — manage them in
+                        <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
+                      </p>
+                    </div>
+                  }
+
+                  <!-- OAuth scopes + grant type (for oauth) -->
+                  @if (form.get('gwCredentialType')?.value === 'oauth') {
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label for="gwOauthScopes" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                          OAuth scopes
+                        </label>
+                        <input
+                          id="gwOauthScopes"
+                          type="text"
+                          formControlName="gwOauthScopes"
+                          placeholder="openid profile email"
+                          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                        />
+                        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                          Space- or comma-separated.
+                        </p>
+                      </div>
+                      <div>
+                        <label for="gwGrantType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                          Grant type
+                        </label>
+                        <select
+                          id="gwGrantType"
+                          formControlName="gwGrantType"
+                          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                        >
+                          @for (grant of gatewayOauthGrantTypes; track grant.value) {
+                            <option [value]="grant.value">{{ grant.label }}</option>
+                          }
+                        </select>
+                        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                          Authorization Code (3LO) requires the user to connect the provider first.
+                        </p>
+                      </div>
+                    </div>
+                  }
+
+                  <!-- Gateway tools (per-tool approval flags) -->
+                  <div formArrayName="gwTools">
+                    <div class="mb-2 flex items-center justify-between">
+                      <span class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Tools
+                      </span>
+                      <div class="flex items-center gap-1">
+                        <button
+                          type="button"
+                          (click)="discoverGatewayTools()"
+                          [disabled]="discovering() || !form.get('gwEndpointUrl')?.value"
+                          class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
+                        >
+                          {{ discovering() ? 'Discovering…' : 'Discover from server' }}
+                        </button>
+                        <button
+                          type="button"
+                          (click)="addGwTool()"
+                          class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
+                        >
+                          <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+                          Add Tool
+                        </button>
+                      </div>
+                    </div>
+                    @if (discoverError()) {
+                      <p class="mb-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
+                        {{ discoverError() }}
+                      </p>
+                    }
+
+                    @if (gwToolsArray.length === 0) {
+                      <p class="text-xs/5 italic text-gray-500 dark:text-gray-400">
+                        Optional. Discover from the server or add tool names manually to attach per-tool approval flags.
+                      </p>
+                    } @else {
+                      <div class="space-y-2">
+                        @for (row of gwToolsArray.controls; track row) {
+                          <div [formGroupName]="$index" class="flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800">
+                            <div class="flex-1">
+                              <input
+                                type="text"
+                                formControlName="name"
+                                placeholder="tool_name"
+                                [attr.aria-label]="'Gateway tool name ' + ($index + 1)"
+                                class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                              />
+                            </div>
+                            <label class="flex items-center gap-1.5 whitespace-nowrap pt-1.5 text-xs/5 text-gray-700 dark:text-gray-300">
+                              <input
+                                type="checkbox"
+                                formControlName="needsApproval"
+                                class="size-4 rounded border-gray-300 text-state-warning-600 focus:ring-2 focus:ring-state-warning-500 dark:border-gray-600 dark:bg-gray-800"
+                              />
+                              <span>Needs approval</span>
+                            </label>
+                            <label class="flex items-center gap-1.5 whitespace-nowrap pt-1.5 text-xs/5 text-gray-700 dark:text-gray-300">
+                              <input
+                                type="checkbox"
+                                formControlName="alwaysOn"
+                                class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                              />
+                              <span>Always on</span>
+                            </label>
+                            <button
+                              type="button"
+                              (click)="removeGwTool($index)"
+                              [attr.aria-label]="'Remove gateway tool ' + ($index + 1)"
+                              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
+                            >
+                              <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                            </button>
+                          </div>
+                        }
+                      </div>
+                    }
+                    <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+                      Note: per-tool approval flags are stored but not yet enforced for Gateway tools (tracked separately).
+                      For OAuth targets, users connect the provider via
+                      <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
+                    </p>
+                  </div>
+                } @else {
+                  <div class="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm/6 text-gray-700 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-300">
+                    <p>
+                      <strong class="font-semibold text-gray-900 dark:text-white">AgentCore Web Search</strong> is an
+                      AWS-operated search tool behind the Gateway: no endpoint, no API key, and queries stay inside AWS.
+                      The Gateway calls it with its own execution role. Exposes one tool, <code class="font-mono">WebSearch</code>.
+                    </p>
+                    <p class="mt-2 text-xs/5 text-gray-600 dark:text-gray-400">
+                      Billed by AWS at $7 per 1,000 searches. AWS's terms require answers built on its results to keep
+                      their source links, so grant it only to agents and roles whose answers cite.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label for="gwConnectorVersion" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Connector version
+                    </label>
+                    <input
+                      id="gwConnectorVersion"
+                      type="text"
+                      formControlName="gwConnectorVersion"
+                      [placeholder]="webSearchDefaultVersion + ' (platform default)'"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500 font-mono"
+                    />
+                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                      Pinned on save, so the tool's schema (part of every turn's cached prompt) never changes under you.
+                      Leave blank for the platform default.
+                    </p>
+                  </div>
+
+                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label for="gwDomainInclude" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Only search these domains
+                      </label>
+                      <textarea
+                        id="gwDomainInclude"
+                        rows="4"
+                        formControlName="gwDomainInclude"
+                        placeholder="boisestate.edu"
+                        aria-describedby="gwDomainIncludeHelp"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500 font-mono"
+                      ></textarea>
+                      <p id="gwDomainIncludeHelp" class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        Optional. One domain per line; a domain covers its subdomains. Leave empty to search the whole web.
+                      </p>
+                    </div>
+                    <div>
+                      <label for="gwDomainExclude" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Never return these domains
+                      </label>
+                      <textarea
+                        id="gwDomainExclude"
+                        rows="4"
+                        formControlName="gwDomainExclude"
+                        placeholder="example.com"
+                        aria-describedby="gwDomainExcludeHelp"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500 font-mono"
+                      ></textarea>
+                      <p id="gwDomainExcludeHelp" class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        Optional. Applied to every search and hidden from the agent, which can narrow results but never
+                        widen them past these lists. Up to 100 each.
                       </p>
                     </div>
                   </div>
                 }
-
-                <!-- Gateway tools (per-tool approval flags) -->
-                <div formArrayName="gwTools">
-                  <div class="mb-2 flex items-center justify-between">
-                    <span class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                      Tools
-                    </span>
-                    <div class="flex items-center gap-1">
-                      <button
-                        type="button"
-                        (click)="discoverGatewayTools()"
-                        [disabled]="discovering() || !form.get('gwEndpointUrl')?.value"
-                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
-                      >
-                        {{ discovering() ? 'Discovering…' : 'Discover from server' }}
-                      </button>
-                      <button
-                        type="button"
-                        (click)="addGwTool()"
-                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
-                      >
-                        <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
-                        Add Tool
-                      </button>
-                    </div>
-                  </div>
-                  @if (discoverError()) {
-                    <p class="mb-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
-                      {{ discoverError() }}
-                    </p>
-                  }
-
-                  @if (gwToolsArray.length === 0) {
-                    <p class="text-xs/5 italic text-gray-500 dark:text-gray-400">
-                      Optional. Discover from the server or add tool names manually to attach per-tool approval flags.
-                    </p>
-                  } @else {
-                    <div class="space-y-2">
-                      @for (row of gwToolsArray.controls; track row) {
-                        <div [formGroupName]="$index" class="flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800">
-                          <div class="flex-1">
-                            <input
-                              type="text"
-                              formControlName="name"
-                              placeholder="tool_name"
-                              [attr.aria-label]="'Gateway tool name ' + ($index + 1)"
-                              class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
-                            />
-                          </div>
-                          <label class="flex items-center gap-1.5 whitespace-nowrap pt-1.5 text-xs/5 text-gray-700 dark:text-gray-300">
-                            <input
-                              type="checkbox"
-                              formControlName="needsApproval"
-                              class="size-4 rounded border-gray-300 text-state-warning-600 focus:ring-2 focus:ring-state-warning-500 dark:border-gray-600 dark:bg-gray-800"
-                            />
-                            <span>Needs approval</span>
-                          </label>
-                          <label class="flex items-center gap-1.5 whitespace-nowrap pt-1.5 text-xs/5 text-gray-700 dark:text-gray-300">
-                            <input
-                              type="checkbox"
-                              formControlName="alwaysOn"
-                              class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
-                            />
-                            <span>Always on</span>
-                          </label>
-                          <button
-                            type="button"
-                            (click)="removeGwTool($index)"
-                            [attr.aria-label]="'Remove gateway tool ' + ($index + 1)"
-                            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
-                          >
-                            <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
-                          </button>
-                        </div>
-                      }
-                    </div>
-                  }
-                  <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
-                    Note: per-tool approval flags are stored but not yet enforced for Gateway tools (tracked separately).
-                    For OAuth targets, users connect the provider via
-                    <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
-                  </p>
-                </div>
               </section>
             }
 
@@ -1259,6 +1358,13 @@ export class ToolFormPage implements OnInit {
    * rejects, and `form.get('status')?.value` is not reactive.
    */
   readonly selectedStatus = signal<string>('active');
+  /** Mirrors the Target type control (same reason as `selectedProtocol`). */
+  readonly gatewayTargetKind = signal<GatewayTargetKind>('server');
+  readonly webSearchDefaultVersion = WEB_SEARCH_DEFAULT_VERSION;
+  readonly gatewayTargetKinds: { value: GatewayTargetKind; label: string; description: string }[] = [
+    { value: 'server', label: 'External MCP server', description: 'An MCP server you deploy, called at its endpoint' },
+    { value: 'web-search', label: 'AgentCore Web Search', description: 'Managed web search from AWS — nothing to deploy' },
+  ];
 
   /** Available connectors for dropdown */
   readonly oauthProviders = computed(() => this.connectorsService.getEnabledConnectors());
@@ -1313,6 +1419,11 @@ export class ToolFormPage implements OnInit {
     gwOauthScopes: [''],
     gwGrantType: ['authorization_code'],
     gwTools: this.fb.array([] as FormGroup[]),
+    // 'server' = external MCP server; otherwise a built-in connector id.
+    gwTargetKind: ['server' as GatewayTargetKind],
+    gwConnectorVersion: [''],
+    gwDomainInclude: [''],
+    gwDomainExclude: [''],
   });
 
   constructor() {
@@ -1641,6 +1752,29 @@ export class ToolFormPage implements OnInit {
     }
   }
 
+  /**
+   * Fill the catalog fields an admin would otherwise type for Web Search —
+   * only the empty ones, so nothing they already entered is overwritten.
+   */
+  private applyWebSearchPreset(): void {
+    const preset = WEB_SEARCH_CONNECTOR_PRESET;
+    const fill: Record<string, string> = {};
+    for (const [control, value] of [
+      ['gwTargetName', preset.targetName],
+      ['toolId', preset.toolId],
+      ['displayName', preset.displayName],
+      ['description', preset.description],
+    ] as const) {
+      if (!this.form.get(control)?.value) {
+        fill[control] = value;
+      }
+    }
+    if (this.form.get('category')?.value === 'utility') {
+      fill['category'] = preset.category;
+    }
+    this.form.patchValue(fill);
+  }
+
   async ngOnInit(): Promise<void> {
     // Listen for protocol changes to update the signal
     this.form.get('protocol')?.valueChanges.subscribe(value => {
@@ -1649,6 +1783,13 @@ export class ToolFormPage implements OnInit {
 
     this.form.get('status')?.valueChanges.subscribe(value => {
       this.selectedStatus.set(value ?? 'active');
+    });
+
+    this.form.get('gwTargetKind')?.valueChanges.subscribe((kind: GatewayTargetKind) => {
+      this.gatewayTargetKind.set(kind);
+      if (kind === 'web-search' && !this.isEditMode()) {
+        this.applyWebSearchPreset();
+      }
     });
 
     // Mutual exclusivity across the three per-user auth modes. All three put a
@@ -1777,7 +1918,12 @@ export class ToolFormPage implements OnInit {
 
       // MCP Gateway target configuration
       if (tool.mcpGatewayConfig) {
+        const connectorId = tool.mcpGatewayConfig.connectorId;
         this.form.patchValue({
+          gwTargetKind: (connectorId ?? 'server') as GatewayTargetKind,
+          gwConnectorVersion: tool.mcpGatewayConfig.connectorVersion || '',
+          gwDomainInclude: (tool.mcpGatewayConfig.domainInclude ?? []).join('\n'),
+          gwDomainExclude: (tool.mcpGatewayConfig.domainExclude ?? []).join('\n'),
           gwTargetName: tool.mcpGatewayConfig.targetName,
           gwEndpointUrl: tool.mcpGatewayConfig.endpointUrl,
           gwListingMode: tool.mcpGatewayConfig.listingMode,
@@ -1793,6 +1939,10 @@ export class ToolFormPage implements OnInit {
         for (const entry of tool.mcpGatewayConfig.tools) {
           this.gwToolsArray.push(this.buildMcpToolRow(entry));
         }
+        // An existing target's type is fixed: AWS can't turn a server target
+        // into a connector in place, and the backend refuses the update.
+        this.gatewayTargetKind.set((connectorId ?? 'server') as GatewayTargetKind);
+        this.form.get('gwTargetKind')?.disable({ emitEvent: false });
       }
 
       // Disable toolId in edit mode
@@ -1857,7 +2007,29 @@ export class ToolFormPage implements OnInit {
 
       // Build Gateway target config if protocol is mcp
       let mcpGatewayConfig: MCPGatewayConfig | undefined;
-      if (formValue.protocol === 'mcp' && formValue.gwTargetName && formValue.gwEndpointUrl) {
+      // getRawValue: the target type is disabled in edit mode, and a disabled
+      // control drops out of `value`.
+      const targetKind: GatewayTargetKind = this.form.getRawValue().gwTargetKind;
+      if (formValue.protocol === 'mcp' && targetKind !== 'server' && formValue.gwTargetName) {
+        mcpGatewayConfig = {
+          targetName: formValue.gwTargetName,
+          endpointUrl: '',
+          connectorId: targetKind,
+          connectorVersion: formValue.gwConnectorVersion?.trim() || null,
+          domainInclude: parseDomainList(formValue.gwDomainInclude),
+          domainExclude: parseDomainList(formValue.gwDomainExclude),
+          // The backend fixes these for a connector; sent only to satisfy the
+          // shared request shape.
+          listingMode: 'default',
+          credentialType: 'gateway_iam_role',
+          oauthScopes: [],
+          grantType: 'authorization_code',
+          customParameters: null,
+          // Keep any per-tool flags a loaded row carried; empty lets the
+          // backend fill in the connector's one tool.
+          tools: (this.gwToolsArray.getRawValue() as MCPToolEntry[]).filter(row => row.name),
+        };
+      } else if (formValue.protocol === 'mcp' && formValue.gwTargetName && formValue.gwEndpointUrl) {
         const gwTools: MCPToolEntry[] = (formValue.gwTools ?? [])
           .map((row: { name?: string; needsApproval?: boolean; alwaysOn?: boolean; description?: string | null }) => ({
             name: (row.name ?? '').trim(),
