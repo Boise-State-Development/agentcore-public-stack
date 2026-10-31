@@ -12,8 +12,9 @@
 #                               / Lambda) onto the freshly-deployed stack.
 #   4. deploy-frontend        — build SPA + S3 sync + CloudFront invalidation.
 #   5. smoke-test / e2e-tests — validate the deployment (e2e-tests also runs
-#      the turn-path smoke matrix, scripts/nightly/turn-smoke.sh, and the eval
-#      harness subset, scripts/nightly/eval-harness.sh, both non-blocking).
+#      the turn-path smoke matrix, scripts/nightly/turn-smoke.sh, non-blocking).
+#      The eval harness is not here: it runs against the dev deployment as
+#      nightly.yml's eval-develop track.
 #   6. teardown               — delete the ephemeral stack + buckets/secrets/logs.
 #
 # Ephemeral deploys run with NO custom domain (CDK_DOMAIN_NAME=""); the SPA,
@@ -549,29 +550,6 @@ jobs:
         with:
           name: turn-smoke-report-${{ inputs.label }}
           path: turn-smoke-report.json
-          retention-days: 30
-          if-no-files-found: ignore
-      # ── Eval harness, nightly subset (docs/specs/eval-harness.md §10) ──
-      # Seeds the eval user (scripts/seed_eval_user.py), signs in as it the same
-      # way the turn smoke does, runs five families once per case and scores
-      # them against the committed Haiku baseline. One sample per case is a smoke
-      # signal, not the release gate (k=3 on dev), so this stays non-blocking.
-      - name: Run eval harness (nightly subset)
-        id: eval-harness
-        if: always()
-        continue-on-error: true
-        env:
-          EVAL_REPORT: ${{ github.workspace }}/eval-harness-report.json
-        run: bash scripts/nightly/eval-harness.sh
-      - name: Upload eval harness report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: eval-harness-report-${{ inputs.label }}
-          path: |
-            eval-harness-report.json
-            eval-harness-run/meta.json
-            eval-harness-run/results.jsonl
           retention-days: 30
           if-no-files-found: ignore
 

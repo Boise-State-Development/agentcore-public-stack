@@ -241,10 +241,10 @@
     },
     "instruction_following.word_limit": {
       "family": "instruction_following",
-      "passed": false,
-      "passes": 1,
+      "passed": true,
+      "passes": 3,
       "samples": 3,
-      "answer": "Photosynthesis is the process where plants convert sunlight, water, and carbon dioxide into glucose and oxygen."
+      "answer": "Photosynthesis is the process by which plants convert sunlight, water, and carbon dioxide into glucose and oxygen for energy."
     },
     "instruction_following.no_tool_when_told_not_to": {
       "family": "instruction_following",
