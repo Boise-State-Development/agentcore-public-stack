@@ -3,8 +3,12 @@ import {
   ChangeDetectionStrategy,
   inject,
   OnInit,
+  signal,
   computed,
+  viewChild,
 } from '@angular/core';
+import { Dialog } from '@angular/cdk/dialog';
+import { firstValueFrom } from 'rxjs';
 import { ActivatedRoute, Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -24,11 +28,21 @@ import { UserService } from '../../../../auth/user.service';
 import { FEATURES } from '../../../../services/features';
 import { UserConversationsComponent } from '../../../costs/components/user-conversations.component';
 import { UserAccessSectionComponent } from '../../components/user-access-section.component';
+import {
+  ExtendQuotaDialogComponent,
+  ExtendQuotaDialogData,
+  ExtendQuotaDialogResult,
+} from '../../../quota-requests/components/extend-quota-dialog.component';
+import { UserQuotaExtensionsComponent } from '../../../quota-requests/components/user-quota-extensions.component';
+import {
+  QuotaRequestsAdminService,
+  quotaAdminErrorMessage,
+} from '../../../quota-requests/services/quota-requests-admin.service';
 
 @Component({
   selector: 'app-user-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SpinnerComponent, UserConversationsComponent, UserAccessSectionComponent],
+  imports: [NgIcon, SpinnerComponent, UserConversationsComponent, UserAccessSectionComponent, UserQuotaExtensionsComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -202,6 +216,10 @@ import { UserAccessSectionComponent } from '../../components/user-access-section
           } @else {
             <div class="text-gray-500">No quota assigned</div>
           }
+          <!-- Extensions on top of the tier (quota-requests spec §6.4). -->
+          @if (canExtendQuota()) {
+            <app-user-quota-extensions [userId]="detail.profile.userId" />
+          }
         </div>
 
         <!-- Activity -->
@@ -296,6 +314,10 @@ import { UserAccessSectionComponent } from '../../components/user-access-section
         </div>
       }
 
+      @if (extendNotice(); as notice) {
+        <p role="status" class="mt-6 text-sm/6 text-gray-700 dark:text-gray-300">{{ notice }}</p>
+      }
+
       <!-- Admin Actions -->
       <div class="flex gap-4 mt-6">
         <button
@@ -304,6 +326,14 @@ import { UserAccessSectionComponent } from '../../components/user-access-section
         >
           Create Override
         </button>
+        @if (canExtendQuota()) {
+          <button
+            (click)="extendQuota()"
+            class="px-4 py-2 border border-gray-300 rounded-2xl hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-800"
+          >
+            Extend Quota
+          </button>
+        }
         <button
           (click)="assignTier()"
           class="px-4 py-2 border border-gray-300 rounded-sm hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-800"
@@ -330,6 +360,16 @@ export class UserDetailPage implements OnInit {
   /** Whether the Direct access section is offered: build flag on, and a system admin. */
   canEditAccess = computed(() => this.features.userGrants && this.userService.isAdmin());
 
+  /** Extend quota and the extensions line: build flag on, and the quota-requests scope. */
+  canExtendQuota = computed(
+    () => this.features.quotaRequests && this.userService.hasAdminScope('admin.quota_requests'),
+  );
+
+  private dialog = inject(Dialog);
+  private quotaRequests = inject(QuotaRequestsAdminService);
+  private quotaExtensions = viewChild(UserQuotaExtensionsComponent);
+  readonly extendNotice = signal<string | null>(null);
+
   ngOnInit(): void {
     const userId = this.route.snapshot.paramMap.get('userId');
     if (userId) {
@@ -349,6 +389,31 @@ export class UserDetailPage implements OnInit {
         queryParams: { userId },
       });
     }
+  }
+
+  /** A direct extension for this user (spec §6.4): the grant form with the user fixed. */
+  async extendQuota(): Promise<void> {
+    const profile = this.user()?.profile;
+    if (!profile) return;
+    this.extendNotice.set(null);
+    let policy;
+    try {
+      policy = await this.quotaRequests.getPolicy();
+    } catch (error) {
+      this.extendNotice.set(quotaAdminErrorMessage(error, 'The quota request settings could not be loaded.'));
+      return;
+    }
+    const ref = this.dialog.open<ExtendQuotaDialogResult, ExtendQuotaDialogData>(ExtendQuotaDialogComponent, {
+      data: {
+        mode: 'direct',
+        policy,
+        user: { userId: profile.userId, email: profile.email, name: profile.name },
+      },
+    });
+    const result = await firstValueFrom(ref.closed);
+    if (result?.kind !== 'created') return;
+    this.extendNotice.set('Quota extended. They have been notified.');
+    await this.quotaExtensions()?.reload();
   }
 
   assignTier(): void {
