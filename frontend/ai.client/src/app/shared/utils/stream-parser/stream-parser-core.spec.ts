@@ -9,6 +9,7 @@ import {
   validateToolResultEvent,
   validateQuotaWarningEvent,
   validateQuotaSessionNoticeEvent,
+  validateQuotaFundingNoticeEvent,
   validateQuotaExceededEvent,
   validateConversationalStreamError,
   validateCitation,
@@ -309,6 +310,30 @@ describe('stream-parser-core', () => {
 
     it('should return false for non-number cost', () => {
       expect(validateQuotaSessionNoticeEvent({ ...valid, sessionCost: '7.58' })).toBe(false);
+    });
+  });
+
+  describe('validateQuotaFundingNoticeEvent', () => {
+    const valid = {
+      type: 'quota_funding_notice',
+      label: 'Fund 100000',
+      chargedThisPeriod: 3.2,
+      cap: 200,
+      remainingUnderCap: 196.8,
+      standing: true,
+      message: 'Included quota used · charging Fund 100000 · $3.20 this month of $200.00',
+    };
+
+    it('accepts a capped and an uncapped notice', () => {
+      expect(validateQuotaFundingNoticeEvent(valid)).toBe(true);
+      const { cap, remainingUnderCap, ...uncapped } = valid;
+      expect(validateQuotaFundingNoticeEvent(uncapped)).toBe(true);
+    });
+
+    it('rejects a malformed one', () => {
+      expect(validateQuotaFundingNoticeEvent(null)).toBe(false);
+      expect(validateQuotaFundingNoticeEvent({ ...valid, type: 'quota_warning' })).toBe(false);
+      expect(validateQuotaFundingNoticeEvent({ ...valid, chargedThisPeriod: '3.20' })).toBe(false);
     });
   });
 

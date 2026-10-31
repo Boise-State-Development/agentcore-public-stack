@@ -36,7 +36,12 @@ extension for that.
 ## Quota requests and extensions
 
 Off by default while in development: set `CDK_QUOTA_REQUESTS_ENABLED=true`
-(app-api). Spec: `docs/specs/quota-requests-and-extensions.md`.
+(app-api) and build the SPA with `features.quotaRequests: true`. Spec:
+`docs/specs/quota-requests-and-extensions.md`.
+
+Users ask from the composer's quota tab (from 80% used, and when blocked) or
+from **Settings → Usage**, which also lists their requests and splits the quota
+bar into the central allowance and each extension.
 
 - **Requests.** A user asks for an amount per period, through a date, with a
   justification and, if the deployment collects one, a funding source

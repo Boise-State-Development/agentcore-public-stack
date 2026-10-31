@@ -9,12 +9,33 @@ import { DecimalPipe } from '@angular/common';
 import { CostService } from './services/cost.service';
 import { UserCostSummary } from './models/cost-summary.model';
 import { QuotaStatusService } from '../../../services/quota/quota-status.service';
+import { QuotaRequestService } from '../../../services/quota/quota-request.service';
+import { QuotaRequest, toAmount } from '../../../services/quota/quota-request.model';
+import { formatAmount, formatQuotaDate, formatUsd, perPeriod } from '../../../services/quota/quota-format';
+import { FEATURES } from '../../../services/features';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { QuotaRequestActionComponent } from '../../../components/quota-request/quota-request-action.component';
+
+const REQUEST_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  info_requested: 'Funding source requested',
+  approved: 'Approved',
+  denied: 'Denied',
+  withdrawn: 'Withdrawn',
+};
+
+const REQUEST_STATUS_CLASSES: Record<string, string> = {
+  pending: 'bg-state-warning-50 text-state-warning-800 ring-state-warning-600/20 dark:bg-state-warning-900/30 dark:text-state-warning-200',
+  info_requested: 'bg-state-warning-50 text-state-warning-800 ring-state-warning-600/20 dark:bg-state-warning-900/30 dark:text-state-warning-200',
+  approved: 'bg-state-success-50 text-state-success-800 ring-state-success-600/20 dark:bg-state-success-900/30 dark:text-state-success-200',
+  denied: 'bg-state-danger-50 text-state-danger-800 ring-state-danger-600/20 dark:bg-state-danger-900/30 dark:text-state-danger-200',
+  withdrawn: 'bg-gray-50 text-gray-700 ring-gray-500/20 dark:bg-white/5 dark:text-gray-300',
+};
 
 @Component({
   selector: 'app-usage-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DecimalPipe, SpinnerComponent],
+  imports: [DecimalPipe, SpinnerComponent, QuotaRequestActionComponent],
   host: { class: 'block' },
   template: `
     <div class="flex flex-col gap-8">
@@ -106,18 +127,35 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
               </p>
             </div>
             <div
-              class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-white/10"
+              class="relative mt-3 h-2.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-white/10"
               role="progressbar"
               [attr.aria-valuenow]="q.pct"
               aria-valuemin="0"
               aria-valuemax="100"
               [attr.aria-label]="'Quota usage: ' + q.pct + ' percent used'"
             >
+              @if (quotaSplit(); as split) {
+                <!-- The extension's share of the track, behind the fill: the bar is
+                     base + extensions, and this shows where the base ends. -->
+                <div
+                  class="absolute inset-y-0 right-0 bg-primary-100 dark:bg-primary-400/30"
+                  [style.left.%]="split.basePct"
+                  aria-hidden="true"
+                  data-testid="quota-extension-segment"
+                ></div>
+              }
               <div
-                class="h-full rounded-full transition-[width] duration-500 ease-out"
+                class="relative h-full rounded-full transition-[width] duration-500 ease-out"
                 [class]="q.fillClass"
                 [style.width.%]="q.pct"
               ></div>
+              @if (quotaSplit(); as split) {
+                <div
+                  class="absolute inset-y-0 w-0.5 bg-white dark:bg-gray-800"
+                  [style.left.%]="split.basePct"
+                  aria-hidden="true"
+                ></div>
+              }
             </div>
             <div class="mt-2 flex flex-wrap items-center justify-between gap-x-4 text-xs">
               <span [class]="q.textClass">{{ q.pct | number: '1.0-1' }}% used</span>
@@ -128,6 +166,25 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                 }
               </span>
             </div>
+            @if (quotaSplit(); as split) {
+              <p class="mt-2 text-xs/5 text-gray-700 dark:text-gray-300" data-testid="quota-split-legend">
+                <span class="mr-1 inline-block size-2 rounded-full bg-gray-300 align-middle dark:bg-white/30" aria-hidden="true"></span>{{ split.base }}
+                @for (part of split.parts; track $index) {
+                  <span> + </span><span class="mr-1 inline-block size-2 rounded-full bg-primary-300 align-middle dark:bg-primary-400" aria-hidden="true"></span>{{ part }}
+                }
+              </p>
+            }
+            @if (standingTerms(); as terms) {
+              <p class="mt-2 text-xs/5 text-gray-700 dark:text-gray-300">{{ terms }}</p>
+            }
+            @if (chargedLine(); as charged) {
+              <p class="mt-1 text-xs/5 text-gray-700 dark:text-gray-300" data-testid="quota-charged">{{ charged }}</p>
+            }
+            @if (offerRequests()) {
+              <div class="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-4 dark:border-white/10">
+                <app-quota-request-action variant="button" />
+              </div>
+            }
           </div>
         } @else if (quotaUnlimited()) {
           <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
@@ -136,6 +193,33 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
               You have an unlimited quota — no spending limit applies to your account.
             </p>
           </div>
+        }
+
+        @if (offerRequests() && myRequests().length) {
+          <section aria-labelledby="your-quota-requests" data-testid="your-quota-requests">
+            <h3 id="your-quota-requests" class="mb-3 text-sm/6 font-medium text-gray-900 dark:text-white">Your requests</h3>
+            <ul role="list" class="divide-y divide-gray-200 overflow-hidden rounded-lg border border-gray-200 bg-white dark:divide-white/10 dark:border-white/10 dark:bg-gray-800">
+              @for (r of myRequests(); track r.requestId) {
+                <li class="px-4 py-3">
+                  <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    <p class="text-sm/6 text-gray-900 dark:text-white">
+                      <span class="font-medium">{{ requestAmount(r) }}</span>
+                      <span class="text-gray-600 dark:text-gray-400"> · through {{ date(r.requestedUntil) }} · sent {{ date(r.createdAt) }}</span>
+                    </p>
+                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs/5 font-medium ring-1 ring-inset" [class]="statusClass(r)">{{ statusLabel(r) }}</span>
+                  </div>
+                  @if (decisionLine(r); as line) {
+                    <p class="mt-1 text-xs/5 text-gray-700 dark:text-gray-300">{{ line }}</p>
+                  }
+                  @if (noteOf(r); as note) {
+                    <p class="mt-1 text-xs/5 text-gray-700 italic dark:text-gray-300">“{{ note }}”</p>
+                  }
+                </li>
+              }
+            </ul>
+          </section>
+        } @else if (offerRequests() && requestsError()) {
+          <p class="text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ requestsError() }}</p>
         }
 
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -224,6 +308,8 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 export class UsageSettingsPage {
   private costService = inject(CostService);
   private quotaStatusService = inject(QuotaStatusService);
+  private features = inject(FEATURES);
+  private quotaRequests = this.features.quotaRequests ? inject(QuotaRequestService) : null;
 
   readonly costSummary = this.costService.currentMonthSummary;
   readonly quotaStatus = this.quotaStatusService.status;
@@ -234,6 +320,109 @@ export class UsageSettingsPage {
   readonly customReportError = signal<string | null>(null);
 
   readonly previousMonths = this.buildPreviousMonths(11);
+
+  constructor() {
+    // quota-status reads fresh, so opening the page after a decision shows the new limit.
+    if (this.quotaRequests) {
+      this.quotaStatusService.reload();
+      void this.quotaRequests.loadRequests();
+    }
+  }
+
+  /** Requests are on, the current period is selected, and the user has a capped quota. */
+  readonly offerRequests = computed(() => {
+    if (!this.quotaRequests || this.selectedPeriodType() !== 'current') return false;
+    const status = this.quotaStatus.value();
+    return !!status?.configured && !status.unlimited;
+  });
+
+  readonly myRequests = computed<QuotaRequest[]>(() => this.quotaRequests?.requests() ?? []);
+  readonly requestsError = computed(() => this.quotaRequests?.requestsLoadError() ?? null);
+
+  /**
+   * The bar as base + extensions (quota-requests spec §5.3), for the current
+   * period: where the base ends on the track, and the legend
+   * `$30 central + $20 additional through Nov 30`.
+   */
+  readonly quotaSplit = computed(() => {
+    if (this.selectedPeriodType() !== 'current') return null;
+    const status = this.quotaStatus.value();
+    const extensions = status?.extensions ?? [];
+    const base = status?.baseLimit;
+    const limit = status?.monthlyLimit;
+    if (!extensions.length || base == null || !limit || limit <= 0) return null;
+    const parts = extensions.map(e => {
+      const until = ` through ${formatQuotaDate(e.validUntil, false)}`;
+      if (e.amount == null) return `usage charged to ${e.fundingLabel || 'your fund'}, no cap${until}`;
+      if (e.fundingMode === 'chargeback') {
+        return `${formatAmount(e.amount)} charged to ${e.fundingLabel || 'your fund'}${until}`;
+      }
+      return `${formatAmount(e.amount)} additional${until}`;
+    });
+    return {
+      basePct: Math.min(100, Math.max(0, (base / limit) * 100)),
+      base: `${formatAmount(base)} central`,
+      parts,
+    };
+  });
+
+  /** A standing arrangement, spelled out (§4.4). */
+  readonly standingTerms = computed(() => {
+    if (this.selectedPeriodType() !== 'current') return null;
+    const status = this.quotaStatus.value();
+    const standing = status?.extensions?.find(e => e.standing);
+    if (!standing || status?.baseLimit == null) return null;
+    const fund = standing.fundingLabel ? ` to ${standing.fundingLabel}` : '';
+    const cap = standing.amount != null ? `, up to ${formatAmount(standing.amount)} ${perPeriod(status.periodType)}` : '';
+    return `After your ${formatAmount(status.baseLimit)} included quota, usage is charged${fund}${cap}, through ${formatQuotaDate(standing.validUntil)}.`;
+  });
+
+  /** What has been charged to a fund this period. */
+  readonly chargedLine = computed(() => {
+    if (this.selectedPeriodType() !== 'current') return null;
+    const status = this.quotaStatus.value();
+    const charged = status?.charged;
+    if (!charged) return null;
+    const period = status?.periodType === 'daily' ? 'today' : 'this month';
+    const cap = charged.cap != null ? ` of ${formatUsd(charged.cap)}` : '';
+    return `Charged to ${charged.label} ${period}: ${formatUsd(charged.thisPeriod)}${cap}`;
+  });
+
+  requestAmount(r: QuotaRequest): string {
+    const amount = formatAmount(toAmount(r.requestedAmount));
+    const per = perPeriod(this.quotaStatus.value()?.periodType);
+    return r.kind === 'standing' ? `Up to ${amount} ${per}, ongoing` : `${amount} ${per}`;
+  }
+
+  /** An approval for a different amount says so plainly (§5.3). */
+  decisionLine(r: QuotaRequest): string | null {
+    const decision = r.decision;
+    if (r.status !== 'approved' || !decision) return null;
+    const granted = toAmount(decision.amount);
+    const asked = toAmount(r.requestedAmount);
+    const until = decision.validUntil ? ` through ${formatQuotaDate(decision.validUntil)}` : '';
+    if (Number.isFinite(granted) && granted !== asked) {
+      return `You asked for ${formatAmount(asked)}; ${formatAmount(granted)} was approved${until}.`;
+    }
+    return until ? `Approved${until}.` : null;
+  }
+
+  noteOf(r: QuotaRequest): string | null {
+    if (r.status === 'info_requested') return r.adminNote || null;
+    return r.decision?.note || null;
+  }
+
+  statusLabel(r: QuotaRequest): string {
+    return REQUEST_STATUS_LABELS[r.status] ?? r.status;
+  }
+
+  statusClass(r: QuotaRequest): string {
+    return REQUEST_STATUS_CLASSES[r.status] ?? REQUEST_STATUS_CLASSES['withdrawn'];
+  }
+
+  date(value: string): string {
+    return formatQuotaDate(value);
+  }
 
   readonly activeData = computed(() => {
     if (this.selectedPeriodType() === 'current') {
@@ -364,6 +553,7 @@ export class UsageSettingsPage {
     this.customReportData.set(null);
     this.costService.reloadCurrentMonthSummary();
     this.quotaStatusService.reload();
+    if (this.quotaRequests) void this.quotaRequests.loadRequests();
   }
 
   formatCurrency(value: number): string {
