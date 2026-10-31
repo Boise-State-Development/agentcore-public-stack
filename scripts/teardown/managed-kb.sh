@@ -40,6 +40,16 @@ if ! declare -f log_info >/dev/null 2>&1; then
     source "${PROJECT_ROOT}/scripts/common/load-env.sh"
 fi
 
+# load-env.sh defines no log_success, and destroy.sh's copy does not reach
+# this script: destroy.sh runs it as a child process (`bash managed-kb.sh`),
+# which inherits no shell functions. Without this the first success message
+# exited 127 and aborted every teardown before any stack was deleted.
+if ! declare -f log_success >/dev/null 2>&1; then
+    log_success() {
+        echo -e "${GREEN:-}[SUCCESS]${NC:-} $1"
+    }
+fi
+
 # Deletion was measured at 2-6 minutes and is asynchronous. 480s is the
 # same tolerance the Python delete saga uses
 # (tombstones.KB_DELETE_POLL_TIMEOUT_SECONDS), so both paths wait the

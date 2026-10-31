@@ -8,7 +8,6 @@ import { Construct } from 'constructs';
 import {
   AppConfig,
   buildCorsOrigins,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
 } from '../../config';
@@ -91,7 +90,6 @@ export class RagDataConstruct extends Construct {
         },
       ],
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
       cors:
         ragCorsOrigins.length > 0
           ? [

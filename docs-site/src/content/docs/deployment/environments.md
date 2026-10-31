@@ -168,6 +168,56 @@ retained resources (see
 [Upgrading from Multi-Stack](/agentcore-public-stack/deployment/upgrade/)). On a
 disposable dev stack, leaving it `false` lets a teardown clean up completely.
 
+## Tearing down
+
+Tear an environment down with **Actions → Teardown All Infrastructure**
+(`teardown.yml`; type `DESTROY` to confirm), or run the script that workflow
+runs, from a checkout with the environment's `CDK_*` variables set:
+
+```bash
+bash scripts/teardown/destroy.sh --dry-run
+```
+
+```bash
+bash scripts/teardown/destroy.sh
+```
+
+The script runs in this order:
+
+1. It deletes the managed knowledge bases the app created at runtime. These are
+   not part of the stack, so a stack delete leaves them behind, still billing.
+2. It empties every S3 bucket the stack owns whose deletion policy is `Delete`,
+   including every object version and delete marker. It finds the buckets from
+   the stack's own resources, so it never touches a bucket that only shares
+   your prefix. With `CDK_RETAIN_DATA_ON_DELETE=true` the buckets are retained,
+   and their objects are left alone.
+3. It deletes the stack. If a log delivery lands in a bucket after it was
+   emptied, the script empties it again and retries once.
+
+`--dry-run` reads the stack and prints what each step would do, without
+deleting anything.
+
+:::caution[Don't tear down with a bare `cdk destroy` or the console]
+The stack doesn't empty its own buckets. CDK's `autoDeleteObjects` would, but
+it costs a custom resource per bucket plus a Lambda and a role: about 15 of the
+500 resources CloudFormation allows a stack. A `cdk destroy` or a console
+delete therefore stops with `DELETE_FAILED` on a non-empty bucket, and it also
+skips the knowledge base step.
+:::
+
+### "The bucket you tried to delete is not empty"
+
+This means the stack was deleted some way other than `destroy.sh`. Run
+`destroy.sh`. It can be re-run on a stack in `DELETE_FAILED`. It deletes any
+knowledge bases left, empties the buckets the stack still holds, and retries the
+delete.
+
+To fix it by hand instead, empty each bucket the stack lists as
+`DELETE_FAILED` with the S3 console's **Empty** action, then retry the delete.
+Don't use `aws s3 rm --recursive` or `aws s3 rb --force` for this. Both remove
+only the current objects, and a versioned bucket with old versions or delete
+markers left in it still refuses to delete.
+
 ## Full configuration reference
 
 The variables above are a curated subset. For every available variable and
