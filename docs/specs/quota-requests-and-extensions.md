@@ -1,6 +1,6 @@
 # Quota requests and extensions — asking for more, granting it, and knowing who pays
 
-**Status:** DRAFT (design only, nothing built)
+**Status:** In progress — PR-1 (backend core) built; PR-2–PR-4 to come
 **Date:** 2026-10-30
 **Targets branch:** `develop`
 **Related:** `docs/specs/quota-cooldown-windows.md` (draft pacing model, compatible),
