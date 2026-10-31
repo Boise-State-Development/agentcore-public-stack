@@ -15,6 +15,7 @@
 export const ADMIN_SCOPE_IDS = [
   'admin.costs',
   'admin.quota',
+  'admin.quota_requests',
   'admin.fine_tuning',
   'admin.models',
   'admin.tools',

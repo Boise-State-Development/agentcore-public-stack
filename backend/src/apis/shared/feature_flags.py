@@ -907,6 +907,29 @@ def session_prewarm_enabled() -> bool:
     return os.environ.get("SESSION_PREWARM_ENABLED", "").strip().lower() == "true"
 
 
+def quota_requests_enabled() -> bool:
+    """Whether users can request more quota and admins can grant extensions.
+
+    ``docs/specs/quota-requests-and-extensions.md``. Gates app-api's
+    ``/quota/*`` user routes and the ``/admin/quota-requests`` and
+    ``/admin/quota-extensions`` admin routes, which 404 after authentication
+    while off. **Opt-in while the feature is in development** (CLAUDE.md
+    "Feature flags"): only ``"true"`` (case-insensitive) enables it, so an
+    unset GitHub variable (``""``) is off. CDK sets it on app-api from
+    ``config.quotaRequests.enabled``. The SPA's matching switch will be
+    ``features.quotaRequests``.
+
+    **app-api only.** The Runtime gets no variable: quota resolution reads
+    extensions wherever it runs, exactly as direct user grants are read, so
+    turning this off stops new extensions without revoking existing ones and
+    spends none of the Runtime's V2 environment budget.
+
+    A **feature switch** once finished: whether users may ask for more is a
+    product and budget choice a deployment may reasonably not want.
+    """
+    return os.environ.get("QUOTA_REQUESTS_ENABLED", "").strip().lower() == "true"
+
+
 def user_grants_enabled() -> bool:
     """Whether the admin surface for direct user grants is mounted on app-api.
 

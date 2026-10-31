@@ -288,6 +288,9 @@ def _no_live_infrastructure_reads(monkeypatch):
         ("agents.main_agent.quota.repository.QuotaRepository.query_user_assignment", None),
         ("agents.main_agent.quota.repository.QuotaRepository.query_role_assignments", []),
         ("agents.main_agent.quota.repository.QuotaRepository.list_assignments_by_type", []),
+        # Quota extensions are read concurrently with the override on every
+        # cold resolve, so they need the same stub.
+        ("agents.main_agent.quota.repository.QuotaRepository.get_active_extensions", []),
         # RBAC role resolution. Tests that care about authorization override the
         # auth dependency itself, which never reaches this.
         ("apis.shared.rbac.repository.AppRoleRepository.get_roles_for_jwt_role", []),

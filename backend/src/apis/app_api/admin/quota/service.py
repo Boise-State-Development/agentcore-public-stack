@@ -11,6 +11,7 @@ from apis.shared.costs.aggregator import CostAggregator
 from agents.main_agent.quota.repository import QuotaRepository
 from agents.main_agent.quota.resolver import QuotaResolver
 from agents.main_agent.quota.models import QuotaTier, QuotaAssignment
+from agents.main_agent.quota.extensions import active_extensions, effective_limit
 from .models import (
     QuotaTierCreate,
     QuotaTierUpdate,
@@ -338,6 +339,8 @@ class QuotaAdminService:
             current_usage = 0.0
 
         # Calculate quota info
+        extensions = []
+        base_limit = None
         if resolved:
             tier = resolved.tier
             _limit = (
@@ -346,9 +349,13 @@ class QuotaAdminService:
                 else tier.monthly_cost_limit
             )
             # Convert Decimal limit to float for calculations
-            limit_float = float(_limit) if _limit else 0
-            percentage_used = (current_usage / limit_float * 100) if limit_float > 0 else 0
-            remaining = max(0, limit_float - current_usage)
+            base_limit = float(_limit) if _limit else 0
+            extensions = active_extensions(resolved.extensions, utc_now_iso())
+            effective = effective_limit(base_limit, extensions)
+            limit_float = effective if effective is not None else None
+            denominator = limit_float if limit_float is not None else base_limit
+            percentage_used = (current_usage / denominator * 100) if denominator > 0 else 0
+            remaining = max(0, limit_float - current_usage) if limit_float is not None else None
         else:
             tier = None
             percentage_used = 0
@@ -376,6 +383,9 @@ class QuotaAdminService:
             quota_limit=limit_float if resolved else None,
             percentage_used=percentage_used,
             remaining=remaining,
+            base_limit=base_limit,
+            effective_limit=limit_float if resolved else None,
+            extensions=extensions,
             recent_blocks=recent_blocks,
             last_block_time=last_block_time
         )
