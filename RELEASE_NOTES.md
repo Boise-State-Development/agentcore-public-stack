@@ -7,7 +7,7 @@
 
 ## Highlights
 
-This release makes the terminal a first-class way to use the platform. `aps-tui` signs in with the same session as the browser, holds a real conversation with the agent, reaches projects, Agents, skills and saved conversations through slash commands, and, with the user's approval on each call, lets the agent read and write files and run commands on the user's own machine. In the web app, every skill bound on a Shared Project now runs for every member, the agent can list and read a project's Files by name, Agents can be duplicated and pinned to the sidebar, and user messages gain a Copy button. Conversation rewind and fork land behind in-development flags, off by default. Two production app-api task deaths are fixed at the root, a PDFium crash and a 3.5-minute event-loop block, with a faster health check and an event-loop lag alarm around them. An evaluation harness drives a golden set through dev and scores it against a committed baseline, and the release process gains a gate that fails a release PR when a new feature flag is not named here. **Three things need attention:** the load balancer now accepts traffic only from CloudFront (on by default, see Breaking changes), one backfill must be run on every environment with projects, and the bootstrap seed should be re-run so the `web_research` skill picks up its new description (see Manual steps). No GSI changes.
+This release makes the terminal a first-class way to use the platform. `aps-tui` signs in with the same session as the browser, holds a real conversation with the agent, reaches projects, Agents, skills and saved conversations through slash commands, and, with the user's approval on each call, lets the agent read and write files and run commands on the user's own machine. In the web app, every skill bound on a Shared Project now runs for every member, the agent can list and read a project's Files by name, Agents can be duplicated and pinned to the sidebar, and user messages gain a Copy button. Conversation rewind and fork land behind in-development flags, off by default and turned on in our dev and prod environments. Two production app-api task deaths are fixed at the root, a PDFium crash and a 3.5-minute event-loop block, with a faster health check and an event-loop lag alarm around them. An evaluation harness drives a golden set through dev and scores it against a committed baseline, and the release process gains a gate that fails a release PR when a new feature flag is not named here. **Three things need attention:** the load balancer now accepts traffic only from CloudFront (on by default, see Breaking changes), one backfill must be run on every environment with projects, and the bootstrap seed should be re-run so the `web_research` skill picks up its new description (see Manual steps). No GSI changes.
 
 ---
 
@@ -50,9 +50,9 @@ A failing TUI build or test now blocks the GitHub Release (`release` needs `buil
 
 About 6,200 lines across the device-auth routes, header sessions, client tools and the `tui/` package's own suite, including a replayed real agent stream.
 
-## Conversation rewind and fork (in development, off by default)
+## Conversation rewind and fork (in development, off by default; on in dev and prod)
 
-A user message gains a hover action row with its sent time, a **Copy** button, and, where the flags are on, **Rewind to here** and **Fork from here** (`docs/specs/conversation-rewind-and-fork.md`; #1768, #1789). Copy and the sent time ship to every deployment; rewind and fork are opt-in.
+A user message gains a hover action row with its sent time, a **Copy** button, and, where the flags are on, **Rewind to here** and **Fork from here** (`docs/specs/conversation-rewind-and-fork.md`; #1768, #1789). Copy and the sent time ship to every deployment; rewind and fork are opt-in, and this release turns them on in our `development` and `production` environments (both halves: the GitHub variables and the SPA build).
 
 - **Rewind** hides the message and everything after it and puts its text back in the composer to edit and resend. `POST /sessions/{id}/rewind` writes a `rewind` attribute on the session row (`epoch`, `spans`, up to 20 `cuts`) in one conditional write under the session's lease, adjusts the compaction checkpoint and anchor, and clears the latest-turn breadcrumbs. **Nothing in AgentCore Memory is deleted**; message ids are positional and never reused. On the Runtime, a warm agent's history is cut in place at the head of the next turn, so the retained prefix stays byte-identical and reads from the prompt cache (measured on dev: a `hit` with 12,651 tokens read, 28 written); a cold restore filters the spans while the SDK reads. Refused with 409 while a turn streams, when the compaction summary already covers the message, or when another rewind won the race. `GET /messages` hides rewound messages and gains `nextMessageIndex`.
 - **Fork** starts a new conversation holding everything before the message, with its text in the new composer; the parent is untouched. `POST /sessions/{id}/fork` copies the parent's visible history into a new Memory session with `extractionMode=SKIP`, records `forkedFrom` and `rootSessionId` on the child, and pins the fork to the parent's Runtime microVM (`affinity_session_id` on the chat proxy and `/chat/prewarm`) so its first turn is seeded from the parent's live history and reads the shared prefix from the cache.
@@ -182,13 +182,13 @@ The CDK CLI bump is required: `aws-cdk-lib` 2.274.0 emits cloud-assembly schema 
 
 | Flag | Default | Set on | Kind | What on does |
 |---|---|---|---|---|
-| `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` / SPA `features.sessionRewind` | **OFF** (in development; only `"true"` enables) | app-api and the AgentCore Runtime (written to the Runtime only while on); set both the same, or the model still sees rewound turns | Feature switch | "Rewind to here" on a user message hides it and everything after it and puts its text back in the composer |
-| `SESSION_FORK_ENABLED` / `CDK_SESSION_FORK_ENABLED` / SPA `features.sessionFork` | **OFF** (in development; only `"true"` enables) | app-api and the AgentCore Runtime (written to the Runtime only while on) | Feature switch | "Fork from here" starts a new conversation holding everything before that message, seeded from the parent's live history |
+| `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` / SPA `features.sessionRewind` | **OFF** (in development; only `"true"` enables). On in dev and prod | app-api and the AgentCore Runtime (written to the Runtime only while on); set both the same, or the model still sees rewound turns | Feature switch | "Rewind to here" on a user message hides it and everything after it and puts its text back in the composer |
+| `SESSION_FORK_ENABLED` / `CDK_SESSION_FORK_ENABLED` / SPA `features.sessionFork` | **OFF** (in development; only `"true"` enables). On in dev and prod | app-api and the AgentCore Runtime (written to the Runtime only while on) | Feature switch | "Fork from here" starts a new conversation holding everything before that message, seeded from the parent's live history |
 | `CDK_ALB_RESTRICT_TO_CLOUDFRONT` | **ON** (`false` restores `0.0.0.0/0`) | the ALB security group, at synth | Infrastructure setting, permanent | Only CloudFront's origin-facing addresses reach the load balancer |
 
 **Default changes:** none. **Retired:** none.
 
-The `development` GitHub environment and `environment.development.ts` have rewind and fork on; `environment.ts` and `environment.production.ts` have them off. No new Runtime-only flags. Device authorization and client tools have no flag: they are live wherever BFF auth is configured, and the web app's requests never carry them.
+The `development` and `production` GitHub environments, `environment.development.ts` and `environment.production.ts` have rewind and fork on; `environment.ts` (local) has them off. The code default stays off, so a fresh fork of this repository does not get them until it opts in; promoting them to default-on is a later change once prod has run them. No new Runtime-only flags. Device authorization and client tools have no flag: they are live wherever BFF auth is configured, and the web app's requests never carry them.
 
 ## 🛠️ Manual steps
 
@@ -211,7 +211,7 @@ Run the `bootstrap-data-seeding` workflow (or `scripts/stack-bootstrap/seed.sh`)
 
 ### Turning rewind and fork on
 
-A per-environment choice. Set `CDK_SESSION_REWIND_ENABLED` and `CDK_SESSION_FORK_ENABLED` to `"true"` on the GitHub environment, re-run `platform.yml`, and set `features.sessionRewind` and `features.sessionFork` in that environment's SPA build.
+A per-environment choice. Set `CDK_SESSION_REWIND_ENABLED` and `CDK_SESSION_FORK_ENABLED` to `"true"` on the GitHub environment, re-run `platform.yml`, and set `features.sessionRewind` and `features.sessionFork` in that environment's SPA build. **For our prod:** both variables are set on the `production` GitHub environment and `environment.production.ts` carries both flags, so the ordinary `platform.yml` → `backend.yml` → `frontend-deploy.yml` sequence turns them on; nothing extra to run. Deploy `platform.yml` before the frontend, or the SPA offers Rewind and Fork for a few minutes while app-api still 404s them.
 
 ### Eval harness (optional)
 
