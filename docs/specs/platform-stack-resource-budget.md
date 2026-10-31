@@ -1,9 +1,21 @@
 # PlatformStack resource budget: the reduction plan
 
-**Status:** Phase 0 shipped with this document. Phases 1 and 2 are proposed.
+**Status:** Phase 0 shipped with this document. The IAM change (§4) and Phase 2 (§5) are in progress. Phase 1 (§3) is proposed.
 **Guard:** `infrastructure/test/platform-ceilings.test.ts` prints the live numbers on every run. Read the guard, not the figures here.
 
 ## 1. Where we are
+
+Three limits decide whether the next feature fits. They are separate problems with separate fixes:
+
+| Limit | Where it stands | Fixed by |
+|---|---|---|
+| CloudFormation's 500 resources per stack | 450 with every flag on; the guard fails above 497 | Phases 1 and 2 (§3, §5) |
+| IAM's 6,144 characters per managed policy | app-api's fullest policy has about 231 free, less than one more grant renders to, and the Runtime role is close | narrowing the DynamoDB permissions (§4) |
+| The V2 Runtime's 2,560-byte environment | guarded at synth by `RuntimeEnvironmentPayloadGuard` | already handled (§6) |
+
+For scale, a SageMaker inference feature (model, endpoint config, endpoint, autoscaling, execution role, notification topics, a completion Lambda and an image repository) comes to about 15–20 resources. It also needs new permissions on app-api and the Runtime.
+
+### Resource count
 
 Every resource lives in one CloudFormation stack, and CloudFormation refuses a stack over **500** resources. The guard synthesizes the stack twice and fails above 497 with every opt-in flag on.
 
@@ -14,7 +26,7 @@ Every resource lives in one CloudFormation stack, and CloudFormation refuses a s
 
 The grouped alarms in #1708 took the all-on count from 494 to 449 on 2026-10-22. Features have added 5 since then. Each opt-in feature we ship adds a few more, so the gap closes again unless something gives resources back.
 
-### What the 450 are
+#### What the 450 are
 
 | Resource type | Count | Note |
 |---|---|---|
@@ -24,7 +36,7 @@ The grouped alarms in #1708 took the all-on count from 494 to 449 on 2026-10-22.
 | `AWS::DynamoDB::Table` | 29 | product data |
 | `AWS::Lambda::Function` | 24 | |
 | `AWS::Logs::LogGroup` | 23 | |
-| `Custom::S3AutoDeleteObjects` | 13 | only when `retainDataOnDelete` is false (§4) |
+| `Custom::S3AutoDeleteObjects` | 13 | only when `retainDataOnDelete` is false (§5) |
 
 The largest constructs are `KbMigration` (40), `Network` (22), `InferenceApi` (21) and `ConversationIndex` (19).
 
@@ -84,7 +96,28 @@ A fork can be hurt in two ways. It may deploy the infrastructure and the scripts
 
 **Net:** about 51 parameters become 2 at N+1, which takes the all-on count from 450 to about **401**.
 
-## 4. Phase 2: empty buckets in the teardown script, not in the stack (−13 to −15, non-retaining deployments only)
+**The catch is timing.** Release N adds 2 resources, and the saving lands one release later. That is why Phase 1 is not the first thing to ship before a feature that is already waiting (§7). It is worth starting early anyway, because each of its steps waits for a release.
+
+## 4. IAM: grant DynamoDB by prefix, not table by table
+
+**The problem.** CDK packs each role's permissions into overflow managed policies of up to 6,144 characters each. Measured on `develop` on 2026-10-31 from the every-flag-on synth:
+
+| Role | Statements | DynamoDB's share of the policy text | DynamoDB resource entries |
+|---|---|---|---|
+| app-api task role | 72 | about 47% | 58 |
+| AgentCore Runtime execution role | 44 | about 30% | 38 |
+
+That share is large because each table is granted on its own, with `grantReadWriteData` / `grantReadData`. Each grant renders the table ARN, the `/index/*` ARN and the action list again.
+
+**The change.** All 29 tables are named `{prefix}-...` by `getResourceName`. So each role's table grants can collapse into one read-write statement on `table/{prefix}-*` and `table/{prefix}-*/index/*`. A read-only statement is added only where a role genuinely must not write a table. That frees thousands of characters per role, and probably an overflow policy or two, which are resources too.
+
+**The security catch.** `projectPrefix` may contain hyphens (`/^[a-z][a-z0-9-]{1,20}$/`), so `dev-*` also matches the tables of a deployment prefixed `dev-foo` in the same account. The statements therefore carry a condition on the `Project` tag that `applyStandardTags` already puts on every table.
+
+**Fork pain:** none. IAM is internal to the stack; no fork reads it.
+
+**Net:** the next feature's permissions go into the existing policies instead of a new managed policy for each grant. The PR reports the exact characters freed per role from the guard's `[policy headroom]` lines.
+
+## 5. Phase 2: empty buckets in the teardown script, not in the stack (−13 to −15, non-retaining deployments only)
 
 When `retainDataOnDelete` is false, every bucket gets CDK's `autoDeleteObjects`. That is one custom resource per bucket, plus the provider Lambda and its role. It is why a `production: true` synth is exactly 15 smaller. Dev and test deployments are the shape that hits 500 first, and that includes most forks' first deployment.
 
@@ -96,12 +129,31 @@ The change:
 
 **Fork pain:** someone who tears down with a bare `cdk destroy` or the console now gets "bucket not empty" and has to empty the buckets by hand. Teardown is rare and the failure message says what to do. Even so, this is a `Changed` CHANGELOG entry, and the docs-site teardown page should be checked first so it already points at the script.
 
-**Net:** about 388 all-on in a non-retaining deployment. A production deployment is unchanged, because it never had these resources.
+**Net:** about 15 fewer with every flag on in a non-retaining deployment (450 → about 435 on its own), available in the release it ships in. A production deployment is unchanged, because it never had these resources.
 
-## 5. Order and checks
+## 6. The Runtime environment needs no refactor
 
-1. **Phase 0 (shipped):** delete four parameters nothing read: `admin/system-prompts-table-arn`, `admin/agent-templates-table-arn`, `managed-kb/service-role-arn` (the backend gets this ARN as `MANAGED_KB_SERVICE_ROLE_ARN`) and `network/alb-url` (still a stack output). `observability/alarm-topic-arn` has no code reader but stays, because the deploy guide's verify step reads it.
-2. **Phase 1:** release N, then N+1, then N+2, as above. Each step is one PR touching CDK, the scripts and the docs together.
-3. **Phase 2:** any time. It does not depend on Phase 1.
+The V2 Runtime's environment is capped at 2,560 bytes. The pattern for staying inside it already exists (`CLAUDE.md`, `docs/specs/agentcore-runtime-v2.md` §7):
+
+- Name any `{prefix}-{suffix}` resource with `getResourceName`.
+- Add its variable to `backend/src/apis/shared/config/derived_environment.json`, which `hydrate_derived_environment()` applies at startup.
+- Never add it to the Runtime's `environmentVariables`.
+
+A CDK test pins each manifest entry to the template, and `RuntimeEnvironmentPayloadGuard` fails synth over the limit. A new feature, such as a SageMaker endpoint name, only has to follow the pattern.
+
+## 7. Order and checks
+
+1. **Phase 0 (shipped):** delete four parameters nothing read:
+   - `admin/system-prompts-table-arn` and `admin/agent-templates-table-arn`
+   - `managed-kb/service-role-arn`: the backend gets this ARN as `MANAGED_KB_SERVICE_ROLE_ARN`
+   - `network/alb-url`: still a stack output
+
+   `observability/alarm-topic-arn` has no code reader but stays, because the deploy guide's verify step reads it.
+2. **IAM (§4)** and **Phase 2 (§5)**, in parallel. These are what free room for a feature already waiting: IAM headroom at no cost to forks, and about −15 resources in the configuration the guard measures, with no deprecation releases.
+3. **Phase 1, release N (§3)**, as soon as those are in, so the release clock starts. Then N+1 and N+2, each one PR touching CDK, the scripts and the docs together.
+
+Projected with every flag on: 450 after Phase 0, about 435 after Phase 2, and about 386 once Phase 1 reaches N+1. A feature of 15–20 resources fits after Phase 2 alone, because the guard's ceiling is 497.
+
+**For a new feature:** ship it behind an opt-in flag (`CLAUDE.md` § Feature Flags), and count its resources before building. Optional pieces, such as a second notification topic or a dedicated role where an existing one would do, are worth cutting. Every resource a feature doesn't add stays available for later features.
 
 For each PR, the guard's `[resource headroom]` line is the before-and-after number, and `list-stack-resources` on dev after the Platform deploy should match it exactly. It has matched since #1685.
