@@ -64,6 +64,9 @@ export const adminScopeGuard: CanActivateFn = async (route, state) => {
 const LANDING_CANDIDATES: ReadonlyArray<{ scope: AdminScopeId; path: string }> = [
   { scope: 'admin.costs', path: '/admin/costs' },
   { scope: 'admin.quota', path: '/admin/quota' },
+  // A quota-requests-only approver lands on the queue. In a build with the
+  // feature off the route is unmatched, but such an admin has nothing else to open either.
+  { scope: 'admin.quota_requests', path: '/admin/quota-requests' },
   { scope: 'admin.fine_tuning', path: '/admin/fine-tuning' },
   { scope: 'admin.models', path: '/admin/manage-models' },
   { scope: 'admin.tools', path: '/admin/tools' },
