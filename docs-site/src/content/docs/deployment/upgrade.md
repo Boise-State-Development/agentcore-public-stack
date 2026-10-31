@@ -58,7 +58,11 @@ Run **Actions → Teardown All Infrastructure** with:
 | `environment` | The environment to tear down |
 | `confirm` | `DESTROY` (exactly, all caps) |
 
-This destroys the existing CloudFormation stacks in that environment.
+This destroys the existing CloudFormation stacks in that environment. The
+workflow runs `scripts/teardown/destroy.sh`, which empties each stack's
+non-retained buckets first; a bare `cdk destroy` or a console delete stops on
+"The bucket you tried to delete is not empty" instead (see
+[Tearing down](/agentcore-public-stack/deployment/environments/#tearing-down)).
 
 ## 3. Clean up retained resources
 

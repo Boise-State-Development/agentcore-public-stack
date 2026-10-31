@@ -7,7 +7,6 @@ import { Construct } from 'constructs';
 import {
   AppConfig,
   buildCorsOrigins,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
 } from '../../config';
@@ -59,7 +58,6 @@ export class FileUploadConstruct extends Construct {
       enforceSSL: true,
       versioned: false,
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
       cors:
         fileUploadCorsOrigins.length > 0
           ? [

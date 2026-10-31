@@ -153,6 +153,20 @@ and back in for a fresh token. If needed, check the users table to confirm the
 record carries the `system_admin` role; for federated users, confirm their
 Cognito groups include the admin role.
 
+## Teardown
+
+### "The bucket you tried to delete is not empty"
+
+**Cause:** the stack was deleted with a bare `cdk destroy` or from the
+CloudFormation console. The stack does not empty its own buckets; the teardown
+script does.
+
+**Fix:** run **Actions → Teardown All Infrastructure**, or
+`bash scripts/teardown/destroy.sh`. Both work on a stack already in
+`DELETE_FAILED`. See
+[Tearing down](/agentcore-public-stack/deployment/environments/#tearing-down)
+for what the script does and how to empty a bucket by hand.
+
 ## Still stuck?
 
 - Re-check every value against the
