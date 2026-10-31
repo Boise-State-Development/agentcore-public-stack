@@ -1,22 +1,28 @@
 #!/bin/bash
 set -euo pipefail
 
-# Script: Run the eval harness's nightly subset against a deployed nightly stack
+# Script: Run the eval harness once per case against the development deployment
 # Description: Seeds the eval user (backend/scripts/seed_eval_user.py), signs in
-#              as it through the stack's app-api, runs a subset of the golden
-#              set once per case, and scores it against the committed Haiku
-#              baseline. See docs/specs/eval-harness.md §10 and
-#              docs/testing/smoke-regression.md §5.
+#              as it through the deployment's app-api, runs the six gating
+#              families of the golden set once per case, and scores them
+#              against the committed Haiku baseline. See
+#              docs/specs/eval-harness.md §10 and docs/testing/smoke-regression.md §5.
 #
-# Runs AFTER scripts/nightly/e2e-test.sh in the same job, which has already
-# added the CloudFront URL to app-api's CORS origins and to the Cognito app
-# client's callback list — both of which the scripted Hosted UI login needs.
+# Called by nightly.yml's eval-develop track against the long-lived dev
+# deployment, never an ephemeral stack: dev has the bootstrap-seeded skills
+# skill_selection loads, a Cognito app client whose callback list already
+# names its own domain, and the deploy the baseline was promoted on.
 #
-# skill_selection is left out: the nightly stack never runs the bootstrap
-# seeding, so the two skills that family loads do not exist there.
+# Seeding is idempotent and runs every time so the eval user's role follows
+# the golden set on the checked-out branch: a case that names a new tool is
+# granted it the same night, instead of failing until someone re-seeds by hand.
+# A re-run reuses the stored password, so the SSM parameter is only read.
+#
+# general_chat is left out: its cases are scored only by the LLM judges, which
+# this run does not invoke (they are advisory and cost more than the turns).
 #
 # Required environment variables:
-#   CDK_PROJECT_PREFIX    — CDK project prefix (e.g. nightly-develop)
+#   CDK_PROJECT_PREFIX    — CDK project prefix of the target (e.g. dev-boisestateai-v2)
 #   CDK_AWS_REGION        — AWS region
 #
 # Optional:
@@ -72,7 +78,7 @@ main() {
     base_url=$(get_base_url) || exit 2
     local api_url="${base_url}/api"
     local model="${EVAL_MODEL_ID:-us.anthropic.claude-haiku-4-5-20251001-v1:0}"
-    local families="${EVAL_FAMILIES:-tool_selection,document_qa,retention,instruction_following,refusal}"
+    local families="${EVAL_FAMILIES:-tool_selection,document_qa,retention,instruction_following,refusal,skill_selection}"
     local report="${EVAL_REPORT:-${PROJECT_ROOT}/eval-harness-report.json}"
     local out="${PROJECT_ROOT}/eval-harness-run"
 

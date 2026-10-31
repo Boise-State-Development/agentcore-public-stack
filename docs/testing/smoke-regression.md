@@ -256,13 +256,17 @@ first look, not the whole proof.
   models), because the nightly stack never runs the bootstrap seeding and its
   `default` role grants nothing. The pool must serve the classic Hosted UI
   login page (managed login v2 exits 2, "could not start").
-- The same job then runs the eval harness's nightly subset through
-  `scripts/nightly/eval-harness.sh`: it seeds the eval user
-  (`backend/scripts/seed_eval_user.py`), runs five families once per case as
-  that user, and scores them against the committed Haiku baseline. It is
-  `continue-on-error` and uploads `eval-harness-report-<label>`; one sample per
-  case is a smoke signal, and the gate is the k=3 run on dev. Skill selection is
-  left out because the nightly stack never seeds the skills it loads.
+- The nightly workflow's `eval-develop` track runs the eval harness against
+  the long-lived dev deployment, not an ephemeral stack, through
+  `scripts/nightly/eval-harness.sh`: it re-seeds the eval user
+  (`backend/scripts/seed_eval_user.py`, idempotent), runs the six gating
+  families once per case as that user, and scores them against the committed
+  Haiku baseline. The step is `continue-on-error`, shows a regression as
+  "partial" in the nightly summary, and uploads `eval-harness-report-dev`
+  (kept 90 days); one sample per case is a smoke signal, and the gate is the
+  k=3 release run. Like every track it is opt-in: add `eval-develop` to the
+  `NIGHTLY_TRACKS` repository variable once the eval user is seeded. `all`
+  leaves it out because it spends against a real environment.
 - L2 is agent-run, not CI.
 
 ---
