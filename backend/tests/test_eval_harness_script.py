@@ -94,6 +94,34 @@ def test_baseline_then_score_passes_then_fails_on_regression(tmp_path, golden, c
     assert json.loads(report.read_text())["gateFailed"] is True
 
 
+def test_explain_reads_cost_rows_unless_told_not_to(tmp_path, golden, capsys, monkeypatch):
+    flags, _ = golden
+    run1 = tmp_path / "run1"
+    _write_run(run1)
+    assert eval_harness.main(flags + ["baseline", "--out", str(run1)]) == 0
+    run2 = tmp_path / "run2"
+    _write_run(run2, failing="a")
+    capsys.readouterr()
+
+    asked = []
+
+    async def fake_calls(meta, rows, family):
+        asked.append(family)
+        return {}
+
+    monkeypatch.setattr(eval_harness, "_family_calls", fake_calls)
+    assert eval_harness.main(flags + ["score", "--out", str(run2), "--explain", "tool_selection"]) == 0
+    out = capsys.readouterr().out
+    assert asked == ["tool_selection"]
+    assert "  calls:" in out and "[0] FAIL  unavailable" in out
+
+    assert eval_harness.main(
+        flags + ["score", "--out", str(run2), "--explain", "tool_selection", "--no-cost-rows"]
+    ) == 0
+    assert asked == ["tool_selection"]
+    assert "calls:" not in capsys.readouterr().out
+
+
 def test_baseline_refuses_a_partial_run(tmp_path, golden, capsys):
     flags, baselines = golden
     run = tmp_path / "run"
