@@ -115,6 +115,11 @@ DEFAULT_COUNT_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 DEFAULT_INPUT_USD_PER_MTOK = 1.10
 CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.1
+BASELINE_TOOL_SPEC = {
+    "name": "calculator",
+    "description": "Evaluate an arithmetic expression.",
+    "inputSchema": {"json": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}},
+}
 
 QUERY_KEYS = ("query", "q", "search_query", "searchQuery")
 COUNT_KEYS = ("maxResults", "max_results", "count", "num_results", "numResults", "limit", "top_k", "page_size", "per_page", "size")
@@ -453,9 +458,16 @@ class TokenCounter:
             return None
 
     def tool_spec_tokens(self, tool_spec: Dict[str, Any]) -> Optional[int]:
+        """Tokens the spec adds to a `toolConfig` that already holds a tool.
+
+        Measured over a baseline tool, not over no tools: the first tool in a
+        request also pulls in the model's fixed tool-use preamble (~500 tokens
+        on Claude), which every real turn pays once regardless of web search.
+        """
         messages = [{"role": "user", "content": [{"text": "hi"}]}]
-        with_tool = self._count({"messages": messages, "toolConfig": {"tools": [{"toolSpec": tool_spec}]}})
-        without = self._count({"messages": messages})
+        tools = [{"toolSpec": BASELINE_TOOL_SPEC}]
+        with_tool = self._count({"messages": messages, "toolConfig": {"tools": [*tools, {"toolSpec": tool_spec}]}})
+        without = self._count({"messages": messages, "toolConfig": {"tools": tools}})
         if with_tool is None or without is None:
             return None
         return with_tool - without
@@ -507,9 +519,7 @@ def _format_list(results: Any, limit: int) -> str:
     return "\n".join(lines) or "(no results)"
 
 
-def judge_query(
-    client: Any, model_id: str, query: str, results_by_arm: Dict[str, Any], rng: random.Random, k: int
-) -> Dict[str, Any]:
+def judge_query(client: Any, model_id: str, query: str, results_by_arm: Dict[str, Any], rng: random.Random, k: int) -> Dict[str, Any]:
     arms = list(results_by_arm)[:2]
     rng.shuffle(arms)
     labels = dict(zip("AB", arms))
