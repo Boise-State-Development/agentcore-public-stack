@@ -14,6 +14,7 @@ import {
   QuotaWarningService,
   QuotaWarning,
   QuotaSessionNotice,
+  QuotaFundingNotice,
   QuotaExceeded,
 } from '../../../services/quota/quota-warning.service';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
@@ -391,6 +392,10 @@ export class StreamParserService {
     // Start the elapsed clock here, not at the first runtime event: the wait
     // the user is measuring begins when they hit send.
     this.toolInsight.startTurn(sessionId);
+    // A blocked turn re-sends quota_exceeded, so each turn starts unblocked and
+    // the composer's "Request more quota" tab tracks the latest answer, not one
+    // from before an approval.
+    this.quotaWarningService.clearQuotaExceeded();
     const state = this.createState(sessionId, startingMessageCount || 0);
     this.states.update((map) => {
       const next = new Map(map);
@@ -626,6 +631,8 @@ export class StreamParserService {
       onQuotaWarning: (data) => this.quotaWarningService.setWarning(data as QuotaWarning),
       onQuotaSessionNotice: (data) =>
         this.quotaWarningService.setSessionNotice(data as QuotaSessionNotice),
+      onQuotaFundingNotice: (data) =>
+        this.quotaWarningService.setFundingNotice(data as QuotaFundingNotice),
       onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
 
       onOAuthRequired: (data: OAuthRequiredEvent) => {

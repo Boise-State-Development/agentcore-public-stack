@@ -120,4 +120,15 @@ export interface FeatureFlags {
    * live history). In development, so `false` everywhere.
    */
   sessionFork: boolean;
+
+  /**
+   * Quota requests (docs/specs/quota-requests-and-extensions.md §5): a user
+   * asks for more quota from the composer's quota tab, the blocked state or
+   * Settings → Usage, sees their requests and any granted extensions there,
+   * answers an admin's request for a funding source, and the notification bell
+   * shows with it. Backend: QUOTA_REQUESTS_ENABLED (app-api; `/quota/*` 404s
+   * while off). In development, so `false` everywhere until a deployment turns
+   * both sides on.
+   */
+  quotaRequests: boolean;
 }
