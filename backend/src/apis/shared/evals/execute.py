@@ -13,9 +13,10 @@ need nothing but the run directory.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tuple
 
 from apis.shared.evals.cases import EvalCase
 from apis.shared.evals.score import score_sample
@@ -46,6 +47,22 @@ class TurnRunner(Protocol):
 
 #: ``(session_id, filename) -> upload_id``
 FixtureRegistrar = Callable[[str, str], Awaitable[str]]
+
+
+@dataclass(frozen=True)
+class StagedSample:
+    """A sample's session, created before the run, with its large documents attached and prepared.
+
+    Large documents take minutes to become searchable, so a run stages every
+    such sample first and waits for all of them at once, instead of each
+    worker waiting in turn. ``documents`` is each one's state when the wait
+    ended (``fixtures.wait_for_documents``), kept on the result row so a
+    failure can be told apart from a document that was not ready.
+    """
+
+    session_id: str
+    upload_ids: Tuple[str, ...]
+    documents: Tuple[Dict[str, Any], ...] = ()
 
 
 class OAuthRequiredError(RuntimeError):
@@ -83,18 +100,25 @@ async def run_sample(
     run_turn: TurnRunner,
     register_fixture: Optional[FixtureRegistrar] = None,
     fixtures_dir: Optional[Path] = None,
+    staged: Optional[StagedSample] = None,
 ) -> Dict[str, Any]:
     """Run every turn of ``case`` in one fresh session and score the last.
+
+    ``staged`` is a session whose large documents were uploaded and prepared
+    ahead of the run (``StagedSample``): the turns run in that session and
+    attach those uploads too, and the row records each document's state.
 
     Raises :class:`OAuthRequiredError` if any turn needs connector consent.
     Every other failure (an error, a timeout, an empty stream) is a failed
     sample with its reason recorded, because that is what a regression looks
     like from the outside.
     """
-    session_id = new_session_id()
+    if case.large_documents and staged is None:
+        raise ValueError(f"{case.id} names large documents but none were staged for it")
+    session_id = staged.session_id if staged is not None else new_session_id()
     started_at = _now_iso()
 
-    upload_ids: List[str] = []
+    upload_ids: List[str] = list(staged.upload_ids) if staged is not None else []
     for filename in case.files:
         if register_fixture is None:
             raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
@@ -142,6 +166,7 @@ async def run_sample(
         "model_id": model_id,
         "session_id": session_id,
         "upload_ids": upload_ids,
+        **({"documents": list(staged.documents)} if staged is not None else {}),
         "status": status,
         "error": error,
         "passed": scored.passed,
