@@ -7,8 +7,9 @@ the outcome. The new release goes at the **top**; never modify previous entries.
 > **Patch releases use the short form.** The full section order and feature-
 > spotlight template below describe a **feature/minor or major** release. For a
 > patch, keep only the **Header**, a short **Highlights** paragraph, the relevant
-> **per-category bullets**, and **Deployment notes** — omit feature spotlights,
-> per-layer subsections, and the test-coverage section.
+> **per-category bullets**, **Feature flags**, **Manual steps** and
+> **Deployment notes** — omit feature spotlights, per-layer subsections, and the
+> test-coverage section. The last three are never omitted; each may read "none".
 
 ## Header
 
@@ -36,8 +37,19 @@ the outcome. The new release goes at the **top**; never modify previous entries.
 8. **🔧 CI/CD** — workflow/pipeline changes, GitHub Actions upgrade table.
 9. **📦 Dependencies** — markdown table with From/To columns, grouped by component.
 10. **🧪 Test coverage** — line counts + scope for notable additions (optional).
-11. **🚀 Deployment notes** — what operators must do differently. Always include,
-    even if the answer is "no special steps."
+11. **🚩 Feature flags** — every flag this release **adds**, **changes the default
+    of**, or **retires**, as a table (template below). Always include; "No new
+    flags, no default changes" is a valid section. CI (`new-feature-flags.yml`)
+    fails the release PR when an added flag is not named here.
+12. **🛠️ Manual steps** — every step a deploy does not do by itself: a backfill
+    script, a bootstrap re-seed, a GitHub environment variable to set, an admin
+    action. Each with the exact command, the environments, and when in the
+    window to run it (template below). Always include; "None" is a valid
+    section. CI (`pending-backfills.yml`) fails the release PR when an added
+    `backfill_*.py` is not named here.
+13. **🚀 Deployment notes** — deploy order and what operators must do
+    differently. Always include, even if the answer is "no special steps."
+    Point at Feature flags and Manual steps rather than repeating them.
 
 ## Feature spotlight template
 
@@ -58,6 +70,54 @@ the outcome. The new release goes at the **top**; never modify previous entries.
 ### Test Coverage
 <N>+ lines of new tests covering <scope>.
 ```
+
+## Feature flags template
+
+One row per flag. Copy the default, the services and the kind from the reader's
+docstring in `feature_flags.py` and from `infrastructure/lib/config.ts`; do not
+guess. A two-sided flag (backend + SPA) is one row naming both.
+
+```markdown
+## 🚩 Feature flags
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` / SPA `features.sessionRewind` | **OFF** (in development; only `"true"` enables) | app-api and the AgentCore Runtime (written to the Runtime only while on); set both sides the same | Feature switch | "Rewind to here" on a user message hides it and everything after it and puts its text back in the composer |
+
+**Default changes:** <flag> went from OFF to ON (now `=false` opts out) — or "none".
+**Retired:** <flag> (its off path is gone; a deployment that set it `=false` loses that opt-out) — or "none".
+```
+
+## Manual steps template
+
+Name the script, the interpreter, the command, the environments and the
+verification. "A backfill is required" is the note that sends someone digging
+through `git log`.
+
+````markdown
+## 🛠️ Manual steps
+
+### Backfill: <what it populates>
+
+**Run after this deploy, on every environment with <the data>. Idempotent; dry-run by default.**
+
+```bash
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_<name>.py \
+    --table <prefix>-<table> --region us-west-2            # dry-run: read it first
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_<name>.py \
+    --table <prefix>-<table> --region us-west-2 --apply
+```
+
+Verify with a live `query … --select COUNT` on the index, never `describe-table` `ItemCount` (it refreshes about every six hours).
+
+### Re-seed: <what changed in the seed>
+
+Run the `bootstrap-data-seeding` workflow (or `scripts/stack-bootstrap/seed.sh`) so <row> picks up <change>. Say what the upsert will and will not overwrite.
+
+### Environment variables to set
+
+`CDK_<X>_ENABLED=true` on the `<env>` GitHub environment, then a `platform.yml` deploy — only if this release expects a deployment to turn something on.
+````
 
 ## Writing style
 

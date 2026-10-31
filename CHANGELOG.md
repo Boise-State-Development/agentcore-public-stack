@@ -4,6 +4,82 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.32.0] - 2026-10-30
+
+The terminal client becomes a first-class way in: `aps-tui` signs in with the same session as the browser (device authorization), holds a real conversation with the agent, reaches projects, Agents, skills and saved conversations, and can run tools on the user's own machine with their approval. Conversations can be rewound to an earlier message or forked from one (in development, default off). Every skill bound on a Shared Project now runs for every member, and the agent can list and read a project's Files by name. Agents can be duplicated and pinned to the sidebar. Two production app-api task deaths are fixed at the root (a PDFium crash and a 3.5-minute event-loop block), with a faster health check and a new event-loop lag alarm around them. An evaluation harness drives a golden set through dev and scores it against a committed baseline. **Three things need attention:** the load balancer now accepts traffic only from CloudFront (`CDK_ALB_RESTRICT_TO_CLOUDFRONT`, default on), one backfill (`backfill_project_skill_adders.py`) must be run on each environment with projects, and the bootstrap seed should be re-run so the `web_research` skill picks up its new description. New flags: `SESSION_REWIND_ENABLED` and `SESSION_FORK_ENABLED` (default off). No GSI changes.
+
+### 🚀 Added
+
+- **Terminal client (`aps-tui`), session-native.** The `tui/` package (renamed from `agentcore-tui`) now talks to the same App API as the web app with a real platform session: streaming turns, the server's model and tool catalogue, saved conversations, Shared Projects (`/project`), Agents (`/agent`), skills (`/skills`, `/<skill>`), conversation modes, effort, attachments and artifacts, all through slash commands (`/help`). Interrupts (tool approval, `ask_user_question`, OAuth consent) are answered in the terminal. A wheel and `SHA256SUMS` are attached to every GitHub Release and installed with `uv tool install`; first launch asks for the deployment's address and signs in through the browser (#1788, #1792)
+- **Client-executed tools.** The terminal declares five tools (`workspace_info`, `run_command`, `read_file`, `list_directory`, `write_file`) that run on the user's machine; the model sees them as `local_*`. Each call is shown before it runs (`y` / `n` / `a` for the session). Off with `/tools local off`. Backend: `client_tools` and `client_surface` on the invocation request, a new `client_tool_call` SSE event, and a `client_tool` interrupt kind. The web app's prompt, `toolConfig` and agent cache key are byte-identical to before (#1770, #1775)
+- **CLI device authorization** (RFC 8628): `POST /auth/cli/authorize`, `GET /auth/cli/verify`, `POST /auth/cli/token` on app-api, with the browser finishing on the normal Cognito Hosted UI login. The CLI then presents `Authorization: BFF <sealed>`; header sessions never set cookies and are CSRF-exempt. Rows live in the existing BFF sessions table; no new table, index or flag. Optional overrides: `DEVICE_GRANTS_TABLE_NAME`, `BFF_CLI_VERIFICATION_URL` (#1770)
+- **Conversation rewind** (in development, default off: `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED`, `features.sessionRewind`). "Rewind to here" on a user message hides it and everything after it and puts its text back in the composer. `POST /sessions/{id}/rewind`; a `rewind` span on the session row; nothing in AgentCore Memory is deleted. A warm agent's history is cut in place so the retained prefix reads from the prompt cache (#1768, #1789)
+- **Conversation fork** (in development, default off: `SESSION_FORK_ENABLED` / `CDK_SESSION_FORK_ENABLED`, `features.sessionFork`). "Fork from here" starts a new conversation holding everything before that message. `POST /sessions/{id}/fork`; the fork runs in the parent's Runtime microVM and its first turn is seeded from the parent's live history. `SessionMetadataResponse` gains `rootSessionId` and `forkedFrom` (#1768, #1789)
+- **Copy and sent time on user messages.** A hover action row under each user bubble with the sent time and a Copy button. Not flag-gated (#1768)
+- **Every skill bound on a Shared Project runs, and shows, for every member.** `PUT /projects/{id}/skills` stamps the saver on each newly bound skill (`addedBy`), and a skill runs for a member when its author is the person who added it. New `GET /agents/{id}/skills` returns the bound skills resolved for the viewer, and the composer's `/` menu reads it. Bindings made before this release need the backfill (#1780, #1781)
+- **`project_files` tool.** On every project conversation the agent can list a project's Files and read one by name (paged at 48 KB). Built without a flag or grant; adds about 273 tokens to a project harness's `toolConfig` once (#1774)
+- **Duplicate an Agent.** `POST /agents/{id}/duplicate` makes a private "Copy of …" owned by the caller from the editable draft; the knowledge base, shares, listing, pins and versions are not copied. A Duplicate button on My Agents and an "Existing agent" option in the start-from-template dialog (#703)
+- **Pinned Agents in the sidebar**, above pinned conversations. Click starts a chat; unpin from the menu or by dragging out. Reuses the existing `/agents/pins` routes (#712)
+- **Evaluation harness.** `backend/scripts/eval_harness.py` drives a 57-case golden set (`backend/evals/cases/`) through a deployment as a dedicated eval user, scores it with pure functions against a committed per-model baseline, and exits non-zero when a gating family regresses. LLM judges (`strands-agents-evals` 1.7.0, dev extra) are advisory. `scripts/seed_eval_user.py` creates the `eval_harness` role, the `eval-harness` Cognito user and an SSM SecureString, and is opt-in. The nightly pipeline runs it non-blocking (#1782, #1794, #1796)
+- **Event-loop lag watchdog** on app-api: `EventLoopLagMs` EMF metric and a `{prefix}-app-api-event-loop-lag` alarm (over 2 s, 2 of 3 minutes) (#1795)
+- Smoke matrix row `empty_final_call` (#1790)
+
+### ✨ Improved
+
+- **A dead app-api task is replaced in about 20 s, not 90.** ALB and container health checks every 10 s with an unhealthy threshold of 2; the SPA retries a GET once on a gateway 502/503/504, never a POST or an SSE stream (#1795)
+- **Project conversations point at the project's tools and skills.** The composer's Tools and Skills menus link to `/projects/:id/tools` and `/skills` instead of Customize, say where a project's skills are chosen, and a project with no instructions now gets the project guidance (#1766, #1779)
+- A skill created under Customize → Skills appears in a project's Skills page and the Agent form without a reload (#1779)
+- `verify_sources` no longer needs an `upload_id` the model can't see: a missing id resolves to a unique filename match or the session's only document (#1784)
+- The seeded `web_research` skill's description says when to load it; on dev, Sonnet 4.6 went from loading it in 3 of 9 research requests to 9 of 9. Reaches a deployment on the next bootstrap seed (#1783)
+- ALB 5xx and connection-error alarm descriptions point at the stopped task's exit code first (#1793)
+- Both backend images set `PYTHONFAULTHANDLER=1`, so a native crash leaves a Python traceback (#1795)
+
+### ⚠️ Changed
+
+- **Breaking: the load balancer accepts traffic only from CloudFront.** `CDK_ALB_RESTRICT_TO_CLOUDFRONT` (default `true`) limits the ALB security group to the `com.amazonaws.global.cloudfront.origin-facing` managed prefix list on 443 (80 without a certificate). Requests sent straight to the ALB hostname time out; every client must use `https://{CDK_DOMAIN_NAME}/api/…`. Set it to `false` to keep the old `0.0.0.0/0` rules (#1746)
+- **Breaking for pre-release TUI installs:** the package, module, command and config paths are `aps-tui` / `aps_tui`; reinstall from the release wheel (#1788)
+- A GitHub Release now requires the TUI build and tests to pass (`build-tui` job) (#1788)
+- Project members now run and see skills that editors authored and added (#1780)
+- The base prompt no longer names a "knowledge base search" tool; it says the knowledge base is searched automatically. One-time prompt-cache re-write (#1777)
+
+### 🐛 Fixed
+
+- **app-api tasks died with exit 139.** PDFium is not thread-safe, and two PDFs parsed for their digests at the same time crashed the process. Every pypdfium2 call now runs behind one process-wide lock (#1793)
+- **app-api stopped answering `/health` for 3.5 minutes while an Agent with 41 documents was deleted.** Synchronous S3 Vectors calls, including a full-index scan, ran on the event loop; they now run off it, and a managed-KB document skips the scan it never needed (#1793)
+- **An empty model call stole the previous call's cost row.** Bedrock streams no `messageStart` for an empty response, so its usage overwrote the earlier call's slot. Each call now gets its own `C#` row (#1785)
+- A conversation deleted while its turn streamed came back to the sidebar; deleted rows now refuse writes and a repeat delete strips leftover index keys (#1765)
+- A dismissed connector sign-in prompt returned on the next conversation and every reload; dismissals are kept per user in localStorage until consent succeeds (#1760)
+- Strands rejected every client-tool call ("Field required: arguments") before the interrupt could fire (#1775)
+
+### 🔒 Security
+
+- ALB ingress restricted to CloudFront (see Changed) (#1746)
+- 11 of 12 open Dependabot alerts resolved: `brotli` 1.2.0 → 1.2.1 (critical, tests/load), `undici` → 8.12.3 (docs-site), `fast-uri` 3.1.8 → 3.1.9 and `body-parser` 2.3.0 → 2.4.0 (frontend), `brace-expansion` 5.0.9 → 5.0.12 via `aws-cdk-lib`. `opentelemetry-api` stays pinned by `aws-opentelemetry-distro` (#1761)
+
+### 📦 Dependencies
+
+- Infrastructure: `aws-cdk` 2.1128.0 → 2.1146.1 (reads cloud-assembly schema 55; a global `cdk` older than this fails to deploy), `aws-cdk-lib` 2.265.0 → 2.274.0 (#1771, #1761)
+- Backend: `strands-agents-evals` 1.7.0 added to the `dev` extra; `rich` 14.3.3 → 15.0.0 (#1796)
+- TUI: `textual` 8.2.8, `httpx-sse`, `keyring`, `platformdirs` (#1788)
+
+### 🏗️ Infrastructure
+
+- ALB security group rules come from an `AwsCustomResource` that resolves the CloudFront origin-facing prefix list at deploy time (about 55 of the 60-rule quota) (#1746)
+- New alarm `{prefix}-app-api-event-loop-lag`; ALB target group and container health-check intervals 30 s → 10 s, unhealthy threshold 3 → 2 (#1795)
+- Shipped defaults synthesize 441/500 resources (was 436); every opt-in flag on, 454/500 (was 449)
+- `platform.yml` forwards `CDK_SESSION_REWIND_ENABLED`, `CDK_SESSION_FORK_ENABLED` and `CDK_ALB_RESTRICT_TO_CLOUDFRONT`. The Runtime copies of the two session flags are written only while on
+
+### 🔧 CI/CD
+
+- **New release gate: every new feature flag must be named in the release notes.** `scripts/release/check-new-feature-flags.mjs` and `.github/workflows/new-feature-flags.yml` diff `feature_flags.py` and `feature-flags.ts` against `main` on every PR into `main`, like the backfill gate. The release skill gains a Feature flags table and a Manual steps section
+- `release.yml`: `build-tui` job attaches the `aps_tui` wheel and `SHA256SUMS` to the release and appends an install section (#1788)
+- Nightly pipeline seeds the eval user on the ephemeral stack and runs five families at k=1, non-blocking (#1794)
+- Concurrent device-grant approval test made deterministic (#1778)
+
+### 📚 Docs
+
+- New specs: evaluation harness, conversation rewind and fork, CLI device authorization, TUI/web parity. Docs-site: Terminal Client page, "Load balancer ingress" on the platform page, exit-code guidance in troubleshooting. Kaizen research 2026-10-23 (#1782, #1768, #1770, #1792, #1746, #1795, #1757)
+
 ## [1.31.0] - 2026-10-24
 
 Users can pin conversations, choose how long-term memory treats them (on, read only or off), and start incognito chats that use memory without adding to it. The sidebar marks conversations that are waiting on the user, and a paused turn that can no longer resume now answers in the conversation instead of failing with a 424. Stopped turns are now metered for what they actually used. Grouping the DynamoDB and Lambda alarms frees 45 resources under CloudFormation's 500-per-stack limit. Source provenance, structured extraction and the first half of agent handoffs land behind in-development flags (default off). Dependency updates resolve 201 of 202 open Dependabot alerts. One GSI (`PinnedSessionIndex`) is added to sessions-metadata. **The backend now needs Python 3.11 or later.**
