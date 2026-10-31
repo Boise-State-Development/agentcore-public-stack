@@ -232,6 +232,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
     projects: { enabled: true },
     userGrants: { enabled: true },
     sessionPrewarm: { enabled: true },
+    quotaRequests: { enabled: true },
     handoffs: { enabled: true },
     sessionRewind: { enabled: true },
     sessionFork: { enabled: true },

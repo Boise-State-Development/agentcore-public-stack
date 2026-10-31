@@ -876,6 +876,36 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Quota requests feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Quota requests feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_QUOTA_REQUESTS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_QUOTA_REQUESTS_ENABLED is unset', () => {
+      delete process.env.CDK_QUOTA_REQUESTS_ENABLED;
+      expect(loadConfig(app).quotaRequests.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_QUOTA_REQUESTS_ENABLED = '';
+      expect(loadConfig(app).quotaRequests.enabled).toBe(false);
+    });
+
+    test('CDK_QUOTA_REQUESTS_ENABLED="true" turns it on', () => {
+      process.env.CDK_QUOTA_REQUESTS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).quotaRequests.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_QUOTA_REQUESTS_ENABLED = 'yes';
+      expect(loadConfig(app).quotaRequests.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Handoffs feature flag — opt-in while in development
   // ============================================================
 
