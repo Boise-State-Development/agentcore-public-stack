@@ -585,6 +585,8 @@ async def _cleanup(rows: Sequence[Dict[str, Any]], user_id: str) -> Tuple[int, i
 async def cmd_cleanup(args: argparse.Namespace) -> int:
     from smoke_turns import resolve_runtime_env
 
+    if args.orphans:
+        return await _sweep_orphans(args)
     out = Path(args.out)
     try:
         meta = _read_meta(out)
@@ -596,6 +598,98 @@ async def cmd_cleanup(args: argparse.Namespace) -> int:
     unrun = _unrun_staged(out, rows)
     await _cleanup(rows + unrun, meta["user_id"])
     _forget_staged(out, unrun)
+    return 0
+
+
+def _parse_iso(value: str) -> datetime:
+    """An ISO timestamp as an aware datetime (``Z`` or an offset); naive values are UTC."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+async def _sweep_orphans(args: argparse.Namespace) -> int:
+    """Delete what runs left behind under the eval user: uploads and ``eval-`` sessions older than ``--older-than``.
+
+    A run cleans up after itself, except when it is killed: a cancelled CI job
+    never reaches its cleanup, and its ``staged.jsonl`` goes with the runner,
+    so the large documents it staged stay in the bucket and the attachments KB.
+    The eval user is the harness's own account (spec D7), so everything under
+    it belongs to some run; the age cutoff keeps the sweep off a run still in
+    progress. Lists only, unless ``--yes``.
+    """
+    from datetime import timedelta
+
+    from seed_eval_user import eval_user_id
+    from smoke_turns import _looks_like_prod, resolve_runtime_env
+
+    from apis.app_api.sessions.services.session_service import SessionService
+    from apis.shared.evals.execute import EVAL_SESSION_PREFIX
+    from apis.shared.evals.fixtures import delete_objects_under, delete_upload, stale_uploads
+    from apis.shared.sessions.metadata import list_user_sessions
+
+    if not args.prefix:
+        print("--orphans needs --prefix", file=sys.stderr)
+        return 2
+    if _looks_like_prod(None, args.prefix):
+        print("refusing: this looks like production (spec D8)", file=sys.stderr)
+        return 2
+    user_id = eval_user_id(args.prefix, args.region)
+    if not user_id:
+        print(f"no eval user on {args.prefix}; nothing to sweep")
+        return 0
+    resolve_runtime_env(args.prefix, args.region)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=args.older_than)
+
+    import boto3
+
+    bucket = os.environ["S3_USER_FILES_BUCKET_NAME"]
+    listing = [
+        obj
+        for page in boto3.client("s3", region_name=args.region).get_paginator("list_objects_v2").paginate(
+            Bucket=bucket, Prefix=f"user-files/{user_id}/"
+        )
+        for obj in page.get("Contents", [])
+    ]
+    uploads = stale_uploads(listing, user_id, cutoff)
+
+    sessions = []
+    token = None
+    while True:
+        page, token = await list_user_sessions(user_id, limit=100, next_token=token)
+        sessions.extend(
+            m.session_id for m in page
+            if m.session_id.startswith(EVAL_SESSION_PREFIX) and _parse_iso(m.last_message_at) < cutoff
+        )
+        if not token:
+            break
+
+    print(f"eval user on {args.prefix}: {len(uploads)} upload(s) and {len(sessions)} session(s) "
+          f"older than {args.older_than:g} min")
+    if not args.yes:
+        for session_id, upload_id in uploads:
+            print(f"  upload  {session_id}/{upload_id}")
+        for session_id in sessions:
+            print(f"  session {session_id}")
+        print("dry run: pass --yes to delete")
+        return 0
+
+    removed = 0
+    for session_id, upload_id in uploads:
+        try:
+            if not await delete_upload(user_id, upload_id):
+                # No row left (an earlier, partial cleanup): the objects are all that remain.
+                await delete_objects_under(bucket, f"user-files/{user_id}/{session_id}/{upload_id}/")
+            removed += 1
+        except Exception as exc:  # noqa: BLE001 — a sweep reports, never aborts
+            logger.warning("could not delete upload %s: %s", upload_id, exc)
+    service = SessionService()
+    ended = 0
+    for session_id in sessions:
+        try:
+            ended += 1 if await service.delete_session(user_id=user_id, session_id=session_id) else 0
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not delete session %s: %s", session_id, exc)
+    print(f"swept {removed} upload(s) and {ended} session(s)")
     return 0
 
 
@@ -856,10 +950,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--baseline", help="write here instead of baselines/<model>.json")
 
     s = sub.add_parser("cleanup", help="delete the sessions and fixture uploads a run recorded")
-    s.add_argument("--out", required=True)
+    s.add_argument("--out", help="the run directory whose sessions and uploads to delete")
     s.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"))
+    s.add_argument("--orphans", action="store_true",
+                   help="instead of --out: sweep the eval user's leftover uploads and eval- sessions on --prefix")
+    s.add_argument("--prefix", help="with --orphans: the deployment to sweep")
+    s.add_argument("--older-than", type=float, default=60.0,
+                   help="with --orphans: only what is older than this many minutes (default 60)")
+    s.add_argument("--yes", action="store_true", help="with --orphans: delete; without it, list only")
 
     args = p.parse_args(argv)
+    if args.command == "cleanup" and not (args.out or args.orphans):
+        p.error("cleanup needs --out (one run) or --orphans (a sweep)")
     if getattr(args, "k", 1) < 1:
         p.error("--k must be at least 1")
     if args.command == "run":

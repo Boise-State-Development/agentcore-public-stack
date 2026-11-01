@@ -231,3 +231,82 @@ def test_cleaned_up_staged_samples_are_forgotten_so_a_resume_stages_them_again(t
     eval_harness._forget_staged(out, unrun)
     remaining = eval_harness.read_rows(out / eval_harness.STAGED_FILE)
     assert [e["session_id"] for e in remaining] == ["eval-ran"]
+
+
+class TestOrphanSweep:
+    def test_cleanup_needs_a_run_or_a_sweep(self, capsys):
+        with pytest.raises(SystemExit):
+            eval_harness.main(["cleanup"])
+        assert "--out" in capsys.readouterr().err
+
+    def test_a_sweep_needs_a_prefix_and_refuses_production(self, capsys):
+        assert eval_harness.main(["cleanup", "--orphans"]) == 2
+        assert eval_harness.main(["cleanup", "--orphans", "--prefix", "prod-boisestateai"]) == 2
+        assert "production" in capsys.readouterr().err
+
+    @pytest.fixture
+    def deployment(self, monkeypatch):
+        import boto3
+        from moto import mock_aws
+
+        import seed_eval_user
+        import smoke_turns
+        from apis.app_api.sessions.services import session_service
+        from apis.shared.files import repository as repository_module
+        from apis.shared.files.repository import FileUploadRepository
+        from apis.shared.sessions import metadata
+
+        for key, value in {"AWS_DEFAULT_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "t", "AWS_SECRET_ACCESS_KEY": "t",
+                           "S3_USER_FILES_BUCKET_NAME": "files", "DYNAMODB_USER_FILES_TABLE_NAME": "files"}.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(seed_eval_user, "eval_user_id", lambda prefix, region: "eval-user")
+        monkeypatch.setattr(smoke_turns, "resolve_runtime_env", lambda prefix, region: None)
+
+        class Session:
+            def __init__(self, session_id, last):
+                self.session_id, self.last_message_at = session_id, last
+
+        async def list_user_sessions(user_id, limit=None, next_token=None):
+            return [Session("eval-old", "2020-01-01T00:00:00Z"), Session("eval-new", "2999-01-01T00:00:00Z"),
+                    Session("someone-elses", "2020-01-01T00:00:00Z")], None
+
+        ended = []
+
+        async def delete_session(self, user_id, session_id):
+            ended.append(session_id)
+            return True
+
+        monkeypatch.setattr(metadata, "list_user_sessions", list_user_sessions)
+        monkeypatch.setattr(session_service.SessionService, "__init__", lambda self: None)
+        monkeypatch.setattr(session_service.SessionService, "delete_session", delete_session)
+        with mock_aws():
+            boto3.client("dynamodb", region_name="us-east-1").create_table(
+                TableName="files",
+                KeySchema=[{"AttributeName": "PK", "KeyType": "HASH"}, {"AttributeName": "SK", "KeyType": "RANGE"}],
+                AttributeDefinitions=[{"AttributeName": "PK", "AttributeType": "S"},
+                                      {"AttributeName": "SK", "AttributeType": "S"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            s3 = boto3.client("s3", region_name="us-east-1")
+            s3.create_bucket(Bucket="files")
+            monkeypatch.setattr(repository_module, "_repository_instance", FileUploadRepository(table_name="files"))
+            for key in ("user-files/eval-user/eval-old/up-1/manual.pdf",
+                        "user-files/eval-user/eval-old/up-1/_derived/text.jsonl"):
+                s3.put_object(Bucket="files", Key=key, Body=b"x")
+            yield s3, ended
+
+    def _sweep(self, *extra):
+        return eval_harness.main(["cleanup", "--orphans", "--prefix", "dev-x", "--region", "us-east-1",
+                                  "--older-than", "-1", *extra])
+
+    def test_lists_without_yes_and_deletes_with_it(self, deployment, capsys):
+        s3, ended = deployment
+        assert self._sweep() == 0
+        out = capsys.readouterr().out
+        assert "1 upload(s) and 1 session(s)" in out and "eval-old/up-1" in out and "dry run" in out
+        assert len(s3.list_objects_v2(Bucket="files").get("Contents", [])) == 2 and ended == []
+
+        assert self._sweep("--yes") == 0
+        assert "swept 1 upload(s) and 1 session(s)" in capsys.readouterr().out
+        assert s3.list_objects_v2(Bucket="files").get("Contents", []) == []
+        assert ended == ["eval-old"]

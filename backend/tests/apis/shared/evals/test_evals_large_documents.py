@@ -183,3 +183,21 @@ def test_every_large_case_asks_a_planted_question_and_expects_its_answer(builder
         question = matches[0]
         assert set(case.expect.contains_any) <= set(question.expected), case.id
         assert set(case.expect.forbidden) <= set(question.forbidden), case.id
+
+
+def test_stale_uploads_are_judged_by_their_newest_object():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+    old, fresh = now - timedelta(hours=3), now - timedelta(minutes=5)
+    root = f"user-files/{USER}"
+    listing = [
+        {"Key": f"{root}/eval-a/up-1/manual.pdf", "LastModified": old},
+        {"Key": f"{root}/eval-a/up-1/_derived/text.jsonl", "LastModified": old},
+        # Original long ago, but the prepare Lambda wrote a sidecar minutes ago: still in use.
+        {"Key": f"{root}/eval-b/up-2/brochure.pdf", "LastModified": old},
+        {"Key": f"{root}/eval-b/up-2/_derived/pages.jsonl", "LastModified": fresh},
+        {"Key": "user-files/someone-else/s/up-9/x.pdf", "LastModified": old},
+        {"Key": f"{root}/stray.txt", "LastModified": old},
+    ]
+    assert fx.stale_uploads(listing, USER, now - timedelta(hours=1)) == [("eval-a", "up-1")]
