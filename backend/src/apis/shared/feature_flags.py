@@ -1205,6 +1205,35 @@ def source_provenance_enabled() -> bool:
     return os.environ.get("SOURCE_PROVENANCE_ENABLED", "").strip().lower() == "true"
 
 
+def web_search_default_max_results_enabled() -> bool:
+    """Whether an AgentCore Web Search call that names no ``maxResults`` asks
+    for 5 results instead of the connector's 10.
+
+    On, ``WebSearchDefaultsHook`` fills in ``maxResults=5`` at
+    ``BeforeToolCallEvent`` for any ``<target>___WebSearch`` call whose input
+    leaves it out. A count the model chose passes through. Each result is about
+    535 tokens, so an unqualified search drops from ~5.3k tokens of tool result
+    to ~2.6k (``docs/specs/web-search-default-comparison-findings.md``). Nothing
+    reaches the system prompt or ``toolConfig``, and the model's request in
+    history stays as it wrote it: the hook hands Strands a copy.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.webSearchDefaultMaxResults.enabled``. No SPA switch: there is
+    nothing to show.
+
+    A **feature switch**, not a rollout switch, and therefore permanent: how
+    many results an unqualified search buys is a product choice between
+    context spent and breadth of answer, which a deployment may reasonably
+    make the other way.
+    """
+    return (
+        os.environ.get("WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED", "").strip().lower()
+        == "true"
+    )
+
+
 def document_extract_enabled() -> bool:
     """Whether a named field set can be run over a document as typed rows
     (``docs/specs/structured-extraction.md``).

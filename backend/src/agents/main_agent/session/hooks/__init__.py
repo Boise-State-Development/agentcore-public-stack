@@ -12,6 +12,7 @@ from agents.main_agent.session.hooks.steering import SteeringHook
 from agents.main_agent.session.hooks.stop import StopHook
 from agents.main_agent.session.hooks.tool_approval import MCPExternalApprovalHook
 from agents.main_agent.session.hooks.tool_census import ToolCensusHook
+from agents.main_agent.session.hooks.web_search_defaults import WebSearchDefaultsHook
 
 __all__ = [
     "AgentStatusHook",
@@ -26,4 +27,5 @@ __all__ = [
     "StopHook",
     "MCPExternalApprovalHook",
     "ToolCensusHook",
+    "WebSearchDefaultsHook",
 ]

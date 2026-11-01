@@ -25,6 +25,7 @@ from agents.main_agent.session.hooks import (
     MCPSessionHealHook,
     ContextAttributionHook,
     PrefixFingerprintHook,
+    WebSearchDefaultsHook,
 )
 from agents.main_agent.tools import (
     create_default_registry,
@@ -400,6 +401,15 @@ class BaseAgent(ABC):
         # failure. After the two gates so a call they stop is not reconnected
         # for nothing; a healthy call pays one session probe.
         hooks.append(MCPSessionHealHook())
+
+        # AgentCore Web Search returns 10 results (~5.3k tokens) unless asked
+        # for fewer; fill in maxResults=5 when the model leaves it out. Hands
+        # Strands a copy of the tool use, so the model's request in history is
+        # untouched and nothing reaches the prompt. Registered only while on.
+        from apis.shared.feature_flags import web_search_default_max_results_enabled
+
+        if web_search_default_max_results_enabled():
+            hooks.append(WebSearchDefaultsHook())
 
         # Per-turn context-token attribution (system / tools / messages).
         # Best-effort; computes the breakdown on BeforeModelCallEvent and
