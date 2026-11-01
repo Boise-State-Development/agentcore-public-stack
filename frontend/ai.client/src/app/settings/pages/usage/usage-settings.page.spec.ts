@@ -165,6 +165,32 @@ describe('UsageSettingsPage quota requests', () => {
       .toBe('$30 central + $20 additional through Nov 30');
   });
 
+  it('says an approval ended early once its extension was revoked', () => {
+    requests.set([
+      {
+        requestId: 'r1', status: 'approved', kind: 'one_time', requestedAmount: '50', requestedUntil: '2026-11-30',
+        justification: 'x', createdAt: '2026-10-30T00:00:00Z', updatedAt: '2026-10-30T00:00:00Z',
+        decision: {
+          decidedAt: '2026-10-31T00:00:00Z', outcome: 'approved', amount: '20', validUntil: '2026-11-30',
+          extensionRevokedAt: '2026-11-05T12:00:00Z',
+        },
+      },
+      {
+        requestId: 'r2', status: 'approved', kind: 'one_time', requestedAmount: '10', requestedUntil: '2026-11-30',
+        justification: 'x', createdAt: '2026-10-30T00:00:00Z', updatedAt: '2026-10-30T00:00:00Z',
+        decision: {
+          decidedAt: '2026-10-31T00:00:00Z', outcome: 'approved', amount: '10', validUntil: '2026-11-30',
+          extensionRevokedAt: '2026-11-05T12:00:00Z',
+        },
+      },
+    ]);
+    const { el } = build(true, extended);
+    const text = el.querySelector('[data-testid="your-quota-requests"]')!.textContent!.replace(/\s+/g, ' ');
+    expect(text).toContain('You asked for $50; $20 was approved. It was ended early on Nov 5, 2026.');
+    expect(text).toContain('Approved, then ended early on Nov 5, 2026.');
+    expect(text).not.toContain('through Nov 30, 2026.');
+  });
+
   it('lists the user’s requests, saying when a different amount was approved', () => {
     const { el } = build(true, extended);
     expect(loadRequests).toHaveBeenCalled();

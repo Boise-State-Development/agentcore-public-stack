@@ -183,6 +183,27 @@ def test_submit_approve_creates_extension_and_notifies(env):
     assert again.status_code == 409
 
 
+def test_my_requests_mark_an_approval_whose_extension_was_revoked(env):
+    client = env["client"]
+    request_id = _submit(client).json()["requestId"]
+    approved = client.post(
+        f"/admin/quota-requests/{request_id}/approve",
+        json={"amount": 20, "validUntil": _through(), "fundingMode": "central"},
+    ).json()
+    mine = client.get("/quota/requests").json()
+    assert mine[0]["decision"].get("extensionRevokedAt") is None
+
+    extension_id = approved["extension"]["extensionId"]
+    assert client.post(f"/admin/quota-extensions/{extension_id}/revoke", json={"reason": "ended"}).status_code == 200
+
+    mine = client.get("/quota/requests").json()
+    assert mine[0]["status"] == "approved"
+    assert mine[0]["decision"]["extensionRevokedAt"]
+    # Joined at read time, never written onto the request row.
+    stored = env["requests"].table.get_item(Key={"PK": f"QUOTA_REQUEST#{request_id}", "SK": "METADATA"})["Item"]
+    assert "extensionRevokedAt" not in stored["decision"]
+
+
 def test_one_open_request_per_user(env):
     client = env["client"]
     first = _submit(client).json()["requestId"]

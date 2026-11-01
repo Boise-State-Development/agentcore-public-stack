@@ -136,6 +136,10 @@ class QuotaRequestDecision(BaseModel):
     funding_mode: Optional[FundingMode] = Field(None, alias="fundingMode")
     standing: Optional[bool] = None
     extension_id: Optional[str] = Field(None, alias="extensionId")
+    # When the extension this approval created was revoked. Joined from the
+    # extension when the requester lists their requests; never stored, because
+    # a revoke acts on the extension and leaves the request "approved" (§7.6).
+    extension_revoked_at: Optional[str] = Field(None, alias="extensionRevokedAt")
 
     @field_validator("amount", mode="before")
     @classmethod

@@ -239,7 +239,22 @@ class QuotaRequestService:
         return await self.requests.get_policy()
 
     async def list_my_requests(self, user: User) -> List[QuotaRequest]:
-        return await self.requests.list_user_requests(user.user_id)
+        """The caller's requests, each approval marked if its extension was since revoked.
+
+        The extension read happens only for a user with an approval to mark.
+        """
+        requests = await self.requests.list_user_requests(user.user_id)
+        if not any(r.decision and r.decision.extension_id for r in requests):
+            return requests
+        revoked = {
+            e.extension_id: e.revoked_at
+            for e in await self.quotas.list_user_extensions(user.user_id)
+            if e.revoked_at
+        }
+        for request in requests:
+            if request.decision and request.decision.extension_id in revoked:
+                request.decision.extension_revoked_at = revoked[request.decision.extension_id]
+        return requests
 
     async def open_request_for(self, user_id: str) -> Optional[QuotaRequest]:
         for request in await self.requests.list_user_requests(user_id):
