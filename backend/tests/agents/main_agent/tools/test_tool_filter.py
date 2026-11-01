@@ -75,6 +75,24 @@ class TestFilterToolsGateway:
         assert local_tools == []
         assert set(gateway_ids) == {"gateway_wikipedia", "gateway_arxiv"}
 
+    def test_registered_gateway_id_without_prefix(self, tool_filter: ToolFilter, caplog):
+        """A Gateway catalog row may use any id (the admin form's Web Search
+        preset is ``agentcore_web_search``); once registered by protocol it
+        classifies as gateway in every entry point instead of being dropped
+        as unknown."""
+        tool_filter.set_gateway_tools(["agentcore_web_search"])
+        with caplog.at_level(logging.WARNING):
+            local_tools, gateway_ids = tool_filter.filter_tools(["agentcore_web_search"])
+            extended = tool_filter.filter_tools_extended(["agentcore_web_search::WebSearch"])
+        assert (local_tools, gateway_ids) == ([], ["agentcore_web_search"])
+        assert extended.gateway_tool_ids == ["agentcore_web_search::WebSearch"]
+        assert tool_filter.get_statistics(["agentcore_web_search"])["gateway_tools"] == 1
+        assert "not a known tool id" not in caplog.text
+
+    def test_unregistered_id_without_prefix_is_not_gateway(self, tool_filter: ToolFilter):
+        _, gateway_ids = tool_filter.filter_tools(["agentcore_web_search"])
+        assert gateway_ids == []
+
     def test_mixed_local_and_gateway(self, tool_filter: ToolFilter):
         local_tools, gateway_ids = tool_filter.filter_tools(
             ["calculator", "gateway_wikipedia"]
