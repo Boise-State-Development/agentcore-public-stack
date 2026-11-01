@@ -108,6 +108,12 @@ BASELINES_DIR = BACKEND_DIR / "evals" / "baselines"
 RESULTS_FILE = "results.jsonl"
 META_FILE = "meta.json"
 JUDGEMENTS_FILE = "judgements.jsonl"
+#: Sessions created, and large documents uploaded, before their samples ran.
+#: Cleanup reads it too, so a run stopped between staging and running leaves nothing behind.
+STAGED_FILE = "staged.jsonl"
+#: The seed the large-document quality readouts used, so the documents are the
+#: ones those readouts measured (``large_document_quality/fixtures.py``).
+LARGE_DOCUMENT_SEED = 7
 #: A judge call carries the scrubbed session plus the evaluator's own prompt.
 #: Sized from strands-evals' built-in prompts; refine from the first run.
 EST_JUDGE_INPUT_TOKENS = 2_500
@@ -382,6 +388,12 @@ async def cmd_run(args: argparse.Namespace) -> int:
         data, mime_type = load_fixture(fixtures_dir, filename)
         return await register_upload(args.user_id, session_id, filename, mime_type, data)
 
+    try:
+        staged = await _stage_large_documents(out, todo, args)
+    except FixtureError as exc:
+        print(f"could not stage large documents: {exc}", file=sys.stderr)
+        return 2
+
     results_path = out / RESULTS_FILE
     queue: asyncio.Queue = asyncio.Queue()
     for item in todo:
@@ -403,6 +415,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
                     run_turn=run_turn,
                     register_fixture=register_fixture,
                     fixtures_dir=fixtures_dir,
+                    staged=staged.get((case.id, sample)),
                 )
             except (OAuthRequiredError, HeadlessAuthError, FixtureError) as exc:
                 fatal.append(f"{type(exc).__name__}: {exc}")
@@ -417,7 +430,9 @@ async def cmd_run(args: argparse.Namespace) -> int:
     await asyncio.gather(*(worker() for _ in range(max(1, args.workers))))
 
     if not args.keep:
-        await _cleanup(new_rows, args.user_id)
+        unrun = _unrun_staged(out, read_rows(results_path))
+        await _cleanup(new_rows + unrun, args.user_id)
+        _forget_staged(out, unrun)
 
     if fatal:
         print(f"\nrun stopped: {fatal[0]}", file=sys.stderr)
@@ -440,6 +455,106 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if tokens:
         print("tokens this invocation: " + ", ".join(f"{k}={v:,}" for k, v in sorted(tokens.items())))
     return 0
+
+
+# --------------------------------------------------------------------------- large documents
+
+
+def _unrun_staged(out: Path, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Staged sessions whose sample never wrote a row, shaped like rows for ``_cleanup``."""
+    ran = {row.get("session_id") for row in rows}
+    return [entry for entry in read_rows(out / STAGED_FILE) if entry["session_id"] not in ran]
+
+
+def _forget_staged(out: Path, deleted: Sequence[Dict[str, Any]]) -> None:
+    """Drop cleaned-up entries from ``staged.jsonl``, so a resumed run stages those samples afresh
+    instead of reusing uploads that no longer exist."""
+    if not deleted:
+        return
+    gone = {entry["session_id"] for entry in deleted}
+    keep = [entry for entry in read_rows(out / STAGED_FILE) if entry["session_id"] not in gone]
+    (out / STAGED_FILE).write_text("".join(json.dumps(entry) + "\n" for entry in keep), encoding="utf-8")
+
+
+def _echo_documents(states: Dict[str, Dict[str, Any]]) -> None:
+    counts = Counter(
+        "ready to ask" if s["settled"] else (s["preparation"] if s["preparation"] != "ready" else "indexing")
+        for s in states.values()
+    )
+    waited = max((s["waitedSeconds"] for s in states.values()), default=0)
+    print(f"  documents after {waited}s: " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())), flush=True)
+
+
+async def _stage_large_documents(
+    out: Path, todo: Sequence[Tuple[EvalCase, int]], args: argparse.Namespace
+) -> Dict[Tuple[str, int], Any]:
+    """Upload every large document the pending samples name, then wait for all of them at once.
+
+    Each sample gets its own session and its own copy of each document,
+    because attachment search is scoped to one user in one conversation. A
+    staged sample from an earlier, interrupted invocation is reused rather
+    than uploaded again.
+    """
+    from apis.shared.evals.execute import StagedSample, new_session_id
+    from apis.shared.evals.fixtures import FixtureError, register_reference_upload, wait_for_documents
+
+    wanted = [(case, sample) for case, sample in todo if case.large_documents]
+    if not wanted:
+        return {}
+    if not os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL"):
+        import boto3
+
+        try:
+            os.environ["LARGE_DOCUMENT_PREPARE_QUEUE_URL"] = boto3.client("sqs", region_name=args.region).get_queue_url(
+                QueueName=f"{args.prefix}-large-document-prepare"
+            )["QueueUrl"]
+        except Exception as exc:  # noqa: BLE001 — reported as a setup error
+            raise FixtureError(f"no large-document prepare queue for {args.prefix}: {exc}") from exc
+
+    from large_document_quality.fixtures import build_all
+
+    names = sorted({name for case, _ in wanted for name in case.large_documents})
+    documents = {fixture.name: fixture for fixture in build_all(LARGE_DOCUMENT_SEED, names)}
+    staged_path = out / STAGED_FILE
+    earlier = {(e["case_id"], int(e["sample"])): e for e in read_rows(staged_path)}
+
+    async def stage(case: EvalCase, sample: int) -> Dict[str, Any]:
+        if (case.id, sample) in earlier:
+            return earlier[(case.id, sample)]
+        session_id = new_session_id()
+        upload_ids = []
+        for name in case.large_documents:
+            doc = documents[name]
+            upload_ids.append(
+                await register_reference_upload(args.user_id, session_id, doc.filename, doc.mime_type, doc.data)
+            )
+        entry = {"case_id": case.id, "sample": sample, "session_id": session_id,
+                 "upload_ids": upload_ids, "documents": list(case.large_documents)}
+        with staged_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+        return entry
+
+    megabytes = sum(len(documents[n].data) for c, _ in wanted for n in c.large_documents) / 1e6
+    print(f"staging {len(wanted)} samples with large documents ({megabytes:.0f} MB to upload)", flush=True)
+    entries = await asyncio.gather(*(stage(case, sample) for case, sample in wanted))
+    states = await wait_for_documents(
+        args.user_id,
+        [u for e in entries for u in e["upload_ids"]],
+        timeout=args.document_timeout,
+        echo=_echo_documents,
+    )
+    unsettled = sum(1 for s in states.values() if not s["settled"])
+    if unsettled:
+        print(f"  {unsettled} document(s) not searchable after {args.document_timeout:.0f}s; "
+              "their samples run anyway, as a user asking early would", flush=True)
+    return {
+        (e["case_id"], int(e["sample"])): StagedSample(
+            session_id=e["session_id"],
+            upload_ids=tuple(e["upload_ids"]),
+            documents=tuple({"name": n, **states[u]} for n, u in zip(e["documents"], e["upload_ids"])),
+        )
+        for e in entries
+    }
 
 
 # --------------------------------------------------------------------------- cleanup
@@ -477,7 +592,10 @@ async def cmd_cleanup(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     resolve_runtime_env(meta["prefix"], meta.get("region") or args.region)
-    await _cleanup(read_rows(out / RESULTS_FILE), meta["user_id"])
+    rows = read_rows(out / RESULTS_FILE)
+    unrun = _unrun_staged(out, rows)
+    await _cleanup(rows + unrun, meta["user_id"])
+    _forget_staged(out, unrun)
     return 0
 
 
@@ -714,6 +832,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--workers", type=int, default=4, help="cases run concurrently; turns within a case never are")
     s.add_argument("--timeout", type=float, default=300.0, help="per-turn stream budget in seconds")
     s.add_argument("--keep", action="store_true", help="do not delete the sessions and uploads this run created")
+    s.add_argument("--document-timeout", type=float, default=900.0,
+                   help="seconds to wait for staged large documents to become searchable (default 900)")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
 
     s = sub.add_parser("judge", help="(spends) score a run's samples with the LLM judges their cases name")

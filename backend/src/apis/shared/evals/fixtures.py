@@ -13,6 +13,14 @@ upload writes: the S3 object at the conventional key, and a READY row.
 Needs AWS credentials and ``S3_USER_FILES_BUCKET_NAME`` /
 ``DYNAMODB_USER_FILES_TABLE_NAME``, which the scripts export from the target's
 SSM parameters.
+
+A large (reference-class) document goes one step further, the step app-api's
+``FileUploadService._enqueue_preparation`` takes after a real upload: the row is
+marked ``preparation = pending`` and ``{user_id, upload_id}`` is sent to the
+deployed prepare queue (``LARGE_DOCUMENT_PREPARE_QUEUE_URL``). The deployed
+Lambda then builds the sidecars and, with the attachments KB on, ingests the
+document, exactly as for a user's upload. ``wait_for_documents`` polls the rows
+until each is ready to ask about. Nothing here reimplements preparation.
 """
 
 from __future__ import annotations
@@ -23,7 +31,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Tuple
 
 #: Extensions the case fixtures use, pinned rather than left to the host's
 #: ``mimetypes`` table, which differs between macOS and the CI image for ``.md``.
@@ -88,8 +96,107 @@ async def register_upload(user_id: str, session_id: str, filename: str, mime_typ
     return upload_id
 
 
+async def register_reference_upload(
+    user_id: str, session_id: str, filename: str, mime_type: str, data: bytes
+) -> str:
+    """Store ``data`` as a READY upload and queue its preparation, as app-api does for a large upload."""
+    import json
+
+    import boto3
+
+    from apis.shared.files.large_document import STATUS_PENDING, preparation_record
+    from apis.shared.files.repository import get_file_upload_repository
+
+    queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "").strip()
+    if not queue_url:
+        raise FixtureError("LARGE_DOCUMENT_PREPARE_QUEUE_URL is not set; does the target run large-document attachments?")
+    upload_id = await register_upload(user_id, session_id, filename, mime_type, data)
+    # Pending before the message, so the Lambda's ``ready`` can never be overwritten.
+    await get_file_upload_repository().update_file_preparation(
+        user_id, upload_id, preparation_record(status=STATUS_PENDING)
+    )
+    body = json.dumps({"user_id": user_id, "upload_id": upload_id})
+    await asyncio.to_thread(boto3.client("sqs").send_message, QueueUrl=queue_url, MessageBody=body)
+    return upload_id
+
+
+#: A prepared document with no ``kbIndex`` yet is about to be ingested by the
+#: same Lambda run (``attachment_index.search_status``). One still without it
+#: after this long belongs to a deployment with the attachments KB off.
+KB_GRACE_SECONDS = 60.0
+_KB_TERMINAL = ("indexed", "failed", "skipped_cap", "removed", "evicted")
+
+
+def document_state(meta: Any) -> Dict[str, Any]:
+    """What a waiting run needs from one upload row: preparation, KB status, text-searchable."""
+    from apis.shared.files import large_document
+    from apis.shared.files.attachment_index import is_text_indexed, kb_status
+
+    if meta is None:
+        return {"preparation": "missing", "kbIndex": None, "textIndexed": False}
+    return {
+        "preparation": large_document.preparation_status(meta),
+        "kbIndex": kb_status(meta),
+        "textIndexed": bool(is_text_indexed(meta)),
+    }
+
+
+def document_settled(state: Dict[str, Any], *, seconds_since_prepared: Optional[float]) -> bool:
+    """Ready to ask about: prepared and searchable, or in a state that will not change.
+
+    A failed preparation is settled too: the turn then gets what a user would
+    get, and the sample's answer says whether that was good enough.
+    """
+    if state["preparation"] in ("failed", "missing"):
+        return True
+    if state["preparation"] != "ready":
+        return False
+    if state["kbIndex"] in _KB_TERMINAL or state["textIndexed"]:
+        return True
+    return state["kbIndex"] is None and (seconds_since_prepared or 0.0) >= KB_GRACE_SECONDS
+
+
+async def wait_for_documents(
+    user_id: str,
+    upload_ids: Sequence[str],
+    *,
+    timeout: float,
+    poll: float = 15.0,
+    echo: Optional[Callable[[Dict[str, Dict[str, Any]]], None]] = None,
+    sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> Dict[str, Dict[str, Any]]:
+    """Poll each upload's row until every one is settled or ``timeout`` passes.
+
+    Returns ``{upload_id: state}`` with ``settled`` and ``waitedSeconds`` added.
+    An unsettled document is not an error: the turn goes ahead with whatever
+    the document has by then, which is what a user asking early would get.
+    """
+    from apis.shared.files.repository import get_file_upload_repository
+
+    repository = get_file_upload_repository()
+    start = clock()
+    prepared_at: Dict[str, float] = {}
+    while True:
+        now = clock()
+        states: Dict[str, Dict[str, Any]] = {}
+        for upload_id in upload_ids:
+            state = document_state(await repository.get_file(user_id, upload_id))
+            if state["preparation"] == "ready":
+                prepared_at.setdefault(upload_id, now)
+            since = now - prepared_at[upload_id] if upload_id in prepared_at else None
+            state["settled"] = document_settled(state, seconds_since_prepared=since)
+            state["waitedSeconds"] = round(now - start)
+            states[upload_id] = state
+        if echo is not None:
+            echo(states)
+        if all(s["settled"] for s in states.values()) or now - start >= timeout:
+            return states
+        await sleep(poll)
+
+
 async def delete_upload(user_id: str, upload_id: str) -> bool:
-    """Remove an upload this harness registered: the S3 object, then the row. ``False`` if it was already gone."""
+    """Remove an upload this harness registered: the row, then its S3 objects. ``False`` if it was already gone."""
     import boto3
 
     from apis.shared.files.repository import get_file_upload_repository
@@ -97,5 +204,20 @@ async def delete_upload(user_id: str, upload_id: str) -> bool:
     meta = await get_file_upload_repository().delete_file(user_id, upload_id)
     if meta is None:
         return False
-    await asyncio.to_thread(boto3.client("s3").delete_object, Bucket=meta.s3_bucket, Key=meta.s3_key)
-    return True
+    # Everything under the upload's prefix: the original, and for a prepared
+    # document its ``_derived/`` sidecars. The delete events take a document
+    # out of the attachments KB, as for a user's own delete.
+    s3 = boto3.client("s3")
+    prefix = meta.s3_key.rsplit("/", 1)[0] + "/"
+    token: Optional[str] = None
+    while True:
+        kwargs: Dict[str, Any] = {"Bucket": meta.s3_bucket, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        page = await asyncio.to_thread(s3.list_objects_v2, **kwargs)
+        keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+        if keys:
+            await asyncio.to_thread(s3.delete_objects, Bucket=meta.s3_bucket, Delete={"Objects": keys})
+        if not page.get("IsTruncated"):
+            return True
+        token = page.get("NextContinuationToken")
