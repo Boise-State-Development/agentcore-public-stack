@@ -242,6 +242,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     sourceProvenance: {
       enabled: false,
     },
+    webSearchDefaultMaxResults: {
+      enabled: false,
+    },
     documentExtract: {
       enabled: false,
       modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',

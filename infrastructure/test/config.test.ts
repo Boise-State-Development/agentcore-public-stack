@@ -741,6 +741,32 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Web Search result default — in development, so only "true" enables
+  // ============================================================
+
+  describe('Web Search default maxResults feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED;
+      expect(loadConfig(app).webSearchDefaultMaxResults.enabled).toBe(false);
+      process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED = '';
+      expect(loadConfig(app).webSearchDefaultMaxResults.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED = 'True';
+      expect(loadConfig(app).webSearchDefaultMaxResults.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED = value;
+        expect(loadConfig(app).webSearchDefaultMaxResults.enabled).toBe(false);
+      }
+    });
+  });
+
+  // ============================================================
   // Structured extraction — in development, so only "true" enables
   // ============================================================
 

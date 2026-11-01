@@ -417,6 +417,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         // runs the check and emits `source_provenance`. Written only while ON,
         // so the default costs nothing against the V2 payload budget.
         ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Web Search result default: a `___WebSearch` call that names no
+        // maxResults asks for 5. Written only while ON, so the default costs
+        // nothing against the V2 payload budget.
+        ...(config.webSearchDefaultMaxResults.enabled
+          ? { WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: 'true' }
+          : {}),
         // Handoffs (in development): the Runtime accepts `handoff_context` on a
         // target's first turn and keeps the source's HANDOFF# row current. Written
         // only while ON, so the default costs nothing against the V2 payload budget.

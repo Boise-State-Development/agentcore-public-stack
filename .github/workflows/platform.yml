@@ -383,6 +383,13 @@ jobs:
       # "true" enables. Sets the flag on the AgentCore Runtime and app-api; no
       # resources. The SPA's matching switch is `features.sourceProvenance`.
       CDK_SOURCE_PROVENANCE_ENABLED: ${{ vars.CDK_SOURCE_PROVENANCE_ENABLED }}
+      # AgentCore Web Search result default: a `<target>___WebSearch` call that
+      # names no maxResults asks for 5 instead of the connector's 10, halving
+      # the ~5.3k tokens an unqualified search adds
+      # (docs/specs/web-search-default-comparison-findings.md). In development,
+      # so only "true" enables. Sets the flag on the AgentCore Runtime only, and
+      # only while on; no resources.
+      CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: ${{ vars.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED }}
       CDK_DOCUMENT_EXTRACT_ENABLED: ${{ vars.CDK_DOCUMENT_EXTRACT_ENABLED }}
       CDK_DOCUMENT_EXTRACT_MODEL_ID: ${{ vars.CDK_DOCUMENT_EXTRACT_MODEL_ID }}
       CDK_DOCUMENT_EXTRACT_CONCURRENCY: ${{ vars.CDK_DOCUMENT_EXTRACT_CONCURRENCY }}

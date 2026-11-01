@@ -108,6 +108,7 @@ export interface AppConfig {
   folderSync: FolderSyncConfig;
   sourceProvenance: SourceProvenanceConfig;
   documentExtract: DocumentExtractConfig;
+  webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -839,6 +840,24 @@ export interface FolderSyncConfig {
  * SessionLookupIndex GSI.
  */
 export interface SourceProvenanceConfig {
+  enabled: boolean;
+}
+
+/**
+ * AgentCore Web Search result default
+ * (docs/specs/web-search-default-comparison-findings.md). On, a Web Search call
+ * (`<target>___WebSearch`) whose input names no `maxResults` asks for 5 results
+ * instead of the connector's 10, which halves the ~5.3k tokens an unqualified
+ * search puts into the conversation. A count the model chose passes through.
+ * **Opt-in while in development**: off unless
+ * CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED=true (or a
+ * `webSearchDefaultMaxResults.enabled: true` cdk.json context). A feature
+ * switch, and therefore permanent: results per search is a product choice
+ * between context spent and breadth. Sets WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
+ * on the AgentCore Runtime only, and **only while on**, so the default spends
+ * none of the V2 payload budget. No resources, and nothing reaches the prompt.
+ */
+export interface WebSearchDefaultMaxResultsConfig {
   enabled: boolean;
 }
 
@@ -1751,6 +1770,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SOURCE_PROVENANCE_ENABLED
         ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
+    },
+    webSearchDefaultMaxResults: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
+        ? process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('webSearchDefaultMaxResults')?.enabled ?? false,
     },
     documentExtract: {
       // In development: only "true" enables, and an unset GitHub variable
