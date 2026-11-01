@@ -394,16 +394,23 @@ export class UsageSettingsPage {
     return r.kind === 'standing' ? `Up to ${amount} ${per}, ongoing` : `${amount} ${per}`;
   }
 
-  /** An approval for a different amount says so plainly (§5.3). */
+  /**
+   * An approval for a different amount says so plainly (§5.3). One whose
+   * extension an admin later revoked says when it ended instead of the date
+   * it was granted through, which would otherwise read as still in force.
+   */
   decisionLine(r: QuotaRequest): string | null {
     const decision = r.decision;
     if (r.status !== 'approved' || !decision) return null;
     const granted = toAmount(decision.amount);
     const asked = toAmount(r.requestedAmount);
-    const until = decision.validUntil ? ` through ${formatQuotaDate(decision.validUntil)}` : '';
+    const ended = decision.extensionRevokedAt ? formatQuotaDate(decision.extensionRevokedAt) : '';
+    const until = !ended && decision.validUntil ? ` through ${formatQuotaDate(decision.validUntil)}` : '';
+    const afterwards = ended ? ` It was ended early on ${ended}.` : '';
     if (Number.isFinite(granted) && granted !== asked) {
-      return `You asked for ${formatAmount(asked)}; ${formatAmount(granted)} was approved${until}.`;
+      return `You asked for ${formatAmount(asked)}; ${formatAmount(granted)} was approved${until}.${afterwards}`;
     }
+    if (ended) return `Approved, then ended early on ${ended}.`;
     return until ? `Approved${until}.` : null;
   }
 

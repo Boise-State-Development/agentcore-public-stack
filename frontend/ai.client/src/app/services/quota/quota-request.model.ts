@@ -62,6 +62,8 @@ export interface QuotaRequestDecision {
   validUntil?: string | null;
   fundingMode?: string | null;
   standing?: boolean | null;
+  /** When an admin revoked the extension this approval created; the request itself stays approved. */
+  extensionRevokedAt?: string | null;
 }
 
 export interface QuotaRequest {
