@@ -1,6 +1,6 @@
 # PlatformStack resource budget: the reduction plan
 
-**Status:** Phase 0 shipped with this document. The IAM change (§4) and Phase 2 (§5) are in progress. Phase 1 (§3) is proposed.
+**Status:** Phase 0 shipped with this document. Phase 2 (§5) shipped in #1808. The IAM change (§4) is in progress. Phase 1 (§3) is proposed.
 **Guard:** `infrastructure/test/platform-ceilings.test.ts` prints the live numbers on every run. Read the guard, not the figures here.
 
 ## 1. Where we are
@@ -123,13 +123,13 @@ When `retainDataOnDelete` is false, every bucket gets CDK's `autoDeleteObjects`.
 
 The change:
 
-- `scripts/teardown/destroy.sh` empties every `{prefix}-` bucket, including object versions, before it deletes the stack.
-- `getAutoDeleteObjects` returns false for every deployment.
-- The teardown docs say to use `destroy.sh` rather than a bare `cdk destroy`.
+- `scripts/teardown/destroy.sh` empties each stack's buckets, including every object version and delete marker, before it deletes the stack. It finds them with `list-stack-resources`, not by `{prefix}-` name, so a bucket that only shares the prefix is never touched. It empties only buckets whose deployed `DeletionPolicy` is `Delete`, so a retaining deployment keeps its objects. A late log delivery that fails the delete is emptied again and the delete retried once. `--dry-run` reports without deleting.
+- `getAutoDeleteObjects` is removed, and the guard fails if a `Custom::S3AutoDeleteObjects` reappears.
+- The teardown docs (docs site `deployment/environments.md` "Tearing down", both troubleshooting pages) say to use `destroy.sh` rather than a bare `cdk destroy`.
 
 **Fork pain:** someone who tears down with a bare `cdk destroy` or the console now gets "bucket not empty" and has to empty the buckets by hand. Teardown is rare and the failure message says what to do. Even so, this is a `Changed` CHANGELOG entry, and the docs-site teardown page should be checked first so it already points at the script.
 
-**Net:** about 15 fewer with every flag on in a non-retaining deployment (450 → about 435 on its own), available in the release it ships in. A production deployment is unchanged, because it never had these resources.
+**Net (measured):** exactly 15 fewer in both columns, 434 → 419 with shipped defaults and 447 → 432 with every flag on, in the release it ships in. A `production: true` synth now has the same count. A production deployment is unchanged, because it never had these resources.
 
 ## 6. The Runtime environment needs no refactor
 

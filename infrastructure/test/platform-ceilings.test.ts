@@ -283,8 +283,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
 /**
  * Booleans in `AppConfig` that are a deployment's shape rather than a feature
  * switch, and which `allFlagsOn` deliberately leaves alone. `production` and
- * `retainDataOnDelete` no longer change the resource count (measured: 426/439
- * either way), so the worst case keeps them as dev runs them; `manageDnsRecords` is already on in
+ * `retainDataOnDelete` no longer change the resource count (measured: the
+ * same counts either way), so the worst case keeps them as dev runs them; `manageDnsRecords` is already on in
  * `DEPLOYED_SHAPE`.
  */
 const NOT_FEATURE_SWITCHES = new Set(['production', 'retainDataOnDelete', 'manageDnsRecords']);
