@@ -114,6 +114,21 @@ class TestCompareRun:
         assert "LOST  tool_selection.a" in text and "bad answer" in text
         assert "tool_selection.b" not in text
         assert "calculator" in text
+        assert "calls:" not in text
+
+    def test_explain_lists_each_samples_calls_when_given_cost_rows(self):
+        baseline = self._baseline({"a": True})
+        rows = [{**_row("a", s, s == 2), "session_id": f"eval-{s}"} for s in range(3)]
+        calls = {
+            "eval-0": [{"cacheStatus": "hit", "compactionEvents": [{"kind": "applied"}], "cost": {"total": 0.002}}],
+            "eval-2": [],
+        }
+        text = explain_family("tool_selection", baseline, rows, calls_by_session=calls)
+        lines = text.splitlines()
+        assert "  calls:" in lines
+        assert any(l.startswith("    [0] FAIL") and "compaction applied 1" in l for l in lines)
+        assert "    [1] FAIL  unavailable" in lines
+        assert "    [2] pass  no cost rows" in lines
 
 
 def test_load_baseline_checks_existence_and_schema(tmp_path):

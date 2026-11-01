@@ -127,10 +127,11 @@ export class AdminTablesConstruct extends Construct {
       tier: ssm.ParameterTier.STANDARD,
     });
 
-    // System prompts: name + arn published. The arn parameter is consumed
-    // by restore tooling and ad-hoc IAM scoping; runtime services use
-    // typed construct refs through PlatformComputeRefs and don't read
-    // these.
+    // System prompts and agent templates publish the table name only.
+    // Runtime services use typed construct refs through
+    // PlatformComputeRefs; an ARN is derivable from the name, and the
+    // ARN parameters these two once had were read by nothing while each
+    // spent one of the stack's 500 resources.
     new ssm.StringParameter(this, 'SystemPromptsTableNameParameter', {
       parameterName: `/${config.projectPrefix}/admin/system-prompts-table-name`,
       stringValue: this.systemPromptsTable.tableName,
@@ -138,27 +139,11 @@ export class AdminTablesConstruct extends Construct {
       tier: ssm.ParameterTier.STANDARD,
     });
 
-    new ssm.StringParameter(this, 'SystemPromptsTableArnParameter', {
-      parameterName: `/${config.projectPrefix}/admin/system-prompts-table-arn`,
-      stringValue: this.systemPromptsTable.tableArn,
-      description: 'System prompts DynamoDB table ARN',
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
-    // Agent templates: name + arn published, mirroring system prompts.
     new ssm.StringParameter(this, 'AgentTemplatesTableNameParameter', {
       parameterName: `/${config.projectPrefix}/admin/agent-templates-table-name`,
       stringValue: this.agentTemplatesTable.tableName,
       description: 'Agent templates DynamoDB table name',
       tier: ssm.ParameterTier.STANDARD,
     });
-
-    new ssm.StringParameter(this, 'AgentTemplatesTableArnParameter', {
-      parameterName: `/${config.projectPrefix}/admin/agent-templates-table-arn`,
-      stringValue: this.agentTemplatesTable.tableArn,
-      description: 'Agent templates DynamoDB table ARN',
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
   }
 }

@@ -13,6 +13,10 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from apis.shared.timestamps import from_iso, to_iso
+from apis.shared.tools.gateway_connectors import (
+    MAX_DOMAIN_FILTER_ENTRIES,
+    get_connector_spec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +426,37 @@ class MCPServerConfig(BaseModel):
         return {entry.name for entry in self.tools if entry.needs_approval}
 
 
+_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def _normalize_domains(domains: List[str], field_name: str) -> List[str]:
+    """Lowercase, trim and de-duplicate a domain filter list, order-preserving.
+
+    Rejects anything that is not a bare host name. The connector matches a
+    root domain against its subdomains, so `https://example.com/docs` is not
+    a narrower filter, it is a typo that would otherwise match nothing — and a
+    silently empty allow list returns no results for every search.
+    """
+    seen: Set[str] = set()
+    cleaned: List[str] = []
+    for raw in domains:
+        domain = (raw or "").strip().lower().rstrip(".")
+        if not domain or domain in seen:
+            continue
+        if not _DOMAIN_RE.match(domain):
+            raise ValueError(
+                f"{field_name}: '{raw}' is not a bare domain (e.g. 'example.com' "
+                "— no scheme, path or port)"
+            )
+        seen.add(domain)
+        cleaned.append(domain)
+    if len(cleaned) > MAX_DOMAIN_FILTER_ENTRIES:
+        raise ValueError(
+            f"{field_name} holds at most {MAX_DOMAIN_FILTER_ENTRIES} domains"
+        )
+    return cleaned
+
+
 class MCPGatewayConfig(BaseModel):
     """
     Configuration for an externally deployed MCP server registered as a
@@ -435,6 +470,11 @@ class MCPGatewayConfig(BaseModel):
     `target_id` and `gateway_arn` are AWS-assigned identifiers stamped onto the
     config by the admin route after the Gateway target is created; they are the
     catalog↔AWS link that lets update/delete reconcile the live target.
+
+    Setting `connector_id` registers a built-in AgentCore connector (e.g. Web
+    Search) instead of an external server: no endpoint, the Gateway's own role
+    as the credential, and a tool list fixed by the connector. See
+    `apis.shared.tools.gateway_connectors`.
     """
 
     # Gateway target identity
@@ -442,7 +482,31 @@ class MCPGatewayConfig(BaseModel):
         ..., description="Gateway target name (unique within the gateway)"
     )
     endpoint_url: str = Field(
-        ..., description="External MCP server endpoint the Gateway calls"
+        "",
+        description="External MCP server endpoint the Gateway calls "
+        "(empty for a connector target)",
+    )
+
+    # Built-in connector target (mutually exclusive with endpoint_url)
+    connector_id: Optional[str] = Field(
+        None,
+        description="Built-in AgentCore connector to register instead of an "
+        "external endpoint (e.g. 'web-search')",
+    )
+    connector_version: Optional[str] = Field(
+        None,
+        description="Pinned connector version; defaults to the platform's "
+        "pinned version for the connector",
+    )
+    domain_include: List[str] = Field(
+        default_factory=list,
+        description="Target-level domain allow list (web-search). When set, "
+        "every search is restricted to these domains; hidden from the agent.",
+    )
+    domain_exclude: List[str] = Field(
+        default_factory=list,
+        description="Target-level domain block list (web-search). Results from "
+        "these domains are dropped on every search; hidden from the agent.",
     )
     listing_mode: GatewayListingMode = Field(
         default=GatewayListingMode.DEFAULT,
@@ -513,6 +577,11 @@ class MCPGatewayConfig(BaseModel):
 
     model_config = {"use_enum_values": True}
 
+    @property
+    def is_connector(self) -> bool:
+        """True for a built-in AgentCore connector target."""
+        return bool(self.connector_id)
+
     @model_validator(mode="after")
     def _validate_credentials(self) -> "MCPGatewayConfig":
         """Enforce the credential/listing-mode co-gating rules.
@@ -521,6 +590,14 @@ class MCPGatewayConfig(BaseModel):
         the listing-mode co-gating gotcha in issue #419. GATEWAY_IAM_ROLE uses
         the gateway's execution role and takes no provider ARN.
         """
+        if self.connector_id:
+            return self._normalize_connector()
+        if not self.endpoint_url:
+            raise ValueError("endpoint_url is required unless connector_id is set")
+        if self.domain_include or self.domain_exclude:
+            raise ValueError(
+                "domain_include / domain_exclude apply only to a connector target"
+            )
         if self.credential_type == GatewayCredentialType.OAUTH:
             if not self.credential_provider_arn:
                 raise ValueError(
@@ -551,9 +628,52 @@ class MCPGatewayConfig(BaseModel):
                 )
         return self
 
+    def _normalize_connector(self) -> "MCPGatewayConfig":
+        """Validate a connector target and fill in what the connector fixes.
+
+        A connector has exactly one shape, so the fields an external target
+        asks the admin for are either rejected (a value there would be
+        silently ignored by AWS, which is worse) or set here: the credential is
+        always the gateway role, listing is DEFAULT (semantic search needs it),
+        the version is pinned, and the tool list is the connector's own tool —
+        keeping any per-tool flags the admin set on it, because that list is
+        what expands a bare catalog id into `gateway_<target>___<tool>`.
+        """
+        spec = get_connector_spec(self.connector_id)
+        if self.endpoint_url:
+            raise ValueError("A connector target takes no endpoint_url")
+        if self.credential_provider_arn or self.lambda_function_name or self.aws_service:
+            raise ValueError(
+                "A connector target signs with the gateway execution role; "
+                "credential_provider_arn, aws_service and lambda_function_name "
+                "must be unset"
+            )
+        if not spec.supports_domain_filter and (self.domain_include or self.domain_exclude):
+            raise ValueError(
+                f"Connector '{spec.connector_id}' does not support domain filters"
+            )
+        self.domain_include = _normalize_domains(self.domain_include, "domain_include")
+        self.domain_exclude = _normalize_domains(self.domain_exclude, "domain_exclude")
+
+        self.credential_type = GatewayCredentialType.GATEWAY_IAM_ROLE.value
+        self.listing_mode = GatewayListingMode.DEFAULT.value
+        self.connector_version = self.connector_version or spec.version
+
+        unknown = [e.name for e in self.tools if e.name != spec.tool_name]
+        if unknown:
+            raise ValueError(
+                f"Connector '{spec.connector_id}' exposes only '{spec.tool_name}'; "
+                f"unknown tools: {', '.join(unknown)}"
+            )
+        if not self.tools:
+            self.tools = [
+                MCPToolEntry(name=spec.tool_name, description=spec.tool_description)
+            ]
+        return self
+
     def to_dict(self) -> dict:
         """Convert to dictionary for DynamoDB storage."""
-        return {
+        item = {
             "targetName": self.target_name,
             "endpointUrl": self.endpoint_url,
             "listingMode": self.listing_mode
@@ -575,6 +695,14 @@ class MCPGatewayConfig(BaseModel):
             "targetId": self.target_id,
             "gatewayArn": self.gateway_arn,
         }
+        # Only on connector rows, so every external-server row stays
+        # byte-identical to what it was before connectors existed.
+        if self.connector_id:
+            item["connectorId"] = self.connector_id
+            item["connectorVersion"] = self.connector_version
+            item["domainInclude"] = list(self.domain_include)
+            item["domainExclude"] = list(self.domain_exclude)
+        return item
 
     @classmethod
     def from_dict(cls, data: dict) -> "MCPGatewayConfig":
@@ -582,6 +710,10 @@ class MCPGatewayConfig(BaseModel):
         return cls(
             target_name=data.get("targetName", ""),
             endpoint_url=data.get("endpointUrl", ""),
+            connector_id=data.get("connectorId"),
+            connector_version=data.get("connectorVersion"),
+            domain_include=data.get("domainInclude") or [],
+            domain_exclude=data.get("domainExclude") or [],
             listing_mode=data.get("listingMode", GatewayListingMode.DEFAULT),
             credential_type=data.get(
                 "credentialType", GatewayCredentialType.NONE
@@ -1367,7 +1499,11 @@ class MCPGatewayConfigRequest(BaseModel):
     """
 
     target_name: str = Field(..., alias="targetName")
-    endpoint_url: str = Field(..., alias="endpointUrl")
+    endpoint_url: str = Field("", alias="endpointUrl")
+    connector_id: Optional[str] = Field(None, alias="connectorId")
+    connector_version: Optional[str] = Field(None, alias="connectorVersion")
+    domain_include: List[str] = Field(default_factory=list, alias="domainInclude")
+    domain_exclude: List[str] = Field(default_factory=list, alias="domainExclude")
     listing_mode: GatewayListingMode = Field(
         default=GatewayListingMode.DEFAULT, alias="listingMode"
     )
@@ -1396,6 +1532,10 @@ class MCPGatewayConfigRequest(BaseModel):
         return MCPGatewayConfig(
             target_name=self.target_name,
             endpoint_url=self.endpoint_url,
+            connector_id=self.connector_id or None,
+            connector_version=self.connector_version or None,
+            domain_include=self.domain_include,
+            domain_exclude=self.domain_exclude,
             listing_mode=self.listing_mode,
             credential_type=self.credential_type,
             credential_provider_arn=self.credential_provider_arn,
@@ -1595,6 +1735,10 @@ class MCPGatewayConfigResponse(BaseModel):
 
     target_name: str = Field(..., alias="targetName")
     endpoint_url: str = Field(..., alias="endpointUrl")
+    connector_id: Optional[str] = Field(None, alias="connectorId")
+    connector_version: Optional[str] = Field(None, alias="connectorVersion")
+    domain_include: List[str] = Field(default_factory=list, alias="domainInclude")
+    domain_exclude: List[str] = Field(default_factory=list, alias="domainExclude")
     listing_mode: str = Field(..., alias="listingMode")
     credential_type: str = Field(..., alias="credentialType")
     credential_provider_arn: Optional[str] = Field(
@@ -1620,6 +1764,10 @@ class MCPGatewayConfigResponse(BaseModel):
         return cls(
             target_name=config.target_name,
             endpoint_url=config.endpoint_url,
+            connector_id=config.connector_id,
+            connector_version=config.connector_version,
+            domain_include=list(config.domain_include),
+            domain_exclude=list(config.domain_exclude),
             listing_mode=config.listing_mode
             if isinstance(config.listing_mode, str)
             else config.listing_mode.value,

@@ -8,6 +8,8 @@ import {
 } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
 import { AdminMarketplaceService } from './marketplace/services/admin-marketplace.service';
+import { QuotaRequestsAdminService } from './quota-requests/services/quota-requests-admin.service';
+import { FEATURES } from '../services/features';
 import { UserService } from '../auth/user.service';
 import { SidenavService } from '../services/sidenav/sidenav.service';
 import { AdminScopeId } from './admin-scope.model';
@@ -29,6 +31,7 @@ import {
   heroMegaphone,
   heroSparkles,
   heroInbox,
+  heroInboxArrowDown,
   heroFlag,
   heroRectangleStack,
   heroStar,
@@ -98,6 +101,7 @@ interface NavGroup {
       heroMegaphone,
       heroSparkles,
       heroInbox,
+      heroInboxArrowDown,
       heroFlag,
       heroRectangleStack,
       heroStar,
@@ -169,6 +173,8 @@ interface NavGroup {
 })
 export class AdminNav implements OnInit {
   private marketplace = inject(AdminMarketplaceService);
+  private quotaRequests = inject(QuotaRequestsAdminService);
+  private features = inject(FEATURES);
   private userService = inject(UserService);
   protected sidenavService = inject(SidenavService);
 
@@ -182,6 +188,20 @@ export class AdminNav implements OnInit {
         // to delegate independently.
         { label: 'Feedback', icon: 'heroHandThumbDown', route: '/admin/feedback', scope: 'admin.costs' },
         { label: 'Quotas', icon: 'heroScale', route: '/admin/quota', scope: 'admin.quota' },
+        // Quota requests (quota-requests spec §6), only in a build with the
+        // feature on. Its own scope, so an approver can hold the queue without
+        // the tier editor; the badge is requests waiting on an admin.
+        ...(this.features.quotaRequests
+          ? [
+              {
+                label: 'Quota Requests',
+                icon: 'heroInboxArrowDown',
+                route: '/admin/quota-requests',
+                scope: 'admin.quota_requests' as const,
+                badge: this.quotaRequests.pendingCount,
+              },
+            ]
+          : []),
         { label: 'Fine-Tuning', icon: 'heroAcademicCap', route: '/admin/fine-tuning', scope: 'admin.fine_tuning' },
       ],
     },
@@ -287,6 +307,10 @@ export class AdminNav implements OnInit {
     // they cannot see anyway.
     if (this.userService.hasAdminScope('admin.marketplace')) {
       void this.marketplace.refreshQueueCounts();
+    }
+    // Same rule for the quota request badge, and nothing at all with the feature off.
+    if (this.features.quotaRequests && this.userService.hasAdminScope('admin.quota_requests')) {
+      void this.quotaRequests.refreshSummary();
     }
   }
 }

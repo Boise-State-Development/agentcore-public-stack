@@ -5,6 +5,8 @@ import {
   QuotaExceeded,
   QuotaSessionNotice,
   DISMISSED_QUOTA_WARNING_KEY,
+  DISMISSED_FUNDING_NOTICE_KEY,
+  QuotaFundingNotice,
 } from './quota-warning.service';
 
 function makeWarning(overrides: Partial<QuotaWarning> = {}): QuotaWarning {
@@ -526,6 +528,32 @@ describe('QuotaWarningService', () => {
       it('should return empty string when no quota exceeded', () => {
         expect(service.resetInfo()).toBe('');
       });
+    });
+  });
+
+  describe('funding notice', () => {
+    const notice: QuotaFundingNotice = {
+      type: 'quota_funding_notice',
+      label: 'Fund 100000',
+      chargedThisPeriod: 3.2,
+      cap: 200,
+      message: 'Included quota used · charging Fund 100000 · $3.20 this month of $200.00',
+    };
+
+    it('shows until dismissed, and stays dismissed for the rest of the period', () => {
+      service.setFundingNotice(notice);
+      expect(service.hasVisibleFundingNotice()).toBe(true);
+      service.dismissFundingNotice();
+      expect(service.hasVisibleFundingNotice()).toBe(false);
+      expect(localStorage.getItem(DISMISSED_FUNDING_NOTICE_KEY)).toBe(new Date().toISOString().slice(0, 7));
+      service.setFundingNotice({ ...notice, chargedThisPeriod: 4 });
+      expect(service.hasVisibleFundingNotice()).toBe(false);
+    });
+
+    it('comes back in a new period', () => {
+      localStorage.setItem(DISMISSED_FUNDING_NOTICE_KEY, '2000-01');
+      service.setFundingNotice(notice);
+      expect(service.hasVisibleFundingNotice()).toBe(true);
     });
   });
 });

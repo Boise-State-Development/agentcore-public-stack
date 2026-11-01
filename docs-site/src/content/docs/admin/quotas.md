@@ -22,7 +22,9 @@ period (usually a month). Managed under `/admin/quota`, scope `admin.quota`.
 Enforcement is computed on every turn from live spend, so nothing has to be
 "unblocked". Tier resolution is cached for five minutes per user, except when a
 turn would be blocked: that turn re-reads the user's quota before refusing, so
-an approval or a new override takes effect on the user's next message.
+an approval or a new override takes effect on the user's next message. The
+Usage page's status read (`GET /costs/quota-status`) always reads fresh, so it
+shows a decision as soon as the user's notification arrives.
 
 ## Overrides
 
@@ -34,7 +36,21 @@ extension for that.
 ## Quota requests and extensions
 
 Off by default while in development: set `CDK_QUOTA_REQUESTS_ENABLED=true`
-(app-api). Spec: `docs/specs/quota-requests-and-extensions.md`.
+(app-api) and build the SPA with `features.quotaRequests: true`. Spec:
+`docs/specs/quota-requests-and-extensions.md`.
+
+Users ask from the composer's quota tab (from 80% used, and when blocked) or
+from **Settings → Usage**, which also lists their requests and splits the quota
+bar into the central allowance and each extension.
+
+Admins work in **Quota Requests** (`/admin/quota-requests`, its own nav entry
+under Usage & Spend, badged with the pending count): **Requests** is the queue
+and each request's detail (approve, ask for info, deny), **Extensions** lists
+active and past extensions with a *Standing* filter and Revoke, and **Settings**
+is the policy, including the funding-field schema with a live preview. A user's
+admin page also offers **Extend Quota** beside Create Override, and its quota
+card lists the user's active extensions. People are always picked from the
+users directory, never typed as an id.
 
 - **Requests.** A user asks for an amount per period, through a date, with a
   justification and, if the deployment collects one, a funding source

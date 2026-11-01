@@ -2678,14 +2678,25 @@ export function getRemovalPolicy(config: AppConfig): cdk.RemovalPolicy {
 }
 
 /**
+ * The `Project` tag every resource in the stack carries: the project prefix,
+ * unless the `tags` context sets `Project` itself. IAM conditions on
+ * `aws:ResourceTag/Project` (the deployment-scoped DynamoDB grants) read this,
+ * so they always compare against the value `applyStandardTags` actually wrote.
+ */
+export function getProjectTag(config: AppConfig): string {
+  return config.tags?.Project ?? config.projectPrefix;
+}
+
+/**
  * Apply standard tags to a stack
  */
 export function applyStandardTags(stack: cdk.Stack, config: AppConfig): void {
   // Inject Project tag dynamically from projectPrefix (can't interpolate in context)
-  cdk.Tags.of(stack).add('Project', config.projectPrefix);
+  cdk.Tags.of(stack).add('Project', getProjectTag(config));
   // Add Version tag from appVersion (flows from VERSION file via CI/CD)
   cdk.Tags.of(stack).add('Version', config.appVersion);
   Object.entries(config.tags).forEach(([key, value]) => {
+    if (key === 'Project') return;
     cdk.Tags.of(stack).add(key, value);
   });
 }

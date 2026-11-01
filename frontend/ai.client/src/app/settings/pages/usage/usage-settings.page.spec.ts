@@ -4,6 +4,10 @@ import { CostService } from './services/cost.service';
 import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 import type { QuotaStatus } from '../../../services/quota/quota-status.model';
 import type { UserCostSummary } from './models/cost-summary.model';
+import { FEATURES } from '../../../services/features';
+import { environment } from '../../../../environments/environment';
+import { QuotaRequestService } from '../../../services/quota/quota-request.service';
+import { signal } from '@angular/core';
 
 function summary(totalCost: number): UserCostSummary {
   return {
@@ -107,5 +111,75 @@ describe('UsageSettingsPage quota bar', () => {
     quotaValue = undefined;
     const c = build();
     expect(c.quotaBar()).toBeNull();
+  });
+});
+
+describe('UsageSettingsPage quota requests', () => {
+  const requests = signal<unknown[] | null>(null);
+  const loadRequests = vi.fn().mockResolvedValue(undefined);
+  const reload = vi.fn();
+
+  function build(quotaRequests: boolean, status: QuotaStatus) {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: CostService,
+          useValue: {
+            currentMonthSummary: { value: () => summary(status.currentUsage), isLoading: () => false, error: () => null },
+            reloadCurrentMonthSummary: () => {},
+          },
+        },
+        { provide: QuotaStatusService, useValue: { status: { value: () => status }, reload } },
+        { provide: QuotaRequestService, useValue: { requests, requestsLoadError: () => null, loadRequests } },
+        { provide: FEATURES, useValue: { ...environment.features, quotaRequests } },
+      ],
+    });
+    const fixture = TestBed.createComponent(UsageSettingsPage);
+    fixture.detectChanges();
+    return { component: fixture.componentInstance, el: fixture.nativeElement as HTMLElement };
+  }
+
+  const extended = quota({
+    monthlyLimit: 50, baseLimit: 30, effectiveLimit: 50, currentUsage: 31, remaining: 19, usagePercentage: 62,
+    extensions: [{ amount: 20, validUntil: '2026-11-30T23:59:59+00:00', fundingMode: 'central', standing: false }],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    requests.set([
+      {
+        requestId: 'r1', status: 'approved', kind: 'one_time', requestedAmount: '50', requestedUntil: '2026-11-30',
+        justification: 'x', createdAt: '2026-10-30T00:00:00Z', updatedAt: '2026-10-30T00:00:00Z',
+        decision: { decidedAt: '2026-10-31T00:00:00Z', outcome: 'approved', amount: '20', validUntil: '2026-11-30', note: 'Enjoy' },
+      },
+    ]);
+  });
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('splits the bar into base and extensions, with the split in words', () => {
+    const { component, el } = build(true, extended);
+    const split = component.quotaSplit()!;
+    expect(split.basePct).toBe(60);
+    expect(el.querySelector('[data-testid="quota-split-legend"]')!.textContent!.replace(/\s+/g, ' ').trim())
+      .toBe('$30 central + $20 additional through Nov 30');
+  });
+
+  it('lists the user’s requests, saying when a different amount was approved', () => {
+    const { el } = build(true, extended);
+    expect(loadRequests).toHaveBeenCalled();
+    expect(reload).toHaveBeenCalled();
+    const list = el.querySelector('[data-testid="your-quota-requests"]')!;
+    expect(list.textContent).toContain('$50 per month');
+    expect(list.textContent).toContain('You asked for $50; $20 was approved through Nov 30, 2026.');
+    expect(list.textContent).toContain('Enjoy');
+    expect(el.textContent).toContain('Request more quota');
+  });
+
+  it('offers no request surface while the feature is off', () => {
+    const { el } = build(false, extended);
+    expect(loadRequests).not.toHaveBeenCalled();
+    expect(el.querySelector('[data-testid="your-quota-requests"]')).toBeNull();
+    expect(el.textContent).not.toContain('Request more quota');
   });
 });

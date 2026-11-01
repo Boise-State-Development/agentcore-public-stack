@@ -142,7 +142,20 @@ export interface A2AAgentConfig {
  */
 export interface MCPGatewayConfig {
   targetName: string;
+  /** Empty for a built-in connector target (`connectorId` set). */
   endpointUrl: string;
+  /**
+   * Built-in AgentCore connector registered instead of an external server
+   * (e.g. 'web-search'). The backend fixes the credential (gateway role),
+   * listing mode, pinned version and tool list for it.
+   */
+  connectorId?: string | null;
+  /** Pinned connector version; the backend fills its default when omitted. */
+  connectorVersion?: string | null;
+  /** Target-level domain allow list (web-search), hidden from the agent. */
+  domainInclude?: string[];
+  /** Target-level domain block list (web-search), hidden from the agent. */
+  domainExclude?: string[];
   listingMode: GatewayListingMode;
   credentialType: GatewayCredentialType;
   credentialProviderArn?: string | null;
@@ -480,6 +493,39 @@ export const A2A_AUTH_TYPES: { value: A2AAuthType; label: string; description?: 
   { value: 'agentcore', label: 'AgentCore Runtime', description: 'AgentCore Runtime authentication' },
   { value: 'api-key', label: 'API Key', description: 'API key in request header' },
 ];
+
+/**
+ * What a protocol='mcp' tool registers on the Gateway: an external MCP server,
+ * or a built-in AgentCore connector (the value is the connector id).
+ */
+export type GatewayTargetKind = 'server' | 'web-search';
+
+/**
+ * Catalog defaults the form fills in (only into empty fields) when an admin
+ * picks AgentCore Web Search, so registering it is a target name and Save.
+ */
+/**
+ * The Web Search connector version the backend pins when none is given
+ * (`apis/shared/tools/gateway_connectors.py`). Display only: the backend owns
+ * the real default.
+ */
+export const WEB_SEARCH_DEFAULT_VERSION = '1.3.0';
+
+export const WEB_SEARCH_CONNECTOR_PRESET = {
+  targetName: 'web-search',
+  toolId: 'agentcore_web_search',
+  displayName: 'Web Search',
+  description: 'Search the web for current information. Returns snippets with source links and publication dates.',
+  category: 'search',
+} as const;
+
+/** Split a free-text domain list (newlines, commas or spaces) into entries. */
+export function parseDomainList(text: string | null | undefined): string[] {
+  return (text ?? '')
+    .split(/[\s,]+/)
+    .map(d => d.trim())
+    .filter(d => d.length > 0);
+}
 
 /**
  * Available Gateway target listing modes for dropdowns.

@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 import boto3
 from botocore.exceptions import ClientError
 
+from .gateway_connectors import get_connector_spec
 from .gateway_identity import resolve_gateway_id
 from .gateway_lambda_grant import (
     grant_gateway_invoke,
@@ -361,7 +362,10 @@ class GatewayTargetService:
     # ------------------------------------------------------------- build helpers
     @staticmethod
     def _build_target_configuration(config: MCPGatewayConfig) -> Dict[str, Any]:
-        """Build `targetConfiguration.mcp.mcpServer` for an external endpoint."""
+        """Build `targetConfiguration.mcp` — `mcpServer` for an external
+        endpoint, `connector` for a built-in AgentCore connector."""
+        if config.is_connector:
+            return GatewayTargetService._build_connector_configuration(config)
         listing_value = (
             config.listing_mode
             if isinstance(config.listing_mode, str)
@@ -372,6 +376,38 @@ class GatewayTargetService:
                 "mcpServer": {
                     "endpoint": config.endpoint_url,
                     "listingMode": _LISTING_MODE_TO_AWS[listing_value],
+                }
+            }
+        }
+
+    @staticmethod
+    def _build_connector_configuration(config: MCPGatewayConfig) -> Dict[str, Any]:
+        """Build `targetConfiguration.mcp.connector` for a built-in connector.
+
+        The version is always sent (the model pins it), so a target never
+        floats onto whatever default AWS has moved the connector to. The domain
+        filter is sent only when a list is set: an empty `include` is not "no
+        restriction" to every connector version, and omitting the key is.
+        """
+        spec = get_connector_spec(config.connector_id)
+        parameter_values: Dict[str, Any] = {}
+        domain_filter: Dict[str, List[str]] = {}
+        if config.domain_include:
+            domain_filter["include"] = list(config.domain_include)
+        if config.domain_exclude:
+            domain_filter["exclude"] = list(config.domain_exclude)
+        if domain_filter:
+            parameter_values["domainFilter"] = domain_filter
+        return {
+            "mcp": {
+                "connector": {
+                    "source": {
+                        "connectorId": spec.connector_id,
+                        "version": config.connector_version or spec.version,
+                    },
+                    "configurations": [
+                        {"name": spec.tool_name, "parameterValues": parameter_values}
+                    ],
                 }
             }
         }
@@ -395,6 +431,12 @@ class GatewayTargetService:
 
         if cred_value == GatewayCredentialType.NONE.value:
             return None
+
+        # A connector is AWS-operated: the gateway role authorizes it through
+        # an IAM action on the connector's service-owned ARN (granted in
+        # AgentCoreGatewayConstruct), so there is no service to sign for.
+        if config.is_connector:
+            return [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
 
         aws_type = _CREDENTIAL_TYPE_TO_AWS[cred_value]
 

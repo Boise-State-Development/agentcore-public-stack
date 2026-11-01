@@ -42,10 +42,12 @@ reaches `/auth/session`, `/models`, `/sessions` and a full tool-using turn on
 browser minted.
 
 **No infrastructure change is required.** Verified rather than assumed: grants
-live in the existing BFF sessions table, and app-api's task role already holds an
-explicit `BffSessionsAccess` statement
-(`infrastructure/lib/constructs/app-api/app-api-iam-grants.ts:174`) granting
-`GetItem`/`PutItem`/`UpdateItem`/`DeleteItem`/`Query`/`Scan` on it. That covers
+live in the existing BFF sessions table, and app-api's task role already holds
+`GetItem`/`PutItem`/`UpdateItem`/`DeleteItem`/`Query`/`Scan` on it (originally an
+explicit `BffSessionsAccess` statement; since 2026-10-31 the prefix-scoped
+`DeploymentTablesReadWrite` statement in
+`infrastructure/lib/constructs/data/deployment-table-grants.ts`, which covers
+every table the deployment names). That covers
 the repository's `TransactWriteItems` as well — per
 [AWS's transaction IAM docs](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis-iam.html)
 there is no separate `dynamodb:TransactWriteItems` action, and permission is

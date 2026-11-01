@@ -28,5 +28,7 @@ export const environment = {
         // and CDK_SESSION_FORK_ENABLED=true.
         sessionRewind: true,
         sessionFork: true,
+        // The `development` GitHub environment sets CDK_QUOTA_REQUESTS_ENABLED=true.
+        quotaRequests: true,
     } satisfies FeatureFlags,
 };

@@ -18,6 +18,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { adminRoutes } from './admin.routes';
 import { AdminNav } from './admin-nav';
 import { AdminMarketplaceService } from './marketplace/services/admin-marketplace.service';
+import { QuotaRequestsAdminService } from './quota-requests/services/quota-requests-admin.service';
+import { FEATURES } from '../services/features';
+import { environment } from '../../environments/environment';
 import { UserService } from '../auth/user.service';
 import { ADMIN_SCOPE_IDS } from './admin-scope.model';
 import { adminScopeGuard } from '../auth/admin-scope.guard';
@@ -72,7 +75,8 @@ describe('admin route scope wiring', () => {
 describe('admin nav scope wiring', () => {
   let userService: { hasAdminScope: ReturnType<typeof vi.fn>; canAccessAdmin: () => boolean };
 
-  function buildNav(hasScope: (scope: string) => boolean) {
+  // Quota requests on by default here, so the scope-agreement test covers its entry too.
+  function buildNav(hasScope: (scope: string) => boolean, quotaRequests = true) {
     TestBed.resetTestingModule();
     userService = {
       hasAdminScope: vi.fn().mockImplementation(hasScope),
@@ -93,6 +97,11 @@ describe('admin nav scope wiring', () => {
             refreshQueueCounts: vi.fn().mockResolvedValue(undefined),
           },
         },
+        {
+          provide: QuotaRequestsAdminService,
+          useValue: { pendingCount: signal(2), refreshSummary: vi.fn().mockResolvedValue(undefined) },
+        },
+        { provide: FEATURES, useValue: { ...environment.features, quotaRequests } },
       ],
     });
 
@@ -172,5 +181,33 @@ describe('admin nav scope wiring', () => {
     nav.ngOnInit();
 
     expect(marketplace.refreshQueueCounts).toHaveBeenCalled();
+  });
+
+  it('lists Quota Requests only in a build with the feature on', () => {
+    const routes = (nav: AdminNav) => nav.navGroups().flatMap(g => g.items.map(i => i.route));
+
+    expect(routes(buildNav(() => true, false))).not.toContain('/admin/quota-requests');
+    expect(routes(buildNav(() => true, true))).toContain('/admin/quota-requests');
+  });
+
+  it('gives a quota-requests approver the queue alone, badged, without the tier editor', () => {
+    const nav = buildNav(scope => scope === 'admin.quota_requests');
+    const quotaRequests = TestBed.inject(QuotaRequestsAdminService);
+
+    const items = nav.navGroups().flatMap(g => g.items);
+    expect(items.map(i => i.route)).toEqual(['/admin/quota-requests']);
+    expect(items[0].badge?.()).toBe(2);
+
+    nav.ngOnInit();
+    expect(quotaRequests.refreshSummary).toHaveBeenCalled();
+  });
+
+  it('skips the quota request badge fetch with the feature off', () => {
+    const nav = buildNav(() => true, false);
+    const quotaRequests = TestBed.inject(QuotaRequestsAdminService);
+
+    nav.ngOnInit();
+
+    expect(quotaRequests.refreshSummary).not.toHaveBeenCalled();
   });
 });

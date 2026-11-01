@@ -22,7 +22,10 @@ Subcommands:
             Advisory: no family gates on a judge.
   score     Compare --out with baselines/<model>.json. Exit 1 if a gating family
             regressed, 2 if the comparison cannot be made. --explain FAMILY
-            prints every flipped case with both answers. No AWS.
+            prints every flipped case with both answers and, best-effort,
+            each sample's model calls from its session's C# cost rows (cache
+            and compaction status, prompt hashes); that read is the only AWS
+            call, and --no-cost-rows skips it.
   baseline  Promote --out to baselines/<model>.json. Refuses unless every case
             in the golden set ran at the run's full k. No AWS.
   cleanup   Delete the sessions and fixture uploads recorded in --out.
@@ -553,6 +556,38 @@ async def cmd_judge(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _family_calls(
+    meta: Dict[str, Any], rows: Sequence[Dict[str, Any]], family: str
+) -> Optional[Dict[str, Sequence[Dict[str, Any]]]]:
+    """The ``C#`` rows of every session in ``family``, best-effort (spec §14 q3).
+
+    Reads the deployment's sessions-metadata table, so it needs credentials
+    for the run's account; without them every sample prints "unavailable"
+    and ``score``'s result is unchanged.
+    """
+    prefix, region = meta.get("prefix"), meta.get("region")
+    if not prefix:
+        print("cost rows: the run's meta.json names no prefix; skipped", file=sys.stderr)
+        return None
+    from apis.shared.config.runtime_environment import derived_environment_manifest
+    from apis.shared.evals.calls import fetch_session_calls
+    from apis.shared.storage.dynamodb_storage import DynamoDBStorage
+
+    table = next(v for v in derived_environment_manifest() if v.name == "DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    os.environ["DYNAMODB_SESSIONS_METADATA_TABLE_NAME"] = table.derive(prefix, None) or ""
+    if region:
+        os.environ.setdefault("AWS_DEFAULT_REGION", region)
+    session_ids = [str(r.get("session_id")) for r in rows if r.get("family") == family and r.get("session_id")]
+    try:
+        storage = DynamoDBStorage()
+    except Exception as exc:  # noqa: BLE001 — a diagnostic never fails score
+        print(f"cost rows: unavailable ({exc})", file=sys.stderr)
+        return {}
+    found = await fetch_session_calls(session_ids, storage)
+    print(f"cost rows: read {len(found)} of {len(set(session_ids))} sessions in {family}", file=sys.stderr)
+    return found
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
@@ -580,8 +615,9 @@ def cmd_score(args: argparse.Namespace) -> int:
             print("\nLLM judges (advisory, mean score 0-1, paired cases only):\n")
             print(format_judge_table(judge_comparisons))
     if args.explain:
+        calls = None if args.no_cost_rows else asyncio.run(_family_calls(meta, rows, args.explain))
         print()
-        print(explain_family(args.explain, baseline, rows))
+        print(explain_family(args.explain, baseline, rows, calls_by_session=calls))
     if args.json:
         Path(args.json).write_text(
             json.dumps(
@@ -683,7 +719,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s = sub.add_parser("score", help="compare a run with its model's baseline; exit 1 on a gating regression")
     s.add_argument("--out", required=True)
     s.add_argument("--baseline", help="baseline file (default: baselines/<model>.json)")
-    s.add_argument("--explain", help="print every flipped case in this family")
+    s.add_argument("--explain", help="print every flipped case in this family, with its samples' model calls")
+    s.add_argument("--no-cost-rows", action="store_true",
+                   help="with --explain, skip reading the samples' C# cost rows (no AWS)")
     s.add_argument("--json", help="also write the comparison as JSON to this path")
 
     s = sub.add_parser("baseline", help="promote a complete run to baselines/<model>.json")

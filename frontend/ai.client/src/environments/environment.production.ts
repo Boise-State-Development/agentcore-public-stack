@@ -29,5 +29,6 @@ export const environment = {
         documentExtract: false,
         sessionRewind: true,
         sessionFork: true,
+        quotaRequests: false,
     } satisfies FeatureFlags,
 };

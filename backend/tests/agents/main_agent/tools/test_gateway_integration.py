@@ -113,3 +113,21 @@ async def test_dedupes_preserving_order():
         "gateway_t___two",
         "gateway_t___three",
     ]
+
+
+@pytest.mark.asyncio
+async def test_web_search_connector_row_expands_without_a_curated_list():
+    """A connector row's tool list is filled by the model, not the admin, so a
+    Web Search catalog tool saved with no tools still expands to the id the
+    Gateway client filters on — otherwise it would pass through unexpanded and
+    never match a listed tool."""
+    from apis.shared.tools.models import MCPGatewayConfig
+
+    tool = SimpleNamespace(
+        protocol="mcp",
+        mcp_gateway_config=MCPGatewayConfig(
+            target_name="web-search", connector_id="web-search"
+        ),
+    )
+    out = await expand_gateway_tool_ids(["agentcore_web_search"], _FakeRepo({"agentcore_web_search": tool}))
+    assert out == ["gateway_web-search___WebSearch"]
