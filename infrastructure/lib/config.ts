@@ -2663,20 +2663,18 @@ export function getTruncatedResourceName(config: AppConfig, maxLength: number, .
  * Get the removal policy based on retention configuration
  * @param config The application configuration
  * @returns RETAIN when retainDataOnDelete is true, DESTROY when false
+ *
+ * Buckets deliberately do not set `autoDeleteObjects` alongside DESTROY. That
+ * option costs one `Custom::S3AutoDeleteObjects` per bucket plus a provider
+ * Lambda and role (about 15 resources against PlatformStack's 500), so
+ * `scripts/teardown/destroy.sh` empties the stack's DESTROY buckets before it
+ * deletes the stack instead. A bare `cdk destroy` therefore stops on "bucket not
+ * empty" (docs/specs/platform-stack-resource-budget.md §4).
  */
 export function getRemovalPolicy(config: AppConfig): cdk.RemovalPolicy {
   return config.retainDataOnDelete 
     ? cdk.RemovalPolicy.RETAIN 
     : cdk.RemovalPolicy.DESTROY;
-}
-
-/**
- * Get the autoDeleteObjects setting for S3 buckets based on retention configuration
- * @param config The application configuration
- * @returns false when retainDataOnDelete is true, true when false
- */
-export function getAutoDeleteObjects(config: AppConfig): boolean {
-  return !config.retainDataOnDelete;
 }
 
 /**

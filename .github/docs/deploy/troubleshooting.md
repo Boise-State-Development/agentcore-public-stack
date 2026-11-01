@@ -228,6 +228,23 @@
 
 ---
 
+## Teardown Issues
+
+<details>
+<summary>Stack delete fails: "The bucket you tried to delete is not empty"</summary>
+
+**Symptom:** the stack ends in `DELETE_FAILED`, and its events show S3 buckets with the reason "The bucket you tried to delete is not empty".
+
+**Cause:** the stack was deleted with a bare `cdk destroy` or from the CloudFormation console. The stack does not empty its own buckets. CDK's `autoDeleteObjects` would, at a cost of about 15 of the stack's 500 resources, so `scripts/teardown/destroy.sh` does it instead. A bare delete also skips the script's first step, deleting the managed knowledge bases the app created at runtime.
+
+**Fix:**
+1. Run **Actions** → **Teardown All Infrastructure**, or `bash scripts/teardown/destroy.sh` locally with the environment's `CDK_*` variables set. Both work on a stack already in `DELETE_FAILED`: the script reads the buckets the stack still holds, empties every object version and delete marker in each, and retries the delete. `--dry-run` shows what it would do first.
+2. To fix it by hand instead, empty each failed bucket with the S3 console's **Empty** action and retry the delete. `aws s3 rm --recursive` and `aws s3 rb --force` are not enough for a versioned bucket, because they leave old versions and delete markers behind.
+
+</details>
+
+---
+
 ## Still Stuck?
 
 - Double-check all values against the [Full Configuration Reference](../../ACTIONS-REFERENCE.md)

@@ -5,7 +5,6 @@ import { Construct } from 'constructs';
 
 import {
   AppConfig,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
 } from '../../config';
@@ -67,7 +66,6 @@ export class ConversationArchiveConstruct extends Construct {
         },
       ],
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
     });
 
     // The runtime resolves the bucket from here rather than from an env var:

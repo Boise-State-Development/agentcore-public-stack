@@ -6,7 +6,6 @@ import { Construct } from 'constructs';
 
 import {
   AppConfig,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
 } from '../../config';
@@ -64,7 +63,6 @@ export class MemorySpacesConstruct extends Construct {
         },
       ],
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
     });
 
     this.table = new dynamodb.Table(this, 'MemorySpacesTable', {

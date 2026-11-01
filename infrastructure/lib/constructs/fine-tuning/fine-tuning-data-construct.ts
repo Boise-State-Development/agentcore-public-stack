@@ -7,7 +7,6 @@ import { Construct } from 'constructs';
 import {
   AppConfig,
   buildCorsOrigins,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
 } from '../../config';
@@ -91,7 +90,6 @@ export class FineTuningDataConstruct extends Construct {
       enforceSSL: true,
       versioned: false,
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
       cors:
         fineTuningCorsOrigins.length > 0
           ? [
