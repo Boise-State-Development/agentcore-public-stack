@@ -283,10 +283,14 @@ class BaseAgent(ABC):
 
     def _register_external_mcp_tools(self) -> None:
         """
-        Register external MCP tool IDs with the tool filter.
+        Register external MCP and Gateway tool IDs with the tool filter.
 
-        Queries the tool catalog for tools with protocol='mcp_external'
-        and registers them so they're recognized during filtering.
+        Queries the tool catalog for the enabled tools and registers those
+        with protocol='mcp_external' (external MCP servers) and protocol='mcp'
+        (AgentCore Gateway targets) so they're recognized during filtering.
+        Gateway rows are registered by protocol because their id need not
+        carry the ``gateway_`` prefix the filter otherwise relies on. The same
+        catalog reads serve both, so recognizing Gateway rows adds no lookup.
         """
         if not self.enabled_tools:
             return
@@ -298,6 +302,7 @@ class BaseAgent(ABC):
 
             repository = get_tool_catalog_repository()
             external_tool_ids = []
+            gateway_tool_ids = []
 
             async def check_tools():
                 # A scoped id (`base::tool`) selects one tool of an MCP server;
@@ -316,6 +321,8 @@ class BaseAgent(ABC):
                     tool = await repository.get_tool(base)
                     if tool and tool.protocol == "mcp_external":
                         external_tool_ids.append(base)
+                    elif tool and tool.protocol == "mcp":
+                        gateway_tool_ids.append(base)
                 return external_tool_ids
 
             try:
@@ -334,6 +341,8 @@ class BaseAgent(ABC):
             if tool_ids:
                 self.tool_filter.set_external_mcp_tools(tool_ids)
                 logger.info(f"Registered {len(tool_ids)} external MCP tools: {tool_ids}")
+            if gateway_tool_ids:
+                self.tool_filter.set_gateway_tools(gateway_tool_ids)
 
         except Exception as e:
             logger.warning(f"Could not register external MCP tools: {e}")
