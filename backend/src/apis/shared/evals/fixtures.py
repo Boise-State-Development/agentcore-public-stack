@@ -31,7 +31,8 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Tuple
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 #: Extensions the case fixtures use, pinned rather than left to the host's
 #: ``mimetypes`` table, which differs between macOS and the CI image for ``.md``.
@@ -197,8 +198,6 @@ async def wait_for_documents(
 
 async def delete_upload(user_id: str, upload_id: str) -> bool:
     """Remove an upload this harness registered: the row, then its S3 objects. ``False`` if it was already gone."""
-    import boto3
-
     from apis.shared.files.repository import get_file_upload_repository
 
     meta = await get_file_upload_repository().delete_file(user_id, upload_id)
@@ -207,17 +206,49 @@ async def delete_upload(user_id: str, upload_id: str) -> bool:
     # Everything under the upload's prefix: the original, and for a prepared
     # document its ``_derived/`` sidecars. The delete events take a document
     # out of the attachments KB, as for a user's own delete.
+    await delete_objects_under(meta.s3_bucket, meta.s3_key.rsplit("/", 1)[0] + "/")
+    return True
+
+
+async def delete_objects_under(bucket: str, prefix: str) -> int:
+    """Delete every object under ``prefix``; returns how many."""
+    import boto3
+
     s3 = boto3.client("s3")
-    prefix = meta.s3_key.rsplit("/", 1)[0] + "/"
+    deleted = 0
     token: Optional[str] = None
     while True:
-        kwargs: Dict[str, Any] = {"Bucket": meta.s3_bucket, "Prefix": prefix}
+        kwargs: Dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
         if token:
             kwargs["ContinuationToken"] = token
         page = await asyncio.to_thread(s3.list_objects_v2, **kwargs)
         keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
         if keys:
-            await asyncio.to_thread(s3.delete_objects, Bucket=meta.s3_bucket, Delete={"Objects": keys})
+            await asyncio.to_thread(s3.delete_objects, Bucket=bucket, Delete={"Objects": keys})
+            deleted += len(keys)
         if not page.get("IsTruncated"):
-            return True
+            return deleted
         token = page.get("NextContinuationToken")
+
+
+def stale_uploads(objects: Iterable[Mapping[str, Any]], user_id: str, cutoff: datetime) -> List[Tuple[str, str]]:
+    """``(session_id, upload_id)`` of each upload under ``user_id`` whose newest object predates ``cutoff``.
+
+    ``objects`` is an S3 listing (``Key``, ``LastModified``). Grouping by the
+    upload's prefix and taking the newest object means an upload the prepare
+    Lambda is still writing sidecars for is never stale.
+    """
+    newest: Dict[Tuple[str, str], datetime] = {}
+    root = f"user-files/{user_id}/"
+    for obj in objects:
+        key = str(obj.get("Key") or "")
+        if not key.startswith(root):
+            continue
+        parts = key[len(root):].split("/")
+        if len(parts) < 3:
+            continue
+        upload = (parts[0], parts[1])
+        modified = obj["LastModified"]
+        if upload not in newest or modified > newest[upload]:
+            newest[upload] = modified
+    return sorted(upload for upload, modified in newest.items() if modified < cutoff)

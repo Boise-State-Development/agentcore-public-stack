@@ -18,6 +18,9 @@ set -euo pipefail
 # granted it the same night, instead of failing until someone re-seeds by hand.
 # A re-run reuses the stored password, so the SSM parameter is only read.
 #
+# Each run first sweeps what an earlier, cancelled run left under the eval user
+# (`eval_harness.py cleanup --orphans`, uploads and sessions over an hour old).
+#
 # general_chat is left out: its cases are scored only by the LLM judges, which
 # this run does not invoke (they are advisory and cost more than the turns).
 #
@@ -90,6 +93,14 @@ main() {
         log_error "Could not seed the eval user"
         exit 2
     fi
+
+    # A cancelled run never reaches its own cleanup, and its staged.jsonl goes
+    # with the runner, so sweep what earlier runs left behind first. Only what
+    # is over an hour old, so a run still in progress elsewhere is never
+    # touched. Best-effort: a failed sweep does not stop tonight's run.
+    log_info "Sweeping leftovers from earlier runs..."
+    uv run python scripts/eval_harness.py cleanup --orphans --prefix "${CDK_PROJECT_PREFIX}" \
+        --region "${CDK_AWS_REGION}" --older-than 60 --yes || log_warn "The orphan sweep failed; continuing"
 
     log_info "Running ${families} once per case on ${model} via ${api_url}"
     set +e
