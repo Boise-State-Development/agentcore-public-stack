@@ -572,6 +572,41 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
               </section>
             }
 
+            <!-- User OAuth Connector for a built-in tool that calls a vendor API as the user -->
+            @if (selectedProtocol() === 'local') {
+              <section class="space-y-3 border-t border-gray-200 pt-8 dark:border-gray-700">
+                <div class="flex items-center gap-2">
+                  <ng-icon name="heroLink" class="size-5 text-accent-3-700 dark:text-accent-3-300" aria-hidden="true" />
+                  <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">User OAuth connector</h2>
+                </div>
+                <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+                  Only for a built-in tool that calls an external service on the user's behalf — the Zoom,
+                  Google Calendar and GitHub meeting tools. Pick the connector whose token the tool should use;
+                  the user is asked to connect it the first time the tool runs. Leave as "None" for every other
+                  built-in tool.
+                </p>
+                <div>
+                  <label for="localRequiresOauthProvider" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Required OAuth provider
+                  </label>
+                  <select
+                    id="localRequiresOauthProvider"
+                    formControlName="requiresOauthProvider"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                  >
+                    <option [value]="''">None - No user OAuth required</option>
+                    @for (provider of oauthProviders(); track provider.providerId) {
+                      <option [value]="provider.providerId">{{ provider.displayName }}</option>
+                    }
+                  </select>
+                  <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                    Manage connectors in
+                    <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
+                  </p>
+                </div>
+              </section>
+            }
+
             <!-- MCP Gateway Target Configuration -->
             @if (selectedProtocol() === 'mcp') {
               <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
