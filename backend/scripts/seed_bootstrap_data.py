@@ -658,6 +658,46 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "system": True,
         "hidden": False,
     },
+    # --- Meeting transcripts → GitHub issues ---
+    # docs/specs/meeting-transcripts-to-github-issues.md. One row per vendor so
+    # RBAC and the connector binding are per vendor; each id provisions its
+    # whole family at runtime (see MEETING_TASKS_TOOL_IDS and
+    # _build_meeting_tools in apis/inference_api/chat/routes.py). Off by
+    # default and not public: these call external accounts on the user's
+    # behalf, and `github_issues` writes. An admin must also set each row's
+    # "Required OAuth provider" (requiresOauthProvider) to the matching
+    # connector — it is deployment data, so the seeder leaves it unset — and
+    # the Runtime must have MEETING_TASKS_ENABLED=true.
+    {
+        "toolId": "google_calendar_meetings",
+        "displayName": "Google Calendar Meetings",
+        "description": "Find the user's calendar events in a date window, with the Zoom meeting id parsed from each event's conference link.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "zoom_meeting_transcripts",
+        "displayName": "Zoom Meeting Transcripts",
+        "description": "List the user's Zoom cloud recordings and read a recording's transcript as speaker-attributed text.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "github_issues",
+        "displayName": "GitHub Issues",
+        "description": "List the user's GitHub repositories and open issues for action items. Confirmation-gated write.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
 ]
 
 

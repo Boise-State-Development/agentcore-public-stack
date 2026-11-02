@@ -485,7 +485,15 @@ class BaseAgent(ABC):
     def _build_oauth_consent_hook(self) -> OAuthConsentHook:
         """Construct the OAuth consent hook with closures over the MCP
         integration and provider repository so it stays decoupled from them.
+
+        Two kinds of tool are OAuth-gated: an external MCP tool, whose
+        provider is looked up through its ``MCPClient``, and a first-party
+        tool bound to a connector at build time
+        (``agents.local_tools.oauth_binding`` — the Zoom / Google Calendar /
+        GitHub families). Both resolve to a provider id here; everything else
+        resolves to None and the hook stays out of the way.
         """
+        from agents.local_tools.oauth_binding import oauth_provider_for
         from agents.main_agent.integrations.external_mcp_client import (
             get_external_mcp_integration,
         )
@@ -494,9 +502,9 @@ class BaseAgent(ABC):
         integration = get_external_mcp_integration()
 
         def provider_lookup(selected_tool: object) -> Optional[str]:
-            if not isinstance(selected_tool, MCPAgentTool):
-                return None
-            return integration.provider_for_client(selected_tool.mcp_client)
+            if isinstance(selected_tool, MCPAgentTool):
+                return integration.provider_for_client(selected_tool.mcp_client)
+            return oauth_provider_for(selected_tool)
 
         async def scopes_lookup(provider_id: str) -> List[str]:
             from apis.shared.oauth.provider_repository import get_provider_repository

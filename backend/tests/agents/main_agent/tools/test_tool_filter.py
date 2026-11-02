@@ -13,6 +13,7 @@ from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
     INJECTED_TOOL_IDS,
+    MEETING_TASKS_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
     SKILL_AUTHORING_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
@@ -283,9 +284,12 @@ class TestInjectedToolIdsContract:
             | POWERPOINT_PRESENTATION_TOOL_IDS
             | WORKSPACE_TOOL_IDS
             | SKILL_AUTHORING_TOOL_IDS
+            | MEETING_TASKS_TOOL_IDS
         )
 
     def test_ids_are_gate_keys_not_tool_names(self):
         """workspace_files provisions list/read/write, so the set cannot be
         derived from the names of the objects the factories return."""
         assert "workspace_files" in INJECTED_TOOL_IDS
+        # Likewise zoom_meeting_transcripts provisions list + get.
+        assert "zoom_meeting_transcripts" in INJECTED_TOOL_IDS
