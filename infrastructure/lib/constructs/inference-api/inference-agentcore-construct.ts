@@ -404,6 +404,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Assistant KB full-context mode (in development, default off). Spread in
         // only while on: the code reads unset as off. Runtime only.
         ...(config.assistantKbFullContext.enabled ? { ASSISTANT_KB_FULL_CONTEXT_ENABLED: 'true' } : {}),
+        // Meeting transcripts → GitHub issues tool families (in development,
+        // default off). Spread in only while on: the code reads unset as off.
+        // Runtime only; the tools are built on the invocation path.
+        ...(config.meetingTasks.enabled ? { MEETING_TASKS_ENABLED: 'true' } : {}),
         // Folder attachments (default on): a turn's folder_attachment_ids are
         // resolved and rendered as manifests. Spread in only while off, like
         // skill authoring; app-api carries its own copy.

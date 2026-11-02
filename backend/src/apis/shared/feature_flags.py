@@ -787,6 +787,28 @@ def platform_self_service_enabled() -> bool:
     return os.environ.get("PLATFORM_SELF_SERVICE_ENABLED", "false").strip().lower() == "true"
 
 
+def meeting_tasks_enabled() -> bool:
+    """Whether the meeting-transcripts-to-GitHub-issues tool families are built.
+
+    Covers the Google Calendar (``google_calendar_meetings``), Zoom
+    (``zoom_meeting_transcripts``) and GitHub (``github_issues``) tools built
+    per request by ``_build_meeting_tools`` in the inference API
+    (``agents/local_tools/meeting_tasks.py``,
+    ``docs/specs/meeting-transcripts-to-github-issues.md``). **Opt-in while the
+    feature is in development**: only ``"true"`` (case-insensitive) enables it;
+    unset, empty or anything else is off. AgentCore Runtime only; CDK sets it
+    there, and only while on. No SPA switch: the tools surface through the
+    existing tool picker and connector consent flow.
+
+    It ANDs with RBAC: each family's catalog row is seeded
+    ``enabledByDefault: false`` and not public, so on by default would still
+    grant nobody anything until a role is granted the tool and an admin binds
+    the row to a connector. Off, the tools are never built, so their specs
+    never reach ``toolConfig`` and no catalog read is made for them.
+    """
+    return os.environ.get("MEETING_TASKS_ENABLED", "").strip().lower() == "true"
+
+
 def projects_enabled() -> bool:
     """Whether Shared Projects exist in this environment.
 

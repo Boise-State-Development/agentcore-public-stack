@@ -102,6 +102,7 @@ from apis.shared.tools.always_on import (
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
+    MEETING_TASKS_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
     SKILL_AUTHORING_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
@@ -1033,6 +1034,55 @@ def _build_skill_authoring_tools(
 
     tools = build_skill_authoring_tools(session_id, user_id, user_email)
     logger.info(f"Created {len(tools)} skill authoring tools")
+    return tools
+
+
+# ============================================================
+# Meeting Transcripts → GitHub Issues Tool Injection
+# ============================================================
+
+async def _build_meeting_tools(
+    enabled_tools: list | None,
+    user_id: str,
+) -> list:
+    """Create the Google Calendar / Zoom / GitHub tool families if enabled.
+
+    One catalog id per vendor (``MEETING_TASKS_TOOL_IDS``); each id present in
+    the turn's tools provisions its whole family
+    (``agents/local_tools/meeting_tasks.py``). Gated on
+    ``MEETING_TASKS_ENABLED`` (in development, default off): off, nothing is
+    built and no catalog read is made.
+
+    Each family closes over ``(user_id, provider_id)``, where ``provider_id``
+    is the connector the admin set on the row ("Required OAuth provider"). It
+    is read from the freshness snapshot the always-on resolver already filled
+    this turn, so the lookup is an in-memory dict read, not a DynamoDB call.
+    The family is built even when the row has no connector yet, so the tool
+    can say so instead of silently not existing. Key-described through the
+    cache key's ``freshness_hash`` (see ``KEY_DESCRIBED_INJECTED_TOOL_IDS``).
+    """
+    if not enabled_tools or not MEETING_TASKS_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    from apis.shared.feature_flags import meeting_tasks_enabled
+
+    if not meeting_tasks_enabled():
+        return []
+
+    from agents.local_tools.meeting_tasks import build_meeting_tasks_tools
+    from apis.shared.tools.freshness import get_local_tool_oauth_providers
+
+    providers = await get_local_tool_oauth_providers()
+    tools = build_meeting_tasks_tools(enabled_tools, user_id, dict(providers))
+    unbound = sorted(
+        tid for tid in MEETING_TASKS_TOOL_IDS.intersection(enabled_tools) if not providers.get(tid)
+    )
+    if unbound:
+        logger.warning(
+            "Meeting tool families enabled without a connector on their catalog row: %s",
+            unbound,
+        )
+    logger.info(f"Created {len(tools)} meeting-transcript tools")
     return tools
 
 
@@ -3585,8 +3635,10 @@ async def _build_turn_tools(
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
-    gate, which is memoized per session once it answers yes. ``turn_project_id``
-    marks a project-harness turn, which also gets ``project_files``."""
+    gate, which is memoized per session once it answers yes, and the meeting
+    tools' connector lookup, served from the catalog snapshot already in
+    memory. ``turn_project_id`` marks a project-harness turn, which also gets
+    ``project_files``."""
     extra_tools = _build_spreadsheet_tools(
         enabled_tools=effective_enabled_tools,
         assistant_id=input_data.rag_assistant_id,
@@ -3618,6 +3670,15 @@ async def _build_turn_tools(
         session_id=input_data.session_id,
         user_id=user_id,
         user_email=current_user.email,
+    )
+
+    # Meeting transcripts → GitHub issues. The one builder here that awaits:
+    # the connector ids come from the catalog snapshot the always-on resolver
+    # filled moments ago, so this is a dict read, not IO, on every turn that
+    # carries one of the ids — and a set intersection on every other turn.
+    extra_tools = extra_tools + await _build_meeting_tools(
+        enabled_tools=effective_enabled_tools,
+        user_id=user_id,
     )
 
     # A project harness addresses its spaces by scope (2.4b), and reads the

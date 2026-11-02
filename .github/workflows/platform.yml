@@ -352,6 +352,13 @@ jobs:
       # environment to turn it on there. Unset (empty string) or anything else
       # means off. Sets the flag on the Runtime only.
       CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED: ${{ vars.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED }}
+      # Meeting transcripts → GitHub issues: the Google Calendar, Zoom and
+      # GitHub tool families (docs/specs/meeting-transcripts-to-github-issues.md).
+      # Opt-in while in development: set the `CDK_MEETING_TASKS_ENABLED`
+      # variable to "true" in an environment to turn it on there. Unset (empty
+      # string) or anything else means off. Sets the flag on the Runtime only;
+      # roles still have to be granted the tools and the rows bound to connectors.
+      CDK_MEETING_TASKS_ENABLED: ${{ vars.CDK_MEETING_TASKS_ENABLED }}
       # Large document attachments: documents over the 4 MB inline limit are
       # attached by reference and read from sidecars a preparation Lambda
       # builds (docs/specs/large-document-attachments.md). Default ON with a

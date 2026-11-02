@@ -227,6 +227,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     assistantKbFullContext: {
       enabled: false,
     },
+    meetingTasks: {
+      enabled: false,
+    },
     largeDocumentAttachments: {
       enabled: false,
     },
