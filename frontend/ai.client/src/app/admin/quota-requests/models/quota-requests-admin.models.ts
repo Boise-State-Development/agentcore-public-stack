@@ -164,3 +164,90 @@ export interface ApproveResponse {
   request: AdminQuotaRequest;
   extension: QuotaExtension;
 }
+
+// ── Chargeback report (§6.6, §9) ─────────────────────────────────────────
+
+export type ChargebackPeriodStatus = 'provisional' | 'closed';
+export type ChargebackModeFilter = 'central' | 'chargeback' | 'standing';
+
+/** One `(period, extension)` row: what an extension was granted and what it actually consumed. */
+export interface QuotaChargeLine {
+  period: string;
+  userId: string;
+  userEmail: string;
+  extensionId: string;
+  requestId?: string | null;
+  fundingMode: FundingMode;
+  /** null for the central budget. */
+  fundingKey?: string | null;
+  /** The fund's free-text label, if it was given one. */
+  fundingLabel: string;
+  authorizerEmail?: string | null;
+  fields: Record<string, string>;
+  groupValue?: string | null;
+  standing: boolean;
+  /** null is uncapped. */
+  granted: DecimalString | null;
+  consumed: DecimalString;
+  baseLimit?: DecimalString | null;
+  /** §9.2: the base limit changed during the period; the larger one was used. */
+  baseLimitAmbiguous: boolean;
+  periodSpend: DecimalString;
+  approvedBy: string;
+  approvedAt: string;
+  validUntil?: string | null;
+  revokedAt?: string | null;
+  status: ChargebackPeriodStatus;
+  closedAt?: string | null;
+  closeVersion?: number | null;
+}
+
+export interface ChargebackPeriod {
+  period: string;
+  status: ChargebackPeriodStatus;
+  closedAt?: string | null;
+  closeVersion?: number | null;
+  /** The grace window has passed: the period is closed (or closes on the next read). */
+  closable: boolean;
+  /** Spend above the effective limit that no extension covers (a `warn` tier). */
+  unattributed: DecimalString;
+}
+
+export interface ChargebackReport {
+  periods: ChargebackPeriod[];
+  lines: QuotaChargeLine[];
+  totals: { central: string; chargeback: string; consumed: string; unattributed: string };
+  fundingFields: FundingField[];
+  groupField?: string | null;
+  /** The §9.1 ordering, printed under the table so two readers agree. */
+  consumptionOrder: string;
+}
+
+export interface ChargebackQuery {
+  /** Inclusive `YYYY-MM` range; `from === to` for one month. */
+  from: string;
+  to: string;
+  /** A funding key, or `central` for the central budget. */
+  fundingKey?: string | null;
+  mode?: ChargebackModeFilter | null;
+}
+
+export interface ChargebackFund {
+  fundingKey: string;
+  label: string;
+  fields: Record<string, string>;
+  authorizerEmail?: string | null;
+  firstPeriod: string;
+  lastPeriod: string;
+  extensions: number;
+  /** Lifetime consumed across closed periods. */
+  consumedClosed: string;
+}
+
+export interface RecloseResult {
+  period: ChargebackPeriod;
+  /** Consumed per fund (`central` for the central budget), before and after. */
+  before: Record<string, string>;
+  after: Record<string, string>;
+  changedFunds: string[];
+}

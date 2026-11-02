@@ -8,7 +8,9 @@ from the same inputs. See ``docs/specs/quota-requests-and-extensions.md``
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 from apis.shared.timestamps import from_iso
@@ -90,6 +92,54 @@ def attribute_overage(
         remaining -= consumed
         attributed.append((ext, consumed))
     return attributed
+
+
+@dataclass
+class PeriodWaterfall:
+    """One user's spend in one period, split per §9.1 (the chargeback report)."""
+
+    spend: Decimal
+    # None when no extension in the period recorded the base it was granted on.
+    base: Optional[Decimal]
+    # The extensions carried different base snapshots (a tier changed
+    # mid-period); ``base`` is then the largest of them (§9.2).
+    base_ambiguous: bool
+    central: Decimal
+    consumed: List[Tuple[QuotaExtension, Decimal]] = field(default_factory=list)
+    unattributed: Decimal = Decimal("0")
+
+
+def period_waterfall(spend: Decimal, extensions: Iterable[QuotaExtension]) -> PeriodWaterfall:
+    """§9.1 for one user and one period, in exact decimal arithmetic.
+
+    ``extensions`` are those active at any point in the period. The base is
+    their ``baseLimitSnapshot`` (§9.2): when they disagree, the largest, which
+    charges funds the least, and the result says so. With no snapshot at all
+    nothing is attributed, because guessing a base could only over-charge.
+    """
+    exts = list(extensions)
+    spend = max(Decimal("0"), spend)
+    snapshots = {e.base_limit_snapshot for e in exts if e.base_limit_snapshot is not None}
+    if not snapshots:
+        return PeriodWaterfall(
+            spend=spend, base=None, base_ambiguous=False, central=spend,
+            consumed=[(e, Decimal("0")) for e in consumption_order(exts)],
+        )
+    base = max(snapshots)
+    remaining = max(Decimal("0"), spend - base)
+    consumed: List[Tuple[QuotaExtension, Decimal]] = []
+    for ext in consumption_order(exts):
+        used = remaining if ext.amount is None else min(Decimal(ext.amount), remaining)
+        remaining -= used
+        consumed.append((ext, used))
+    return PeriodWaterfall(
+        spend=spend,
+        base=base,
+        base_ambiguous=len(snapshots) > 1,
+        central=min(spend, base),
+        consumed=consumed,
+        unattributed=remaining,
+    )
 
 
 def funding_label(source: Optional[FundingSource]) -> str:

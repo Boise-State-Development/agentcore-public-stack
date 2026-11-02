@@ -8,12 +8,16 @@ import {
   AdminQuotaRequestPolicy,
   ApproveRequestBody,
   ApproveResponse,
+  ChargebackFund,
+  ChargebackQuery,
+  ChargebackReport,
   ExtensionCreateBody,
   QuotaExtension,
   QuotaRequestDetail,
   QuotaRequestListResponse,
   QuotaRequestStatus,
   QuotaRequestSummary,
+  RecloseResult,
 } from '../models/quota-requests-admin.models';
 
 /**
@@ -115,6 +119,45 @@ export class QuotaRequestsAdminService {
     );
   }
 
+  /** §9.3: closed months from the ledger, the open one computed and marked provisional. */
+  async getChargeback(query: ChargebackQuery): Promise<ChargebackReport> {
+    return firstValueFrom(
+      this.http.get<ChargebackReport>(`${this.requestsUrl()}/chargeback`, {
+        ...this.options,
+        params: chargebackParams(query),
+      }),
+    );
+  }
+
+  /** The same report as CSV (§9.5), funding fields flattened one column per schema key. */
+  async getChargebackCsv(query: ChargebackQuery): Promise<Blob> {
+    return firstValueFrom(
+      this.http.get(`${this.requestsUrl()}/chargeback`, {
+        ...this.options,
+        params: chargebackParams(query).set('format', 'csv'),
+        responseType: 'blob',
+      }),
+    );
+  }
+
+  async listFunds(): Promise<ChargebackFund[]> {
+    const result = await firstValueFrom(
+      this.http.get<{ funds: ChargebackFund[] }>(`${this.requestsUrl()}/chargeback/funds`, this.options),
+    );
+    return result.funds;
+  }
+
+  /** Recalculate a closed month (§9.4). Audited with each fund's total before and after. */
+  async reclosePeriod(period: string): Promise<RecloseResult> {
+    return firstValueFrom(
+      this.http.post<RecloseResult>(
+        `${this.requestsUrl()}/chargeback/${encodeURIComponent(period)}/close`,
+        {},
+        this.options,
+      ),
+    );
+  }
+
   async getPolicy(): Promise<AdminQuotaRequestPolicy> {
     return firstValueFrom(this.http.get<AdminQuotaRequestPolicy>(`${this.requestsUrl()}/policy`, this.options));
   }
@@ -122,6 +165,13 @@ export class QuotaRequestsAdminService {
   async updatePolicy(policy: AdminQuotaRequestPolicy): Promise<AdminQuotaRequestPolicy> {
     return firstValueFrom(this.http.put<AdminQuotaRequestPolicy>(`${this.requestsUrl()}/policy`, policy, this.options));
   }
+}
+
+function chargebackParams(query: ChargebackQuery): HttpParams {
+  let params = new HttpParams().set('from', query.from).set('to', query.to);
+  if (query.fundingKey) params = params.set('fundingKey', query.fundingKey);
+  if (query.mode) params = params.set('mode', query.mode);
+  return params;
 }
 
 /**

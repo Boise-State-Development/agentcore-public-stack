@@ -1,6 +1,6 @@
 # Quota requests and extensions — asking for more, granting it, and knowing who pays
 
-**Status:** In progress — PR-1 (backend core) built; PR-2–PR-4 to come
+**Status:** Built — PR-1 (backend core), PR-2 (SPA user side), PR-3 (SPA admin side) and PR-4 (chargeback) shipped; flag off by default
 **Date:** 2026-10-30
 **Targets branch:** `develop`
 **Related:** `docs/specs/quota-cooldown-windows.md` (draft pacing model, compatible),
@@ -795,6 +795,44 @@ back-dated, a changed grouping field. It bumps `closeVersion`, rewrites the
 lines, and writes an audit record (`quota_period.reclosed`) carrying the
 per-fund totals before and after, so a changed statement is explainable. The
 open month is never "closed"; it is always computed.
+
+### 9.4.1 As built (PR-4)
+
+- **Close without transactions.** The app-api role has no
+  `TransactWriteItems`, so a period's close state is one marker row in its own
+  partition (`PK=QUOTA_CHARGE#{period}`, `SK=#CLOSE`, sorting before every
+  fund key). A close computes first, then claims the marker conditionally
+  (`attribute_not_exists` for the first close, `closeVersion = v AND status =
+  closed` for a re-close), writes the lines in a batch, deletes the previous
+  version's lines the new one no longer has, and finishes the marker
+  conditional on its own claim. A reader that loses the claim answers from its
+  own computation, marked provisional, and writes nothing. A claim abandoned
+  mid-write is taken over after five minutes.
+- **A spend read that fails fails the close.** The request context's usage
+  read turns an error into $0; the report's does not, because a closed
+  statement that charges nobody is worse than a provisional one.
+- **Who appears.** The waterfall runs over users with an extension active in
+  the period (via the pointers). A revoke is clipped by the extension's
+  revoked `validUntil`: the extension leaves every period after the revoke
+  and stays in the one it was revoked in, where spend before the revoke used
+  it. Per-day clipping inside a month would need per-day spend, which the
+  aggregates do not keep.
+- **No snapshot, no attribution.** An extension granted on an unlimited tier
+  has no `baseLimitSnapshot`; a user whose extensions all lack one has
+  nothing attributed, rather than a guessed base that could over-charge.
+- **A fund named only by its label.** With no funding fields defined, a
+  one-time chargeback may carry just a label; it has no `fundingKey`, so the
+  ledger files it under `_label=<label>` (schema keys start with a letter, so
+  this cannot collide) rather than under the central budget. The CSV carries
+  `fundingLabel` for it.
+- **Daily tiers** are reported on the monthly spend against the snapshot as
+  stored (§15.5 stays open).
+- **The UI** is a *Chargeback* tab beside Requests, Extensions and Settings in
+  the PR-3 area (not a view inside Requests), with the range, fund, mode and
+  grouping pickers of §6.6. The CSV adds `standing`, `baseLimit`,
+  `baseLimitChanged` and `periodStatus` after §9.5's columns, and prefixes a
+  value that starts with `=`, `+`, `-` or `@` with `'` so a spreadsheet does
+  not evaluate it.
 
 ### 9.5 What the report is not
 

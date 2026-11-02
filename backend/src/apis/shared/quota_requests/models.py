@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -270,3 +270,81 @@ class UserFacingPolicy(BaseModel):
             ),
             fiscal_year_end=policy.fiscal_year_end,
         )
+
+
+# ========== Chargeback ledger (§7.3, §9) ==========
+
+PeriodStatus = Literal["provisional", "closed"]
+
+
+class QuotaChargeLine(BaseModel):
+    """One ``(period, extension)`` row of the chargeback report (§7.3).
+
+    Computed for the open period and for a closed one before its close, and
+    materialised under ``QUOTA_CHARGE#{period}`` once the period closes, so a
+    statement already sent never moves because a tier changed or a late cost
+    row landed. Money is exact decimal; ``granted`` None means uncapped.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    period: str
+    user_id: str = Field(..., alias="userId")
+    user_email: str = Field("", alias="userEmail")
+    extension_id: str = Field(..., alias="extensionId")
+    request_id: Optional[str] = Field(None, alias="requestId")
+
+    funding_mode: FundingMode = Field(..., alias="fundingMode")
+    funding_key: Optional[str] = Field(None, alias="fundingKey")
+    # The free-text label the fund was given, if any; the fields name it otherwise.
+    funding_label: str = Field("", alias="fundingLabel")
+    authorizer_email: Optional[str] = Field(None, alias="authorizerEmail")
+    fields: Dict[str, str] = Field(default_factory=dict)
+    # The value of the policy's ``reportGroupField`` on this line's fund, as of the close.
+    group_value: Optional[str] = Field(None, alias="groupValue")
+
+    standing: bool = False
+    granted: Optional[Decimal] = None
+    consumed: Decimal = Decimal("0")
+    base_limit: Optional[Decimal] = Field(None, alias="baseLimit")
+    # §9.2: the user's extensions carried different base snapshots this period.
+    base_limit_ambiguous: bool = Field(False, alias="baseLimitAmbiguous")
+    period_spend: Decimal = Field(Decimal("0"), alias="periodSpend")
+
+    approved_by: str = Field("", alias="approvedBy")
+    approved_at: str = Field("", alias="approvedAt")
+    valid_until: Optional[str] = Field(None, alias="validUntil")
+    revoked_at: Optional[str] = Field(None, alias="revokedAt")
+
+    status: PeriodStatus = "provisional"
+    closed_at: Optional[str] = Field(None, alias="closedAt")
+    close_version: Optional[int] = Field(None, alias="closeVersion")
+
+    @field_validator("granted", "consumed", "base_limit", "period_spend", mode="before")
+    @classmethod
+    def _decimal(cls, v):
+        return _to_decimal(v)
+
+    @property
+    def fund_sort_key(self) -> str:
+        return self.funding_key or "central"
+
+
+class ChargebackPeriod(BaseModel):
+    """Where one period of the report came from."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    period: str
+    status: PeriodStatus
+    closed_at: Optional[str] = Field(None, alias="closedAt")
+    close_version: Optional[int] = Field(None, alias="closeVersion")
+    # The grace window (§9.4) has passed: the period is closed, or closes on this read.
+    closable: bool = False
+    # Over-limit spend no extension covers (a ``warn`` tier run past its effective limit).
+    unattributed: Decimal = Decimal("0")
+
+    @field_validator("unattributed", mode="before")
+    @classmethod
+    def _decimal(cls, v):
+        return _to_decimal(v)
