@@ -4,6 +4,8 @@ import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
 import { of } from 'rxjs';
+import { readFileSync } from 'node:fs';
+import { fromProjectRoot } from '../../../../../testing/project-root';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
@@ -400,6 +402,31 @@ describe('SessionList', () => {
       const component = await createComponent();
       (component as any).onUnpinnedDrop(drop(pinnedList, unpinnedList));
       expect(mockSessionService.setSessionPinned).toHaveBeenCalledWith('test-session', false);
+    });
+
+    // Below `lg` the hidden desktop sidebar and the mobile drawer each render a
+    // SessionList. CDK resolves `cdkDropListConnectedTo` ids to the FIRST list
+    // registered with that id, so shared ids wire the drawer to the hidden
+    // sidebar's lists and drops do nothing.
+    it('gives each instance its own drop-list ids', async () => {
+      const desktop = (await createComponent()) as any;
+      const drawer = (await createComponent()) as any;
+      const ids = [desktop.pinnedListId, desktop.unpinnedListId, drawer.pinnedListId, drawer.unpinnedListId];
+      expect(new Set(ids).size).toBe(4);
+    });
+
+    it('binds the drop lists to the per-instance ids, not literals', () => {
+      const html = readFileSync(
+        fromProjectRoot('src/app/components/sidenav/components/session-list/session-list.html'),
+        'utf8',
+      );
+      const dropLists = html.match(/<[a-z]+\s[^>]*\bcdkDropList\b[^>]*>/g) ?? [];
+      expect(dropLists).toHaveLength(2);
+      for (const tag of dropLists) {
+        expect(tag).toMatch(/\[id\]="(pinnedListId|unpinnedListId)"/);
+        expect(tag).toMatch(/\[cdkDropListConnectedTo\]="\[(pinnedListId|unpinnedListId)\]"/);
+        expect(tag).not.toMatch(/\sid="/);
+      }
     });
   });
 
