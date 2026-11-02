@@ -9,7 +9,7 @@ interface QuotaRequestsTab {
 }
 
 /**
- * Quota requests and extensions (spec §6): Requests · Extensions · Settings.
+ * Quota requests and extensions (spec §6): Requests · Extensions · Chargeback · Settings.
  *
  * Its own area beside Quotas rather than tabs inside it, because the two are
  * different scopes: `/admin/quota` is `admin.quota` (the tier editor) and this
@@ -61,6 +61,7 @@ export class QuotaRequestsLayout implements OnInit {
   readonly tabs: QuotaRequestsTab[] = [
     { label: 'Requests', route: 'requests', badge: true },
     { label: 'Extensions', route: 'extensions' },
+    { label: 'Chargeback', route: 'chargeback' },
     { label: 'Settings', route: 'settings' },
   ];
 

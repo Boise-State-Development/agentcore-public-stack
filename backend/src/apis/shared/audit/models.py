@@ -114,6 +114,9 @@ class AuditAction:
     QUOTA_REQUEST_MUTATION_DENIED = "quota_request.mutation_denied"
     QUOTA_EXTENSION_CREATED = "quota_extension.created"
     QUOTA_EXTENSION_REVOKED = "quota_extension.revoked"
+    # A closed chargeback period recalculated (§9.4), target ``quota_period``
+    # keyed by ``YYYY-MM``, with the per-fund totals before and after.
+    QUOTA_PERIOD_RECLOSED = "quota_period.reclosed"
 
 
 ALL_ACTIONS: frozenset[str] = frozenset(
@@ -131,6 +134,7 @@ TARGET_PROJECT = "project"
 TARGET_USER_GRANT = "user_grant"
 TARGET_QUOTA_REQUEST = "quota_request"
 TARGET_QUOTA_EXTENSION = "quota_extension"
+TARGET_QUOTA_PERIOD = "quota_period"
 
 
 @dataclass

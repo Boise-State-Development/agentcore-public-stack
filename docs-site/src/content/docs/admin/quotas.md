@@ -84,6 +84,36 @@ users directory, never typed as an id.
 | `GET` / `POST /admin/quota-extensions` | List, or extend a user directly |
 | `POST /admin/quota-extensions/{id}/revoke` | End one now |
 | `GET` / `PUT /admin/quota-requests/policy` | The request policy |
+| `GET /admin/quota-requests/chargeback` | The chargeback report: `period=YYYY-MM` or `from`/`to`, filters `fundingKey`, `group`, `userId`, `authorizer`, `mode`, `f_<field>`, and `format=csv` |
+| `GET /admin/quota-requests/chargeback/funds` | Every funding source granted against, for the fund picker |
+| `POST /admin/quota-requests/chargeback/{period}/close` | Recalculate a closed month (audited) |
 
-The chargeback report (who consumed what against which fund, per month) is
-being built and is not available yet.
+### Chargeback report
+
+Admin → Quota Requests → **Chargeback** answers, per funding source, what
+extensions were granted and what they actually consumed, for a month, a
+quarter or the fiscal year (from the policy's fiscal year end).
+
+- **How spend is attributed.** For each user and month, spend up to the base
+  limit is the central allowance. Spend above it goes to that month's
+  extensions in a fixed order: centrally funded first, then capped chargeback,
+  then standing; within each, the earliest end date first, then the oldest.
+  *Consumed* is actual spend, never the granted amount, so a fund is charged
+  only for what was used. Spend past every extension (a `warn` tier) is
+  reported as *not covered*.
+- **Base limit.** Each extension records the user's base limit when it was
+  granted. If those differ within a month (the tier changed), the report uses
+  the larger, which charges funds the least, and marks the line *base limit
+  changed during period* for finance to resolve.
+- **Provisional and closed.** The current month, and the previous one until 48
+  hours after it ends, is computed on every read and labelled **Provisional**.
+  The first read after that closes the month: its lines are written to the
+  ledger and do not move again when a tier changes or a late cost row lands.
+  **Recalculate** rebuilds a closed month (for a cost correction, or a revoke
+  that should have been back-dated) and writes a `quota_period.reclosed` audit
+  record with each fund's total before and after.
+- **Export CSV** flattens the funding fields into one column per schema key,
+  ready for a journal upload. The report does not move money; it is the
+  evidence a finance process needs.
+- **Grouping.** With a `reportGroupField` in the policy (for example `org`),
+  the report can roll up by that field, one row per value with a drill-down.

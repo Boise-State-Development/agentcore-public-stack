@@ -20,6 +20,10 @@ export const quotaRequestsRoutes: Routes = [
         loadComponent: () => import('./pages/extension-list.page').then(m => m.ExtensionListPage),
       },
       {
+        path: 'chargeback',
+        loadComponent: () => import('./pages/chargeback-report.page').then(m => m.ChargebackReportPage),
+      },
+      {
         path: 'settings',
         loadComponent: () => import('./pages/policy-settings.page').then(m => m.PolicySettingsPage),
       },
