@@ -30,6 +30,9 @@ import { AgentPinService } from '../../../../agents/services/agent-pin.service';
 import { AgentIconComponent } from '../../../../agents/components/agent-icon.component';
 import { PinnedAgent } from '../../../../agents/models/store.model';
 
+/** Numbers each SessionList so its drop-list ids are unique on the page. */
+let nextSessionListId = 0;
+
 /** What a dragged row carries: a conversation, or (from Pinned only) a pinned Agent. */
 type DragData = SessionMetadata | PinnedAgent;
 
@@ -249,8 +252,17 @@ export class SessionList {
     'dark:bg-gray-800!', 'dark:ring-white/10',
   ];
 
-  protected readonly pinnedListId = 'session-list-pinned';
-  protected readonly unpinnedListId = 'session-list-unpinned';
+  /**
+   * Drop-list ids, unique per instance. Below `lg` the desktop sidebar stays in
+   * the DOM (display: none) while the mobile drawer renders a second list, and
+   * `cdkDropListConnectedTo` resolves an id to the FIRST list registered with
+   * it. Shared ids connected the drawer to the hidden sidebar's lists, so once
+   * both rendered Pinned (any pin, an Agent included) drag-to-pin and
+   * drag-to-unpin silently did nothing.
+   */
+  private readonly instanceId = nextSessionListId++;
+  protected readonly pinnedListId = `session-list-pinned-${this.instanceId}`;
+  protected readonly unpinnedListId = `session-list-unpinned-${this.instanceId}`;
 
   constructor() {
     // Pinned Agents load once the session list has loaded, which is also the
