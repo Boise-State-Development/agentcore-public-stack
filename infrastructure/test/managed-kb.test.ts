@@ -277,12 +277,6 @@ describe('ManagedKbRoleConstruct — service role', () => {
       .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
     expect(actions).not.toContain('cloudwatch:PutMetricData');
   });
-
-  it('publishes the service role ARN to SSM', () => {
-    t.hasResourceProperties('AWS::SSM::Parameter', {
-      Name: '/test-project/managed-kb/service-role-arn',
-    });
-  });
 });
 
 describe('ManagedKbRoleConstruct — caller grants', () => {
@@ -572,16 +566,13 @@ describe('Managed_KB retrieval wiring on PlatformStack', () => {
     t = Template.fromStack(stack);
   });
 
-  it('creates exactly one shared service role and publishes its ARN', () => {
+  it('creates exactly one shared service role', () => {
     // Requirement 8.9: one role reused across every Managed_KB.
     const roles = Object.values(t.findResources('AWS::IAM::Role')).filter(
       (r) => (r.Properties as { RoleName?: string })?.RoleName
         === 'test-project-managed-kb-service-role',
     );
     expect(roles).toHaveLength(1);
-    t.hasResourceProperties('AWS::SSM::Parameter', {
-      Name: '/test-project/managed-kb/service-role-arn',
-    });
   });
 
   it('attaches retrieval to the AgentCore Runtime role and the App API task role', () => {

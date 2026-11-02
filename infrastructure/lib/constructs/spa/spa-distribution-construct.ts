@@ -12,7 +12,6 @@ import { Construct } from 'constructs';
 import {
   AppConfig,
   buildCorsOrigins,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
   getTruncatedResourceName,
@@ -376,7 +375,6 @@ function handler(event) {
         },
       ],
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
     });
 
     const accessLogsEnabled = config.frontend.accessLogsEnabled !== false;

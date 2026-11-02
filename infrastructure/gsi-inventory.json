@@ -58,6 +58,7 @@
     ],
     "sessions-metadata": [
       "DueScheduleIndex",
+      "PinnedSessionIndex",
       "ProjectSessionIndex",
       "SessionLookupIndex",
       "SessionRecencyIndex",

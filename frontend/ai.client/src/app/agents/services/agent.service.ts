@@ -4,6 +4,7 @@ import { AgentApiService } from './agent-api.service';
 import {
   Agent,
   AgentRunnability,
+  AgentBoundSkill,
   BindableItem,
   BindableKind,
   CreateAgentDraftRequest,
@@ -11,6 +12,12 @@ import {
   UpdateAgentRequest,
 } from '../models/agent.model';
 import { SkillExposure } from '../models/store.model';
+
+/** Shown after a duplicate: the knowledge base is deliberately not copied. */
+export const AGENT_DUPLICATED_TOAST = {
+  title: 'Agent duplicated',
+  message: 'Knowledge base files were not copied. Add them to the new agent.',
+} as const;
 
 /**
  * Signal-based state for the Agent Designer. Mirrors the assistants / memory-spaces
@@ -72,6 +79,18 @@ export class AgentService {
     return firstValueFrom(this.api.getRunnability(id));
   }
 
+  /**
+   * The Agent's bound skills that will run for the signed-in user, in binding order.
+   *
+   * The session page locks the composer's `/` menu to these. Not memoised and not
+   * swallowed: the caller decides what a failure means (it falls back to the viewer's
+   * own list, which is what a backend without this route implies).
+   */
+  async getBoundSkills(id: string): Promise<AgentBoundSkill[]> {
+    const response = await firstValueFrom(this.api.getSkills(id));
+    return response.skills;
+  }
+
   /** The skills the owner wrote that sharing this Agent hands over (§6/D7). Owner only. */
   async getShareSkillExposure(id: string): Promise<SkillExposure[]> {
     const response = await firstValueFrom(this.api.getShareSkillExposure(id));
@@ -85,6 +104,13 @@ export class AgentService {
   async createAgent(request: CreateAgentRequest): Promise<Agent> {
     this.error.set(null);
     const agent = await firstValueFrom(this.api.createAgent(request));
+    this.agents.update((current) => [agent, ...current]);
+    return agent;
+  }
+
+  async duplicateAgent(id: string): Promise<Agent> {
+    this.error.set(null);
+    const agent = await firstValueFrom(this.api.duplicateAgent(id));
     this.agents.update((current) => [agent, ...current]);
     return agent;
   }
@@ -133,5 +159,18 @@ export class AgentService {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Forget the memoised palette for a kind, so the next `loadBindable` re-fetches.
+   *
+   * The cache lives for the whole tab, and a palette can go stale without any
+   * Agent Designer page knowing: a skill written under Customize → Skills joins
+   * the caller's accessible set the moment it is saved, but a project's Skills
+   * page (or an Agent form) opened earlier would keep offering the old list until
+   * a reload. Whatever changes the set calls this, and the pickers stay dumb.
+   */
+  invalidateBindable(kind: BindableKind): void {
+    this.bindableCache.delete(kind);
   }
 }

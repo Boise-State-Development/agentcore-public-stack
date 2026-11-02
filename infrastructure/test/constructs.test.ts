@@ -6,7 +6,7 @@
  */
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { createMockConfig, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
 import { mockCognitoRefs } from './helpers/mock-cognito';
 
@@ -351,6 +351,29 @@ describe('AgentCoreGatewayConstruct', () => {
     const t = Template.fromStack(stack);
     t.resourceCountIs('AWS::BedrockAgentCore::Gateway', 1);
     t.resourceCountIs('AWS::IAM::Role', 1);
+  });
+
+  it('lets the gateway role invoke the Web Search connector', () => {
+    const stack = testStack();
+    new AgentCoreGatewayConstruct(stack, 'GW', {
+      config: createMockConfig(),
+      ...mockCognitoRefs(stack),
+    });
+    const t = Template.fromStack(stack);
+    // The connector ARN is service-owned: its account field is the literal
+    // `aws`, not ours. A grant on our own account would never match.
+    t.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'ConnectorWebSearch',
+            Effect: 'Allow',
+            Action: 'bedrock-agentcore:InvokeWebSearch',
+            Resource: Match.stringLikeRegexp('^arn:aws:bedrock-agentcore:.+:aws:tool/web-search\\.v1$'),
+          }),
+        ]),
+      },
+    });
   });
 
   it('publishes the gateway id SSM parameter for app-api (issue #419)', () => {

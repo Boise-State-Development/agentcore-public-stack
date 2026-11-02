@@ -75,4 +75,60 @@ export interface FeatureFlags {
    * folder schedule while off; the kb-sync Lambdas carry it too).
    */
   folderSync: boolean;
+  /**
+   * Source provenance verification
+   * (docs/specs/source-provenance-verification.md): a cited value is rendered
+   * with a page reference only where the backend could confirm the passage is
+   * in the document AND that the value appears in it; a located passage that
+   * does not support its value renders as the warning it is. Backend:
+   * SOURCE_PROVENANCE_ENABLED (the Runtime builds `verify_sources` and emits
+   * `source_provenance`; app-api replays it). In development, so `false`
+   * everywhere until a deployment turns both sides on.
+   */
+  sourceProvenance: boolean;
+
+  /**
+   * Structured extraction: a named field set run over a document as typed rows
+   * (docs/specs/structured-extraction.md). The UI's share is the rows table —
+   * each cell showing its source-provenance state in the same vocabulary
+   * `sourceProvenance` established, plus the `schemaEnforced` disclosure when
+   * the typed schema was requested rather than guaranteed. Backend:
+   * DOCUMENT_EXTRACT_ENABLED (the Runtime mounts `document_extract`, extracts,
+   * verifies and emits `document_extraction`; app-api replays the `EXTR#`
+   * rows). In development, so `false` everywhere until a deployment turns both
+   * sides on. Carried from slice one so the two sides can land independently;
+   * the table render is slice three.
+   */
+  documentExtract: boolean;
+
+  /**
+   * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
+   * user message offers "Rewind to here", which hides it and everything after
+   * it and puts its text back in the composer to edit and resend. Backend:
+   * SESSION_REWIND_ENABLED (app-api's `POST /sessions/{id}/rewind` 404s while
+   * off; the Runtime applies the cut). In development, so `false` everywhere
+   * until a deployment turns both sides on.
+   */
+  sessionRewind: boolean;
+
+  /**
+   * Conversation fork (docs/specs/conversation-rewind-and-fork.md §7): a user
+   * message offers "Fork from here", which starts a new conversation holding
+   * everything before it, with its text in the new composer. The parent stays
+   * as it is. Backend: SESSION_FORK_ENABLED (app-api's `POST /sessions/{id}/fork`
+   * 404s while off; the Runtime seeds the fork's first turn from the parent's
+   * live history). In development, so `false` everywhere.
+   */
+  sessionFork: boolean;
+
+  /**
+   * Quota requests (docs/specs/quota-requests-and-extensions.md §5): a user
+   * asks for more quota from the composer's quota tab, the blocked state or
+   * Settings → Usage, sees their requests and any granted extensions there,
+   * answers an admin's request for a funding source, and the notification bell
+   * shows with it. Backend: QUOTA_REQUESTS_ENABLED (app-api; `/quota/*` 404s
+   * while off). In development, so `false` everywhere until a deployment turns
+   * both sides on.
+   */
+  quotaRequests: boolean;
 }

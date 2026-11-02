@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from apis.app_api.sessions.services.delete_cascade import SessionDeleteCascade
 
-STEPS = ["agentcore_memory", "session_files", "share_snapshots", "artifact_shares", "conversation_archive"]
+STEPS = ["agentcore_memory", "session_files", "share_snapshots", "artifact_shares", "conversation_archive", "handoffs"]
 
 
 def _cascade(**overrides):
@@ -15,16 +15,18 @@ def _cascade(**overrides):
     share_service.delete_shares_for_session = AsyncMock(return_value=0)
     artifact_shares = MagicMock()
     archive = MagicMock(return_value=0)
+    handoffs = MagicMock(return_value=0)
     cascade = SessionDeleteCascade(
         session_service=overrides.get("service", service),
         share_service=share_service,
         artifact_share_service=artifact_shares,
         delete_archive=archive,
+        delete_handoffs=handoffs,
     )
-    return cascade, service, share_service, artifact_shares, archive
+    return cascade, service, share_service, artifact_shares, archive, handoffs
 
 
-def test_steps_are_the_five_cleanups_with_owner_scoped_arguments():
+def test_steps_are_the_six_cleanups_with_owner_scoped_arguments():
     cascade, *_ = _cascade()
     steps = cascade.steps("user-1", "sess-1")
 
@@ -35,11 +37,12 @@ def test_steps_are_the_five_cleanups_with_owner_scoped_arguments():
         ("sess-1",),
         ("sess-1", "user-1"),
         ("user-1", "sess-1"),
+        ("user-1", "sess-1"),
     ]
 
 
 def test_queue_adds_every_step_as_a_background_task():
-    cascade, service, share_service, artifact_shares, archive = _cascade()
+    cascade, service, share_service, artifact_shares, archive, handoffs = _cascade()
     background = MagicMock()
 
     cascade.queue(background, "user-1", "sess-1")
@@ -51,11 +54,12 @@ def test_queue_adds_every_step_as_a_background_task():
         share_service.delete_shares_for_session,
         artifact_shares.delete_for_session,
         archive,
+        handoffs,
     ]
 
 
 def test_run_awaits_every_step_in_order():
-    cascade, service, share_service, artifact_shares, archive = _cascade()
+    cascade, service, share_service, artifact_shares, archive, handoffs = _cascade()
 
     failed = asyncio.run(cascade.run("user-1", "sess-1"))
 
@@ -65,10 +69,11 @@ def test_run_awaits_every_step_in_order():
     share_service.delete_shares_for_session.assert_awaited_once_with("sess-1")
     artifact_shares.delete_for_session.assert_called_once_with("sess-1", "user-1")
     archive.assert_called_once_with("user-1", "sess-1")
+    handoffs.assert_called_once_with("user-1", "sess-1")
 
 
 def test_run_isolates_a_failing_step():
-    cascade, service, _, _, archive = _cascade()
+    cascade, service, _, _, archive, _ = _cascade()
     service.delete_session_files.side_effect = RuntimeError("boom")
 
     failed = asyncio.run(cascade.run("user-1", "sess-1"))

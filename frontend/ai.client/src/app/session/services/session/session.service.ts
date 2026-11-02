@@ -1,4 +1,4 @@
-import { inject, Injectable, signal, WritableSignal, resource, computed, effect } from '@angular/core';
+import { inject, Injectable, signal, WritableSignal, resource, computed, effect, untracked } from '@angular/core';
 import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
@@ -6,7 +6,8 @@ import { SessionService as BffSessionService } from '../../../auth/session.servi
 import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { SessionMetadata, SessionPreferences, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
-import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
+import { SessionAffinityService } from './session-affinity.service';
+import type { UiResourceEvent, SourceProvenanceClaim } from '../../../shared/utils/stream-parser';
 
 /**
  * Sessions the sidebar asks for at a time: the first load, and each page
@@ -39,6 +40,8 @@ export interface SessionsListResponse {
   sessions: SessionMetadata[];
   /** Pagination token for retrieving the next page of results */
   nextToken: string | null;
+  /** The user's pinned conversations, most recently pinned first. First page only. */
+  pinned?: SessionMetadata[];
 }
 
 /**
@@ -88,9 +91,36 @@ export interface PendingInterrupt {
  *
  * Matches the MessagesListResponse model from the Python API.
  */
+/** What `POST /sessions/{id}/fork` answers. */
+export interface SessionForkResult {
+  sessionId: string;
+  title: string;
+  /** The forked-from message's text as the user typed it, for the new composer. */
+  prefillText: string;
+  /** The conversation this family of forks started from; see SessionAffinityService. */
+  rootSessionId: string;
+}
+
+/** What `POST /sessions/{id}/rewind` answers. */
+export interface SessionRewindResult {
+  /** The index the next stored message takes; ids are never reused. */
+  nextMessageIndex: number;
+  /** The rewound message's text as the user typed it, for the composer. */
+  prefillText: string;
+  /** The visible messages the rewind hid, oldest first. */
+  rewoundMessageIds: string[];
+  epoch: number;
+}
+
 export interface MessagesListResponse {
   /** List of messages in the session */
   messages: Message[];
+  /**
+   * The index the next stored message will take. Larger than the number of
+   * messages once a rewind has hidden some, because ids are positional and
+   * never reused. Present only while the backend's rewind flag is on.
+   */
+  nextMessageIndex?: number;
   /** Pagination token for retrieving the next page of results */
   nextToken: string | null;
   /** OAuth consent interrupts that paused agent turns and are awaiting user action */
@@ -109,6 +139,14 @@ export interface MessagesListResponse {
    * Present only on the first page.
    */
   toolSummaries?: { batchId?: string; toolUseIds?: string[]; summary?: string }[];
+  /**
+   * Persisted source-provenance verdicts, each shaped like the live
+   * `source_provenance` SSE event. Replayed on load because that event never
+   * re-streams: without it a reloaded conversation shows cited values with no
+   * provenance, and a `quote_unsupported` that vanishes on refresh reads as a
+   * clean answer. Present only on the first page.
+   */
+  sourceProvenance?: { toolUseId?: string; claims?: SourceProvenanceClaim[] }[];
   /**
    * True when Memory's events for this session have expired and these
    * messages are the conversation archive's text-only copy. The agent cannot
@@ -165,6 +203,7 @@ export interface BulkDeleteSessionsResponse {
 })
 export class SessionService {
   private http = inject(HttpClient);
+  private affinity = inject(SessionAffinityService);
   private bffSession = inject(BffSessionService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/sessions`);
@@ -328,7 +367,8 @@ export class SessionService {
       // Resource hasn't loaded yet or is disabled, return cached sessions only
       return {
         sessions: localCache,
-        nextToken: null
+        nextToken: null,
+        pinned: undefined,
       };
     }
 
@@ -372,6 +412,85 @@ export class SessionService {
     // The next user to sign in starts from one page, not this one's scroll depth.
     this.sessionsWindow.set(SIDEBAR_PAGE_SIZE);
     this.loadMoreSessionsError.set(false);
+    this.pinOverrides.set(new Map());
+  }
+
+  /**
+   * Optimistic pin state: sessionId → `pinnedAt` (pinned) or `null` (unpinned),
+   * applied over the server's `pinned` list so the sidebar moves a row the
+   * instant Pin/Unpin is clicked. An entry is dropped once a list response
+   * agrees with it, or rolled back if the request fails.
+   */
+  private readonly pinOverrides = signal<ReadonlyMap<string, string | null>>(new Map());
+
+  /**
+   * The user's pinned conversations, most recently pinned first: the server's
+   * list with optimistic pins/unpins applied. Rows come from the main list when
+   * it has them, so a rename or local-cache update shows up here too.
+   */
+  readonly pinnedSessions = computed<SessionMetadata[]>(() => {
+    const merged = this.mergedSessionsResource();
+    const overrides = this.pinOverrides();
+    const byId = new Map(merged.sessions.map(s => [s.sessionId, s]));
+    const pinned = new Map<string, SessionMetadata>();
+
+    for (const session of merged.pinned ?? []) {
+      const override = overrides.get(session.sessionId);
+      if (override === null) continue;
+      pinned.set(session.sessionId, {
+        ...(byId.get(session.sessionId) ?? session),
+        pinnedAt: override ?? session.pinnedAt,
+      });
+    }
+    for (const [sessionId, pinnedAt] of overrides) {
+      const session = byId.get(sessionId);
+      if (pinnedAt === null || pinned.has(sessionId) || !session) continue;
+      pinned.set(sessionId, { ...session, pinnedAt });
+    }
+
+    return [...pinned.values()].sort((a, b) => (b.pinnedAt ?? '').localeCompare(a.pinnedAt ?? ''));
+  });
+
+  readonly pinnedSessionIds = computed(() => new Set(this.pinnedSessions().map(s => s.sessionId)));
+
+  /** Drop optimistic pin entries once the server's list reflects them. */
+  private readonly reconcilePinOverrides = effect(() => {
+    const response = this.sessionsResource.hasValue() ? this.sessionsResource.value() : null;
+    if (!response?.pinned) return;
+    untracked(() => {
+      const overrides = this.pinOverrides();
+      if (overrides.size === 0) return;
+      const serverIds = new Set(response.pinned!.map(s => s.sessionId));
+      const next = new Map(overrides);
+      for (const [sessionId, pinnedAt] of overrides) {
+        if (serverIds.has(sessionId) === (pinnedAt !== null)) next.delete(sessionId);
+      }
+      if (next.size !== overrides.size) this.pinOverrides.set(next);
+    });
+  });
+
+  /**
+   * Pins or unpins a conversation. Updates the sidebar immediately, then
+   * `PUT`/`DELETE /sessions/{id}/pin`; on failure the optimistic change is
+   * rolled back and the error rethrown so the caller can tell the user.
+   */
+  async setSessionPinned(sessionId: string, pinned: boolean): Promise<void> {
+    const previous = this.pinOverrides();
+    this.pinOverrides.set(new Map(previous).set(sessionId, pinned ? new Date().toISOString() : null));
+
+    try {
+      const url = `${this.baseUrl()}/${sessionId}/pin`;
+      await firstValueFrom(pinned ? this.http.put<void>(url, {}) : this.http.delete<void>(url));
+      this.refreshSessions();
+    } catch (error) {
+      this.pinOverrides.update(current => {
+        const next = new Map(current);
+        if (previous.has(sessionId)) next.set(sessionId, previous.get(sessionId)!);
+        else next.delete(sessionId);
+        return next;
+      });
+      throw error;
+    }
   }
 
   /**
@@ -640,6 +759,41 @@ export class SessionService {
   }
 
   /**
+   * Rewind the conversation to just before one of the user's messages
+   * (docs/specs/conversation-rewind-and-fork.md §4). The message and
+   * everything after it are hidden server-side; nothing is deleted. Rejects
+   * with the HTTP error for a refusal (409 while a turn streams, or for a
+   * message the compaction summary covers), whose `detail` is user-readable.
+   */
+  async rewindSession(sessionId: string, messageId: string): Promise<SessionRewindResult> {
+    return firstValueFrom(
+      this.http.post<SessionRewindResult>(
+        `${this.baseUrl()}/${sessionId}/rewind`,
+        { messageId },
+        // The caller explains a refusal in its own words, from the detail.
+        { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) },
+      ),
+    );
+  }
+
+  /**
+   * Start a new conversation from everything before one of the user's
+   * messages (rewind/fork spec §7). The parent is untouched. Rejects with the
+   * HTTP error for a refusal, whose `detail` is user-readable.
+   */
+  async forkSession(sessionId: string, messageId: string): Promise<SessionForkResult> {
+    const result = await firstValueFrom(
+      this.http.post<SessionForkResult>(
+        `${this.baseUrl()}/${sessionId}/fork`,
+        { messageId },
+        { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) },
+      ),
+    );
+    this.affinity.record(result.sessionId, result.rootSessionId);
+    return result;
+  }
+
+  /**
    * Withdraw a queued follow-up the user removed from the composer.
    * Idempotent — the backend returns 204 whether or not the entry is still
    * there, because the user's intent is satisfied either way.
@@ -681,6 +835,8 @@ export class SessionService {
           context: new HttpContext().set(SUPPRESS_ERROR_TOAST, options.quiet ?? false),
         })
       );
+      // A fork's turns pin to its root's microVM; learn it before the next send.
+      this.affinity.record(sessionId, response?.rootSessionId);
 
       return response;
     } catch (error) {

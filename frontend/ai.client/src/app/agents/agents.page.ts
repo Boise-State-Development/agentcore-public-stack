@@ -1,4 +1,5 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, OnInit, signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -12,8 +13,10 @@ import {
   heroSparkles,
   heroSquares2x2,
   heroBars3,
+  heroDocumentDuplicate,
 } from '@ng-icons/heroicons/outline';
-import { AgentService } from './services/agent.service';
+import { AGENT_DUPLICATED_TOAST, AgentService } from './services/agent.service';
+import { ToastService } from '../services/toast/toast.service';
 import { Agent } from './models/agent.model';
 import {
   ConfirmationDialogComponent,
@@ -60,6 +63,7 @@ import { AgentsViewMode, LocalSettingsService } from '../services/local-settings
       heroSparkles,
       heroSquares2x2,
       heroBars3,
+      heroDocumentDuplicate,
     }),
   ],
 })
@@ -68,6 +72,9 @@ export class AgentsPage implements OnInit {
   private agentService = inject(AgentService);
   private localSettings = inject(LocalSettingsService);
   private dialog = inject(Dialog);
+  private toast = inject(ToastService);
+  /** The agent currently being duplicated; disables the Duplicate buttons meanwhile. */
+  readonly duplicatingId = signal<string | null>(null);
 
   readonly agents = this.agentService.agents$;
   readonly loading = this.agentService.loading$;
@@ -117,6 +124,25 @@ export class AgentsPage implements OnInit {
 
   onEdit(agent: Agent): void {
     this.router.navigate(['/agents', agent.agentId, 'edit']);
+  }
+
+  canDuplicate(agent: Agent): boolean {
+    return ['owner', 'editor'].includes(agent.userPermission ?? 'owner');
+  }
+
+  async onDuplicate(agent: Agent): Promise<void> {
+    if (this.duplicatingId()) return;
+    this.duplicatingId.set(agent.agentId);
+    try {
+      const copy = await this.agentService.duplicateAgent(agent.agentId);
+      await this.router.navigate(['/agents', copy.agentId, 'edit']);
+      this.toast.info(AGENT_DUPLICATED_TOAST.title, AGENT_DUPLICATED_TOAST.message);
+    } catch (err) {
+      console.error('Error duplicating agent:', err);
+      this.toast.error('Could not duplicate agent', (err as HttpErrorResponse)?.error?.detail ?? 'Please try again.');
+    } finally {
+      this.duplicatingId.set(null);
+    }
   }
 
   onChat(agent: Agent): void {

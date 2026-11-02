@@ -34,8 +34,12 @@ import type {
   ToolResultEventData,
   AgentStatusEvent,
   ToolGroupSummaryEvent,
+  SourceProvenanceEvent,
+  SourceProvenanceClaim,
+  SourceLocator,
   QuotaWarningEvent,
   QuotaSessionNoticeEvent,
+  QuotaFundingNoticeEvent,
   QuotaExceededEvent,
   StreamErrorEvent,
   ConversationalStreamErrorEvent,
@@ -89,6 +93,7 @@ export interface StreamParserCallbacks {
   // Quota events
   onQuotaWarning?: (data: QuotaWarningEvent) => void;
   onQuotaSessionNotice?: (data: QuotaSessionNoticeEvent) => void;
+  onQuotaFundingNotice?: (data: QuotaFundingNoticeEvent) => void;
   onQuotaExceeded?: (data: QuotaExceededEvent) => void;
 
   // OAuth consent required (external MCP tool needs user authorization)
@@ -112,6 +117,7 @@ export interface StreamParserCallbacks {
   // mid-turn, out of band with the content stream, and replaces the
   // deterministic formatter line the rail has been showing.
   onToolGroupSummary?: (data: ToolGroupSummaryEvent) => void;
+  onSourceProvenance?: (data: SourceProvenanceEvent) => void;
 
   // Compaction (backend rolled older turns into a summary on this turn)
   onCompaction?: (data: CompactionEvent) => void;
@@ -373,6 +379,27 @@ export function validateQuotaSessionNoticeEvent(
     event.sessionId.length > 0 &&
     typeof event.sessionCost === 'number' &&
     typeof event.quotaLimit === 'number'
+  );
+}
+
+/**
+ * Validate QuotaFundingNoticeEvent structure
+ */
+export function validateQuotaFundingNoticeEvent(
+  data: unknown,
+): data is QuotaFundingNoticeEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<QuotaFundingNoticeEvent>;
+
+  return (
+    event.type === 'quota_funding_notice' &&
+    typeof event.label === 'string' &&
+    typeof event.chargedThisPeriod === 'number' &&
+    typeof event.message === 'string' &&
+    (event.cap === undefined || typeof event.cap === 'number')
   );
 }
 
@@ -786,6 +813,87 @@ export function validateToolGroupSummaryEvent(
   );
 }
 
+const PROVENANCE_STATES = new Set([
+  'supported',
+  'quote_unsupported',
+  'unassessed',
+  'unverified',
+]);
+const LOCATOR_KINDS = new Set(['page', 'paragraph', 'line']);
+const LOCATOR_PRECISIONS = new Set(['measured', 'estimated']);
+
+/**
+ * Validate one claim of a `source_provenance` event.
+ *
+ * An unknown `state` is rejected rather than passed through: every renderer
+ * branches on it, and a state nothing recognises would fall through to
+ * whatever the default arm happens to be — which for a citation badge means
+ * showing something reassuring about a value we know nothing about.
+ *
+ * A locator is accepted only whole. A partial one (a page with no `precision`)
+ * is exactly the shape that renders invented precision, so it is dropped to
+ * `null` — losing the page reference, never faking one.
+ */
+function normalizeProvenanceClaim(raw: unknown): SourceProvenanceClaim | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const claim = raw as Partial<SourceProvenanceClaim>;
+  if (typeof claim.state !== 'string' || !PROVENANCE_STATES.has(claim.state)) {
+    return null;
+  }
+  const loc = claim.locator as Partial<SourceLocator> | null | undefined;
+  const locator: SourceLocator | null =
+    loc &&
+    typeof loc === 'object' &&
+    typeof loc.kind === 'string' &&
+    LOCATOR_KINDS.has(loc.kind) &&
+    typeof loc.value === 'number' &&
+    Number.isFinite(loc.value) &&
+    typeof loc.precision === 'string' &&
+    LOCATOR_PRECISIONS.has(loc.precision)
+      ? { kind: loc.kind as SourceLocator['kind'], value: loc.value, precision: loc.precision as SourceLocator['precision'] }
+      : null;
+  return {
+    id: typeof claim.id === 'string' ? claim.id : '',
+    state: claim.state as SourceProvenanceClaim['state'],
+    method: typeof claim.method === 'string' ? claim.method : '',
+    value: typeof claim.value === 'string' ? claim.value : undefined,
+    quote: typeof claim.quote === 'string' ? claim.quote : '',
+    locator,
+    uploadId: typeof claim.uploadId === 'string' ? claim.uploadId : '',
+    filename: typeof claim.filename === 'string' ? claim.filename : '',
+  };
+}
+
+/**
+ * Validate a `source_provenance` event.
+ *
+ * Claims that do not validate are dropped individually rather than failing the
+ * whole event: losing one verdict degrades to "no provenance shown for that
+ * value", while rejecting the batch would also discard a `quote_unsupported`
+ * sitting beside it — the one verdict that must never go missing quietly.
+ */
+export function validateSourceProvenanceEvent(
+  data: unknown,
+): data is SourceProvenanceEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  const event = data as Partial<SourceProvenanceEvent>;
+  if (event.type !== 'source_provenance' || !Array.isArray(event.claims)) {
+    return false;
+  }
+  const claims = event.claims
+    .map(normalizeProvenanceClaim)
+    .filter((c): c is SourceProvenanceClaim => c !== null);
+  if (claims.length === 0) {
+    return false;
+  }
+  event.claims = claims;
+  return typeof event.toolUseId === 'string' && event.toolUseId.length > 0;
+}
+
 /**
  * Validate an `agent_notice` event. `message` is what the user reads, so an
  * empty one is rejected rather than rendered as a blank notice.
@@ -960,6 +1068,12 @@ export function processStreamEvent(
         }
         break;
 
+      case 'quota_funding_notice':
+        if (validateQuotaFundingNoticeEvent(data)) {
+          callbacks.onQuotaFundingNotice?.(data);
+        }
+        break;
+
       case 'quota_exceeded':
         if (validateQuotaExceededEvent(data)) {
           callbacks.onQuotaExceeded?.(data);
@@ -1081,6 +1195,14 @@ export function processStreamEvent(
           callbacks.onAgentStatus?.(data);
         } else {
           callbacks.onParseError?.('agent_status: invalid data structure');
+        }
+        break;
+
+      case 'source_provenance':
+        if (validateSourceProvenanceEvent(data)) {
+          callbacks.onSourceProvenance?.(data);
+        } else {
+          callbacks.onParseError?.('source_provenance: invalid data structure');
         }
         break;
 

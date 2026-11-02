@@ -87,11 +87,60 @@ describe('buildAppApiEnvironment — session prewarm', () => {
   });
 });
 
+describe('buildAppApiEnvironment — quota requests', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.QUOTA_REQUESTS_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ quotaRequests: { enabled: true } }), stubParams());
+    expect(on.QUOTA_REQUESTS_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — handoffs', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.HANDOFFS_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ handoffs: { enabled: true } }), stubParams());
+    expect(on.HANDOFFS_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — session rewind', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.SESSION_REWIND_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ sessionRewind: { enabled: true } }), stubParams());
+    expect(on.SESSION_REWIND_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — session fork', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SESSION_FORK_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ sessionFork: { enabled: true } }), stubParams());
+    expect(on.SESSION_FORK_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — folder sync', () => {
   it('forwards the flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).FOLDER_SYNC_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(createMockConfig({ folderSync: { enabled: true } }), stubParams());
     expect(on.FOLDER_SYNC_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — source provenance', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SOURCE_PROVENANCE_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(
+      createMockConfig({ sourceProvenance: { enabled: true } }),
+      stubParams(),
+    );
+    expect(on.SOURCE_PROVENANCE_ENABLED).toBe('true');
   });
 });
 

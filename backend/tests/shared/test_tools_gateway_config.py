@@ -328,3 +328,97 @@ class TestCoGatingValidator:
         )
         with pytest.raises(ValidationError):
             req.to_model()
+
+
+# ------------------------------------------------------- built-in connectors
+
+
+class TestConnectorConfig:
+    """`connector_id` registers an AgentCore connector (Web Search) instead of
+    an external server; the validator fills in everything the connector fixes."""
+
+    def test_connector_defaults(self):
+        config = MCPGatewayConfig(target_name="web-search", connector_id="web-search")
+
+        assert config.is_connector
+        assert config.endpoint_url == ""
+        assert config.credential_type == "gateway_iam_role"
+        assert config.listing_mode == "default"
+        assert config.connector_version == "1.3.0"
+        # The tool list is what expands the bare catalog id into
+        # gateway_web-search___WebSearch, so it must never be empty.
+        assert [e.name for e in config.tools] == ["WebSearch"]
+
+    def test_per_tool_flags_survive_normalization(self):
+        config = MCPGatewayConfig(
+            target_name="web-search",
+            connector_id="web-search",
+            tools=[MCPToolEntry(name="WebSearch", always_on=True)],
+        )
+        assert config.tools[0].always_on is True
+
+    def test_round_trip_keeps_pinned_version_and_filters(self):
+        config = MCPGatewayConfig(
+            target_name="web-search",
+            connector_id="web-search",
+            connector_version="1.2.0",
+            domain_include=["BoiseState.edu", "boisestate.edu", " nih.gov. "],
+            domain_exclude=["pinterest.com"],
+        )
+        item = config.to_dict()
+
+        assert item["connectorVersion"] == "1.2.0"
+        assert item["domainInclude"] == ["boisestate.edu", "nih.gov"]
+        assert MCPGatewayConfig.from_dict(item) == config
+
+    def test_external_server_rows_gain_no_connector_keys(self):
+        config = MCPGatewayConfig(
+            target_name="weather-target", endpoint_url="https://example.com/mcp"
+        )
+        assert not config.is_connector
+        assert "connectorId" not in config.to_dict()
+
+    @pytest.mark.parametrize(
+        "overrides, message",
+        [
+            ({"connector_id": "not-a-connector"}, "Unsupported Gateway connector"),
+            ({"endpoint_url": "https://example.com/mcp"}, "takes no endpoint_url"),
+            ({"aws_service": "lambda"}, "gateway execution role"),
+            ({"credential_provider_arn": "arn:aws:x"}, "gateway execution role"),
+            ({"tools": [MCPToolEntry(name="Other")]}, "exposes only 'WebSearch'"),
+            ({"domain_include": ["https://example.com/docs"]}, "not a bare domain"),
+            ({"domain_exclude": ["example.com:443"]}, "not a bare domain"),
+            ({"domain_exclude": [f"d{i}.com" for i in range(101)]}, "at most 100"),
+        ],
+    )
+    def test_rejects_what_a_connector_cannot_honor(self, overrides, message):
+        with pytest.raises(ValidationError, match=message):
+            MCPGatewayConfig(
+                **{"target_name": "web-search", "connector_id": "web-search", **overrides}
+            )
+
+    def test_external_server_still_requires_endpoint_and_no_domain_filter(self):
+        with pytest.raises(ValidationError, match="endpoint_url is required"):
+            MCPGatewayConfig(target_name="weather-target")
+        with pytest.raises(ValidationError, match="only to a connector target"):
+            MCPGatewayConfig(
+                target_name="weather-target",
+                endpoint_url="https://example.com/mcp",
+                domain_exclude=["pinterest.com"],
+            )
+
+    def test_request_and_response_carry_connector_fields(self):
+        request = MCPGatewayConfigRequest.model_validate(
+            {
+                "targetName": "web-search",
+                "connectorId": "web-search",
+                "domainExclude": ["pinterest.com"],
+            }
+        )
+        model = request.to_model()
+        response = MCPGatewayConfigResponse.from_model(model).model_dump(by_alias=True)
+
+        assert response["connectorId"] == "web-search"
+        assert response["connectorVersion"] == "1.3.0"
+        assert response["domainExclude"] == ["pinterest.com"]
+        assert response["endpointUrl"] == ""

@@ -1,8 +1,9 @@
 """Show a model its message history through a per-call projection.
 
-Shared by the projections that keep history a model would reject away from it
-(``text_only_input``, ``signed_reasoning_input``). The wrapper never touches the
-message list it is handed: that list is aliased across every agent serving the
+Used by the projections that keep history a model would reject away from it
+(today just ``text_only_input``; the signed-reasoning projection it also served
+retired when Strands 1.61.1 took that job over upstream). The wrapper never
+touches the message list it is handed: that list is aliased across every agent serving the
 session (#741), so each projection returns a new list, or the same one when it
 has nothing to change.
 """

@@ -5,6 +5,7 @@ import { filter } from 'rxjs/operators';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
+import { CdkScrollable } from '@angular/cdk/scrolling';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroAdjustmentsHorizontal,
@@ -41,6 +42,7 @@ import { EditSidebarDialogComponent } from './components/edit-sidebar-dialog.com
     TooltipDirective,
     RouterLink,
     RouterLinkActive,
+    CdkScrollable,
     CdkMenuTrigger,
     CdkMenu,
     CdkMenuItem,

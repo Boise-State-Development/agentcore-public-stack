@@ -71,6 +71,7 @@ export {
   validateAgentNoticeEvent,
   validateAgentStatusEvent,
   validateToolGroupSummaryEvent,
+  validateSourceProvenanceEvent,
 } from './stream-parser-core';
 
 // Types
@@ -106,6 +107,9 @@ export type {
   AgentNoticeEvent,
   AgentStatusEvent,
   ToolGroupSummaryEvent,
+  SourceProvenanceEvent,
+  SourceProvenanceClaim,
+  SourceLocator,
   McpUiCsp,
   McpUiPermissions,
   StreamEventType,

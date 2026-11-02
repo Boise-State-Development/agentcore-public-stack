@@ -1,0 +1,799 @@
+/* aps-tui stylesheet.
+ *
+ * Aesthetic direction: technical/utilitarian. Left rule-marks instead of chat
+ * bubbles, generous vertical rhythm, and no decoration that does not carry
+ * information. Colours come from Textual theme variables so every built-in
+ * theme (including ansi-dark / ansi-light for limited terminals) stays legible.
+ *
+ * Two rules keep the whole thing coherent:
+ *
+ * 1. One accent per meaning. $primary is "you" and the thing you act on next
+ *    (composer, highlighted row). $accent is the assistant. $success is work
+ *    that finished, $warning is a soft limit, $error is a failure. Nothing else
+ *    gets a colour.
+ * 2. Every container between #transcript and its text has `height: auto`.
+ *    Textual containers default to `height: 1fr`, which makes a message fill
+ *    the viewport instead of sizing to content; the transcript's virtual size
+ *    then never exceeds one screen and long answers are clipped and
+ *    unreachable. That shipped once.
+ */
+
+Screen {
+    layers: base overlay;
+    background: $background;
+}
+
+Header {
+    background: $background;
+    color: $text-muted;
+}
+
+HeaderTitle {
+    color: $text;
+}
+
+Footer {
+    background: $surface;
+}
+
+/* ----------------------------------------------------------------- transcript */
+
+#transcript {
+    padding: 1 3 0 3;
+    scrollbar-size-vertical: 1;
+    scrollbar-gutter: stable;
+}
+
+/* Shown until the first message: a quiet landing rather than a notice bar. */
+#empty-state {
+    width: 100%;
+    height: 1fr;
+    align: center middle;
+}
+
+#empty-state > * {
+    width: auto;
+    height: auto;
+}
+
+#empty-state .wordmark {
+    color: $accent;
+    text-style: bold;
+}
+
+#empty-state .tagline {
+    color: $text;
+    margin-top: 1;
+}
+
+#empty-state .hints {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#empty-state .hint-key {
+    color: $primary;
+}
+
+/* ------------------------------------------------------------------- messages */
+
+.message {
+    width: 100%;
+    height: auto;
+    margin-bottom: 1;
+}
+
+.message-role {
+    text-style: bold;
+    height: auto;
+}
+
+.user-message {
+    border-left: wide $primary;
+    padding: 0 1;
+    height: auto;
+    background: $boost;
+}
+
+.user-message .message-role {
+    color: $primary;
+}
+
+.assistant-message {
+    border-left: wide $accent;
+    padding: 0 1;
+    height: auto;
+}
+
+.assistant-message .message-role {
+    color: $accent;
+}
+
+/* The Markdown widget adds its own block spacing; strip the outer padding so
+ * prose lines up with the role label above it. */
+.assistant-message Markdown {
+    padding: 0;
+    margin: 0;
+    height: auto;
+    background: transparent;
+}
+
+.assistant-message MarkdownFence {
+    margin: 1 0;
+    height: auto;
+}
+
+/* ------------------------------------------------------------ collapsibles */
+
+/* Textual's Collapsible is a panel: surface background, a rule on top, inner
+ * padding. Inside a transcript that reads as a second message. Flatten every
+ * one into a single muted toggle line that opens in place. */
+.message Collapsible,
+.notice Collapsible {
+    background: transparent;
+    border-top: none;
+    padding: 0;
+    margin: 0;
+    height: auto;
+}
+
+.message Collapsible:focus-within,
+.notice Collapsible:focus-within {
+    background-tint: $foreground 0%;
+}
+
+.message CollapsibleTitle,
+.notice CollapsibleTitle {
+    padding: 0;
+    color: $text-muted;
+    text-style: none;
+}
+
+.message CollapsibleTitle:hover,
+.notice CollapsibleTitle:hover {
+    background: transparent;
+    color: $text;
+}
+
+.message CollapsibleTitle:focus,
+.notice CollapsibleTitle:focus {
+    background: transparent;
+    color: $text;
+    text-style: underline;
+}
+
+/* Collapsible renders its own contents container; it needs to size to content
+ * too or the pane clips its body when expanded. */
+.message Contents,
+.notice Contents {
+    height: auto;
+    padding: 0 0 0 2;
+}
+
+.reasoning {
+    margin: 0 0 1 0;
+    color: $text-muted;
+}
+
+.reasoning Markdown {
+    background: transparent;
+    height: auto;
+    padding: 0;
+    color: $text-muted;
+}
+
+/* -------------------------------------------------------------------- notices */
+
+/* System / error notices rendered inline in the transcript. */
+.notice {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: wide $warning;
+    color: $text-muted;
+}
+
+.notice.-error {
+    border-left: wide $error;
+    color: $error;
+}
+
+.notice-hint {
+    color: $text-muted;
+    text-style: italic;
+    height: auto;
+}
+
+/* ------------------------------------------------------- agent-stream content */
+
+/* Tool calls. One line — glyph, name, what it was asked — plus a muted toggle
+ * for the payload. A dim rule while running, success once it returned, error
+ * if it failed, so a glance down the transcript shows where work happened and
+ * whether any of it broke. */
+.tool-call {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: wide $surface-lighten-2;
+    color: $text-muted;
+}
+
+.tool-call.-finished {
+    border-left: wide $success;
+}
+
+.tool-call.-error {
+    border-left: wide $error;
+}
+
+.tool-call.-error .tool-call-header {
+    color: $error;
+}
+
+.tool-call-header {
+    height: auto;
+    color: $text;
+}
+
+.tool-call-detail {
+    height: auto;
+}
+
+.tool-call-args,
+.tool-call-result {
+    height: auto;
+    color: $text-muted;
+}
+
+/* Citations. */
+.citations {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: wide $secondary;
+    color: $text-muted;
+}
+
+.citations .message-role {
+    color: $secondary;
+}
+
+.citation-source {
+    height: auto;
+    color: $text-muted;
+}
+
+.citations-detail {
+    height: auto;
+}
+
+/* Quota. Warnings inherit `.notice`'s warning rule; a hard stop adds
+ * `.-error`, which `.notice.-error` already colours. */
+.quota-notice {
+    height: auto;
+    color: $text;
+}
+
+.quota-notice .message-role {
+    color: $warning;
+    height: auto;
+}
+
+.quota-notice.-error .message-role {
+    color: $error;
+}
+
+/* Compaction is informational, not a warning — a muted rule keeps it from
+ * reading as something that went wrong. */
+.compaction-notice {
+    height: auto;
+    border-left: wide $surface-lighten-2;
+}
+
+/* Artifacts. */
+.artifact-card {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: wide $success;
+}
+
+.artifact-card .message-role {
+    color: $success;
+}
+
+.artifact-title {
+    height: auto;
+    text-style: bold;
+    color: $text;
+}
+
+/* Interrupts are actionable, not failures. */
+.interrupt-notice {
+    height: auto;
+    border-left: wide $primary;
+    color: $text;
+}
+
+.interrupt-notice .message-role {
+    color: $primary;
+    height: auto;
+}
+
+/* The consent URL must survive a copy-paste, so it is not wrapped or styled
+ * into something a terminal will not linkify. */
+.interrupt-url {
+    height: auto;
+    color: $accent;
+    text-style: underline;
+    padding: 1 0;
+}
+
+/* ------------------------------------------------------------------- composer */
+
+/* Docked bottom, as is the Footer; two widgets docked to the same edge overlap,
+ * so the bottom padding is exactly the Footer's height and keeps the status
+ * bar above it. */
+#composer-area {
+    dock: bottom;
+    height: auto;
+    /* Room for the command menu (10) above a one-line composer (3), the
+     * status bar (1) and the bottom padding (1). The menu only opens while the
+     * composer holds a single line, so the two never need their maxima at once. */
+    max-height: 18;
+    padding: 0 3 1 3;
+    background: $background;
+}
+
+/* The slash-command completion popup. Sits directly above the composer and
+ * never takes focus; the composer keeps it and forwards navigation keys. */
+#command-menu {
+    height: auto;
+    max-height: 10;
+    margin: 0 0 0 0;
+    border: round $primary-darken-1;
+    background: $surface;
+    padding: 0;
+}
+
+#command-menu > .option-list--option-highlighted {
+    background: $primary 30%;
+    text-style: none;
+}
+
+#composer {
+    border: round $primary;
+    border-title-color: $primary;
+    border-subtitle-color: $text-muted;
+    height: auto;
+    max-height: 10;
+    padding: 0 1;
+    background: $surface;
+}
+
+#composer:focus {
+    border: round $primary-lighten-1;
+}
+
+/* $text-muted resolves to `auto 60%`, which `color` accepts but `border` does
+ * not — borders need a concrete color, so use a surface-derived one. */
+#composer.-busy {
+    border: round $surface-lighten-3;
+    border-title-color: $accent;
+}
+
+#composer:disabled {
+    border: round $surface-lighten-2;
+}
+
+/* Two halves: state on the left, model and token counts on the right. The bar
+ * itself is quiet — the footer directly below is the one with a background. */
+#status-bar {
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+#status-state {
+    width: auto;
+    height: 1;
+    color: $text-muted;
+}
+
+#status-bar.-busy #status-state {
+    color: $accent;
+}
+
+#status-bar.-error #status-state {
+    color: $error;
+}
+
+#status-meta {
+    width: 1fr;
+    height: 1;
+    text-align: right;
+    color: $text-muted;
+}
+
+/* --------------------------------------------------------------------- splash */
+
+/* Opaque, not translucent: this covers a half-built chat screen, and letting
+ * that show through reads as a rendering fault rather than a backdrop. */
+Splash {
+    background: $background;
+    align: center middle;
+}
+
+/* The mascot is offset horizontally across the full width, so it must not be
+ * centred or constrained — `width: auto` keeps the offset animation measuring
+ * the art rather than a stretched container. */
+Splash #splash-mascot {
+    width: auto;
+    height: auto;
+    color: $accent;
+    text-style: bold;
+}
+
+Splash #splash-wordmark {
+    width: auto;
+    height: auto;
+    color: $primary;
+    text-style: bold;
+    margin-top: 1;
+}
+
+Splash #splash-subtitle {
+    width: auto;
+    height: auto;
+    color: $text-muted;
+}
+
+Splash #splash-version {
+    width: auto;
+    height: auto;
+    color: $text-muted;
+    text-style: dim;
+}
+
+Splash #splash-hint {
+    width: auto;
+    height: auto;
+    color: $text-muted;
+    text-style: italic;
+    margin-top: 1;
+}
+
+/* --------------------------------------------------------------------- modals */
+
+/* Every dialog shares one frame: a rounded panel floating over a dimmed chat,
+ * a bold title, muted help text, and actions bottom-right. */
+ModalScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#picker-frame,
+#tool-picker-frame,
+#confirm-frame,
+#rename-frame {
+    width: 76;
+    max-width: 92%;
+    height: auto;
+    max-height: 90%;
+    border: round $primary;
+    border-title-color: $text-muted;
+    background: $surface;
+    padding: 1 2;
+}
+
+#tool-picker-frame {
+    width: 96;
+}
+
+#confirm-frame {
+    width: 60;
+    border: round $error;
+}
+
+#picker-title {
+    width: 100%;
+    height: auto;
+    text-style: bold;
+    color: $text;
+    margin-bottom: 1;
+}
+
+#picker-help {
+    width: 100%;
+    height: auto;
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#picker-error,
+#tool-picker-empty {
+    width: 100%;
+    height: auto;
+    color: $error;
+    margin-bottom: 1;
+}
+
+#tool-picker-empty {
+    color: $text-muted;
+}
+
+#confirm-subject {
+    width: 100%;
+    height: auto;
+    color: $text;
+    text-style: bold;
+}
+
+/* Lists inside dialogs lose their own chrome — the frame is the border. */
+ModalScreen OptionList,
+ModalScreen SelectionList {
+    height: auto;
+    max-height: 16;
+    border: none;
+    padding: 0;
+    background: transparent;
+}
+
+ModalScreen OptionList:focus,
+ModalScreen SelectionList:focus {
+    border: none;
+    background-tint: $foreground 0%;
+}
+
+#tool-picker-body {
+    height: auto;
+    max-height: 18;
+    scrollbar-size-vertical: 1;
+}
+
+#rename-input {
+    width: 100%;
+    border: tall $surface-lighten-2;
+    background: $background;
+}
+
+#rename-input:focus {
+    border: tall $primary;
+}
+
+#tool-picker-actions,
+#confirm-actions {
+    width: 100%;
+    height: auto;
+    align-horizontal: right;
+    margin-top: 1;
+}
+
+#tool-picker-actions Button,
+#confirm-actions Button {
+    min-width: 12;
+    margin-left: 1;
+}
+
+/* -------------------------------------------------------------- conversations */
+
+#conversation-list {
+    background: transparent;
+    padding: 0 2;
+    scrollbar-size-vertical: 1;
+}
+
+#conversation-list > ListItem {
+    padding: 0 1;
+}
+
+/* Date headings are landmarks, not rows: spaced above, never highlighted. */
+.conversation-group {
+    margin-top: 1;
+    padding: 0;
+}
+
+#conversation-list > .conversation-group.-highlight,
+#conversation-list:focus > .conversation-group.-highlight {
+    background: transparent;
+}
+
+.conversation-group-label {
+    color: $text-muted;
+    text-style: bold;
+}
+
+.conversation-row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#conversation-list > .conversation-row.-highlight {
+    background: $boost;
+    color: $text;
+}
+
+#conversation-list:focus > .conversation-row.-highlight {
+    background: $primary 20%;
+    color: $text;
+    text-style: none;
+}
+
+.conversation-title {
+    height: auto;
+}
+
+#conversation-status {
+    width: 100%;
+    height: 1;
+    padding: 0 3;
+    color: $text-muted;
+}
+
+#conversation-status.-error {
+    color: $error;
+}
+
+/* -------------------------------------------------------------- prompts */
+
+/* A paused turn's prompt. It is the one thing on screen asking for a key, so
+ * it takes focus and gets a visible frame while open; once answered it
+ * collapses to a single muted outcome line and gives the rule up. */
+.prompt {
+    background: $boost;
+    border-left: wide $primary;
+    padding: 0 1;
+}
+
+.prompt:focus {
+    border-left: wide $accent;
+    background: $primary 12%;
+}
+
+.prompt .message-role {
+    color: $primary;
+}
+
+.prompt:focus .message-role {
+    color: $accent;
+}
+
+.prompt-command {
+    height: auto;
+    color: $text;
+    text-style: bold;
+    padding: 0 0 0 2;
+}
+
+.prompt-keys {
+    height: auto;
+    color: $text-muted;
+    margin-top: 1;
+}
+
+.prompt #uq-options {
+    height: auto;
+    padding: 0 0 0 2;
+}
+
+.prompt #uq-other {
+    margin-top: 1;
+}
+
+.interrupt-notice.-settled {
+    border-left: wide $surface-lighten-2;
+    background: transparent;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+.prompt-outcome {
+    height: auto;
+    color: $text-muted;
+}
+
+#conversation-filter {
+    margin: 0 2;
+    border: tall $surface-lighten-2;
+    background: $background;
+}
+
+#conversation-filter:focus {
+    border: tall $primary;
+}
+
+/* ------------------------------------------------------------ ansi themes */
+
+/* ansi-dark / ansi-light map every colour to one of the terminal's sixteen,
+ * so percentage blends and surface-lighten steps collapse: `$primary 12%`
+ * became solid blue behind the focused prompt. Fall back to a rule-only
+ * focus cue and the terminal's own reverse-video for list selection. */
+.prompt:ansi:focus {
+    background: transparent;
+    border-left: wide ansi_bright_blue;
+}
+
+ModalScreen:ansi SelectionList > .option-list--option-highlighted,
+ModalScreen:ansi OptionList > .option-list--option-highlighted {
+    background: ansi_blue;
+    color: ansi_bright_white;
+    text-style: bold;
+}
+
+/* `$surface-lighten-2` is near-white on a light background, so the muted
+ * rules on running tool calls and settled prompts vanished there. */
+.tool-call:light,
+.compaction-notice:light,
+.interrupt-notice.-settled:light {
+    border-left: wide $foreground 30%;
+}
+
+/* ------------------------------------------------------ shared conversation */
+
+#shared-banner {
+    height: auto;
+    padding: 0 3;
+    color: $text-muted;
+    background: $surface;
+}
+
+#shared-banner.-error {
+    color: $error;
+}
+
+/* ------------------------------------------------------------------- setup */
+
+SetupScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#setup-frame {
+    width: 84;
+    max-width: 94%;
+    height: auto;
+    border: round $primary;
+    padding: 1 2;
+    background: $surface;
+}
+
+#setup-title {
+    width: 100%;
+    height: auto;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#setup-body {
+    width: 100%;
+    height: auto;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#setup-input {
+    margin-bottom: 1;
+}
+
+#setup-choices {
+    height: auto;
+    max-height: 8;
+    margin-bottom: 1;
+}
+
+#setup-error {
+    width: 100%;
+    height: auto;
+    color: $error;
+    margin-bottom: 1;
+}
+
+#setup-help {
+    width: 100%;
+    height: auto;
+    color: $text-muted;
+}

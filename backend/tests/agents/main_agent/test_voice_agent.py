@@ -146,7 +146,10 @@ class TestBidiProviderContract:
         spec = importlib.util.find_spec("strands.bidi")
         source = (pathlib.Path(spec.origin).parent / "agent" / "agent.py").read_text()
         init = source[source.index("def __init__") : source.index('"""', source.index("def __init__"))]
-        assert "session_manager" not in init
+        # 1.57.2 removed `session_manager=` (#4698) and 1.61.1 restored it,
+        # typed `SessionManager[LocalAgent]`. We deliberately stay on `hooks=`:
+        # it is the one spelling that worked across all three versions, and
+        # switching now would be a behaviour change riding in on a bump.
         assert "hooks: list[HookProvider] | None = None" in init
         assert "AgentInitializedEvent" in source and "MessageAddedEvent" in source
 
@@ -154,9 +157,95 @@ class TestBidiProviderContract:
         assert "hooks=[self.session_manager]" in create
         assert "session_manager=self.session_manager" not in create
 
-    def test_nova_sonic_usage_is_still_cumulative(self):
-        """VoiceAgent de-cumulates bidi_usage; a switch to deltas would double-count."""
-        assert "usage_is_cumulative = True" in self._provider_source()
+    def test_nova_sonic_usage_is_reported_as_deltas(self):
+        """1.58.0 (#4886) removed `usage_is_cumulative`; events are now per-event deltas.
+
+        `VoiceAgent._apply_usage_snapshot` sums them. If a later SDK goes back
+        to cumulative totals, summing would multiply a session's bill, so pin
+        both halves of the contract: the flag stays gone, and the provider
+        keeps reading Nova's `delta` bucket rather than `total`.
+        """
+        source = self._provider_source()
+        assert "usage_is_cumulative" not in source, (
+            "the provider declares usage_is_cumulative again — _apply_usage_snapshot "
+            "sums deltas and would now over-count; see voice_agent.py"
+        )
+        assert 'nova_event["usageEvent"]["details"]["delta"]' in source
+
+    def test_usage_events_carry_the_modality_split_upstream(self):
+        """We deleted our own splitter when the provider started emitting one.
+
+        If these keys move, the speech/text buckets silently fall back to zero
+        and a voice session prices entirely on the text rate card.
+        """
+        source = self._provider_source()
+        assert "input_token_details" in source and "output_token_details" in source
+        assert '"audio":' in source and '"text":' in source
+
+
+class TestBidiImportsResolve:
+    """Every name `voice_agent` imports from `strands.bidi` must still exist.
+
+    `voice_agent` wraps those imports in `try/except ImportError` that degrades
+    to `BIDI_AVAILABLE = False` and one INFO line, so a rename upstream does
+    not crash — it turns voice off everywhere, quietly. `TestBidiProviderContract`
+    checks a hand-written list of symbols and therefore only catches the ones
+    somebody thought to add: on the strands-agents 1.61.1 bump it passed clean
+    while `strands.bidi.types.events.ModalityUsage` had been deleted and voice
+    was dead.
+
+    This reads the imports out of our own AST instead, so a new import is
+    covered the day it is written. It reads the SDK's *source* rather than
+    importing it, because CI installs `--extra agentcore --extra dev` but not
+    `--extra bidi`: the modules ship in the base wheel, their runtime
+    dependencies do not.
+    """
+
+    def test_every_bidi_symbol_we_import_exists_in_the_installed_sdk(self):
+        import ast
+        import importlib.util
+        import inspect
+        import pathlib
+        import re
+
+        import agents.main_agent.voice_agent as va
+
+        imports = [
+            (node.module, alias.name)
+            for node in ast.walk(ast.parse(inspect.getsource(va)))
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("strands.bidi")
+            for alias in node.names
+        ]
+        assert imports, "no strands.bidi imports found — did voice_agent move?"
+
+        missing = []
+        for module, name in imports:
+            spec = importlib.util.find_spec(module)
+            if spec is None or not spec.origin:
+                missing.append(f"{module} (module not found)")
+                continue
+            source = pathlib.Path(spec.origin).read_text()
+            # A name is defined if it is declared here or re-exported from here.
+            defined = re.search(
+                rf"^(class|def|async def)\s+{re.escape(name)}\b|^{re.escape(name)}\s*[:=]"
+                rf"|\b{re.escape(name)}\b",
+                source,
+                re.MULTILINE,
+            )
+            if not defined:
+                missing.append(f"{module}.{name}")
+
+        assert not missing, (
+            "voice_agent imports names the installed strands SDK no longer defines: "
+            f"{missing}. The import is swallowed into BIDI_AVAILABLE=False, so voice "
+            "would switch off silently rather than fail."
+        )
+
+    def test_the_import_block_still_degrades_rather_than_raising(self):
+        """The swallow is deliberate; this pins that it is still a swallow."""
+        import agents.main_agent.voice_agent as va
+
+        assert isinstance(va.BIDI_AVAILABLE, bool)
 
 
 class TestVoiceConstants:
@@ -347,41 +436,38 @@ class TestVoicePresentationInPrompt:
     def test_guidelines_still_precede_the_voice_line(self):
         prompt = self._prompt_for("tiffany")
         assert prompt.index("Voice Interaction Guidelines") < prompt.index('voice "Tiffany"')
-
-
 class TestUsageModalitySplit:
-    """Nova's usageEvent split survives the provider, and prices each bucket."""
+    """Nova's speech/text split, and the delta arithmetic behind it.
 
-    NOVA_USAGE = {
-        "totalInputTokens": 1_300,
-        "totalOutputTokens": 2_400,
-        "totalTokens": 3_700,
-        "details": {
-            "delta": {"input": {"speechTokens": 10, "textTokens": 1}, "output": {"speechTokens": 20, "textTokens": 2}},
-            "total": {
-                "input": {"speechTokens": 1_000, "textTokens": 300},
-                "output": {"speechTokens": 2_000, "textTokens": 400},
-            },
-        },
+    strands-agents 1.58.0 (#4886) changed two things at once: `bidi_usage`
+    events became PER-EVENT DELTAS (`usage_is_cumulative` was deleted) and
+    `BidiUsageEvent.as_dict()` went snake_case. Both are absorbed in
+    `VoiceWireAdapter._usage`, which still emits the cumulative camelCase
+    shape `voice-chat.service.ts` and `_apply_usage_snapshot` are written
+    against. These are the real SDK payloads, as captured from a live Nova
+    Sonic turn.
+    """
+
+    # Two consecutive usage deltas exactly as the 1.61.1 provider emits them.
+    DELTA_ONE = {
+        "type": "bidi_usage",
+        "input_tokens": 11,
+        "output_tokens": 22,
+        "total_tokens": 33,
+        "input_token_details": {"audio": 10, "text": 1},
+        "output_token_details": {"audio": 20, "text": 2},
+    }
+    DELTA_TWO = {
+        "type": "bidi_usage",
+        "input_tokens": 110,
+        "output_tokens": 220,
+        "total_tokens": 330,
+        "input_token_details": {"audio": 100, "text": 10},
+        "output_token_details": {"audio": 200, "text": 20},
     }
 
-    def test_split_rows_come_from_details_total_not_delta(self):
-        from agents.main_agent.voice_agent import usage_modality_details
-
-        rows = usage_modality_details(self.NOVA_USAGE)
-        assert rows == [
-            {"modality": "audio", "input_tokens": 1_000, "output_tokens": 2_000},
-            {"modality": "text", "input_tokens": 300, "output_tokens": 400},
-        ]
-
-    def test_no_details_means_no_rows(self):
-        from agents.main_agent.voice_agent import usage_modality_details
-
-        assert usage_modality_details({"totalInputTokens": 5, "totalOutputTokens": 6}) == []
-        assert usage_modality_details({"details": {}}) == []
-
-    @pytest.mark.asyncio
-    async def test_receive_events_accumulates_the_split_and_prices_it(self, monkeypatch):
+    @staticmethod
+    def _agent():
         from agents.main_agent.voice_agent import VoiceAgent, VoiceWireAdapter
 
         agent = VoiceAgent.__new__(VoiceAgent)
@@ -390,27 +476,109 @@ class TestUsageModalitySplit:
         agent._per_turn_usage = []
         agent._turn_count = 0
         agent._response_start_count = 0
+        return agent
 
-        usage_event = {
-            "type": "bidi_usage",
-            "inputTokens": 1_300,
-            "outputTokens": 2_400,
-            "totalTokens": 3_700,
-            "modality_details": [
-                {"modality": "audio", "input_tokens": 1_000, "output_tokens": 2_000},
-                {"modality": "text", "input_tokens": 300, "output_tokens": 400},
-            ],
-        }
-
+    @staticmethod
+    def _bidi(*payloads):
         class _Ev:
+            def __init__(self, payload):
+                self._payload = payload
+
             def as_dict(self):
-                return dict(usage_event)
+                return dict(self._payload)
 
         class _Bidi:
             async def receive(self):
-                yield _Ev()
+                for payload in payloads:
+                    yield _Ev(payload)
 
-        agent._bidi_agent = _Bidi()
+        return _Bidi()
+
+    def test_the_wire_accumulates_deltas_into_cumulative_totals(self):
+        """⚠️ Regression guard for the 1.58.0 cumulative -> delta flip.
+
+        If someone makes the adapter pass deltas straight through, this fails
+        with the SECOND delta's numbers instead of the running total. Both
+        consumers — `_apply_usage_snapshot` here and `voice-chat.service.ts`
+        in the SPA — replace rather than sum, on this wire's promise that the
+        counts are cumulative. Passing deltas through would bill every voice
+        session for only its final event.
+        """
+        from agents.main_agent.voice_agent import VoiceWireAdapter
+
+        wire = VoiceWireAdapter()
+
+        first = wire.translate(dict(self.DELTA_ONE))[0]
+        assert first["inputTokens"] == 11
+
+        second = wire.translate(dict(self.DELTA_TWO))[0]
+        assert second["inputTokens"] == 121, "deltas must accumulate, not replace"
+        assert second["outputTokens"] == 242
+        assert second["totalTokens"] == 363
+        assert second["inputTokens"] != self.DELTA_TWO["input_tokens"]
+
+    def test_the_wire_reads_snake_case_and_emits_camel_case(self):
+        """1.57.2 emitted `inputTokens`; 1.61.1 emits `input_tokens`.
+
+        A camelCase read of a 1.61.1 event yields None and the totals stay at
+        zero — which is how a live voice turn priced at $0 before this branch.
+        """
+        from agents.main_agent.voice_agent import VoiceWireAdapter
+
+        out = VoiceWireAdapter().translate(dict(self.DELTA_ONE))[0]
+
+        assert out["inputTokens"] == 11 and out["totalTokens"] == 33
+        assert "input_tokens" not in out
+
+    def test_the_wire_still_understands_pre_1_58_events(self):
+        """Old spellings keep working, so either SDK generation lands the same."""
+        from agents.main_agent.voice_agent import VoiceWireAdapter
+
+        out = VoiceWireAdapter().translate(
+            {
+                "type": "bidi_usage",
+                "inputTokens": 1_300,
+                "outputTokens": 2_400,
+                "totalTokens": 3_700,
+                "modality_details": [
+                    {"modality": "audio", "input_tokens": 1_000, "output_tokens": 2_000},
+                    {"modality": "text", "input_tokens": 300, "output_tokens": 400},
+                ],
+            }
+        )[0]
+
+        assert out["inputTokens"] == 1_300
+        assert out["modality_details"][0] == {
+            "modality": "audio", "input_tokens": 1_000, "output_tokens": 2_000,
+        }
+
+    def test_an_event_with_no_split_carries_no_rows(self):
+        from agents.main_agent.voice_agent import VoiceWireAdapter
+
+        out = VoiceWireAdapter().translate(
+            {"type": "bidi_usage", "input_tokens": 7, "output_tokens": 8, "total_tokens": 15}
+        )[0]
+
+        assert out["inputTokens"] == 7
+        assert "modality_details" not in out
+
+    def test_unknown_modalities_are_ignored_not_crashed(self):
+        """TokenDetails also allows image / video / cache_read / reasoning."""
+        from agents.main_agent.voice_agent import VoiceWireAdapter
+
+        out = VoiceWireAdapter().translate(
+            {"type": "bidi_usage", "input_tokens": 5, "output_tokens": 0, "total_tokens": 5,
+             "input_token_details": {"audio": 4, "image": 1, "cache_read": 9}}
+        )[0]
+
+        rows = {r["modality"]: r for r in out["modality_details"]}
+        assert rows["audio"]["input_tokens"] == 4
+        assert set(rows) == {"audio", "text"}
+
+    @pytest.mark.asyncio
+    async def test_receive_events_accumulates_the_split_and_prices_it(self, monkeypatch):
+        agent = self._agent()
+        agent._bidi_agent = self._bidi(self.DELTA_ONE, self.DELTA_TWO)
 
         pricing = {
             "inputPricePerMtok": 0.319,
@@ -428,106 +596,34 @@ class TestUsageModalitySplit:
         monkeypatch.setenv(EnvVars.NOVA_SONIC_MODEL_ID, "amazon.nova-2-sonic-v1:0")
 
         events = [e async for e in agent.receive_events()]
-        assert len(events) == 1
+
+        assert len(events) == 2
         usage = agent.accumulated_usage
-        assert usage["speechInputTokens"] == 1_000
-        assert usage["textInputTokens"] == 300
-        assert usage["speechOutputTokens"] == 2_000
-        assert usage["textOutputTokens"] == 400
+        assert usage["inputTokens"] == 121
+        assert usage["speechInputTokens"] == 110
+        assert usage["textInputTokens"] == 11
+        assert usage["speechOutputTokens"] == 220
+        assert usage["textOutputTokens"] == 22
 
-        expected_in = (1_000 * 3.0 + 300 * 0.319) / 1_000_000
-        expected_out = (2_000 * 12.0 + 400 * 2.651) / 1_000_000
-        assert events[0]["cost"]["inputCost"] == pytest.approx(expected_in)
-        assert events[0]["cost"]["outputCost"] == pytest.approx(expected_out)
-        assert events[0]["cost"]["total"] == pytest.approx(expected_in + expected_out)
-
-
-class TestProviderSubclass:
-    """The usage-detail subclass only exists with the bidi extra installed."""
-
-    def test_subclass_overrides_the_converter_the_provider_still_has(self):
-        import agents.main_agent.voice_agent as va
-
-        if not va.BIDI_AVAILABLE:
-            pytest.skip("strands-agents[bidi] not installed")
-        assert issubclass(va.NovaSonicModelWithUsageDetails, va.BedrockNovaSonicModel)
-        # The hook we override must still be the provider's name for it.
-        assert callable(getattr(va.BedrockNovaSonicModel, "_convert_nova_event", None))
-
-    def test_override_signature_matches_the_providers(self):
-        """The provider calls the hook positionally; a stale arity raises on every event.
-
-        1.57 added ``response_state``. A name-only check passed straight through
-        that change, so pin the parameter list itself.
-        """
-        import inspect
-
-        import agents.main_agent.voice_agent as va
-
-        if not va.BIDI_AVAILABLE:
-            pytest.skip("strands-agents[bidi] not installed")
-        ours = list(inspect.signature(va.NovaSonicModelWithUsageDetails._convert_nova_event).parameters)
-        theirs = list(inspect.signature(va.BedrockNovaSonicModel._convert_nova_event).parameters)
-        assert ours == theirs
-
-    def test_converter_keeps_the_split_on_the_usage_event(self):
-        import agents.main_agent.voice_agent as va
-
-        if not va.BIDI_AVAILABLE:
-            pytest.skip("strands-agents[bidi] not installed")
-        model = va.NovaSonicModelWithUsageDetails.__new__(va.NovaSonicModelWithUsageDetails)
-        events = model._convert_nova_event({"usageEvent": TestUsageModalitySplit.NOVA_USAGE}, MagicMock())
-        assert len(events) == 1
-        d = events[0].as_dict()
-        assert d["inputTokens"] == 1_300 and d["outputTokens"] == 2_400
-        assert [r["modality"] for r in d["modality_details"]] == ["audio", "text"]
-        assert d["modality_details"][0]["input_tokens"] == 1_000
-
-    def test_converter_leaves_other_events_to_the_provider(self):
-        import agents.main_agent.voice_agent as va
-
-        if not va.BIDI_AVAILABLE:
-            pytest.skip("strands-agents[bidi] not installed")
-        model = va.NovaSonicModelWithUsageDetails.__new__(va.NovaSonicModelWithUsageDetails)
-        state = MagicMock()
-        with patch.object(va.BedrockNovaSonicModel, "_convert_nova_event", return_value=["delegated"]) as sup:
-            assert model._convert_nova_event({"completionStart": {"completionId": "c1"}}, state) == ["delegated"]
-            sup.assert_called_once_with({"completionStart": {"completionId": "c1"}}, state)
+        expected_in = (110 * 3.0 + 11 * 0.319) / 1_000_000
+        expected_out = (220 * 12.0 + 22 * 2.651) / 1_000_000
+        assert events[-1]["cost"]["inputCost"] == pytest.approx(expected_in)
+        assert events[-1]["cost"]["outputCost"] == pytest.approx(expected_out)
+        assert events[-1]["cost"]["total"] == pytest.approx(expected_in + expected_out)
 
     @pytest.mark.asyncio
-    async def test_drain_keeps_the_split_too(self):
-        """Usage that only arrives after stop() must price on the same buckets as the live stream."""
-        from agents.main_agent.voice_agent import VoiceAgent, VoiceWireAdapter
+    async def test_drain_keeps_the_split_and_the_running_total(self):
+        """Usage arriving after stop() shares the adapter, so totals keep adding up."""
+        agent = self._agent()
+        agent._bidi_agent = self._bidi(self.DELTA_ONE)
+        [e async for e in agent.receive_events()]
 
-        class _Ev:
-            def as_dict(self):
-                return {
-                    "type": "bidi_usage",
-                    "inputTokens": 1_300,
-                    "outputTokens": 2_400,
-                    "totalTokens": 3_700,
-                    "modality_details": [
-                        {"modality": "audio", "input_tokens": 1_000, "output_tokens": 2_000},
-                        {"modality": "text", "input_tokens": 300, "output_tokens": 400},
-                    ],
-                }
-
-        class _Bidi:
-            async def receive(self):
-                yield _Ev()
-
-        agent = VoiceAgent.__new__(VoiceAgent)
-        agent._bidi_agent = _Bidi()
-        agent._wire = VoiceWireAdapter()
-        agent._accumulated_usage = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
-        agent._per_turn_usage = []
-        agent._turn_count = 0
-
+        agent._bidi_agent = self._bidi(self.DELTA_TWO)
         await agent.drain_remaining_events(timeout=1.0)
 
-        assert agent.accumulated_usage["speechInputTokens"] == 1_000
-        assert agent.accumulated_usage["textOutputTokens"] == 400
-        assert agent.accumulated_usage["totalTokens"] == 3_700
+        assert agent.accumulated_usage["inputTokens"] == 121
+        assert agent.accumulated_usage["speechInputTokens"] == 110
+        assert agent.accumulated_usage["textOutputTokens"] == 22
 
 
 class TestVoiceWireAdapter:

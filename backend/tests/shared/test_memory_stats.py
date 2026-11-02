@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -127,18 +126,26 @@ class TestMemoryReadTool:
 
 class TestOffTheReturnPath:
     def test_a_slow_count_never_delays_the_read(self, projects, memory, monkeypatch):
-        """The count goes to a background thread: a 500 ms UpdateItem costs the read nothing."""
+        """The count goes to a background thread: the read returns while the count is still blocked.
+
+        Gated rather than timed. A wall-clock bound on the whole read also timed
+        its moto-backed S3 and DynamoDB calls, and a loaded CI worker took 1.9 s
+        over them. A count on the return path holds the read at the gate until
+        its timeout, and finishes before the read returns, so the assertion
+        below fails however fast the machine is.
+        """
         from agents.builtin_tools.memory_spaces import project_tools
         from agents.builtin_tools.memory_spaces.project_tools import ProjectMemoryScopes, make_project_memory_tools
 
         team = _team(projects)
         memory.save_entry(team.shared_space_id, EDITOR.user_id, EDITOR.email, "canvas", ITEMS)
         monkeypatch.setattr(project_tools, "MemorySpaceService", lambda: memory)
+        release = threading.Event()
         done = threading.Event()
 
         class Slow:
             def record_retrieval(self, space_id, slug, at):
-                time.sleep(0.5)
+                release.wait(5)
                 done.set()
 
         monkeypatch.setattr(stats, "_repository", lambda: Slow())
@@ -147,9 +154,10 @@ class TestOffTheReturnPath:
         scopes = ProjectMemoryScopes(team.project_id, team.shared_space_id, None, OWNER)
         tool = {t.tool_name: t for t in make_project_memory_tools(scopes)}["memory_read"]
 
-        started = time.perf_counter()
-        result = asyncio.run(tool(scope="project", slug="canvas", tool_context=SimpleNamespace(invocation_state={})))
-        elapsed = time.perf_counter() - started
-        assert result["status"] == "success"
-        assert elapsed < 0.4 and not done.is_set()
+        try:
+            result = asyncio.run(tool(scope="project", slug="canvas", tool_context=SimpleNamespace(invocation_state={})))
+            assert result["status"] == "success"
+            assert not done.is_set()
+        finally:
+            release.set()
         assert done.wait(2)

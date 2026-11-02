@@ -81,10 +81,25 @@ describe('Lambda and DLQ alarms', () => {
     'memory-maintenance-worker',
   ];
 
-  it('creates error and throttle alarms for the previously unmonitored functions', () => {
+  function groups(kind: 'errors' | 'throttles'): any[] {
+    return Object.values(alarms).filter((a) => (
+      typeof a.Properties.AlarmName === 'string'
+      && a.Properties.AlarmName.startsWith(`${MOCK_PREFIX}-lambda-${kind}-group-`)
+    ));
+  }
+
+  /** The grouped alarms whose description names `fn` as a member. */
+  function groupsNaming(kind: 'errors' | 'throttles', fn: string): any[] {
+    // Member lists are comma-separated, so match whole names: 'kb-sync-worker'
+    // must not match inside 'kb-migration-worker'.
+    const member = new RegExp(`(: |, )${fn}(, |\\. )`);
+    return groups(kind).filter((a) => member.test(a.Properties.AlarmDescription));
+  }
+
+  it('puts every function in exactly one error group and one throttle group', () => {
     for (const fn of FULLY_ALARMED) {
-      byName(`lambda-${fn}-errors`);
-      byName(`lambda-${fn}-throttles`);
+      expect(groupsNaming('errors', fn)).toHaveLength(1);
+      expect(groupsNaming('throttles', fn)).toHaveLength(1);
     }
   });
 
@@ -92,8 +107,8 @@ describe('Lambda and DLQ alarms', () => {
   // (dispatcher 1, worker 3); a second at one shared threshold would conflict.
   it('does not duplicate error alarms that already exist elsewhere', () => {
     for (const fn of THROTTLE_ONLY) {
-      byName(`lambda-${fn}-throttles`);
-      expect(names()).not.toContain(`${MOCK_PREFIX}-lambda-${fn}-errors`);
+      expect(groupsNaming('throttles', fn)).toHaveLength(1);
+      expect(groupsNaming('errors', fn)).toHaveLength(0);
     }
     // The originals are still present, with their tuned thresholds intact.
     expect(byName('kb-sync-dispatcher-errors').Properties.Threshold).toBe(1);
@@ -103,37 +118,48 @@ describe('Lambda and DLQ alarms', () => {
     expect(byName('memory-maintenance-worker-errors').Properties.Threshold).toBe(1);
   });
 
-  // Deploy-time machinery is excluded: its failure fails the deploy directly.
-  it('every runtime Lambda has an error alarm', () => {
-    const alarmNames = names();
-    const functions = template.findResources('AWS::Lambda::Function');
-
-    const deployTimeOnly = /RagCors|AutoDelete|CustomResource|Provider|framework|LogRetention/i;
-    const runtimeFunctions = Object.keys(functions).filter((id) => !deployTimeOnly.test(id));
-
-    // Every runtime function should be represented by at least one error alarm.
-    // Cross-check on count rather than name-matching logical ids, since alarm
-    // names use short names and logical ids are CDK-generated.
-    const errorAlarms = alarmNames.filter((n) => /-errors$/.test(n));
-    expect(errorAlarms.length).toBeGreaterThanOrEqual(FULLY_ALARMED.length);
-    expect(runtimeFunctions.length).toBeGreaterThan(0);
+  // One Errors (or Throttles) metric per member, so the member count in the
+  // description and the metric count must agree.
+  it('each group carries one metric per member, inside the 10-metric limit', () => {
+    for (const kind of ['errors', 'throttles'] as const) {
+      for (const alarm of groups(kind)) {
+        const stats = alarm.Properties.Metrics.filter((m: any) => m.MetricStat);
+        expect(stats.length).toBeLessThanOrEqual(10);
+        const expected = kind === 'errors' ? 'Errors' : 'Throttles';
+        for (const m of stats) {
+          expect(m.MetricStat.Metric.Namespace).toBe('AWS/Lambda');
+          expect(m.MetricStat.Metric.MetricName).toBe(expected);
+        }
+        const members = alarm.Properties.AlarmDescription.split(': ')[1].split('.')[0].split(', ');
+        expect(members).toHaveLength(stats.length);
+      }
+    }
   });
 
-  it('throttle alarms fire on any throttle at all', () => {
-    for (const fn of [...FULLY_ALARMED, ...THROTTLE_ONLY]) {
-      const alarm = byName(`lambda-${fn}-throttles`);
-      expect(alarm.Properties.MetricName).toBe('Throttles');
-      expect(alarm.Properties.Namespace).toBe('AWS/Lambda');
+  // MAX keeps the threshold per function rather than per group.
+  it('alarms on the worst function in the group', () => {
+    for (const alarm of [...groups('errors'), ...groups('throttles')]) {
+      const expression = alarm.Properties.Metrics.find((m: any) => m.Expression).Expression;
+      expect(expression).toMatch(/^MAX\(\[m0(, m\d+)*\]\)$/);
+    }
+  });
+
+  it('throttle groups fire on any throttle at all', () => {
+    for (const alarm of groups('throttles')) {
       expect(alarm.Properties.Threshold).toBe(0);
     }
   });
 
   it('alarms bind the FunctionName dimension to the real function', () => {
-    const alarm = byName('lambda-artifact-render-errors');
-    const dims = alarm.Properties.Dimensions;
-    expect(dims).toHaveLength(1);
-    expect(dims[0].Name).toBe('FunctionName');
-    expect(JSON.stringify(dims[0].Value)).toMatch(/Ref|Fn::GetAtt/);
+    const functionIds = new Set(Object.keys(template.findResources('AWS::Lambda::Function')));
+    for (const alarm of [...groups('errors'), ...groups('throttles')]) {
+      for (const m of alarm.Properties.Metrics.filter((x: any) => x.MetricStat)) {
+        const dims = m.MetricStat.Metric.Dimensions;
+        expect(dims).toHaveLength(1);
+        expect(dims[0].Name).toBe('FunctionName');
+        expect(functionIds.has(dims[0].Value.Ref)).toBe(true);
+      }
+    }
   });
 
   // A timed-out invocation already records an Errors datapoint.
@@ -162,7 +188,7 @@ describe('Lambda and DLQ alarms', () => {
   });
 
   it('every Lambda and DLQ alarm is routed to the alarm topic', () => {
-    for (const name of names().filter((n) => /-lambda-|^.*-dlq-/.test(n))) {
+    for (const name of names().filter((n) => n.startsWith(`${MOCK_PREFIX}-lambda-`) || n.startsWith(`${MOCK_PREFIX}-dlq-`))) {
       const alarm = Object.values(alarms).find((a) => a.Properties.AlarmName === name);
       expect(alarm.Properties.AlarmActions).toHaveLength(1);
       expect(alarm.Properties.OKActions).toHaveLength(1);

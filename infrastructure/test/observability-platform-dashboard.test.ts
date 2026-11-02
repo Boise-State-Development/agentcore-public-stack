@@ -120,7 +120,9 @@ describe('Unified platform dashboard', () => {
   describe('row 3 — alarm status', () => {
     // The list is discovered by walking the tree, so this checks it found all.
     it('includes every alarm in the stack', () => {
-      expect(alarmCount).toBeGreaterThan(60);
+      // A floor against an empty walk, not a target: grouped DynamoDB and
+      // Lambda alarms brought this synth from 90+ down to 49.
+      expect(alarmCount).toBeGreaterThan(40);
       // The widget references each alarm by ARN, which renders as
       // {"Fn::GetAtt": [<AlarmLogicalId>, "Arn"]} rather than a literal string —
       // hence counting GetAtt Arn references rather than grepping for ':alarm:'.

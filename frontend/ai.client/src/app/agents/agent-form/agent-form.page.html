@@ -95,6 +95,12 @@
       </div>
     }
 
+    @if (unavailableBindingNote(); as note) {
+      <div role="status" class="rounded-xl border border-state-info-200 bg-state-info-50 px-4 py-3 text-sm text-state-info-800 dark:border-state-info-800/50 dark:bg-state-info-900/20 dark:text-state-info-300">
+        {{ note }}
+      </div>
+    }
+
     @if (hasTemplateNotice()) {
       <div class="rounded-xl border border-state-info-200 bg-state-info-50 px-4 py-3 text-sm text-state-info-800 dark:border-state-info-800/50 dark:bg-state-info-900/20 dark:text-state-info-300">
         <div class="flex items-start justify-between gap-3">

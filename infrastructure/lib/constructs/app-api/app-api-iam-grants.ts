@@ -6,13 +6,13 @@
  * required IAM policy statements to the task role.
  *
  * The grants are grouped by domain:
- *   - Core tables (users, roles, quotas, costs, sessions, OAuth)
- *   - File uploads (S3 + DDB)
- *   - RAG (assistants table, documents bucket, vector store)
+ *   - DynamoDB (every table this deployment names, in one statement)
+ *   - File uploads (S3)
+ *   - RAG (documents bucket, vector store)
  *   - Cognito (user pool admin ops)
  *   - Secrets Manager (auth secret, OAuth secrets, BFF cookie key)
- *   - Artifacts (S3 + DDB + render token)
- *   - Fine-tuning (DDB + S3 + SageMaker + IAM PassRole)
+ *   - Artifacts (S3 + render token)
+ *   - Fine-tuning (S3 + SageMaker + IAM PassRole)
  *   - AgentCore Memory
  *   - Bedrock (title generation)
  *   - SSM (inference-api image tag for runtime endpoint resolution)
@@ -27,6 +27,10 @@ import {
   grantManagedKbDocumentDeletion,
   grantManagedKbRetrieval,
 } from '../managed-kb/managed-kb-role-construct';
+import {
+  deploymentTablesReadWrite,
+  otherDeploymentsTablesDeny,
+} from '../data/deployment-table-grants';
 
 export interface AppApiIamGrantsProps {
   scope: Construct;
@@ -75,95 +79,19 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   // The "regular" assistants table was decommissioned — the python
   // app uses the rag-assistants table for both assistant config and
   // their RAG document/vector metadata, via DYNAMODB_ASSISTANTS_TABLE_NAME
-  // → /{prefix}/rag/assistants-table-name. Grants on rag-assistants
-  // are wired in the RagAssistantsTableAccess block below.
+  // → /{prefix}/rag/assistants-table-name. It is granted with every
+  // other table in the DeploymentTablesReadWrite statement below.
 
-  // ── User settings ──
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'UserSettingsTableAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-        'dynamodb:BatchGetItem', 'dynamodb:BatchWriteItem',
-      ],
-      resources: [props.refs.userSettingsTable.tableArn, `${props.refs.userSettingsTable.tableArn}/index/*`],
-    }),
-  );
-
-  // ── User menu links ──
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'UserMenuLinksTableAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-      ],
-      resources: [props.refs.userMenuLinksTable.tableArn, `${props.refs.userMenuLinksTable.tableArn}/index/*`],
-    }),
-  );
-
-  // ── Announcements (admin-authored notices + per-user acks) ──
-  // One table, two item shapes: the announcement rows under the fixed
-  // `ANNOUNCEMENTS` partition, and each user's ack rows under `USER#<id>`.
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'AnnouncementsTableAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-      ],
-      resources: [props.refs.announcementsTable.tableArn, `${props.refs.announcementsTable.tableArn}/index/*`],
-    }),
-  );
-
-  // ── System prompts (Conversation Modes catalog) ──
-  // Admin-managed CRUD; per-user reads (name + description) go through
-  // the user-facing `/system-prompts` endpoint, which uses the same
-  // table.
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'SystemPromptsTableAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-      ],
-      resources: [props.refs.systemPromptsTable.tableArn, `${props.refs.systemPromptsTable.tableArn}/index/*`],
-    }),
-  );
-
-  // ── Agent templates (create-agent picker catalog) ──
-  // Admin-managed CRUD; per-user reads (the enabled catalog) go through the
-  // user-facing `/templates` endpoint, which uses the same table.
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'AgentTemplatesTableAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-      ],
-      resources: [props.refs.agentTemplatesTable.tableArn, `${props.refs.agentTemplatesTable.tableArn}/index/*`],
-    }),
-  );
-
-  // ── RAG assistants table ──
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'RagAssistantsTableAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-        'dynamodb:BatchGetItem', 'dynamodb:BatchWriteItem',
-      ],
-      resources: [props.refs.ragAssistantsTable.tableArn, `${props.refs.ragAssistantsTable.tableArn}/index/*`],
-    }),
-  );
+  // ── DynamoDB: every table this deployment names ──
+  // app-api is the CRUD owner of all of the stack's tables, so one statement on
+  // `table/{prefix}-*` (which covers their indexes) replaces a statement per
+  // table, and the Deny refuses another deployment's tables that the prefix
+  // pattern would otherwise match. See deployment-table-grants.ts for the
+  // collision and why the Deny is conditioned the way it is.
+  // `app-api role reaches every table` in dynamodb-table-grants.test.ts holds
+  // this to the synthesized tables.
+  taskRole.addToPrincipalPolicy(deploymentTablesReadWrite(config, 'DeploymentTablesReadWrite'));
+  taskRole.addToPrincipalPolicy(otherDeploymentsTablesDeny(config, 'OtherDeploymentsTablesDeny'));
 
   // ── RAG documents bucket ──
   taskRole.addToPrincipalPolicy(
@@ -218,44 +146,6 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       conditions: { StringLike: { 's3:prefix': ['conversations/*'] } },
     }),
   );
-
-  // ── Core tables (OIDC, Users, Roles, API Keys, OAuth) ──
-  const coreTables = [
-    { sid: 'OidcStateAccess', arn: props.refs.oidcStateTable.tableArn },
-    { sid: 'UsersTableAccess', arn: props.refs.usersTable.tableArn },
-    { sid: 'AppRolesTableAccess', arn: props.refs.appRolesTable.tableArn },
-    { sid: 'AuditLogTableAccess', arn: props.refs.auditLogTable.tableArn },
-    { sid: 'ApiKeysTableAccess', arn: props.refs.apiKeysTable.tableArn },
-    { sid: 'OAuthProvidersAccess', arn: props.refs.oauthProvidersTable.tableArn },
-    { sid: 'OAuthUserTokensAccess', arn: props.refs.oauthUserTokensTable.tableArn },
-    { sid: 'UserQuotasAccess', arn: props.refs.userQuotasTable.tableArn },
-    { sid: 'QuotaEventsAccess', arn: props.refs.quotaEventsTable.tableArn },
-    { sid: 'SessionsMetadataAccess', arn: props.refs.sessionsMetadataTable.tableArn },
-    { sid: 'UserCostSummaryAccess', arn: props.refs.userCostSummaryTable.tableArn },
-    { sid: 'SystemCostRollupAccess', arn: props.refs.systemCostRollupTable.tableArn },
-    { sid: 'ManagedModelsAccess', arn: props.refs.managedModelsTable.tableArn },
-    { sid: 'AuthProvidersAccess', arn: props.refs.authProvidersTable.tableArn },
-    { sid: 'BffSessionsAccess', arn: props.refs.bffSessionsTable.tableArn },
-    { sid: 'VoiceTicketReplayAccess', arn: props.refs.voiceTicketReplayTable.tableArn },
-    { sid: 'UserFilesTableAccess', arn: props.refs.fileUploadTable.tableArn },
-    { sid: 'SharedConversationsAccess', arn: props.refs.sharedConversationsTable.tableArn },
-    { sid: 'ProjectsTableAccess', arn: props.refs.projectsTable.tableArn },
-  ];
-
-  for (const { sid, arn } of coreTables) {
-    taskRole.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        sid,
-        effect: iam.Effect.ALLOW,
-        actions: [
-          'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-          'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-          'dynamodb:BatchGetItem', 'dynamodb:BatchWriteItem',
-        ],
-        resources: [arn, `${arn}/index/*`],
-      }),
-    );
-  }
 
   // ── File uploads S3 ──
   taskRole.addToPrincipalPolicy(
@@ -437,10 +327,9 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
-  // ── Artifacts (S3 + DDB + render token) ──
+  // ── Artifacts (S3 + render token) ──
   // Sourced from typed PlatformStack refs — see PlatformComputeRefs.
   const artifactsBucketArn = props.refs.artifactsContentBucket.bucketArn;
-  const artifactsTableArn = props.refs.artifactsTable.tableArn;
   const artifactRenderTokenSecretArn = props.refs.artifactRenderTokenSecret.secretArn;
 
   taskRole.addToPrincipalPolicy(
@@ -449,15 +338,6 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       effect: iam.Effect.ALLOW,
       actions: ['s3:GetObject', 's3:PutObject', 's3:PutObjectTagging', 's3:ListBucket'],
       resources: [artifactsBucketArn, `${artifactsBucketArn}/*`],
-    }),
-  );
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'ArtifactsTableReadWrite',
-      effect: iam.Effect.ALLOW,
-      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-                'dynamodb:DeleteItem', 'dynamodb:Query'],
-      resources: [artifactsTableArn, `${artifactsTableArn}/index/*`],
     }),
   );
   taskRole.addToPrincipalPolicy(
@@ -482,26 +362,16 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
-  // ── Memory Spaces (S3 + DynamoDB) ──
+  // ── Memory Spaces (S3) ──
   // app-api is a readwriter of memory-space content and metadata
-  // (apis/shared/memory/*). Sourced from typed refs.
+  // (apis/shared/memory/*); the table is in DeploymentTablesReadWrite.
   const memorySpacesBucketArn = props.refs.memorySpacesBucket.bucketArn;
-  const memorySpacesTableArn = props.refs.memorySpacesTable.tableArn;
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'MemorySpacesBucketReadWrite',
       effect: iam.Effect.ALLOW,
       actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:ListBucket'],
       resources: [memorySpacesBucketArn, `${memorySpacesBucketArn}/*`],
-    }),
-  );
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'MemorySpacesTableReadWrite',
-      effect: iam.Effect.ALLOW,
-      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:DeleteItem',
-                'dynamodb:Query', 'dynamodb:BatchWriteItem'],
-      resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
     }),
   );
 
@@ -547,25 +417,12 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
 
   // ── Fine-tuning ──
   // Sourced from typed PlatformStack refs.
-  const ftJobsTableArn = props.refs.fineTuningJobsTable.tableArn;
-  const ftAccessTableArn = props.refs.fineTuningAccessTable.tableArn;
   const ftDataBucketArn = props.refs.fineTuningDataBucket.bucketArn;
   // sagemaker-execution-role-arn is written by a sibling construct in
   // PlatformStack, so it still comes in via props (it's already a
   // string ref off the SageMakerExecutionRoleConstruct).
   const ftExecRoleArn = props.sagemakerExecutionRoleArn;
 
-  taskRole.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      sid: 'FineTuningTablesAccess',
-      effect: iam.Effect.ALLOW,
-      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-                'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
-                'dynamodb:BatchGetItem', 'dynamodb:BatchWriteItem'],
-      resources: [ftJobsTableArn, `${ftJobsTableArn}/index/*`,
-                  ftAccessTableArn, `${ftAccessTableArn}/index/*`],
-    }),
-  );
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'FineTuningBucketAccess',

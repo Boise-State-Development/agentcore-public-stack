@@ -34,8 +34,16 @@ SESSION = "sess-1"
 
 
 def _row(upload_id: str = "up-1", *, size: int = 38 * MB, prepared: bool = True, kb: Optional[dict] = None,
-         user: str = USER, session: str = SESSION, bucket: str = "test-file-uploads") -> FileMetadata:
+         user: str = USER, session: str = SESSION, bucket: str = "test-file-uploads",
+         created: Optional[datetime] = None) -> FileMetadata:
+    """``created`` pins ``created_at``, which ``_last_activity`` counts.
+
+    Without it the field defaults to the wall clock, so any test asserting an
+    eviction has to hope real "now" is far enough behind its fixed ``NOW`` —
+    and silently stops testing anything the day it is not.
+    """
     return FileMetadata(
+        **({"created_at": created} if created is not None else {}),
         upload_id=upload_id,
         user_id=user,
         session_id=session,
@@ -359,7 +367,7 @@ class TestEviction:
     NOW = datetime(2026, 11, 20, tzinfo=timezone.utc)
 
     def _indexed(self, env, indexed_at: datetime):
-        run(env["put"](_row(kb={"status": "indexed", "indexedAt": indexed_at.isoformat()})))
+        run(env["put"](_row(kb={"status": "indexed", "indexedAt": indexed_at.isoformat()}, created=indexed_at)))
         ai.reserve_bytes(USER, "up-1", 38 * MB, table=env["indexer"].bytes_table)
         return run(env["repo"].get_file(USER, "up-1"))
 
@@ -392,7 +400,8 @@ class TestReconcile:
     def test_orphans_are_removed_stale_statuses_settled_and_idle_documents_evicted(self, env):
         recent = (self.NOW - timedelta(days=2)).isoformat()
         run(env["put"](_row("settle", kb={"status": "indexing", "submittedAt": recent})))
-        run(env["put"](_row("idle", kb={"status": "indexed", "indexedAt": (self.NOW - timedelta(days=45)).isoformat()})))
+        idle_at = self.NOW - timedelta(days=45)
+        run(env["put"](_row("idle", kb={"status": "indexed", "indexedAt": idle_at.isoformat()}, created=idle_at)))
         env["activity"]["at"] = self.NOW - timedelta(days=40)
         env["agent"].listing = [
             ("att#user-1#sess-1#orphan", "INDEXED"),

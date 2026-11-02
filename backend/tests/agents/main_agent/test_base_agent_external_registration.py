@@ -73,3 +73,35 @@ class TestRegisterExternalMcpToolsScoped:
             BaseAgent._register_external_mcp_tools(agent)
 
         assert tool_filter._external_mcp_tools == {"canvas"}
+
+
+class TestRegisterGatewayToolsByProtocol:
+    def test_gateway_row_without_prefix_is_classified_as_gateway(self):
+        """A protocol='mcp' row is a Gateway target whatever its id. Before
+        this, only a ``gateway_``-prefixed id was recognized, so a Web Search
+        tool saved as ``agentcore_web_search`` was granted and enabled yet the
+        agent built without it ("not a known tool id")."""
+        tool_filter = _make_filter()
+        agent = SimpleNamespace(
+            enabled_tools=["agentcore_web_search", "canvas"],
+            tool_filter=tool_filter,
+        )
+
+        async def fake_get_tool(tool_id):
+            return {
+                "agentcore_web_search": SimpleNamespace(protocol="mcp"),
+                "canvas": SimpleNamespace(protocol="mcp_external"),
+            }.get(tool_id)
+
+        repo = SimpleNamespace(get_tool=AsyncMock(side_effect=fake_get_tool))
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ):
+            BaseAgent._register_external_mcp_tools(agent)
+
+        result = tool_filter.filter_tools_extended(["agentcore_web_search", "canvas"])
+        assert result.gateway_tool_ids == ["agentcore_web_search"]
+        assert result.external_mcp_tool_ids == ["canvas"]
+        # One catalog read per enabled tool, as before: no extra lookups.
+        assert repo.get_tool.await_count == 2

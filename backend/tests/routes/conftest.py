@@ -52,6 +52,16 @@ def _stub_ensure_session_metadata_exists(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_list_pinned_sessions(monkeypatch):
+    """GET /sessions reads the PinnedSessionIndex on its first page. Route tests
+    mock ``list_user_sessions`` and don't provision the table, so pins are empty."""
+    monkeypatch.setattr(
+        "apis.app_api.sessions.routes.list_pinned_sessions",
+        AsyncMock(return_value=[]),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Auto-stub the api-converse profile lookup
 # ---------------------------------------------------------------------------
@@ -278,6 +288,9 @@ def _no_live_infrastructure_reads(monkeypatch):
         ("agents.main_agent.quota.repository.QuotaRepository.query_user_assignment", None),
         ("agents.main_agent.quota.repository.QuotaRepository.query_role_assignments", []),
         ("agents.main_agent.quota.repository.QuotaRepository.list_assignments_by_type", []),
+        # Quota extensions are read concurrently with the override on every
+        # cold resolve, so they need the same stub.
+        ("agents.main_agent.quota.repository.QuotaRepository.get_active_extensions", []),
         # RBAC role resolution. Tests that care about authorization override the
         # auth dependency itself, which never reaches this.
         ("apis.shared.rbac.repository.AppRoleRepository.get_roles_for_jwt_role", []),

@@ -14,6 +14,7 @@ import {
   QuotaWarningService,
   QuotaWarning,
   QuotaSessionNotice,
+  QuotaFundingNotice,
   QuotaExceeded,
 } from '../../../services/quota/quota-warning.service';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
@@ -391,6 +392,10 @@ export class StreamParserService {
     // Start the elapsed clock here, not at the first runtime event: the wait
     // the user is measuring begins when they hit send.
     this.toolInsight.startTurn(sessionId);
+    // A blocked turn re-sends quota_exceeded, so each turn starts unblocked and
+    // the composer's "Request more quota" tab tracks the latest answer, not one
+    // from before an approval.
+    this.quotaWarningService.clearQuotaExceeded();
     const state = this.createState(sessionId, startingMessageCount || 0);
     this.states.update((map) => {
       const next = new Map(map);
@@ -602,6 +607,12 @@ export class StreamParserService {
       onToolGroupSummary: (data) =>
         this.toolInsight.recordSummary(state.sessionId, data),
 
+      // Source-provenance verdicts for a `verify_sources` call. Scoped to the
+      // streaming session, not the viewed one: a background conversation's
+      // verdicts belong to that conversation.
+      onSourceProvenance: (data) =>
+        this.toolInsight.recordProvenance(state.sessionId, data),
+
       onModelRetry: (data: ModelRetryEvent) => {
         // Not viewed-session-scoped on purpose: this signal is read per
         // session id, so a background conversation's retry stays with that
@@ -620,6 +631,8 @@ export class StreamParserService {
       onQuotaWarning: (data) => this.quotaWarningService.setWarning(data as QuotaWarning),
       onQuotaSessionNotice: (data) =>
         this.quotaWarningService.setSessionNotice(data as QuotaSessionNotice),
+      onQuotaFundingNotice: (data) =>
+        this.quotaWarningService.setFundingNotice(data as QuotaFundingNotice),
       onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
 
       onOAuthRequired: (data: OAuthRequiredEvent) => {
@@ -635,6 +648,12 @@ export class StreamParserService {
           lastAssistantId,
           state.sessionId,
         );
+        // Only the interrupt-driven flavor pauses the turn. A pre-flight
+        // prompt (no interruptId) left a finished turn behind, so the
+        // conversation is not waiting on anything.
+        if (data.interruptId) {
+          this.chatStateService.markSessionAwaitingInput(state.sessionId, 'oauth');
+        }
       },
 
       onSteeringApplied: (data: SteeringAppliedEvent) => {
@@ -729,6 +748,7 @@ export class StreamParserService {
           messageId: lastAssistantId,
           sessionId: state.sessionId,
         });
+        this.chatStateService.markSessionAwaitingInput(state.sessionId, 'tool_approval');
       },
 
       onUserQuestionRequired: (data: UserQuestionRequiredEvent) => {
@@ -740,6 +760,7 @@ export class StreamParserService {
           messageId: lastAssistantId,
           sessionId: state.sessionId,
         });
+        this.chatStateService.markSessionAwaitingInput(state.sessionId, 'user_question');
       },
 
       onBrowserLoginRequired: (data: BrowserLoginRequiredEvent) => {
@@ -760,6 +781,7 @@ export class StreamParserService {
           sandboxOrigin: data.sandboxOrigin,
           messageId: lastAssistantId,
         });
+        this.chatStateService.markSessionAwaitingInput(state.sessionId, 'browser_login');
       },
 
       onError: (data) => this.handleError(state, data),
@@ -774,6 +796,9 @@ export class StreamParserService {
           streamError.metadata?.['error_kind'] === 'max_tokens';
         if (isMaxTokens) {
           this.chatStateService.setLastTurnContinuable(state.sessionId, true);
+        }
+        if (streamError.metadata?.['error_kind'] === 'resume_unavailable') {
+          this.chatStateService.markResumeUnavailable(state.sessionId);
         }
       },
 

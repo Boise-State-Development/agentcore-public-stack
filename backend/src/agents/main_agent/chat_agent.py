@@ -83,7 +83,8 @@ class ChatAgent(BaseAgent):
             # activation tool; read_skill_file is the S3 adapter for reference
             # files (added after tool filtering — it is infrastructure, not an
             # RBAC-gated tool, and is implicitly scoped to the turn's skills).
-            plugin, read_skill_file = build_skills_runtime(self._accessible_skill_ids)
+            skills_runtime = build_skills_runtime(self._accessible_skill_ids)
+            plugin, read_skill_file = skills_runtime.plugin, skills_runtime.read_skill_file
             plugins = [plugin] if plugin else []
             if plugin:
                 tools = list(tools) + [read_skill_file]
@@ -91,6 +92,24 @@ class ChatAgent(BaseAgent):
                     "ChatAgent: skills disclosure enabled (%d accessible skill ids)",
                     len(self._accessible_skill_ids or []),
                 )
+
+            # Structured extraction (docs/specs/structured-extraction.md §5.2,
+            # D10). Built here rather than in `_build_document_tools` because
+            # it needs the turn's skill records, which that gate cannot see:
+            # a field set lives in a skill's reference bundle. Like
+            # read_skill_file above it is infrastructure, not an RBAC-gated
+            # tool, and is implicitly scoped to the turn's skills.
+            #
+            # Mounted on a FIELD SET, not on a document (D9) — the one
+            # deliberate divergence from verify_sources' gate. A session with a
+            # document and no field set has nothing to extract, and a tool that
+            # cannot work costs cacheable prefix for nothing. The check reads
+            # the resource manifest already loaded with the catalog rows, so it
+            # does no I/O and adds nothing measurable to the preamble.
+            #
+            # No new agent-cache key element: the turn's skills are already in
+            # the key and the flag is a deployment constant.
+            tools = self._with_document_extract(tools, skills_runtime.records)
 
             # Tool-result offload at intake (compaction PR-4): oversized tool
             # results become a bounded preview + retrieval references before
@@ -129,6 +148,53 @@ class ChatAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
             raise
+
+    def _with_document_extract(
+        self, tools: List[Any], skill_records: List[Any]
+    ) -> List[Any]:
+        """Append ``document_extract`` when this turn can actually run one.
+
+        Three conditions, in the order that costs least to check: the flag, a
+        field set among the turn's skills, and an identity to bind the tool to.
+        The field-set check is a comprehension over resource manifests already
+        in memory (``apis.shared.extraction.resolver.turn_has_field_set``) — no
+        S3 GET, no extra query, no network — which is what keeps this off the
+        TTFT budget.
+
+        Fail-open: any error here leaves the tool list untouched, because a
+        turn without extraction is a working turn and a raised exception in
+        agent construction is not.
+        """
+        try:
+            from apis.shared.feature_flags import document_extract_enabled
+
+            if not document_extract_enabled():
+                return tools
+
+            from apis.shared.extraction.resolver import turn_has_field_set
+
+            if not turn_has_field_set(skill_records):
+                return tools
+
+            session_id = getattr(self, "session_id", None)
+            user_id = getattr(self, "user_id", None)
+            if not session_id or not user_id:
+                return tools
+
+            from agents.builtin_tools.document_extract_tool import (
+                make_document_extract_tool,
+            )
+
+            logger.info(
+                "ChatAgent: document_extract mounted (%d skill record(s) carry a field set)",
+                len(skill_records or []),
+            )
+            return list(tools) + [
+                make_document_extract_tool(session_id, user_id, list(skill_records))
+            ]
+        except Exception:  # noqa: BLE001 - never fail agent construction over it
+            logger.warning("ChatAgent: document_extract not mounted", exc_info=True)
+            return tools
 
     def _system_prompt_for(self, tools: List[Any]) -> str:
         """The system prompt this turn actually sends.

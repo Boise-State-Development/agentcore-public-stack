@@ -121,12 +121,12 @@ def test_instructions_gain_reference_file_listing():
 
 class TestBuildSkillsRuntime:
     def test_returns_none_none_when_empty(self):
-        assert sm.build_skills_runtime(None) == (None, None)
-        assert sm.build_skills_runtime([]) == (None, None)
+        assert sm.build_skills_runtime(None) == (None, None, [])
+        assert sm.build_skills_runtime([]) == (None, None, [])
 
     def test_returns_plugin_and_tool(self, monkeypatch):
         monkeypatch.setattr(sm, "fetch_active_skill_records", lambda ids: [_record()])
-        plugin, read_tool = sm.build_skills_runtime(["pdf_workflows"])
+        plugin, read_tool, _records = sm.build_skills_runtime(["pdf_workflows"])
         assert isinstance(plugin, AgentSkills)
         assert read_tool.tool_name == "read_skill_file"
 
@@ -145,7 +145,7 @@ class TestBuildSkillsRuntime:
             monkeypatch.setattr(
                 sm, "fetch_active_skill_records", lambda ids: list(fetch_order)
             )
-            plugin, _ = sm.build_skills_runtime(["any"])
+            plugin, _, _records = sm.build_skills_runtime(["any"])
             return [s.name for s in plugin.get_available_skills()]
 
         forward = names_for(recs)

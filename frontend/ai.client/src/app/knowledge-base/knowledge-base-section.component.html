@@ -245,6 +245,16 @@
     (change)="onFileSelected($event)"
     accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
   />
+  <!-- Picker for "Replace with a newer version". Its accept list is set to
+       the original's extension each time it opens (see startReplace). -->
+  <input
+    #replaceInput
+    type="file"
+    class="sr-only"
+    tabindex="-1"
+    aria-hidden="true"
+    (change)="onReplaceFilePicked($event)"
+  />
 
   <!-- File Upload -->
   <div>
@@ -528,7 +538,7 @@
         </div>
       }
       <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
-        @for (doc of uploadedDocuments(); track doc.documentId) {
+        @for (doc of displayedDocuments(); track doc.documentId) {
           <li class="flex items-start gap-3 px-3 py-2.5 sm:px-4">
             <div class="flex min-w-0 flex-1 items-start gap-3">
               @if (doc.status === 'complete') {
@@ -567,6 +577,14 @@
                   @if (doc.chunkCount) {
                     <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
                     <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ doc.chunkCount }} chunks</span>
+                  }
+                  @if (replace.activeOldId() === doc.documentId) {
+                    <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
+                    <span role="status" class="text-xs/5 font-medium text-state-info-600 dark:text-state-info-400">Replacing…</span>
+                  }
+                  @if (replace.replacementFor(doc.documentId)) {
+                    <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
+                    <span class="text-xs/5 text-gray-500 dark:text-gray-400">New version of the file above</span>
                   }
                   @if (canManageSync() && isDriveSyncable(doc) && reconnectLabelForDocument(doc); as provider) {
                     <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
@@ -616,9 +634,22 @@
                 <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
               </button>
             }
+            @if (canReplace(doc)) {
+              <button
+                type="button"
+                (click)="startReplace(doc)"
+                [disabled]="replaceDisabled()"
+                title="Replace with a newer version"
+                [attr.aria-label]="'Replace ' + doc.filename"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-primary-50"
+              >
+                <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
+              </button>
+            }
             <button
               type="button"
               (click)="deleteDocument(doc.documentId)"
+              [disabled]="replace.isBusy(doc.documentId)"
               title="Delete document"
               [attr.aria-label]="'Delete ' + doc.filename"
               class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"

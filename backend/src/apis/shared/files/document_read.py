@@ -60,6 +60,7 @@ from xml.etree import ElementTree
 
 from . import large_document
 from .models import FileMetadata, FileStatus, get_file_format, is_presentation_file, is_tabular_file
+from .pdfium_lock import pdfium_lock, serialized_pdfium
 from .repository import get_file_upload_repository
 from .workspace import (
     WORKSPACE_READ_MAX_BYTES,
@@ -655,6 +656,7 @@ async def _pdf_pages_from_shards(
     return _pages_result(sliced, start, end, count, truncated, base, meta.filename)
 
 
+@serialized_pdfium
 def _assemble_from_shards(shards: Sequence[Tuple[Tuple[int, int], bytes]], start: int, end: int) -> bytes:
     import pypdfium2 as pdfium
 
@@ -676,9 +678,15 @@ def _assemble_from_shards(shards: Sequence[Tuple[Tuple[int, int], bytes]], start
 
 # ---------------------------------------------------------------------------
 # PDF (pypdfium2 — already a dependency for attachment thumbnails)
+#
+# PDFium is not thread-safe, so every function here runs under the process-wide
+# lock in ``pdfium_lock``: the ones that open a document hold it for the
+# document's whole lifetime, and the two per-call helpers take it again (it is
+# re-entrant) so a caller elsewhere is serialized even without the outer guard.
 # ---------------------------------------------------------------------------
 
 
+@serialized_pdfium
 def _open_pdf(raw: bytes):
     import pypdfium2 as pdfium  # lazy: native lib, not needed on non-PDF paths
 
@@ -688,6 +696,7 @@ def _open_pdf(raw: bytes):
         raise DocumentReadError(f"Could not open the PDF: {e}") from e
 
 
+@serialized_pdfium
 def _pdf_page_text(pdf, index: int) -> str:
     page = pdf[index]
     try:
@@ -714,6 +723,7 @@ def _resolve_range(pages: Tuple[int, int], count: int, limit: int) -> Tuple[int,
     return start, end, truncated
 
 
+@serialized_pdfium
 def _pdf_pages(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, Any], filename: str) -> DocumentReadResult:
     import pypdfium2 as pdfium
 
@@ -758,6 +768,7 @@ def _pages_result(
     )
 
 
+@serialized_pdfium
 def _pdf_pages_text(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, Any]) -> DocumentReadResult:
     """``_pdf_pages`` for a text-only model: the same range and the same
     ``max_pages`` cap, returned as each page's text layer in the payload."""
@@ -794,6 +805,7 @@ def _pages_text(
     )
 
 
+@serialized_pdfium
 def _pdf_pattern(raw: bytes, pattern: str, base: Dict[str, Any]) -> DocumentReadResult:
     regex, note = _compile(pattern)
     pdf = _open_pdf(raw)
@@ -855,6 +867,7 @@ def _scan_pages(
     return DocumentReadResult(mode="pattern", payload=payload, pages_returned=0, format="pdf")
 
 
+@serialized_pdfium
 def _pdf_index(raw: bytes, base: Dict[str, Any]) -> DocumentReadResult:
     pdf = _open_pdf(raw)
     try:
@@ -1176,3 +1189,67 @@ def _unique_document_name(filename: str, suffix: str) -> str:
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
     stem = re.sub(r"\s+", " ", _NAME_UNSAFE.sub(" ", stem)).strip()[:40] or "document"
     return f"{stem} {suffix} {uuid.uuid4().hex[:6]}"
+
+
+# ---------------------------------------------------------------------------
+# Provenance: one document's text as the units it is numbered by
+# ---------------------------------------------------------------------------
+
+
+def _units_text(fmt: str, raw: bytes) -> List[str]:
+    """One string per page / paragraph / line, from the document's bytes.
+
+    The same three extractors the retrieval modes above use, so a quote is
+    verified against exactly the text ``document_read`` would have shown — not
+    a second, differently-cleaned rendering of the same file. HTML in
+    particular is left as-is, because that is what ``pattern`` mode searches.
+    """
+    if fmt == "pdf":
+        with pdfium_lock():
+            pdf = _open_pdf(raw)
+            try:
+                return [_pdf_page_text(pdf, i) for i in range(len(pdf))]
+            finally:
+                pdf.close()
+    if fmt == "docx":
+        return docx_paragraphs(raw)
+    return raw.decode("utf-8", errors="replace").splitlines()
+
+
+async def document_provenance_units(
+    user_id: str, session_id: str, upload_id: str
+) -> Tuple[FileMetadata, str, List[str]]:
+    """``(meta, fmt, unit texts)`` for one of the session's documents.
+
+    The document side of ``docs/specs/source-provenance-verification.md``. A
+    *prepared* document is read from the text layer the prepare Lambda already
+    wrote — ``text.jsonl``'s records are its persisted page markers, so this is
+    one S3 GET and no parse. Anything else is fetched and extracted, the same
+    work a ``document_read`` call does, under the same source-size bound.
+
+    Never on the pre-first-token path: the only caller is a tool the model
+    invokes after it has read a document and formed an answer.
+
+    An empty list (a scanned PDF with no text layer) is returned rather than
+    raised on, so the caller can say "nothing is traced here" instead of
+    failing the turn.
+    """
+    _require_identity(user_id, session_id)
+    if not upload_id:
+        raise WorkspaceValidationError("upload_id is required")
+
+    meta = await _get_owned_ready_file(user_id, upload_id)
+    fmt = document_format_for(meta.mime_type, meta.filename)
+    if fmt is None:
+        raise DocumentReadError(
+            f"'{meta.filename}' is not a readable document, so there is nothing to "
+            "verify a quote against."
+        )
+
+    if large_document.is_prepared(meta):
+        return meta, fmt, await _fetch_text_layer(meta)
+
+    if meta.size_bytes > _MAX_DOCUMENT_BYTES:
+        raise DocumentReadError(_unreadable_message(meta))
+    raw = await _fetch_bytes(meta)
+    return meta, fmt, await asyncio.to_thread(_units_text, fmt, raw)

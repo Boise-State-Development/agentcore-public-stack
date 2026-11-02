@@ -93,7 +93,8 @@
                 class="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-linear-to-b from-gray-100 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-gray-900"
                 [class.opacity-0]="!bodyScrolled()"></div>
 
-            <div class="flex-1 overflow-y-auto px-3 pb-4" (scroll)="onBodyScroll($event)">
+            <!-- cdkScrollable: lets a conversation dragged toward Pinned auto-scroll this area. -->
+            <div cdkScrollable class="flex-1 overflow-y-auto px-3 pb-4" (scroll)="onBodyScroll($event)">
                 <div class="sidenav-body-enter pb-2">
                     <!--
                         The navigation entries, in the order and with the visibility the
@@ -176,8 +177,8 @@
     @if (userService.currentUser(); as user) {
         <div class="flex shrink-0 items-center gap-1 border-t border-gray-200 px-3 py-2 dark:border-white/10">
             <app-user-dropdown class="min-w-0 flex-1" [user]="user" [isAdmin]="isAdmin()" (logout)="handleLogout()"></app-user-dropdown>
-            @if (features.projects) {
-                <!-- Projects are the inbox's only producer so far; show the bell with them. -->
+            @if (features.projects || features.quotaRequests) {
+                <!-- The inbox's producers are projects and quota requests; show the bell with either. -->
                 <app-notification-bell class="shrink-0" />
             }
         </div>

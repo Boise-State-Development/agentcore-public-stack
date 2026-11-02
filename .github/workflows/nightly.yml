@@ -7,8 +7,15 @@
 #   deploy-<branch>                    Deploy full stack from <branch>
 #   e2e-<branch>                       Deploy full stack, run Playwright E2E tests, teardown
 #   scan-images-<branch>               Scan Docker images from <branch> for vulnerabilities
+#   eval-develop                       Run the eval harness once per case against the
+#                                      long-lived `development` deployment, as its eval
+#                                      user (docs/specs/eval-harness.md §10). Nothing is
+#                                      deployed; `develop` is the only accepted branch,
+#                                      because that is what the dev deployment runs
 #   all                                Run all tracks with default branches
-#                                      (tests + deploy + e2e on develop)
+#                                      (tests + deploy + e2e on develop). Not eval-develop:
+#                                      it spends against a real environment, so it is
+#                                      always named on its own
 #
 #   <branch> MUST be `main` or `develop`. Any other branch is rejected with an
 #   error. This is a security boundary, not an oversight: the workflow is
@@ -32,6 +39,7 @@
 #   deploy-develop
 #   deploy-main,deploy-develop
 #   test-backend-develop,deploy-develop,e2e-develop
+#   deploy-develop,eval-develop
 #   all
 #
 # Fork safety: If NIGHTLY_TRACKS is not set (empty), NO tracks run.
@@ -92,6 +100,8 @@ jobs:
       scan_images_ref: ${{ steps.resolve.outputs.scan_images_ref }}
       run_e2e: ${{ steps.resolve.outputs.run_e2e }}
       e2e_ref: ${{ steps.resolve.outputs.e2e_ref }}
+      run_eval: ${{ steps.resolve.outputs.run_eval }}
+      eval_ref: ${{ steps.resolve.outputs.eval_ref }}
       any_track: ${{ steps.resolve.outputs.any_track }}
     steps:
       - name: Parse tracks
@@ -115,6 +125,8 @@ jobs:
           scan_images_ref=""
           run_e2e=false
           e2e_ref=""
+          run_eval=false
+          eval_ref=""
 
           # Empty tracks = nothing runs (fork-safe default)
           if [ -z "$TRACKS" ]; then
@@ -177,6 +189,17 @@ jobs:
                   run_e2e=true
                   e2e_ref="develop"
                   ;;
+                eval-develop)
+                  run_eval=true
+                  eval_ref="develop"
+                  ;;
+                eval-*)
+                  # The eval track targets a long-lived deployment, not an
+                  # ephemeral stack: `development` runs develop, and production
+                  # is never a target (docs/specs/eval-harness.md D8).
+                  echo "::error::Track '$token' is not a track. The eval harness runs only as eval-develop, against the development deployment."
+                  exit 1
+                  ;;
                 test-backend-*|test-frontend-*|deploy-*|scan-images-*|e2e-*)
                   # Refuse any branch outside the allowlist above. This workflow
                   # runs on `schedule`/`workflow_dispatch`, i.e. in the context of
@@ -201,7 +224,8 @@ jobs:
           any_track=false
           if [ "$run_test_backend" = "true" ] || [ "$run_test_frontend" = "true" ] || \
              [ "$run_deploy" = "true" ] || \
-             [ "$run_scan_images" = "true" ] || [ "$run_e2e" = "true" ]; then
+             [ "$run_scan_images" = "true" ] || [ "$run_e2e" = "true" ] || \
+             [ "$run_eval" = "true" ]; then
             any_track=true
           fi
 
@@ -217,6 +241,8 @@ jobs:
             echo "scan_images_ref=$scan_images_ref"
             echo "run_e2e=$run_e2e"
             echo "e2e_ref=$e2e_ref"
+            echo "run_eval=$run_eval"
+            echo "eval_ref=$eval_ref"
             echo "any_track=$any_track"
           } >> "$GITHUB_OUTPUT"
 
@@ -227,6 +253,7 @@ jobs:
           echo "  deploy:        $run_deploy (ref: $deploy_ref)"
           echo "  scan-images:   $run_scan_images (ref: $scan_images_ref)"
           echo "  e2e:           $run_e2e (ref: $e2e_ref)"
+          echo "  eval:          $run_eval (ref: $eval_ref)"
           echo "  any_track:     $any_track"
 
   # ── Test Tracks ───────────────────────────────────────────────────────────
@@ -490,6 +517,76 @@ jobs:
       run-e2e: 'true'
     secrets: inherit
 
+  # ── Eval Track ────────────────────────────────────────────────────────────
+  # Runs the eval harness's golden set once per case against the long-lived
+  # development deployment as its eval user, and scores it against the
+  # committed Haiku baseline (docs/specs/eval-harness.md §10). Dev rather than
+  # an ephemeral stack because dev already has what every family needs (the
+  # seeded skills, the eval user, the deploy the baseline was promoted on), and
+  # because it costs a few dozen turns instead of a full deploy. Informational:
+  # one sample per case is a smoke signal, the gate is the k=3 release run.
+
+  eval:
+    name: Eval Harness (dev)
+    runs-on: ubuntu-24.04
+    needs: resolve-tracks
+    if: needs.resolve-tracks.outputs.run_eval == 'true'
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      duration: ${{ steps.eval-harness.outputs.duration }}
+      # The run step is continue-on-error, so the job always concludes success;
+      # the summary reads the step's own outcome to show a regression.
+      outcome: ${{ steps.eval-harness.outcome }}
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve-tracks.outputs.eval_ref }}
+          persist-credentials: false
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-nightly-eval-harness
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: true
+          cache-dependency-glob: 'backend/uv.lock'
+      - name: Sync backend deps
+        working-directory: backend
+        run: uv sync --extra agentcore --frozen
+      - name: Run eval harness
+        id: eval-harness
+        continue-on-error: true
+        env:
+          EVAL_REPORT: ${{ github.workspace }}/eval-harness-report.json
+        run: |
+          set +e
+          bash scripts/nightly/eval-harness.sh
+          code=$?
+          echo "duration=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit $code
+      - name: Upload eval harness report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eval-harness-report-dev
+          path: |
+            eval-harness-report.json
+            eval-harness-run/meta.json
+            eval-harness-run/results.jsonl
+          retention-days: 90
+          if-no-files-found: ignore
+
   # ── Image Scanning Track ──────────────────────────────────────────────────
 
   scan-images:
@@ -625,13 +722,13 @@ jobs:
   summary:
     name: Nightly Summary
     runs-on: ubuntu-24.04
-    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, deploy, e2e, scan-images]
+    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, deploy, e2e, eval, scan-images]
     if: always() && needs.resolve-tracks.outputs.any_track == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.deploy_ref || needs.resolve-tracks.outputs.e2e_ref || 'develop' }}
+          ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.deploy_ref || needs.resolve-tracks.outputs.e2e_ref || needs.resolve-tracks.outputs.eval_ref || 'develop' }}
 
       - name: Generate nightly summary
         env:
@@ -640,6 +737,7 @@ jobs:
           RUN_DEPLOY: ${{ needs.resolve-tracks.outputs.run_deploy }}
           RUN_E2E: ${{ needs.resolve-tracks.outputs.run_e2e }}
           RUN_SCAN_IMAGES: ${{ needs.resolve-tracks.outputs.run_scan_images }}
+          RUN_EVAL: ${{ needs.resolve-tracks.outputs.run_eval }}
           DEPLOY_REF: ${{ needs.resolve-tracks.outputs.deploy_ref }}
           E2E_REF: ${{ needs.resolve-tracks.outputs.e2e_ref }}
         run: |
@@ -688,6 +786,13 @@ jobs:
           if [ "$RUN_E2E" = "true" ]; then
             status="$(map_status "${{ needs.e2e.result }}")"
             ROWS+=("E2E Tests (${E2E_REF})|${status}|0")
+            [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
+          fi
+
+          # Eval track (informational, like E2E: a regression is partial, never failure)
+          if [ "$RUN_EVAL" = "true" ]; then
+            status="$(map_status "${{ needs.eval.outputs.outcome || needs.eval.result }}")"
+            ROWS+=("Eval Harness (dev)|${status}|${{ needs.eval.outputs.duration || '0' }}")
             [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
           fi
 

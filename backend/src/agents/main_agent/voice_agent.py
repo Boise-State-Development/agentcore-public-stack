@@ -39,80 +39,20 @@ logger = logging.getLogger(__name__)
 # ``strands.bidi``. The experimental path survives as a shim that resolves to
 # the same module objects (so ``isinstance`` holds across both) but warns on
 # import; import the stable path.
+#
+# Every name below is pinned against the installed SDK's *source* by
+# ``TestBidiImportsResolve``, because a rename here is swallowed into
+# BIDI_AVAILABLE=False and turns voice off with one INFO line. That is how
+# ``ModalityUsage`` would have gone unnoticed on the 1.61.1 bump.
 try:
     from strands.bidi import BidiAgent
     from strands.bidi.models.bedrock import BedrockNovaSonicModel
-    from strands.bidi.types.events import BidiUsageEvent, ModalityUsage
     BIDI_AVAILABLE = True
 except ImportError:
     BIDI_AVAILABLE = False
 
 
-def usage_modality_details(usage_event: dict) -> list:
-    """Split a Nova Sonic ``usageEvent`` into Strands ``ModalityUsage`` rows.
-
-    Nova reports four buckets under ``details.total`` — speech and text, in and
-    out — and bills them on two rate cards ten-fold apart. Strands 1.55's
-    provider keeps only the grand totals, which is what made every voice
-    session price as if it were all speech (or, with no catalog row, $0).
-
-    Returns ``[]`` when the event carries no ``details`` so the caller can
-    tell "no split" from "a split of zeros". The rows are plain dicts (the
-    ``ModalityUsage`` TypedDict shape) so this stays importable without the
-    bidi extra installed.
-    """
-    total = (usage_event.get("details") or {}).get("total") or {}
-    if not total:
-        return []
-    inp = total.get("input") or {}
-    out = total.get("output") or {}
-    return [
-        {
-            "modality": "audio",
-            "input_tokens": int(inp.get("speechTokens") or 0),
-            "output_tokens": int(out.get("speechTokens") or 0),
-        },
-        {
-            "modality": "text",
-            "input_tokens": int(inp.get("textTokens") or 0),
-            "output_tokens": int(out.get("textTokens") or 0),
-        },
-    ]
-
-
-if BIDI_AVAILABLE:
-
-    class NovaSonicModelWithUsageDetails(BedrockNovaSonicModel):
-        """``BedrockNovaSonicModel`` that keeps the speech/text usage split.
-
-        Only ``usageEvent`` is intercepted; every other event goes to the
-        provider untouched. The split rides the ``modality_details`` slot the
-        SDK already reserves on ``BidiUsageEvent`` (and serialises through
-        ``as_dict``), so nothing downstream has to learn a new event shape.
-
-        1.57 changed this hook's contract: it now takes the provider's
-        per-response state and returns a *list* of events. The provider calls
-        it positionally, so an override with the old one-argument signature
-        raises on every Nova event — which is why the signature is asserted
-        against the provider's in the tests rather than trusted.
-        """
-
-        def _convert_nova_event(self, nova_event: dict, response_state: Any) -> list:
-            usage = nova_event.get("usageEvent")
-            if not usage:
-                return super()._convert_nova_event(nova_event, response_state)
-            details = usage_modality_details(usage)
-            total_input = usage.get("totalInputTokens", 0)
-            total_output = usage.get("totalOutputTokens", 0)
-            return [
-                BidiUsageEvent(
-                    input_tokens=total_input,
-                    output_tokens=total_output,
-                    total_tokens=usage.get("totalTokens", total_input + total_output),
-                    modality_details=[ModalityUsage(**row) for row in details] or None,
-                )
-            ]
-else:
+if not BIDI_AVAILABLE:
     logger.info("BidiAgent not available — install strands-agents[bidi] for voice support")
 
 
@@ -174,6 +114,17 @@ class VoiceWireAdapter:
         self._response_id: Optional[str] = None
         self._assistant_started = False
         self._interrupted = False
+        # Running totals, because the SDK reports usage per-event since 1.58.0
+        # while this wire promises cumulative counts. See `_usage`.
+        self._usage_totals: Dict[str, int] = {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "totalTokens": 0,
+        }
+        self._usage_split: Dict[str, Dict[str, int]] = {
+            "speech": {"input_tokens": 0, "output_tokens": 0},
+            "text": {"input_tokens": 0, "output_tokens": 0},
+        }
 
     def translate(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Return the wire events for one Strands Bidi event (zero or more)."""
@@ -238,6 +189,9 @@ class VoiceWireAdapter:
             self._interrupted = False
             return events
 
+        if event_type == "bidi_usage":
+            return [self._usage(event)]
+
         if event_type == "bidi_connection_stop":
             return [
                 {
@@ -248,6 +202,61 @@ class VoiceWireAdapter:
             ]
 
         return [event]
+
+    def _usage(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize one ``bidi_usage`` event to the 1.55 wire shape.
+
+        Two things moved under us in strands-agents 1.58.0 (#4886), and both
+        are absorbed here so neither the SPA nor our usage accounting has to
+        learn the SDK's shape:
+
+        1. **Deltas, not totals.** The provider set ``usage_is_cumulative =
+           True`` through 1.57.2 and each event carried the connection's
+           running totals. 1.58.0 removed that flag entirely and Nova's
+           ``details.delta`` is what the provider now reads, so this adds each
+           event up. ``voice-chat.service.ts`` and ``_apply_usage_snapshot``
+           both replace rather than sum, on the documented promise that this
+           wire reports cumulative counts — passing deltas through would make
+           every voice session bill for only its final event.
+        2. **snake_case.** ``BidiUsageEvent.as_dict()`` emitted ``inputTokens``
+           on 1.57.2 and emits ``input_tokens`` now, so a camelCase read gets
+           ``None`` and the totals stay at zero. The split moved with it, from
+           our own ``modality_details`` rows to the SDK's
+           ``input_token_details`` / ``output_token_details`` maps.
+
+        Older spellings are still accepted, so an event from either SDK
+        generation lands on the same wire shape.
+        """
+        def _n(*names: str) -> int:
+            for name in names:
+                value = event.get(name)
+                if value is not None:
+                    return int(value)
+            return 0
+
+        self._usage_totals["inputTokens"] += _n("input_tokens", "inputTokens")
+        self._usage_totals["outputTokens"] += _n("output_tokens", "outputTokens")
+        self._usage_totals["totalTokens"] += _n("total_tokens", "totalTokens")
+
+        details_in = event.get("input_token_details") or {}
+        details_out = event.get("output_token_details") or {}
+        for modality, key in (("audio", "speech"), ("text", "text")):
+            self._usage_split[key]["input_tokens"] += int(details_in.get(modality) or 0)
+            self._usage_split[key]["output_tokens"] += int(details_out.get(modality) or 0)
+        # A pre-1.58 event carries the split as rows instead.
+        for row in event.get("modality_details") or []:
+            key = {"audio": "speech", "text": "text"}.get(row.get("modality"))
+            if key:
+                self._usage_split[key]["input_tokens"] += int(row.get("input_tokens") or 0)
+                self._usage_split[key]["output_tokens"] += int(row.get("output_tokens") or 0)
+
+        wire: Dict[str, Any] = {"type": "bidi_usage", **self._usage_totals}
+        if any(v["input_tokens"] or v["output_tokens"] for v in self._usage_split.values()):
+            wire["modality_details"] = [
+                {"modality": modality, **self._usage_split[key]}
+                for modality, key in (("audio", "speech"), ("text", "text"))
+            ]
+        return wire
 
     def _start_assistant(self) -> List[Dict[str, Any]]:
         if self._assistant_started:
@@ -289,8 +298,9 @@ class VoiceAgent(BaseAgent):
             os.environ.get(EnvVars.NOVA_SONIC_VOICE, Defaults.NOVA_SONIC_VOICE),
         )
         self._bidi_agent: Any = None
-        # Nova Sonic bidi_usage events report CUMULATIVE token counts (not deltas).
-        # _accumulated_usage stores the latest cumulative snapshot from the stream.
+        # VoiceWireAdapter normalizes bidi_usage to CUMULATIVE totals (the
+        # 1.55 wire contract) whatever the SDK reports, so _accumulated_usage
+        # holds the latest snapshot rather than summing.
         self._accumulated_usage: dict = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
         self._per_turn_usage: List[dict] = []  # Snapshot of usage per completed turn
         self._turn_count: int = 0  # Completed turns (bidi_response_complete)
@@ -318,7 +328,7 @@ class VoiceAgent(BaseAgent):
             # `voice` kwarg, and `audio` carries per-direction sample rates
             # only (channels and format are fixed at mono PCM). Unknown keys
             # are rejected, so the 1.55 five-key dict no longer fits.
-            model = NovaSonicModelWithUsageDetails(
+            model = BedrockNovaSonicModel(
                 model_id=model_id,
                 voice=self._voice,
                 audio={
@@ -336,12 +346,14 @@ class VoiceAgent(BaseAgent):
 
             # Create BidiAgent with separate agent_id.
             #
-            # 1.57.2 removed BidiAgent's `session_manager` kwarg (#4698). All
-            # it did was register the manager as a hook provider, and BidiAgent
-            # still fires the events the manager listens on
-            # (AgentInitializedEvent, MessageAddedEvent, BidiAgentStopEvent),
-            # so passing it as a hook keeps voice transcripts persisting.
-            # Dropping it would not error — voice would just stop saving.
+            # 1.57.2 removed BidiAgent's `session_manager` kwarg (#4698) and
+            # 1.61.1 brought it back, now typed `SessionManager[LocalAgent]`.
+            # We stay on `hooks=`: all the kwarg ever did was register the
+            # manager as a hook provider, BidiAgent still fires the events the
+            # manager listens on (AgentInitializedEvent, MessageAddedEvent,
+            # BidiAgentStopEvent), and `hooks=` is the one spelling that worked
+            # across all three versions. Dropping it would not error — voice
+            # would just stop saving.
             self._bidi_agent = BidiAgent(
                 model=model,
                 tools=tools,
@@ -592,10 +604,14 @@ class VoiceAgent(BaseAgent):
     def _apply_usage_snapshot(self, usage: dict) -> None:
         """Fold one ``bidi_usage`` payload into ``_accumulated_usage``.
 
-        Nova Sonic reports CUMULATIVE totals in each event (not deltas), so we
-        replace rather than sum — the speech/text split too, when the provider
-        kept it (see NovaSonicModelWithUsageDetails). Shared by the live stream
-        and the post-stop drain so the two can never price a session differently.
+        ``VoiceWireAdapter`` hands this the 1.55 wire shape — CUMULATIVE
+        camelCase totals plus ``modality_details`` — whatever the SDK
+        underneath reports, so this replaces rather than sums. The
+        delta-to-cumulative arithmetic lives in the adapter; see
+        ``VoiceWireAdapter._usage``.
+
+        Shared by the live stream and the post-stop drain so the two can never
+        price a session differently.
         """
         for key in ("inputTokens", "outputTokens", "totalTokens"):
             self._accumulated_usage[key] = usage.get(key, self._accumulated_usage[key])

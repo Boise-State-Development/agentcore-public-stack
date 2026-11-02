@@ -11,6 +11,10 @@ from apis.shared.sessions.models import (
     SessionInterruptRequest,
     SessionSteerRequest,
     SessionSteerResponse,
+    SessionRewindRequest,
+    SessionRewindResponse,
+    SessionForkRequest,
+    SessionForkResponse,
     SessionMetadataResponse,
     SessionMetadata,
     SessionPreferences,
@@ -32,8 +36,10 @@ from apis.shared.sessions.feedback import (
 )
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import (
+    list_pinned_sessions,
     list_user_sessions,
     get_session_metadata,
+    set_session_pinned,
     mark_session_read,
     mark_session_unread,
     remove_pending_interrupts,
@@ -52,6 +58,8 @@ from apis.shared.feature_flags import (
     response_feedback_enabled,
     mid_turn_steering_enabled,
     browser_takeover_enabled,
+    session_rewind_enabled,
+    session_fork_enabled,
 )
 from apis.shared.auth.models import User
 from apis.shared.system_prompts.service import get_system_prompts_service
@@ -109,9 +117,24 @@ async def list_user_sessions_endpoint(
             for session in sessions
         ]
 
+        # Pins ride on the first page so the sidebar gets them without a second
+        # request. A failure here degrades to "no Pinned group", never a failed list.
+        pinned_responses = None
+        if not next_token:
+            try:
+                pinned_responses = [
+                    SessionMetadataResponse.model_validate(
+                        {**session.model_dump(by_alias=True), "pinnedAt": pinned_at}
+                    )
+                    for session, pinned_at in await list_pinned_sessions(user_id)
+                ]
+            except Exception:
+                logger.error("Error listing pinned sessions", exc_info=True)
+
         return SessionsListResponse(
             sessions=session_responses,
-            next_token=next_page_token
+            next_token=next_page_token,
+            pinned=pinned_responses,
         )
 
     except Exception as e:
@@ -217,6 +240,38 @@ async def mark_session_unread_endpoint(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.put("/{session_id}/pin", status_code=status.HTTP_204_NO_CONTENT)
+async def pin_session_endpoint(
+    session_id: str,
+    current_user: User = Depends(get_current_user_from_session)
+):
+    """
+    Pin a conversation to the top of the sidebar (issue #711).
+
+    Idempotent: re-pinning moves it to the top of the Pinned group. Returns
+    404 for a session the user doesn't own, and 409 for a project task, which
+    already lists under its project and can't be pinned.
+    """
+    result = await set_session_pinned(session_id, current_user.user_id, pinned=True)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="Session not found")
+    if result == "project":
+        raise HTTPException(status_code=409, detail="Project conversations can't be pinned")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{session_id}/pin", status_code=status.HTTP_204_NO_CONTENT)
+async def unpin_session_endpoint(
+    session_id: str,
+    current_user: User = Depends(get_current_user_from_session)
+):
+    """Unpin a conversation. Idempotent; 404 for a session the user doesn't own."""
+    result = await set_session_pinned(session_id, current_user.user_id, pinned=False)
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="Session not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.put("/{session_id}/metadata", response_model=SessionMetadataResponse, response_model_exclude_none=True)
 async def update_session_metadata_endpoint(
     session_id: str,
@@ -272,6 +327,16 @@ async def update_session_metadata_endpoint(
             session_id=session_id,
             user_id=user_id
         )
+
+        # A deleted conversation can't be edited (#1764). The rebuilt model
+        # below would read as active, so storing it used to return the
+        # conversation to the sidebar. store_session_metadata refuses it too;
+        # the 404 tells the caller.
+        if existing_metadata and (existing_metadata.deleted or existing_metadata.status == "deleted"):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session not found: {session_id}",
+            )
 
         if not existing_metadata:
             # The per-user fetch can return None either because the session
@@ -919,6 +984,89 @@ async def steer_running_turn_endpoint(
         raise HTTPException(status_code=500, detail="Failed to queue the follow-up")
 
     return SessionSteerResponse(queued=queued, entry_id=body.entry_id)
+
+
+@router.post("/{session_id}/rewind", response_model=SessionRewindResponse, response_model_by_alias=True)
+async def rewind_session_endpoint(
+    session_id: str,
+    body: SessionRewindRequest,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Rewind the conversation to just before one of the user's messages.
+
+    The message and everything after it are hidden, never deleted (rewind spec
+    §4), and the message's text comes back as ``prefillText`` for the composer.
+    The next turn cuts a warm agent's history in place, so the retained prefix
+    reads from the prompt cache exactly as if the hidden turns never happened.
+
+    Lives on app-api for the same reason ``/steer`` does: the Runtime data
+    plane proxies only ``/invocations`` and ``/ping``. 404 while
+    ``SESSION_REWIND_ENABLED`` is off (checked after authentication); 409 while
+    a turn is streaming, for a message the compaction summary already covers,
+    or when another rewind won a race.
+    """
+    if not session_rewind_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    logger.info("POST /sessions/.../rewind")
+
+    from .services.rewind_service import RewindRefused, rewind_session
+
+    try:
+        result = await rewind_session(session_id, current_user.user_id, body.message_id)
+    except RewindRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except Exception:
+        logger.error("Error rewinding a session", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to rewind the conversation")
+
+    return SessionRewindResponse(
+        next_message_index=result.next_message_index,
+        prefill_text=result.prefill_text,
+        rewound_message_ids=result.rewound_message_ids,
+        epoch=result.epoch,
+    )
+
+
+@router.post("/{session_id}/fork", response_model=SessionForkResponse, response_model_by_alias=True)
+async def fork_session_endpoint(
+    session_id: str,
+    body: SessionForkRequest,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Start a new conversation from everything before one of the user's messages.
+
+    The parent is untouched (rewind/fork spec §7). The new session holds a
+    verbatim copy of the parent's visible history before the message, written
+    without long-term extraction, and the message's text comes back as
+    ``prefillText``. ``rootSessionId`` is what the SPA pins the fork's turns
+    to, so the first one starts from the parent's live history and reads the
+    shared prefix from the prompt cache. 404 while ``SESSION_FORK_ENABLED`` is
+    off (checked after authentication); 409 for a message the compaction
+    summary covers or one a rewind hid.
+    """
+    if not session_fork_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    logger.info("POST /sessions/.../fork")
+
+    from .services.fork_service import fork_session
+    from .services.rewind_service import RewindRefused
+
+    try:
+        result = await fork_session(session_id, current_user.user_id, body.message_id)
+    except RewindRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except Exception:
+        logger.error("Error forking a session", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fork the conversation")
+
+    return SessionForkResponse(
+        session_id=result.session_id,
+        title=result.title,
+        prefill_text=result.prefill_text,
+        root_session_id=result.root_session_id,
+    )
 
 
 @router.delete("/{session_id}/steer/{entry_id}", status_code=204)

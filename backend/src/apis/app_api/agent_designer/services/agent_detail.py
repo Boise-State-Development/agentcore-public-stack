@@ -44,6 +44,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from apis.shared.assistants.categories import get_category
 from apis.shared.assistants.compat import effective_bindings
 from apis.shared.assistants.models import (
+    AgentBoundSkill,
     AgentCapability,
     AgentModelRetirement,
     AgentRunnabilityResponse,
@@ -58,6 +59,9 @@ from apis.shared.models.models import ModelStatus
 from apis.shared.models.retirement import resolve_effective_model, resolve_from_catalog
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.skills.access import resolve_invocable_skill_ids
+from apis.shared.skills.bundle import slugify_skill_name
+from apis.shared.skills.models import SkillStatus
+from apis.shared.skills.pins import base_skill_id, project_skill_adders
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.tools.scoped_ids import base_tool_id
 
@@ -289,6 +293,57 @@ async def resolve_listing_display(
     return publisher, category_label
 
 
+# --------------------------------------------------------------------- bound skills
+async def resolve_bound_skills(assistant: Assistant, user: User) -> List[AgentBoundSkill]:
+    """The Agent's bound skills that will run for ``user``, in binding order.
+
+    This is what the composer's ``/`` menu is built from in an Agent conversation (a
+    project's included). It has to come from here and not from the viewer's own
+    ``GET /skills/`` list, because that list is the viewer's catalog grants and the
+    skills they authored, and a skill the *Agent's owner* (or, on a project, the editor
+    who added it) authored is in neither — so a member intersecting the Agent's bindings
+    with their own list saw nothing, and the menu never opened for them.
+
+    Judged by the run-time predicate (``resolve_invocable_skill_ids`` with the project's
+    adders), so the menu offers exactly what the turn will disclose: a skill the viewer
+    cannot run is left out rather than listed as a command that does nothing. Names and
+    descriptions are the live catalog row's; a pinned binding runs its pinned content,
+    but its ``slug`` is derived from the skill id and so is the same either way. The
+    slug is served, never re-derived client-side, for the reason on
+    ``UserSkillResponse.slug``. An inactive skill is left out, as ``GET /skills/`` leaves
+    it out. Deterministic for a given viewer and record, so the set a member sees does
+    not move between turns.
+    """
+    refs: List[str] = []
+    for binding in effective_bindings(assistant):
+        if binding.kind != "skill":
+            continue
+        ref = base_skill_id(binding.ref)
+        if ref not in refs:
+            refs.append(ref)
+    if not refs or not skills_enabled():
+        return []
+
+    invocable = await resolve_invocable_skill_ids(
+        user, refs, assistant.owner_id, adders=project_skill_adders(assistant)
+    )
+    wanted = [ref for ref in refs if ref in invocable]
+    if not wanted:
+        return []
+
+    records = {r.skill_id: r for r in await get_skill_catalog_repository().batch_get_skills(wanted)}
+    return [
+        AgentBoundSkill(
+            skill_id=record.skill_id,
+            display_name=record.display_name,
+            description=record.description,
+            slug=slugify_skill_name(record.skill_id),
+        )
+        for ref in wanted
+        if (record := records.get(ref)) is not None and record.status == SkillStatus.ACTIVE
+    ]
+
+
 # ---------------------------------------------------------------------- runnability
 async def _available_refs(kind: str, assistant: Assistant, user: User, refs: List[str]) -> Set[str]:
     """The refs of ``kind`` that would resolve for ``user`` when this Agent runs.
@@ -301,7 +356,9 @@ async def _available_refs(kind: str, assistant: Assistant, user: User, refs: Lis
         return {item.ref for item in await list_bindable(kind, user)}
     if not skills_enabled():
         return set()
-    return await resolve_invocable_skill_ids(user, refs, assistant.owner_id)
+    return await resolve_invocable_skill_ids(
+        user, refs, assistant.owner_id, adders=project_skill_adders(assistant)
+    )
 
 
 async def resolve_runnability(

@@ -6,10 +6,12 @@ Contains Pydantic models for chat API requests and responses.
 import json
 from typing import Any, Dict, List, Optional
 
+from apis.shared.client_tools import ClientToolSpec, validate_client_tools
 from pydantic import BaseModel, Field, field_validator
 
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 from apis.shared.browser_takeover import coerce_frame_height
+from apis.shared.handoff.turn import HandoffContextRequest
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 # Hard upper bound on a request's ``system_prompt``. The Agent Designer preview sends an
@@ -133,11 +135,39 @@ class InvocationRequest(BaseModel):
     # the managed model's admin defaults. Unsupported params are dropped
     # silently by the merge step in routes.py.
     inference_params: Optional[Dict[str, Any]] = None
+    # Which client the user is on, so the agent's interface guidance matches
+    # what they can actually see and press. "web" (the default) gets the
+    # default prompt unchanged; "terminal" appends a block that overrides its
+    # browser-only instructions (keybindings instead of Customize → Tools, no
+    # KaTeX/Mermaid). Unknown values degrade to "web" rather than failing the
+    # turn — see `system_prompt_builder.compose_base_prompt`.
+    #
+    # NOTE: this is a *rendering capability* hint, not an authorization input.
+    # Nothing downstream may grant or restrict access based on it.
+    client_surface: Optional[str] = None
+    # Tools the *client* can execute on its own machine (a terminal running a
+    # shell command, reading a file). The server builds one interrupting tool
+    # per spec; the model's call pauses the turn with a `client_tool_call` SSE
+    # event, the client runs it and resumes with the result. Absent for every
+    # web turn — the SPA has nothing to execute. See `apis.shared.client_tools`.
+    client_tools: Optional[List[ClientToolSpec]] = None
+
+    @field_validator("client_tools")
+    @classmethod
+    def _bound_client_tools(cls, value: Optional[List[ClientToolSpec]]) -> Optional[List[ClientToolSpec]]:
+        # Count and duplicate checks live with the specs; a ValueError here is a
+        # 422 with the message, which is what a misbehaving client should see.
+        return validate_client_tools(value) or None
     # NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
     # AgentCore Runtime's internal 'assistant_id' field handling.
     # AgentCore Runtime returns 424 when it sees a non-empty 'assistant_id' field,
     # likely trying to resolve it as an AWS Bedrock Agent ID.
     rag_assistant_id: Optional[str] = None
+    # Incognito chat (#1738): the user chose, before the first message, that
+    # this conversation reads long-term memory but never adds to it. Honoured
+    # only on the turn that creates the session; afterwards the stored flag
+    # decides (``session_is_incognito``), so a later request can't change it.
+    incognito: Optional[bool] = None
     # Marketplace D11: this turn was handed to the Agent by an `@`-mention in
     # the composer, rather than the whole conversation being bound to it.
     #
@@ -181,6 +211,13 @@ class InvocationRequest(BaseModel):
     # rather than a quietly-ignored flag — a silently downgraded preview would run the
     # wrong configuration and report it as the reviewed one.
     review_preview: Optional[bool] = None
+    # Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): this is the first turn of a
+    # conversation started by handing off from another one. `{handoffId, text}`, where `text` is
+    # the context card as the user sent it (absent when they removed it). The server re-caps it,
+    # accepts the handoff once, and prepends it wrapped; the bubble shows `message` only. Ignored
+    # with a warning while HANDOFFS_ENABLED is off, on a resume, and on a conversation that
+    # already took a handoff.
+    handoff_context: Optional[HandoffContextRequest] = None
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.

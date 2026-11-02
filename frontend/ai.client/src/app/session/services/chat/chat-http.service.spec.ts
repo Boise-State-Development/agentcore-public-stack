@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { SessionAffinityService } from '../session/session-affinity.service';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
@@ -191,6 +192,23 @@ describe('ChatHttpService', () => {
     });
     // The caller's object is left as it was.
     expect(request).toEqual({ session_id: 's1', message: 'hi' });
+    vi.restoreAllMocks();
+  });
+
+  it("pins a fork's turn to its root conversation", async () => {
+    // Rewind/fork spec §7: a fork's turns run in the microVM where its root's
+    // live history (the cached prefix) is; app-api pins on this field.
+    TestBed.inject(SessionAffinityService).record('fork-1', 'root-1');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response('event: done\ndata: {}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+
+    await service.sendChatRequest({ session_id: 'fork-1', message: 'hi' });
+    await service.sendChatRequest({ session_id: 'root-1', message: 'hi' });
+
+    const bodies = fetchSpy.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(bodies[0].affinity_session_id).toBe('root-1');
+    expect(bodies[1].affinity_session_id).toBeUndefined();
     vi.restoreAllMocks();
   });
 

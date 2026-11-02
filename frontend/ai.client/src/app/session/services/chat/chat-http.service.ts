@@ -1,5 +1,6 @@
 import { DestroyRef, inject, Injectable } from '@angular/core';
 import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
+import { SessionAffinityService } from '../session/session-affinity.service';
 import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
@@ -173,6 +174,18 @@ interface GenerateTitleResponse {
 })
 export class ChatHttpService {
   private streamParserService = inject(StreamParserService);
+  private sessionAffinity = inject(SessionAffinityService);
+
+  /**
+   * A fork's turns pin to its root conversation's microVM, where the parent's
+   * live history (the cached prefix) is (rewind/fork spec §7). Read by
+   * app-api's proxy for routing only.
+   */
+  private withAffinity(requestObject: Record<string, unknown>): Record<string, unknown> {
+    const sessionId = typeof requestObject['session_id'] === 'string' ? requestObject['session_id'] : null;
+    const affinity = this.sessionAffinity.affinityFor(sessionId);
+    return affinity ? { ...requestObject, affinity_session_id: affinity } : requestObject;
+  }
   private turnTiming = inject(TurnTimingService);
   private chatStateService = inject(ChatStateService);
   private messageMapService = inject(MessageMapService);
@@ -264,7 +277,7 @@ export class ChatHttpService {
             OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
             ...csrfHeaders,
           },
-          body: JSON.stringify(withBrowserFrameHeight(requestObject)),
+          body: JSON.stringify(this.withAffinity(withBrowserFrameHeight(requestObject))),
           signal: abortController.signal,
           // Keep the stream open when the tab is backgrounded. With the library
           // default (`openWhenHidden: false`) fetch-event-source aborts the

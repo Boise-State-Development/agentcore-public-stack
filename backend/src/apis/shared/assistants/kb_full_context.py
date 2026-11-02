@@ -37,7 +37,9 @@ Scope and safety are the retrieval path's, on purpose:
 
 Engine-agnostic: the text comes from the original upload in the documents
 bucket, which both the legacy and the managed engine keep (a managed knowledge
-base has no other copy the Runtime can read).
+base has no other copy the Runtime can read). The listing and the per-document
+text (and its cache) live in :mod:`kb_documents`, shared with a project
+harness's ``project_files`` tool.
 """
 
 from __future__ import annotations
@@ -45,12 +47,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from apis.shared.assistants.kb_access import KbAccess
+from apis.shared.assistants.kb_documents import (
+    kb_document_text as _document_text,
+    list_kb_documents as _list_documents,
+    reset_text_cache_for_tests,
+)
 from apis.shared.feature_flags import assistant_kb_full_context_enabled
 from apis.shared.files.document_tokens import CHARS_PER_TOKEN
 
@@ -71,16 +77,8 @@ DEFAULT_FULL_CONTEXT_MAX_TOKENS = 50_000
 #: exists so a corpus of large files costs one Query, not their downloads.
 MAX_RAW_BYTES = 16 * 1024 * 1024
 
-#: Per-document text cache entries. A document's text is a pure function of its
-#: bytes, so the key is what changes when they do; entries never go stale, they
-#: are only evicted for room.
-_TEXT_CACHE_MAX_ENTRIES = 256
-
 #: Documents downloaded and parsed at once on a cold build.
 _FETCH_WORKERS = 8
-
-_text_cache: Dict[Tuple[Any, ...], Optional[str]] = {}
-_text_cache_lock = threading.Lock()
 
 
 def full_context_max_tokens() -> int:
@@ -93,72 +91,6 @@ def full_context_max_tokens() -> int:
     except ValueError:
         logger.warning("%s=%r is not an integer; using %d", FULL_CONTEXT_MAX_TOKENS_ENV, raw, DEFAULT_FULL_CONTEXT_MAX_TOKENS)
         return DEFAULT_FULL_CONTEXT_MAX_TOKENS
-
-
-def _list_documents(assistant_id: str) -> List[Dict[str, Any]]:
-    """Every DOC# row of this assistant (blocking; paginated)."""
-    from boto3.dynamodb.conditions import Key
-
-    from apis.shared.aws_clients import get_dynamodb_table
-
-    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
-    if not table_name:
-        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME not configured")
-    table = get_dynamodb_table(table_name, os.environ.get("AWS_REGION", "us-west-2"))
-    query: Dict[str, Any] = {
-        "KeyConditionExpression": Key("PK").eq(f"AST#{assistant_id}") & Key("SK").begins_with("DOC#"),
-    }
-    items: List[Dict[str, Any]] = []
-    while True:
-        response = table.query(**query)
-        items.extend(response.get("Items", []))
-        last = response.get("LastEvaluatedKey")
-        if not last:
-            return items
-        query["ExclusiveStartKey"] = last
-
-
-def _text_cache_key(doc: Mapping[str, Any]) -> Tuple[Any, ...]:
-    return (
-        doc.get("documentId"),
-        doc.get("s3Key"),
-        doc.get("updatedAt"),
-        doc.get("contentHash"),
-        int(doc.get("sizeBytes") or 0),
-    )
-
-
-def _document_text(doc: Mapping[str, Any], fmt: str, limit: int) -> Optional[str]:
-    """The document's whole text layer, or ``None`` if it is empty or over ``limit``.
-
-    Blocking (S3 read and parse); run it off the loop. Cached by
-    :func:`_text_cache_key`, including the ``None`` answers, so an over-budget or
-    scanned document is downloaded once per process, not once per turn.
-    """
-    from apis.shared.aws_clients import get_client
-    from apis.shared.files.document_digest import document_text
-
-    key = _text_cache_key(doc) + (limit,)
-    with _text_cache_lock:
-        if key in _text_cache:
-            return _text_cache[key]
-
-    bucket = os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
-    if not bucket:
-        raise RuntimeError("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME not configured")
-    raw = get_client("s3").get_object(Bucket=bucket, Key=doc["s3Key"])["Body"].read()
-    extracted = document_text(fmt, raw, limit)
-    text: Optional[str] = extracted.text.strip()
-    if extracted.truncated or not text:
-        # Over budget, or no text layer (a scan): either way this knowledge base
-        # cannot be sent whole, and retrieval (which may OCR it) should serve it.
-        text = None
-
-    with _text_cache_lock:
-        if len(_text_cache) >= _TEXT_CACHE_MAX_ENTRIES:
-            _text_cache.pop(next(iter(_text_cache)))
-        _text_cache[key] = text
-    return text
 
 
 def _escape(text: str) -> str:
@@ -259,5 +191,4 @@ async def load_full_kb_context(assistant_id: str, *, access: Optional[KbAccess])
 
 
 def _reset_for_tests() -> None:
-    with _text_cache_lock:
-        _text_cache.clear()
+    reset_text_cache_for_tests()

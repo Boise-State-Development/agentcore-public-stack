@@ -9,6 +9,7 @@ import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
 import { SessionPrewarmService } from '../session/session-prewarm.service';
 import { ConversationBindingService } from '../session/conversation-binding.service';
+import { IncognitoChatService } from '../incognito';
 import { TurnTimingService } from './turn-timing.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
@@ -80,6 +81,7 @@ export class ChatRequestService implements OnDestroy {
   private systemPromptsService = inject(SystemPromptsService);
   private router = inject(Router);
   private readonly binding = inject(ConversationBindingService);
+  private readonly incognitoChat = inject(IncognitoChatService);
   // TODO: Inject proper logging service
 
   constructor() {
@@ -139,6 +141,9 @@ export class ChatRequestService implements OnDestroy {
     // this turn lands on the microVM that is already starting (session
     // prewarm). Null while the feature is off: mint one, as before.
     sessionId = sessionId || this.sessionPrewarm.claimNewConversationId() || uuidv4();
+    // Before any await: the new-chat composer's incognito toggle is reset when
+    // the composer is torn down, so the choice must be taken now (#1738).
+    this.incognitoChat.claim(sessionId);
     // Client-measured time to first token starts here, at the send (read before
     // noteTurn, which this turn's own start would otherwise count as a warm).
     this.startTurnTiming(sessionId, isNewSession);
@@ -510,6 +515,12 @@ export class ChatRequestService implements OnDestroy {
       provider: isDefaultModel ? null : selectedModel.provider,
     };
 
+    // Incognito chat (#1738). The backend honours it only on the turn that
+    // creates the session; sending it on later turns (e.g. a retry) is harmless.
+    if (this.incognitoChat.isIncognito(session_id)) {
+      requestObject['incognito'] = true;
+    }
+
     // Skills v2 D6: skills are opt-in, so send the selection only when there is
     // one. Omitting the key is the "no skills" signal the backend already
     // defaults to, which keeps a plain turn's payload identical to before and
@@ -842,6 +853,12 @@ export class ChatRequestService implements OnDestroy {
    * `preview-` prefix.
    */
   private async reconcileAfterResume(sessionId: string): Promise<void> {
+    // Checked first so the mark is always consumed. A refused resume streams
+    // an unpersisted explanation; a reload would replace it with history that
+    // has none.
+    if (this.chatStateService.takeResumeUnavailable(sessionId)) {
+      return;
+    }
     if (isPreviewSession(sessionId)) {
       return;
     }

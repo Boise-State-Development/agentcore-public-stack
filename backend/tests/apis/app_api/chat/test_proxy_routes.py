@@ -188,6 +188,33 @@ def test_pins_the_runtime_session_per_user_not_per_session_id(
     assert seen[0] != seen[1]
 
 
+@pytest.mark.parametrize("fork_on, expected_session", [(True, "root-sid"), (False, "fork-sid")])
+def test_a_fork_pins_to_its_root_conversation_only_while_forks_are_on(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str, fork_on: bool, expected_session: str
+) -> None:
+    """Rewind/fork spec §7: a fork's turns run in the microVM where its root's
+    live history (the cached prefix) is. Still per user: the hash keeps it."""
+    from apis.shared.harness.runner import RUNTIME_SESSION_ID_HEADER, runtime_session_id_for
+
+    if fork_on:
+        monkeypatch.setenv("SESSION_FORK_ENABLED", "true")
+    else:
+        monkeypatch.delenv("SESSION_FORK_ENABLED", raising=False)
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get(RUNTIME_SESSION_ID_HEADER))
+        return httpx.Response(200, content=b"event: done\ndata: {}\n\n", headers={"content-type": "text/event-stream"})
+
+    _patch_upstream(monkeypatch, handler)
+    user = _user()
+    TestClient(_build_app(record=_record(), user_override=user)).post(
+        chat_path, json={"session_id": "fork-sid", "affinity_session_id": "root-sid", "message": "hi"}
+    )
+
+    assert seen == [runtime_session_id_for(expected_session, user.user_id)]
+
+
 def test_forwards_request_body_verbatim(
     monkeypatch: pytest.MonkeyPatch, chat_path: str
 ) -> None:

@@ -170,6 +170,7 @@ jobs:
       # a different AWS account (records are then created manually from the
       # deploy's CfnOutputs). Defaults to true.
       CDK_MANAGE_DNS_RECORDS: ${{ vars.CDK_MANAGE_DNS_RECORDS }}
+      CDK_ALB_RESTRICT_TO_CLOUDFRONT: ${{ vars.CDK_ALB_RESTRICT_TO_CLOUDFRONT }}
       # AgentCore Gateway inbound authorizer: "iam" (default) or "jwt".
       # The authorizer is IMMUTABLE after Gateway creation — the AgentCore
       # control plane rejects a change on an existing Gateway. Leave unset (or
@@ -269,6 +270,30 @@ jobs:
       # "true" in an environment to turn it on there. app-api only. The SPA's
       # matching switch is `features.sessionPrewarm` in src/environments/*.ts.
       CDK_SESSION_PREWARM_ENABLED: ${{ vars.CDK_SESSION_PREWARM_ENABLED }}
+      # Quota requests and extensions: users ask for more quota, admins grant
+      # additive extensions (docs/specs/quota-requests-and-extensions.md).
+      # Opt-in while in development: set `CDK_QUOTA_REQUESTS_ENABLED` to "true"
+      # in an environment to turn it on there. app-api only. The SPA's matching
+      # switch will be `features.quotaRequests` in src/environments/*.ts.
+      CDK_QUOTA_REQUESTS_ENABLED: ${{ vars.CDK_QUOTA_REQUESTS_ENABLED }}
+      # Handoffs: a mid-thread @-mention hands off to an Agent with reviewed
+      # context (docs/specs/agent-handoffs-and-consults.md, Phase 0). Opt-in
+      # while in development: set `CDK_HANDOFFS_ENABLED` to "true" in an
+      # environment to turn it on there. Sets it on app-api and on the AgentCore
+      # Runtime (only while on).
+      CDK_HANDOFFS_ENABLED: ${{ vars.CDK_HANDOFFS_ENABLED }}
+      # Conversation rewind: "Rewind to here" on a user message
+      # (docs/specs/conversation-rewind-and-fork.md §4). Opt-in while in
+      # development: set `CDK_SESSION_REWIND_ENABLED` to "true" in an environment
+      # to turn it on there. Sets it on app-api and on the AgentCore Runtime (only
+      # while on). The SPA's matching switch is `features.sessionRewind`.
+      CDK_SESSION_REWIND_ENABLED: ${{ vars.CDK_SESSION_REWIND_ENABLED }}
+      # Conversation fork: "Fork from here" on a user message
+      # (docs/specs/conversation-rewind-and-fork.md §7). Opt-in while in
+      # development: set `CDK_SESSION_FORK_ENABLED` to "true" in an environment to
+      # turn it on there. Sets it on app-api and on the AgentCore Runtime (only
+      # while on). The SPA's matching switch is `features.sessionFork`.
+      CDK_SESSION_FORK_ENABLED: ${{ vars.CDK_SESSION_FORK_ENABLED }}
       # Client-measured time to first token: POST /telemetry/turn-timing records the
       # SPA's own send-to-first-token in AgentCoreStack/TurnLatency
       # (docs/specs/turn-path-ttft.md §6). Default ON with a kill switch: set
@@ -359,6 +384,22 @@ jobs:
       # with a kill switch ("false" turns it off). Sets the flag on app-api and
       # both kb-sync Lambdas; no resources. The SPA's matching switch is `features.folderSync`.
       CDK_FOLDER_SYNC_ENABLED: ${{ vars.CDK_FOLDER_SYNC_ENABLED }}
+      # Source provenance verification: `verify_sources` checks whether a cited
+      # passage is in the document and whether the asserted value appears in it
+      # (docs/specs/source-provenance-verification.md). In development, so only
+      # "true" enables. Sets the flag on the AgentCore Runtime and app-api; no
+      # resources. The SPA's matching switch is `features.sourceProvenance`.
+      CDK_SOURCE_PROVENANCE_ENABLED: ${{ vars.CDK_SOURCE_PROVENANCE_ENABLED }}
+      # AgentCore Web Search result default: a `<target>___WebSearch` call that
+      # names no maxResults asks for 5 instead of the connector's 10, halving
+      # the ~5.3k tokens an unqualified search adds
+      # (docs/specs/web-search-default-comparison-findings.md). In development,
+      # so only "true" enables. Sets the flag on the AgentCore Runtime only, and
+      # only while on; no resources.
+      CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: ${{ vars.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED }}
+      CDK_DOCUMENT_EXTRACT_ENABLED: ${{ vars.CDK_DOCUMENT_EXTRACT_ENABLED }}
+      CDK_DOCUMENT_EXTRACT_MODEL_ID: ${{ vars.CDK_DOCUMENT_EXTRACT_MODEL_ID }}
+      CDK_DOCUMENT_EXTRACT_CONCURRENCY: ${{ vars.CDK_DOCUMENT_EXTRACT_CONCURRENCY }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

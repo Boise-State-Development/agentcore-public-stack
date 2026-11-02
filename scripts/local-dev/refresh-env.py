@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import pathlib
 import shutil
@@ -80,9 +81,9 @@ def deployed_env(task: str, profile: str, region: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true", help="write the file")
-    parser.add_argument("--task", default="dev-boisestateai-v2-app-api-task")
-    parser.add_argument("--profile", default="boisestate.ai")
-    parser.add_argument("--region", default="us-west-2")
+    parser.add_argument("--task", required=True, help="deployed app-api task definition, e.g. <prefix>-app-api-task")
+    parser.add_argument("--profile", required=True, help="AWS profile with read access to that environment")
+    parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
     args = parser.parse_args()
 
     original = ENV_FILE.read_text()

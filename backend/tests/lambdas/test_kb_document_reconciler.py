@@ -40,6 +40,7 @@ from apis.app_api.kb_migration import document_reconciler as dr
 
 REGION = "us-east-1"
 TABLE = "test-doc-reconciler"
+BUCKET = "test-doc-reconciler-documents"
 NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
@@ -59,6 +60,7 @@ def table(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
     monkeypatch.setenv("DYNAMODB_ASSISTANTS_TABLE_NAME", TABLE)
+    monkeypatch.setenv("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME", BUCKET)
     # Never inherited from the developer's shell: the reconciler is disarmed unless
     # something says otherwise.
     monkeypatch.delenv(dr.FLAG_DOC_RECONCILER_ARMED, raising=False)
@@ -76,6 +78,7 @@ def table(monkeypatch):
             ],
             BillingMode="PAY_PER_REQUEST",
         )
+        boto3.client("s3", region_name=REGION).create_bucket(Bucket=BUCKET)
         yield boto3.resource("dynamodb", region_name=REGION).Table(TABLE)
 
 
@@ -85,12 +88,14 @@ def no_metrics(monkeypatch):
 
 
 # ── Fixtures for the table ────────────────────────────────────────────────────
-def _seed_kb(table, assistant_id, *, engine="managed", aws_kb_id="KB1"):
+def _seed_kb(table, assistant_id, *, engine="managed", aws_kb_id="KB1", reserved_bytes=None):
     item = {
         "PK": f"AST#{assistant_id}",
         "SK": f"KB#{assistant_id}",
         "appKbId": assistant_id,
     }
+    if reserved_bytes is not None:
+        item["reservedBytes"] = reserved_bytes
     if engine:
         item["retrievalEngine"] = engine
     if aws_kb_id:
@@ -99,7 +104,11 @@ def _seed_kb(table, assistant_id, *, engine="managed", aws_kb_id="KB1"):
     table.put_item(Item=item)
 
 
-def _seed_doc(table, assistant_id, document_id, *, status, updated_at=OLD, s3_key=None, filename=None):
+def _seed_doc(
+    table, assistant_id, document_id, *, status, updated_at=OLD, s3_key=None, filename=None,
+    uploaded=True, created_at=None, size_bytes=None,
+):
+    """A ``DOC#`` row; with ``s3_key``, its object is put too unless ``uploaded=False``."""
     item = {
         "PK": f"AST#{assistant_id}",
         "SK": f"DOC#{document_id}",
@@ -109,14 +118,26 @@ def _seed_doc(table, assistant_id, document_id, *, status, updated_at=OLD, s3_ke
     }
     if s3_key is not None:
         item["s3Key"] = s3_key
+        if uploaded:
+            boto3.client("s3", region_name=REGION).put_object(Bucket=BUCKET, Key=s3_key, Body=b"%PDF")
     if filename is not None:
         item["filename"] = filename
+    if created_at is not None:
+        item["createdAt"] = created_at
+    if size_bytes is not None:
+        item["sizeBytes"] = size_bytes
     table.put_item(Item=item)
 
 
 def _doc(table, assistant_id, document_id):
     return table.get_item(
         Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"}
+    ).get("Item")
+
+
+def _kb(table, assistant_id):
+    return table.get_item(
+        Key={"PK": f"AST#{assistant_id}", "SK": f"KB#{assistant_id}"}
     ).get("Item")
 
 
@@ -131,10 +152,14 @@ class _FakeBackend:
     retrievable, and that the id-as-query search only works when filtered.
     """
 
-    def __init__(self, statuses=None, retrievable=None, other_documents=("DOC-someone-else",)):
+    def __init__(
+        self, statuses=None, retrievable=None, other_documents=("DOC-someone-else",),
+        ingest_error=None,
+    ):
         self._statuses = dict(statuses or {})
         self._retrievable = set(retrievable or [])
         self._other_documents = list(other_documents)
+        self._ingest_error = ingest_error
         self.search_filters = []
         self.ingested = []
         self._agent_client = _FakeAgent(self)
@@ -148,6 +173,8 @@ class _FakeBackend:
 
     # -- the protocol surface --------------------------------------------------
     async def ingest(self, kb_ref, source):
+        if self._ingest_error is not None:
+            raise self._ingest_error
         self.ingested.append(source.document_id)
 
     async def search(self, kb_ref, query, top_k=5, retrieval_filter=None):
@@ -481,6 +508,186 @@ class TestReIngest:
         assert backend.ingested == [], "a deleted document was pushed back into the KB"
         assert report.actions_performed == 0
         assert report.planned_actions[0].error is None
+
+
+# ── NOT_FOUND with no bytes in S3 → failed, not re-ingested ──────────────────
+class TestMissingUpload:
+    """A row is written before the browser's PUT. When the PUT never landed,
+    Bedrock reports NOT_FOUND exactly as for a dead-lettered ingest, but there are
+    no bytes: Bedrock accepts an ingest for a missing object and never indexes it,
+    so an armed reconciler that re-ingested it would re-submit it every night."""
+
+    KEY = "assistants/ast-1/documents/doc-1/report.pdf"
+    DECLARED = 2048
+
+    def _seed_missing(self, table, *, created_at=OLD):
+        _seed_kb(table, "ast-1", reserved_bytes=self.DECLARED)
+        _seed_doc(
+            table, "ast-1", "doc-1", status="uploading", updated_at=OLD,
+            s3_key=self.KEY, filename="report.pdf", uploaded=False,
+            created_at=created_at, size_bytes=self.DECLARED,
+        )
+
+    def test_a_missing_upload_is_failed_and_its_reservation_released_when_armed(self, table):
+        """MUTATION GUARD: dropping the S3 probe re-ingests a URI with nothing behind it."""
+        self._seed_missing(table)
+        backend = _FakeBackend(statuses={"doc-1": "NOT_FOUND"})
+
+        report = _run(table, backend, armed=True)
+
+        assert [(a.kind, a.note) for a in report.planned_actions] == [
+            (dr.ACTION_MARK_FAILED, dr.NOTE_UPLOAD_MISSING)
+        ]
+        assert report.actions_performed == 1
+        assert backend.ingested == []
+        row = _doc(table, "ast-1", "doc-1")
+        assert row["status"] == "failed"
+        assert row["ingestionError"] == dr.ic.UPLOAD_MISSING_MESSAGE
+        assert row.get("byteCapSettled") is True
+        assert int(_kb(table, "ast-1")["reservedBytes"]) == 0
+
+    def test_report_only_reports_the_fail_and_writes_nothing(self, table):
+        """The report must name the action an armed run would take — a fail, not
+        the re-ingest the NOT_FOUND status alone would suggest."""
+        self._seed_missing(table)
+        backend = _FakeBackend(statuses={"doc-1": "NOT_FOUND"})
+
+        report = _run(table, backend, armed=False)
+
+        payload = report.to_dict()
+        assert payload["plannedByKind"][dr.ACTION_MARK_FAILED] == 1
+        assert payload["plannedByKind"][dr.ACTION_RE_INGEST] == 0
+        assert payload["plannedActions"][0]["note"] == dr.NOTE_UPLOAD_MISSING
+        assert payload["actionsPerformed"] == 0
+        assert backend.ingested == []
+        assert _doc(table, "ast-1", "doc-1")["status"] == "uploading"
+        assert int(_kb(table, "ast-1")["reservedBytes"]) == self.DECLARED
+
+    def test_a_row_with_no_created_at_is_treated_as_past_its_window(self, table):
+        self._seed_missing(table, created_at=None)
+        backend = _FakeBackend(statuses={"doc-1": "NOT_FOUND"})
+
+        report = _run(table, backend, armed=True)
+
+        assert [a.kind for a in report.planned_actions] == [dr.ACTION_MARK_FAILED]
+        assert _doc(table, "ast-1", "doc-1")["status"] == "failed"
+
+    def test_a_missing_upload_whose_url_is_still_valid_is_left_alone(self, table):
+        """The PUT can still land. Failing the row would settle its bytes, and the
+        object's own event would then be skipped as already settled."""
+        recent = _iso(datetime.now(timezone.utc) - timedelta(minutes=5))
+        self._seed_missing(table, created_at=recent)
+        backend = _FakeBackend(statuses={"doc-1": "NOT_FOUND"})
+
+        report = _run(table, backend, armed=True)
+
+        assert report.planned_actions == []
+        assert report.skipped_in_flight == ["doc-1"]
+        assert backend.ingested == []
+        assert _doc(table, "ast-1", "doc-1")["status"] == "uploading"
+        assert int(_kb(table, "ast-1")["reservedBytes"]) == self.DECLARED
+
+    @pytest.mark.parametrize("cause", ["probe-inconclusive", "bucket-unset"])
+    def test_an_inconclusive_probe_re_ingests_as_before(self, table, monkeypatch, cause):
+        """A probe that cannot tell is not evidence the upload is missing."""
+        self._seed_missing(table)
+        if cause == "bucket-unset":
+            monkeypatch.delenv("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
+        else:
+            monkeypatch.setattr(dr.ic, "_source_object_exists", lambda bucket, key: None)
+        backend = _FakeBackend(statuses={"doc-1": "NOT_FOUND"})
+
+        report = _run(table, backend, armed=True)
+
+        assert [a.kind for a in report.planned_actions] == [dr.ACTION_RE_INGEST]
+        assert backend.ingested == ["doc-1"]
+        assert _doc(table, "ast-1", "doc-1")["status"] == "uploading"
+
+    def test_a_missing_upload_deleted_mid_pass_is_neither_recreated_nor_released(self, table):
+        self._seed_missing(table)
+
+        class _DeletedDuringProbe(_FakeAgent):
+            def get_knowledge_base_documents(self, **kwargs):
+                table.delete_item(Key={"PK": "AST#ast-1", "SK": "DOC#doc-1"})
+                return super().get_knowledge_base_documents(**kwargs)
+
+        backend = _FakeBackend(statuses={"doc-1": "NOT_FOUND"})
+        backend._agent_client = _DeletedDuringProbe(backend)
+
+        report = _run(table, backend, armed=True)
+
+        assert [a.kind for a in report.planned_actions] == [dr.ACTION_MARK_FAILED]
+        assert report.actions_performed == 0
+        assert report.planned_actions[0].error is None
+        assert _doc(table, "ast-1", "doc-1") is None
+        assert int(_kb(table, "ast-1")["reservedBytes"]) == self.DECLARED
+
+
+# ── A re-ingest Bedrock refuses → failed ─────────────────────────────────────
+class TestIngestRejected:
+    KEY = "assistants/ast-1/documents/doc-1/report.pdf"
+    DECLARED = 2048
+
+    def _seed(self, table):
+        _seed_kb(table, "ast-1", reserved_bytes=self.DECLARED)
+        _seed_doc(
+            table, "ast-1", "doc-1", status="uploading", updated_at=OLD,
+            s3_key=self.KEY, filename="report.pdf", size_bytes=self.DECLARED,
+        )
+
+    def test_a_refused_re_ingest_fails_the_row_when_armed(self, table):
+        """The same bytes would be refused again, so retrying nightly cannot help.
+        The armed report records the mark_failed that was written, not a re-ingest."""
+        from apis.shared.kb_backend.managed_backend import ManagedKbDocumentRejected
+
+        self._seed(table)
+        backend = _FakeBackend(
+            statuses={"doc-1": "NOT_FOUND"},
+            ingest_error=ManagedKbDocumentRejected({"doc-1": ("FAILED", "unsupported file type")}),
+        )
+
+        report = _run(table, backend, armed=True)
+
+        [action] = report.planned_actions
+        assert (action.kind, action.note) == (dr.ACTION_MARK_FAILED, dr.NOTE_INGEST_REJECTED)
+        assert action.performed is True
+        assert action.error is None
+        assert report.to_dict()["plannedByKind"][dr.ACTION_RE_INGEST] == 0
+        row = _doc(table, "ast-1", "doc-1")
+        assert row["status"] == "failed"
+        assert "unsupported file type" in row["ingestionError"]
+        assert int(_kb(table, "ast-1")["reservedBytes"]) == 0
+
+    def test_report_only_still_plans_a_re_ingest(self, table):
+        """Only a submit reveals a refusal, and report-only submits nothing."""
+        from apis.shared.kb_backend.managed_backend import ManagedKbDocumentRejected
+
+        self._seed(table)
+        backend = _FakeBackend(
+            statuses={"doc-1": "NOT_FOUND"},
+            ingest_error=ManagedKbDocumentRejected({"doc-1": ("FAILED", "unsupported")}),
+        )
+
+        report = _run(table, backend, armed=False)
+
+        assert [a.kind for a in report.planned_actions] == [dr.ACTION_RE_INGEST]
+        assert _doc(table, "ast-1", "doc-1")["status"] == "uploading"
+
+    def test_a_transient_ingest_error_leaves_the_row_for_the_next_pass(self, table):
+        """Not a refusal: the error is recorded and the row is not failed."""
+        self._seed(table)
+        backend = _FakeBackend(
+            statuses={"doc-1": "NOT_FOUND"}, ingest_error=RuntimeError("throttled"),
+        )
+
+        report = _run(table, backend, armed=True)
+
+        [action] = report.planned_actions
+        assert action.kind == dr.ACTION_RE_INGEST
+        assert action.performed is False
+        assert "throttled" in action.error
+        assert _doc(table, "ast-1", "doc-1")["status"] == "uploading"
+        assert int(_kb(table, "ast-1")["reservedBytes"]) == self.DECLARED
 
 
 # ── In-flight and unknown statuses are left alone ─────────────────────────────

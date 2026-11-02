@@ -84,11 +84,19 @@ Each file shows who added it and a status:
 
 - **Setting up / Uploading**: the file is being prepared. The assistant can't
   use it yet.
-- **Ready**: the assistant can search it.
+- **Ready**: the assistant can search it, and open it by name.
 
 A project's first upload also creates its search index, so the first files can
 take a little longer than later ones. Files added together are prepared side by
 side, and are usually **Ready** within a few minutes.
+
+The assistant reaches Files two ways. For every message it finds the passages
+that best match your wording on its own. It can also **list what is in Files
+and read a whole file when you name it**: "read submission-07.docx", "grade
+each Week 3 paper against the rubric", "compare the sponsor's v2 redline with
+our v3". Name the file when you want work on one document rather than a search
+across all of them. Spreadsheets, presentations and images can be listed but
+not opened this way; attach those to the conversation instead.
 
 What to put in Files:
 

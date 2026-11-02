@@ -273,6 +273,38 @@ def _native_counter(model: Any) -> Optional[NativeCounter]:
     return count_via_model
 
 
+async def count_text_tokens(model: Any, text: str) -> Optional[int]:
+    """Native token count of ``text`` alone on ``model``, or ``None``.
+
+    For the interrupted-turn metering path, which has to put a number on the
+    partial answer the provider never reported usage for. The count goes
+    through the same bounded CountTokens client as every other count here
+    (one attempt, short timeout, no retry on a throttle) and the message
+    scaffolding is subtracted via the memoised probe weight, so the result is
+    the text's own tokens — the probe's one-token payload apart.
+
+    ``None`` whenever a native count can't be had (counting off, model on the
+    skip list, throttled, not a Bedrock transport), leaving the caller to
+    estimate. Blocking work runs in a worker thread; safe to await off the
+    critical path, which is the only place this is called from.
+    """
+    if not text:
+        return 0
+    counter = _native_counter(model)
+    if counter is None:
+        return None
+    framed = await counter([{"role": "user", "content": [{"text": text}]}])
+    if framed is None:
+        return None
+    baseline = await _probe_baseline(model, counter)
+    if baseline is None:
+        return int(framed)
+    # The probe carries the scaffolding plus its own one-token payload, so the
+    # residual understates by about a token. Never report zero for text that
+    # exists: a cut answer always cost something.
+    return max(1, int(framed) - int(baseline))
+
+
 def _fallback_count(model: Any) -> Optional[int]:
     """The model's running count of heuristic fallbacks, or ``None`` when it
     keeps none (a test double, another transport) — which proves nothing."""

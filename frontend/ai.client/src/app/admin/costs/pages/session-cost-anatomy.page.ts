@@ -1000,6 +1000,7 @@ export class SessionCostAnatomyPage {
         return `${base} bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300`;
       case 'partial_miss':
         return `${base} bg-category-accent-partial-miss-100 text-category-accent-partial-miss-800 dark:bg-category-accent-partial-miss-900/30 dark:text-category-accent-partial-miss-300`;
+      case 'estimated':
       case 'uncached':
       default:
         return `${base} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;
@@ -1020,6 +1021,10 @@ export class SessionCostAnatomyPage {
         return 'Miss (Partial)';
       case 'uncached':
         return 'Uncached';
+      case 'estimated':
+        // Not a verdict: this call never reported usage, so there was nothing
+        // to classify. The row's `usageEstimated` names what each figure is.
+        return 'Not measured';
       default:
         return status;
     }

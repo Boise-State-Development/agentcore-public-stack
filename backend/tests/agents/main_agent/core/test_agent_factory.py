@@ -5,6 +5,7 @@ Covers create_agent for Bedrock, OpenAI, and Gemini providers, API key validatio
 retry strategy configuration, and SequentialToolExecutor usage.
 """
 
+import copy
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -466,11 +467,18 @@ class TestTextOnlyModel:
 
 
 # ---------------------------------------------------------------------------
-# Claude sees history without the unsigned reasoning another model left there
+# Reasoning hygiene across a model switch — now Strands' job, not ours
 # ---------------------------------------------------------------------------
-class TestSignedReasoning:
+class TestReasoningHygiene:
     """A turn on GPT stores its reasoning unsigned; after a switch to Claude,
-    Claude would be asked to verify a block that has no signature."""
+    Claude would be asked to verify a block that has no signature.
+
+    We projected that away ourselves (29b05de1) until strands-agents 1.61.1
+    (#5166) did it upstream in ``BedrockModel._format_bedrock_messages``. The
+    factory no longer wraps anything, so these tests pin the *upstream*
+    behaviour: if a bump dropped it, every cross-model Claude turn would start
+    failing signature verification with nothing of ours left to catch it.
+    """
 
     HISTORY = [
         {"role": "user", "content": [{"text": "hi"}]},
@@ -483,7 +491,8 @@ class TestSignedReasoning:
 
     @patch("agents.main_agent.core.agent_factory.Agent")
     @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
-    def test_claude_streams_without_unsigned_reasoning(self, mock_bedrock_cls, mock_agent_cls):
+    def test_factory_no_longer_wraps_claudes_model(self, mock_bedrock_cls, mock_agent_cls):
+        """The local projection is gone; Strands filters inside its own formatter."""
         from agents.main_agent.core.agent_factory import AgentFactory
 
         model = MagicMock()
@@ -492,14 +501,11 @@ class TestSignedReasoning:
 
         AgentFactory.create_agent(model_config=_bedrock_config(), **_COMMON_KWARGS)
 
-        mock_agent_cls.call_args.kwargs["model"].stream(self.HISTORY, None, "system")
-        sent = inner_stream.call_args.args[0]
-        assert sent[1]["content"] == [{"text": "hello"}]
-        assert "reasoningContent" in self.HISTORY[1]["content"][0], "the shared history is untouched"
+        assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream
 
     @patch("agents.main_agent.core.agent_factory.Agent")
     @patch("agents.main_agent.core.agent_factory.build_mantle_model")
-    def test_other_providers_keep_their_reasoning(self, mock_mantle, mock_agent_cls):
+    def test_mantle_models_are_not_wrapped_either(self, mock_mantle, mock_agent_cls):
         from agents.main_agent.core.agent_factory import AgentFactory
 
         model = MagicMock()
@@ -512,3 +518,39 @@ class TestSignedReasoning:
         )
 
         assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream
+
+    def test_strands_drops_unsigned_reasoning_before_sending_to_claude(self):
+        """GPT -> Claude. Drives the real SDK formatter, not a stub."""
+        from strands.models.bedrock import BedrockModel
+
+        formatted = BedrockModel(
+            model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0", region_name="us-west-2"
+        )._format_bedrock_messages(copy.deepcopy(self.HISTORY))
+
+        assert formatted[1]["content"] == [{"text": "hello"}]
+
+    def test_strands_keeps_claudes_own_signed_reasoning(self):
+        """A Claude-only history has nothing to drop — the cached prefix is unchanged."""
+        from strands.models.bedrock import BedrockModel
+
+        signed = {"reasoningContent": {"reasoningText": {"text": "thinking", "signature": "sig"}}}
+        history = [{"role": "assistant", "content": [copy.deepcopy(signed), {"text": "hello"}]}]
+
+        formatted = BedrockModel(
+            model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0", region_name="us-west-2"
+        )._format_bedrock_messages(history)
+
+        assert formatted[0]["content"] == [signed, {"text": "hello"}]
+
+    def test_strands_drops_signed_reasoning_for_models_that_reject_it(self):
+        """Claude -> Nova, the direction our own projection never covered."""
+        from strands.models.bedrock import BedrockModel
+
+        signed = {"reasoningContent": {"reasoningText": {"text": "thinking", "signature": "sig"}}}
+        history = [{"role": "assistant", "content": [signed, {"text": "hello"}]}]
+
+        formatted = BedrockModel(
+            model_id="us.amazon.nova-pro-v1:0", region_name="us-west-2"
+        )._format_bedrock_messages(history)
+
+        assert formatted[0]["content"] == [{"text": "hello"}]

@@ -2,7 +2,8 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AgentService } from '../../../agents/services/agent.service';
 import { ConfigService } from '../../../services/config.service';
 import { MySkill } from '../models/my-skill.model';
 import { MySkillService } from './my-skill.service';
@@ -29,13 +30,16 @@ function stubSkill(overrides: Partial<MySkill> = {}): MySkill {
 describe('MySkillService', () => {
   let service: MySkillService;
   let httpMock: HttpTestingController;
+  let invalidateBindable: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    invalidateBindable = vi.fn();
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
+        { provide: AgentService, useValue: { invalidateBindable } },
         MySkillService,
       ],
     });
@@ -133,6 +137,29 @@ describe('MySkillService', () => {
     await promise;
 
     expect(service.skills$()).toEqual([]);
+  });
+
+  it('drops the bindable skill palette after every write, not after a failed one', async () => {
+    // A project's Skills page memoises the palette for the whole tab; an authored
+    // skill is part of the accessible set, so each write must make it re-fetch.
+    const created = service.createSkill({ displayName: 'Grant Writing', description: 'd' });
+    httpMock.expectOne(BASE).flush(stubSkill());
+    await created;
+    expect(invalidateBindable).toHaveBeenCalledWith('skill');
+
+    const updated = service.updateSkill('grant_writing', { description: 'e' });
+    httpMock.expectOne(`${BASE}/grant_writing`).flush(stubSkill({ description: 'e' }));
+    await updated;
+
+    const deleted = service.deleteSkill('grant_writing');
+    httpMock.expectOne(`${BASE}/grant_writing`).flush(null);
+    await deleted;
+    expect(invalidateBindable).toHaveBeenCalledTimes(3);
+
+    const failed = service.createSkill({ displayName: 'X', description: 'd' });
+    httpMock.expectOne(BASE).flush({ detail: 'nope' }, { status: 400, statusText: 'Bad Request' });
+    await expect(failed).rejects.toBeDefined();
+    expect(invalidateBindable).toHaveBeenCalledTimes(3); // nothing changed server-side
   });
 
   it('posts an upload as multipart with the resource kind', async () => {

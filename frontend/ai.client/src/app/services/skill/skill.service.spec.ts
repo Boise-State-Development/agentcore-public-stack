@@ -64,14 +64,14 @@ describe('SkillService', () => {
 
     it('locks enabledSkillIds to the bound set (replace semantics)', () => {
       // web_research is user-disabled; the lock forces exactly the bound set.
-      service.lockToAgentSkills(['web_research']);
+      service.lockToAgentSkillIds(['web_research']);
       expect(service.agentLocked()).toBe(true);
       expect(service.enabledSkillIds()).toEqual(['web_research']);
       expect(service.enabledCount()).toBe(1);
     });
 
     it('reflects the bound set in per-skill shown state', () => {
-      service.lockToAgentSkills(['web_research']);
+      service.lockToAgentSkillIds(['web_research']);
       const pdf = service.skills().find(s => s.skillId === 'pdf_workflows')!;
       const web = service.skills().find(s => s.skillId === 'web_research')!;
       expect(service.isSkillShownEnabled(pdf)).toBe(false);
@@ -79,7 +79,7 @@ describe('SkillService', () => {
     });
 
     it('ignores toggles while locked (no HTTP)', async () => {
-      service.lockToAgentSkills(['web_research']);
+      service.lockToAgentSkillIds(['web_research']);
       await service.toggleSkill('pdf_workflows');
       httpMock.expectNone('http://localhost:8000/skills/preferences');
       expect(service.enabledSkillIds()).toEqual(['web_research']);
@@ -87,20 +87,20 @@ describe('SkillService', () => {
 
     it('filters visibleSkills to only the bound skills while locked', () => {
       expect(service.visibleSkills().map(s => s.skillId).sort()).toEqual(['pdf_workflows', 'web_research']);
-      service.lockToAgentSkills(['web_research']);
+      service.lockToAgentSkillIds(['web_research']);
       expect(service.visibleSkills().map(s => s.skillId)).toEqual(['web_research']);
     });
 
     it('locks to no skills at all for a project that binds none', () => {
       // A project never runs on the member's own skills, so an empty lock is a real lock.
-      service.lockToAgentSkills([]);
+      service.lockToAgentSkillIds([]);
       expect(service.agentLocked()).toBe(true);
       expect(service.enabledSkillIds()).toEqual([]);
       expect(service.visibleSkills()).toEqual([]);
     });
 
     it('restores the user set when cleared', () => {
-      service.lockToAgentSkills(['web_research']);
+      service.lockToAgentSkillIds(['web_research']);
       service.clearAgentLock();
       expect(service.agentLocked()).toBe(false);
       // Back to per-skill state: only pdf_workflows is user-enabled.
@@ -258,6 +258,63 @@ describe('SkillService', () => {
       await expect(promise).rejects.toThrow();
       expect(service.getSkill('pdf_workflows')?.isEnabled).toBe(true);
       expect(service.getSkill('pdf_workflows')?.userEnabled).toBe(null);
+    });
+  });
+  describe('resolved agent lock', () => {
+    // The Agent resolved its bound skills for this viewer (`GET /agents/{id}/skills`).
+    // `owners_style` is not in the viewer's own list at all: it is the owner's skill,
+    // which is exactly the case the id lock could never show.
+    const resolved = [
+      { skillId: 'owners_style', displayName: "Owner's Style", description: 'House style', slug: 'owners-style' },
+      { skillId: 'web_research', displayName: 'Web Research', description: 'Research the web', slug: 'web-research' },
+    ];
+
+    beforeEach(setup);
+
+    it('renders the resolved entries, not the intersection with the user list', () => {
+      service.lockToAgentSkills(resolved);
+      expect(service.agentLocked()).toBe(true);
+      expect(service.agentSkillsResolving()).toBe(false);
+      expect(service.visibleSkills().map(s => s.skillId)).toEqual(['owners_style', 'web_research']);
+      expect(service.enabledSkillIds()).toEqual(['owners_style', 'web_research']);
+      expect(service.enabledCount()).toBe(2);
+    });
+
+    it('carries the server slug and shows every resolved row as on', () => {
+      service.lockToAgentSkills(resolved);
+      const rows = service.visibleSkills();
+      expect(rows.map(s => s.slug)).toEqual(['owners-style', 'web-research']);
+      expect(rows.every(s => service.isSkillShownEnabled(s))).toBe(true);
+    });
+
+    it('is resolving between the id lock and the resolved list', () => {
+      service.lockToAgentSkillIds(['owners_style'], { resolving: true });
+      expect(service.agentSkillsResolving()).toBe(true);
+      // Until the list arrives the rows are what the user list can name: nothing here.
+      expect(service.visibleSkills()).toEqual([]);
+      service.lockToAgentSkills(resolved);
+      expect(service.agentSkillsResolving()).toBe(false);
+    });
+
+    it('settles to the id lock when the resolution fails, keeping the lock', () => {
+      service.lockToAgentSkillIds(['web_research'], { resolving: true });
+      service.settleAgentLock();
+      expect(service.agentLocked()).toBe(true);
+      expect(service.agentSkillsResolving()).toBe(false);
+      expect(service.visibleSkills().map(s => s.skillId)).toEqual(['web_research']);
+    });
+
+    it('ignores toggles while locked to resolved entries', async () => {
+      service.lockToAgentSkills(resolved);
+      await service.toggleSkill('web_research');
+      httpMock.expectNone('http://localhost:8000/skills/preferences');
+    });
+
+    it('restores the user set when cleared', () => {
+      service.lockToAgentSkills(resolved);
+      service.clearAgentLock();
+      expect(service.visibleSkills().map(s => s.skillId).sort()).toEqual(['pdf_workflows', 'web_research']);
+      expect(service.enabledSkillIds()).toEqual(['pdf_workflows']);
     });
   });
 });

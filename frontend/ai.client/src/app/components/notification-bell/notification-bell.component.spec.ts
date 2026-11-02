@@ -44,6 +44,23 @@ describe('describeNotification', () => {
     expect(describeNotification(n)).toBe(text);
   });
 
+  it.each([
+    [notif({ kind: 'quota_request_decided', projectId: null, payload: { outcome: 'approved', amount: '20.00', requestedAmount: '20.00', through: '2026-11-30' } }), 'Your quota was increased by $20 per month through Nov 30, 2026.'],
+    [notif({ kind: 'quota_request_decided', projectId: null, payload: { outcome: 'approved', amount: '25.00', requestedAmount: '50.00', through: '2026-11-30' } }), 'Your quota was increased by $25 per month through Nov 30, 2026. You asked for $50; $25 was approved.'],
+    [notif({ kind: 'quota_request_decided', projectId: null, payload: { outcome: 'denied', note: 'Not this month' } }), 'Your quota request was declined.'],
+    [notif({ kind: 'quota_request_info_requested', projectId: null, payload: { note: 'Which fund?' } }), 'Your administrator asked for a funding source for your quota request.'],
+    [notif({ kind: 'quota_extension_granted', projectId: null, payload: { standing: false, amount: '10.00', through: '2026-12-31' } }), 'Your quota was increased by $10 per month through Dec 31, 2026.'],
+    [notif({ kind: 'quota_extension_granted', projectId: null, payload: { standing: true, amount: '200.00', fundingLabel: 'COAS Dean’s Office', through: '2027-06-30' } }), 'After your included quota, usage is now charged to COAS Dean’s Office, up to $200 per month through Jun 30, 2027.'],
+    [notif({ kind: 'quota_extension_revoked', projectId: null, payload: { reason: 'Project ended' } }), 'An extension to your quota was ended.'],
+  ])('%#: quota notifications read as a sentence', (n, text) => {
+    expect(describeNotification(n)).toBe(text);
+  });
+
+  it('words a quota amount in the tier’s period', () => {
+    const n = notif({ kind: 'quota_extension_granted', payload: { amount: '5.00', through: '2026-11-30' } });
+    expect(describeNotification(n, 'daily')).toBe('Your quota was increased by $5 per day through Nov 30, 2026.');
+  });
+
   it('formats relative times', () => {
     const now = Date.parse('2026-09-24T12:00:00Z');
     expect(relativeTime('2026-09-24T11:59:40Z', now)).toBe('Just now');
@@ -223,6 +240,16 @@ describe('NotificationBellComponent', () => {
     const { component } = render();
     expect(component.noteOf(notif({ kind: 'project_task_shared', payload: { shareId: 's', note: 'Over to you' } }))).toBe('Over to you');
     expect(component.noteOf(notif({ payload: { note: 'ignored' } }))).toBeNull();
+  });
+
+  it('a quota notification opens Settings → Usage with its note', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    const n = notif({ kind: 'quota_request_decided', projectId: null, payload: { outcome: 'denied', note: 'Not this month' } });
+    expect(component.noteOf(n)).toBe('Not this month');
+    expect(component.noteOf(notif({ kind: 'quota_extension_revoked', payload: { reason: 'Project ended' } }))).toBe('Project ended');
+    component.open(n);
+    expect(navigate).toHaveBeenCalledWith(['/settings', 'usage']);
   });
 
   it('a removal is only marked read: there is no project to open', () => {

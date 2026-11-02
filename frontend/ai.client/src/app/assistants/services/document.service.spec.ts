@@ -5,6 +5,7 @@ import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { DocumentService, DocumentUploadError } from './document.service';
 import { ConfigService } from '../../services/config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 describe('DocumentService', () => {
   let service: DocumentService;
   let httpMock: HttpTestingController;
@@ -40,6 +41,28 @@ describe('DocumentService', () => {
 
     const result = await promise;
     expect(result).toEqual(mockResponse);
+  });
+
+  it('sends the file name and suppresses the global error toast only when asked', async () => {
+    const file = new File(['test'], 'notes.pdf', { type: 'application/pdf' });
+    const url = 'http://localhost:8000/assistants/assistant1/documents/upload-url';
+
+    const quiet = service.requestUploadUrl('assistant1', file, { suppressErrorToast: true });
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne(url);
+      expect(req.request.body.filename).toBe('notes.pdf');
+      expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+      req.flush({ uploadUrl: 'u', documentId: '1' });
+    });
+    await quiet;
+
+    const loud = service.requestUploadUrl('assistant1', file);
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne(url);
+      expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(false);
+      req.flush({ uploadUrl: 'u', documentId: '2' });
+    });
+    await loud;
   });
 
   it('should list documents', async () => {

@@ -21,5 +21,10 @@ export const environment = {
         folderAttachments: true,
         attachmentKb: false,
         folderSync: true,
+        sourceProvenance: false,
+        documentExtract: false,
+        sessionRewind: false,
+        sessionFork: false,
+        quotaRequests: false,
     } satisfies FeatureFlags,
 };

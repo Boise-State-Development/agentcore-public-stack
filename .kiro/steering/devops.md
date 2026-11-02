@@ -48,6 +48,7 @@ These conventions are relied on throughout the repo and are the fastest way to r
         *   `deploy-inference-api-code` — `aws bedrock-agentcore-control update-agent-runtime` for the AgentCore Runtime.
         *   `deploy-app-api-code` — `aws ecs register-task-definition` + `update-service` + `wait services-stable` for the App API Fargate service.
 *   **`frontend-deploy.yml`**: Builds the Angular SPA and syncs it to the SPA bucket created by PlatformStack.
+*   **`release.yml`**: On push to `main`, tags `v<VERSION>`, builds the terminal client wheel (`scripts/tui/build.sh --check`) and creates the GitHub Release with the notes section for that version plus the `aps-tui` wheel, sdist and checksums as assets. The TUI is installed from that release page, never from PyPI.
 *   **`teardown.yml`**: Manually-triggered. Calls `scripts/teardown/destroy.sh` to delete every CloudFormation stack with the project prefix (uses `aws cloudformation delete-stack`, not `cdk destroy`, so it works for both the current single-stack architecture and any legacy 2-stack or 9-stack deployments).
 *   **`nightly-deploy-pipeline.yml`**: Combined platform → backend → frontend → smoke/E2E test pipeline that runs nightly.
 

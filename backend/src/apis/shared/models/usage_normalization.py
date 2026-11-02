@@ -30,16 +30,16 @@ This module fixes both halves, once, at the earliest seam we control:
    observability layer and the SSE stream. Downstream consumers keep reading
    plain Converse-shaped usage dicts and need no provider awareness.
 
-The wrapper is also where ``cache_write_tokens`` re-enters the pipeline.
-Through strands-agents 1.57.1 the SDK never read it off the Responses usage
-object, so ``cacheWriteInputTokens`` was structurally 0 for GPT-5.6 — which
-pinned ``wastedUsd`` at $0 and made the 1.25x write premium invisible, the
-same blind spot that let the compaction spiral run unnoticed. Both OpenAI
-paths now report it upstream (Chat Completions in 1.57 via #4361, Responses
+``cacheWriteInputTokens`` arrives from the SDK itself. Both OpenAI paths map
+``cache_write_tokens`` upstream (Chat Completions in 1.57 via #4361, Responses
 in 1.57.2 via #4193), each beside an ``inputTokens`` that is still inclusive,
-so :func:`normalize_usage` still subtracts it once like any other write
-bucket. The recovery here now writes the value the SDK already set; it is
-redundant on the current pin, and deleting it is a separate cleanup.
+so :func:`normalize_usage` subtracts the write bucket once like any other.
+We carried a local recovery of that field through 1.57.1, when the SDK dropped
+it and ``cacheWriteInputTokens`` was structurally 0 for GPT-5.6 — which pinned
+``wastedUsd`` at $0 and made the 1.25x write premium invisible. It became a
+same-value overwrite on 1.57.2 and was removed. ``TestStrandsSdkContract``
+asserts the upstream mapping against the real SDK, so a bump that regressed it
+would fail there rather than silently zeroing the write premium again.
 
 ⚠️ :func:`normalize_usage` is **not idempotent** for the OpenAI family — it
 subtracts. Apply it exactly once per usage payload, at the model seam. Do not
@@ -48,7 +48,7 @@ add a second call at a site that reads the usage dict.
 
 import logging
 from enum import Enum
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -106,36 +106,6 @@ def normalize_usage(
     return normalized
 
 
-def openai_cache_write_tokens(usage_obj: Any) -> Optional[int]:
-    """Read ``cache_write_tokens`` off a raw OpenAI usage object.
-
-    GPT-5.6 reports it at ``usage.input_tokens_details.cache_write_tokens``.
-    The OpenAI SDK's models permit extra fields, so on an SDK pin that predates
-    the field it still arrives as a passthrough attribute. The top level is
-    checked as well because some OpenAI-compatible gateways hoist it there.
-
-    Args:
-        usage_obj: The provider usage object (``ResponseUsage`` or compatible).
-
-    Returns:
-        The token count, or ``None`` when the field is absent or not an int.
-        ``False`` / ``bool`` values are rejected — ``bool`` is an ``int``
-        subclass and would otherwise coerce to 0/1.
-    """
-    if usage_obj is None:
-        return None
-
-    details = getattr(usage_obj, "input_tokens_details", None)
-    for source in (details, usage_obj):
-        if source is None:
-            continue
-        value = getattr(source, "cache_write_tokens", None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-
-    return None
-
-
 # Strands formats every provider chunk through one method per model class, but
 # the two OpenAI-family classes disagree on its name: OpenAIModel exposes a
 # public `format_chunk`, OpenAIResponsesModel a private `_format_chunk`.
@@ -146,13 +116,11 @@ _CHUNK_FORMATTER_NAMES = ("_format_chunk", "format_chunk")
 _NORMALIZED_CLASSES: Dict[type, type] = {}
 
 
-def _normalize_metadata_chunk(event: Mapping[str, Any], chunk: Any) -> Any:
+def _normalize_metadata_chunk(chunk: Any) -> Any:
     """Rewrite a formatted ``metadata`` chunk into Converse usage semantics.
 
     Args:
-        event: The raw Strands chunk event; ``event["data"]`` is the provider
-            usage object, the only place ``cache_write_tokens`` survives.
-        chunk: The ``StreamEvent`` the base model produced for that event.
+        chunk: The ``StreamEvent`` the base model produced for a usage event.
 
     Returns:
         ``chunk``, mutated in place when it carried a usage payload.
@@ -167,14 +135,6 @@ def _normalize_metadata_chunk(event: Mapping[str, Any], chunk: Any) -> Any:
     usage = metadata.get("usage")
     if not isinstance(usage, dict):
         return chunk
-
-    # Recover the write bucket before disjointness is computed — the written
-    # tokens are part of the inclusive `input_tokens` and have to come out of
-    # it too, or they are billed at input + 1.25x write. Strands >=1.57.2 sets
-    # the same value itself; this assignment is then a same-value overwrite.
-    cache_write = openai_cache_write_tokens(event.get("data"))
-    if cache_write:
-        usage["cacheWriteInputTokens"] = cache_write
 
     usage.update(normalize_usage(usage, UsageProvider.OPENAI))
     return chunk
@@ -218,7 +178,7 @@ def usage_normalized(base_cls: Any) -> Any:
 
     def _formatter(self: Any, event: Dict[str, Any], **kwargs: Any) -> Any:
         chunk = getattr(super(subclass, self), formatter_name)(event, **kwargs)
-        return _normalize_metadata_chunk(event, chunk)
+        return _normalize_metadata_chunk(chunk)
 
     _formatter.__name__ = formatter_name
     _formatter.__qualname__ = f"UsageNormalized{base_cls.__name__}.{formatter_name}"

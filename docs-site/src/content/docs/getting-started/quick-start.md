@@ -27,8 +27,17 @@ resources. The [Local Development](/agentcore-public-stack/local-development/)
 page covers installing dependencies, configuring `.env` from SSM, and starting
 the services.
 
+## 3. Use it from a terminal (optional)
+
+Every release attaches `aps-tui`, a terminal client for the same assistant.
+Install it with [uv](https://docs.astral.sh/uv/) from the release page of your
+deployment and run `aps-tui`; the first launch asks for your deployment's
+address and signs you in through the browser. See
+[Terminal Client](/agentcore-public-stack/features/terminal-client/).
+
 ## Where to go next
 
 - [Architecture Overview](/agentcore-public-stack/getting-started/architecture-overview/) — how the agents, APIs, and infrastructure fit together.
 - [Deployment Overview](/agentcore-public-stack/deployment/overview/) — stand up your own stack.
 - [Local Development](/agentcore-public-stack/local-development/) — develop against a deployed environment.
+- [Terminal Client](/agentcore-public-stack/features/terminal-client/) — the assistant in your shell, with tools that run on your machine.

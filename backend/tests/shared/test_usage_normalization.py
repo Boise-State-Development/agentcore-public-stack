@@ -23,7 +23,6 @@ import pytest
 from apis.shared.models.usage_normalization import (
     UsageProvider,
     normalize_usage,
-    openai_cache_write_tokens,
     usage_normalized,
 )
 
@@ -154,47 +153,16 @@ class TestNormalizeUsageDisjointInvariant:
         assert usage["inputTokens"] == 30_500
 
 
-class TestOpenAICacheWriteExtraction:
-    """`cache_write_tokens` recovery, against the real openai usage models."""
-
-    def test_reads_from_input_tokens_details(self):
-        from openai.types.responses.response_usage import ResponseUsage
-
-        usage_obj = ResponseUsage.model_validate(OPENAI_RESPONSES_WIRE_USAGE)
-
-        assert openai_cache_write_tokens(usage_obj) == 400
-
-    def test_reads_from_top_level_when_a_gateway_hoists_it(self):
-        from openai.types.responses.response_usage import ResponseUsage
-
-        payload = dict(OPENAI_RESPONSES_WIRE_USAGE)
-        payload["input_tokens_details"] = {"cached_tokens": 30_000}
-        payload["cache_write_tokens"] = 400
-
-        assert openai_cache_write_tokens(ResponseUsage.model_validate(payload)) == 400
-
-    def test_absent_field_returns_none(self):
-        from openai.types.completion_usage import CompletionUsage
-
-        usage_obj = CompletionUsage.model_validate(OPENAI_CHAT_WIRE_USAGE)
-
-        assert openai_cache_write_tokens(usage_obj) is None
-
-    def test_none_usage_object_returns_none(self):
-        assert openai_cache_write_tokens(None) is None
-
-    def test_bool_is_rejected_rather_than_coerced(self):
-        class _Usage:
-            cache_write_tokens = True
-
-        assert openai_cache_write_tokens(_Usage()) is None
-
-
 class TestStrandsSdkContract:
-    """Pin the two SDK facts the shim is built on.
+    """Pin the SDK facts the shim is built on.
 
-    If a Strands bump breaks either, these fail loudly here rather than
+    If a Strands bump breaks any of them, these fail loudly here rather than
     silently double-billing every OpenAI-family token in production.
+
+    Since the local ``cache_write_tokens`` recovery was removed, the two
+    ``surfaces_cache_writes`` tests below are the *only* thing standing between
+    an upstream regression and a silently invisible 1.25x write premium. They
+    drive the real SDK deliberately — do not restub them.
     """
 
     def test_chunk_formatter_seams_still_exist(self):
@@ -210,10 +178,10 @@ class TestStrandsSdkContract:
     def test_responses_sdk_surfaces_cache_writes_but_input_stays_inclusive(self):
         """The bug this module exists to fix, asserted against the real SDK.
 
-        strands-agents 1.57.2 (#4193) maps Responses ``cache_write_tokens``, so
-        our recovery in ``_normalize_metadata_chunk`` now writes the value the
-        SDK already set. ``inputTokens`` is still the inclusive total, so
-        disjointness remains ours to restore — exactly once.
+        strands-agents 1.57.2 (#4193) maps Responses ``cache_write_tokens``,
+        which is why we no longer recover it ourselves. ``inputTokens`` is
+        still the inclusive total, so disjointness remains ours to restore —
+        exactly once.
         """
         from openai.types.responses.response_usage import ResponseUsage
         from strands.models import OpenAIResponsesModel

@@ -18,13 +18,15 @@ Requirements: 18.1, 18.2, 18.3, 18.4, 18.5
 
 import asyncio
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from apis.shared.assistants.kb_access import granted
 from apis.shared.assistants.rag_service import search_assistant_knowledgebase_with_formatting
+from apis.shared.kb_backend import dual_read as dual_read_module
+from apis.shared.kb_backend import idleness as idleness_module
 from apis.shared.kb_backend.dual_read import (
     DUAL_READ_ATTR,
     compare,
@@ -104,6 +106,95 @@ def _real_managed_backend():
     return ManagedKbBackend()
 
 
+#: Every registry of detached tasks a piloted search leaves running. Both modules
+#: hold strong references to their own fire-and-forget tasks — ``create_task``
+#: returns the only reference, and dropping it lets the task be collected
+#: mid-flight — so between them these two sets are the managed read, the
+#: comparison that publishes it, and the idleness touch.
+_DETACHED_TASK_REGISTRIES = (dual_read_module._IN_FLIGHT, idleness_module._IN_FLIGHT)
+
+#: Generous on purpose: this work awaits stubs and mocks, so it settles in
+#: microseconds. The deadline is here to fail a wedged test with a message naming
+#: the task rather than with a bare suite timeout.
+_SETTLE_TIMEOUT_SECONDS = 5.0
+
+
+def _detached_tasks() -> Set["asyncio.Task"]:
+    tasks: Set["asyncio.Task"] = set()
+    for registry in _DETACHED_TASK_REGISTRIES:
+        tasks |= set(registry)
+    return tasks
+
+
+async def _settle(started_before: Set["asyncio.Task"]) -> None:
+    """Wait for the detached work this call started, *inside* the patch scope.
+
+    The facade hands back the legacy result and leaves the comparison running
+    (Requirement 18.5), so a test that asserts on the comparison has to wait for
+    it — and has to wait for *all* of it. Polling a mock's ``called`` does not.
+    ``_publish`` sends its four emits to a worker thread in a single
+    ``asyncio.to_thread``, so the first of them satisfies the poll while the
+    other three are still behind the GIL. The test then leaves the ``patch``
+    block, the real ``emit_value`` goes back onto the module, and those three
+    build real CloudWatch clients and publish nothing the mock can see.
+
+    One fault, two symptoms, and together they are the whole of the failure in
+    CI: ``KbDualReadRankCorrelation`` missing from ``emitted``, and three
+    off-box connections at teardown — three, because three emits were left.
+    Production never sees it. Nothing swaps ``emit_value`` there, and
+    ``metrics._publish`` wraps each emit in its own ``except``, so one that fails
+    cannot drop the next.
+
+    Only tasks this call started are awaited: the registries are module globals
+    that outlive a test, and a task another test left behind belongs to that
+    test's event loop, which is closed.
+    """
+    deadline = time.perf_counter() + _SETTLE_TIMEOUT_SECONDS
+    while True:
+        pending = [task for task in _detached_tasks() - started_before if not task.done()]
+        if not pending:
+            # One more turn of the loop, so a task that has just finished gets
+            # its done-callback run and anything it scheduled becomes visible.
+            await asyncio.sleep(0)
+            if not any(not task.done() for task in _detached_tasks() - started_before):
+                return
+            continue
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise AssertionError(
+                f"detached dual-read work did not settle in {_SETTLE_TIMEOUT_SECONDS}s: {pending}"
+            )
+        await asyncio.wait(pending, timeout=remaining)
+
+
+async def _cancel_detached(started_before: Set["asyncio.Task"]) -> None:
+    """Stop this call's detached work before the test's patches come off.
+
+    For the one test that deliberately does not wait for it: a three-second
+    managed read still in flight when ``patch`` unwinds would publish its
+    comparison through the real emitter.
+    """
+    for task in _detached_tasks() - started_before:
+        task.cancel()
+    await _settle(started_before)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_cloudwatch():
+    """Never publish a metric from this file, even from a task that got away.
+
+    A net under the barrier above, and the same one ``test_kb_backend_parity``
+    puts under itself: ``kb_backend.metrics._publish`` builds
+    ``boto3.client("cloudwatch")`` behind an ``except`` documented as
+    "observability must not break retrieval", so a live call fails silently and
+    the test still passes. Every assertion here is on a mock installed over this,
+    so the fixture changes no outcome — it only makes the file hermetic by
+    construction rather than by timing.
+    """
+    with patch("apis.shared.kb_backend.metrics._publish"):
+        yield
+
+
 @pytest.fixture
 def managed_registered():
     """Replace the registered managed backend with a stub for one test.
@@ -139,16 +230,17 @@ async def _search(legacy: StubBackend, record: Dict[str, Any], top_k: int = 5):
     ) as emit_value, patch(
         "apis.shared.kb_backend.dual_read.emit_count"
     ) as emit_count:
+        started_before = _detached_tasks()
         results = await search_assistant_knowledgebase_with_formatting(
             ASSISTANT_ID, "q", top_k, access=ACCESS
         )
         # Let the detached comparison run to completion before asserting on it.
-        # Not a sleep in the facade — a sleep in the *test*, which is the whole
-        # point: the caller never waits, the assertion does.
-        for _ in range(200):
-            await asyncio.sleep(0)
-            if emit_value.called or emit_count.called:
-                break
+        # Not a wait in the facade — a wait in the *test*, which is the whole
+        # point: the caller never waits, the assertion does. It waits for the
+        # task rather than for the first metric, because the publish is one
+        # ``to_thread`` of four emits and the first proves nothing about the
+        # other three (see :func:`_settle`).
+        await _settle(started_before)
     return results, emit_value, emit_count
 
 
@@ -350,11 +442,16 @@ class TestThePilotAddsNoLatency:
         ), patch(
             "apis.shared.kb_backend.dual_read.emit_value"
         ):
+            started_before = _detached_tasks()
             started = time.perf_counter()
             results = await search_assistant_knowledgebase_with_formatting(
                 ASSISTANT_ID, "q", 5, access=ACCESS
             )
             elapsed = time.perf_counter() - started
+            # Measured, so the three-second read has served its purpose. It must
+            # not outlive these patches: the comparison behind it would publish
+            # through the real emitter once they come off.
+            await _cancel_detached(started_before)
 
         assert len(results) == 1
         assert elapsed < MANAGED_DELAY_SECONDS / 3, (
@@ -422,9 +519,15 @@ class TestComparisonMetrics:
         managed_registered(StubBackend([_chunk("doc-a")]))
         _, emit_value, _ = await _search(StubBackend([_chunk("doc-a")]), {DUAL_READ_ATTR: True})
 
-        for call in emit_value.call_args_list:
-            if call.args[0] == "KbDualReadLatency":
-                assert call.kwargs["unit"] == "Milliseconds"
+        latencies = [
+            call for call in emit_value.call_args_list if call.args[0] == "KbDualReadLatency"
+        ]
+        # Asserted before the loop, because a loop over nothing asserts nothing:
+        # while the comparison could be half-published when the test looked, this
+        # passed on runs where no latency had been recorded at all.
+        assert len(latencies) == 2
+        for call in latencies:
+            assert call.kwargs["unit"] == "Milliseconds"
 
 
 class TestCompareIsPureArithmetic:

@@ -110,13 +110,13 @@ _MARKDOWN_RENDER_TEMPLATE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__ARTIFACT_TITLE__</title>
 <link rel="stylesheet" id="katex-css"
-  href="https://cdn.jsdelivr.net/npm/katex@0.16.45/dist/katex.min.css"
-  integrity="sha384-UA8juhPf75SzzAMA/4fo3yOU7sBJ0om7SCD2GHq0fZqZco6tr1UCV7nUbk9J90JM"
+  href="https://cdn.jsdelivr.net/npm/katex@0.18.2/dist/katex.min.css"
+  integrity="sha384-qArEAQvOPs1o7K1iAybhs66g8nYTXVt4VLOQ3abu+OMLJyPNfaH4Wpko0X2epHJ+"
   crossorigin="anonymous"
   onload="this.dataset.state='loaded'" onerror="this.dataset.state='failed'">
 <script defer
-  src="https://cdn.jsdelivr.net/npm/katex@0.16.45/dist/katex.min.js"
-  integrity="sha384-Tt7wBxLKwSzFVRET4O4U9H6v8MNaQ/CjN2FMP4xFm0ErrFu6aNqoonRVW5W40iGI"
+  src="https://cdn.jsdelivr.net/npm/katex@0.18.2/dist/katex.min.js"
+  integrity="sha384-IHT6Yddb0KLCzZaxQ/so1j3xkJ8R6hOkCR06ma9NDHGn0Z4ClKcGtQ6qqsflRPxR"
   crossorigin="anonymous"></script>
 <style>
   :root { color-scheme: light dark; }

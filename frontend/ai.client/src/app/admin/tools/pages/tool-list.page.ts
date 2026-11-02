@@ -523,7 +523,16 @@ export function capabilityRefreshSummary(
                               }
                             </dt>
                             <dd class="mt-0.5 space-y-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
-                              <p class="break-all font-mono text-xs/5">{{ tool.mcpGatewayConfig.endpointUrl }}</p>
+                              @if (tool.mcpGatewayConfig.connectorId) {
+                                <p class="font-mono text-xs/5">
+                                  AgentCore connector: {{ tool.mcpGatewayConfig.connectorId }}
+                                  @if (tool.mcpGatewayConfig.connectorVersion) {
+                                    v{{ tool.mcpGatewayConfig.connectorVersion }}
+                                  }
+                                </p>
+                              } @else {
+                                <p class="break-all font-mono text-xs/5">{{ tool.mcpGatewayConfig.endpointUrl }}</p>
+                              }
                               <p class="text-xs/5 text-gray-500 dark:text-gray-400">
                                 target: {{ tool.mcpGatewayConfig.targetName }} ·
                                 outbound: {{ tool.mcpGatewayConfig.credentialType }} ·

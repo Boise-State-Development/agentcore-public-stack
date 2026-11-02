@@ -68,8 +68,8 @@ Both paths validate questions through the same `validateUserQuestions`, so the
 live and replayed prompts cannot drift.
 
 **Abandonment**: a breadcrumb that outlives its `pausedTurn` snapshot renders a
-prompt the user can no longer answer — the resume route 400s on an interrupt id
-the rebuilt agent never saw, so Submit is a guaranteed error. Nothing used to
+prompt the user can no longer answer — the resume route refuses an interrupt id
+the rebuilt agent never saw, so Submit can only end in "send your message again". Nothing used to
 clear them: the two `remove_pending_interrupts` call sites are resume cleanup
 and the explicit dismiss endpoint, neither of which a user reaches by simply
 typing something else. `clear_pending_interrupts` is now called beside

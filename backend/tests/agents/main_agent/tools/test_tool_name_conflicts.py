@@ -24,6 +24,7 @@ from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.chat_agent import ChatAgent
 from agents.main_agent.tools.tool_filter import ToolFilterResult
 from agents.main_agent.tools.tool_name_conflicts import (
+    MAX_TOOL_NAME_LENGTH,
     NameExcludingToolProvider,
     SkippedToolName,
     resolve_tool_name_conflicts,
@@ -266,3 +267,82 @@ def test_the_note_is_byte_stable():
         SkippedToolName("b", "S3", "S1"),
     ]
     assert skipped_tools_note(skipped) == skipped_tools_note(list(skipped))
+
+
+# --- names Bedrock will not accept ------------------------------------------
+
+
+_TOO_LONG = "generate_quarterly_enrollment_summary_report_for_every_active_program"
+assert len(_TOO_LONG) > MAX_TOOL_NAME_LENGTH
+
+
+def test_a_name_too_long_for_bedrock_is_left_out_and_the_rest_survive():
+    """`toolSpec.name` is capped at 64 characters and Bedrock refuses the whole
+    request, so one over-long name would cost the turn every other tool with
+    it. An MCP server names its own tools, so it must only cost that tool.
+    """
+    server = _FakeServer("Reports MCP", [_TOO_LONG, "list_reports"])
+
+    resolved, skipped = resolve_tool_name_conflicts([server])
+
+    assert _registered_names(resolved) == ["list_reports"]
+    assert skipped == [
+        SkippedToolName(_TOO_LONG, "Reports MCP", reason="too_long")
+    ]
+
+
+def test_a_name_exactly_at_the_limit_is_kept():
+    at_limit = "a" * MAX_TOOL_NAME_LENGTH
+    server = _FakeServer("Edge MCP", [at_limit])
+
+    resolved, skipped = resolve_tool_name_conflicts([server])
+
+    assert _registered_names(resolved) == [at_limit]
+    assert skipped == []
+
+
+def test_an_over_long_platform_tool_is_left_out_too():
+    builtin = _named_tool(_TOO_LONG)
+    ok = _named_tool("summarize")
+
+    resolved, skipped = resolve_tool_name_conflicts([builtin, ok])
+
+    assert resolved == [ok]
+    assert [s.reason for s in skipped] == ["too_long"]
+
+
+def test_an_over_long_name_is_not_held_against_another_source():
+    """It is left out everywhere, so it is never recorded as taken — the second
+    copy is dropped for being too long, not for clashing."""
+    first = _FakeServer("A", [_TOO_LONG])
+    second = _FakeServer("B", [_TOO_LONG, "fine"])
+
+    resolved, skipped = resolve_tool_name_conflicts([first, second])
+
+    assert _registered_names(resolved) == ["fine"]
+    assert [(s.source, s.reason) for s in skipped] == [
+        ("A", "too_long"),
+        ("B", "too_long"),
+    ]
+
+
+def test_the_model_is_told_about_a_name_that_is_too_long():
+    note = skipped_tools_note(
+        [SkippedToolName(_TOO_LONG, "Reports MCP", reason="too_long")]
+    )
+
+    assert "too long" in note
+    assert f"`{_TOO_LONG}` from Reports MCP" in note
+    assert str(MAX_TOOL_NAME_LENGTH) in note
+
+
+def test_both_kinds_of_note_can_appear_together():
+    note = skipped_tools_note(
+        [
+            SkippedToolName("whoami", "Salesforce", "Canvas"),
+            SkippedToolName(_TOO_LONG, "Reports MCP", reason="too_long"),
+        ]
+    )
+
+    assert note.count("##") == 2
+    assert note.index("name clash") < note.index("too long")

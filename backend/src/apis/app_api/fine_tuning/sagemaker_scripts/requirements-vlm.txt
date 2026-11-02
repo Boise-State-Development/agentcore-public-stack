@@ -10,6 +10,6 @@
 # DLC and are deliberately unpinned here; pinning them would fight the image.
 pandas
 scikit-learn
-pillow==12.3.0
+pillow==13.0.0
 peft==0.20.0
 bitsandbytes==0.50.2

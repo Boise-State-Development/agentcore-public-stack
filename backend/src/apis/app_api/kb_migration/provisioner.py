@@ -286,6 +286,14 @@ async def _hand_to_consumer(
     The mark is guarded on the row still being ``provisioning``. The consumer can
     reach a terminal state before this write lands (an ingest refused outright
     fails in under a second), and this must not drag it back to ``uploading``.
+
+    Every waiting row is handed over, including one whose browser ``PUT`` has not
+    landed (the row is written before the upload). The consumer owns that case
+    (``ingestion_consumer._missing_upload_result``): it checks the object exists
+    before ingesting, and either leaves the row for the object's own event or
+    fails it once the upload URL has expired. Skipping such a row here instead
+    would strand it at ``provisioning``, which the document list's stale sweep
+    does not cover.
     """
     function_name = os.environ.get(ENV_INGESTION_CONSUMER)
     if not function_name:

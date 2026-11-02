@@ -19,8 +19,8 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Literal, Optional, List, Set, Tuple
-from urllib.parse import urlparse
+from typing import Any, Callable, Dict, Iterator, Literal, Optional, List, Set, Tuple
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
@@ -65,6 +65,23 @@ class ConsentGatedTool:
     tool_id: str
     display_name: str
     provider_id: str
+
+
+@dataclass
+class _ServerToLoad:
+    """One MCP server a build will load, with its catalog row already read.
+
+    Produced by ``_distinct_servers``: one per server, not per catalog entry,
+    with ``allowed_tool_names`` widened to cover every entry that reaches it.
+    """
+
+    tool_id: str
+    allowed_tool_names: Optional[Set[str]]
+    row: Optional[ToolDefinition]
+    #: False when the row could not be read, so ``_load_server`` reads it
+    #: itself and reports the failure as it always did.
+    row_read: bool
+    catalog_ms: int
 
 
 def _aws_hostname(url: str) -> str:
@@ -177,6 +194,66 @@ def _headers_digest(headers: dict) -> str:
 def _elapsed_ms(started: float) -> int:
     """Milliseconds since a ``perf_counter`` reading."""
     return int((time.perf_counter() - started) * 1000)
+
+
+def _normalized_server_url(url: Any) -> Optional[str]:
+    """``url`` with the parts that address the same endpoint folded together.
+
+    Scheme and host are case-insensitive and a trailing slash reaches the same
+    endpoint. The path and the query are otherwise left alone: a query can
+    carry the tenant or account a hosted server is scoped to, which makes it a
+    different server rather than a duplicate.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return None
+    parts = urlsplit(url.strip())
+    if not parts.netloc:
+        return None
+    return urlunsplit(
+        (
+            parts.scheme.lower(),
+            parts.netloc.lower(),
+            parts.path.rstrip("/"),
+            parts.query,
+            "",
+        )
+    )
+
+
+def _same_server_key(tool: Any) -> Optional[str]:
+    """What two catalog records must share to be one MCP connection.
+
+    The URL alone is not enough. Two records can point at one hosted server
+    and ask it for different things in their headers — on dev the GitHub
+    connector's entries share ``https://api.githubcopilot.com/mcp/`` and pick
+    their toolset with ``X-MCP-Toolsets`` — and two records can reach one URL
+    with different credentials. Collapsing either would cost a user tools or
+    quietly swap whose token is sent, so the key carries the custom headers and
+    the auth mode too: only records that would open the very same connection
+    count as one server.
+
+    Whatever this key keeps apart still cannot fail the agent. Two records that
+    reach one server differently offer its tools under the same names, and
+    ``resolve_tool_name_conflicts`` keeps one copy of each.
+
+    ``None`` when there is no usable URL, which only ever costs the dedupe:
+    such a record is never treated as a duplicate of anything.
+    """
+    config = getattr(tool, "mcp_config", None)
+    normalized = _normalized_server_url(getattr(config, "server_url", None))
+    if not normalized:
+        return None
+    headers = getattr(config, "custom_headers", None) or {}
+    return "|".join(
+        (
+            normalized,
+            _headers_digest(headers) if headers else "",
+            str(getattr(config, "auth_type", "") or ""),
+            str(getattr(tool, "requires_oauth_provider", None) or ""),
+            str(bool(getattr(tool, "forward_auth_token", False))),
+            str(getattr(tool, "token_exchange_audience", None) or ""),
+        )
+    )
 
 
 def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
@@ -644,6 +721,7 @@ class ExternalMCPIntegration:
         auth_token: Optional[str],
         off_loop: bool = False,
         consent_gated: Optional[List[ConsentGatedTool]] = None,
+        server: Optional[_ServerToLoad] = None,
     ) -> Tuple[Optional[MCPClient], dict]:
         """Build, pre-flight and cache one external MCP server's client.
 
@@ -651,12 +729,22 @@ class ExternalMCPIntegration:
         its ``timings`` entry. Touches only this server's cache key, so
         several can run at once. A server dropped for missing consent is
         appended to ``consent_gated`` when given.
+
+        ``server`` carries the catalog row the caller already read
+        (``_distinct_servers`` reads every row to find the servers reached
+        twice) and the read it paid for, so no row is read twice on the turn
+        path. Without it — or when that read failed — the row is read here, as
+        before.
         """
         started = time.perf_counter()
         timing: dict = {"id": tool_id, "outcome": "skipped"}
         try:
-            tool = await repository.get_tool(tool_id)
-            timing["catalogMs"] = _elapsed_ms(started)
+            if server is not None and server.row_read:
+                tool = server.row
+                timing["catalogMs"] = server.catalog_ms
+            else:
+                tool = await repository.get_tool(tool_id)
+                timing["catalogMs"] = _elapsed_ms(started)
             if not tool:
                 return None, timing
 
@@ -825,6 +913,17 @@ class ExternalMCPIntegration:
             )
 
             if client:
+                # A client carrying one user's credential must only ever be
+                # handed back for that user by the MCP Apps UI catalog (which
+                # app-initiated tools/call and resources/read resolve from).
+                # Stamp before the preflight below, which runs tools/list and
+                # records the catalog entries. Mirrors the cache-key
+                # partitioning above: shared clients stay unowned.
+                if requires_user_auth and user_id:
+                    try:
+                        client.owner_user_id = user_id
+                    except Exception:  # noqa: BLE001
+                        pass
                 # What the context breakdown calls this server's tools.
                 # Display-only: never let it cost the server its tools.
                 try:
@@ -893,6 +992,121 @@ class ExternalMCPIntegration:
         finally:
             timing["totalMs"] = _elapsed_ms(started)
 
+    async def _read_row(
+        self, tool_id: str, repository: Any
+    ) -> Tuple[Optional[ToolDefinition], bool, int]:
+        """One catalog row, whether it was read at all, and the ms it took.
+
+        Never raises. A read that fails reports ``read=False``, which leaves
+        the entry out of the dedupe and has ``_load_server`` read the row
+        itself — where the failure is reported exactly as it was before. A row
+        that is simply absent reports ``read=True`` with ``None``, so a missing
+        tool is not looked up twice.
+        """
+        started = time.perf_counter()
+        try:
+            return await repository.get_tool(tool_id), True, _elapsed_ms(started)
+        except Exception as exc:  # noqa: BLE001 - _load_server reports it
+            logger.warning(
+                "Could not read %s's catalog row while looking for servers "
+                "reached twice: %s",
+                tool_id,
+                exc,
+            )
+            return None, False, _elapsed_ms(started)
+
+    async def _distinct_servers(
+        self,
+        servers: List[Tuple[str, Optional[Set[str]]]],
+        repository: Any,
+    ) -> Tuple[List[_ServerToLoad], List[dict]]:
+        """One entry per distinct MCP server, plus a timing per entry dropped.
+
+        Two catalog records can point at the same server URL. In prod
+        ``google_tasks_employee`` and ``google_tasks_student`` are one Google
+        Tasks server, and a user holding both roles loaded it twice: every one
+        of its tools was offered under its own name twice, which Strands'
+        registry refuses, so the agent was never built and five scheduled runs
+        failed (#1527). Loading it once is also one MCP handshake instead of
+        two on the turn path.
+
+        Which record survives is decided here, off the catalog rows, *before*
+        any client is built or pre-flighted — never by whichever parallel
+        pre-flight finished first. The survivor is the first of them in the
+        order ``load_external_tools`` was given, which is the order
+        ``collect_tool_name_filters`` fixed from ``enabled_tools`` and the
+        order every other part of the build already reads (see
+        ``resolve_always_on_tool_ids``): it decides this server's place in the
+        tool list, and with it the order of the cacheable ``toolConfig`` prefix,
+        so it has to be the same on every turn and in every process (#1406).
+
+        The dropped record's selected tool names are folded into the
+        survivor's filter, so a server held through two roles still reaches
+        every tool either role selected — bounded, as always, by the surviving
+        row's own admin tool list, which ``_load_server`` applies.
+
+        A record whose status is disabled claims nothing, so it can never win
+        over an active record for the same server.
+        """
+        rows = await asyncio.gather(
+            *(self._read_row(tool_id, repository) for tool_id, _ in servers)
+        )
+
+        # Mutable while building: a later duplicate widens the survivor's filter.
+        kept: List[_ServerToLoad] = []
+        winner_of: Dict[str, int] = {}  # server key -> index into `kept`
+        dropped: List[dict] = []
+
+        for (tool_id, names), (row, was_read, catalog_ms) in zip(servers, rows):
+            # A disabled row must never claim a server, or it would win the
+            # dedupe and then be skipped for its status — costing the user a
+            # server an *active* record reaches. Dev has exactly this shape:
+            # three catalog entries on Zoom's hosted server, of which
+            # `race_test_zoom_search_2` and `_3` are disabled and `zoom_hosted`
+            # is active. Left keyless, it keeps its own entry and `_load_server`
+            # reports `disabled` for it exactly as before.
+            key = (
+                _same_server_key(row)
+                if row is not None
+                and not is_disabled_status(getattr(row, "status", None))
+                else None
+            )
+            index = winner_of.get(key) if key else None
+            if index is None:
+                if key:
+                    winner_of[key] = len(kept)
+                kept.append(
+                    _ServerToLoad(tool_id, names, row, was_read, catalog_ms)
+                )
+                continue
+
+            winner = kept[index]
+            logger.warning(
+                "Two tool catalog entries reach the same MCP server (%s): "
+                "keeping '%s' and dropping '%s'. Loading both would offer every "
+                "one of that server's tools twice under one name, which no "
+                "agent can register.",
+                getattr(getattr(row, "mcp_config", None), "server_url", key),
+                winner.tool_id,
+                tool_id,
+            )
+            # None is "the whole server", which absorbs any subset.
+            winner.allowed_tool_names = (
+                None
+                if names is None or winner.allowed_tool_names is None
+                else winner.allowed_tool_names | names
+            )
+            dropped.append(
+                {
+                    "id": tool_id,
+                    "outcome": "duplicate",
+                    "catalogMs": catalog_ms,
+                    "totalMs": catalog_ms,
+                }
+            )
+
+        return kept, dropped
+
     async def load_external_tools(
         self,
         enabled_tool_ids: List[str],
@@ -920,7 +1134,10 @@ class ExternalMCPIntegration:
                 ``outcome`` is ``cached``, ``loaded``, ``recovered``,
                 ``consent`` (dropped: the user has not connected the
                 provider), ``dropped`` (pre-flight failed otherwise),
-                ``disabled`` (status is disabled), ``skipped`` or ``error``.
+                ``disabled`` (status is disabled), ``duplicate`` (another
+                entry already reaches this server's URL; these come last, so
+                the loaded servers keep their catalog order), ``skipped`` or
+                ``error``.
             consent_gated: When given, one ``ConsentGatedTool`` is appended
                 per server dropped for missing consent, sorted by display name
                 and tool id so anything rendered from it is deterministic.
@@ -938,7 +1155,12 @@ class ExternalMCPIntegration:
         # server (filter is None).
         name_filters = collect_tool_name_filters(enabled_tool_ids)
 
-        servers = list(name_filters.items())
+        # One entry per distinct server: several catalog records can front one
+        # URL, and loading it twice fails the whole agent (#1527). Reads every
+        # row, which `_load_server` is then handed so none is read twice.
+        servers, duplicate_timings = await self._distinct_servers(
+            list(name_filters.items()), repository
+        )
         # Parallel pre-flights append in completion order; sorted below.
         gated: List[ConsentGatedTool] = []
         if len(servers) > 1 and mcp_parallel_preflight_enabled():
@@ -951,28 +1173,30 @@ class ExternalMCPIntegration:
             results = await asyncio.gather(
                 *(
                     self._load_server(
-                        tool_id,
-                        names,
+                        server.tool_id,
+                        server.allowed_tool_names,
                         repository,
                         user_id,
                         auth_token,
                         off_loop=True,
                         consent_gated=gated,
+                        server=server,
                     )
-                    for tool_id, names in servers
+                    for server in servers
                 )
             )
         else:
             results = [
                 await self._load_server(
-                    tool_id,
-                    names,
+                    server.tool_id,
+                    server.allowed_tool_names,
                     repository,
                     user_id,
                     auth_token,
                     consent_gated=gated,
+                    server=server,
                 )
-                for tool_id, names in servers
+                for server in servers
             ]
 
         for client, timing in results:
@@ -980,6 +1204,10 @@ class ExternalMCPIntegration:
                 timings.append(timing)
             if client is not None:
                 clients.append(client)
+
+        if timings is not None:
+            # Last, so the servers that were loaded keep their catalog order.
+            timings.extend(duplicate_timings)
 
         if consent_gated is not None:
             consent_gated.extend(
@@ -1041,6 +1269,14 @@ class ExternalMCPIntegration:
             self._client_versions.pop(key, None)
             self._provider_for_client_id.pop(id(client), None)
             self._approval_names_for_client_id.pop(id(client), None)
+
+        # Their UI catalog entries point at the clients just dropped.
+        try:
+            from agents.main_agent.integrations.mcp_apps import get_ui_tool_catalog
+
+            get_ui_tool_catalog().forget_user(user_id)
+        except Exception:  # noqa: BLE001 - cache hygiene must not fail a disconnect
+            logger.debug("Could not clear UI catalog entries for user", exc_info=True)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for user {user_id}")

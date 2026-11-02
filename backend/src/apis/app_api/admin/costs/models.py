@@ -255,6 +255,13 @@ class SessionCallRow(BaseModel):
         None, alias="cachePrefixGapSeconds"
     )
     wasted_usd: float = Field(0.0, alias="wastedUsd")
+    # Set when this call's usage was estimated rather than reported by the
+    # provider — today only an interrupted turn's cut generation, whose
+    # terminal usage event never arrived. A field -> method map (which figure
+    # came from a native count, from the projection, from the streamed text),
+    # so a reader never mistakes these tokens or this cost for a measurement.
+    # Such a row's `cacheStatus` is `estimated` and its `wastedUsd` is zero.
+    usage_estimated: Optional[Dict[str, str]] = Field(None, alias="usageEstimated")
     # #756 — which Agent ran this call, and whether that changed from the call
     # before it. An `@`-mention (Marketplace D11) hands one turn to a different
     # Agent, which genuinely re-writes the prefix; without this a deliberate swap

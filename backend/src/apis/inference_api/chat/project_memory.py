@@ -186,3 +186,22 @@ def _shared_task_tools(project_id: str, user_id: str, email: str, name: str) -> 
     from agents.builtin_tools.project_shared_tasks import make_shared_task_tools
 
     return tuple(make_shared_task_tools(project_id, User(email=email, user_id=user_id, name=name, roles=[])))
+
+
+def build_project_files_tools(project_id: str, assistant_id: str, user: User) -> List[Any]:
+    """The harness's ``project_files``, closed over the project, its harness and the member.
+
+    Memoized like the other harness tools, for the same reason: built on every
+    harness turn before the agent-cache lookup. It closes over values the cache
+    key already carries (the harness ``assistant_id`` and the member's user id),
+    so it needs no key element of its own. Built whenever the turn is a
+    project's, with or without memory spaces: a project's Files exist either way.
+    """
+    return list(_project_files_tools(project_id, assistant_id, user.user_id, user.email, user.name))
+
+
+@functools.lru_cache(maxsize=512)
+def _project_files_tools(project_id: str, assistant_id: str, user_id: str, email: str, name: str) -> Tuple[Any, ...]:
+    from agents.builtin_tools.project_files_tool import make_project_files_tool
+
+    return (make_project_files_tool(project_id, assistant_id, User(email=email, user_id=user_id, name=name, roles=[])),)

@@ -40,6 +40,7 @@ import { AgentService } from '../services/agent.service';
 import {
   Agent,
   AgentBinding,
+  AgentModelConfig,
   BindableItem,
   BindableServerTool,
   ModelParamSpec,
@@ -239,6 +240,39 @@ export class AgentFormPage implements OnInit, OnDestroy {
    */
   readonly toolsOpen = signal(true);
   readonly selectedSkillRefs = signal<Set<string>>(new Set());
+  /**
+   * The model as stored on the loaded record. A share editor's palette lists only
+   * their own models, so the agent's model may be absent from it; saving must then
+   * keep the stored `provider` rather than drop it (the runtime routes on it).
+   */
+  private readonly storedModelConfig = signal<AgentModelConfig | null>(null);
+
+  /**
+   * How many of the agent's model, tools and skills are not in the current user's
+   * palettes — typically a share editor who lacks something the owner bound. They are
+   * still sent on save (the backend keeps bindings already on the record), so the
+   * note only explains why they aren't listed. Zero while palettes are loading.
+   */
+  readonly unavailableBindingCount = computed(() => {
+    if (this.loadingPalettes() || this.mode() !== 'edit' || this.isViewer()) return 0;
+    let count = 0;
+    const modelId = this.selectedModelId();
+    if (modelId && !this.models().some((m) => m.ref === modelId)) count++;
+    const toolRefs = new Set(this.tools().map((t) => t.ref));
+    for (const ref of this.selectedToolRefs()) if (!toolRefs.has(baseToolId(ref))) count++;
+    const skillRefs = new Set(this.skills().map((t) => t.ref));
+    for (const ref of this.selectedSkillRefs()) if (!skillRefs.has(ref)) count++;
+    return count;
+  });
+
+  /** The info line for {@link unavailableBindingCount}; empty when there is nothing to say. */
+  readonly unavailableBindingNote = computed(() => {
+    const n = this.unavailableBindingCount();
+    if (n === 0) return '';
+    return n === 1
+      ? "1 model, tool or skill on this agent isn't available to your account, so it isn't listed below. It stays on the agent when you save."
+      : `${n} models, tools or skills on this agent aren't available to your account, so they aren't listed below. They stay on the agent when you save.`;
+  });
 
   // ---- model params (governed by the selected model's supportedParams) --------
   private readonly selectedModel = computed<BindableItem | undefined>(() =>
@@ -540,6 +574,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     (agent.starters ?? []).forEach((s) => this.starters.push(new FormControl(s, Validators.required)));
 
     this.selectedModelId.set(agent.modelConfig?.modelId ?? null);
+    this.storedModelConfig.set(agent.modelConfig ?? null);
     this.modelParams.set(
       stripHiddenParams(
         (agent.modelConfig?.params ?? {}) as Record<string, number | string>,
@@ -930,7 +965,12 @@ export class AgentFormPage implements OnInit, OnDestroy {
     // Responses API, not Bedrock ConverseStream); without it the binding resolves
     // to provider=None and a Mantle model fails with an invalid-model-identifier
     // error. Mirrors what the normal chat path sends with every request.
-    const provider = this.selectedModel()?.meta?.['provider'] as string | undefined;
+    // A model outside the user's palette (a share editor without the owner's model)
+    // keeps the provider stored on the record.
+    const stored = this.storedModelConfig();
+    const provider =
+      (this.selectedModel()?.meta?.['provider'] as string | undefined) ??
+      (stored?.modelId === this.selectedModelId() ? stored?.provider : undefined);
     const payload = {
       name: v.name,
       description: v.description,

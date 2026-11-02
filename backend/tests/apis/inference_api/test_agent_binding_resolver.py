@@ -75,7 +75,7 @@ def _patch_skill_access(monkeypatch, allowed, *, enabled=True) -> AsyncMock:
     """
     monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: enabled)
     predicate = AsyncMock(
-        side_effect=lambda invoker, refs, owner_id: (
+        side_effect=lambda invoker, refs, owner_id, adders=None: (
             set(refs) if allowed is True else {r for r in refs if r in allowed}
         )
     )
@@ -485,3 +485,34 @@ class TestRetiredMemoryBinding:
         # unbound Agent.
         assert plan.skills.skill_ids == []
         assert plan.tools.tool_ids == [] and plan.tools.owns_toolset is False
+
+
+class TestProjectSkillAdders:
+    """A project harness hands each skill binding's recorded adder to the predicate
+    (shared-projects §9.6, clause 4); every other Agent hands none, so the adder
+    clause can only ever widen a project's skills."""
+
+    @pytest.mark.asyncio
+    async def test_a_project_harness_passes_its_adders(self, monkeypatch):
+        predicate = _patch_skill_access(monkeypatch, True)
+        harness = _assistant(bindings=[
+            AgentBinding(kind="skill", ref="erins_rubric", config={"version": 1, "addedBy": "u-erin"}),
+            AgentBinding(kind="skill", ref="old_skill", config={"version": 2}),
+        ])
+        harness.kind = "project"
+
+        await resolve_agent_invocation(harness, _user(), degrade=True)
+
+        predicate.assert_awaited_once()
+        assert predicate.await_args.kwargs == {"adders": {"erins_rubric": "u-erin"}}
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_agent_passes_no_adders(self, monkeypatch):
+        predicate = _patch_skill_access(monkeypatch, True)
+        agent = _assistant(bindings=[
+            AgentBinding(kind="skill", ref="erins_rubric", config={"addedBy": "u-erin"}),
+        ])
+
+        await resolve_agent_invocation(agent, _user())
+
+        assert predicate.await_args.kwargs == {"adders": {}}

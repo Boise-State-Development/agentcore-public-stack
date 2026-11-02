@@ -38,6 +38,7 @@ class ToolFilter:
         """
         self.registry = registry
         self._external_mcp_tools: set[str] = set()
+        self._gateway_tools: set[str] = set()
 
     def set_external_mcp_tools(self, tool_ids: List[str]) -> None:
         """
@@ -52,6 +53,24 @@ class ToolFilter:
         self._external_mcp_tools = set(tool_ids)
         if tool_ids:
             logger.info(f"Registered {len(tool_ids)} external MCP tool IDs")
+
+    def set_gateway_tools(self, tool_ids: List[str]) -> None:
+        """
+        Register catalog tool IDs whose protocol is 'mcp' (AgentCore Gateway).
+
+        A Gateway tool is otherwise recognized only by its ``gateway_`` id
+        prefix, but the admin tool form lets an admin pick any id for a
+        Gateway target (the Web Search preset is ``agentcore_web_search``).
+        Without this, such a tool is granted, listed and enabled, and the
+        agent silently builds without it.
+
+        Args:
+            tool_ids: Base catalog IDs with protocol='mcp'
+        """
+        self._gateway_tools = set(tool_ids)
+
+    def _is_gateway(self, base: str) -> bool:
+        return base.startswith(Prefixes.GATEWAY_TOOL) or base in self._gateway_tools
 
     def filter_tools(
         self,
@@ -90,7 +109,7 @@ class ToolFilter:
                 if id(tool_obj) not in seen_local:
                     seen_local.add(id(tool_obj))
                     filtered_tools.append(tool_obj)
-            elif base.startswith(Prefixes.GATEWAY_TOOL):
+            elif self._is_gateway(base):
                 # Gateway MCP tool - collect for separate handling
                 gateway_tool_ids.append(tool_id)
             elif base in self._external_mcp_tools:
@@ -143,7 +162,7 @@ class ToolFilter:
                 if id(tool_obj) not in seen_local:
                     seen_local.add(id(tool_obj))
                     filtered_tools.append(tool_obj)
-            elif base.startswith(Prefixes.GATEWAY_TOOL):
+            elif self._is_gateway(base):
                 # Gateway MCP tool (AgentCore Gateway)
                 gateway_tool_ids.append(tool_id)
             elif base in self._external_mcp_tools:
@@ -195,7 +214,7 @@ class ToolFilter:
             base = base_tool_id(tool_id)
             if self.registry.has_tool(base):
                 local_count += 1
-            elif base.startswith(Prefixes.GATEWAY_TOOL):
+            elif self._is_gateway(base):
                 gateway_count += 1
             elif base in self._external_mcp_tools:
                 external_mcp_count += 1

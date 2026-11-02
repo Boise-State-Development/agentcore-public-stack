@@ -100,14 +100,24 @@ TAIL_ALLOWED = frozenset(
         "tool_approval_required",
         "user_question_required",
         "browser_login_required",
+        "client_tool_call",
         "metadata",
         "metadata_summary",
         "compaction",
         "session_title",
         "tool_group_summary",
+        # `verify_sources` verdicts drain beside the tool summaries, including
+        # the one flush in the `done` branch, so a turn that verified anything
+        # lands this after the final message_stop.
+        "source_provenance",
         "agent_status",
         "artifact",
         "ui_resource",
+        # Drained on the same pass as the tool-batch summaries, so like them
+        # it can land in the tail when the tool ran in the final batch
+        # (docs/specs/structured-extraction.md §9). `source_provenance` is
+        # added by the PR that dev-validates it, which owns that line.
+        "document_extraction",
         "event",
         "message",
         "result",
@@ -151,6 +161,7 @@ INTERRUPT_EVENTS = frozenset(
         "tool_approval_required",
         "user_question_required",
         "browser_login_required",
+        "client_tool_call",
     }
 )
 
@@ -315,6 +326,8 @@ class AppApiTransport:
             follow_redirects=False,
         )
         self._csrf: Optional[str] = None
+        #: The signed-in user as ``GET /auth/session`` reports it (``user_id``, ``email``…).
+        self.user: Dict[str, Any] = {}
 
     # -- auth -------------------------------------------------------------
 
@@ -375,7 +388,23 @@ class AppApiTransport:
         self._csrf = body.get("csrf_token") or body.get("csrfToken")
         if not self._csrf:
             raise RuntimeError("GET /auth/session returned no csrf_token")
-        logger.info("signed in (cognito) as %s", (body.get("user") or {}).get("email", "?"))
+        # The session payload is flat (user_id, email, name, roles, csrf_token).
+        self.user = {k: body.get(k) for k in ("user_id", "email", "name", "roles") if k in body}
+        logger.info("signed in (cognito) as %s", self.user.get("email") or "?")
+
+    async def enable_headless_grant(self) -> Dict[str, Any]:
+        """Pin a headless grant from this live session (``POST /runs/grant``).
+
+        The eval harness signs in fresh on every run and renews its grant this
+        way, so the grant's 30-day login-recency window never lapses on an
+        account nobody logs into by hand.
+        """
+        r = await self._client.post("/runs/grant", headers=self._headers())
+        if r.status_code == 404:
+            raise RuntimeError("POST /runs/grant -> 404: scheduled runs are off in this environment")
+        if r.status_code != 200:
+            raise RuntimeError(f"POST /runs/grant -> {r.status_code}: {r.text[:200]}")
+        return r.json()
 
     def _headers(self) -> Dict[str, str]:
         h = {"Content-Type": "application/json"}
@@ -628,7 +657,9 @@ def _pick_username_field(form: _HtmlForm) -> str:
 # ============================================================
 
 
-RESUME_HEAD_EXTRA = frozenset({"tool_use", "tool_result", "tool_error", "message", "metadata", "tool_group_summary", "ui_resource"})
+RESUME_HEAD_EXTRA = frozenset(
+    {"tool_use", "tool_result", "tool_error", "message", "metadata", "tool_group_summary", "ui_resource", "source_provenance"}
+)
 
 
 def assert_frame_contract(turn: TurnResult, *, allow_interrupt: bool = False, resume: bool = False) -> List[str]:
@@ -725,10 +756,27 @@ def _restore_check(messages_body: Dict[str, Any], user_prompt: str, assistant_te
 
 PDF_TOKEN = "SMOKE-PDF-TOKEN-7731"
 
+#: The one sentence in the source-provenance fixture PDF. Carries an amount the
+#: value check can match literally, and nothing else a stray number could match.
+PROVENANCE_SENTENCE = "The total approved budget is $487,500 for this award."
+PROVENANCE_AMOUNT = "$487,500"
+#: An amount deliberately absent from the document. The point of the row is that
+#: this one comes back quote_unsupported while carrying a real quote.
+PROVENANCE_FABRICATED = "$912,000"
 
-def minimal_pdf(text: str) -> bytes:
-    """A valid single-page PDF whose only content is ``text`` (Helvetica 24pt)."""
-    stream = f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode("latin-1")
+
+def minimal_pdf(text: str, *, font_size: int = 24) -> bytes:
+    """A valid single-page PDF whose only content is ``text`` (Helvetica).
+
+    ``font_size`` defaults to 24, which is what the token rows have always
+    used. Pass something smaller for anything sentence-length: text wider than
+    the 612pt MediaBox runs off the page, and ``get_text_bounded`` clips to the
+    page box, so the text layer comes back **silently truncated** — a 53-char
+    sentence at 24pt extracts as its first 49 characters. A row asserting on
+    that text then fails for a reason that has nothing to do with what it is
+    testing.
+    """
+    stream = f"BT /F1 {font_size} Tf 72 700 Td ({text}) Tj ET".encode("latin-1")
     objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -904,6 +952,94 @@ async def row_tool_turn(ctx: Context) -> RowResult:
     return RowResult("tool_turn", "PASS", f"tools used: {names}; {len(turn.all('tool_result'))} result(s)", warnings, {"tools": names})
 
 
+EMPTY_FINAL_PROMPTS = (
+    "First write one short sentence with your own estimate of 1234*5678. Then call the {tool} tool to "
+    "check it. When the tool result comes back your turn is already finished: reply with an empty "
+    "message containing no text at all.",
+    "Call the {tool} tool to compute 17*23. Write no text at all, neither before nor after the tool "
+    "call. After the tool result arrives, end your turn immediately without writing anything.",
+)
+
+
+def _calls_from_frames(turn: TurnResult) -> List[Dict[str, Any]]:
+    """One entry per model call: each ``message_stop`` and the first usage-bearing
+    ``metadata`` after it.
+
+    Stops count the calls, not starts: Bedrock sends no ``messageStart`` for an
+    empty response, only ``messageStop`` + ``metadata``. The coordinator's
+    turn-level ``metadata`` before ``done`` repeats the last call's usage, and
+    pairing only the first one after each stop leaves it out.
+    """
+    calls: List[Dict[str, Any]] = []
+    awaiting: Optional[Dict[str, Any]] = None
+    for f in turn.frames:
+        if f.name == "message_stop":
+            awaiting = {"usage": None}
+            calls.append(awaiting)
+        elif f.name == "metadata" and awaiting is not None and f.data.get("usage"):
+            awaiting["usage"] = f.data["usage"]
+            awaiting = None
+    return calls
+
+
+async def row_empty_final_call(ctx: Context) -> RowResult:
+    """A model call that streams no ``message_start`` still gets its own ``C#`` row.
+
+    Before PR #1785 the empty call's usage overwrote the previous call's slot:
+    that call went unbilled and the session showed one row fewer than calls.
+    """
+    tool = ctx.args.tool
+    sid = ""
+    turn: Optional[TurnResult] = None
+    calls: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    for attempt, template in enumerate(EMPTY_FINAL_PROMPTS, start=1):
+        sid = ctx.new_session()
+        turn = await ctx.transport.stream_turn(ctx.base_payload(sid, template.format(tool=tool), enabled_tools=[tool]))
+        ctx.note(turn)
+        warnings = assert_frame_contract(turn)
+        calls = _calls_from_frames(turn)
+        if len(calls) > len(turn.all("message_start")):
+            break
+    else:
+        return RowResult(
+            "empty_final_call",
+            "OBSERVED",
+            f"the model wrote text on all {len(EMPTY_FINAL_PROMPTS)} attempts; no empty call to meter",
+            warnings,
+        )
+
+    body: Optional[Dict[str, Any]] = None
+    code = 0
+    for _ in range(8):
+        code, body = await ctx.transport.get_calls(sid)
+        if body and len(body.get("calls") or []) >= len(calls):
+            break
+        await asyncio.sleep(1.5)
+    if code in (401, 403):
+        raise RowSkip(f"cost rows unreadable (admin endpoint -> {code}); run as system_admin")
+    if not body:
+        raise RowSkip(f"cost anatomy unavailable (HTTP {code})")
+
+    rows = sorted(body.get("calls") or [], key=lambda r: r.get("messageId") or 0)
+    if len(rows) != len(calls):
+        raise RowFailure(
+            f"{len(calls)} model calls streamed (one with no message_start) but {len(rows)} C# rows: "
+            "the unannounced call's usage merged into a neighbour's row"
+        )
+    for idx, (call, row) in enumerate(zip(calls, rows)):
+        usage = call["usage"] or {}
+        streamed = (usage.get("inputTokens"), usage.get("outputTokens"))
+        recorded = (row.get("inputTokens"), row.get("outputTokens"))
+        if call["usage"] and streamed != recorded:
+            raise RowFailure(f"call {idx} streamed in/out {streamed} but its row (messageId {row.get('messageId')}) holds {recorded}")
+    ids = [r.get("messageId") for r in rows]
+    if len(set(ids)) != len(ids):
+        raise RowFailure(f"rows share message ids: {ids}")
+    data = {"attempt": attempt, "calls": len(calls), "messageIds": ids, "outputTokens": [r.get("outputTokens") for r in rows]}
+    return RowResult("empty_final_call", "PASS", f"{len(calls)} calls -> {len(rows)} rows, each with its own usage (ids {ids})", warnings, data)
+
+
 ASK_PROMPT = (
     "Do not answer this message directly. Your first and only action is to call the ask_user_question "
     "tool once, with a single question: header 'Color', question 'Which color do you prefer?', options "
@@ -970,6 +1106,82 @@ async def row_ask_user_question(ctx: Context) -> RowResult:
         f"paused with {len(questions)} question(s), resumed with {pick!r}, answer: {resume.final_text[:40]!r}",
         warnings,
         {"options": options},
+    )
+
+
+CLIENT_TOOL_PROMPT = (
+    "Use the local_echo_marker tool exactly once, with marker set to 'smoke-7731', "
+    "and then tell me verbatim what it returned."
+)
+
+
+async def row_client_tool_call(ctx: Context) -> RowResult:
+    """The terminal client's protocol: declare a tool, the model calls it, the
+    turn pauses on `client_tool_call`, the client resumes with the output.
+
+    The declared tool here is a stub nobody runs — this script *is* the client,
+    so it answers the interrupt itself. What this proves is the server half:
+    the spec reaches toolConfig, the pause lands after the final message_stop,
+    and the resume rebuilds the tool from the snapshot and returns our output
+    as the tool result (the answer should echo it).
+    """
+    spec = {
+        "name": "echo_marker",
+        "description": "Runs on the user's machine and returns the marker string it was given, prefixed with OK.",
+        "inputSchema": {"type": "object", "properties": {"marker": {"type": "string"}}, "required": ["marker"]},
+    }
+    warnings: List[str] = []
+    turn: Optional[TurnResult] = None
+    call: Optional[Frame] = None
+    sid = ""
+    for attempt in range(1, 4):
+        sid = ctx.new_session()
+        turn = await ctx.transport.stream_turn(ctx.base_payload(sid, CLIENT_TOOL_PROMPT, client_tools=[spec]))
+        ctx.note(turn)
+        warnings += assert_frame_contract(turn, allow_interrupt=True)
+        call = turn.first("client_tool_call")
+        if call is not None:
+            if attempt > 1:
+                warnings.append(f"model only called the client tool on attempt {attempt}")
+            break
+    assert turn is not None
+    if call is None:
+        raise RowFailure(f"no client_tool_call frame in 3 attempts; frames={sorted(set(turn.names))}; answer: {turn.final_text[:60]!r}")
+    names = turn.names
+    if names.index("client_tool_call") < len(names) - 1 - names[::-1].index("message_stop"):
+        raise RowFailure("client_tool_call arrived before the final message_stop")
+    if call.data.get("toolName") != "echo_marker":
+        raise RowFailure(f"client_tool_call names {call.data.get('toolName')!r}, expected the bare declared name 'echo_marker'")
+    marker = (call.data.get("arguments") or {}).get("marker", "")
+    interrupt_id = call.data.get("interruptId")
+    if not interrupt_id:
+        raise RowFailure(f"client_tool_call lacks interruptId: {call.data}")
+
+    resume = await ctx.transport.stream_turn(
+        {
+            "session_id": sid,
+            "message": "",
+            "enabled_tools": [],
+            "client_tools": [spec],
+            **({"model_id": ctx.args.model_id} if ctx.args.model_id else {}),
+            "interrupt_responses": [{"interruptId": interrupt_id, "response": {"output": f"OK {marker}", "isError": False}}],
+        }
+    )
+    ctx.note(resume)
+    warnings += assert_frame_contract(resume, resume=True)
+    if resume.all("client_tool_call"):
+        raise RowFailure("the resumed turn re-raised client_tool_call (the tool was not rebuilt from the snapshot, or the answer was rejected)")
+    if "7731" not in resume.final_text:
+        warnings.append(f"resumed answer did not echo the marker: {resume.final_text[:60]!r}")
+    code, body = await ctx.transport.get_messages(sid)
+    if code == 200 and body is not None and body.get("pendingInterrupts"):
+        raise RowFailure("pendingInterrupts still non-empty after a successful resume")
+    return RowResult(
+        "client_tool_call_resume",
+        "PASS",
+        f"paused on echo_marker(marker={marker!r}), resumed; answer: {resume.final_text[:40]!r}",
+        warnings,
+        {},
     )
 
 
@@ -1137,6 +1349,122 @@ async def row_attach_pdf(ctx: Context) -> RowResult:
     return RowResult("attach_pdf", "PASS", f"inline PDF accepted, answer streamed, attachment restored; tools={_tools_used(turn)}", warnings)
 
 
+
+async def _register_upload(
+    user_id: str, session_id: str, filename: str, mime_type: str, data: bytes
+) -> str:
+    """Register *data* as a READY session file and return its upload_id.
+
+    A row that needs ``document_read`` / ``verify_sources`` must send a real
+    upload, not base64 ``files``: see ``apis/shared/evals/fixtures.py``, which
+    the eval harness shares. An environment with nowhere to store it skips the
+    row rather than failing it.
+    """
+    from apis.shared.evals.fixtures import FixtureError, register_upload
+
+    try:
+        return await register_upload(user_id, session_id, filename, mime_type, data)
+    except FixtureError as exc:
+        raise RowSkip(str(exc)) from exc
+
+
+async def row_source_provenance(ctx: Context) -> RowResult:
+    """`verify_sources` answers both questions and emits `source_provenance`.
+
+    The row the feature exists for is `quote_unsupported`: a real sentence from
+    the document carrying a value that is not in it. A badge keyed on "did we
+    find the quote" would certify that, so the row asserts the two states
+    differ while both quotes are the same located sentence.
+
+    The prompt is explicit because nothing in the system prompt asks the model
+    to verify before asserting (docs/specs/source-provenance-verification.md D6
+    names that consequence). So this proves the machinery, not the coverage: a
+    turn where the model volunteers the call is not what is being measured here.
+    """
+    if not ctx.args.with_attachments:
+        raise RowSkip("pass --with-attachments")
+    sid = ctx.new_session()
+    prompt = (
+        "The attached smoke.pdf contains exactly one sentence. Do precisely this and nothing else:\n"
+        "1. Call document_read with no arguments to get smoke.pdf's upload_id.\n"
+        "2. Call verify_sources ONCE with that upload_id and exactly two claims:\n"
+        f"   - id \"real\", value \"{PROVENANCE_AMOUNT}\", quote set to that sentence copied verbatim.\n"
+        f"   - id \"bogus\", value \"{PROVENANCE_FABRICATED}\", quote set to the SAME sentence verbatim.\n"
+        "3. Reply with just: real=<state> bogus=<state>"
+    )
+    # A real upload, not base64: see _register_upload for why the document
+    # tools do not exist on an inline-base64 turn.
+    upload_id = await _register_upload(
+        ctx.args.user_id or "", sid, "smoke.pdf", "application/pdf", minimal_pdf(PROVENANCE_SENTENCE, font_size=11)
+    )
+    turn = await ctx.transport.stream_turn(
+        ctx.base_payload(sid, prompt, file_upload_ids=[upload_id], enabled_tools=None)
+    )
+    ctx.note(turn)
+    warnings = assert_frame_contract(turn)
+
+    frames = turn.all("source_provenance")
+    if not frames:
+        raise RowFailure(
+            "no source_provenance frame. Is SOURCE_PROVENANCE_ENABLED=true on the AgentCore "
+            f"Runtime, and did the model call verify_sources? tools={_tools_used(turn)}; "
+            f"answer: {turn.final_text[:80]!r}"
+        )
+
+    claims = {c.get("id"): c for f in frames for c in (f.data.get("claims") or [])}
+    missing = {"real", "bogus"} - set(claims)
+    if missing:
+        raise RowFailure(f"frame carried claims {sorted(claims)}, missing {sorted(missing)}")
+
+    real, bogus = claims["real"], claims["bogus"]
+    if real.get("state") != "supported":
+        raise RowFailure(f"the document's own amount read {real.get('state')!r} ({real.get('method')!r}), not supported")
+    if bogus.get("state") != "quote_unsupported":
+        raise RowFailure(
+            f"a fabricated amount on a real quote read {bogus.get('state')!r} "
+            f"({bogus.get('method')!r}), not quote_unsupported — this is the state the feature exists for"
+        )
+    # Both quotes are the same located sentence, so both must carry a locator.
+    # If only the supported one did, the badge and the warning would disagree
+    # about whether the passage was found.
+    for name, claim in (("real", real), ("bogus", bogus)):
+        locator = claim.get("locator") or {}
+        if locator.get("kind") != "page" or locator.get("value") != 1:
+            raise RowFailure(f"{name} locator was {locator!r}, expected page 1")
+        if locator.get("precision") != "measured":
+            raise RowFailure(
+                f"{name} locator precision was {locator.get('precision')!r}; pypdfium2 measures "
+                "every page boundary, so a hedge here means the precision is being inferred"
+            )
+
+    # The frame never re-streams, so a reload reads the SRCV# rows instead.
+    code, body = await ctx.transport.get_messages(sid)
+    if code != 200 or body is None:
+        raise RowFailure(f"GET /messages -> {code}")
+    replayed = {
+        c.get("id"): c
+        for row in (body.get("sourceProvenance") or [])
+        for c in (row.get("claims") or [])
+    }
+    if not replayed:
+        raise RowFailure("GET /messages returned no sourceProvenance — the verdicts would vanish on reload")
+    for name, expected in (("real", "supported"), ("bogus", "quote_unsupported")):
+        if (replayed.get(name) or {}).get("state") != expected:
+            raise RowFailure(f"replayed {name} was {(replayed.get(name) or {}).get('state')!r}, expected {expected}")
+
+    answer = turn.final_text.lower()
+    if "supported" not in answer:
+        warnings.append(f"model did not read the states back: {turn.final_text[:60]!r}")
+    return RowResult(
+        "source_provenance",
+        "PASS",
+        f"real={real.get('method')} bogus={bogus.get('method')}, both located p.1 measured, "
+        f"replayed on reload; tools={_tools_used(turn)}",
+        warnings,
+        {"real": real, "bogus": bogus},
+    )
+
+
 async def row_attach_csv(ctx: Context) -> RowResult:
     if not ctx.args.with_attachments:
         raise RowSkip("pass --with-attachments")
@@ -1225,12 +1553,15 @@ ROWS: List[Tuple[str, Callable[[Context], Awaitable[Any]]]] = [
     ("second_turn_cache", row_second_turn_cache),
     ("restore_after_reload", row_restore),
     ("tool_turn", row_tool_turn),
+    ("empty_final_call", row_empty_final_call),
     ("ask_user_question_resume", row_ask_user_question),
     ("tool_approval_resume", row_tool_approval),
+    ("client_tool_call_resume", row_client_tool_call),
     ("duplicate_send_409+stop_mid_answer", row_duplicate_and_stop),
     ("preview_session", row_preview_session),
     ("steer_mid_turn", row_steer_observed),
     ("attach_pdf", row_attach_pdf),
+    ("source_provenance", row_source_provenance),
     ("attach_csv", row_attach_csv),
     ("skill_invoke", row_skill_invoke),
     ("kb_agent_first_turn", row_kb_agent),
@@ -1287,6 +1618,20 @@ def resolve_runtime_env(prefix: str, region: str) -> None:
         "DYNAMODB_ASSISTANTS_TABLE_NAME": param("rag/assistants-table-name", f"{prefix}-assistants"),
         "DYNAMODB_USER_SETTINGS_TABLE_NAME": param("settings/user-settings-table-name", f"{prefix}-user-settings"),
         "AGENTCORE_MEMORY_ID": param("inference-api/memory-id", ""),
+        # Session files, for rows that need a real upload rather than inline
+        # base64 (`_register_upload`). Both are `{prefix}-user-file-uploads`,
+        # the bucket suffixed with the account — taken from app-api's live task
+        # definition, not from a bucket-name search: this account also holds an
+        # unrelated `*-user-files-*` bucket from another stack.
+        "DYNAMODB_USER_FILES_TABLE_NAME": f"{prefix}-user-file-uploads",
+        "S3_USER_FILES_BUCKET_NAME": f"{prefix}-user-file-uploads-{account}",
+        # Runtime-direct mode reads `GET /messages` in-process, standing in for
+        # app-api, so the in-process reader needs app-api's flags too. Only the
+        # *read* is affected: the `source_provenance` frame comes from the
+        # deployed Runtime, so a deployment with the feature genuinely off fails
+        # the frame assertion first and this cannot mask it. `setdefault`, so an
+        # operator who exports it wins.
+        "SOURCE_PROVENANCE_ENABLED": "true",
     }
     for k, v in env.items():
         os.environ.setdefault(k, v)

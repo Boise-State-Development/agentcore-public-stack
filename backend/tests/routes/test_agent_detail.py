@@ -447,3 +447,55 @@ class TestDetailReadServesTheSnapshot:
 
         assert resp.status_code == 503
         assert "published version could not be loaded" in resp.json()["detail"]
+
+
+# ── bound skills (the `/` menu's source in an Agent conversation) ────────────────────
+class TestAgentSkillsRoute:
+    def _call(self, app, *, skills=None, exists=True, access=True):
+        from apis.shared.assistants.models import AgentBoundSkill
+
+        agent = _make_assistant(bindings=[AgentBinding(kind="skill", ref="skl_private")])
+        with patch(
+            f"{ROUTES_MODULE}.assistant_exists", new_callable=AsyncMock, return_value=exists
+        ), patch(
+            f"{ROUTES_MODULE}.get_assistant_with_access_check",
+            new_callable=AsyncMock,
+            return_value=(agent, "viewer") if access else (None, None),
+        ), patch(
+            f"{ROUTES_MODULE}.resolve_invocation_agent",
+            new_callable=AsyncMock,
+            return_value=(agent, None),
+        ) as resolve_version, patch(
+            f"{ROUTES_MODULE}.resolve_bound_skills",
+            new_callable=AsyncMock,
+            return_value=skills if skills is not None else [
+                AgentBoundSkill(skill_id="skl_private", display_name="Grading Rubric",
+                                description="Grade against the rubric", slug="skl-private"),
+            ],
+        ) as resolve:
+            response = TestClient(app).get("/agents/ast-001/skills")
+        return response, resolve, resolve_version
+
+    def test_lists_the_resolved_skills_with_the_servers_slug(self, app, make_user, _flags_on):
+        mock_auth_user(app, make_user())
+        resp, resolve, resolve_version = self._call(app)
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "agentId": "ast-001",
+            "skills": [{"skillId": "skl_private", "displayName": "Grading Rubric",
+                        "description": "Grade against the rubric", "slug": "skl-private"}],
+        }
+        # Resolved against the configuration that runs for this caller, by the viewer.
+        resolve_version.assert_awaited_once()
+        assert resolve.await_args.args[1].user_id == make_user().user_id
+
+    def test_access_gated_like_the_detail_read(self, app, make_user, _flags_on):
+        mock_auth_user(app, make_user())
+        assert self._call(app, exists=False)[0].status_code == 404
+        assert self._call(app, access=False)[0].status_code == 403
+
+    def test_404_while_agents_are_off(self, app, make_user, monkeypatch):
+        monkeypatch.setenv("AGENTS_API_ENABLED", "false")
+        mock_auth_user(app, make_user())
+        assert self._call(app)[0].status_code == 404

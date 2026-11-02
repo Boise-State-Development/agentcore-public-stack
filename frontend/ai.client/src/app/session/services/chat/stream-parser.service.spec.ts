@@ -390,6 +390,19 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
     expect(chatState.lastTurnContinuable()).toBe(true);
   });
 
+  it('marks a refused resume so the post-resume reload is skipped', () => {
+    service.parseEventSourceMessage('s1', 'stream_error', {
+      type: 'stream_error',
+      code: 'bad_request',
+      message: 'Send your message again.',
+      recoverable: false,
+      metadata: { error_kind: 'resume_unavailable', reason: 'expired' },
+    });
+
+    expect(chatState.takeResumeUnavailable('s1')).toBe(true);
+    expect(chatState.lastTurnContinuable()).toBe(false);
+  });
+
   it('does not mark continuable for a non-max_tokens stream_error', () => {
     service.parseEventSourceMessage('s1', 'stream_error', {
       type: 'stream_error',

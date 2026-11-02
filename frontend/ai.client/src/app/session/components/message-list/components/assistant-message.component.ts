@@ -3,6 +3,9 @@ import { Message, ContentBlock, ToolUseData } from '../../../services/models/mes
 import { ToolUseComponent } from './tool-use';
 import { ToolRailComponent } from './tool-rail';
 import { ToolCallGroup, ToolCallDisplay, ToolCallBatch } from './tool-rail/tool-rail.model';
+import { SourceProvenanceComponent } from './source-provenance/source-provenance.component';
+import { FEATURES } from '../../../../services/features';
+import type { SourceProvenanceClaim } from '../../../../shared/utils/stream-parser';
 import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
@@ -121,10 +124,13 @@ interface DisplayBlock {
     | 'mcp_app_frame'
     | 'reasoningContent'
     | 'oauth_required'
-    | 'browser_page';
+    | 'browser_page'
+    | 'source_provenance';
   data?: ContentBlock;
   // For browser page cards: where a rail's browse_web calls left the browser.
   browserPage?: BrowserPageSummary;
+  // For source-provenance panels: one `verify_sources` call's verdicts.
+  provenance?: readonly SourceProvenanceClaim[];
   // For tool groups (inline rail)
   group?: ToolCallGroup;
   // For promoted visuals
@@ -162,6 +168,7 @@ interface DisplayBlock {
     OAuthConsentPromptComponent,
     McpAppFrameComponent,
     BrowserPageCardComponent,
+    SourceProvenanceComponent,
   ],
   template: `
     <div class="block-container">
@@ -239,6 +246,17 @@ interface DisplayBlock {
                 [inputComplete]="block.inputComplete ?? false"
                 [toolInput]="block.toolInput ?? {}"
                 [toolName]="block.toolName ?? ''"
+              />
+            </div>
+          }
+          @case ('source_provenance') {
+            <div
+              class="message-block"
+              [style.animation-delay]="$index * 0.1 + 's'"
+            >
+              <app-source-provenance
+                class="flex w-full justify-start"
+                [claims]="block.provenance!"
               />
             </div>
           }
@@ -352,6 +370,7 @@ export class AssistantMessageComponent {
   private mcpAppState = inject(McpAppStateService);
   private chatState = inject(ChatStateService);
   private toolInsight = inject(ToolInsightService);
+  private readonly features = inject(FEATURES);
 
   /**
    * Transforms content blocks into display blocks.
@@ -391,6 +410,8 @@ export class AssistantMessageComponent {
     // Read once per recomputation, not per call: these are signal reads, and
     // the computed must re-run when a late-arriving summary lands.
     const insights = this.toolInsight;
+    // Compile-time switch: while off, no panel is built and nothing is read.
+    const provenanceEnabled = this.features.sourceProvenance;
 
     /**
      * Segment a rail's calls by the backend batch that produced them.
@@ -447,6 +468,19 @@ export class AssistantMessageComponent {
       if (browserPage) {
         lastBrowserPage = browserPage;
         result.push({ type: 'browser_page', browserPage });
+      }
+      // Provenance verdicts go UNDER the rail, not inside it: the rail is
+      // collapsed by default and says what the agent did, while these say
+      // whether the answer's values are in the source. A `quote_unsupported`
+      // folded into a collapsed rail is a warning nobody sees.
+      // One panel per verifying call, so two documents never merge.
+      if (provenanceEnabled) {
+        for (const call of calls) {
+          const verdicts = insights.provenanceFor(sessionId, call.id);
+          if (verdicts?.length) {
+            result.push({ type: 'source_provenance', provenance: verdicts });
+          }
+        }
       }
     };
 

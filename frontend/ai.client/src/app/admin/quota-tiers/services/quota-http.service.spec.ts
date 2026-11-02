@@ -67,6 +67,38 @@ describe('QuotaHttpService', () => {
     req.flush(mockAssignments);
   });
 
+  it('repairs legacy +00:00Z timestamps in override responses', () => {
+    let result: any[] = [];
+    service.getOverrides().subscribe(o => (result = o));
+
+    httpMock.expectOne('http://localhost:8000/admin/quota/overrides?active_only=false').flush([
+      {
+        overrideId: 'o-1',
+        createdAt: '2026-07-27T05:09:55.853557+00:00Z',
+        validFrom: '2026-07-01T00:00:00.000Z',
+        reason: 'ends with +00:00Z but is not a timestamp',
+      },
+    ]);
+
+    expect(result[0].createdAt).toBe('2026-07-27T05:09:55.853557Z');
+    expect(result[0].validFrom).toBe('2026-07-01T00:00:00.000Z');
+    expect(result[0].reason).toBe('ends with +00:00Z but is not a timestamp');
+  });
+
+  it('repairs legacy timestamps nested in user quota info', () => {
+    let info: any;
+    service.getUserQuotaInfo('user1').subscribe(i => (info = i));
+
+    httpMock.expectOne('http://localhost:8000/admin/quota/users/user1').flush({
+      userId: 'user1',
+      lastBlockTime: '2026-07-27T05:09:55+00:00Z',
+      tier: { createdAt: '2026-07-27T05:09:55.1+00:00Z' },
+    });
+
+    expect(info.lastBlockTime).toBe('2026-07-27T05:09:55Z');
+    expect(info.tier.createdAt).toBe('2026-07-27T05:09:55.1Z');
+  });
+
   it('should get user quota info', () => {
     const mockInfo = { userId: 'user1', quotaUsed: 100 };
 

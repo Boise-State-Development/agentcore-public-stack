@@ -162,6 +162,7 @@ export function trajectoryFillClass(status: CacheStatus | null | undefined): str
       return 'fill-state-danger-500';
     case 'partial_miss':
       return 'fill-category-accent-partial-miss-500';
+    case 'estimated':
     case 'uncached':
     default:
       return 'fill-gray-400 dark:fill-gray-500';
@@ -175,6 +176,7 @@ export const TRAJECTORY_LEGEND: ReadonlyArray<{ status: CacheStatus; label: stri
   { status: 'miss_avoidable', label: 'Avoidable miss' },
   { status: 'miss_ttl_expired', label: 'TTL miss' },
   { status: 'uncached', label: 'Uncached' },
+  { status: 'estimated', label: 'Not measured' },
 ];
 
 /** Only the legend entries that actually appear in the data. */

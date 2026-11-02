@@ -15,6 +15,7 @@ standard natively and skills no longer bind tools.
 
 from .strands_mapping import (
     build_skills_plugin,
+    SkillsRuntime,
     build_skills_runtime,
     fetch_active_skill_records,
     make_read_skill_file_tool,
@@ -24,6 +25,7 @@ from .strands_mapping import (
 
 __all__ = [
     "build_skills_plugin",
+    "SkillsRuntime",
     "build_skills_runtime",
     "fetch_active_skill_records",
     "make_read_skill_file_tool",

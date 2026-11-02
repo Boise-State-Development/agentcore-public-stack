@@ -16,15 +16,16 @@ Two tiers feed the result (Skills v2 §5):
 Selection (``enabled_skills``) narrows this set per turn; it never widens it.
 
 A third tier exists only *through an Agent* — **invoke-through** (§6/D7):
-skills the Agent's owner authored resolve for anyone the Agent is shared with.
-It deliberately does NOT live in ``resolve_accessible_skill_ids``, because that
-function feeds the plain-chat picker and the design-time bindable palette; a
-skill reachable only by invoking someone's Agent must never appear there. See
-:func:`resolve_invocable_skill_ids`.
+skills the Agent's owner authored resolve for anyone the Agent is shared with,
+and on a Shared Project's harness, skills the *editor who added them* authored
+resolve for every member (shared-projects §9.6). It deliberately does NOT live
+in ``resolve_accessible_skill_ids``, because that function feeds the plain-chat
+picker and the design-time bindable palette; a skill reachable only by invoking
+someone's Agent must never appear there. See :func:`resolve_invocable_skill_ids`.
 """
 
 import logging
-from typing import List, Optional, Set
+from typing import List, Mapping, Optional, Set
 
 from apis.shared.auth.models import User
 
@@ -82,17 +83,39 @@ async def resolve_accessible_skill_ids(user: User) -> List[str]:
 
 
 async def resolve_invocable_skill_ids(
-    invoker: User, requested_ids: List[str], agent_owner_id: Optional[str]
+    invoker: User,
+    requested_ids: List[str],
+    agent_owner_id: Optional[str],
+    *,
+    adders: Optional[Mapping[str, str]] = None,
 ) -> Set[str]:
     """Which of ``requested_ids`` may resolve for ``invoker`` through this Agent (§6).
 
     The **invoke-through** predicate. A skill bound on an Agent resolves when any
-    of three clauses holds:
+    of four clauses holds:
 
     1. **Catalog grant** — the invoker's RBAC roles reach the skill; or
     2. **Ownership** — the invoker authored it; or
     3. **Invoke-through** — the *Agent's owner* authored it, and the invoker has
-       share-access to the Agent.
+       share-access to the Agent; or
+    4. **Added by its author** — the person who *added the binding* authored it
+       (``adders`` maps skill id → adder user id, recorded on the binding by the
+       project settings route), and the invoker has access to the Agent.
+
+    Clause 4 exists for a Shared Project's harness, whose ``ownerId`` is the
+    project's creator: without it a skill an *editor* wrote and added ran for the
+    editor alone and was silently dropped for everyone else (§9.6). It is the
+    owner clause with the adder in the owner's place, and it keeps the same
+    chain-sharing guard — the adder must have *authored* the skill, so a skill
+    merely shared to them cannot be laundered through a project. Only a project
+    harness supplies ``adders`` (``pins.project_skill_adders``); every other
+    Agent passes none and is judged by clauses 1–3 exactly as before.
+
+    **Catalog skills are not widened by either clause.** A ``system``-owned
+    skill never matches an owner or an adder, so a role-granted editor adding an
+    admin skill to a project does not hand it to members outside that role — the
+    same rule as tools, which stay per-member RBAC on a harness. A member without
+    the role has it dropped with an ``agent_notice``.
 
     Clauses 1+2 are exactly ``resolve_accessible_skill_ids``. Note this is
     deliberately NOT a bare RBAC permission check (the removed
@@ -121,19 +144,34 @@ async def resolve_invocable_skill_ids(
     allowed = set(await resolve_accessible_skill_ids(invoker))
 
     missing = [sid for sid in requested_ids if sid not in allowed]
-    if not missing or not agent_owner_id:
+    if not missing:
         return allowed
 
     from apis.shared.skills.models import SYSTEM_OWNER_ID
 
-    if agent_owner_id == SYSTEM_OWNER_ID:
+    # The authors a missing skill may resolve through: the Agent's owner (clause 3)
+    # and, per skill, whoever added its binding (clause 4). ``system`` is never one
+    # of them — an owner- or adder-match on "system" would hand the whole catalog to
+    # anyone who could invoke the Agent, bypassing RBAC entirely.
+    owner = agent_owner_id if agent_owner_id and agent_owner_id != SYSTEM_OWNER_ID else None
+    adders = {
+        sid: adder
+        for sid, adder in (adders or {}).items()
+        if sid in missing and adder and adder != SYSTEM_OWNER_ID
+    }
+    if not owner and not adders:
         return allowed
 
     try:
         from apis.shared.skills.repository import get_skill_catalog_repository
 
         records = await get_skill_catalog_repository().batch_get_skills(missing)
-        allowed |= {r.skill_id for r in records if r.owner_id == agent_owner_id}
+        allowed |= {
+            r.skill_id
+            for r in records
+            if r.owner_id != SYSTEM_OWNER_ID
+            and (r.owner_id == owner or r.owner_id == adders.get(r.skill_id))
+        }
     except Exception:
         logger.warning("Failed to resolve invoke-through skills", exc_info=True)
 

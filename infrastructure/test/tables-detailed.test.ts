@@ -225,6 +225,7 @@ describe('CostTrackingTablesConstruct — detailed', () => {
         Match.objectLike({ IndexName: 'DueScheduleIndex' }),
         Match.objectLike({ IndexName: 'SessionRecencyIndex' }),
         Match.objectLike({ IndexName: 'ProjectSessionIndex' }),
+        Match.objectLike({ IndexName: 'PinnedSessionIndex' }),
       ]),
     });
   });

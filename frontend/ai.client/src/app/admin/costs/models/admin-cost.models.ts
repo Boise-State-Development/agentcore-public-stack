@@ -184,7 +184,16 @@ export type CacheStatus =
   | 'partial_miss'
   | 'miss_ttl_expired'
   | 'miss_avoidable'
-  | 'uncached';
+  | 'uncached'
+  /**
+   * The call's usage was never reported, so its cache outcome was not
+   * measured — today only an interrupted turn's cut generation, whose
+   * terminal usage event never arrived. Deliberately not a classification:
+   * the tokens on such a row are an attribution (see `usageEstimated`), and a
+   * plausible-looking `first_write` derived from them would send a cache
+   * investigation after a call nobody measured.
+   */
+  | 'estimated';
 
 /** Prompt-cache prefix hashes for one model call. */
 export interface PrefixFingerprints {
@@ -258,6 +267,15 @@ export interface SessionCallRow {
    */
   cachePrefixGapSeconds?: number | null;
   wastedUsd: number;
+  /**
+   * Present when this call's usage was estimated rather than reported by the
+   * provider — an interrupted turn's cut generation. A field → method map
+   * (`projection`, `native_count`, `chars_per_token`, `assumed_first_write`,
+   * …), so the tokens and the cost on this row are never mistaken for a
+   * measurement. Such a row's `cacheStatus` is `estimated` and its
+   * `wastedUsd` is zero by construction.
+   */
+  usageEstimated?: Record<string, string> | null;
   /**
    * Which Agent ran this call, and whether that changed from the call before it (#756).
    *

@@ -13,6 +13,8 @@
 #   4. deploy-frontend        — build SPA + S3 sync + CloudFront invalidation.
 #   5. smoke-test / e2e-tests — validate the deployment (e2e-tests also runs
 #      the turn-path smoke matrix, scripts/nightly/turn-smoke.sh, non-blocking).
+#      The eval harness is not here: it runs against the dev deployment as
+#      nightly.yml's eval-develop track.
 #   6. teardown               — delete the ephemeral stack + buckets/secrets/logs.
 #
 # Ephemeral deploys run with NO custom domain (CDK_DOMAIN_NAME=""); the SPA,

@@ -46,6 +46,8 @@ The alternative considered — display-only metadata (a `displayText`-style side
 
 **Correctness constraint (fixed in this branch):** because `append_message` persists each completed message immediately (flush is a no-op — `turn_based_session_manager.py:949`), the coordinator accumulates **only the in-flight message's** text deltas: the accumulator resets at assistant `message_start` and clears at `message_stop`. Accumulating across the whole stream would duplicate mid-turn messages already committed to Memory.
 
+**The live conversation gets it too.** The synthetic write goes straight to Memory through a throwaway session manager, so on its own it never reaches the cached agent's in-process `agent.messages` — and the next turn usually hits the agent cache, where `initialize()` does not re-run. Without a matching in-process append the model answers the follow-up from `[question, follow-up]` with no partial (dev, 2026-10-22: the follow-up call's `messageCount` was 2), and a later restore builds a different history and re-writes the cached prefix. `_append_interrupted_reply` appends the same dict to the list in place, which reaches every agent aliased to that `(session, user)` (`_adopt_session_conversation`), and only after the Memory write succeeded.
+
 **Empty partial:** a placeholder assistant turn (`"[Response interrupted before any content was generated]"`) is persisted **only when the history tail is a user message** — that's the dangling-turn case the placeholder exists to repair. On continuation/resume teardowns (tail = assistant) nothing needs repair, so only the marker is written.
 
 ### 3.3 Intent capture is primary; server-side detection is the backstop

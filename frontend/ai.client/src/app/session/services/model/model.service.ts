@@ -398,6 +398,19 @@ export class ModelService {
   }
 
   /**
+   * Apply a newly saved user default to this tab's selection (#1585).
+   * `loadModels()` only reads the user default on a fresh tab, so without this
+   * new chats kept the old pick until reload. `null` falls back to the admin
+   * default. Skipped while an Agent lock is active.
+   */
+  applyUserDefault(modelId: string | null): void {
+    if (this._agentLockedModelId() !== null) return;
+    if (modelId && this.setSelectedModelById(modelId, { announceRetirement: false })) return;
+    const adminDefault = this.models().find(m => m.isDefault);
+    if (adminDefault) this.setSelectedModel(adminDefault);
+  }
+
+  /**
    * Lock the picker to an Agent's pinned model (Agent Designer). Selects the
    * model by its modelId and marks it agent-locked so the dropdown disables.
    * If the pinned model isn't in the user's available set, the lock is still

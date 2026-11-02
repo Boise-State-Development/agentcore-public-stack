@@ -115,6 +115,19 @@ export class CostTrackingTablesConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // PinnedSessionIndex — a user's pinned conversations, most recently pinned
+    // first (issue #711). GSI6_PK = USER#{userId}, GSI6_SK = {pinnedAt}#{sessionId}.
+    // Sparse: the keys exist only while a session is pinned, so the sidebar reads
+    // exactly the pins and nothing else, independent of list pagination. Removed
+    // on unpin and on soft-delete. Deploys ahead of any writer (a no-op until rows
+    // carry GSI6 keys). ⚠️ One GSI per UpdateTable: must land alone.
+    this.sessionsMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'PinnedSessionIndex',
+      partitionKey: { name: 'GSI6_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI6_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
 
 
     // UserCostSummary Table

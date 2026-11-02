@@ -1,7 +1,8 @@
 import { Injectable, inject, computed } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, map } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
+import { normalizeLegacyTimestamps } from '../../../utils/date';
 import {
   QuotaTier,
   QuotaTierCreate,
@@ -28,19 +29,23 @@ export class QuotaHttpService {
   private config = inject(ConfigService);
   private baseUrl = computed(() => `${this.config.appApiUrl()}/admin/quota`);
 
+  // Every response passes through `normalizeLegacyTimestamps`: quota rows written
+  // before the backend timestamp fix carry `…+00:00Z`, and the quota pages render
+  // those with `DatePipe`, which throws on that form and stalls rendering.
+
   // ========== Quota Tiers ==========
 
   getTiers(enabledOnly = false): Observable<QuotaTier[]> {
     const params = new HttpParams().set('enabled_only', enabledOnly);
-    return this.http.get<QuotaTier[]>(`${this.baseUrl()}/tiers`, { params });
+    return this.http.get<QuotaTier[]>(`${this.baseUrl()}/tiers`, { params }).pipe(map(normalizeLegacyTimestamps));
   }
 
   getTier(tierId: string): Observable<QuotaTier> {
-    return this.http.get<QuotaTier>(`${this.baseUrl()}/tiers/${tierId}`);
+    return this.http.get<QuotaTier>(`${this.baseUrl()}/tiers/${tierId}`).pipe(map(normalizeLegacyTimestamps));
   }
 
   createTier(tier: QuotaTierCreate): Observable<QuotaTier> {
-    return this.http.post<QuotaTier>(`${this.baseUrl()}/tiers`, tier);
+    return this.http.post<QuotaTier>(`${this.baseUrl()}/tiers`, tier).pipe(map(normalizeLegacyTimestamps));
   }
 
   updateTier(
@@ -50,7 +55,7 @@ export class QuotaHttpService {
     return this.http.patch<QuotaTier>(
       `${this.baseUrl()}/tiers/${tierId}`,
       updates
-    );
+    ).pipe(map(normalizeLegacyTimestamps));
   }
 
   deleteTier(tierId: string): Observable<void> {
@@ -69,13 +74,13 @@ export class QuotaHttpService {
     }
     return this.http.get<QuotaAssignment[]>(`${this.baseUrl()}/assignments`, {
       params,
-    });
+    }).pipe(map(normalizeLegacyTimestamps));
   }
 
   getAssignment(assignmentId: string): Observable<QuotaAssignment> {
     return this.http.get<QuotaAssignment>(
       `${this.baseUrl()}/assignments/${assignmentId}`
-    );
+    ).pipe(map(normalizeLegacyTimestamps));
   }
 
   createAssignment(
@@ -84,7 +89,7 @@ export class QuotaHttpService {
     return this.http.post<QuotaAssignment>(
       `${this.baseUrl()}/assignments`,
       assignment
-    );
+    ).pipe(map(normalizeLegacyTimestamps));
   }
 
   updateAssignment(
@@ -94,7 +99,7 @@ export class QuotaHttpService {
     return this.http.patch<QuotaAssignment>(
       `${this.baseUrl()}/assignments/${assignmentId}`,
       updates
-    );
+    ).pipe(map(normalizeLegacyTimestamps));
   }
 
   deleteAssignment(assignmentId: string): Observable<void> {
@@ -115,13 +120,13 @@ export class QuotaHttpService {
     }
     return this.http.get<QuotaOverride[]>(`${this.baseUrl()}/overrides`, {
       params,
-    });
+    }).pipe(map(normalizeLegacyTimestamps));
   }
 
   getOverride(overrideId: string): Observable<QuotaOverride> {
     return this.http.get<QuotaOverride>(
       `${this.baseUrl()}/overrides/${overrideId}`
-    );
+    ).pipe(map(normalizeLegacyTimestamps));
   }
 
   createOverride(
@@ -130,7 +135,7 @@ export class QuotaHttpService {
     return this.http.post<QuotaOverride>(
       `${this.baseUrl()}/overrides`,
       override
-    );
+    ).pipe(map(normalizeLegacyTimestamps));
   }
 
   updateOverride(
@@ -140,7 +145,7 @@ export class QuotaHttpService {
     return this.http.patch<QuotaOverride>(
       `${this.baseUrl()}/overrides/${overrideId}`,
       updates
-    );
+    ).pipe(map(normalizeLegacyTimestamps));
   }
 
   deleteOverride(overrideId: string): Observable<void> {
@@ -170,7 +175,7 @@ export class QuotaHttpService {
       params = params.set('limit', options.limit);
     }
 
-    return this.http.get<QuotaEvent[]>(`${this.baseUrl()}/events`, { params });
+    return this.http.get<QuotaEvent[]>(`${this.baseUrl()}/events`, { params }).pipe(map(normalizeLegacyTimestamps));
   }
 
   // ========== User Quota Inspector ==========
@@ -191,6 +196,6 @@ export class QuotaHttpService {
 
     return this.http.get<UserQuotaInfo>(`${this.baseUrl()}/users/${userId}`, {
       params,
-    });
+    }).pipe(map(normalizeLegacyTimestamps));
   }
 }

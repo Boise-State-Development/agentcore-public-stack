@@ -3,7 +3,7 @@
  * §4C). Pinned:
  *   - CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED is opt-in ('' and junk are off);
  *   - off, nothing is synthesized: no queue, no Lambda, no alarm, no queue URL;
- *   - on, it costs exactly 11 resources in a stack near CloudFormation's 500;
+ *   - on, it costs exactly 11 of PlatformStack's resources;
  *   - the Lambda reads any original under `user-files/` but writes and deletes
  *     only `_derived/` sidecars, and is fed one message at a time;
  *   - app-api, and only app-api, gets the flag, the queue URL and a send grant;
@@ -176,10 +176,10 @@ describe('large-document preparation in PlatformStack', () => {
 
   describe('while on', () => {
     it('costs exactly 11 resources', () => {
-      // PlatformStack is near CloudFormation's 500-resource limit, so the
-      // number a deployment pays to turn this on is pinned: two queues, the
-      // queue's TLS policy, log group, function, role, its policy, the event
-      // source mapping, the function-name parameter and two alarms.
+      // The number a deployment pays to turn this on is pinned: two queues,
+      // the queue's TLS policy, log group, function, role, its policy, the
+      // event source mapping, the function-name parameter and two alarms.
+      // What the whole stack then costs is `platform-ceilings.test.ts`.
       const before = new Set(Object.keys(off.toJSON().Resources));
       const added = Object.entries(on.toJSON().Resources)
         .filter(([id]) => !before.has(id))
