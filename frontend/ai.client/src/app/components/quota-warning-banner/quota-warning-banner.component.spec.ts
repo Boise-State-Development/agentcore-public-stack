@@ -19,8 +19,11 @@ describe('QuotaWarningBannerComponent', () => {
     return { fixture, el: fixture.nativeElement as HTMLElement };
   }
 
+  let status: ReturnType<typeof signal<Record<string, unknown>>>;
+
   function configure(quotaRequests: boolean) {
     localStorage.clear();
+    status = signal<Record<string, unknown>>({ configured: true, unlimited: false, openRequest: null, charged: null });
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
@@ -28,7 +31,7 @@ describe('QuotaWarningBannerComponent', () => {
         { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }) } },
         {
           provide: QuotaStatusService,
-          useValue: { status: { value: signal({ configured: true, unlimited: false, openRequest: null }) } },
+          useValue: { status: { value: () => status() } },
         },
         { provide: QuotaRequestService, useValue: {} },
         { provide: QuotaRequestDialogService, useValue: { open: () => Promise.resolve(undefined) } },
@@ -46,6 +49,15 @@ describe('QuotaWarningBannerComponent', () => {
     remaining: 30 - percentageUsed * 0.3,
     message: '',
   });
+
+  const funding = (chargedThisPeriod: number, cap: number, standing = true) => ({
+    type: 'quota_funding_notice' as const, label: 'Fund 100000', chargedThisPeriod, cap, standing,
+    message: `Included quota used · charging Fund 100000 · $${chargedThisPeriod.toFixed(2)} this month of $${cap.toFixed(2)}`,
+  });
+
+  /** The tabs on screen, by test id. */
+  const tabs = (el: HTMLElement) =>
+    [...el.querySelectorAll('[data-testid^="quota-"]')].map(t => t.getAttribute('data-testid'));
 
   const exceeded = {
     type: 'quota_exceeded' as const,
@@ -97,5 +109,60 @@ describe('QuotaWarningBannerComponent', () => {
     (notice.querySelector('button') as HTMLButtonElement).click();
     fixture.detectChanges();
     expect(el.querySelector('[data-testid="quota-funding-notice"]')).toBeNull();
+  });
+
+  describe('one tab at a time', () => {
+    it('shows the funding notice over the warning, keeping its request link as a higher cap', () => {
+      warnings.setWarning(warning(85));
+      warnings.setFundingNotice(funding(12.5, 20));
+      const { el } = render(true);
+      expect(tabs(el)).toEqual(['quota-funding-notice']);
+      const link = el.querySelector('[data-testid="quota-funding-notice"] button:not([aria-label])')!;
+      expect(link.textContent?.trim()).toBe('Request a higher cap');
+    });
+
+    it('keeps plain Request more on a funding notice that is not standing', () => {
+      warnings.setWarning(warning(85));
+      warnings.setFundingNotice(funding(12.5, 20, false));
+      const { el } = render(true);
+      expect(el.querySelector('[data-testid="quota-funding-notice"]')!.textContent).toContain('Request more');
+    });
+
+    it('shows only the blocked tab when a funding notice is still held', () => {
+      warnings.setFundingNotice(funding(19.6, 20));
+      warnings.setQuotaExceeded(exceeded);
+      const { el } = render(true);
+      expect(tabs(el)).toEqual(['quota-blocked-tab']);
+    });
+
+    it('says the fund cap was reached when a capped fund is what ran out', () => {
+      status.set({ configured: true, unlimited: false, openRequest: null, charged: { label: 'Fund 100000', thisPeriod: 20, cap: 20 } });
+      warnings.setQuotaExceeded(exceeded);
+      const { el } = render(true);
+      const tab = el.querySelector('[data-testid="quota-blocked-tab"]')!;
+      expect(tab.textContent).toContain('Fund cap reached');
+      expect(tab.querySelector('button')!.textContent?.trim()).toBe('Request a higher cap');
+    });
+
+    it('reveals the next tab when the shown one is dismissed', () => {
+      warnings.setWarning(warning(85));
+      warnings.setFundingNotice(funding(12.5, 20));
+      const { fixture, el } = render(true);
+      (el.querySelector('[aria-label="Dismiss funding notice"]') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(tabs(el)).toEqual(['quota-warning-tab']);
+    });
+
+    it('shows the warning over this conversation’s cost notice', () => {
+      warnings.setSessionNotice({
+        type: 'quota_session_notice', sessionId: 's1', sessionCost: 8, quotaLimit: 30,
+        sessionPercentageOfLimit: 26.7, thresholdPercentage: 25, message: '',
+      });
+      const { fixture, el } = render(true);
+      expect(tabs(el)).toEqual(['quota-session-notice']);
+      warnings.setWarning(warning(80));
+      fixture.detectChanges();
+      expect(tabs(el)).toEqual(['quota-warning-tab']);
+    });
   });
 });

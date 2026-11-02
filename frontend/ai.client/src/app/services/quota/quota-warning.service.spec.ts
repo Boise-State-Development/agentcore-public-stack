@@ -550,6 +550,13 @@ describe('QuotaWarningService', () => {
       expect(service.hasVisibleFundingNotice()).toBe(false);
     });
 
+    it('is forgotten at the start of a turn, without forgetting the dismissal', () => {
+      service.setFundingNotice(notice);
+      service.clearFundingNotice();
+      expect(service.fundingNotice()).toBeNull();
+      expect(service.hasVisibleFundingNotice()).toBe(false);
+    });
+
     it('comes back in a new period', () => {
       localStorage.setItem(DISMISSED_FUNDING_NOTICE_KEY, '2000-01');
       service.setFundingNotice(notice);
