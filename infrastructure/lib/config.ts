@@ -91,6 +91,7 @@ export interface AppConfig {
   skillAuthoring: SkillAuthoringConfig;
   wordTrackedChanges: WordTrackedChangesConfig;
   assistantKbFullContext: AssistantKbFullContextConfig;
+  meetingTasks: MeetingTasksConfig;
   largeDocumentAttachments: LargeDocumentAttachmentsConfig;
   attachmentKb: AttachmentKbConfig;
   folderAttachments: FolderAttachmentsConfig;
@@ -685,6 +686,24 @@ export interface WordTrackedChangesConfig {
  * Runtime can always read (`AssistantDocumentsRead`). No SPA switch.
  */
 export interface AssistantKbFullContextConfig {
+  enabled: boolean;
+}
+
+/**
+ * Meeting transcripts → GitHub issues
+ * (backend/src/agents/local_tools/meeting_tasks.py,
+ * docs/specs/meeting-transcripts-to-github-issues.md): the Google Calendar,
+ * Zoom and GitHub tool families, built per request for users whose roles are
+ * granted the `google_calendar_meetings` / `zoom_meeting_transcripts` /
+ * `github_issues` catalog tools, each calling the vendor API with the user's
+ * own OAuth token from the connector an admin bound to the row. **Opt-in while
+ * in development**: off unless CDK_MEETING_TASKS_ENABLED=true (or a
+ * `meetingTasks.enabled: true` cdk.json context). While on, sets
+ * MEETING_TASKS_ENABLED on the AgentCore Runtime; while off, the variable is
+ * absent. No IAM: the tokens come from the AgentCore Identity vault the Runtime
+ * already reads for OAuth-gated MCP tools. No SPA switch.
+ */
+export interface MeetingTasksConfig {
   enabled: boolean;
 }
 
@@ -1557,6 +1576,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED
         ? process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('assistantKbFullContext')?.enabled ?? false,
+    },
+    meetingTasks: {
+      // Opt-in while in development, same parsing as assistantKbFullContext.
+      enabled: process.env.CDK_MEETING_TASKS_ENABLED
+        ? process.env.CDK_MEETING_TASKS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('meetingTasks')?.enabled ?? false,
     },
     largeDocumentAttachments: {
       // Default ON with a kill switch, same parsing as skillAuthoring above.
