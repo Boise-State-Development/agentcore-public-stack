@@ -665,7 +665,7 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
     # whole family at runtime (see MEETING_TASKS_TOOL_IDS and
     # _build_meeting_tools in apis/inference_api/chat/routes.py). Off by
     # default and not public: these call external accounts on the user's
-    # behalf, and `github_issues` writes. An admin must also set each row's
+    # behalf, and `github_issues_local` writes. An admin must also set each row's
     # "Required OAuth provider" (requiresOauthProvider) to the matching
     # connector — it is deployment data, so the seeder leaves it unset — and
     # the Runtime must have MEETING_TASKS_ENABLED=true.
@@ -690,8 +690,8 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
-        "toolId": "github_issues",
-        "displayName": "GitHub Issues",
+        "toolId": "github_issues_local",
+        "displayName": "GitHub Issues (direct API)",
         "description": "List the user's GitHub repositories and open issues for action items. Confirmation-gated write.",
         "category": "utility",
         "protocol": "local",

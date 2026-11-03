@@ -62,7 +62,7 @@ Identity vault. No new storage, no new infrastructure, no new consent UX.
 | `google_calendar_meetings` | `list_calendar_meetings(start?, end?, query?)` | `GET calendar/v3/calendars/primary/events` (singleEvents, orderBy startTime) | 50 events; 25 attendee emails listed (count always full); description/location 300 chars; cancelled events dropped; `zoom_meeting_id` parsed from conference entry points, hangoutLink, location, description |
 | `zoom_meeting_transcripts` | `list_zoom_recordings(from_date?, to_date?)` | `GET users/me/recordings` | ≤ 1 month per call (Zoom limit); ≤ 3 pages × 30 |
 | | `get_zoom_transcript(meeting_id)` | `GET meetings/{id}/recordings`, then the `TRANSCRIPT` file's `download_url` | download host must be `*.zoom.us` / `*.zoomgov.com` before **and** after redirects; WebVTT parsed, consecutive same-speaker cues merged; cut at 60,000 chars with `truncated` + note |
-| `github_issues` | `list_github_repositories(query?)` | `GET user/repos?affiliation=owner,collaborator,organization_member&sort=pushed` | 50 repos; description 120 chars |
+| `github_issues_local` | `list_github_repositories(query?)` | `GET user/repos?affiliation=owner,collaborator,organization_member&sort=pushed` | 50 repos; description 120 chars |
 | | `create_github_issues(repository, issues[], confirm=false)` | `POST repos/{owner}/{repo}/issues` per issue | `owner/name` validated; ≤ 25 issues; title ≤ 256; body ≤ 20,000; preview unless `confirm` |
 
 Every tool returns the Strands shape `{"status", "content": [{"json"|"text"}]}` and never raises.

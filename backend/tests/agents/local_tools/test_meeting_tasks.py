@@ -111,7 +111,7 @@ class TestContract:
         )
         assert mt.MEETING_TASKS_TOOL_IDS is MEETING_TASKS_TOOL_IDS
         assert [tid for tid, _ in mt.MEETING_TASKS_FACTORIES] == sorted(
-            MEETING_TASKS_TOOL_IDS, key=["google_calendar_meetings", "zoom_meeting_transcripts", "github_issues"].index
+            MEETING_TASKS_TOOL_IDS, key=["google_calendar_meetings", "zoom_meeting_transcripts", "github_issues_local"].index
         )
 
     def test_no_tool_takes_a_user_or_token_argument(self):
@@ -126,7 +126,7 @@ class TestContract:
         tools = mt.build_meeting_tasks_tools(
             MEETING_TASKS_TOOL_IDS,
             USER,
-            {"google_calendar_meetings": "g", "zoom_meeting_transcripts": "z", "github_issues": None},
+            {"google_calendar_meetings": "g", "zoom_meeting_transcripts": "z", "github_issues_local": None},
         )
         bound = {t.tool_name: oauth_provider_for(t) for t in tools}
         assert bound == {
@@ -138,7 +138,7 @@ class TestContract:
         }
 
     def test_builds_only_enabled_families_in_catalog_order(self):
-        tools = mt.build_meeting_tasks_tools(["github_issues", "google_calendar_meetings"], USER, {})
+        tools = mt.build_meeting_tasks_tools(["github_issues_local", "google_calendar_meetings"], USER, {})
         assert [t.tool_name for t in tools] == [
             "list_calendar_meetings",
             "list_github_repositories",
@@ -598,4 +598,4 @@ class TestGitHub:
     @pytest.mark.asyncio
     async def test_missing_connector_on_the_write_tool(self):
         tool = _by_name(mt.make_github_tools(USER, None), "create_github_issues")
-        assert "github_issues" in _text(await _call(tool, repository="org/platform", issues=_issues(1)))
+        assert "github_issues_local" in _text(await _call(tool, repository="org/platform", issues=_issues(1)))

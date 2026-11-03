@@ -9,7 +9,7 @@ into tracked work (``docs/specs/meeting-transcripts-to-github-issues.md``):
 * **Zoom** (``zoom_meeting_transcripts``): ``list_zoom_recordings`` lists the
   user's cloud recordings; ``get_zoom_transcript`` downloads a recording's
   transcript (Zoom's WebVTT) and returns it as speaker-attributed plain text.
-* **GitHub** (``github_issues``): ``list_github_repositories`` finds the target
+* **GitHub** (``github_issues_local``): ``list_github_repositories`` finds the target
   repository; ``create_github_issues`` opens one issue per action item, as a
   two-step confirmed write.
 
@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 GOOGLE_CALENDAR_MEETINGS_TOOL_ID = "google_calendar_meetings"
 ZOOM_MEETING_TRANSCRIPTS_TOOL_ID = "zoom_meeting_transcripts"
-GITHUB_ISSUES_TOOL_ID = "github_issues"
+GITHUB_ISSUES_TOOL_ID = "github_issues_local"
 
 # The gate set itself lives with the other injected families so ToolFilter and
 # the cache-eligibility predicate read one definition; re-exported here for

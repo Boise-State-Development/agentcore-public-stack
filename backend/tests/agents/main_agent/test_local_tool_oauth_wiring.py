@@ -212,7 +212,7 @@ class TestConnectorSnapshot:
     async def test_reads_only_local_rows_with_a_connector(self):
         rows = [
             _row("zoom_meeting_transcripts", provider="zoom-conn"),
-            _row("github_issues", provider="  "),
+            _row("github_issues_local", provider="  "),
             _row("google_calendar_meetings"),
             _row("canvas", protocol="mcp_external", provider="canvas-conn"),
             _row("gateway_x", protocol=SimpleNamespace(value="mcp"), provider="x"),
@@ -228,9 +228,9 @@ class TestConnectorSnapshot:
         with _patch_catalog([]) as get_repo:
             get_repo.return_value.list_tools = AsyncMock(side_effect=RuntimeError("ddb"))
             assert dict(await freshness.get_local_tool_oauth_providers()) == {}
-        with _patch_catalog([_row("github_issues", provider="gh")]):
-            assert dict(await freshness.get_local_tool_oauth_providers()) == {"github_issues": "gh"}
-        freshness.invalidate("github_issues")
+        with _patch_catalog([_row("github_issues_local", provider="gh")]):
+            assert dict(await freshness.get_local_tool_oauth_providers()) == {"github_issues_local": "gh"}
+        freshness.invalidate("github_issues_local")
         with _patch_catalog([]) as get_repo:
             get_repo.return_value.list_tools = AsyncMock(side_effect=RuntimeError("ddb"))
             # Invalidated and unreadable: empty rather than stale, like the id snapshots.
@@ -273,9 +273,9 @@ class TestRouteBuilder:
         from agents.local_tools.oauth_binding import oauth_provider_for
         from apis.inference_api.chat.routes import _build_meeting_tools
 
-        rows = [_row("zoom_meeting_transcripts", provider="zoom-conn"), _row("github_issues")]
+        rows = [_row("zoom_meeting_transcripts", provider="zoom-conn"), _row("github_issues_local")]
         with _patch_catalog(rows), caplog.at_level("WARNING", logger="apis.inference_api.chat.routes"):
-            tools = await _build_meeting_tools(["zoom_meeting_transcripts", "github_issues", "calculator"], USER)
+            tools = await _build_meeting_tools(["zoom_meeting_transcripts", "github_issues_local", "calculator"], USER)
 
         assert [(t.tool_name, oauth_provider_for(t)) for t in tools] == [
             ("list_zoom_recordings", "zoom-conn"),
@@ -283,7 +283,7 @@ class TestRouteBuilder:
             ("list_github_repositories", None),
             ("create_github_issues", None),
         ]
-        assert any("github_issues" in r.getMessage() for r in caplog.records)
+        assert any("github_issues_local" in r.getMessage() for r in caplog.records)
 
 
 class TestCacheEligibility:
