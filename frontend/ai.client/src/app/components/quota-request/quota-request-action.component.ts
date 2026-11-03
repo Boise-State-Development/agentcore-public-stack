@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import { FEATURES } from '../../services/features';
+import { NotificationsService } from '../../services/notifications/notifications.service';
 import { QuotaStatusService } from '../../services/quota/quota-status.service';
 import { QuotaRequestFailure, QuotaRequestService } from '../../services/quota/quota-request.service';
 import { formatQuotaDate } from '../../services/quota/quota-format';
@@ -21,7 +22,14 @@ import { QuotaRequestDialogService } from './quota-request-dialog.service';
  * `Fund cap reached ·` when the spend that hit the limit was charged to a
  * capped fund, where the next step is *Request a higher cap* (§5.2). The lead
  * shows before the status loads, so the tab is never empty.
+ *
+ * While a request is open, the inbox is re-read every
+ * {@link DECISION_POLL_MS} on a visible page, so an admin's decision reaches
+ * the bell, and through it this status, without the user opening anything.
  */
+/** How often a page showing an open request looks for the admin's decision. */
+export const DECISION_POLL_MS = 30_000;
+
 @Component({
   selector: 'app-quota-request-action',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -75,6 +83,7 @@ export class QuotaRequestActionComponent {
   private quotaStatus = inject(QuotaStatusService);
   private requests = inject(QuotaRequestService);
   private dialog = inject(QuotaRequestDialogService);
+  private notifications = inject(NotificationsService);
 
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
@@ -98,6 +107,22 @@ export class QuotaRequestActionComponent {
     const charged = this.quotaStatus.status.value()?.charged;
     return !!charged && charged.cap != null && charged.thisPeriod >= charged.cap - 0.005;
   });
+
+  /** True while the caller has a request open (pending, or sent back for a funding source). */
+  private readonly requestOpen = computed(() => {
+    const kind = this.state()?.kind;
+    return kind === 'pending' || kind === 'info';
+  });
+
+  constructor() {
+    effect(onCleanup => {
+      if (!this.requestOpen()) return;
+      const timer = setInterval(() => {
+        if (document.visibilityState === 'visible') void this.notifications.refresh();
+      }, DECISION_POLL_MS);
+      onCleanup(() => clearInterval(timer));
+    });
+  }
 
   protected readonly requestLabel = computed(() => (this.capReached() ? 'Request a higher cap' : this.label()));
 

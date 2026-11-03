@@ -1,4 +1,4 @@
-import { DestroyRef, inject, Injectable } from '@angular/core';
+import { DestroyRef, inject, Injectable, Injector } from '@angular/core';
 import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
 import { SessionAffinityService } from '../session/session-affinity.service';
 import { StreamParserService } from './stream-parser.service';
@@ -13,6 +13,7 @@ import { ErrorService } from '../../../services/error/error.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { TurnTimingService } from './turn-timing.service';
 import { browserFrameHeight } from '../../../services/browser-login/browser-frame-height';
+import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 
 /**
  * Title fallback polling. A stream that outruns title generation closes a few
@@ -195,6 +196,7 @@ export class ChatHttpService {
   private bffSession = inject(BffSessionService);
   private errorService = inject(ErrorService);
   private destroyRef = inject(DestroyRef);
+  private injector = inject(Injector);
 
   constructor() {
     this.registerPageLifecycleAttribution();
@@ -230,6 +232,7 @@ export class ChatHttpService {
       // left behind here makes every completed turn in this tab eligible for
       // a `navigated_away` marker on the next refresh / tab close.
       this.chatStateService.releaseAbortController(sessionId, abortController);
+      this.reloadQuotaStatus();
     };
 
     try {
@@ -503,6 +506,18 @@ export class ChatHttpService {
     this.chatStateService.abortRequest(sessionId);
     this.messageMapService.endStreaming(sessionId);
     this.chatStateService.setChatLoading(sessionId, false);
+    this.reloadQuotaStatus();
+  }
+
+  /**
+   * Re-read the caller's quota status once a turn ends. A turn moves the
+   * spend, and the limit, an open request or a fund's charge may have changed
+   * while it ran; the composer's quota tab and the request dialog read this
+   * status, which otherwise dates from page load. One GET per turn, off the
+   * turn path (quota-requests spec §10.3).
+   */
+  private reloadQuotaStatus(): void {
+    this.injector.get(QuotaStatusService).reload();
   }
 
   /**

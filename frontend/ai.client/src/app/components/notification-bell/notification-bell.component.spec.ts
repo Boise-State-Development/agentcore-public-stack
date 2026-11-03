@@ -6,6 +6,10 @@ import { NotificationBellComponent, describeNotification, relativeTime } from '.
 import { NotificationsService } from '../../services/notifications/notifications.service';
 import { AppNotification } from '../../services/notifications/notification.model';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
+import { FEATURES } from '../../services/features';
+import { QuotaRequestService } from '../../services/quota/quota-request.service';
+import { QuotaStatusService } from '../../services/quota/quota-status.service';
+import { environment } from '../../../environments/environment';
 
 function notif(over: Partial<AppNotification> = {}): AppNotification {
   return {
@@ -268,5 +272,27 @@ describe('NotificationBellComponent', () => {
     component.lastRefresh = Date.now() - 61_000;
     component.onVisibilityChange();
     expect(service.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('a new quota notification re-reads the quota state, however full the inbox and the badge', () => {
+    const onQuotaNotification = vi.fn();
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, quotaRequests: true } });
+    TestBed.overrideProvider(QuotaRequestService, { useValue: { onQuotaNotification } });
+    TestBed.overrideProvider(QuotaStatusService, { useValue: { status: { value: () => undefined } } });
+    // A full first page, 14 unread: what the inbox already held is the baseline.
+    const page = Array.from({ length: 20 }, (_, i) =>
+      notif({ notificationId: `old-${i}`, kind: i % 2 ? 'quota_request_info_requested' : 'project_invited' }),
+    );
+    notifications.set(page);
+    unreadCount.set(14);
+    const { fixture } = render();
+    expect(onQuotaNotification).not.toHaveBeenCalled();
+
+    // The decision lands on top and the oldest drops off the page; the count stays at 9+.
+    notifications.set([notif({ notificationId: 'decided', kind: 'quota_request_decided', projectId: null }), ...page.slice(0, 19)]);
+    unreadCount.set(15);
+    fixture.detectChanges();
+    expect(onQuotaNotification).toHaveBeenCalledTimes(1);
+    expect(onQuotaNotification).toHaveBeenCalledWith('quota_request_decided');
   });
 });
