@@ -42,6 +42,7 @@ from apis.shared.handoff.metrics import emit_handoff_metric
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_compaction, get_session_metadata
+from apis.shared.sessions.rewind import parse_message_index
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,11 @@ async def create_handoff(
         listing = await get_messages(session_id=session_id, user_id=user.user_id)
     except FileNotFoundError:
         listing = None
-    messages = [m.model_dump(by_alias=True, exclude_none=True) for m in (listing.messages if listing else [])]
+    visible = listing.messages if listing else []
+    messages = [m.model_dump(by_alias=True, exclude_none=True) for m in visible]
+    # The row anchors to the last message's id, never its position: a rewind
+    # hides messages without renumbering, so the two differ once one has run.
+    anchor = parse_message_index(session_id, visible[-1].id) if visible else None
     checkpoint, summary = await get_session_compaction(session_id, user.user_id)
 
     excerpt = render_excerpt(messages, compaction_checkpoint=checkpoint, compaction_summary=summary)
@@ -149,7 +154,7 @@ async def create_handoff(
         agent_name=agent.name or "",
         request=request,
         source_title=source_title,
-        source_message_index=len(messages) - 1,
+        source_message_index=anchor if anchor is not None else len(messages) - 1,
         excerpt_hash=context_hash(excerpt.text),
         excerpt_tokens=excerpt.estimated_tokens,
         turns_covered=turns,
