@@ -20,6 +20,9 @@ import {
  */
 export const REQUEST_PROMPT_PERCENT = 80;
 
+/** The composer's quota tabs, highest priority first. */
+export type QuotaTab = 'blocked' | 'funding' | 'warning' | 'session';
+
 /**
  * Subtle quota warning indicator component
  *
@@ -46,6 +49,15 @@ export const REQUEST_PROMPT_PERCENT = 80;
  * now charged to a fund — is shown whatever the flag says: it describes an
  * extension that exists, and charging someone's fund silently is the one
  * thing it is there to prevent.
+ *
+ * **One tab at a time.** Stacked pills read as clutter, so the composer shows
+ * the most important visible one: blocked, then the funding notice, then the
+ * per-user warning, then the per-conversation notice. An outranked tab is not
+ * merged into the winner except where its point is short: the funding tab
+ * keeps the warning's *Request more* (as *Request a higher cap* on a standing
+ * arrangement), and the blocked tab says *Fund cap reached* when a capped fund
+ * is what ran out. Dismissing the shown tab reveals the next one, and each
+ * keeps its own dismissal.
  */
 @Component({
   selector: 'app-quota-warning-banner',
@@ -55,95 +67,99 @@ export const REQUEST_PROMPT_PERCENT = 80;
     provideIcons({ heroBanknotes, heroChatBubbleLeftRight, heroExclamationTriangle, heroNoSymbol, heroXMark }),
   ],
   template: `
-    @if (quotaWarningService.hasVisibleFundingNotice()) {
-      <div class="flex justify-center">
-        <div
-          class="inline-flex items-center gap-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800 border-gray-300 text-gray-700 dark:border-gray-600 dark:text-gray-300"
-          role="status"
-          [attr.aria-live]="'polite'"
-          data-testid="quota-funding-notice"
-        >
-          <ng-icon name="heroBanknotes" class="size-3 shrink-0" />
-          <span class="font-medium">{{ quotaWarningService.fundingNotice()?.message }}</span>
-          <button
-            type="button"
-            (click)="dismissFundingNotice($event)"
-            class="p-0.5 -mr-1 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-            aria-label="Dismiss funding notice"
+    @switch (tab()) {
+      @case ('blocked') {
+        <div class="flex justify-center">
+          <div
+            class="inline-flex flex-wrap items-center justify-center gap-x-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800 border-state-danger-400 text-state-danger-700 dark:border-state-danger-500 dark:text-state-danger-300"
+            role="status"
+            [attr.aria-live]="'polite'"
+            data-testid="quota-blocked-tab"
           >
-            <ng-icon name="heroXMark" class="size-3" />
-          </button>
+            <ng-icon name="heroNoSymbol" class="size-3 shrink-0" />
+            <app-quota-request-action [blocked]="true" label="Request more quota" />
+          </div>
         </div>
-      </div>
-    }
-    @if (showBlockedTab()) {
-      <div class="flex justify-center">
-        <div
-          class="inline-flex flex-wrap items-center justify-center gap-x-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800 border-state-danger-400 text-state-danger-700 dark:border-state-danger-500 dark:text-state-danger-300"
-          role="status"
-          [attr.aria-live]="'polite'"
-          data-testid="quota-blocked-tab"
-        >
-          <ng-icon name="heroNoSymbol" class="size-3 shrink-0" />
-          <span class="font-medium">Quota reached ·</span>
-          <app-quota-request-action label="Request more quota" />
-        </div>
-      </div>
-    }
-    @if (showSessionNotice()) {
-      <div class="flex justify-center">
-        <div
-          class="inline-flex items-center gap-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800 border-gray-300 text-gray-700 dark:border-gray-600 dark:text-gray-300"
-          role="status"
-          [attr.aria-live]="'polite'"
-        >
-          <ng-icon name="heroChatBubbleLeftRight" class="size-3 shrink-0" />
-          <span class="font-medium">{{ sessionNoticeText() }}</span>
-          <button
-            type="button"
-            (click)="dismissSessionNotice($event)"
-            class="p-0.5 -mr-1 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-            aria-label="Dismiss conversation cost notice"
+      }
+      @case ('funding') {
+        <div class="flex justify-center">
+          <div
+            class="inline-flex flex-wrap items-center justify-center gap-x-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800 border-gray-300 text-gray-700 dark:border-gray-600 dark:text-gray-300"
+            role="status"
+            [attr.aria-live]="'polite'"
+            data-testid="quota-funding-notice"
           >
-            <ng-icon name="heroXMark" class="size-3" />
-          </button>
+            <ng-icon name="heroBanknotes" class="size-3 shrink-0" />
+            <span class="font-medium">{{ quotaWarningService.fundingNotice()?.message }}</span>
+            @if (offerRequest()) {
+              <span aria-hidden="true">·</span>
+              <app-quota-request-action [label]="fundingRequestLabel()" />
+            }
+            <button
+              type="button"
+              (click)="dismissFundingNotice($event)"
+              class="p-0.5 -mr-1 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+              aria-label="Dismiss funding notice"
+            >
+              <ng-icon name="heroXMark" class="size-3" />
+            </button>
+          </div>
         </div>
-      </div>
-    }
-    @if (quotaWarningService.hasVisibleWarning()) {
-      <div class="flex justify-center">
-        <div
-          class="inline-flex items-center gap-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800"
-          [class.border-state-warning-400]="quotaWarningService.severity() === 'warning'"
-          [class.text-state-warning-700]="quotaWarningService.severity() === 'warning'"
-          [class.dark:border-state-warning-500]="quotaWarningService.severity() === 'warning'"
-          [class.dark:text-state-warning-300]="quotaWarningService.severity() === 'warning'"
-          [class.border-state-danger-400]="quotaWarningService.severity() === 'critical'"
-          [class.text-state-danger-700]="quotaWarningService.severity() === 'critical'"
-          [class.dark:border-state-danger-500]="quotaWarningService.severity() === 'critical'"
-          [class.dark:text-state-danger-300]="quotaWarningService.severity() === 'critical'"
-          role="status"
-          [attr.aria-live]="'polite'"
-        >
-          <ng-icon
-            name="heroExclamationTriangle"
-            class="size-3 shrink-0"
-          />
-          <span class="font-medium">{{ messageText() }}</span>
-          @if (offerRequest()) {
-            <span aria-hidden="true">·</span>
-            <app-quota-request-action />
-          }
-          <button
-            type="button"
-            (click)="dismiss($event)"
-            class="p-0.5 -mr-1 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-            aria-label="Dismiss warning"
+      }
+      @case ('warning') {
+        <div class="flex justify-center">
+          <div
+            class="inline-flex flex-wrap items-center justify-center gap-x-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800"
+            [class.border-state-warning-400]="quotaWarningService.severity() === 'warning'"
+            [class.text-state-warning-700]="quotaWarningService.severity() === 'warning'"
+            [class.dark:border-state-warning-500]="quotaWarningService.severity() === 'warning'"
+            [class.dark:text-state-warning-300]="quotaWarningService.severity() === 'warning'"
+            [class.border-state-danger-400]="quotaWarningService.severity() === 'critical'"
+            [class.text-state-danger-700]="quotaWarningService.severity() === 'critical'"
+            [class.dark:border-state-danger-500]="quotaWarningService.severity() === 'critical'"
+            [class.dark:text-state-danger-300]="quotaWarningService.severity() === 'critical'"
+            role="status"
+            [attr.aria-live]="'polite'"
+            data-testid="quota-warning-tab"
           >
-            <ng-icon name="heroXMark" class="size-3" />
-          </button>
+            <ng-icon name="heroExclamationTriangle" class="size-3 shrink-0" />
+            <span class="font-medium">{{ messageText() }}</span>
+            @if (offerRequest()) {
+              <span aria-hidden="true">·</span>
+              <app-quota-request-action />
+            }
+            <button
+              type="button"
+              (click)="dismiss($event)"
+              class="p-0.5 -mr-1 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+              aria-label="Dismiss warning"
+            >
+              <ng-icon name="heroXMark" class="size-3" />
+            </button>
+          </div>
         </div>
-      </div>
+      }
+      @case ('session') {
+        <div class="flex justify-center">
+          <div
+            class="inline-flex items-center gap-1.5 px-3 py-1 text-xs rounded-t-lg border border-b-0 animate-fade-in bg-white dark:bg-slate-800 border-gray-300 text-gray-700 dark:border-gray-600 dark:text-gray-300"
+            role="status"
+            [attr.aria-live]="'polite'"
+            data-testid="quota-session-notice"
+          >
+            <ng-icon name="heroChatBubbleLeftRight" class="size-3 shrink-0" />
+            <span class="font-medium">{{ sessionNoticeText() }}</span>
+            <button
+              type="button"
+              (click)="dismissSessionNotice($event)"
+              class="p-0.5 -mr-1 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+              aria-label="Dismiss conversation cost notice"
+            >
+              <ng-icon name="heroXMark" class="size-3" />
+            </button>
+          </div>
+        </div>
+      }
     }
   `,
   styles: [`
@@ -171,6 +187,20 @@ export class QuotaWarningBannerComponent {
   /** Blocked, and this deployment lets users ask for more. */
   protected showBlockedTab = computed(
     () => this.features.quotaRequests && this.quotaWarningService.isQuotaExceeded(),
+  );
+
+  /** The one tab shown, by priority (see the class doc). */
+  protected readonly tab = computed<QuotaTab | null>(() => {
+    if (this.showBlockedTab()) return 'blocked';
+    if (this.quotaWarningService.hasVisibleFundingNotice()) return 'funding';
+    if (this.quotaWarningService.hasVisibleWarning()) return 'warning';
+    if (this.showSessionNotice()) return 'session';
+    return null;
+  });
+
+  /** A standing arrangement's next step is a higher cap, not more quota. */
+  protected readonly fundingRequestLabel = computed(() =>
+    this.quotaWarningService.fundingNotice()?.standing ? 'Request a higher cap' : 'Request more',
   );
 
   /** From the soft limit up, the warning tab offers a request. */

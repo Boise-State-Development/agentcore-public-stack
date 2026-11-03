@@ -748,3 +748,28 @@ describe('StreamParserService - hasReceivedDone (Stop guard)', () => {
     expect(service.hasReceivedDone('s1')).toBe(true);
   });
 });
+
+describe('StreamParserService - quota state per turn', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('starts each turn without a blocked state or a funding notice from an earlier one', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [StreamParserService, ChatStateService, ErrorService, QuotaWarningService],
+    });
+    const quota = TestBed.inject(QuotaWarningService);
+    quota.setFundingNotice({
+      type: 'quota_funding_notice', label: 'Fund 100000', chargedThisPeriod: 19.6, cap: 20, standing: true,
+      message: 'Included quota used · charging Fund 100000 · $19.60 this month of $20.00',
+    });
+    quota.setQuotaExceeded({
+      type: 'quota_exceeded', currentUsage: 50, quotaLimit: 50, percentageUsed: 100,
+      periodType: 'monthly', resetInfo: '', message: '',
+    });
+
+    TestBed.inject(StreamParserService).reset('s1');
+
+    expect(quota.fundingNotice()).toBeNull();
+    expect(quota.isQuotaExceeded()).toBe(false);
+  });
+});

@@ -392,10 +392,12 @@ export class StreamParserService {
     // Start the elapsed clock here, not at the first runtime event: the wait
     // the user is measuring begins when they hit send.
     this.toolInsight.startTurn(sessionId);
-    // A blocked turn re-sends quota_exceeded, so each turn starts unblocked and
-    // the composer's "Request more quota" tab tracks the latest answer, not one
-    // from before an approval.
+    // A blocked turn re-sends quota_exceeded, and a turn still charging a fund
+    // re-sends quota_funding_notice, so each turn starts without either: the
+    // composer's tab tracks the latest answer, not one from before an approval
+    // or from spend that has since reached its cap.
     this.quotaWarningService.clearQuotaExceeded();
+    this.quotaWarningService.clearFundingNotice();
     const state = this.createState(sessionId, startingMessageCount || 0);
     this.states.update((map) => {
       const next = new Map(map);

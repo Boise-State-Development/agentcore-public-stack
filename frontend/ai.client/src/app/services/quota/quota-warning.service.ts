@@ -379,6 +379,15 @@ export class QuotaWarningService {
     this.isFundingNoticeDismissedSignal.set(this.readFundingDismissedPeriod() === currentPeriod());
   }
 
+  /**
+   * Forget the funding notice (at the start of each turn). The backend re-sends
+   * it at the head of every turn still in the band, so a notice left over from
+   * an earlier turn would describe spend that has since moved on.
+   */
+  clearFundingNotice(): void {
+    this.fundingNoticeSignal.set(null);
+  }
+
   /** Dismiss the funding notice for the rest of this period. */
   dismissFundingNotice(): void {
     this.isFundingNoticeDismissedSignal.set(true);
@@ -422,7 +431,7 @@ export class QuotaWarningService {
     this.clearWarning();
     this.clearSessionNotice();
     this.clearQuotaExceeded();
-    this.fundingNoticeSignal.set(null);
+    this.clearFundingNotice();
   }
 
   /**

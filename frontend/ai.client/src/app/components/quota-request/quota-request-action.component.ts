@@ -16,12 +16,20 @@ import { QuotaRequestDialogService } from './quota-request-dialog.service';
  *
  * `inline` sits inside the composer's quota tab (small text, link-styled);
  * `button` sits beside the Usage page's quota bar.
+ *
+ * `blocked` leads with what stopped the user: `Quota reached ·`, or
+ * `Fund cap reached ·` when the spend that hit the limit was charged to a
+ * capped fund, where the next step is *Request a higher cap* (§5.2). The lead
+ * shows before the status loads, so the tab is never empty.
  */
 @Component({
   selector: 'app-quota-request-action',
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { class: 'contents' },
   template: `
+    @if (blocked()) {
+      <span class="font-medium">{{ capReached() ? 'Fund cap reached' : 'Quota reached' }} ·</span>
+    }
     @if (state(); as s) {
       @switch (s.kind) {
         @case ('info') {
@@ -46,7 +54,7 @@ import { QuotaRequestDialogService } from './quota-request-dialog.service';
               Request more quota
             </button>
           } @else {
-            <button type="button" [class]="linkClass()" (click)="request()">{{ label() }}</button>
+            <button type="button" [class]="linkClass()" (click)="request()">{{ requestLabel() }}</button>
           }
         }
       }
@@ -60,6 +68,8 @@ export class QuotaRequestActionComponent {
   readonly variant = input<'inline' | 'button'>('inline');
   /** The inline link's wording: `Request more` in the warning tab, `Request more quota` when blocked. */
   readonly label = input('Request more');
+  /** Lead with what blocked the user (the composer's blocked tab). */
+  readonly blocked = input(false);
 
   private features = inject(FEATURES);
   private quotaStatus = inject(QuotaStatusService);
@@ -82,6 +92,14 @@ export class QuotaRequestActionComponent {
     }
     return { kind: 'request' as const };
   });
+
+  /** This period's charged spend has reached the fund's cap. */
+  protected readonly capReached = computed(() => {
+    const charged = this.quotaStatus.status.value()?.charged;
+    return !!charged && charged.cap != null && charged.thisPeriod >= charged.cap - 0.005;
+  });
+
+  protected readonly requestLabel = computed(() => (this.capReached() ? 'Request a higher cap' : this.label()));
 
   protected readonly textClass = computed(() =>
     this.variant() === 'inline' ? 'text-xs' : 'text-sm/6 text-gray-700 dark:text-gray-300',
