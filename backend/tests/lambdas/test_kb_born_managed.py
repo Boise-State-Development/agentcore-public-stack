@@ -254,6 +254,102 @@ class TestFirstUploadTrigger:
             assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is False
 
 
+class TestStartsWithoutWaitingForTheTick:
+    """Prod, 2026-11-03. The dispatcher runs every 15 minutes, so a queued job
+    waited 0–15 minutes before anything built the knowledge base: a Shared
+    Project's 11 files sat at "Setting up" for 12 minutes, then were all ready two
+    minutes after the tick. The first upload now starts the worker itself."""
+
+    WORKER = "kb-migration-worker"
+
+    @pytest.fixture()
+    def worker(self, monkeypatch):
+        monkeypatch.setenv(bm.ENV_WORKER_FUNCTION, self.WORKER)
+        sent = []
+        with patch.object(
+            bm, "_invoke_worker", side_effect=lambda fn, payload: sent.append((fn, payload))
+        ):
+            yield sent
+
+    @pytest.mark.asyncio
+    async def test_first_upload_starts_the_worker_with_the_dispatchers_payload(
+        self, table, flag_on, worker
+    ):
+        """MUTATION GUARD: drop the invoke and this fails — the job is queued and
+        nothing runs it until the next tick."""
+        assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is True
+
+        assert worker == [
+            (
+                self.WORKER,
+                {
+                    "assistantId": ASSISTANT_ID,
+                    "appKbId": ASSISTANT_ID,
+                    "migrationState": r.BORN_MANAGED,
+                    "migrationGeneration": 0,
+                },
+            )
+        ]
+        # Still queued: the tick stays the safety net for a worker that never runs.
+        assert _kb(table)["GSI7_PK"] == r.work_pk(r.BORN_MANAGED)
+
+    @pytest.mark.asyncio
+    async def test_later_uploads_during_provisioning_do_not_start_it_again(
+        self, table, flag_on, worker
+    ):
+        """A project seeds many files at once. Only the upload that queued the job
+        starts the worker; the rest join it."""
+        assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is True
+        assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is True
+        assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is True
+
+        assert len(worker) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_refused_invoke_leaves_the_job_for_the_tick(
+        self, table, flag_on, monkeypatch
+    ):
+        monkeypatch.setenv(bm.ENV_WORKER_FUNCTION, self.WORKER)
+        with patch.object(bm, "_invoke_worker", side_effect=RuntimeError("AccessDenied")):
+            assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is True
+
+        record = _kb(table)
+        assert record["migrationState"] == r.BORN_MANAGED
+        assert record["GSI7_PK"] == r.work_pk(r.BORN_MANAGED)
+
+    @pytest.mark.asyncio
+    async def test_no_function_name_means_the_tick_as_before(
+        self, table, flag_on, monkeypatch
+    ):
+        """An image shipped ahead of the infrastructure that sets the name."""
+        monkeypatch.delenv(bm.ENV_WORKER_FUNCTION, raising=False)
+        with patch.object(bm, "_invoke_worker") as invoked:
+            assert await bm.begin_born_managed(ASSISTANT_ID, owner_user_id=OWNER) is True
+
+        invoked.assert_not_called()
+        assert _kb(table)["migrationState"] == r.BORN_MANAGED
+
+    def test_the_payload_is_one_the_worker_reads(self):
+        """Sent through the real invoke: asynchronous, so the worker's own retries
+        apply, and carrying the identifiers its handler reads."""
+        import json
+        from unittest.mock import MagicMock
+
+        from apis.app_api.kb_migration import worker as wk
+
+        client = MagicMock()
+        payload = {"assistantId": ASSISTANT_ID, "appKbId": ASSISTANT_ID}
+        with patch("boto3.client", return_value=client):
+            bm._invoke_worker(self.WORKER, payload)
+
+        kwargs = client.invoke.call_args.kwargs
+        assert kwargs["FunctionName"] == self.WORKER
+        assert kwargs["InvocationType"] == "Event"
+        with patch.object(wk, "run_step", new=AsyncMock()) as run_step:
+            wk.lambda_handler(json.loads(kwargs["Payload"]), None)
+        run_step.assert_awaited_once_with(ASSISTANT_ID, ASSISTANT_ID)
+
+
 # ── 2. The legacy pipeline stands down ───────────────────────────────────────
 class TestLegacyPipelineSkips:
     def test_legacy_handler_skips_a_document_bound_for_a_provisioning_kb(self, table):

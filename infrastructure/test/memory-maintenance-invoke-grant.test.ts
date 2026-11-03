@@ -6,6 +6,9 @@
  * resolved document (already 5,921 of IAM's 6,144 characters) then passed the
  * limit. CDK packs overflow statements by a size it estimates before ARNs
  * resolve, so a synth can't see that. The grant now has its own managed policy.
+ *
+ * The managed-KB migration worker's invoke (born-managed provisioning started on
+ * the first upload) shares that policy for the same reason, so both are asserted.
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -16,11 +19,13 @@ interface PolicyDocument {
   Statement?: Array<{ Action?: string | string[] }>;
 }
 
-function invokesWorker(doc: PolicyDocument | undefined): boolean {
+const WORKERS = ['MemoryMaintenanceWorkerLambda', 'KbMigrationWorkerLambda'];
+
+function invokesWorker(doc: PolicyDocument | undefined, worker: string): boolean {
   return (doc?.Statement ?? []).some(
     (st) =>
       (Array.isArray(st.Action) ? st.Action : [st.Action]).includes('lambda:InvokeFunction') &&
-      JSON.stringify(st).includes('MemoryMaintenanceWorkerLambda'),
+      JSON.stringify(st).includes(worker),
   );
 }
 
@@ -39,14 +44,18 @@ describe('Memory maintenance invoke grant', () => {
     template = Template.fromStack(stack);
   });
 
-  it('is a one-statement managed policy on the app-api task role', () => {
+  it('is an invoke-only managed policy on the app-api task role', () => {
     const policies = Object.entries(template.findResources('AWS::IAM::ManagedPolicy')).filter(([id]) =>
       id.includes('MemoryMaintenanceInvokePolicy'),
     );
     expect(policies).toHaveLength(1);
     const [, policy] = policies[0];
-    expect(policy.Properties.PolicyDocument.Statement).toHaveLength(1);
-    expect(invokesWorker(policy.Properties.PolicyDocument)).toBe(true);
+    const statements: PolicyDocument['Statement'] = policy.Properties.PolicyDocument.Statement;
+    // One statement per worker, and nothing but invokes: anything else belongs
+    // in a policy named for it.
+    expect(statements).toHaveLength(WORKERS.length);
+    for (const st of statements ?? []) expect(st.Action).toBe('lambda:InvokeFunction');
+    for (const worker of WORKERS) expect(invokesWorker(policy.Properties.PolicyDocument, worker)).toBe(true);
     expect(JSON.stringify(policy.Properties.Roles)).toContain('AppApiTaskDefinitionTaskRole');
   });
 
@@ -57,6 +66,8 @@ describe('Memory maintenance invoke grant', () => {
     ].filter(([id]) => id.includes('AppApiTaskDefinitionTaskRole'));
     // Non-vacuous: the role's default and overflow policies must be in the template.
     expect(appApiPolicies.length).toBeGreaterThan(0);
-    for (const [, r] of appApiPolicies) expect(invokesWorker(r.Properties.PolicyDocument)).toBe(false);
+    for (const [, r] of appApiPolicies) {
+      for (const worker of WORKERS) expect(invokesWorker(r.Properties.PolicyDocument, worker)).toBe(false);
+    }
   });
 });
