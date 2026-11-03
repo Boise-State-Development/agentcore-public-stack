@@ -23,6 +23,7 @@ describe('FEATURES', () => {
     expect(environment.features.sessionFork).toBe(false);
     expect(environment.features.quotaRequests).toBe(false);
     expect(environment.features.projectFileReadiness).toBe(false);
+    expect(environment.features.awsLimits).toBe(false);
   });
 
   it('turns finished features on locally, matching their default-on backend switches', () => {

@@ -91,6 +91,7 @@ export interface AppConfig {
   sessionRewind: SessionRewindConfig;
   sessionFork: SessionForkConfig;
   quotaRequests: QuotaRequestsConfig;
+  awsLimits: AwsLimitsConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -490,6 +491,22 @@ export interface SessionPrewarmConfig {
  * requests, extensions and the policy live in the existing user-quotas table.
  */
 export interface QuotaRequestsConfig {
+  enabled: boolean;
+}
+
+/**
+ * AWS Limits admin page (GitHub issue #12): the account's Service Quotas for
+ * the services this stack uses, with usage and increase requests.
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_AWS_LIMITS_ENABLED=true (or an `awsLimits.enabled: true` cdk.json
+ * context). Sets AWS_LIMITS_ENABLED on **app-api only**, which serves
+ * `/admin/aws-limits`, and only while on grants the App API task role the
+ * Service Quotas reads, cloudwatch:GetMetricData, RequestServiceQuotaIncrease
+ * (conditioned to the monitored services) and creation of the Service Quotas
+ * service-linked role. The Runtime needs no copy. No new resources: increase
+ * submissions are audited in the existing audit-log table.
+ */
+export interface AwsLimitsConfig {
   enabled: boolean;
 }
 
@@ -1703,6 +1720,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_QUOTA_REQUESTS_ENABLED
         ? process.env.CDK_QUOTA_REQUESTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('quotaRequests')?.enabled ?? false,
+    },
+    awsLimits: {
+      // Opt-in while in development, same parsing as quotaRequests above.
+      enabled: process.env.CDK_AWS_LIMITS_ENABLED
+        ? process.env.CDK_AWS_LIMITS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('awsLimits')?.enabled ?? false,
     },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.

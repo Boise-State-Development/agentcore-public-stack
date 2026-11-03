@@ -76,7 +76,7 @@ describe('admin nav scope wiring', () => {
   let userService: { hasAdminScope: ReturnType<typeof vi.fn>; canAccessAdmin: () => boolean };
 
   // Quota requests on by default here, so the scope-agreement test covers its entry too.
-  function buildNav(hasScope: (scope: string) => boolean, quotaRequests = true) {
+  function buildNav(hasScope: (scope: string) => boolean, quotaRequests = true, awsLimits = true) {
     TestBed.resetTestingModule();
     userService = {
       hasAdminScope: vi.fn().mockImplementation(hasScope),
@@ -101,7 +101,7 @@ describe('admin nav scope wiring', () => {
           provide: QuotaRequestsAdminService,
           useValue: { pendingCount: signal(2), refreshSummary: vi.fn().mockResolvedValue(undefined) },
         },
-        { provide: FEATURES, useValue: { ...environment.features, quotaRequests } },
+        { provide: FEATURES, useValue: { ...environment.features, quotaRequests, awsLimits } },
       ],
     });
 
@@ -209,5 +209,19 @@ describe('admin nav scope wiring', () => {
     nav.ngOnInit();
 
     expect(quotaRequests.refreshSummary).not.toHaveBeenCalled();
+  });
+
+  it('lists AWS Limits under Usage & Spend only in a build with the feature on', () => {
+    const routes = (nav: AdminNav) => nav.navGroups().flatMap(g => g.items.map(i => i.route));
+
+    expect(routes(buildNav(() => true, true, false))).not.toContain('/admin/aws-limits');
+    const usage = buildNav(() => true, true, true).navGroups().find(g => g.label === 'Usage & Spend');
+    expect(usage?.items.map(i => i.route)).toContain('/admin/aws-limits');
+  });
+
+  it('shows an admin holding only aws_limits exactly one entry', () => {
+    const groups = buildNav(scope => scope === 'admin.aws_limits').navGroups();
+    expect(groups.length).toBe(1);
+    expect(groups[0].items.map(i => i.route)).toEqual(['/admin/aws-limits']);
   });
 });

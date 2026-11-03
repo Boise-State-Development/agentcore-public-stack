@@ -45,6 +45,7 @@ EXPECTED_MODULE_SCOPES = {
     "routes.py": "admin.models",
     "quota/routes.py": "admin.quota",
     "quota_requests/routes.py": "admin.quota_requests",
+    "aws_limits/routes.py": "admin.aws_limits",
     "costs/routes.py": "admin.costs",
     "feedback/routes.py": "admin.costs",  # eval-sampling queue sits beside the cost rows
     "users/routes.py": "admin.users",

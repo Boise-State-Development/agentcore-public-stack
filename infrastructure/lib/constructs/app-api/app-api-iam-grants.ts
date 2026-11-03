@@ -427,6 +427,11 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
         actions: ['lambda:InvokeFunction'],
         resources: [props.refs.kbMigrationWorker.functionArn],
       }),
+      // AWS Limits (GitHub issue #12): only while CDK_AWS_LIMITS_ENABLED is on.
+      // Here rather than on the role for the same overflow-policy reason, and
+      // rather than in a managed policy of its own because the stack is a few
+      // resources under its ceiling (platform-ceilings.test.ts).
+      ...(config.awsLimits.enabled ? awsLimitsStatements() : []),
     ],
   });
 
@@ -900,4 +905,71 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       ],
     }),
   );
+}
+
+/**
+ * Service Quotas services the AWS Limits page may raise. Mirrors
+ * `MONITORED_SERVICE_CODES` in backend/src/apis/shared/aws_limits/catalog.py;
+ * the backend refuses anything else before calling AWS, and this condition
+ * refuses it again at IAM.
+ */
+export const AWS_LIMITS_REQUESTABLE_SERVICES = [
+  'bedrock', 'bedrock-agentcore', 'lambda', 'fargate', 'ecs', 'dynamodb', 'sagemaker', 'transcribe',
+];
+
+/**
+ * The App API's AWS Limits grants (GitHub issue #12).
+ *
+ * No `support:*`: when an increase needs manual review, Service Quotas opens
+ * the support case itself through its service-linked role
+ * (AWSServiceRoleForServiceQuotas, whose managed policy holds
+ * support:CreateCase). What the caller does need is permission to create that
+ * role, used once, on the first increase request anyone makes in the account;
+ * without it the request fails with DependencyAccessDeniedException. The role
+ * is deliberately not created in CDK (`CfnServiceLinkedRole`): that deploy
+ * fails in any account where it already exists.
+ */
+function awsLimitsStatements(): iam.PolicyStatement[] {
+  return [
+    // Read: these actions have no resource-level permissions.
+    new iam.PolicyStatement({
+      sid: 'AwsLimitsRead',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'servicequotas:ListServices',
+        'servicequotas:ListServiceQuotas',
+        'servicequotas:ListAWSDefaultServiceQuotas',
+        'servicequotas:GetServiceQuota',
+        'servicequotas:GetAWSDefaultServiceQuota',
+        'servicequotas:ListRequestedServiceQuotaChangeHistory',
+        'servicequotas:ListRequestedServiceQuotaChangeHistoryByQuota',
+        'servicequotas:GetRequestedServiceQuotaChange',
+        'servicequotas:GetAutoManagementConfiguration',
+      ],
+      resources: ['*'],
+    }),
+    // Usage: GetMetricData has no resource-level permissions.
+    new iam.PolicyStatement({
+      sid: 'AwsLimitsMetricsRead',
+      effect: iam.Effect.ALLOW,
+      actions: ['cloudwatch:GetMetricData'],
+      resources: ['*'],
+    }),
+    // Write: limited to the monitored services.
+    new iam.PolicyStatement({
+      sid: 'AwsLimitsRequestIncrease',
+      effect: iam.Effect.ALLOW,
+      actions: ['servicequotas:RequestServiceQuotaIncrease'],
+      resources: ['*'],
+      conditions: { StringEquals: { 'servicequotas:service': AWS_LIMITS_REQUESTABLE_SERVICES } },
+    }),
+    // First-ever request in an account: let Service Quotas' own role be created. Nothing else.
+    new iam.PolicyStatement({
+      sid: 'AwsLimitsServiceLinkedRole',
+      effect: iam.Effect.ALLOW,
+      actions: ['iam:CreateServiceLinkedRole'],
+      resources: ['arn:aws:iam::*:role/aws-service-role/servicequotas.amazonaws.com/AWSServiceRoleForServiceQuotas'],
+      conditions: { StringEquals: { 'iam:AWSServiceName': 'servicequotas.amazonaws.com' } },
+    }),
+  ];
 }

@@ -153,4 +153,12 @@ export interface FeatureFlags {
    * until a deployment turns it on.
    */
   projectFileReadiness: boolean;
+
+  /**
+   * AWS Limits admin page (GitHub issue #12): the account's Service Quotas for
+   * the services this stack uses, with usage and increase requests, under
+   * Usage & Spend. Backend: AWS_LIMITS_ENABLED (app-api; `/admin/aws-limits`
+   * 404s while off). In development, so `false` locally and in prod.
+   */
+  awsLimits: boolean;
 }
