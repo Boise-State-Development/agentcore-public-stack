@@ -130,9 +130,9 @@ the renderer.
 - **House voices only.** v1 ships five synthetic voices, one per speaker tag
   `[S1]`–`[S5]`: short clips MOSS-TTSD generated from fixed seeds with no
   reference audio, plus their transcripts, versioned in the image under
-  `voices/`. The bake-off minted and tested two; PR-0 mints the rest and
-  approves all five. Requests name a voice id; the request
-  schema has **no audio field**, and the renderer rejects any voice id it does
+  `voices/`. The bake-off minted and tested two; PR-0 mints the remaining three
+  from fixed seeds. Requests name a voice id; the request schema has **no audio
+  field**, and the renderer rejects any voice id it does
   not ship. No user-supplied or real person's voice is ever used. (MOSS-TTSD's own
   sample reference clips are recordings of public figures and are not used.)
 - Output: mono MP3, 128 kbps, loudness-normalised to -16 LUFS (ffmpeg in the
@@ -449,10 +449,11 @@ plus 15 idle minutes (~$0.65).
    - Render 5, 10 and 15 minutes in a single pass, and record memory and quality.
    - Measure a SageMaker async cold start from zero.
    - Build FlashAttention and re-measure render speed.
-   - Mint five house voices and approve them.
+   - Mint five house voices.
    - Render a single-narrator script and a three-to-five-speaker script, and
      score both the way the bake-off scored two hosts. The bake-off tested only
-     a two-host script, so these are unmeasured until then.
+     a two-host script, so these are unmeasured until then. The
+     three-to-five-speaker render is also the check on the new house voices.
    - These results set the word cap and the cold-start copy.
 2. **PR-1, renderer stack.**
    - Container, stack, workflow, and the submit and finalize Lambdas.
@@ -504,8 +505,7 @@ plus 15 idle minutes (~$0.65).
 
 1. **Notify a user who left before it finished** (an announcement, email or
    push), or is the Files panel enough?
-2. **Voices:** a voice picker, more than five house voices, and how a new house
-   voice is approved.
+2. **Voices:** a voice picker, and adding house voices beyond five.
 3. **Editing:** re-render one segment instead of the whole script.
 4. **Captions:** ship the script as a `.txt` or WebVTT sidecar for accessibility.
    MOSS-TTSD gives no word timestamps, so WebVTT would need alignment.
