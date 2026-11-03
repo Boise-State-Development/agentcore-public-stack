@@ -126,7 +126,7 @@ describe('ProjectFileReadinessComponent', () => {
   it('keeps its links readable in dark mode', async () => {
     respond(doc('a', 'provisioning'));
     const { el } = await mount();
-    expect(el.querySelector('a')?.className).toContain('dark:text-primary-accessible-dark');
+    expect(el.querySelector('a')?.className).toContain('dark:text-primary-50');
   });
 
   it('names files that could not be added, and can be dismissed', async () => {
