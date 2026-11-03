@@ -51,8 +51,9 @@ SKILL_AUTHORING_TOOL_IDS = frozenset({"my_skill_create"})
 # Meeting transcripts → GitHub issues (bound to user + the connector on the
 # row). One toggle per vendor, each provisioning its family: Google Calendar
 # (``list_calendar_meetings``), Zoom (``list_zoom_recordings`` /
-# ``get_zoom_transcript``) and GitHub (``list_github_repositories`` /
-# ``create_github_issues``). Additionally gated on ``meeting_tasks_enabled()``.
+# ``get_zoom_transcript``) and GitHub (``list_github_projects`` /
+# ``list_github_repositories`` / ``create_project_tasks``). Additionally gated
+# on ``meeting_tasks_enabled()``.
 # Kept as literals here (not imported from the tool module) so this leaf stays
 # import-light; ``tests/agents/local_tools/test_meeting_tasks.py`` pins them.
 MEETING_TASKS_TOOL_IDS = frozenset(
