@@ -102,7 +102,7 @@ class PeriodWaterfall:
     # None when no extension in the period recorded the base it was granted on.
     base: Optional[Decimal]
     # The extensions carried different base snapshots (a tier changed
-    # mid-period); ``base`` is then the largest of them (§9.2).
+    # mid-period); ``base`` is then the newest extension's (§9.2).
     base_ambiguous: bool
     central: Decimal
     consumed: List[Tuple[QuotaExtension, Decimal]] = field(default_factory=list)
@@ -113,29 +113,36 @@ def period_waterfall(spend: Decimal, extensions: Iterable[QuotaExtension]) -> Pe
     """§9.1 for one user and one period, in exact decimal arithmetic.
 
     ``extensions`` are those active at any point in the period. The base is
-    their ``baseLimitSnapshot`` (§9.2): when they disagree, the largest, which
-    charges funds the least, and the result says so. With no snapshot at all
-    nothing is attributed, because guessing a base could only over-charge.
+    their ``baseLimitSnapshot`` (§9.2). When they disagree (the base changed
+    mid-period) it is the newest extension's, the base in force latest, which
+    is the one enforcement charged against; the result says so. An extension
+    granted on a higher base than that can only have covered spend above its
+    own snapshot, because spend within a period only grows. With no snapshot
+    at all nothing is attributed, because guessing a base could over-charge.
     """
     exts = list(extensions)
     spend = max(Decimal("0"), spend)
-    snapshots = {e.base_limit_snapshot for e in exts if e.base_limit_snapshot is not None}
-    if not snapshots:
+    snapped = [e for e in exts if e.base_limit_snapshot is not None]
+    if not snapped:
         return PeriodWaterfall(
             spend=spend, base=None, base_ambiguous=False, central=spend,
             consumed=[(e, Decimal("0")) for e in consumption_order(exts)],
         )
-    base = max(snapshots)
+    # Two grants in the same instant tie on the larger base, as before.
+    base = max(snapped, key=lambda e: (e.created_at, e.base_limit_snapshot)).base_limit_snapshot
     remaining = max(Decimal("0"), spend - base)
     consumed: List[Tuple[QuotaExtension, Decimal]] = []
     for ext in consumption_order(exts):
         used = remaining if ext.amount is None else min(Decimal(ext.amount), remaining)
+        snapshot = ext.base_limit_snapshot
+        if snapshot is not None and snapshot > base:
+            used = min(used, max(Decimal("0"), spend - snapshot))
         remaining -= used
         consumed.append((ext, used))
     return PeriodWaterfall(
         spend=spend,
         base=base,
-        base_ambiguous=len(snapshots) > 1,
+        base_ambiguous=len({e.base_limit_snapshot for e in snapped}) > 1,
         central=min(spend, base),
         consumed=consumed,
         unattributed=remaining,

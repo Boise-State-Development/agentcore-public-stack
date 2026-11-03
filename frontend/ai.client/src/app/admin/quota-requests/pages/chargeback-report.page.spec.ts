@@ -112,12 +112,15 @@ describe('ChargebackReportPage', () => {
     expect(text(fixture.nativeElement)).toContain('centrally funded, then capped chargeback, then standing');
   });
 
-  it('marks a line whose base limit changed during the period', async () => {
+  it('marks a line whose base limit changed during the period, and its group while collapsed', async () => {
     const fixture = await render();
     const marked = rows(fixture.nativeElement).filter(r => r.includes('Base limit changed during period'));
     expect(marked).toHaveLength(1);
-    expect(marked[0]).toContain('$40.00');
+    expect(marked[0]).toContain('the latest ($40.00) was used');
     expect(marked[0]).toContain('Standing');
+    const flaggedGroups = rows(fixture.nativeElement).filter(r => r.includes('A base limit changed during the period'));
+    expect(flaggedGroups).toHaveLength(1);
+    expect(flaggedGroups[0]).toContain('200000');
   });
 
   it('labels an open month provisional with the date it closes', async () => {

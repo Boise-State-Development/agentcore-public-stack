@@ -759,10 +759,35 @@ reading it agree.
 
 `base_P` is the extension's `baseLimitSnapshot` when every extension in P
 carries the same snapshot, which is the normal case. If an admin changed the
-tier mid-period (snapshots differ), the report uses the **largest** snapshot,
-which charges funds the least, and marks the row *base limit changed during
-period*. Finance resolves the rare ambiguity; the report never silently
-over-charges a fund.
+tier or an override mid-period (snapshots differ), the report uses the
+snapshot of the **most recently created** extension: the base in force
+latest, which is the one enforcement charged against (§8.2 runs on the base
+of the moment, not on any earlier one). Two grants made in the same instant
+tie on the larger. An extension granted on a **higher** base than that one
+can only have covered spend above its own snapshot, because spend within a
+period only grows, so its consumption is capped at `max(0, spend_P −
+its snapshot)`. Every row of that user in that period is marked *base limit
+changed during period*, on the Chargeback view (the line, and its group
+heading while collapsed) and in the CSV (`baseLimitChanged`), and finance
+resolves the rare ambiguity.
+
+*Decision (QA on dev, 2026-11).* This replaces "use the largest snapshot",
+which undercharged funds. On dev a user on a $10 tier was moved to a $0.01
+override mid-month and given a standing chargeback capped at $0.02;
+enforcement and `quota-status` charged the fund $0.02, while the report took
+the $10 snapshot of an earlier grant as the base and charged nobody. The
+report must never charge a fund less than enforcement did. The lowest
+snapshot was the other candidate; it over-charges when a base was *raised*
+mid-period (a fund charged for spend the new base covered), so the newest
+snapshot is the one that agrees with enforcement in both directions.
+Enforcement can still disagree when the base changed after the newest grant
+(no extension records it), which the marker covers.
+
+What this does not change: a revoked extension stays in the period it was
+revoked in (§9.4.1), and with only monthly spend the report cannot tell how
+much of the month it absorbed. A central extension revoked before a
+chargeback one was granted can therefore still absorb overage that
+enforcement, after the revoke, charged to the fund.
 
 ### 9.3 Reading the report
 

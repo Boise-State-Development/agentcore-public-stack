@@ -190,7 +190,7 @@ export interface QuotaChargeLine {
   granted: DecimalString | null;
   consumed: DecimalString;
   baseLimit?: DecimalString | null;
-  /** §9.2: the base limit changed during the period; the larger one was used. */
+  /** §9.2: the base limit changed during the period; the newest grant's was used. */
   baseLimitAmbiguous: boolean;
   periodSpend: DecimalString;
   approvedBy: string;
