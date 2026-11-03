@@ -1,16 +1,20 @@
-# Podcast generation: scripted conversations rendered as audio
+# Spoken audio generation: scripts rendered as speech
 
 Status: proposed, nothing built. Will ship in development behind
-`PODCAST_GENERATION_ENABLED` (off by default).
+`SPOKEN_AUDIO_ENABLED` (off by default).
 
 ## 1. Summary
 
-A user asks for a podcast ("turn this report into a ten-minute two-host
-episode"). The chat model writes the script, as it writes any document today,
-and calls a `create_podcast` tool. The tool hands the script to an **external
-renderer**: an open-weight text-to-speech model (MOSS-TTSD v1.0) on a SageMaker
-asynchronous endpoint that scales to zero, deployed as its own stack outside
-`PlatformStack`. When the render finishes, the finished MP3 lands in the
+A user asks for something to listen to: a podcast ("turn this report into a
+ten-minute two-host episode"), a narration of a document, or a dialogue for a
+language lesson. The chat model writes the script, as it writes any document
+today, and calls a `create_spoken_audio` tool. The tool is a general
+script-to-speech renderer with one to five speakers; nothing in it is specific to
+podcasts, which are the motivating example.
+
+The tool hands the script to an **external renderer**: an open-weight
+text-to-speech model (MOSS-TTSD v1.0) on a SageMaker asynchronous endpoint that
+scales to zero, deployed as its own stack outside `PlatformStack`. When the render finishes, the finished MP3 lands in the
 conversation's Files, a cost row charges the GPU time to the user's quota, and
 an inline card in the chat turns from "Rendering…" into an audio player.
 
@@ -49,54 +53,54 @@ Apache-2.0 licensed, supports up to five speakers and, per its model card, up to
 ## 3. Architecture
 
 ```
- chat turn (Runtime)                       renderer stack ({prefix}-PodcastRendererStack)
+ chat turn (Runtime)                       renderer stack ({prefix}-SpokenAudioRendererStack)
  ───────────────────                       ──────────────────────────────────────────────
- create_podcast(title, script)
-   ├─ PutItem   PODJ#<jobId>  status=queued ──┐
-   └─ PutObject requests/<jobId>.json ────────┼──▶ S3 event ─▶ podcast-submit λ
+ create_spoken_audio(title, script)
+   ├─ PutItem   SPKA#<jobId>  status=queued ──┐
+   └─ PutObject requests/<jobId>.json ────────┼──▶ S3 event ─▶ spoken-audio-submit λ
       (allowed by the renderer bucket's       │                 ├─ InvokeEndpointAsync
-       resource policy, not the Runtime role) │                 └─ PODJ# status=submitted,
+       resource policy, not the Runtime role) │                 └─ SPKA# status=submitted,
    returns ~1 s later: a "rendering" card     │                    coldStart, estimatedReadyAt
                                               │
                                               │   SageMaker async endpoint (MOSS-TTSD, 0..N)
                                               │     writes audio/<jobId>.mp3 + outputs/<id>.out
                                               │                       │ (or failures/<id>.out)
                                               │                       ▼
- SPA card polls app-api                       │   S3 event ─▶ podcast-finalize λ
-   GET /sessions/{id}/podcasts/{jobId}        │                 ├─ copy MP3 → user-files bucket
+ SPA card polls app-api                       │   S3 event ─▶ spoken-audio-finalize λ
+   GET /sessions/{id}/spoken-audio/{jobId}        │                 ├─ copy MP3 → user-files bucket
    (one row read)  ◀──────────────────────────┴──────────────── ├─ FileMetadata row (READY)
                                                                 ├─ C# cost row → user-cost-summary
-                                                                └─ PODJ# status=ready
+                                                                └─ SPKA# status=ready
 ```
 
 ## 4. The renderer
 
 ### 4.1 Where it lives and how it deploys
 
-- **Container:** `backend/src/podcast_renderer/`. A SageMaker bring-your-own-container
+- **Container:** `backend/src/spoken_audio_renderer/`. A SageMaker bring-your-own-container
   server (`/ping`, `/invocations`) on the AWS PyTorch inference deep learning
   container, which is pulled from AWS ECR and so avoids the Docker Hub rate limit
   that has blocked backend deploys before. The package is outside the `apis/`
   import boundary and never imports `apis.shared`: it carries its own exactly
   pinned torch/transformers stack (MOSS-TTSD pins `transformers==5.0.0`,
   `torch==2.9.1+cu128`).
-- **Stack:** `infrastructure/lib/podcast-renderer/podcast-renderer-stack.ts`, with
-  its own entry point `infrastructure/bin/podcast-renderer.ts`. It reuses
+- **Stack:** `infrastructure/lib/spoken-audio-renderer/spoken-audio-renderer-stack.ts`, with
+  its own entry point `infrastructure/bin/spoken-audio-renderer.ts`. It reuses
   `config.ts` (`loadConfig`, `getResourceName`), so every name it derives for
   the platform's tables, bucket and Runtime role is computed by the same code
   that named them.
-- **Lambdas:** `backend/src/lambdas/podcast_submit/` and
-  `backend/src/lambdas/podcast_finalize/`, following the one-folder-per-Lambda
+- **Lambdas:** `backend/src/lambdas/spoken_audio_submit/` and
+  `backend/src/lambdas/spoken_audio_finalize/`, following the one-folder-per-Lambda
   convention. The finalizer imports `apis.shared`, as
   `large_document_prepare` does, so the cost row and file row are written by the
   same code the platform uses.
-- **Workflow:** `.github/workflows/podcast-renderer.yml`, run by an environment
+- **Workflow:** `.github/workflows/spoken-audio-renderer.yml`, run by an environment
   that wants the feature. It builds and pushes the image, then
-  `cdk deploy {prefix}-PodcastRendererStack -a "npx ts-node bin/podcast-renderer.ts"`.
+  `cdk deploy {prefix}-SpokenAudioRendererStack -a "npx ts-node bin/spoken-audio-renderer.ts"`.
   The two Lambdas are container-image functions, like `large_document_prepare`,
   and the renderer stack creates them on a bootstrap image. Their **code** is
   updated by `backend.yml` through `scripts/build/deploy-image-lambda-one.sh`
-  (new `podcast-submit` / `podcast-finalize` cases, targeting the function by its
+  (new `spoken-audio-submit` / `spoken-audio-finalize` cases, targeting the function by its
   derived name), alongside every other backend deploy. That keeps the finalizer
   on the same commit as the `apis.shared` schema it writes, so the two stacks can
   never skew. In an environment that never deployed the renderer, the step finds
@@ -110,8 +114,8 @@ deliberate exception to the single-stack convention, and the implementing PR
 updates CLAUDE.md to say so. The exception is narrow: there are **no
 CloudFormation exports or imports** between the stacks, so neither blocks the
 other's update or deletion, and deploy order does not matter beyond the one
-condition above. A deployment that does not want podcasts never deploys the
-renderer.
+condition above. A deployment that does not want spoken audio never deploys
+the renderer.
 
 ### 4.2 Model, weights and voices
 
@@ -123,9 +127,11 @@ renderer.
   bucket, not in the image, so the image stays small enough for a GitHub runner
   to build. A runner with the default disk is still tight for a CUDA base image;
   PR-1 confirms it or moves the build to a larger runner.
-- **House voices only.** v1 ships two synthetic voices: short clips MOSS-TTSD
-  generated from a fixed seed with no reference audio, plus their transcripts,
-  versioned in the image under `voices/`. Requests name a voice id; the request
+- **House voices only.** v1 ships five synthetic voices, one per speaker tag
+  `[S1]`–`[S5]`: short clips MOSS-TTSD generated from fixed seeds with no
+  reference audio, plus their transcripts, versioned in the image under
+  `voices/`. The bake-off minted and tested two; PR-0 mints the rest and
+  approves all five. Requests name a voice id; the request
   schema has **no audio field**, and the renderer rejects any voice id it does
   not ship. No user-supplied or real person's voice is ever used. (MOSS-TTSD's own
   sample reference clips are recordings of public figures and are not used.)
@@ -137,11 +143,11 @@ renderer.
 - **Instance:** `ml.g6e.xlarge` (NVIDIA L40S, 48 GB). The bake-off peaked at
   24.8 GB of GPU memory, so 24 GB cards (A10G, L4) are ruled out.
 - **Scale to zero:** an Application Auto Scaling target with minimum 0 and maximum
-  `CDK_PODCAST_RENDERER_MAX_INSTANCES` (default 1, matching dev's quota of one
+  `CDK_SPOKEN_AUDIO_RENDERER_MAX_INSTANCES` (default 1, matching dev's quota of one
   `ml.g6e.xlarge` endpoint instance). It scales out from zero on the
   `HasBacklogWithoutCapacity` metric and back in on
   `ApproximateBacklogSizePerInstance`, after
-  `CDK_PODCAST_RENDERER_IDLE_MINUTES` (default 15) with an empty queue.
+  `CDK_SPOKEN_AUDIO_RENDERER_IDLE_MINUTES` (default 15) with an empty queue.
 - **One render per instance** (`MaxConcurrentInvocationsPerInstance: 1`). Jobs
   queue in SageMaker's own async queue.
 - **Request TTL:** a request that waits longer than 1 hour lands in
@@ -153,9 +159,9 @@ renderer.
 
 ### 4.4 The bucket contract
 
-One private bucket, `{prefix}-podcast-renderer-io-{account}`: SSE-S3,
+One private bucket, `{prefix}-spoken-audio-renderer-io-{account}`: SSE-S3,
 public access blocked, SSL enforced. The suffix and every key prefix live in
-`backend/src/apis/shared/podcast/renderer_contract.json`, which both the Python
+`backend/src/apis/shared/spoken_audio/renderer_contract.json`, which both the Python
 side and the CDK stack read, with a test on each side pinning them.
 
 | Prefix | Written by | Holds | Lifecycle |
@@ -172,46 +178,61 @@ entry against the `PlatformStack` template, and this bucket is not in it.
 
 ## 5. Platform side
 
-### 5.1 The tool: `create_podcast`
+### 5.1 The tool: `create_spoken_audio`
 
 ```
-create_podcast(title: str, script: str) -> card
+create_spoken_audio(title: str, script: str) -> card
 ```
 
-- **Script format:** turns tagged `[S1]` / `[S2]`, one per line, the format
-  MOSS-TTSD and the bake-off used. v1 maps S1 and S2 to the two house voices.
-  More speakers and a voice choice are open questions (§12).
+- **Description** (it ships in `toolConfig` on every turn while the tool is
+  enabled, so it stays short):
+
+  > Render a script as spoken audio (MP3) that is saved to this chat's Files.
+  > Use it for podcasts, narrations and dialogues. Speech only. Write the script
+  > as turns, one per line, each starting with a speaker tag `[S1]` to `[S5]`;
+  > use only `[S1]` for a single narrator. Rendering runs in the background.
+
+  It names podcasts, narrations and dialogues as examples and says "speech
+  only", so it never suggests music or sound effects, which the model cannot
+  make.
+- **Script format:** turns tagged `[S1]` to `[S5]`, one per line, the format
+  MOSS-TTSD and the bake-off used. Each tag maps to one house voice (§4.2), so
+  one to five speakers, a single narrator included. Choosing voices is an open
+  question (§14).
+- **Quality is measured for two speakers only.** The bake-off rendered a
+  two-host script. A single narrator and three to five speakers are unmeasured
+  until PR-0 renders them (§12).
 - **Validation:** at most 3,000 words in v1 (about 15 minutes at the 3.4 words
   per second MOSS-TTSD spoke in the bake-off), until PR-0 measures long-form
-  renders. Every turn tagged, at least two turns, and at most 2 unfinished jobs
-  per user.
+  renders. At least one turn, every turn tagged `[S1]` to `[S5]`, and at most 2
+  unfinished jobs per user.
 - **Quota pre-check:** the estimated cost (§7) is checked against the user's
   remaining quota with the same check the turn path uses. Over quota, the tool
   returns a refusal the model can relay, and nothing is submitted.
-- **Submit:** `PutItem` of a `PODJ#<jobId>` row (§5.2), then `PutObject` of the
+- **Submit:** `PutItem` of a `SPKA#<jobId>` row (§5.2), then `PutObject` of the
   request JSON. The job id is a random UUID. Both calls are on resources the
   Runtime can already reach: sessions-metadata through its existing grant, and
   the renderer bucket through the bucket's own policy. **The Runtime role gains
   nothing.**
 - **Returns in about a second.** The result is an inline card (`ui_type:
-  "podcast_render"`, `ui_display: "inline"`, payload `{job_id, title,
+  "spoken_audio_render"`, `ui_display: "inline"`, payload `{job_id, title,
   est_audio_s, est_ready_at}`) and a one-sentence summary for the model:
   "Rendering *Title* (about N minutes of audio). A card showing its progress
   and, when done, a player is already displayed; you cannot check its status."
   There is no URL and no echo of the script.
 - **No renderer deployed:** `PutObject` fails with `NoSuchBucket`, and the tool
-  says podcast rendering is not set up in this environment.
+  says spoken audio is not set up in this environment.
 - **Registration:** a context-bound tool built per request
-  (`_build_podcast_tools` in `inference_api/chat/routes.py`) with a
-  `PODCAST_TOOL_IDS` family in `apis/shared/tools/injected.py`. Its closure is
+  (`_build_spoken_audio_tools` in `inference_api/chat/routes.py`) with a
+  `SPOKEN_AUDIO_TOOL_IDS` family in `apis/shared/tools/injected.py`. Its closure is
   only `(session_id, user_id)`, both cache-key elements, so the family joins
   `KEY_DESCRIBED_INJECTED_TOOL_IDS` and enabling it does not bypass the agent
-  cache. The catalog row `create_podcast` is seeded `enabledByDefault: false` and
+  cache. The catalog row `create_spoken_audio` is seeded `enabledByDefault: false` and
   reaches users only through a role grant.
 
 ### 5.2 The job row
 
-A `PODJ#<jobId>` row in sessions-metadata, keyed like the `TSUM#` and `EXTR#`
+A `SPKA#<jobId>` row in sessions-metadata, keyed like the `TSUM#` and `EXTR#`
 rows (the owner in the partition key, reachable per session through
 `SessionLookupIndex`), so it needs no new table or index. It has a TTL like the
 `C#` rows.
@@ -233,7 +254,7 @@ The finalizer is triggered by S3 events on `outputs/` and `failures/`. It is the
 **only** writer of terminal state. Steps, all idempotent:
 
 1. Read the manifest (or the failure body) and the original request.
-2. **Claim** the job: a conditional update of `PODJ#` from `submitted` or
+2. **Claim** the job: a conditional update of `SPKA#` from `submitted` or
    `queued` to `finalizing`. If the condition fails, another delivery already
    handled it, and the finalizer exits.
 3. On success:
@@ -242,8 +263,8 @@ The finalizer is triggered by S3 events on `outputs/` and `failures/`. It is the
    - Write a `FileMetadata` row with status `READY`, MIME type `audio/mpeg` and
      filename `<slug>.mp3`.
    - Write the `C#` cost row (§7).
-   - Set `PODJ#` to `ready`.
-4. On failure: set `PODJ#` to `failed` with an error code, write no cost row,
+   - Set `SPKA#` to `ready`.
+4. On failure: set `SPKA#` to `failed` with an error code, write no cost row,
    and emit an EMF metric.
 
 Its grants live on its own role in the renderer stack: read the renderer bucket;
@@ -264,7 +285,7 @@ shared copy.
   plus a cold start of minutes, which breaks the 600 s turn limit for anything
   but a short clip. It would also hold the session's single-flight lease, so the
   user could not send another message, and tie the render to a Runtime microVM.
-- **app-api finalizes lazily when the card polls.** An episode whose user closes
+- **app-api finalizes lazily when the card polls.** A render whose user closes
   the tab would never be metered and never land in Files. It would also need
   app-api to read the renderer bucket.
 - **The renderer calls back into app-api over HTTP.** That adds a
@@ -283,13 +304,13 @@ needed, and nothing is charged.
 
 ### 5.4 Status route
 
-`GET /sessions/{session_id}/podcasts/{job_id}` in `apis/app_api/podcasts/`.
+`GET /sessions/{session_id}/spoken-audio/{job_id}` in `apis/app_api/spoken_audio/`.
 
 - **Auth:** `get_current_user_from_session`, which authenticates before the flag
   check, per the convention for flag-gated routes. Ownership is the `(session,
   user)` key of the row, so a job id alone reveals nothing. 404 when the flag is
   off.
-- **Read:** one `GetItem` on `PODJ#`, no other calls, the same shape as
+- **Read:** one `GetItem` on `SPKA#`, no other calls, the same shape as
   `GET /files/{id}/search-status`.
 - **Response:** `{status, coldStart, estimatedReadyAt, uploadId?, audioS?,
   error?}`. app-api already reads sessions-metadata, so it gains no grants.
@@ -297,13 +318,13 @@ needed, and nothing is charged.
 ## 6. What the SPA shows
 
 A new inline renderer next to `file-download-renderer.component.ts`, mounted from
-the tool result's `podcast_render` card. It uses signals and is gated on
-`features.podcastGeneration`; with the flag off the result falls back to the
+the tool result's `spoken_audio_render` card. It uses signals and is gated on
+`features.spokenAudio`; with the flag off the result falls back to the
 ordinary tool rail.
 
 | State | Card |
 |---|---|
-| `queued` / `submitted`, `coldStart: true` | "Warming up the renderer. The first episode in a while takes a few extra minutes." Indeterminate bar |
+| `queued` / `submitted`, `coldStart: true` | "Warming up the renderer. The first render in a while takes a few extra minutes." Indeterminate bar |
 | `submitted` | "Rendering *Title*, about N min of audio". A progress bar driven by `estimatedReadyAt` that slows near the end and never shows 100% before `ready` |
 | `ready` | Native `<audio controls preload="none">` player, duration, a Download button and "Saved to this chat's Files" |
 | `failed` / `expired` | What happened, in a sentence, and that asking again will retry. No cost was charged |
@@ -333,28 +354,28 @@ costUsd = renderS × gpuUsdPerHour / 3600
 - **`renderS`** is measured inside the container: wall time around generation
   plus MP3 encoding for this job only, rounded up to the second.
 - **`gpuUsdPerHour`** comes from renderer config
-  (`CDK_PODCAST_RENDERER_GPU_USD_PER_HOUR`), set on the finalizer. The
+  (`CDK_SPOKEN_AUDIO_RENDERER_GPU_USD_PER_HOUR`), set on the finalizer. The
   SageMaker async-inference rate for `ml.g6e.xlarge` in us-west-2 is
   **$2.6054/hour** (Price List API, `AmazonSageMaker`, usage type
   `USW2-AsyncInf:ml.g6e.xlarge`, verified 2026-11-02), about 40% above the EC2
   on-demand rate for the same instance. The value is re-verified whenever the
   instance type or region changes.
 - **The cost row** is a normal `C#` row written through `store_message_metadata`
-  with message id `podcast:<jobId>` and model `podcast/moss-ttsd-v1.0`, so it
+  with message id `spoken-audio:<jobId>` and model `spoken-audio/moss-ttsd-v1.0`, so it
   updates the user's cost summary (quota), the system rollup and the admin cost
   drill-down exactly as a model call does. Its cost is never `None`, so
   `UnmeteredModelCall` does not fire. Like voice rows, it carries no prompt-cache
   fields.
 - **Not charged to users:** the cold start, the idle tail before scale-in, and
   failed renders. These are platform overhead, reported through EMF metrics
-  (`PodcastRenderSeconds`, `PodcastBilledUsd`) and reconciled monthly against
+  (`SpokenAudioRenderSeconds`, `SpokenAudioBilledUsd`) and reconciled monthly against
   the endpoint's actual instance-hours. Charging a cold start to whoever happened
-  to trigger it would make the same episode cost a user anywhere from $0.05 to
+  to trigger it would make the same render cost a user anywhere from $0.05 to
   $0.40.
 - **Pre-check estimate** (§5.1): `wordCount / 3.4 × 0.5 × rate / 3600 × 1.5`,
   which uses the bake-off's speaking rate and render speed with a 50% margin.
 
-| Episode | Render (at 0.5× real time) | Charged |
+| Script | Render (at 0.5× real time) | Charged |
 |---|---|---|
 | Bake-off script (487 words, 2.3 min) | ~70 s | ~$0.05 |
 | 10 minutes | ~300 s | ~$0.22 |
@@ -367,12 +388,12 @@ plus 15 idle minutes (~$0.65).
 
 | | Name | Default |
 |---|---|---|
-| Backend (Runtime builds the tool; app-api mounts the status route) | `PODCAST_GENERATION_ENABLED` / `CDK_PODCAST_GENERATION_ENABLED` / `config.podcastGeneration.enabled` | off; only `"true"` enables |
-| SPA | `features.podcastGeneration` | `false` in all three environment files until dev turns the backend on |
-| Renderer instance type | `CDK_PODCAST_RENDERER_INSTANCE_TYPE` | `ml.g6e.xlarge` |
-| Renderer max instances | `CDK_PODCAST_RENDERER_MAX_INSTANCES` | `1` |
-| Idle before scale-in | `CDK_PODCAST_RENDERER_IDLE_MINUTES` | `15` |
-| GPU rate | `CDK_PODCAST_RENDERER_GPU_USD_PER_HOUR` | `2.6054` |
+| Backend (Runtime builds the tool; app-api mounts the status route) | `SPOKEN_AUDIO_ENABLED` / `CDK_SPOKEN_AUDIO_ENABLED` / `config.spokenAudio.enabled` | off; only `"true"` enables |
+| SPA | `features.spokenAudio` | `false` in all three environment files until dev turns the backend on |
+| Renderer instance type | `CDK_SPOKEN_AUDIO_RENDERER_INSTANCE_TYPE` | `ml.g6e.xlarge` |
+| Renderer max instances | `CDK_SPOKEN_AUDIO_RENDERER_MAX_INSTANCES` | `1` |
+| Idle before scale-in | `CDK_SPOKEN_AUDIO_RENDERER_IDLE_MINUTES` | `15` |
+| GPU rate | `CDK_SPOKEN_AUDIO_RENDERER_GPU_USD_PER_HOUR` | `2.6054` |
 
 - The Runtime copy of the flag is written only while on, so the default spends
   none of the V2 environment budget. While on it costs one short variable.
@@ -420,7 +441,7 @@ plus 15 idle minutes (~$0.65).
 | `PlatformStack` resources | **0** (verified by `platform-ceilings.test.ts` in PR-2) |
 | Runtime / app-api role policies | **0 characters**: the renderer bucket's policy grants the Runtime; the renderer stack's own roles do the rest |
 | Runtime environment (V2 budget) | the flag variable while on; the bucket name is derived |
-| New tables or indexes | none (`PODJ#` rows in sessions-metadata) |
+| New tables or indexes | none (`SPKA#` rows in sessions-metadata) |
 
 ## 12. Phasing
 
@@ -428,21 +449,25 @@ plus 15 idle minutes (~$0.65).
    - Render 5, 10 and 15 minutes in a single pass, and record memory and quality.
    - Measure a SageMaker async cold start from zero.
    - Build FlashAttention and re-measure render speed.
-   - Re-mint the two house voices and approve them.
+   - Mint five house voices and approve them.
+   - Render a single-narrator script and a three-to-five-speaker script, and
+     score both the way the bake-off scored two hosts. The bake-off tested only
+     a two-host script, so these are unmeasured until then.
    - These results set the word cap and the cold-start copy.
 2. **PR-1, renderer stack.**
    - Container, stack, workflow, and the submit and finalize Lambdas.
    - Deployed to dev only and smoke-tested by writing a request object by hand.
 3. **PR-2, platform backend.**
-   - Flag pair, the `apis/shared/podcast/` contract module, and the tool with its
+   - Flag pair, the `apis/shared/spoken_audio/` contract module, and the tool with its
      catalog seed and injected family.
-   - The `PODJ#` model and status route.
+   - The `SPKA#` model and status route.
    - The `_store_document` key scheme moved to `apis/shared/files/`.
    - Tests (§13).
 4. **PR-3, SPA.** The card, player, polling and feature flag.
 5. **PR-4, enablement.**
    - Dev validation end to end and the docs-site page.
-   - A "podcast producer" skill (episode structure, pacing, length) and a sample
+   - Skills that write good scripts for the tool, starting with a "podcast
+     producer" (episode structure, pacing, length) and a narrator, plus a sample
      agent in Agent Designer.
 
 ## 13. Tests
@@ -451,13 +476,14 @@ plus 15 idle minutes (~$0.65).
   A stack test pins the bucket name, prefixes and the Runtime role principal to
   `getResourceName`.
 - **Tool:**
-  - Validation: tags, cap, active-job limit.
+  - Validation: a single-narrator `[S1]` script is accepted, an `[S6]` tag or an
+    untagged turn is refused, the word cap, the active-job limit.
   - The quota refusal path.
   - The missing-bucket message.
   - The result carries no URL and no script.
   - Injected-family cache eligibility (`tests/shared/test_injected_tool_cache_eligibility.py`).
 - **Finalizer** (moto):
-  - Success writes the file row, `C#` row and `PODJ#`.
+  - Success writes the file row, `C#` row and `SPKA#`.
   - A second delivery is a no-op.
   - A failure writes no cost row.
   - Cost arithmetic.
@@ -478,9 +504,9 @@ plus 15 idle minutes (~$0.65).
 
 1. **Notify a user who left before it finished** (an announcement, email or
    push), or is the Files panel enough?
-2. **Voices:** more than two speakers, a voice picker, and how a new house voice
-   is approved.
-3. **Editing:** re-render one segment instead of the whole episode.
+2. **Voices:** a voice picker, more than five house voices, and how a new house
+   voice is approved.
+3. **Editing:** re-render one segment instead of the whole script.
 4. **Captions:** ship the script as a `.txt` or WebVTT sidecar for accessibility.
    MOSS-TTSD gives no word timestamps, so WebVTT would need alignment.
 5. **Labelling:** whether to mark generated audio as AI-made, in ID3 metadata
