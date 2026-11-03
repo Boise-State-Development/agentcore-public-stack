@@ -25,13 +25,16 @@ from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.caching.config_cache import get_config_cache
 from apis.shared.quota_requests import service as service_module
-from apis.shared.quota_requests.models import QuotaRequestContext, QuotaRequestPolicy
+from apis.shared.quota_requests.chargeback import ChargebackService
+from apis.shared.quota_requests.ledger import ChargeLedgerRepository
+from apis.shared.quota_requests.models import ApproveRequestBody, QuotaRequestContext, QuotaRequestPolicy
 from apis.shared.quota_requests.repository import QuotaRequestRepository
-from apis.shared.quota_requests.service import QuotaRequestService
+from apis.shared.quota_requests.service import QuotaRequestService, QuotaRequestStateError
 
 TABLE = "test-user-quotas"
 REQUESTER = User(email="requester@example.com", user_id="user-r", name="R", roles=["Faculty"])
 ADMIN = User(email="approver@example.com", user_id="user-a", name="A", roles=["Admin"])
+SECOND_ADMIN = User(email="approver2@example.com", user_id="user-a2", name="A2", roles=["Admin"])
 
 
 def _create_table() -> None:
@@ -202,6 +205,75 @@ def test_my_requests_mark_an_approval_whose_extension_was_revoked(env):
     # Joined at read time, never written onto the request row.
     stored = env["requests"].table.get_item(Key={"PK": f"QUOTA_REQUEST#{request_id}", "SK": "METADATA"})["Item"]
     assert "extensionRevokedAt" not in stored["decision"]
+
+
+def test_concurrent_approvals_leave_one_extension_and_no_ghost(env, monkeypatch):
+    """Two admins approve the same request at once: both read it open, one wins."""
+    import asyncio
+
+    service = env["service"]
+    request_id = _submit(env["client"]).json()["requestId"]
+    stale = asyncio.run(service.get_request(request_id))
+    body = ApproveRequestBody(amount=20, valid_until=date.today() + timedelta(days=20), funding_mode="central")
+
+    _, winner = asyncio.run(service.approve(ADMIN, request_id, body))
+
+    # The second admin's read happened before the first decision landed.
+    async def _stale_read(_request_id):
+        return stale.model_copy(deep=True)
+
+    monkeypatch.setattr(service, "get_request", _stale_read)
+    with pytest.raises(QuotaRequestStateError):
+        asyncio.run(service.approve(SECOND_ADMIN, request_id, body))
+
+    extensions = asyncio.run(env["quotas"].list_user_extensions(REQUESTER.user_id))
+    assert [e.extension_id for e in extensions] == [winner.extension_id]
+    actions = [r["action"] for r in env["audit"].records]
+    assert actions.count("quota_extension.created") == 1
+    assert actions.count("quota_request.approved") == 1
+    assert [n["kind"] for n in env["notifications"].sent] == ["quota_request_decided"]
+    stored = asyncio.run(env["requests"].get_request(request_id))
+    assert stored.decision.decided_by == ADMIN.user_id and stored.decision.extension_id == winner.extension_id
+
+    # The month's chargeback report has one line for the request, not a ghost beside it.
+    async def _policy():
+        return QuotaRequestPolicy()
+
+    async def _spend(user_id, period):
+        from decimal import Decimal
+
+        return Decimal("0")
+
+    report = ChargebackService(
+        ledger=ChargeLedgerRepository(table_name=TABLE), policy_loader=_policy, spend_reader=_spend,
+    )
+    lines, _ = asyncio.run(report.compute_period(date.today().strftime("%Y-%m"), QuotaRequestPolicy()))
+    assert [l.extension_id for l in lines if l.request_id == request_id] == [winner.extension_id]
+
+
+def test_an_approval_whose_extension_write_fails_reopens_the_request(env, monkeypatch):
+    import asyncio
+
+    service = env["service"]
+    request_id = _submit(env["client"]).json()["requestId"]
+    body = ApproveRequestBody(amount=20, valid_until=date.today() + timedelta(days=20), funding_mode="central")
+
+    async def _fail(extension):
+        raise RuntimeError("DynamoDB unavailable")
+
+    create_extension = env["quotas"].create_extension
+    monkeypatch.setattr(env["quotas"], "create_extension", _fail)
+    with pytest.raises(RuntimeError):
+        asyncio.run(service.approve(ADMIN, request_id, body))
+
+    stored = asyncio.run(env["requests"].get_request(request_id))
+    assert stored.status == "pending" and stored.decision is None
+    assert env["audit"].records == [] and env["notifications"].sent == []
+    # Nothing is left in the way of trying again.
+    monkeypatch.setattr(env["quotas"], "create_extension", create_extension)
+    _, extension = asyncio.run(service.approve(ADMIN, request_id, body))
+    assert asyncio.run(env["requests"].get_request(request_id)).status == "approved"
+    assert extension.request_id == request_id
 
 
 def test_one_open_request_per_user(env):

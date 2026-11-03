@@ -35,6 +35,8 @@ interface ChargeGroup {
   consumed: number;
   /** null when any line in the group is uncapped. */
   granted: number | null;
+  /** Some line's base limit changed during its period (§9.2), shown while the group is collapsed. */
+  baseLimitChanged: boolean;
 }
 
 const CENTRAL = 'central';
@@ -181,6 +183,9 @@ const CENTRAL = 'central';
                     <span>
                       {{ g.title }}
                       <span class="block text-xs/5 font-normal text-gray-600 dark:text-gray-400">{{ g.detail }}</span>
+                      @if (g.baseLimitChanged) {
+                        <span class="block text-xs/5 font-normal text-state-warning-800 dark:text-state-warning-200">⚠ A base limit changed during the period; check the marked lines</span>
+                      }
                     </span>
                   </button>
                 </th>
@@ -202,7 +207,7 @@ const CENTRAL = 'central';
                       }
                       @if (l.baseLimitAmbiguous) {
                         <span class="mt-1 block text-xs/5 text-state-warning-800 dark:text-state-warning-200">
-                          ⚠ Base limit changed during period; the larger ({{ usd(l.baseLimit) }}) was used
+                          ⚠ Base limit changed during period; the latest ({{ usd(l.baseLimit) }}) was used
                         </span>
                       }
                     </td>
@@ -275,10 +280,11 @@ export class ChargebackReportPage implements OnInit {
       const key = byGroup ? this.groupKeyOf(line) : (line.fundingKey ?? CENTRAL);
       let group = map.get(key);
       if (!group) {
-        group = { key, ...this.groupHeading(line, byGroup), lines: [], consumed: 0, granted: 0 };
+        group = { key, ...this.groupHeading(line, byGroup), lines: [], consumed: 0, granted: 0, baseLimitChanged: false };
         map.set(key, group);
       }
       group.lines.push(line);
+      group.baseLimitChanged ||= line.baseLimitAmbiguous;
       group.consumed += toAmount(line.consumed);
       group.granted = group.granted === null || line.granted === null ? null : group.granted + toAmount(line.granted);
     }

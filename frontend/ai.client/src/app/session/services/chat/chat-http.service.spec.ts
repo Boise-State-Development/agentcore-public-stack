@@ -13,6 +13,7 @@ import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { TurnTimingService } from './turn-timing.service';
+import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 
 describe('ChatHttpService', () => {
   let service: ChatHttpService;
@@ -36,6 +37,7 @@ describe('ChatHttpService', () => {
         { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), setLastTurnInterrupted: vi.fn(), seedSessionAggregates: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()), releaseAbortController: vi.fn(), streamingSessionIds: vi.fn().mockReturnValue([]) } },
         { provide: MessageMapService, useValue: { endStreaming: vi.fn() } },
         { provide: ErrorService, useValue: { handleHttpError: vi.fn(), addError: vi.fn() } },
+        { provide: QuotaStatusService, useValue: { reload: vi.fn() } },
       ],
     });
     service = TestBed.inject(ChatHttpService);
@@ -166,6 +168,23 @@ describe('ChatHttpService', () => {
     expect(chatStateService.releaseAbortController).toHaveBeenCalledWith('s1', controller);
     // Released, not aborted — the turn completed on its own.
     expect(controller.signal.aborted).toBe(false);
+    vi.restoreAllMocks();
+  });
+
+  it('re-reads the quota status when a turn ends, finished or stopped', async () => {
+    const quotaStatus = TestBed.inject(QuotaStatusService) as unknown as { reload: ReturnType<typeof vi.fn> };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('event: done\ndata: {}\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    );
+    await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+    expect(quotaStatus.reload).toHaveBeenCalledTimes(1);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+    service.cancelChatRequest('s1');
+    expect(quotaStatus.reload).toHaveBeenCalledTimes(2);
     vi.restoreAllMocks();
   });
 

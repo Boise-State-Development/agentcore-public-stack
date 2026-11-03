@@ -1,5 +1,5 @@
 // services/stream-parser.service.ts
-import { Injectable, Signal, WritableSignal, signal, computed, inject } from '@angular/core';
+import { Injectable, Injector, Signal, WritableSignal, signal, computed, inject } from '@angular/core';
 import { Message, ContentBlock, Citation } from '../models/message.model';
 import { MetadataEvent } from '../models/content-types';
 import { ChatStateService } from './chat-state.service';
@@ -31,6 +31,7 @@ import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from './tool-insight.service';
 import { SessionService } from '../session/session.service';
 import { AgentNoticeService } from '../agent-notice/agent-notice.service';
+import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 import type {
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
@@ -195,6 +196,7 @@ export class StreamParserService {
   private sessionService = inject(SessionService);
   private toolInsight = inject(ToolInsightService);
   private agentNotice = inject(AgentNoticeService);
+  private injector = inject(Injector);
 
   // =========================================================================
   // Per-Session State
@@ -393,11 +395,13 @@ export class StreamParserService {
     // the user is measuring begins when they hit send.
     this.toolInsight.startTurn(sessionId);
     // A blocked turn re-sends quota_exceeded, and a turn still charging a fund
-    // re-sends quota_funding_notice, so each turn starts without either: the
+    // or still over the session share re-sends quota_funding_notice and
+    // quota_session_notice, so each turn starts without any of them: the
     // composer's tab tracks the latest answer, not one from before an approval
-    // or from spend that has since reached its cap.
+    // or from spend measured against a limit that has since changed.
     this.quotaWarningService.clearQuotaExceeded();
     this.quotaWarningService.clearFundingNotice();
+    this.quotaWarningService.forgetSessionNotice();
     const state = this.createState(sessionId, startingMessageCount || 0);
     this.states.update((map) => {
       const next = new Map(map);
@@ -635,7 +639,12 @@ export class StreamParserService {
         this.quotaWarningService.setSessionNotice(data as QuotaSessionNotice),
       onQuotaFundingNotice: (data) =>
         this.quotaWarningService.setFundingNotice(data as QuotaFundingNotice),
-      onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
+      onQuotaExceeded: (data) => {
+        this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded);
+        // The status was read at page load; the request dialog and the
+        // blocked tab's "Fund cap reached" read the spend that blocked.
+        this.injector.get(QuotaStatusService).reload();
+      },
 
       onOAuthRequired: (data: OAuthRequiredEvent) => {
         // oauth_required arrives after message_stop, so the triggering

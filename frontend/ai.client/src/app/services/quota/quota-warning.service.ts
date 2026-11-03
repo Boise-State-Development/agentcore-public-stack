@@ -117,6 +117,8 @@ export class QuotaWarningService {
 
   /** The current per-session notice, null if this conversation is not heavy */
   private sessionNoticeSignal = signal<QuotaSessionNotice | null>(null);
+  /** The last notice set, kept past a turn's start so a dismissal survives the same notice coming back. */
+  private lastSessionNotice: QuotaSessionNotice | null = null;
 
   /** Timestamp when the warning was received */
   private warningTimestampSignal = signal<Date | null>(null);
@@ -352,14 +354,25 @@ export class QuotaWarningService {
    * another thread's composer.
    */
   setSessionNotice(notice: QuotaSessionNotice): void {
-    const current = this.sessionNoticeSignal();
+    const current = this.lastSessionNotice;
+    this.sessionNoticeSignal.set(notice);
     if (
       current?.sessionId !== notice.sessionId ||
       current?.sessionCost !== notice.sessionCost
     ) {
-      this.sessionNoticeSignal.set(notice);
       this.isSessionNoticeDismissedSignal.set(false);
     }
+    this.lastSessionNotice = notice;
+  }
+
+  /**
+   * Hide the session notice at the start of a turn. The backend re-sends it
+   * at the head of every turn still over the share, measured against the
+   * limit in force then; one left over from an earlier turn can name a limit
+   * that has since changed. A dismissal holds if the same notice comes back.
+   */
+  forgetSessionNotice(): void {
+    this.sessionNoticeSignal.set(null);
   }
 
   /** Dismiss the current session notice */
@@ -370,6 +383,7 @@ export class QuotaWarningService {
   /** Clear session-notice state (e.g. when switching conversations) */
   clearSessionNotice(): void {
     this.sessionNoticeSignal.set(null);
+    this.lastSessionNotice = null;
     this.isSessionNoticeDismissedSignal.set(false);
   }
 

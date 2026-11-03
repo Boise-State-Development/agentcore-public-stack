@@ -468,7 +468,12 @@ class QuotaRequestService:
         # A central extension carries no fund; anything sent with it is dropped.
         return cleaned if funding_mode == "chargeback" else None
 
-    async def _create_extension(
+    async def _create_extension(self, admin: User, **kwargs: Any) -> QuotaExtension:
+        extension = await self._build_extension(admin, **kwargs)
+        await self._store_extension(admin, extension)
+        return extension
+
+    async def _build_extension(
         self,
         admin: User,
         *,
@@ -509,8 +514,12 @@ class QuotaRequestService:
             created_by_email=(admin.email or "").lower() or None,
             created_at=now,
         )
+        return extension
+
+    async def _store_extension(self, admin: User, extension: QuotaExtension) -> None:
+        """Write a built extension, drop the cached resolution, and audit it."""
         await self.quotas.create_extension(extension)
-        self._invalidate(subject.user_id)
+        self._invalidate(extension.user_id)
         get_audit_service().record(
             action=AuditAction.QUOTA_EXTENSION_CREATED,
             actor=admin,
@@ -525,11 +534,10 @@ class QuotaRequestService:
                 "fundingKey": extension.funding_key,
                 "validFrom": extension.valid_from,
                 "validUntil": extension.valid_until,
-                "requestId": request_id,
+                "requestId": extension.request_id,
             },
         )
         logger.info("Quota extension created", extra={"event": "quota_extension_created", "extension_id": extension.extension_id})
-        return extension
 
     async def approve(self, admin: User, request_id: str, body: ApproveRequestBody) -> Tuple[QuotaRequest, QuotaExtension]:
         request = await self.get_request(request_id)
@@ -544,13 +552,20 @@ class QuotaRequestService:
         )
         subject = await self._user_for(request.user_id, request.user_email)
         reason = (body.note or "").strip() or f"Approved quota request {request_id}"
-        extension = await self._create_extension(
+        extension = await self._build_extension(
             admin, subject=subject, amount=body.amount, standing=standing,
             funding_mode=body.funding_mode, funding=funding, valid_from=None,
             valid_until=body.valid_until, reason=reason, request_id=request_id, policy=policy,
         )
 
+        # The decision is written before the extension exists, conditional on
+        # the request still being open, so two admins approving at once leave
+        # one extension: the loser's write fails here and it has written
+        # nothing (no extension, no audit row, no notification). The reverse
+        # order left the loser's extension in the store, revoked but still in
+        # the month's chargeback report.
         expected = request.status
+        undecided = request.model_copy(deep=True)
         request.status = "approved"
         request.updated_at = utc_now_iso()
         request.decision = QuotaRequestDecision(
@@ -565,14 +580,19 @@ class QuotaRequestService:
             standing=standing,
             extension_id=extension.extension_id,
         )
+        await self._save(request, expected)
         try:
-            await self._save(request, expected)
-        except QuotaRequestStateError:
-            # Another admin decided first; undo the grant this approval made.
-            await self.quotas.revoke_extension(
-                extension.extension_id, revoked_by=admin.user_id, reason="Superseded by a concurrent decision"
-            )
-            self._invalidate(request.user_id)
+            await self._store_extension(admin, extension)
+        except Exception:
+            # The grant never landed: put the request back where it was, so it
+            # is not "approved" with nothing behind it, and let the admin retry.
+            try:
+                await self.requests.save_request(undecided, expected_status="approved")
+            except Exception:
+                logger.exception(
+                    "Approved quota request has no extension",
+                    extra={"event": "quota_request_approval_orphaned", "request_id": request_id},
+                )
             raise
 
         get_audit_service().record(

@@ -34,7 +34,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from moto import mock_aws
 
-from agents.main_agent.quota.extensions import period_waterfall
+from agents.main_agent.quota.extensions import build_funding_notice, period_waterfall
 from agents.main_agent.quota.models import FundingSource, QuotaExtension
 from agents.main_agent.quota.repository import QuotaRepository
 from apis.app_api.admin.quota_requests import routes as admin_routes
@@ -207,7 +207,8 @@ def test_seeded_month_reproduces_the_waterfall_by_hand(env):
 
     assert lines["E3"]["granted"] is None and lines["E3"]["standing"] is True
     assert Decimal(lines["E6"]["granted"]) == 50
-    # §9.2: user E's snapshots differ, so both lines carry the larger base and the marker.
+    # §9.2: user E's snapshots differ, so both lines carry one base and the marker
+    # (granted in the same instant, the tie takes the larger).
     assert {lines["E8"]["baseLimitAmbiguous"], lines["E9"]["baseLimitAmbiguous"]} == {True}
     assert Decimal(lines["E9"]["baseLimit"]) == 40
     assert lines["E1"]["baseLimitAmbiguous"] is False
@@ -246,6 +247,60 @@ def test_waterfall_cases():
     # No snapshot at all: nothing is attributed rather than guessing a base.
     blind = central.model_copy(update={"base_limit_snapshot": None})
     assert run("90", blind).consumed[0][1] == 0
+
+
+# ── §9.2: a base that changed mid-period ────────────────────────────────────
+
+
+def _checker_charge(spend: str, base: str, active: List[QuotaExtension]) -> Decimal:
+    """What enforcement charged a fund: the checker's own funding notice."""
+    notice = build_funding_notice(float(spend), float(base), active)
+    return Decimal(str(notice.charged_this_period)) if notice else Decimal("0")
+
+
+def test_a_lowered_base_then_a_standing_extension_charges_the_fund_what_the_checker_did(env):
+    """The dev case: Default ($10), a central grant on that base, ended; then a
+    $0.01 override and a standing chargeback capped at $0.02 on it."""
+    early = _ext(
+        "Q1", "user-q", 10, base="10",
+        valid_from="2026-10-03T04:39:41Z", valid_until="2026-10-03T04:41:51Z", created_at="2026-10-03T04:39:41Z",
+    )
+    standing = _ext(
+        "Q2", "user-q", Decimal("0.02"), mode="chargeback", standing=True, source=_source("100000", "4210"),
+        base="0.01", valid_from="2026-10-03T04:49:47Z", created_at="2026-10-03T04:49:47Z",
+        valid_until="2027-06-30T23:59:59.999999Z",
+    )
+    for ext in (early, standing):
+        asyncio.run(env["quotas"].create_extension(ext))
+    env["spend"]["user-q"] = "0.035"
+
+    # Enforcement after the override: base $0.01, the standing extension in force.
+    charged = _checker_charge("0.035", "0.01", [standing])
+    assert charged == Decimal("0.02")
+
+    report = _report(env["service"])
+    lines = _by_ext(report)
+    assert Decimal(lines["Q2"]["consumed"]) == charged
+    assert Decimal(lines["Q1"]["consumed"]) == 0
+    assert Decimal(lines["Q2"]["baseLimit"]) == Decimal("0.01")
+    assert lines["Q1"]["baseLimitAmbiguous"] is True and lines["Q2"]["baseLimitAmbiguous"] is True
+    # The CSV row carries the same marker for finance.
+    rows = {r["extensionId"]: r for r in csv.DictReader(io.StringIO(report_csv(report, POLICY.schema_keys)))}
+    assert rows["Q2"]["baseLimitChanged"] == "true" and rows["Q2"]["baseLimit"] == "0.01"
+    assert rows["Q2"]["consumed"] == "0.02"
+
+
+def test_a_raised_base_reports_on_the_newer_base_too():
+    """A tier raised mid-period: the lowest snapshot would charge the fund for
+    spend enforcement left inside the new base."""
+    capped = _ext("R1", "u", 20, mode="chargeback", source=_source("1", "1"), base="10",
+                  created_at="2026-10-02T00:00:00Z")
+    central = _ext("R2", "u", 5, base="40", created_at="2026-10-20T00:00:00Z")
+    result = period_waterfall(Decimal("50"), [capped, central])
+    assert result.base == 40 and result.base_ambiguous is True
+    consumed = {e.extension_id: c for e, c in result.consumed}
+    assert consumed == {"R2": 5, "R1": 5}
+    assert consumed["R1"] == _checker_charge("50", "40", [capped, central])
 
 
 # ── closing (§9.4) ──────────────────────────────────────────────────────────
