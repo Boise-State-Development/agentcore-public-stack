@@ -107,6 +107,28 @@ describe('ProjectFileReadinessComponent', () => {
     expect(files).toHaveBeenCalledTimes(3);
   });
 
+  it('never says "all ready" when one of them failed', async () => {
+    // Dev, 2026-11-03: a project with one file ready and one failed flashed
+    // "All 2 project files are ready."
+    respond(doc('a', 'embedding'), doc('b', 'failed'));
+    const { fixture, el } = await mount();
+    expect(el.textContent).toContain("Preparing 1 of 2 project files.");
+
+    respond(doc('a'), doc('b', 'failed'));
+    await tick(fixture, READINESS_POLL_START_MS);
+    expect(el.textContent).toContain("1 of 2 project files is ready. 1 couldn't be added.");
+    expect(el.textContent).not.toContain('All 2');
+
+    await tick(fixture, READY_FLASH_MS);
+    expect(el.textContent).toContain("1 project file couldn't be added");
+  });
+
+  it('keeps its links readable in dark mode', async () => {
+    respond(doc('a', 'provisioning'));
+    const { el } = await mount();
+    expect(el.querySelector('a')?.className).toContain('dark:text-primary-accessible-dark');
+  });
+
   it('names files that could not be added, and can be dismissed', async () => {
     respond(doc('a'), doc('b', 'failed'));
     const { fixture, el } = await mount();

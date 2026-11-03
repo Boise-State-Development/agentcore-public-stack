@@ -61,14 +61,17 @@ const MAX_PAGES = 5;
             @if (failed() > 0) {
               {{ failed() }} couldn't be added.
             }
-            <a [routerLink]="filesLink()" class="font-medium text-primary-accessible underline underline-offset-2 hover:no-underline">View files</a>
+            <a [routerLink]="filesLink()" class="font-medium text-primary-accessible underline underline-offset-2 hover:no-underline dark:text-primary-accessible-dark">View files</a>
           </p>
         </div>
       } @else if (justReady()) {
         <div class="mb-2 flex items-start gap-2 rounded-2xl border border-gray-200 bg-white px-3 py-2 text-xs/5 text-gray-700 shadow-xs dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
           <ng-icon name="heroCheckCircle" class="mt-0.5 size-4 shrink-0 text-state-success-600 dark:text-state-success-400" aria-hidden="true" />
           <p class="min-w-0 flex-1">
-            @if (total() === 1) {
+            @if (failed() > 0) {
+              {{ ready() }} of {{ total() }} project files {{ ready() === 1 ? 'is' : 'are' }} ready.
+              {{ failed() }} couldn't be added.
+            } @else if (total() === 1) {
               The project file is ready.
             } @else {
               All {{ total() }} project files are ready.
@@ -81,7 +84,7 @@ const MAX_PAGES = 5;
           <p class="min-w-0 flex-1">
             {{ failed() }} project {{ failed() === 1 ? "file couldn't" : "files couldn't" }} be added, so the assistant can't use
             {{ failed() === 1 ? 'it' : 'them' }}.
-            <a [routerLink]="filesLink()" class="font-medium text-primary-accessible underline underline-offset-2 hover:no-underline">Upload again from Files</a>
+            <a [routerLink]="filesLink()" class="font-medium text-primary-accessible underline underline-offset-2 hover:no-underline dark:text-primary-accessible-dark">Upload again from Files</a>
           </p>
           <button
             type="button"
@@ -110,6 +113,7 @@ export class ProjectFileReadinessComponent {
     () => this.documents().filter(d => PROCESSING_STATUSES.includes(d.status)).length,
   );
   protected readonly failed = computed(() => this.documents().filter(d => d.status === 'failed').length);
+  protected readonly ready = computed(() => this.total() - this.pending() - this.failed());
   protected readonly failedDismissed = computed(() => this.dismissedFor() === this.projectId());
   protected readonly filesLink = computed(() => ['/projects', this.projectId(), 'files']);
 
