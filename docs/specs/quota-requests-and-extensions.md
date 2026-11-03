@@ -633,6 +633,20 @@ Terminal: `approved`, `denied`, `withdrawn`. A user may hold **one** request
 in `pending` or `info_requested` at a time (`POST` returns 409 with the open
 request's id); decided requests do not block a new one.
 
+**Approving claims the request first.** Every decision is a write
+conditional on the request's status not having moved since it was read, so
+two admins deciding at once produce one decision. An approval makes that
+write, carrying the new extension's id, **before** the extension exists, and
+writes the extension (and its `quota_extension.created` audit row) only
+after it wins. The loser of a race has written nothing: no extension, no
+audit row, no notification. If the extension write then fails, the request
+is put back to the status it had, so it is never approved with nothing
+behind it. (As first built, the extension came first and the loser revoked
+its own; the revoked extension stayed in the store with no audit row of its
+own and showed in that month's chargeback report as a second grant for the
+same request, first in consumption order because its `validUntil` was
+earliest. Found by QA on dev, 2026-11.)
+
 ---
 
 ## 8. Resolution and enforcement
