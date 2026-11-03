@@ -70,7 +70,18 @@ PROJECT_FILE_TEXT_MAX_CHARS = 1_000_000
 _CANDIDATES_MAX = 5
 
 NO_ACCESS = "You don't have access to this project's files."
-NOT_READY = "'{name}' is not ready yet (status: {status}), so it can't be read. Only files listed as ready can be."
+#: A file that is not ready is a normal answer, not a failed call: it was uploaded
+#: fine and is still being prepared (or its preparation failed), so the result is
+#: reported as a success and the chat does not show the call as failed.
+NOT_READY = (
+    "'{name}' is still being prepared (status: {status}), so it can't be read yet. Files are "
+    "usually ready within a few minutes of upload. Answer from the ready files, tell the member "
+    "this one isn't ready, and don't call this tool for it again this turn."
+)
+NOT_ADDED = (
+    "'{name}' was not added to the project (its preparation failed), so it can't be read. "
+    "Tell the member they can upload it again from the project's Files page."
+)
 NOT_TEXT = (
     "'{name}' is a {kind}, which this tool can't read as text. It reads PDF, Word, text, "
     "Markdown and HTML files."
@@ -207,7 +218,14 @@ def read_project_file(assistant_id: str, filename: str, offset: int) -> Dict[str
     doc = match_project_file(docs, filename)
     name = str(doc.get("filename") or "")
     if not _is_ready(doc):
-        raise ProjectFilesError(NOT_READY.format(name=name, status=_status(doc)))
+        status = _status(doc)
+        message = NOT_ADDED if status == "failed" else NOT_READY
+        return {
+            "mode": "not_ready",
+            "filename": name,
+            "status": status,
+            "message": message.format(name=name, status=status),
+        }
     content_type = str(doc.get("contentType") or "")
     fmt = document_format_for(content_type, name)
     if fmt is None:
