@@ -222,6 +222,66 @@ describe('ProjectFilesComponent', () => {
     expect(api.file).toHaveBeenCalledWith('prj_1', 'p');
   });
 
+  describe('a file that takes a while', () => {
+    let visibility: DocumentVisibilityState;
+
+    beforeEach(() => {
+      visibility = 'visible';
+      vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+    });
+
+    const setVisibility = (next: DocumentVisibilityState) => {
+      visibility = next;
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+
+    const mount = async () => {
+      const fixture = TestBed.createComponent(ProjectFilesComponent);
+      fixture.componentRef.setInput('project', PROJECT);
+      fixture.detectChanges();
+      await vi.advanceTimersByTimeAsync(0);
+      fixture.detectChanges();
+      return { fixture, el: fixture.nativeElement as HTMLElement };
+    };
+
+    it('is still polled after five minutes, and shows Ready when it gets there', async () => {
+      // Prod, 2026-11-03: a new project's first files waited ~14 minutes for their
+      // knowledge base, and the page stopped polling at 5, stuck on "Setting up".
+      vi.useFakeTimers();
+      api.files.mockReturnValue(of({ documents: [doc('p', { status: 'provisioning' })], nextToken: null, canEdit: true }));
+      let ready = false;
+      api.file.mockImplementation(() => of(doc('p', { status: ready ? 'complete' : 'provisioning' })));
+      const { fixture, el } = await mount();
+      expect(el.textContent).toContain('Setting up');
+
+      await vi.advanceTimersByTimeAsync(14 * 60 * 1000);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(10_000);
+      fixture.detectChanges();
+      expect(el.textContent).toContain('Ready');
+    });
+
+    it('asks nothing while the tab is hidden, and resumes when it is back', async () => {
+      vi.useFakeTimers();
+      api.files.mockReturnValue(of({ documents: [doc('p', { status: 'provisioning' })], nextToken: null, canEdit: true }));
+      api.file.mockReturnValue(of(doc('p', { status: 'provisioning' })));
+      const { fixture, el } = await mount();
+
+      setVisibility('hidden');
+      api.file.mockClear();
+      // Long enough for the poll to run out entirely while nobody is looking.
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      expect(api.file).not.toHaveBeenCalled();
+
+      api.file.mockReturnValue(of(doc('p', { status: 'complete' })));
+      setVisibility('visible');
+      await vi.advanceTimersByTimeAsync(1000);
+      fixture.detectChanges();
+      expect(api.file).toHaveBeenCalledWith('prj_1', 'p');
+      expect(el.textContent).toContain('Ready');
+    });
+  });
+
   it('deletes after confirmation', async () => {
     dialog.open.mockReturnValue({ closed: of(true) });
     api.deleteFile.mockReturnValue(of(undefined));
