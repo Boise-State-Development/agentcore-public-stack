@@ -172,6 +172,9 @@ class OAuthProviderRepository:
             existing.oauth_discovery_url = updates.oauth_discovery_url
         if updates.authorization_server_metadata is not None:
             existing.authorization_server_metadata = updates.authorization_server_metadata
+        if updates.tenant_id is not None:
+            # Empty string clears the tenant; `None` leaves it alone.
+            existing.tenant_id = updates.tenant_id or None
         if updates.custom_parameters is not None:
             # Empty dict (`{}`) explicitly clears the field; pass None on the
             # update model to leave the existing value alone.
