@@ -34,6 +34,7 @@ import { ModelDropdownComponent } from '../../../components/model-dropdown/model
 import { AnnouncementBannerComponent } from '../../../components/announcement-banner/announcement-banner.component';
 import { QuotaWarningBannerComponent } from '../../../components/quota-warning-banner/quota-warning-banner.component';
 import { AgentNoticeBannerComponent } from '../agent-notice-banner/agent-notice-banner.component';
+import { ProjectFileReadinessComponent } from '../project-file-readiness/project-file-readiness.component';
 import { TooltipDirective } from '../../../components/tooltip';
 import { FileCardComponent } from '../../../components/file-card';
 import { StorageQuotaBannerComponent } from '../../../components/storage-quota-banner';
@@ -332,7 +333,7 @@ export const PROJECT_SKILLS_HINT = "Skills for this project are chosen on its Sk
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent, IncognitoToggleComponent],
+  imports: [AgentNoticeBannerComponent, ProjectFileReadinessComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent, IncognitoToggleComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },
@@ -487,6 +488,10 @@ export class ChatInputComponent {
    * the first message goes.
    */
   readonly project = input<ComposerProject | null>(null);
+  /** The project whose file readiness shows above the composer, while that's switched on. */
+  protected readonly readinessProjectId = computed(() =>
+    this.features.projectFileReadiness ? (this.project()?.projectId ?? null) : null,
+  );
 
   /**
    * Whether `@` hands a turn to another Agent here. Never in a project: a

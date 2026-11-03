@@ -232,10 +232,25 @@ class TestRead:
         assert "beyond the end" in _text_of(_call(_tool(), filename="short.docx", offset=99))
         assert "0 or more" in _text_of(_call(_tool(), filename="short.docx", offset=-1))
 
-    def test_a_file_that_is_not_ready_cannot_be_read(self, files):
+    def test_a_file_that_is_not_ready_is_reported_not_failed(self, files):
+        """Prod, 2026-11-03: reading a file still being prepared was an error result,
+        which the chat showed as a failed tool call. The file is fine; only not ready."""
         files.add(_doc("d1", "draft.docx", status="processing"), **{"draft.docx": "would be readable"})
-        text = _text_of(_call(_tool(), filename="draft.docx"))
-        assert "not ready yet (status: processing)" in text
+        result = _call(_tool(), filename="draft.docx")
+
+        assert result["status"] == "success"
+        payload = _payload(result)
+        assert payload["mode"] == "not_ready" and payload["status"] == "processing"
+        assert "still being prepared (status: processing)" in payload["message"]
+        # Never the file's text: it is not ready.
+        assert "would be readable" not in str(payload)
+
+    def test_a_failed_file_says_to_upload_it_again(self, files):
+        files.add(_doc("d1", "broken.pdf", status="failed"))
+        payload = _payload(_call(_tool(), filename="broken.pdf"))
+
+        assert payload["mode"] == "not_ready" and payload["status"] == "failed"
+        assert "upload it again" in payload["message"]
 
     def test_two_files_with_one_name_are_named_as_ambiguous(self, files):
         files.add(_doc("d1", "essay.docx", size=100, created="2026-10-01T00:00:00Z"),

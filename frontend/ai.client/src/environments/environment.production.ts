@@ -31,5 +31,6 @@ export const environment = {
         sessionRewind: true,
         sessionFork: true,
         quotaRequests: false,
+        projectFileReadiness: false,
     } satisfies FeatureFlags,
 };

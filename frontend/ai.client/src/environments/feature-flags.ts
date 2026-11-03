@@ -142,4 +142,15 @@ export interface FeatureFlags {
    * both sides on.
    */
   quotaRequests: boolean;
+  /**
+   * Project file readiness: a strip above a project chat's composer while any of
+   * the project's files are still being prepared ("Preparing 3 of 11 project
+   * files…"), "All 11 files ready" once they are, and a note on files that
+   * couldn't be added. It reads the project's file list
+   * (`GET /projects/{id}/knowledge`), so it needs nothing new from app-api. Its
+   * backend partner is PROJECT_FILE_READINESS_ENABLED on the AgentCore Runtime,
+   * which tells the model the same thing per turn. In development, so `false`
+   * until a deployment turns it on.
+   */
+  projectFileReadiness: boolean;
 }

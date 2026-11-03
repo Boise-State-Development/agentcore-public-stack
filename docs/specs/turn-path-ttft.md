@@ -605,6 +605,17 @@ the network half is unmeasured. Expected on dev: ≈0 on a follow-up (the `Query
 `tools` stage), and on a first turn at most the downloads less that same window. Read
 `agent_build.kb_full_context` on dev before turning it on anywhere else.
 
+*P3b″. Project file readiness (`PROJECT_FILE_READINESS_ENABLED`, default off).* A Shared
+Project harness turn (not a resume or continuation) also starts `load_file_status_note` at the
+project gate, beside the member note: one `Query` for the harness's `DOC#` rows, run in a
+thread. It is awaited only at message assembly in the stream, after the agent build, so its
+round trip overlaps the KB search and the build and adds nothing before the first token unless
+the `Query` outlasts both. Its result is a `<project_files_status>` block appended to the user
+message, or nothing when every file is ready; it never reaches the system prompt or
+`toolConfig`. It reads the rows separately from `load_full_kb_context`, which costs a second
+small `Query` on project turns while both flags are on; sharing one listing would couple the
+two loaders for no measurable gain.
+
 *Tests.* P3a: a fake session factory and a fake tool loader that each sleep; assert the
 build's wall time is the max not the sum, that `tools` order is unchanged across runs
 (`test_prompt_cache_determinism.py` already pins order), and that a failure in either thread
