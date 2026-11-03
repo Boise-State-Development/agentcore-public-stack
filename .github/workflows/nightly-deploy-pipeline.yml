@@ -157,6 +157,10 @@ jobs:
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      # A stack an earlier teardown left in DELETE_FAILED can't be updated, so
+      # finish deleting it first. A no-op for any other state.
+      - name: Clear a stack left in DELETE_FAILED
+        run: bash scripts/nightly/clear-failed-stack.sh
       - name: Deploy PlatformStack
         run: bash scripts/platform/deploy.sh
 
