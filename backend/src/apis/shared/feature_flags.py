@@ -791,7 +791,7 @@ def meeting_tasks_enabled() -> bool:
     """Whether the meeting-transcripts-to-GitHub-issues tool families are built.
 
     Covers the Google Calendar (``google_calendar_meetings``), Zoom
-    (``zoom_meeting_transcripts``) and GitHub (``github_issues``) tools built
+    (``zoom_meeting_transcripts``) and GitHub (``github_issues_local``) tools built
     per request by ``_build_meeting_tools`` in the inference API
     (``agents/local_tools/meeting_tasks.py``,
     ``docs/specs/meeting-transcripts-to-github-issues.md``). **Opt-in while the

@@ -145,9 +145,9 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         category=ToolCategory.UTILITIES,
         icon="video-camera",
     ),
-    "github_issues": ToolMetadata(
-        tool_id="github_issues",
-        name="GitHub Issues",
+    "github_issues_local": ToolMetadata(
+        tool_id="github_issues_local",
+        name="GitHub Issues (direct API)",
         description="List the user's GitHub repositories and open issues for action items. Confirmation-gated write.",
         category=ToolCategory.UTILITIES,
         icon="code-bracket-square",
