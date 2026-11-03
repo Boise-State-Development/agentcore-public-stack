@@ -427,6 +427,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         ...(config.webSearchDefaultMaxResults.enabled
           ? { WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: 'true' }
           : {}),
+        // Project file readiness: a project turn names the files the model cannot
+        // see yet. Written only while ON, so the default costs nothing against
+        // the V2 payload budget.
+        ...(config.projectFileReadiness.enabled ? { PROJECT_FILE_READINESS_ENABLED: 'true' } : {}),
         // Handoffs (in development): the Runtime accepts `handoff_context` on a
         // target's first turn and keeps the source's HANDOFF# row current. Written
         // only while ON, so the default costs nothing against the V2 payload budget.

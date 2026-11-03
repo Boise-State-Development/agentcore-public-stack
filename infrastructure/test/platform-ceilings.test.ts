@@ -265,6 +265,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },
+    // Project file readiness: one Runtime variable, written only while on.
+    projectFileReadiness: { enabled: true },
     // Meeting tasks add no resources — one Runtime variable, written only while
     // on — so like Web Search above it is here for the environment-variable
     // ceilings and flag coverage.

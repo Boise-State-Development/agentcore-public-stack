@@ -110,6 +110,7 @@ export interface AppConfig {
   sourceProvenance: SourceProvenanceConfig;
   documentExtract: DocumentExtractConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
+  projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -877,6 +878,23 @@ export interface SourceProvenanceConfig {
  * none of the V2 payload budget. No resources, and nothing reaches the prompt.
  */
 export interface WebSearchDefaultMaxResultsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Project file readiness. On, a Shared Project turn whose files include any that
+ * are still being prepared or that failed gets a short `<project_files_status>`
+ * note in the user message naming them, so the model says it cannot use them
+ * instead of answering as though they did not exist; a turn whose files are all
+ * ready is unchanged. The SPA half (`features.projectFileReadiness`) shows their
+ * progress above the project chat's composer. **Opt-in while in development**:
+ * off unless CDK_PROJECT_FILE_READINESS_ENABLED=true (or a
+ * `projectFileReadiness.enabled: true` cdk.json context). A feature switch once
+ * finished. Sets PROJECT_FILE_READINESS_ENABLED on the AgentCore Runtime only,
+ * and **only while on**, so the default spends none of the V2 payload budget. No
+ * resources, and nothing reaches the system prompt or `toolConfig`.
+ */
+export interface ProjectFileReadinessConfig {
   enabled: boolean;
 }
 
@@ -1802,6 +1820,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
         ? process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('webSearchDefaultMaxResults')?.enabled ?? false,
+    },
+    projectFileReadiness: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_PROJECT_FILE_READINESS_ENABLED
+        ? process.env.CDK_PROJECT_FILE_READINESS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('projectFileReadiness')?.enabled ?? false,
     },
     documentExtract: {
       // In development: only "true" enables, and an unset GitHub variable

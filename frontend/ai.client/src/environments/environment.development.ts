@@ -32,5 +32,7 @@ export const environment = {
         sessionFork: true,
         // The `development` GitHub environment sets CDK_QUOTA_REQUESTS_ENABLED=true.
         quotaRequests: true,
+        // The `development` GitHub environment sets CDK_PROJECT_FILE_READINESS_ENABLED=true.
+        projectFileReadiness: true,
     } satisfies FeatureFlags,
 };

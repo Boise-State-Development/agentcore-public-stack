@@ -43,6 +43,7 @@ from apis.shared.feature_flags import (
     inline_attachment_persist_enabled,
     memory_spaces_enabled,
     mid_turn_steering_enabled,
+    project_file_readiness_enabled,
     skills_enabled,
 )
 from apis.shared.files.document_read import is_document_class
@@ -4455,6 +4456,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # Who is speaking in a harness turn, prepended to the message (never the system
     # prompt, which every member shares); see `_build_project_member_note`.
     project_member_note: Optional[str] = None
+    # Which of the project's files the model cannot see yet (``kb_readiness``),
+    # started with the member note and awaited at message assembly, so its one
+    # Query overlaps the search and the agent build.
+    project_files_note_task: Optional["asyncio.Task[Optional[str]]"] = None
     # Shared Projects 2.4b: a harness turn's memory load (started once the project is
     # known) and its result, which supplies `memory_context`, the scope-addressed
     # memory tools and their cache-key element.
@@ -4770,6 +4775,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             turn_project_id = assistant.project_id
             # The role the access check above resolved from the project: no extra read.
             project_member_note = _build_project_member_note(current_user, assistant_permission)
+            # Skipped where `final_message` is ignored (a resume or a continuation).
+            if project_file_readiness_enabled() and not is_resume and not is_continuation:
+                from apis.shared.assistants.kb_readiness import load_file_status_note
+
+                project_files_note_task = asyncio.create_task(
+                    load_file_status_note(
+                        input_data.rag_assistant_id,
+                        access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+                    )
+                )
             # Shared Projects 2.4b: the project's memory spaces, read now and awaited at
             # prompt assembly (5b), so the reads overlap binding resolution and the
             # knowledge-base search instead of adding to the time to first token.
@@ -5476,6 +5491,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     final_message = build_handoff_message(handoff_block, final_message)
             if attachment_guidance:
                 final_message = f"{final_message}\n\n{attachment_guidance}"
+            # Project files the model cannot see yet (`kb_readiness`). Persisted with
+            # the message and hidden from the bubble by the `original_message`
+            # displayText split, like the member note. Absent when every file is ready.
+            if project_files_note_task is not None:
+                project_files_note = await project_files_note_task
+                if project_files_note:
+                    final_message = f"{final_message}\n\n{project_files_note}"
             # Rendered into the persisted user message once, from this turn's
             # read of the row: a digest that lands later never rewrites it, so
             # restored history stays byte-stable (large-document spec §4B.5).
