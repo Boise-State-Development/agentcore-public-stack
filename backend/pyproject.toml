@@ -27,8 +27,7 @@ dependencies = [
     # Authentication (for shared auth module)
     "pyjwt[crypto]==2.15.0",
 
-    # OAuth provider management
-    "authlib==1.9.3",
+    # In-process TTL cache for BFF session lookups (apis/shared/sessions_bff/cache.py)
     "cachetools==6.2.4",
 
     # Security: pin starlette to fix Dependabot alert (transitive via fastapi)
