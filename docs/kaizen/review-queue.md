@@ -5,6 +5,56 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-11-03] Take Strands 1.63.0 with a written readout, then curate Haiku 5.5
+- **Source**: research/2026-11-03.md
+- **Surface**: backend
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — the preserved-thinking probe item and the stale caching comment in `model_config.py`
+- **Unlocks**: Haiku 5.5 as the cheap default
+- **Status**: open
+
+### [2026-11-03] Find out why Nightly Build & Test has failed on `main` for seven nights
+- **Source**: research/2026-11-03.md
+- **Surface**: cross-cutting
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — a permanently red check
+- **Status**: open
+
+### [2026-11-03] Sync the multi-agent patterns doc to the 1.61.1 pin and decide #1748
+- **Source**: research/2026-11-03.md
+- **Surface**: cross-cutting
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — stale pin claims
+- **Status**: open
+
+### [2026-11-03] Spike idle-time compaction after the cache TTL
+- **Source**: research/2026-11-03.md
+- **Surface**: backend
+- **Effort × Impact**: M × M
+- **Subtracts**: no — addition only; justified only if `C#` rows show material post-gap re-write spend
+- **Status**: open
+
+### [2026-11-03] Plan the MCP SDK path past Strands' `mcp<2.2` cap
+- **Source**: research/2026-11-03.md
+- **Surface**: backend
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — avoids two successive MCP upgrades
+- **Status**: open
+
+### [2026-11-03] Spec sync: multi-agent-patterns.md §3, §4.2 and staleness table (pin is 1.61.1, not 1.57.2)
+- **Source**: research/2026-11-03.md
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — stale version claims
+- **Status**: open
+
+### [2026-11-03] Spec sync: multi-agent-patterns.md §4 (Strands 1.63.0 request-wide Graph/Swarm limits, #5306)
+- **Source**: research/2026-11-03.md
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — notes upstream coverage of the hop-budget idea
+- **Status**: open
+
 ### [2026-10-23] Take Strands 1.62.0, then curate Claude Haiku 5.5 at a 100K effective window — the probe becomes a check of #5171
 - **Source**: research/2026-10-23.md ▸ Top 5 #1
 - **Surface**: backend + catalog (`pyproject.toml`, `uv.lock`, Lambda requirements; `curated-models.ts`; `probe_bedrock_cache_point_support.py`)
