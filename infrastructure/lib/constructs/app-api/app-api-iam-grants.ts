@@ -402,6 +402,10 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   // before ARNs resolve. On dev the resolved OverflowPolicy3 was already 5,921 of
   // IAM's 6,144 characters, so the grant failed the deploy (ServiceLimitExceeded)
   // and rolled the stack back. A role may attach 10 managed policies; it has 3.
+  //
+  // It also carries the managed-KB worker invoke below. The id and description
+  // still name memory maintenance because changing a managed policy's
+  // description replaces it; a statement added here updates in place.
   new iam.ManagedPolicy(scope, 'AppApiMemoryMaintenanceInvokePolicy', {
     roles: [taskRole],
     description: 'app-api: async-invoke the memory maintenance worker (Shared Projects 2.6)',
@@ -411,6 +415,17 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
         effect: iam.Effect.ALLOW,
         actions: ['lambda:InvokeFunction'],
         resources: [props.refs.memoryMaintenanceWorker.functionArn],
+      }),
+      // Born-managed KB provisioning: the first upload into a new agent or
+      // project async-invokes the managed-KB migration worker, so the build
+      // starts now instead of at the next 15-minute dispatcher tick
+      // (apis/app_api/kb_upgrade/born_managed.py). Same reason as above for
+      // living in this managed policy rather than the role's overflow policies.
+      new iam.PolicyStatement({
+        sid: 'KbMigrationWorkerInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [props.refs.kbMigrationWorker.functionArn],
       }),
     ],
   });
