@@ -280,8 +280,9 @@ class TestRouteBuilder:
         assert [(t.tool_name, oauth_provider_for(t)) for t in tools] == [
             ("list_zoom_recordings", "zoom-conn"),
             ("get_zoom_transcript", "zoom-conn"),
+            ("list_github_projects", None),
             ("list_github_repositories", None),
-            ("create_github_issues", None),
+            ("create_project_tasks", None),
         ]
         assert any("github_issues_local" in r.getMessage() for r in caplog.records)
 

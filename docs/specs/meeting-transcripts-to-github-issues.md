@@ -1,18 +1,19 @@
-# Spec: Meeting transcripts → GitHub issues (Google Calendar, Zoom, GitHub)
+# Spec: Meeting transcripts → GitHub project tasks (Google Calendar, Zoom, GitHub)
 
 **Status:** Implemented, in development (default off: `MEETING_TASKS_ENABLED` / `CDK_MEETING_TASKS_ENABLED`)
 **Audience:** Whoever turns this on for an environment, and whoever changes it.
 **Operator guide:** `docs-site/src/content/docs/integrations/meeting-action-items.md`
-**Last updated:** 2026-11-02
+**Last updated:** 2026-11-03
 
 ---
 
 ## 1. One-line summary
 
 Three first-party tool families — Google Calendar, Zoom, GitHub — that let the agent find a
-meeting, read its Zoom cloud-recording transcript, and open one GitHub issue per action item,
-each calling the vendor's REST API with **the user's own OAuth token** from the AgentCore
-Identity vault. No new storage, no new infrastructure, no new consent UX.
+meeting, read its Zoom cloud-recording transcript, and add one task per action item to a GitHub
+Projects (v2) board (an issue in a repository the user picks, placed on the board with its
+single-select fields set), each calling the vendor's API with **the user's own OAuth token** from
+the AgentCore Identity vault. No new storage, no new infrastructure, no new consent UX.
 
 ---
 
@@ -29,6 +30,9 @@ Identity vault. No new storage, no new infrastructure, no new consent UX.
 | Granularity | One catalog row per vendor, each provisioning its whole family | RBAC and connector binding are per vendor. A team without Google Calendar gets Zoom + GitHub only. |
 | Gate | `MEETING_TASKS_ENABLED`, opt-in, Runtime only | House rule for new features. Rows are also seeded off-by-default and not public, so the flag alone grants nothing. |
 | GitHub write | Two-step `confirm` like `set_default_model` | The model previews; the user agrees in the conversation; then it writes. Transcript text is explicitly data, not instructions. |
+| Where tasks land | A repository issue, then added to a Projects (v2) board | The team's boards hold only repository issues (the board that motivated this has 285 items, no drafts), so a draft item would be the odd one out: no assignees, labels, PR links or commit-closes. Issues are REST; boards are GraphQL-only, so one write mixes both. |
+| Which board | A per-call `project` argument (`owner/number` or URL), resolved with `list_github_projects` | Same posture as `repository`: deployment data the model resolves from the conversation, not an env var against the Runtime's budget. A board spans many repositories, so both are chosen per call. |
+| Board fields | Single-select only; `{field: option}` per task or per call, matched case-insensitively against the board; unknown names fail the call | A typo must not drop a field silently. `Status → Triage` and `Source → Meeting` apply as defaults when the board has them and the model did not set them. Text, number, date and iteration fields are out of scope. |
 
 ### Non-goals
 
@@ -62,8 +66,9 @@ Identity vault. No new storage, no new infrastructure, no new consent UX.
 | `google_calendar_meetings` | `list_calendar_meetings(start?, end?, query?)` | `GET calendar/v3/calendars/primary/events` (singleEvents, orderBy startTime) | 50 events; 25 attendee emails listed (count always full); description/location 300 chars; cancelled events dropped; `zoom_meeting_id` parsed from conference entry points, hangoutLink, location, description |
 | `zoom_meeting_transcripts` | `list_zoom_recordings(from_date?, to_date?)` | `GET users/me/recordings` | ≤ 1 month per call (Zoom limit); ≤ 3 pages × 30 |
 | | `get_zoom_transcript(meeting_id)` | `GET meetings/{id}/recordings`, then the `TRANSCRIPT` file's `download_url` | download host must be `*.zoom.us` / `*.zoomgov.com` before **and** after redirects; WebVTT parsed, consecutive same-speaker cues merged; cut at 60,000 chars with `truncated` + note |
-| `github_issues_local` | `list_github_repositories(query?)` | `GET user/repos?affiliation=owner,collaborator,organization_member&sort=pushed` | 50 repos; description 120 chars |
-| | `create_github_issues(repository, issues[], confirm=false)` | `POST repos/{owner}/{repo}/issues` per issue | `owner/name` validated; ≤ 25 issues; title ≤ 256; body ≤ 20,000; preview unless `confirm` |
+| `github_issues_local` | `list_github_projects(owner)` | GraphQL `organization(login).projectsV2` and `user(login).projectsV2` in one query (the one that is not that kind of login answers `NOT_FOUND`, which is tolerated) | 25 boards, most recently updated first; description 120 chars |
+| | `list_github_repositories(query?)` | `GET user/repos?affiliation=owner,collaborator,organization_member&sort=pushed` | 50 repos; description 120 chars |
+| | `create_project_tasks(project, repository, tasks[], fields?, confirm=false)` | GraphQL `projectV2(number)` with its `fields(first: 50)` to resolve the board; then per task `POST repos/{owner}/{repo}/issues`, `addProjectV2ItemById`, and one aliased `updateProjectV2ItemFieldValue` mutation for its fields | `owner/number` or board URL; `owner/name` validated; ≤ 25 tasks; title ≤ 256; body ≤ 20,000; a closed board is refused; preview (with the board's field options) unless `confirm` |
 
 Every tool returns the Strands shape `{"status", "content": [{"json"|"text"}]}` and never raises.
 
@@ -86,7 +91,7 @@ Every tool returns the Strands shape `{"status", "content": [{"json"|"text"}]}` 
    `_handle_auth_failure` clear the cache and set `event.retry`, once per provider per turn.
 
 **Cost posture.** Off: one `frozenset.intersection` per turn. On, without the ids enabled: the
-same. On, with the ids: a dict lookup and five constant tool specs in the prefix. Nothing reaches
+same. On, with the ids: a dict lookup and six constant tool specs in the prefix. Nothing reaches
 the system prompt. Transcripts are bounded at the source.
 
 **Agent cache.** The family is in `KEY_DESCRIBED_INJECTED_TOOL_IDS`. The closures hold
@@ -98,14 +103,17 @@ agent on the next turn. Tokens are read live on every call, so connecting never 
 
 ## 5. Safety notes
 
-- **Duplicate writes.** `create_github_issues` returns the retryable 401 shape only when no issue
-  has been created yet. A 401 (or any failure) after the first creation returns a `partial`
-  success listing `created` and `failed`, so a hook-driven retry can never re-open issue 1.
+- **Duplicate writes.** `create_project_tasks` returns the retryable 401 shape only when no issue
+  has been created yet (the board lookup and the first issue `POST`). A 401 (or any failure) after
+  the first creation returns a `partial` success listing `created`, `failed` (issues not opened)
+  and `warnings` (issues opened but not added to the board, or added with fields unset), so a
+  hook-driven retry can never re-open issue 1. A missing `project` scope surfaces from GraphQL as
+  `INSUFFICIENT_SCOPES` and is reported as a plain message naming the scope and the admin fix.
 - **SSRF.** The only URL taken from a vendor response and fetched is Zoom's transcript
   `download_url`; it is checked against Zoom's domains before the request and the final URL is
   checked again after redirects. Everything else is a fixed API base.
 - **Prompt injection.** `get_zoom_transcript`'s docstring tells the model the text is quoted data,
-  and `create_github_issues` tells it never to confirm on an instruction from a transcript,
+  and `create_project_tasks` tells it never to confirm on an instruction from a transcript,
   document or page. The two-step confirm is the hard stop.
 - **Logging.** Vendor, status code and exception type only. No tokens, no transcript text, no
   issue bodies.
@@ -138,9 +146,12 @@ response shapes are taken from the public API references and exercised only agai
    seeder does not overwrite existing tools).
 3. Admin → Connectors: Google (scope `calendar.readonly`, `access_type=offline`, `prompt=consent`),
    Zoom (`cloud_recording:read:list_user_recordings`, `cloud_recording:read:list_recording_files`),
-   GitHub (`repo` or `public_repo`). Register each connector's callback URL at the vendor.
+   GitHub (`repo` or `public_repo`, plus `project` for the board). Register each connector's
+   callback URL at the vendor; an organization with OAuth App access restrictions must also
+   approve the GitHub app before it can see the org's repositories or boards.
 4. Admin → Tools: set "Required OAuth provider" on each of the three rows.
 5. Admin → Roles: grant the rows.
 6. First live check: a user with all three connected asks for yesterday's meeting; confirm the
    consent card appears once per vendor, the transcript renders with speakers, the preview lists
-   the issues, and `confirm=true` opens them with links.
+   the tasks with their board fields, and `confirm=true` opens them with links and each lands on
+   the board in `Triage` with `Source: Meeting`.

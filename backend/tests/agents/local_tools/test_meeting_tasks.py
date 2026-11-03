@@ -116,7 +116,7 @@ class TestContract:
 
     def test_no_tool_takes_a_user_or_token_argument(self):
         tools = mt.build_meeting_tasks_tools(MEETING_TASKS_TOOL_IDS, USER, {tid: "c" for tid in MEETING_TASKS_TOOL_IDS})
-        assert len(tools) == 5
+        assert len(tools) == 6
         for tool in tools:
             fn = getattr(tool, "__wrapped__", None) or tool
             params = set(inspect.signature(fn).parameters)
@@ -133,16 +133,18 @@ class TestContract:
             "list_calendar_meetings": "g",
             "list_zoom_recordings": "z",
             "get_zoom_transcript": "z",
+            "list_github_projects": None,
             "list_github_repositories": None,
-            "create_github_issues": None,
+            "create_project_tasks": None,
         }
 
     def test_builds_only_enabled_families_in_catalog_order(self):
         tools = mt.build_meeting_tasks_tools(["github_issues_local", "google_calendar_meetings"], USER, {})
         assert [t.tool_name for t in tools] == [
             "list_calendar_meetings",
+            "list_github_projects",
             "list_github_repositories",
-            "create_github_issues",
+            "create_project_tasks",
         ]
         assert mt.build_meeting_tasks_tools([], USER, {}) == []
         assert mt.build_meeting_tasks_tools(None, USER, {}) == []
@@ -473,10 +475,6 @@ class TestZoom:
 # ---------------------------------------------------------------------------
 
 
-def _issues(n=2) -> List[Dict[str, Any]]:
-    return [{"title": f"Action item {i}", "body": f"From the 2026-03-02 sprint planning.\n> item {i}", "labels": ["meeting"]} for i in range(n)]
-
-
 class TestGitHub:
     @pytest.mark.asyncio
     async def test_list_repositories_filters_and_summarizes(self, transport):
@@ -520,82 +518,401 @@ class TestGitHub:
         out = _payload(await _call(tool))
         assert [r["full_name"] for r in out["repositories"]] == ["org/platform", "me/dotfiles"]
 
+
+# ---------------------------------------------------------------------------
+# GitHub Projects (v2): board lookup, preview, and the issue → board write
+# ---------------------------------------------------------------------------
+
+PROJECT_ID = "PVT_board"
+STATUS_FIELD = {
+    "id": "F_status",
+    "name": "Status",
+    "dataType": "SINGLE_SELECT",
+    "options": [{"id": "O_triage", "name": "Triage"}, {"id": "O_done", "name": "Done"}],
+}
+SOURCE_FIELD = {
+    "id": "F_source",
+    "name": "Source",
+    "dataType": "SINGLE_SELECT",
+    "options": [{"id": "O_snow", "name": "ServiceNow"}, {"id": "O_meeting", "name": "Meeting"}],
+}
+APP_FIELD = {
+    "id": "F_app",
+    "name": "App",
+    "dataType": "SINGLE_SELECT",
+    "options": [{"id": "O_ai", "name": "boisestate.ai"}, {"id": "O_majors", "name": "Majors"}],
+}
+TITLE_FIELD = {"id": "F_title", "name": "Title", "dataType": "TITLE"}
+
+
+def _board(closed=False, fields=(STATUS_FIELD, SOURCE_FIELD, APP_FIELD, TITLE_FIELD)):
+    """GraphQL answer for an org board; the ``user`` lookup of an org login is NOT_FOUND."""
+    board = {
+        "id": PROJECT_ID,
+        "title": "Cloud Architecture & Development",
+        "url": "https://github.com/orgs/org/projects/7",
+        "closed": closed,
+        "fields": {"nodes": list(fields)},
+    }
+    return _json(
+        200,
+        {"data": {"organization": {"projectV2": board}, "user": None}, "errors": [{"type": "NOT_FOUND", "message": "Could not resolve to a User"}]},
+    )
+
+
+def _gql(keyword: str):
+    """Predicate: a GraphQL POST whose query mentions ``keyword``."""
+    return lambda r: r.method == "POST" and r.url.path == "/graphql" and keyword in r.content.decode()
+
+
+def _gql_body(request: httpx.Request) -> Dict[str, Any]:
+    return json.loads(request.content)
+
+
+def _is_issue_post(r: httpx.Request) -> bool:
+    return r.method == "POST" and r.url.path == "/repos/org/platform/issues"
+
+
+def _tasks(n=2) -> List[Dict[str, Any]]:
+    return [{"title": f"Action item {i}", "body": f"From the 2026-03-02 sprint planning.\n> item {i}", "labels": ["meeting"]} for i in range(n)]
+
+
+class TestProjectHelpers:
+    @pytest.mark.parametrize(
+        "ref, expected",
+        [
+            ("org/7", ("org", 7)),
+            ("  My-Org/12  ", ("My-Org", 12)),
+            ("https://github.com/orgs/org/projects/7", ("org", 7)),
+            ("https://github.com/users/someone/projects/3/views/1", ("someone", 3)),
+            ("7", None),
+            ("org/platform", None),
+            ("org/7/extra", None),
+            ("", None),
+            (None, None),
+        ],
+    )
+    def test_parse_project_ref(self, ref, expected):
+        assert mt.parse_project_ref(ref) == expected
+
+    def test_resolve_field_values_applies_defaults_and_is_case_insensitive(self):
+        selects = mt._single_select_fields({"fields": {"nodes": [STATUS_FIELD, SOURCE_FIELD, APP_FIELD, TITLE_FIELD]}})
+        assert set(selects) == {"Status", "Source", "App"}  # the TITLE field is not a single-select
+
+        values, problem = mt.resolve_field_values(selects, {})
+        assert problem is None and values == {"Status": "Triage", "Source": "Meeting"}
+
+        values, problem = mt.resolve_field_values(selects, {"app": "BOISESTATE.AI", "status": "done"})
+        assert problem is None and values == {"App": "boisestate.ai", "Status": "Done", "Source": "Meeting"}
+
+        values, problem = mt.resolve_field_values({"App": selects["App"]}, {})
+        assert problem is None and values == {}  # defaults only when the board has the field
+
+    def test_resolve_field_values_refuses_unknown_names(self):
+        selects = mt._single_select_fields({"fields": {"nodes": [STATUS_FIELD, APP_FIELD]}})
+        _, problem = mt.resolve_field_values(selects, {"Apps": "Majors"})
+        assert "no single-select field named 'Apps'" in problem and "App, Status" in problem
+        _, problem = mt.resolve_field_values(selects, {"App": "Major"})
+        assert "'Major' is not an option" in problem and "boisestate.ai, Majors" in problem
+
+    def test_build_field_update_mutation_aliases_each_field(self):
+        selects = mt._single_select_fields({"fields": {"nodes": [STATUS_FIELD, SOURCE_FIELD]}})
+        mutation, variables = mt.build_field_update_mutation(selects, {"Status": "Triage", "Source": "Meeting"})
+        assert mutation.count("updateProjectV2ItemFieldValue") == 2
+        assert "$project: ID!" in mutation and "$item: ID!" in mutation
+        assert variables == {"f0": "F_status", "o0": "O_triage", "f1": "F_source", "o1": "O_meeting"}
+
+
+class TestGitHubProjects:
     @pytest.mark.asyncio
-    async def test_preview_validates_and_writes_nothing(self, transport):
+    async def test_list_projects_for_an_org(self, transport):
+        nodes = [
+            {
+                "number": 7,
+                "title": "Cloud Architecture & Development",
+                "url": "https://github.com/orgs/org/projects/7",
+                "closed": False,
+                "shortDescription": "Web Team sprints",
+            },
+            {"number": 2, "title": "Old", "url": "https://github.com/orgs/org/projects/2", "closed": True, "shortDescription": None},
+        ]
+        t = transport(
+            [
+                (
+                    _gql("projectsV2"),
+                    _json(
+                        200,
+                        {
+                            "data": {"organization": {"projectsV2": {"nodes": nodes}}, "user": None},
+                            "errors": [{"type": "NOT_FOUND", "message": "no user"}],
+                        },
+                    ),
+                )
+            ]
+        )
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "list_github_projects")
+        out = _payload(await _call(tool, owner="org"))
+        req = t.requests[0]
+        assert req.headers["Authorization"] == "Bearer github-token"
+        assert _gql_body(req)["variables"] == {"owner": "org", "first": mt.MAX_GITHUB_PROJECTS}
+        assert out["count"] == 2
+        assert out["projects"][0] == {
+            "project": "org/7",
+            "title": "Cloud Architecture & Development",
+            "closed": False,
+            "description": "Web Team sprints",
+            "url": "https://github.com/orgs/org/projects/7",
+        }
+        assert out["projects"][1]["closed"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_projects_unknown_owner_is_an_error(self, transport):
+        transport(
+            [(_gql("projectsV2"), _json(200, {"data": {"organization": None, "user": None}, "errors": [{"type": "NOT_FOUND", "message": "x"}]}))]
+        )
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "list_github_projects")
+        assert "No GitHub organization or user named 'nobody'" in _text(await _call(tool, owner="nobody"))
+
+    @pytest.mark.asyncio
+    async def test_list_projects_rejects_a_bad_owner_without_a_request(self, transport):
         t = transport([])
-        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_github_issues")
-        out = _payload(await _call(tool, repository="org/platform", issues=_issues(2)))
-        assert out["status"] == "confirm_required" and out["issue_count"] == 2
-        assert [p["title"] for p in out["preview"]] == ["Action item 0", "Action item 1"]
-        assert out["preview"][0]["labels"] == ["meeting"]
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "list_github_projects")
+        assert "organization or user login" in _text(await _call(tool, owner="org/7"))
         assert t.requests == []
+
+    @pytest.mark.asyncio
+    async def test_preview_reads_the_board_and_writes_nothing(self, transport):
+        t = transport([(_gql("projectV2(number"), _board())])
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        out = _payload(await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(2), fields={"App": "boisestate.ai"}))
+
+        assert len(t.requests) == 1
+        assert _gql_body(t.requests[0])["variables"] == {"owner": "org", "number": 7, "fields": mt.MAX_PROJECT_FIELDS}
+        assert out["status"] == "confirm_required" and out["task_count"] == 2
+        assert out["project"] == {"project": "org/7", "title": "Cloud Architecture & Development", "url": "https://github.com/orgs/org/projects/7"}
+        assert [p["title"] for p in out["preview"]] == ["Action item 0", "Action item 1"]
+        assert out["preview"][0]["fields"] == {"App": "boisestate.ai", "Status": "Triage", "Source": "Meeting"}
+        assert out["preview"][0]["labels"] == ["meeting"]
+        assert out["field_options"] == {"Status": ["Triage", "Done"], "Source": ["ServiceNow", "Meeting"], "App": ["boisestate.ai", "Majors"]}
+        assert "confirm=true" in out["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_task_field_overrides_the_shared_field_and_the_board_url_works(self, transport):
+        transport([(_gql("projectV2(number"), _board())])
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        tasks = _tasks(2)
+        tasks[1]["fields"] = {"app": "majors", "Status": "Done"}
+        out = _payload(
+            await _call(
+                tool, project="https://github.com/orgs/org/projects/7", repository="org/platform", tasks=tasks, fields={"App": "boisestate.ai"}
+            )
+        )
+        assert out["preview"][0]["fields"] == {"App": "boisestate.ai", "Status": "Triage", "Source": "Meeting"}
+        assert out["preview"][1]["fields"] == {"App": "Majors", "Status": "Done", "Source": "Meeting"}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "repository, issues, fragment",
+        "kwargs, fragment",
         [
-            ("platform", _issues(1), "owner/name"),
-            ("org/platform/extra", _issues(1), "owner/name"),
-            ("org/platform", [], "non-empty"),
-            ("org/platform", "not a list", "non-empty"),
-            ("org/platform", _issues(26), "At most 25"),
-            ("org/platform", [{"body": "no title"}], "Issue 1 has no title"),
-            ("org/platform", [{"title": "t" * 300}], "over 256"),
-            ("org/platform", [{"title": "ok", "labels": "bug"}], "labels must be a list"),
-            ("org/platform", [{"title": "ok"}, "nope"], "Issue 2 is not an object"),
+            ({"project": "7"}, "owner/number"),
+            ({"project": "org/platform"}, "owner/number"),
+            ({"repository": "platform"}, "owner/name"),
+            ({"repository": "org/platform/extra"}, "owner/name"),
+            ({"tasks": []}, "non-empty"),
+            ({"tasks": "not a list"}, "non-empty"),
+            ({"tasks": _tasks(26)}, "At most 25"),
+            ({"tasks": [{"body": "no title"}]}, "Task 1 has no title"),
+            ({"tasks": [{"title": "t" * 300}]}, "over 256"),
+            ({"tasks": [{"title": "ok", "labels": "bug"}]}, "labels must be a list"),
+            ({"tasks": [{"title": "ok"}, "nope"]}, "Task 2 is not an object"),
+            ({"tasks": [{"title": "ok", "fields": "Triage"}]}, "Task 1's fields must be an object"),
+            ({"fields": {"Status": 3}}, "`fields` must be an object"),
         ],
     )
-    async def test_invalid_input_is_an_error_without_a_request(self, transport, repository, issues, fragment):
+    async def test_invalid_input_is_an_error_without_a_request(self, transport, kwargs, fragment):
         t = transport([])
-        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_github_issues")
-        assert fragment in _text(await _call(tool, repository=repository, issues=issues, confirm=True))
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        args = {"project": "org/7", "repository": "org/platform", "tasks": _tasks(1), "confirm": True, **kwargs}
+        assert fragment in _text(await _call(tool, **args))
         assert t.requests == []
 
     @pytest.mark.asyncio
-    async def test_confirm_creates_each_issue_and_reports_urls(self, transport):
+    async def test_unknown_field_or_option_is_refused_before_any_write(self, transport):
+        t = transport([(_gql("projectV2(number"), _board)])
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        text = _text(await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(1), fields={"Apps": "Majors"}, confirm=True))
+        assert text.startswith("Task 1:") and "no single-select field named 'Apps'" in text
+        tasks = _tasks(2)
+        tasks[1]["fields"] = {"Priority": "P1"}
+        text = _text(await _call(tool, project="org/7", repository="org/platform", tasks=tasks, confirm=True))
+        assert text.startswith("Task 2:") and "'Priority'" in text
+        assert all(r.url.path == "/graphql" for r in t.requests) and len(t.requests) == 2
+
+    @pytest.mark.asyncio
+    async def test_closed_or_missing_board_is_refused(self, transport):
+        transport([(_gql("projectV2(number"), _board(closed=True))])
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        assert "is closed" in _text(await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(1)))
+
+        transport(
+            [
+                (
+                    _gql("projectV2(number"),
+                    _json(200, {"data": {"organization": {"projectV2": None}, "user": None}, "errors": [{"type": "NOT_FOUND", "message": "x"}]}),
+                )
+            ]
+        )
+        text = _text(await _call(tool, project="org/99", repository="org/platform", tasks=_tasks(1)))
+        assert "No GitHub project org/99" in text and "list_github_projects" in text
+
+    @pytest.mark.asyncio
+    async def test_missing_project_scope_names_the_fix(self, transport):
+        transport(
+            [
+                (
+                    _gql("projectV2(number"),
+                    _json(
+                        200,
+                        {"data": None, "errors": [{"type": "INSUFFICIENT_SCOPES", "message": "Your token has not been granted the required scopes"}]},
+                    ),
+                )
+            ]
+        )
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        result = await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(1))
+        text = _text(result)
+        assert "`project` OAuth scope" in text and "Admin → Connectors" in text
+        assert not looks_like_auth_failure(result)
+
+    @pytest.mark.asyncio
+    async def test_confirm_creates_each_issue_adds_it_to_the_board_and_sets_fields(self, transport):
         counter = iter(range(101, 200))
 
         def created():
             n = next(counter)
-            return _json(201, {"number": n, "title": f"Action item {n - 101}", "html_url": f"https://github.com/org/platform/issues/{n}"})
+            return _json(
+                201, {"number": n, "node_id": f"I_{n}", "title": f"Action item {n - 101}", "html_url": f"https://github.com/org/platform/issues/{n}"}
+            )
 
-        t = transport([(lambda r: r.method == "POST" and r.url.path == "/repos/org/platform/issues", created)])
-        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_github_issues")
-        out = _payload(await _call(tool, repository="org/platform", issues=_issues(2), confirm=True))
+        items = iter(["PVTI_a", "PVTI_b"])
+        t = transport(
+            [
+                (_gql("projectV2(number"), _board()),
+                (_is_issue_post, created),
+                (_gql("addProjectV2ItemById"), lambda: _json(200, {"data": {"addProjectV2ItemById": {"item": {"id": next(items)}}}})),
+                (_gql("updateProjectV2ItemFieldValue"), _json(200, {"data": {"f0": {"projectV2Item": {"id": "x"}}}})),
+            ]
+        )
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        out = _payload(await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(2), fields={"App": "boisestate.ai"}, confirm=True))
 
-        assert out["status"] == "created" and out["failed"] == []
-        assert [c["number"] for c in out["created"]] == [101, 102]
-        sent = [json.loads(r.content) for r in t.requests]
-        assert sent[0] == {"title": "Action item 0", "body": _issues(1)[0]["body"], "labels": ["meeting"]}
-        assert "assignees" not in sent[0]
+        assert out["status"] == "created" and out["failed"] == [] and out["warnings"] == []
+        assert out["created"] == [
+            {
+                "number": 101,
+                "title": "Action item 0",
+                "url": "https://github.com/org/platform/issues/101",
+                "on_board": True,
+                "fields": {"App": "boisestate.ai", "Status": "Triage", "Source": "Meeting"},
+            },
+            {
+                "number": 102,
+                "title": "Action item 1",
+                "url": "https://github.com/org/platform/issues/102",
+                "on_board": True,
+                "fields": {"App": "boisestate.ai", "Status": "Triage", "Source": "Meeting"},
+            },
+        ]
+        assert "2 issue(s)" in out["message"] and "2 added to" in out["message"]
+
+        # board lookup, then per task: REST POST, add item, set fields
+        assert [r.url.path for r in t.requests] == ["/graphql", "/repos/org/platform/issues", "/graphql", "/graphql"] * 1 + [
+            "/repos/org/platform/issues",
+            "/graphql",
+            "/graphql",
+        ]
+        issue_posts = [json.loads(r.content) for r in t.requests if _is_issue_post(r)]
+        assert issue_posts[0] == {"title": "Action item 0", "body": _tasks(1)[0]["body"], "labels": ["meeting"]}
+        assert "fields" not in issue_posts[0] and "assignees" not in issue_posts[0]
+        add_vars = _gql_body(t.requests[2])["variables"]
+        assert add_vars == {"project": PROJECT_ID, "content": "I_101"}
+        field_vars = _gql_body(t.requests[3])["variables"]
+        assert field_vars["project"] == PROJECT_ID and field_vars["item"] == "PVTI_a"
+        assert {field_vars["f0"]: field_vars["o0"], field_vars["f1"]: field_vars["o1"], field_vars["f2"]: field_vars["o2"]} == {
+            "F_app": "O_ai",
+            "F_status": "O_triage",
+            "F_source": "O_meeting",
+        }
 
     @pytest.mark.asyncio
     async def test_401_before_anything_is_created_is_retryable(self, transport):
         transport([(lambda r: True, _json(401, {"message": "Bad credentials"}))])
-        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_github_issues")
-        assert looks_like_auth_failure(await _call(tool, repository="org/platform", issues=_issues(2), confirm=True))
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        # On the board lookup...
+        assert looks_like_auth_failure(await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(2), confirm=True))
+        # ...and on the first issue POST.
+        transport([(_gql("projectV2(number"), _board()), (_is_issue_post, _json(401, {"message": "Bad credentials"}))])
+        assert looks_like_auth_failure(await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(2), confirm=True))
 
     @pytest.mark.asyncio
     async def test_failure_after_a_creation_is_partial_never_retryable(self, transport):
-        responses = iter(
+        posts = iter(
             [
-                _json(201, {"number": 1, "title": "Action item 0", "html_url": "u1"}),
+                _json(201, {"number": 1, "node_id": "I_1", "title": "Action item 0", "html_url": "u1"}),
                 _json(401, {"message": "Bad credentials"}),
                 _json(422, {"message": "Validation Failed"}),
             ]
         )
-        transport([(lambda r: True, lambda: next(responses))])
-        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_github_issues")
-        result = await _call(tool, repository="org/platform", issues=_issues(3), confirm=True)
+        transport(
+            [
+                (_gql("projectV2(number"), _board()),
+                (_is_issue_post, lambda: next(posts)),
+                (_gql("addProjectV2ItemById"), _json(200, {"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_1"}}}})),
+                (_gql("updateProjectV2ItemFieldValue"), _json(200, {"data": {}})),
+            ]
+        )
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        result = await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(3), confirm=True)
         # A hook-driven retry would re-create issue 0, so this must not look like a 401.
         assert not looks_like_auth_failure(result)
         out = _payload(result)
         assert out["status"] == "partial"
-        assert [c["number"] for c in out["created"]] == [1]
+        assert [c["number"] for c in out["created"]] == [1] and out["created"][0]["on_board"] is True
         assert [f["status"] for f in out["failed"]] == [401, 422]
         assert "1 issue(s)" in out["message"] and "2 could not" in out["message"]
 
     @pytest.mark.asyncio
+    async def test_board_step_failures_are_warnings_beside_the_created_issue(self, transport):
+        adds = iter(
+            [
+                _json(200, {"errors": [{"type": "FORBIDDEN", "message": "Resource not accessible by integration"}]}),
+                _json(200, {"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_2"}}}}),
+            ]
+        )
+        counter = iter([1, 2])
+        transport(
+            [
+                (_gql("projectV2(number"), _board()),
+                (
+                    _is_issue_post,
+                    lambda: _json(201, {"number": (n := next(counter)), "node_id": f"I_{n}", "title": f"Action item {n - 1}", "html_url": f"u{n}"}),
+                ),
+                (_gql("addProjectV2ItemById"), lambda: next(adds)),
+                (_gql("updateProjectV2ItemFieldValue"), _json(401, {"message": "Bad credentials"})),
+            ]
+        )
+        tool = _by_name(mt.make_github_tools(USER, "github-conn"), "create_project_tasks")
+        result = await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(2), confirm=True)
+        assert not looks_like_auth_failure(result)
+        out = _payload(result)
+        assert out["status"] == "partial" and out["failed"] == []
+        assert [(c["number"], c["on_board"], c["fields"]) for c in out["created"]] == [(1, False, {}), (2, True, {})]
+        assert [(w["number"], w["stage"]) for w in out["warnings"]] == [(1, "add_to_project"), (2, "set_fields")]
+        assert "Resource not accessible" in out["warnings"][0]["detail"]
+        assert "401" in out["warnings"][1]["detail"]
+        assert "2 were created but not fully placed" in out["message"]
+
+    @pytest.mark.asyncio
     async def test_missing_connector_on_the_write_tool(self):
-        tool = _by_name(mt.make_github_tools(USER, None), "create_github_issues")
-        assert "github_issues_local" in _text(await _call(tool, repository="org/platform", issues=_issues(1)))
+        tool = _by_name(mt.make_github_tools(USER, None), "create_project_tasks")
+        assert "github_issues_local" in _text(await _call(tool, project="org/7", repository="org/platform", tasks=_tasks(1)))
