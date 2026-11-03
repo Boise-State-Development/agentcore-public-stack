@@ -39,6 +39,7 @@ import {
   heroTag,
   heroBookmark,
   heroSquares2x2,
+  heroServerStack,
 } from '@ng-icons/heroicons/outline';
 
 interface NavItem {
@@ -109,6 +110,7 @@ interface NavGroup {
       heroTag,
       heroBookmark,
       heroSquares2x2,
+      heroServerStack,
     }),
   ],
   host: { class: 'flex min-h-0 flex-1 flex-col' },
@@ -203,6 +205,11 @@ export class AdminNav implements OnInit {
             ]
           : []),
         { label: 'Fine-Tuning', icon: 'heroAcademicCap', route: '/admin/fine-tuning', scope: 'admin.fine_tuning' },
+        // AWS Limits (GitHub issue #12), only in a build with the feature on:
+        // the account's Service Quotas, a separate thing from the user Quotas above.
+        ...(this.features.awsLimits
+          ? [{ label: 'AWS Limits', icon: 'heroServerStack', route: '/admin/aws-limits', scope: 'admin.aws_limits' as const }]
+          : []),
       ],
     },
     {

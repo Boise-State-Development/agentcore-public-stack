@@ -11,6 +11,9 @@ import { FEATURES } from '../services/features';
 /** Matches only in a build with quota requests on (compile-time; see environments/feature-flags.ts). */
 const quotaRequestsEnabled = () => inject(FEATURES).quotaRequests;
 
+/** Matches only in a build with AWS Limits on (compile-time; see environments/feature-flags.ts). */
+const awsLimitsEnabled = () => inject(FEATURES).awsLimits;
+
 /**
  * Admin console routes.
  *
@@ -67,6 +70,15 @@ export const adminRoutes: Routes = [
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.quota_requests' } satisfies AdminScopeRouteData,
     loadChildren: () => import('./quota-requests/quota-requests.routes').then(m => m.quotaRequestsRoutes),
+  },
+  {
+    // The account's AWS Service Quotas (GitHub issue #12); unmatched in a
+    // build with the feature off.
+    path: 'aws-limits',
+    canMatch: [awsLimitsEnabled],
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.aws_limits' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./aws-limits/aws-limits.page').then(m => m.AwsLimitsPage),
   },
   {
     path: 'fine-tuning',

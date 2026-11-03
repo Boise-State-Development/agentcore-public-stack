@@ -32,5 +32,7 @@ export const environment = {
         sessionFork: true,
         // The `development` GitHub environment sets CDK_QUOTA_REQUESTS_ENABLED=true.
         quotaRequests: true,
+        // Needs CDK_AWS_LIMITS_ENABLED=true in the `development` GitHub environment.
+        awsLimits: true,
     } satisfies FeatureFlags,
 };

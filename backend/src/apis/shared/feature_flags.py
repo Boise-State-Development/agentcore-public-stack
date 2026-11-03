@@ -952,6 +952,28 @@ def quota_requests_enabled() -> bool:
     return os.environ.get("QUOTA_REQUESTS_ENABLED", "").strip().lower() == "true"
 
 
+def aws_limits_enabled() -> bool:
+    """Whether the AWS Limits admin page (Service Quotas monitoring) is served.
+
+    GitHub issue #12. Gates app-api's ``/admin/aws-limits`` routes, which 404
+    after authentication while off. The page lists the account's applied AWS
+    quotas for the services this stack uses, with usage where AWS publishes a
+    usage metric, and lets an admin request an increase through Service Quotas.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it, so an unset GitHub variable
+    (``""``) is off. CDK sets it on app-api from ``config.awsLimits.enabled``,
+    and grants the Service Quotas permissions only while it is on. The SPA's
+    matching switch is ``features.awsLimits``.
+
+    **app-api only.** The Runtime never reads quotas, so it gets no variable.
+
+    A **feature switch** once finished: whether app admins may raise AWS
+    account quotas from the app is a deployment's choice.
+    """
+    return os.environ.get("AWS_LIMITS_ENABLED", "").strip().lower() == "true"
+
+
 def user_grants_enabled() -> bool:
     """Whether the admin surface for direct user grants is mounted on app-api.
 

@@ -932,6 +932,36 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // AWS Limits feature flag — opt-in while in development
+  // ============================================================
+
+  describe('AWS Limits feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_AWS_LIMITS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_AWS_LIMITS_ENABLED is unset', () => {
+      delete process.env.CDK_AWS_LIMITS_ENABLED;
+      expect(loadConfig(app).awsLimits.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_AWS_LIMITS_ENABLED = '';
+      expect(loadConfig(app).awsLimits.enabled).toBe(false);
+    });
+
+    test('CDK_AWS_LIMITS_ENABLED="true" turns it on', () => {
+      process.env.CDK_AWS_LIMITS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).awsLimits.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_AWS_LIMITS_ENABLED = 'yes';
+      expect(loadConfig(app).awsLimits.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Handoffs feature flag — opt-in while in development
   // ============================================================
 

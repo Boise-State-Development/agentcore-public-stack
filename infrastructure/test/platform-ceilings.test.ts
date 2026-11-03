@@ -235,6 +235,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
     userGrants: { enabled: true },
     sessionPrewarm: { enabled: true },
     quotaRequests: { enabled: true },
+    awsLimits: { enabled: true },
     handoffs: { enabled: true },
     sessionRewind: { enabled: true },
     sessionFork: { enabled: true },

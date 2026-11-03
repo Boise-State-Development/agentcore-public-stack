@@ -95,6 +95,12 @@ describe('buildAppApiEnvironment — quota requests', () => {
     const on = buildAppApiEnvironment(createMockConfig({ quotaRequests: { enabled: true } }), stubParams());
     expect(on.QUOTA_REQUESTS_ENABLED).toBe('true');
   });
+
+  it('forwards the AWS Limits flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).AWS_LIMITS_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ awsLimits: { enabled: true } }), stubParams());
+    expect(on.AWS_LIMITS_ENABLED).toBe('true');
+  });
 });
 
 describe('buildAppApiEnvironment — handoffs', () => {

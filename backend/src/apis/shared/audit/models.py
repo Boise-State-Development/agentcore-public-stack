@@ -118,6 +118,12 @@ class AuditAction:
     # keyed by ``YYYY-MM``, with the per-fund totals before and after.
     QUOTA_PERIOD_RECLOSED = "quota_period.reclosed"
 
+    # AWS Limits (GitHub issue #12), target ``aws_limit_request`` keyed by the
+    # Service Quotas request id. AWS records the app-api task role as the
+    # requester, so this record is the only trace of which admin asked; the
+    # increase history joins on it.
+    AWS_LIMIT_INCREASE_REQUESTED = "aws_limit.increase_requested"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -135,6 +141,7 @@ TARGET_USER_GRANT = "user_grant"
 TARGET_QUOTA_REQUEST = "quota_request"
 TARGET_QUOTA_EXTENSION = "quota_extension"
 TARGET_QUOTA_PERIOD = "quota_period"
+TARGET_AWS_LIMIT_REQUEST = "aws_limit_request"
 
 
 @dataclass

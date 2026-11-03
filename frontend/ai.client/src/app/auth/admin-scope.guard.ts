@@ -67,6 +67,8 @@ const LANDING_CANDIDATES: ReadonlyArray<{ scope: AdminScopeId; path: string }> =
   // A quota-requests-only approver lands on the queue. In a build with the
   // feature off the route is unmatched, but such an admin has nothing else to open either.
   { scope: 'admin.quota_requests', path: '/admin/quota-requests' },
+  // Unmatched in a build with AWS Limits off, like quota requests above.
+  { scope: 'admin.aws_limits', path: '/admin/aws-limits' },
   { scope: 'admin.fine_tuning', path: '/admin/fine-tuning' },
   { scope: 'admin.models', path: '/admin/manage-models' },
   { scope: 'admin.tools', path: '/admin/tools' },

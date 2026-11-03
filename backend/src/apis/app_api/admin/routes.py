@@ -1018,6 +1018,14 @@ from .quota_requests.routes import router as quota_requests_router
 
 router.include_router(quota_requests_router)
 
+# ========== Include AWS Limits Subrouter ==========
+# Service Quotas monitoring and increase requests (GitHub issue #12), scope
+# admin.aws_limits. Mounted always; every handler 404s while
+# AWS_LIMITS_ENABLED is off (checked after the scope dependency).
+from .aws_limits.routes import router as aws_limits_router
+
+router.include_router(aws_limits_router)
+
 # ========== Include Cost Dashboard Subrouter ==========
 from .costs.routes import router as costs_router
 

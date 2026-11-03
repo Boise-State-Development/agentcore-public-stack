@@ -185,6 +185,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     quotaRequests: {
       enabled: false,
     },
+    awsLimits: {
+      enabled: false,
+    },
     handoffs: {
       enabled: false,
     },
