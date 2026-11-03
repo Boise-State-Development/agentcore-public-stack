@@ -56,7 +56,7 @@ SKILL_AUTHORING_TOOL_IDS = frozenset({"my_skill_create"})
 # Kept as literals here (not imported from the tool module) so this leaf stays
 # import-light; ``tests/agents/local_tools/test_meeting_tasks.py`` pins them.
 MEETING_TASKS_TOOL_IDS = frozenset(
-    {"google_calendar_meetings", "zoom_meeting_transcripts", "github_issues"}
+    {"google_calendar_meetings", "zoom_meeting_transcripts", "github_issues_local"}
 )
 
 # Document retrieval (bound to session/user). Listed for the record, and

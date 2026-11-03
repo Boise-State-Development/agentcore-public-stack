@@ -27,7 +27,7 @@ Identity vault.
 |---|---|---|
 | `google_calendar_meetings` | `list_calendar_meetings` | Google Calendar v3, `calendars/primary/events` |
 | `zoom_meeting_transcripts` | `list_zoom_recordings`, `get_zoom_transcript` | Zoom v2, `users/me/recordings`, `meetings/{id}/recordings`, transcript download |
-| `github_issues` | `list_github_repositories`, `create_github_issues` | GitHub REST, `user/repos`, `repos/{owner}/{repo}/issues` |
+| `github_issues_local` | `list_github_repositories`, `create_github_issues` | GitHub REST, `user/repos`, `repos/{owner}/{repo}/issues` |
 
 The three are independent. Grant only Zoom + GitHub to a team that does not use
 Google Calendar; the agent asks for the meeting id instead.

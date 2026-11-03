@@ -765,7 +765,7 @@ export interface AssistantKbFullContextConfig {
  * docs/specs/meeting-transcripts-to-github-issues.md): the Google Calendar,
  * Zoom and GitHub tool families, built per request for users whose roles are
  * granted the `google_calendar_meetings` / `zoom_meeting_transcripts` /
- * `github_issues` catalog tools, each calling the vendor API with the user's
+ * `github_issues_local` catalog tools, each calling the vendor API with the user's
  * own OAuth token from the connector an admin bound to the row. **Opt-in while
  * in development**: off unless CDK_MEETING_TASKS_ENABLED=true (or a
  * `meetingTasks.enabled: true` cdk.json context). While on, sets
