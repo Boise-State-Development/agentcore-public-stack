@@ -114,7 +114,21 @@ export class ToolInsightService {
     ReadonlyMap<string, readonly RunningTool[]>
   >(new Map());
 
+  /**
+   * The most recent batch summary each conversation received, live or hydrated.
+   *
+   * What a handoff row shows as its status line while its target runs in the
+   * background (handoffs spec §4.3): the latest thing the Agent did, in the
+   * same words the target's own tool rail uses.
+   */
+  private readonly latestSummaryBySession = signal<ReadonlyMap<string, string>>(new Map());
+
   // -- reads ---------------------------------------------------------------
+
+  /** The latest tool-batch summary a conversation received, if any. */
+  latestSummary(sessionId: string): string | undefined {
+    return this.latestSummaryBySession().get(sessionId);
+  }
 
   /** Everything known about one tool call in one conversation. */
   get(sessionId: string, toolUseId: string): ToolInsight | undefined {
@@ -282,6 +296,7 @@ export class ToolInsightService {
   recordSummary(sessionId: string, event: ToolGroupSummaryEvent): void {
     const summary = event.summary?.trim();
     if (!summary || !event.toolUseIds?.length) return;
+    this.latestSummaryBySession.update(map => new Map(map).set(sessionId, summary));
 
     this.bySession.update(map => {
       const existing = map.get(sessionId);

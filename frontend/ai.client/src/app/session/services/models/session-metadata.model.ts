@@ -23,6 +23,11 @@ export interface SessionPreferences {
    * project in the sidebar and enables "Project members" sharing.
    */
   projectId?: string;
+  /**
+   * Incognito chat (#1738): reads long-term memory but never adds to it.
+   * Fixed by the backend when the first turn creates the session.
+   */
+  incognito?: boolean;
   /** Display state for promoted visuals, keyed by tool_use_id */
   visualState?: Record<string, VisualDisplayState>;
 }
@@ -44,6 +49,10 @@ export interface SessionMetadata {
   starred?: boolean;
   tags?: string[];
   preferences?: SessionPreferences;
+  /** Set on a fork: the conversation its family started from (rewind/fork spec §7). */
+  rootSessionId?: string;
+  /** Set on a fork: where it was cut from its parent. */
+  forkedFrom?: { sessionId: string; messageIndex: number; cut: number };
   /** Running USD cost across all turns in this session. Denormalized on the
    *  session row by the backend's _bump_session_aggregates; legacy sessions
    *  are lazily backfilled on first read. */

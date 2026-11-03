@@ -65,6 +65,7 @@ from apis.shared.files import large_document
 from apis.shared.files.document_digest import build_digest, document_digest_enabled, record_digest
 from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs
 from apis.shared.files.models import FileMetadata, FileStatus, is_reference_document
+from apis.shared.files.pdfium_lock import serialized_pdfium
 from apis.shared.files.repository import FileUploadRepository, get_file_upload_repository
 from apis.shared.timestamps import utc_now_iso
 
@@ -124,6 +125,7 @@ def _put(s3: Any, bucket: str, key: str, body: Union[bytes, BinaryIO], content_t
     s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type)
 
 
+@serialized_pdfium
 def _prepare_pdf(s3: Any, meta: FileMetadata, raw: bytes, shard_pages: int) -> List[str]:
     """Page texts, with every shard uploaded as it is rendered (one shard in
     memory at a time). Document errors raise ``PreparationFailed``; S3 errors

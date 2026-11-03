@@ -14,14 +14,24 @@ never appear in a skill id (``SKILL_ID_PATTERN``), so the split is unambiguous.
 
 Anything that compares a run-time id with a catalog id (access checks, slash-command
 matching, the freshness lookup) must compare ``base_skill_id(ref)``.
+
+**Who added a binding** lives in the same ``config`` slot (``addedBy``, a user id),
+written by the project settings route and never accepted from a client. It is what lets
+a skill an *editor* authored run for every member of the project (shared-projects §9.6,
+clause 4 of ``resolve_invocable_skill_ids``): the harness's ``ownerId`` is its creator,
+so the owner clause alone covers only the creator's skills. A user id, so it is stripped
+from every project response the way ``createdBy`` is.
 """
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 # The binding ``config`` key that holds the pinned version number.
 PIN_CONFIG_KEY = "version"
+
+# The binding ``config`` key that holds the user id of whoever added the binding.
+ADDED_BY_CONFIG_KEY = "addedBy"
 
 _SEPARATOR = "@"
 
@@ -65,3 +75,43 @@ def binding_pin(config: Optional[Mapping[str, Any]]) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return number if number >= 1 and number == value else None
+
+
+def binding_adder(config: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The user id that added a skill binding, or ``None`` when it was never recorded.
+
+    Bindings from before the key existed have none, and so get no clause-4 grant: the
+    rule never guesses who added a skill.
+    """
+    value = (config or {}).get(ADDED_BY_CONFIG_KEY)
+    return value if isinstance(value, str) and value else None
+
+
+def public_skill_config(config: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """A skill binding's config as an API returns it: without the adder's user id."""
+    return {k: v for k, v in (config or {}).items() if k != ADDED_BY_CONFIG_KEY}
+
+
+def project_skill_adders(assistant: Any) -> Dict[str, str]:
+    """``{skill ref: adder user id}`` for a **project harness**'s skill bindings.
+
+    Empty for every other Agent, so the adder clause can only ever widen a project's
+    skills: an ordinary Agent's bindings are the owner's, judged by the owner clause,
+    and its config is client-writable through ``PUT /agents/{id}``. Keyed by the base
+    skill id, so a ref that carries ``@n`` is judged like a pin in ``config``.
+    """
+    if getattr(assistant, "kind", None) != "project":
+        return {}
+    return skill_binding_adders(getattr(assistant, "bindings", None) or [])
+
+
+def skill_binding_adders(bindings: Iterable[Any]) -> Dict[str, str]:
+    """``{skill ref: adder user id}`` over skill bindings that recorded one."""
+    adders: Dict[str, str] = {}
+    for binding in bindings:
+        if getattr(binding, "kind", None) != "skill":
+            continue
+        adder = binding_adder(getattr(binding, "config", None))
+        if adder:
+            adders.setdefault(base_skill_id(binding.ref), adder)
+    return adders

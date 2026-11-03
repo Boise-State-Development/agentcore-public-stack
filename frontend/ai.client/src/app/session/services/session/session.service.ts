@@ -1,3 +1,4 @@
+import { HandoffView, SpawnedFrom } from '../handoff/handoff.models';
 import { inject, Injectable, signal, WritableSignal, resource, computed, effect, untracked } from '@angular/core';
 import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
@@ -6,6 +7,7 @@ import { SessionService as BffSessionService } from '../../../auth/session.servi
 import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { SessionMetadata, SessionPreferences, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
+import { SessionAffinityService } from './session-affinity.service';
 import type { UiResourceEvent, SourceProvenanceClaim } from '../../../shared/utils/stream-parser';
 
 /**
@@ -90,9 +92,36 @@ export interface PendingInterrupt {
  *
  * Matches the MessagesListResponse model from the Python API.
  */
+/** What `POST /sessions/{id}/fork` answers. */
+export interface SessionForkResult {
+  sessionId: string;
+  title: string;
+  /** The forked-from message's text as the user typed it, for the new composer. */
+  prefillText: string;
+  /** The conversation this family of forks started from; see SessionAffinityService. */
+  rootSessionId: string;
+}
+
+/** What `POST /sessions/{id}/rewind` answers. */
+export interface SessionRewindResult {
+  /** The index the next stored message takes; ids are never reused. */
+  nextMessageIndex: number;
+  /** The rewound message's text as the user typed it, for the composer. */
+  prefillText: string;
+  /** The visible messages the rewind hid, oldest first. */
+  rewoundMessageIds: string[];
+  epoch: number;
+}
+
 export interface MessagesListResponse {
   /** List of messages in the session */
   messages: Message[];
+  /**
+   * The index the next stored message will take. Larger than the number of
+   * messages once a rewind has hidden some, because ids are positional and
+   * never reused. Present only while the backend's rewind flag is on.
+   */
+  nextMessageIndex?: number;
   /** Pagination token for retrieving the next page of results */
   nextToken: string | null;
   /** OAuth consent interrupts that paused agent turns and are awaiting user action */
@@ -119,6 +148,15 @@ export interface MessagesListResponse {
    * clean answer. Present only on the first page.
    */
   sourceProvenance?: { toolUseId?: string; claims?: SourceProvenanceClaim[] }[];
+  /**
+   * Handoffs sent from this conversation (handoffs spec §4.3), each shaped like
+   * `GET /sessions/{id}/handoffs/{handoffId}`. Rendered as handoff rows after their
+   * `sourceMessageIndex`. Present only on the first page, and empty while the backend
+   * flag is off.
+   */
+  handoffs?: HandoffView[];
+  /** Set when this conversation was started by a handoff: where its context came from. */
+  spawnedFrom?: SpawnedFrom;
   /**
    * True when Memory's events for this session have expired and these
    * messages are the conversation archive's text-only copy. The agent cannot
@@ -175,6 +213,7 @@ export interface BulkDeleteSessionsResponse {
 })
 export class SessionService {
   private http = inject(HttpClient);
+  private affinity = inject(SessionAffinityService);
   private bffSession = inject(BffSessionService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/sessions`);
@@ -730,6 +769,41 @@ export class SessionService {
   }
 
   /**
+   * Rewind the conversation to just before one of the user's messages
+   * (docs/specs/conversation-rewind-and-fork.md §4). The message and
+   * everything after it are hidden server-side; nothing is deleted. Rejects
+   * with the HTTP error for a refusal (409 while a turn streams, or for a
+   * message the compaction summary covers), whose `detail` is user-readable.
+   */
+  async rewindSession(sessionId: string, messageId: string): Promise<SessionRewindResult> {
+    return firstValueFrom(
+      this.http.post<SessionRewindResult>(
+        `${this.baseUrl()}/${sessionId}/rewind`,
+        { messageId },
+        // The caller explains a refusal in its own words, from the detail.
+        { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) },
+      ),
+    );
+  }
+
+  /**
+   * Start a new conversation from everything before one of the user's
+   * messages (rewind/fork spec §7). The parent is untouched. Rejects with the
+   * HTTP error for a refusal, whose `detail` is user-readable.
+   */
+  async forkSession(sessionId: string, messageId: string): Promise<SessionForkResult> {
+    const result = await firstValueFrom(
+      this.http.post<SessionForkResult>(
+        `${this.baseUrl()}/${sessionId}/fork`,
+        { messageId },
+        { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) },
+      ),
+    );
+    this.affinity.record(result.sessionId, result.rootSessionId);
+    return result;
+  }
+
+  /**
    * Withdraw a queued follow-up the user removed from the composer.
    * Idempotent — the backend returns 204 whether or not the entry is still
    * there, because the user's intent is satisfied either way.
@@ -771,6 +845,8 @@ export class SessionService {
           context: new HttpContext().set(SUPPRESS_ERROR_TOAST, options.quiet ?? false),
         })
       );
+      // A fork's turns pin to its root's microVM; learn it before the next send.
+      this.affinity.record(sessionId, response?.rootSessionId);
 
       return response;
     } catch (error) {

@@ -155,16 +155,26 @@ export class ParsePreferencePipe implements PipeTransform {
         } @else {
           <!-- Memory Available - Show Content -->
 
+          <!-- Info Banner -->
+          <div class="mb-6 rounded-lg border border-state-info-200 bg-state-info-50 p-4 dark:border-state-info-800 dark:bg-state-info-900/20">
+            <div class="flex items-start gap-3">
+              <ng-icon name="heroInformationCircle" size="20" color="var(--color-state-info-600)" class="shrink-0" />
+              <p class="text-sm/6 text-state-info-700 dark:text-state-info-300">
+                These memories are automatically extracted from your conversations to personalize responses.
+                They help the AI remember your preferences and context across sessions.
+              </p>
+            </div>
+          </div>
+
           <!-- Long-term memory mode -->
           <section
             aria-labelledby="memory-mode-label"
             class="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
           >
             <p id="memory-mode-label" class="text-sm/6 font-medium text-gray-900 dark:text-gray-100">
-              Long-term memory
+              Long-term Memory Preferences
             </p>
             <p id="memory-mode-description" class="text-sm/6 text-gray-600 dark:text-gray-400">
-              Choose whether the assistant uses the preferences and facts it learns from your conversations.
               Your existing memories are kept in every mode, and you can view and delete them here.
               Memory Spaces belonging to projects and agents are separate and aren't affected by this setting.
             </p>
@@ -178,22 +188,24 @@ export class ParsePreferencePipe implements PipeTransform {
                 <label
                   class="flex cursor-pointer flex-col rounded-2xl border border-gray-300 px-4 py-3 transition-colors hover:bg-gray-50 has-checked:border-primary-500 has-checked:bg-gray-100 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-primary-500 has-disabled:cursor-not-allowed has-disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-700/40 dark:has-checked:border-primary-400 dark:has-checked:bg-gray-700"
                 >
-                  <input
-                    type="radio"
-                    name="memory-mode"
-                    class="sr-only"
-                    [attr.value]="option.value"
-                    [checked]="memoryMode() === option.value"
-                    [disabled]="savingMemorySetting()"
-                    [attr.aria-labelledby]="'memory-mode-' + option.value + '-label'"
-                    [attr.aria-describedby]="'memory-mode-' + option.value + '-hint'"
-                    (change)="setMemoryMode(option.value)"
-                  />
-                  <span
-                    [id]="'memory-mode-' + option.value + '-label'"
-                    class="text-sm/6 font-medium text-gray-900 dark:text-white"
-                    >{{ option.label }}</span
-                  >
+                  <span class="flex items-start justify-between gap-3">
+                    <span
+                      [id]="'memory-mode-' + option.value + '-label'"
+                      class="text-sm/6 font-medium text-gray-900 dark:text-white"
+                      >{{ option.label }}</span
+                    >
+                    <input
+                      type="radio"
+                      name="memory-mode"
+                      class="relative mt-1 size-4 shrink-0 appearance-none rounded-full border border-gray-300 bg-white before:absolute before:inset-1 before:rounded-full before:bg-white not-checked:before:hidden checked:border-primary-500 checked:bg-primary-500 focus-visible:outline-none disabled:border-gray-300 disabled:bg-gray-100 disabled:before:bg-gray-400 dark:border-gray-500 dark:bg-gray-800 dark:checked:border-primary-400 dark:checked:bg-primary-400 forced-colors:appearance-auto forced-colors:before:hidden"
+                      [attr.value]="option.value"
+                      [checked]="memoryMode() === option.value"
+                      [disabled]="savingMemorySetting()"
+                      [attr.aria-labelledby]="'memory-mode-' + option.value + '-label'"
+                      [attr.aria-describedby]="'memory-mode-' + option.value + '-hint'"
+                      (change)="setMemoryMode(option.value)"
+                    />
+                  </span>
                   <span
                     [id]="'memory-mode-' + option.value + '-hint'"
                     class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-300"
@@ -206,16 +218,6 @@ export class ParsePreferencePipe implements PipeTransform {
               <p role="alert" class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ message }}</p>
             }
           </section>
-          <!-- Info Banner -->
-          <div class="mb-6 rounded-lg border border-state-info-200 bg-state-info-50 p-4 dark:border-state-info-800 dark:bg-state-info-900/20">
-            <div class="flex items-start gap-3">
-              <ng-icon name="heroInformationCircle" size="20" color="var(--color-state-info-600)" class="shrink-0" />
-              <p class="text-sm/6 text-state-info-700 dark:text-state-info-300">
-                These memories are automatically extracted from your conversations to personalize responses.
-                They help the AI remember your preferences and context across sessions.
-              </p>
-            </div>
-          </div>
 
           <!-- Search and Refresh Controls -->
           <div class="mb-6 flex flex-wrap items-center gap-4">

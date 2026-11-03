@@ -61,6 +61,19 @@ describe('NetworkConstruct — detailed', () => {
   });
 });
 
+/**
+ * Every ingress rule on the template, inline or standalone. A rule whose
+ * peer is a deploy-time token (the prefix-list lookup) is rendered as its
+ * own AWS::EC2::SecurityGroupIngress resource rather than inline.
+ */
+function allIngress(tpl: Template): any[] {
+  const inline = Object.values(tpl.findResources('AWS::EC2::SecurityGroup'))
+    .flatMap((g: any) => g.Properties.SecurityGroupIngress ?? []);
+  const standalone = Object.values(tpl.findResources('AWS::EC2::SecurityGroupIngress'))
+    .map((r: any) => r.Properties);
+  return [...inline, ...standalone];
+}
+
 describe('AlbConstruct — detailed', () => {
   let t: Template;
   beforeAll(() => {
@@ -76,17 +89,57 @@ describe('AlbConstruct — detailed', () => {
     });
   });
 
-  it('security group allows HTTP from anywhere', () => {
-    t.hasResourceProperties('AWS::EC2::SecurityGroup', {
-      SecurityGroupIngress: Match.arrayWith([
-        Match.objectLike({ FromPort: 80, ToPort: 80, CidrIp: '0.0.0.0/0' }),
-      ]),
+  it('security group admits nobody from 0.0.0.0/0 by default', () => {
+    const ingress = allIngress(t);
+    expect(ingress.filter((r: any) => r.CidrIp === '0.0.0.0/0' || r.CidrIpv6 === '::/0')).toEqual([]);
+  });
+
+  it('security group admits only the CloudFront origin-facing prefix list, on :80 without a cert', () => {
+    const ingress = allIngress(t);
+    expect(ingress).toHaveLength(1);
+    expect(ingress[0]).toMatchObject({ IpProtocol: 'tcp', FromPort: 80, ToPort: 80 });
+    // Resolved at deploy time by the lookup custom resource, not hardcoded.
+    expect(ingress[0].SourcePrefixListId).toEqual({
+      'Fn::GetAtt': [expect.stringMatching(/^AlbCloudFrontOriginFacingPrefixList/), 'PrefixLists.0.PrefixListId'],
     });
   });
 
-  it('security group allows HTTPS from anywhere', () => {
-    t.hasResourceProperties('AWS::EC2::SecurityGroup', {
+  it('looks the prefix list up by its AWS-managed name on every deploy', () => {
+    const lookups = t.findResources('Custom::AWS');
+    expect(Object.keys(lookups)).toHaveLength(1);
+    const props = Object.values(lookups)[0] as any;
+    const update = JSON.stringify(props.Properties.Update);
+    expect(update).toContain('describeManagedPrefixLists');
+    expect(update).toContain('com.amazonaws.global.cloudfront.origin-facing');
+  });
+
+  it('admits CloudFront on :443 only when the ALB has a certificate', () => {
+    const stack = testStack();
+    const vpc = new ec2.Vpc(stack, 'Vpc');
+    new AlbConstruct(stack, 'Alb', {
+      config: createMockConfig({
+        certificateArn: `arn:aws:acm:${MOCK_REGION}:${MOCK_ACCOUNT}:certificate/abc`,
+      }),
+      vpc,
+    });
+    const ingress = allIngress(Template.fromStack(stack));
+    expect(ingress).toHaveLength(1);
+    expect(ingress[0]).toMatchObject({ FromPort: 443, ToPort: 443 });
+    expect(ingress[0].SourcePrefixListId).toBeDefined();
+  });
+
+  it('opens :80 and :443 to the internet only when albRestrictToCloudFront is false', () => {
+    const stack = testStack();
+    const vpc = new ec2.Vpc(stack, 'Vpc');
+    new AlbConstruct(stack, 'Alb', {
+      config: createMockConfig({ albRestrictToCloudFront: false }),
+      vpc,
+    });
+    const tpl = Template.fromStack(stack);
+    tpl.resourceCountIs('Custom::AWS', 0);
+    tpl.hasResourceProperties('AWS::EC2::SecurityGroup', {
       SecurityGroupIngress: Match.arrayWith([
+        Match.objectLike({ FromPort: 80, ToPort: 80, CidrIp: '0.0.0.0/0' }),
         Match.objectLike({ FromPort: 443, ToPort: 443, CidrIp: '0.0.0.0/0' }),
       ]),
     });

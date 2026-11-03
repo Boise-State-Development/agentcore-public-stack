@@ -289,8 +289,20 @@ only the model knows which value it is asserting. So the claim is explicit.
 A new builtin tool, `backend/src/agents/builtin_tools/verify_sources_tool.py`:
 
 ```
-verify_sources(upload_id, claims: [{id, value, quote}])
+verify_sources(claims: [{id, value, quote}], upload_id?)
 ```
+
+**Which document.** `upload_id` is optional because the model often cannot see one: a
+small attachment reaches it as an inline `document` block named by its filename, and no
+upload id appears anywhere in the conversation. Required, it sent Haiku 4.5 to guess
+(`"0"` in five dev samples of five), fail, list documents through `document_read` and
+verify again, two wasted tool rounds whose preambles ("Now let me verify:") were the
+turn's last visible text. So the tool resolves a missing or unknown id against the
+session's own documents: a unique filename match (as attached, or as the document block
+names it), else the session's only document. Anything still ambiguous returns the
+session's documents (`upload_id` and filename, at most 20) so the next call can pick. A
+real upload id resolves exactly as before, and only the fallback pays the session
+listing query.
 
 **Where it is built.** Inside the existing
 [`_build_document_tools`](../../backend/src/apis/inference_api/chat/routes.py:1218)

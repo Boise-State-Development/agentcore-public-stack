@@ -23,6 +23,7 @@ describe('ChatContainerComponent — a project conversation', () => {
     readonly sessionId = input<string | null>(null);
     readonly allowFolderAttachments = input<boolean>(false);
     readonly showScopePicker = input<boolean>(false);
+    readonly offerIncognito = input<boolean>(false);
     readonly project = input<ComposerProject | null>(null);
     readonly draftKey = input<string | null>(null);
     readonly isChatLoading = input<boolean>(false);

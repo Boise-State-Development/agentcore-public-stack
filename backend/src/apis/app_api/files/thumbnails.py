@@ -10,6 +10,8 @@ import io
 import logging
 from typing import Callable, Dict
 
+from apis.shared.files.pdfium_lock import serialized_pdfium
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,6 +98,7 @@ class ThumbnailRenderer:
             )
         return renderer(raw)
 
+    @serialized_pdfium
     def _render_pdf(self, raw: bytes) -> bytes:
         # Imported lazily so unit tests that don't touch the renderer don't
         # need the native lib loaded.

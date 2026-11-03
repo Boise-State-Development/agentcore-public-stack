@@ -7,6 +7,9 @@ whole record resend the unchanged discovery URL on every save, and rejecting
 those makes metadata-only edits (scopes, display name, icon, enabled)
 impossible for any provider that has one — the admin has no way to satisfy the
 rotation requirement. See `apis/app_api/admin/oauth/routes.py`.
+
+A Microsoft connector's Entra tenant follows the same rule, for the same
+reason: AgentCore must be sent the full config, tenant included.
 """
 
 from __future__ import annotations
@@ -77,6 +80,8 @@ class _FakeProviderRepo:
             self._provider.display_name = updates.display_name
         if updates.oauth_discovery_url is not None:
             self._provider.oauth_discovery_url = updates.oauth_discovery_url
+        if updates.tenant_id is not None:
+            self._provider.tenant_id = updates.tenant_id or None
         self._provider.updated_at = "2026-09-10T00:00:00Z"
         return self._provider
 
@@ -242,3 +247,110 @@ class TestDiscoveryGuard:
 
         assert len(registrar.update_calls) == 1
         assert registrar.update_calls[0]["discovery_url"] == _DISCOVERY_URL
+
+
+_TENANT_ID = "11111111-2222-3333-4444-555555555555"
+
+
+def _microsoft_provider(**overrides) -> OAuthProvider:
+    defaults = dict(
+        provider_id="canvas-faculty",
+        display_name="Azure DevOps",
+        provider_type=OAuthProviderType.MICROSOFT,
+        scopes=["499b84ac-1321-427f-aa17-267ca6975798/user_impersonation"],
+        allowed_roles=["staff"],
+        oauth_discovery_url=None,
+        tenant_id=_TENANT_ID,
+        credential_provider_arn="arn:aws:bedrock-agentcore:us-west-2:1:provider/ado",
+    )
+    defaults.update(overrides)
+    return OAuthProvider(**defaults)
+
+
+class TestTenantGuard:
+    @pytest.mark.asyncio
+    async def test_unchanged_tenant_allows_metadata_only_edit(self):
+        repo = _FakeProviderRepo(_microsoft_provider())
+        registrar = _FakeRegistrar()
+
+        response = await _update(
+            OAuthProviderUpdate(display_name="Azure DevOps (Boise State)", tenant_id=_TENANT_ID),
+            repo,
+            registrar,
+        )
+
+        assert response.display_name == "Azure DevOps (Boise State)"
+        assert response.tenant_id == _TENANT_ID
+        assert registrar.update_calls == []
+
+    @pytest.mark.asyncio
+    async def test_unset_tenant_resent_blank_is_not_a_change(self):
+        """The form sends `""` for an empty tenant field; nothing changed."""
+        repo = _FakeProviderRepo(_microsoft_provider(tenant_id=None))
+        registrar = _FakeRegistrar()
+
+        await _update(OAuthProviderUpdate(scopes=["openid"], tenant_id=""), repo, registrar)
+
+        assert registrar.update_calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("new_tenant", ["contoso.onmicrosoft.com", ""])
+    async def test_changed_tenant_without_credentials_400s(self, new_tenant):
+        repo = _FakeProviderRepo(_microsoft_provider())
+        registrar = _FakeRegistrar()
+
+        with pytest.raises(HTTPException) as exc:
+            await _update(OAuthProviderUpdate(tenant_id=new_tenant), repo, registrar)
+
+        assert exc.value.status_code == 400
+        assert "credential rotation" in exc.value.detail
+        assert registrar.update_calls == []
+
+    @pytest.mark.asyncio
+    async def test_changed_tenant_with_rotation_reaches_agentcore(self):
+        repo = _FakeProviderRepo(_microsoft_provider())
+        registrar = _FakeRegistrar()
+
+        response = await _update(
+            OAuthProviderUpdate(
+                client_id="new-client",
+                client_secret="new-secret",
+                tenant_id="contoso.onmicrosoft.com",
+            ),
+            repo,
+            registrar,
+        )
+
+        assert registrar.update_calls[0]["tenant_id"] == "contoso.onmicrosoft.com"
+        assert response.tenant_id == "contoso.onmicrosoft.com"
+
+    @pytest.mark.asyncio
+    async def test_rotation_alone_carries_the_existing_tenant_forward(self):
+        repo = _FakeProviderRepo(_microsoft_provider())
+        registrar = _FakeRegistrar()
+
+        await _update(
+            OAuthProviderUpdate(client_id="new-client", client_secret="new-secret"),
+            repo,
+            registrar,
+        )
+
+        assert registrar.update_calls[0]["tenant_id"] == _TENANT_ID
+
+    @pytest.mark.asyncio
+    async def test_tenant_on_a_non_microsoft_provider_400s(self):
+        repo = _FakeProviderRepo(_provider())
+        registrar = _FakeRegistrar()
+
+        with pytest.raises(HTTPException) as exc:
+            await _update(
+                OAuthProviderUpdate(
+                    client_id="c", client_secret="s", tenant_id=_TENANT_ID
+                ),
+                repo,
+                registrar,
+            )
+
+        assert exc.value.status_code == 400
+        assert "microsoft" in exc.value.detail
+        assert registrar.update_calls == []

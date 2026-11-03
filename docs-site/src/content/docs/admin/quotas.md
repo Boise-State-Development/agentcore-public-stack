@@ -1,12 +1,119 @@
 ---
 title: Quotas
-description: Rate limits and quota tiers.
+description: Quota tiers, assignments, overrides, and quota requests and extensions.
 sidebar:
   order: 3
 ---
 
-:::caution[Draft]
-This page is a scaffolded placeholder — content to be written.
-:::
+Usage & Spend group. Quotas cap how much each user can spend on model calls in a
+period (usually a month). Managed under `/admin/quota`, scope `admin.quota`.
 
-Usage & Spend group. Per-tier usage limits; backed by `admin/quota` and the `/admin/quota` pages.
+## How a user's limit is decided
+
+1. **Tier.** The first match wins: an active **override**, a direct user
+   assignment, an AppRole assignment, a JWT role assignment, an email-domain
+   assignment, then the default tier. The tier sets the period limit, the
+   warning ladder (50%, 75%, the soft limit, 90%), the per-conversation notice
+   share, and whether reaching the limit blocks or only warns.
+2. **Extensions** (when quota requests are on, see below) are added on top:
+   `effective limit = base limit + every active extension`. Warnings, the
+   per-conversation notice and the block all run on the effective limit.
+
+Enforcement is computed on every turn from live spend, so nothing has to be
+"unblocked". Tier resolution is cached for five minutes per user, except when a
+turn would be blocked: that turn re-reads the user's quota before refusing, so
+an approval or a new override takes effect on the user's next message. The
+Usage page's status read (`GET /costs/quota-status`) always reads fresh, so it
+shows a decision as soon as the user's notification arrives.
+
+## Overrides
+
+An override **replaces** the user's tier for a date range: a custom limit, or
+unlimited. Use it for "unlimited for this person". It leaves no boundary between
+the central allowance and the extra, so it cannot be charged back; use an
+extension for that.
+
+## Quota requests and extensions
+
+Off by default while in development: set `CDK_QUOTA_REQUESTS_ENABLED=true`
+(app-api) and build the SPA with `features.quotaRequests: true`. Spec:
+`docs/specs/quota-requests-and-extensions.md`.
+
+Users ask from the composer's quota tab (from 80% used, and when blocked) or
+from **Settings → Usage**, which also lists their requests and splits the quota
+bar into the central allowance and each extension.
+
+Admins work in **Quota Requests** (`/admin/quota-requests`, its own nav entry
+under Usage & Spend, badged with the pending count): **Requests** is the queue
+and each request's detail (approve, ask for info, deny), **Extensions** lists
+active and past extensions with a *Standing* filter and Revoke, and **Settings**
+is the policy, including the funding-field schema with a live preview. A user's
+admin page also offers **Extend Quota** beside Create Override, and its quota
+card lists the user's active extensions. People are always picked from the
+users directory, never typed as an id.
+
+- **Requests.** A user asks for an amount per period, through a date, with a
+  justification and, if the deployment collects one, a funding source
+  (`POST /quota/requests`). One open request per user. An admin approves
+  (creating an extension), asks for information (usually "which fund?") or
+  denies with a note. Nobody can decide their own request or extend their own
+  quota.
+- **Extensions.** Additive and period-scoped: `$X` more in every period between
+  two dates. Each is **centrally funded** or **charged back** to a funding
+  source. A **standing** extension is a per-user chargeback arrangement: past
+  the central allowance the user keeps going, charged to their fund, up to a
+  per-period cap (or uncapped, which is never the default). Revoking ends an
+  extension now; extensions are never deleted.
+- **Policy** (`GET`/`PUT /admin/quota-requests/policy`): request presets and
+  bounds, whether and how the request form asks for a funding source, the
+  funding-field schema (for example fund / org / program, or a cost center),
+  standing defaults, the fiscal year end, and who is notified of new requests.
+- **Scope.** `admin.quota_requests` governs the request queue and extensions,
+  separately from `admin.quota`, so approving requests can be delegated without
+  the tier editor.
+- **Audit and notifications.** Approvals, denials, information requests,
+  extension grants and revokes, and refused self-decisions are audited. The
+  requester is notified in-app of each decision.
+
+| Route | Purpose |
+|---|---|
+| `GET /admin/quota-requests?status=` | The queue (pending by default) |
+| `GET /admin/quota-requests/summary` | Pending and info-requested counts |
+| `GET /admin/quota-requests/{id}` | The request with live usage, prior periods and history |
+| `POST /admin/quota-requests/{id}/approve` / `request-info` / `deny` | Decide |
+| `GET` / `POST /admin/quota-extensions` | List, or extend a user directly |
+| `POST /admin/quota-extensions/{id}/revoke` | End one now |
+| `GET` / `PUT /admin/quota-requests/policy` | The request policy |
+| `GET /admin/quota-requests/chargeback` | The chargeback report: `period=YYYY-MM` or `from`/`to`, filters `fundingKey`, `group`, `userId`, `authorizer`, `mode`, `f_<field>`, and `format=csv` |
+| `GET /admin/quota-requests/chargeback/funds` | Every funding source granted against, for the fund picker |
+| `POST /admin/quota-requests/chargeback/{period}/close` | Recalculate a closed month (audited) |
+
+### Chargeback report
+
+Admin → Quota Requests → **Chargeback** answers, per funding source, what
+extensions were granted and what they actually consumed, for a month, a
+quarter or the fiscal year (from the policy's fiscal year end).
+
+- **How spend is attributed.** For each user and month, spend up to the base
+  limit is the central allowance. Spend above it goes to that month's
+  extensions in a fixed order: centrally funded first, then capped chargeback,
+  then standing; within each, the earliest end date first, then the oldest.
+  *Consumed* is actual spend, never the granted amount, so a fund is charged
+  only for what was used. Spend past every extension (a `warn` tier) is
+  reported as *not covered*.
+- **Base limit.** Each extension records the user's base limit when it was
+  granted. If those differ within a month (the tier changed), the report uses
+  the larger, which charges funds the least, and marks the line *base limit
+  changed during period* for finance to resolve.
+- **Provisional and closed.** The current month, and the previous one until 48
+  hours after it ends, is computed on every read and labelled **Provisional**.
+  The first read after that closes the month: its lines are written to the
+  ledger and do not move again when a tier changes or a late cost row lands.
+  **Recalculate** rebuilds a closed month (for a cost correction, or a revoke
+  that should have been back-dated) and writes a `quota_period.reclosed` audit
+  record with each fund's total before and after.
+- **Export CSV** flattens the funding fields into one column per schema key,
+  ready for a journal upload. The report does not move money; it is the
+  evidence a finance process needs.
+- **Grouping.** With a `reportGroupField` in the policy (for example `org`),
+  the report can roll up by that field, one row per value with a drill-down.

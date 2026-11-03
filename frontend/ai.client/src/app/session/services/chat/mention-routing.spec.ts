@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { routeMention } from './mention-routing';
+import { routeMention, stripMention } from './mention-routing';
 
 /**
  * The SPA half of the `@`-mention binding rule, and the mirror of the backend's
@@ -117,5 +117,23 @@ describe('routeMention', () => {
       });
       expect(routed.assistantId).toBe('ast-rubric');
     }
+  });
+});
+
+describe('stripMention (handoffs review sheet request)', () => {
+  it('drops a leading mention', () => {
+    expect(stripMention('@Rubric Builder draft a rubric for this', 'Rubric Builder')).toBe('draft a rubric for this');
+  });
+
+  it('drops a mention typed mid-sentence and closes the gap', () => {
+    expect(stripMention('please @Rubric Builder  draft a rubric', 'Rubric Builder')).toBe('please draft a rubric');
+  });
+
+  it('drops only the picking token, not a later use of the name', () => {
+    expect(stripMention('@Rubric Builder ask @Rubric Builder again', 'Rubric Builder')).toBe('ask @Rubric Builder again');
+  });
+
+  it('leaves text without the token as typed', () => {
+    expect(stripMention('  draft a rubric  ', 'Rubric Builder')).toBe('draft a rubric');
   });
 });

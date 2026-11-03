@@ -1160,16 +1160,33 @@ describe('KbMigration wiring on PlatformStack', () => {
     }
   });
 
-  it('never reads the service-role ARN back from the SSM path this stack publishes', () => {
-    // Passing the ManagedKbRoleConstruct by ref is not a style choice:
-    // CloudFormation resolves AWS::SSM::Parameter::Value template
-    // parameters BEFORE any stack resource exists, so a same-stack read
-    // is unsatisfiable on first deploy.
-    const params = t.toJSON().Parameters ?? {};
-    for (const param of Object.values(params) as Array<Record<string, unknown>>) {
-      const type = param.Type as string | undefined;
-      if (!type?.startsWith('AWS::SSM::Parameter::Value')) continue;
-      expect(param.Default).not.toBe('/test-project/managed-kb/service-role-arn');
-    }
+  it('lets app-api start born-managed provisioning without waiting for the tick', () => {
+    // born_managed._start_worker_now async-invokes the migration worker on a new
+    // knowledge base's first upload. Without the name it logs and falls back to
+    // the 15-minute dispatcher tick; without the grant the invoke is refused and
+    // it falls back the same way. Both fail silently, so both are asserted
+    // against the worker the dispatcher itself invokes.
+    const workerLogicalId = Object.keys(t.findResources('AWS::Lambda::Function'))
+      .find((id) => id.includes('KbMigrationWorkerLambda'));
+    expect(workerLogicalId).toBeDefined();
+
+    type Container = { Environment?: Array<{ Name: string; Value: unknown }> };
+    const env = Object.values(t.findResources('AWS::ECS::TaskDefinition')).flatMap((td) =>
+      ((td.Properties as { ContainerDefinitions?: Container[] }).ContainerDefinitions ?? [])
+        .flatMap((c) => c.Environment ?? []),
+    );
+    expect(env).toContainEqual({
+      Name: 'KB_MIGRATION_WORKER_FUNCTION_NAME',
+      Value: { Ref: workerLogicalId },
+    });
+
+    type Statement = { Sid?: string; Action?: unknown; Resource?: unknown };
+    const invoke = Object.values(t.findResources('AWS::IAM::ManagedPolicy'))
+      .flatMap((r) =>
+        (r.Properties as { PolicyDocument?: { Statement?: Statement[] } }).PolicyDocument?.Statement ?? [],
+      )
+      .find((st) => st.Sid === 'KbMigrationWorkerInvoke');
+    expect(invoke?.Action).toBe('lambda:InvokeFunction');
+    expect(invoke?.Resource).toEqual({ 'Fn::GetAtt': [workerLogicalId, 'Arn'] });
   });
 });

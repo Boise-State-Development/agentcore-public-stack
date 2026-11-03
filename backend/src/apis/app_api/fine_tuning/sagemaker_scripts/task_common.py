@@ -169,7 +169,13 @@ def extract_archive(archive_path, dest_dir):
             name = member.filename
             if name.endswith("/"):
                 continue
-            if os.path.isabs(name) or ".." in name.replace("\\", "/").split("/"):
+            # A leading slash is absolute in zip semantics on every OS, even
+            # though os.path.isabs("/etc/passwd") is False on Windows.
+            if (
+                os.path.isabs(name)
+                or name.startswith(("/", "\\"))
+                or ".." in name.replace("\\", "/").split("/")
+            ):
                 raise ValueError(
                     f"Refusing to extract unsafe archive entry: {name!r}"
                 )

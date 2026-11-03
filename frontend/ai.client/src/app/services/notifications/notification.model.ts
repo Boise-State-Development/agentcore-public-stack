@@ -16,7 +16,13 @@ export type NotificationKind =
   | 'project_proposal_pending'
   | 'project_proposal_decided'
   | 'project_memory_maintenance'
-  | 'project_schedule_paused';
+  | 'project_schedule_paused'
+  // Quota requests and extensions (quota-requests spec §11.1).
+  | 'quota_request_submitted'
+  | 'quota_request_decided'
+  | 'quota_request_info_requested'
+  | 'quota_extension_granted'
+  | 'quota_extension_revoked';
 
 export interface AppNotification {
   notificationId: string;
@@ -33,7 +39,9 @@ export interface AppNotification {
    * `shareId`, `title` and an optional `note` for a shared task;
    * `proposalId`, `slug`, and for a decision `decision` and an optional `note`, for a memory proposal;
    * `runId`, `fileCount` and up to ten `slugs` for a maintenance run's proposals;
-   * `scheduleId`, `label`, `reason` and `createdBy` (the creator's email) for a schedule that stopped.
+   * `scheduleId`, `label`, `reason` and `createdBy` (the creator's email) for a schedule that stopped;
+   * for quota: `requestId`, `outcome`, `amount` / `requestedAmount` (decimal strings), `through`
+   * (a date), `standing`, `fundingLabel`, `note`, and `reason` on a revoke.
    */
   payload: {
     role?: string;

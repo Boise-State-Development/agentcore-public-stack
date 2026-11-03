@@ -24,5 +24,15 @@ export const environment = {
         folderSync: true,
         sourceProvenance: true,
         documentExtract: false,
+        // The `development` GitHub environment sets CDK_HANDOFFS_ENABLED=true.
+        handoffs: true,
+        // The `development` GitHub environment sets CDK_SESSION_REWIND_ENABLED=true
+        // and CDK_SESSION_FORK_ENABLED=true.
+        sessionRewind: true,
+        sessionFork: true,
+        // The `development` GitHub environment sets CDK_QUOTA_REQUESTS_ENABLED=true.
+        quotaRequests: true,
+        // The `development` GitHub environment sets CDK_PROJECT_FILE_READINESS_ENABLED=true.
+        projectFileReadiness: true,
     } satisfies FeatureFlags,
 };

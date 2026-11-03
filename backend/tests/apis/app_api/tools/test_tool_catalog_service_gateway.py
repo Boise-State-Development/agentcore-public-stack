@@ -192,6 +192,23 @@ class TestUpdate:
         assert updates["mcp_gateway_config"].gateway_arn == "arn:new"
 
     @pytest.mark.asyncio
+    async def test_switching_between_server_and_connector_rejected(self):
+        existing = _gateway_tool(_gateway_config(target_id="TGT1"))
+        repo = MagicMock()
+        repo.get_tool = AsyncMock(return_value=existing)
+        repo.update_tool = AsyncMock()
+        gw = MagicMock()
+
+        connector = MCPGatewayConfig(target_name="weather-target", connector_id="web-search")
+        with pytest.raises(ValueError, match="built-in connector"):
+            await _service(repo, gw).update_tool(
+                "gw_weather", {"mcp_gateway_config": connector}, _admin()
+            )
+
+        gw.update_target.assert_not_called()
+        repo.update_tool.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_protocol_transition_to_mcp_rejected(self):
         existing = ToolDefinition(
             tool_id="local_thing", display_name="x", description="d", protocol=ToolProtocol.LOCAL

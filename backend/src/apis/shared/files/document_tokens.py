@@ -63,11 +63,14 @@ def pdf_page_count(raw: bytes) -> Optional[int]:
 
         import pypdfium2 as pdfium
 
-        pdf = pdfium.PdfDocument(io.BytesIO(bytes(raw)))
-        try:
-            return len(pdf)
-        finally:
-            pdf.close()
+        from .pdfium_lock import pdfium_lock
+
+        with pdfium_lock():
+            pdf = pdfium.PdfDocument(io.BytesIO(bytes(raw)))
+            try:
+                return len(pdf)
+            finally:
+                pdf.close()
     except Exception:  # noqa: BLE001 - estimator must never raise
         logger.debug("pdf_page_count: unparseable PDF, falling back to bytes/4", exc_info=True)
         return None

@@ -10,6 +10,12 @@
      the quota tab, which has to stay welded to the composer's top edge. -->
 <app-agent-notice-banner />
 
+<!-- Whether a project's files can be used yet: only while some are preparing or
+     failed, so a ready project shows nothing here. -->
+@if (readinessProjectId(); as projectId) {
+  <app-project-file-readiness [projectId]="projectId" />
+}
+
 <!-- Cost quota warning: a tab welded to the composer's top edge. It stays up
      here rather than joining the meta line beneath, because it is a warning
      and the line beneath is quiet metadata. -->
@@ -178,6 +184,7 @@
         [items]="skillResults()"
         [activeIndex]="skillActiveIndex()"
         [query]="skillQuery()"
+        [projectScoped]="projectSkillsLocked()"
         (picked)="onSkillPicked($event)"
         (browseAll)="onSkillBrowseAll()"
       />
@@ -686,6 +693,9 @@
     }
   </div>
   <div class="flex shrink-0 items-center gap-0.5">
+    @if (incognitoOffered()) {
+      <app-incognito-toggle class="shrink-0" />
+    }
     <app-model-dropdown size="compact" [menuOpens]="compact() ? 'up' : 'down'" class="shrink-0" />
     <ng-content select="[composerMeta]" />
   </div>

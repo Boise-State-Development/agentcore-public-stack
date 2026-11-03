@@ -105,13 +105,11 @@ export interface KbMigrationConstructProps {
    */
   documentsBucket: s3.IBucket;
   /**
-   * The shared Managed_KB service role construct from task 1.2. Passed
-   * as a construct ref, NOT read back from
-   * `/{prefix}/managed-kb/service-role-arn`: that parameter is published
-   * by this same stack, and CloudFormation resolves
-   * `AWS::SSM::Parameter::Value` template parameters before any of the
-   * stack's resources exist, so a same-stack read is unsatisfiable on
-   * first deploy.
+   * The shared Managed_KB service role construct from task 1.2, passed
+   * as a construct ref. Never route it through SSM: CloudFormation
+   * resolves `AWS::SSM::Parameter::Value` template parameters before
+   * any of the stack's resources exist, so a same-stack read is
+   * unsatisfiable on first deploy.
    *
    * This construct is where the provisioning and direct-ingestion grants
    * defined in task 1.2 finally get attached — they were deliberately

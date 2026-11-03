@@ -36,6 +36,13 @@ NotificationKind = Literal[
     # createdBy}. ``reason`` is a run_block_reason code, a worker pause reason, or
     # "paused_by_editor" / "deleted" when someone else stopped it.
     "project_schedule_paused",
+    # Quota requests and extensions (quota-requests spec §11.1). Not project
+    # events: projectId is unset and the payload carries the ids.
+    "quota_request_submitted",
+    "quota_request_decided",
+    "quota_request_info_requested",
+    "quota_extension_granted",
+    "quota_extension_revoked",
 ]
 
 

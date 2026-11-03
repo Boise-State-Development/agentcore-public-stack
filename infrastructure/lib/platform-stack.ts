@@ -996,6 +996,8 @@ export class PlatformStack extends cdk.Stack {
       memorySpacesTable: this.memorySpacesTable,
       projectsTable: this.projectsTable,
       memoryMaintenanceWorker: this._memoryMaintenance.workerLambda,
+      // Created unconditionally above; the field is optional only for ordering.
+      kbMigrationWorker: this._kbMigration!.workerLambda,
       fineTuningJobsTable: this.fineTuningJobsTable,
       fineTuningAccessTable: this.fineTuningAccessTable,
       fineTuningDataBucket: this.fineTuningDataBucket,

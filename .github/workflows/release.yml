@@ -12,8 +12,35 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  build-tui:
+    name: Build terminal client (aps-tui)
+    # The TUI is not published to a package index. Its wheel is attached to
+    # the release below and installed by URL; see tui/README.md. Same guard as
+    # the release job, so forks do not build an artifact nothing will publish.
+    if: ${{ github.repository == 'Boise-State-Development/agentcore-public-stack' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Test and build
+        run: bash scripts/tui/build.sh --check
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aps-tui-dist
+          path: |
+            tui/dist/aps_tui-*
+            tui/dist/SHA256SUMS
+          retention-days: 1
+          if-no-files-found: error
+
   release:
     name: Create Release
+    needs: build-tui
     # Don't create releases/tags in forks.
     if: ${{ github.repository == 'Boise-State-Development/agentcore-public-stack' }}
     runs-on: ubuntu-24.04
@@ -90,6 +117,12 @@ jobs:
           git tag -a "${{ steps.version.outputs.TAG }}" -m "Release ${{ steps.version.outputs.VERSION }}"
           git push origin "${{ steps.version.outputs.TAG }}"
 
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.check-tag.outputs.EXISTS == 'false'
+        with:
+          name: aps-tui-dist
+          path: tui-dist
+
       - name: Create GitHub Release
         if: steps.check-tag.outputs.EXISTS == 'false'
         env:
@@ -99,6 +132,21 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           PRERELEASE="${{ steps.version.outputs.PRERELEASE }}"
           NOTES_FILE="${{ steps.notes.outputs.NOTES_FILE }}"
+
+          # The terminal client's install line, under the notes. The wheel is
+          # the same for every deployment; the base URL is given at login.
+          WHEEL="$(basename tui-dist/aps_tui-*.whl)"
+          {
+            echo
+            echo "## Terminal client"
+            echo
+            echo "Install or upgrade \`aps-tui\` (needs [uv](https://docs.astral.sh/uv/)):"
+            echo
+            echo '```bash'
+            echo "uv tool install --force https://github.com/${{ github.repository }}/releases/download/${TAG}/${WHEEL}"
+            echo "aps-tui login --sso --base-url https://<your-deployment>/api"
+            echo '```'
+          } >> "${NOTES_FILE}"
 
           ARGS=(
             "${TAG}"
@@ -111,7 +159,7 @@ jobs:
             ARGS+=( --prerelease )
           fi
 
-          gh release create "${ARGS[@]}"
+          gh release create "${ARGS[@]}" tui-dist/aps_tui-* tui-dist/SHA256SUMS
 
       - name: Generate summary
         if: always()

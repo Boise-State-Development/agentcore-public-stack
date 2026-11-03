@@ -5,8 +5,13 @@
 #
 # Destroys all CDK stacks in reverse deployment order.
 # Infrastructure stack is destroyed last since all others depend on it.
+# Empties each stack's DESTROY buckets first (see "Buckets" below).
 #
-# Usage: bash scripts/teardown/destroy.sh
+# Usage: bash scripts/teardown/destroy.sh [--dry-run]
+#
+#   --dry-run  Read only. Lists each existing stack, the buckets it owns
+#              and which of them would be emptied, then stops. Deletes
+#              nothing and skips the Managed Knowledge Base step.
 #============================================================
 
 set -euo pipefail
@@ -14,12 +19,31 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+DRY_RUN=false
+for arg in "$@"; do
+    case "${arg}" in
+        --dry-run) DRY_RUN=true ;;
+        *)
+            echo "Unknown argument: ${arg}" >&2
+            echo "Usage: bash scripts/teardown/destroy.sh [--dry-run]" >&2
+            exit 2
+            ;;
+    esac
+done
+
 # Source common utilities
 source "${PROJECT_ROOT}/scripts/common/load-env.sh"
 
 log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
+
+# load-env.sh treats jq as optional; the bucket step parses CloudFormation
+# templates and S3 listings with it, so here it is required.
+if ! command -v jq >/dev/null 2>&1; then
+    log_error "jq is required (bash scripts/common/install-deps.sh installs it)"
+    exit 1
+fi
 
 # ===========================================================
 # Destroy all stacks (parallel where possible)
@@ -51,6 +75,28 @@ log_success() {
 #     specific resources that refused to delete (typically S3
 #     buckets that still have objects, or resources with RETAIN
 #     policies if you want them gone).
+#
+# Buckets:
+#   The stack does not empty its own buckets. CDK's `autoDeleteObjects`
+#   would, at the cost of one custom resource per bucket plus a provider
+#   Lambda and role, about 15 of PlatformStack's 500-resource limit
+#   (docs/specs/platform-stack-resource-budget.md §4). This script does
+#   it instead, before each stack is deleted:
+#   - The buckets come from the stack's own resources
+#     (list-stack-resources, AWS::S3::Bucket), never a name pattern, so
+#     another environment's bucket in the same account is never touched.
+#   - Only a bucket whose DeletionPolicy in the deployed template is
+#     Delete is emptied. With retainDataOnDelete every bucket is Retain,
+#     CloudFormation leaves it standing, and this script leaves its
+#     objects alone. Reading the deployed template rather than local
+#     config means a stale cdk.context.json cannot change the answer.
+#   - Every object version and delete marker goes, because a versioned
+#     bucket with only noncurrent versions still refuses deletion.
+#   - Log delivery (ALB, CloudFront) can write a new object after the
+#     bucket is emptied and before its writer is deleted. On a
+#     DELETE_FAILED whose failed resources include a bucket, the stack's
+#     buckets are emptied again and the delete is retried once; by then
+#     the writers are gone.
 # ===========================================================
 
 cd "${PROJECT_ROOT}/infrastructure"
@@ -84,7 +130,11 @@ FOUNDATION_STACKS=(
 )
 
 log_info "============================================"
-log_info "  TEARDOWN: Destroying all CDK stacks"
+if [ "${DRY_RUN}" = "true" ]; then
+    log_info "  TEARDOWN (DRY RUN): nothing will be deleted"
+else
+    log_info "  TEARDOWN: Destroying all CDK stacks"
+fi
 log_info "  Project: ${CDK_PROJECT_PREFIX}"
 log_info "  Region:  ${CDK_AWS_REGION}"
 log_info "  Account: ${CDK_AWS_ACCOUNT}"
@@ -106,30 +156,184 @@ stack_exists() {
         >/dev/null 2>&1
 }
 
+# Scratch space for templates and S3 listings, which are too large to pass
+# as command-line arguments (Linux caps one argument at 128 KiB).
+BUCKET_WORK_DIR=$(mktemp -d)
+trap 'rm -rf "${BUCKET_WORK_DIR}"' EXIT
+
+# The stack's buckets as "<bucket name>\t<DeletionPolicy>" lines, read from
+# the stack itself: list-stack-resources for the physical names, the
+# deployed template for each one's DeletionPolicy (absent means Delete,
+# CloudFormation's default). Buckets already deleted, or never created, are
+# left out.
+#
+# ⚠️ Every step carries an explicit `|| return 1`: callers use this in a
+# condition, which suspends `set -e` for the whole function, and a failed
+# read must not look like a stack with no buckets.
+stack_buckets() {
+    local stack_name="$1"
+    local template resources
+    template=$(mktemp "${BUCKET_WORK_DIR}/template.XXXXXX") || return 1
+    resources=$(mktemp "${BUCKET_WORK_DIR}/resources.XXXXXX") || return 1
+
+    aws cloudformation get-template \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}" \
+        --template-stage Processed \
+        --query 'TemplateBody' \
+        --output json > "${template}" || return 1
+    aws cloudformation list-stack-resources \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}" \
+        --query "StackResourceSummaries[?ResourceType=='AWS::S3::Bucket' && ResourceStatus!='DELETE_COMPLETE'].[LogicalResourceId,PhysicalResourceId]" \
+        --output json > "${resources}" || return 1
+
+    # The CLI decodes a JSON template body into an object; a YAML one stays
+    # a string, which CDK never deploys.
+    jq -r --slurpfile tpl "${template}" '
+        ($tpl[0] | if type == "string" then fromjson else . end | .Resources) as $res
+        | .[] | select(.[1] != null)
+        | [.[1], ($res[.[0]].DeletionPolicy // "Delete")] | @tsv
+    ' "${resources}" || return 1
+}
+
+# Delete every object version and delete marker in a bucket, 1,000 at a
+# time. Each pass re-lists from the start, because the previous pass's keys
+# are gone. Fails on the first batch S3 reports errors for (Object Lock,
+# a denied delete), rather than spinning on keys it cannot remove.
+empty_bucket() {
+    local bucket="$1"
+    local listing payload response count errors total=0
+
+    if ! aws s3api head-bucket --bucket "${bucket}" >/dev/null 2>&1; then
+        # Already deleted, or not readable. In the second case the stack
+        # delete reports the bucket, which is the useful error.
+        echo "    ${bucket}: not reachable (already deleted?), skipping"
+        return 0
+    fi
+
+    listing=$(mktemp "${BUCKET_WORK_DIR}/listing.XXXXXX") || return 1
+    payload=$(mktemp "${BUCKET_WORK_DIR}/payload.XXXXXX") || return 1
+    response=$(mktemp "${BUCKET_WORK_DIR}/response.XXXXXX") || return 1
+
+    while :; do
+        aws s3api list-object-versions \
+            --bucket "${bucket}" \
+            --max-keys 1000 \
+            --no-paginate \
+            --output json > "${listing}" || return 1
+        count=$(jq '[(.Versions // [])[], (.DeleteMarkers // [])[]] | length' "${listing}") || return 1
+        [ "${count}" -eq 0 ] && break
+
+        jq '{Objects: [(.Versions // [])[], (.DeleteMarkers // [])[] | {Key, VersionId}], Quiet: true}' \
+            "${listing}" > "${payload}" || return 1
+        aws s3api delete-objects \
+            --bucket "${bucket}" \
+            --delete "file://${payload}" \
+            --output json > "${response}" || return 1
+
+        errors=$(jq '(.Errors // []) | length' "${response}") || return 1
+        if [ "${errors}" -ne 0 ]; then
+            echo "    ${bucket}: S3 refused ${errors} of ${count} deletes; first refusals:"
+            jq -r '.Errors[:5][] | "      \(.Key) (\(.VersionId // "-")): \(.Code) \(.Message)"' "${response}" || true
+            return 1
+        fi
+        total=$((total + count))
+    done
+
+    echo "    ${bucket}: emptied (${total} object versions and delete markers removed)"
+}
+
+# Empty every bucket the stack owns whose DeletionPolicy is Delete; report
+# the rest. In --dry-run, only reports. Returns non-zero if the buckets
+# could not be listed or any one of them could not be emptied.
+empty_stack_buckets() {
+    local stack_name="$1"
+    local listing bucket policy sample
+    local buckets=()
+    local policies=()
+
+    if ! listing=$(stack_buckets "${stack_name}"); then
+        echo "    could not list the buckets of ${stack_name}"
+        return 1
+    fi
+    if [ -z "${listing}" ]; then
+        echo "    ${stack_name} owns no buckets"
+        return 0
+    fi
+
+    # Collected first so nothing inside the loop below can read the listing
+    # from stdin.
+    while IFS=$'\t' read -r bucket policy; do
+        [ -n "${bucket}" ] || continue
+        buckets+=("${bucket}")
+        policies+=("${policy}")
+    done <<< "${listing}"
+
+    local i
+    for i in "${!buckets[@]}"; do
+        bucket="${buckets[$i]}"
+        policy="${policies[$i]}"
+        if [ "${policy}" != "Delete" ]; then
+            echo "    ${bucket}: DeletionPolicy ${policy}, kept with its objects"
+            continue
+        fi
+        if [ "${DRY_RUN}" = "true" ]; then
+            sample=$(aws s3api list-object-versions \
+                --bucket "${bucket}" --max-keys 1000 --no-paginate --output json 2>/dev/null \
+                | jq '[(.Versions // [])[], (.DeleteMarkers // [])[]] | length' 2>/dev/null) \
+                || sample="?"
+            [ "${sample}" = "1000" ] && sample="1000+"
+            echo "    ${bucket}: would be emptied (${sample} object versions and delete markers)"
+            continue
+        fi
+        empty_bucket "${bucket}" || return 1
+    done
+}
+
+# Number of the stack's buckets currently in DELETE_FAILED.
+failed_bucket_count() {
+    aws cloudformation list-stack-resources \
+        --stack-name "$1" \
+        --region "${CDK_AWS_REGION}" \
+        --query "length(StackResourceSummaries[?ResourceType=='AWS::S3::Bucket' && ResourceStatus=='DELETE_FAILED'])" \
+        --output text 2>/dev/null || echo 0
+}
+
 # Delete a CloudFormation stack by name and wait for completion.
 # All output goes to ${log_file}; the caller decides what to surface
-# based on the exit code. On DELETE_FAILED, also dumps the stack
+# based on the exit code. If the delete fails on a bucket (a log write
+# that landed after the bucket was emptied), empties the stack's buckets
+# again and retries once. On a final DELETE_FAILED, also dumps the stack
 # status reason and the resources that refused to delete.
 destroy_stack() {
     local stack_name="$1"
     local log_file="$2"
+    local attempt
 
     {
-        echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Calling delete-stack for ${stack_name}"
-        if ! aws cloudformation delete-stack \
-            --stack-name "${stack_name}" \
-            --region "${CDK_AWS_REGION}"; then
-            echo "delete-stack API call failed for ${stack_name}"
-            return 1
-        fi
+        for attempt in 1 2; do
+            echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Calling delete-stack for ${stack_name} (attempt ${attempt})"
+            if ! aws cloudformation delete-stack \
+                --stack-name "${stack_name}" \
+                --region "${CDK_AWS_REGION}"; then
+                echo "delete-stack API call failed for ${stack_name}"
+                return 1
+            fi
 
-        echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Waiting for ${stack_name} to reach DELETE_COMPLETE..."
-        if aws cloudformation wait stack-delete-complete \
-            --stack-name "${stack_name}" \
-            --region "${CDK_AWS_REGION}"; then
-            echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] ${stack_name} deleted successfully"
-            return 0
-        fi
+            echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Waiting for ${stack_name} to reach DELETE_COMPLETE..."
+            if aws cloudformation wait stack-delete-complete \
+                --stack-name "${stack_name}" \
+                --region "${CDK_AWS_REGION}"; then
+                echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] ${stack_name} deleted successfully"
+                return 0
+            fi
+
+            [ "${attempt}" -eq 1 ] || break
+            [ "$(failed_bucket_count "${stack_name}")" != "0" ] || break
+            echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] A bucket refused to delete; emptying ${stack_name}'s buckets again"
+            empty_stack_buckets "${stack_name}" || break
+        done
 
         echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] wait stack-delete-complete returned non-zero for ${stack_name}"
         echo
@@ -171,15 +375,19 @@ destroy_stack() {
 log_info ""
 log_info "Phase 0: Runtime-created resources (before any stack)..."
 
-if ! bash "${SCRIPT_DIR}/managed-kb.sh"; then
-    log_warn "============================================"
-    log_warn "Managed Knowledge Base teardown did not complete."
-    log_warn "Stopping BEFORE any stack is deleted, because the Bedrock"
-    log_warn "service role lives in PlatformStack and its knowledge bases"
-    log_warn "cannot be deleted without it."
-    log_warn "Resolve the knowledge bases listed above, then re-run."
-    log_warn "============================================"
-    exit 1
+if [ "${DRY_RUN}" = "true" ]; then
+    log_info "  Dry run: skipping the knowledge base step, which deletes as it goes"
+else
+    if ! bash "${SCRIPT_DIR}/managed-kb.sh"; then
+        log_warn "============================================"
+        log_warn "Managed Knowledge Base teardown did not complete."
+        log_warn "Stopping BEFORE any stack is deleted, because the Bedrock"
+        log_warn "service role lives in PlatformStack and its knowledge bases"
+        log_warn "cannot be deleted without it."
+        log_warn "Resolve the knowledge bases listed above, then re-run."
+        log_warn "============================================"
+        exit 1
+    fi
 fi
 
 # ---------------------------------------------------------------
@@ -192,6 +400,7 @@ PIDS=()
 STACK_NAMES=()
 LOG_DIR=$(mktemp -d)
 SKIPPED_STACKS=()
+FAILED_STACKS=()
 
 for STACK in "${PARALLEL_STACKS[@]}"; do
     FULL_STACK_NAME="${CDK_PROJECT_PREFIX}-${STACK}"
@@ -205,6 +414,17 @@ for STACK in "${PARALLEL_STACKS[@]}"; do
         continue
     fi
 
+    log_info "  Buckets of ${FULL_STACK_NAME}:"
+    if ! empty_stack_buckets "${FULL_STACK_NAME}"; then
+        log_warn "  Could not empty the buckets of ${FULL_STACK_NAME}; not deleting it"
+        FAILED_STACKS+=("${FULL_STACK_NAME}")
+        continue
+    fi
+    if [ "${DRY_RUN}" = "true" ]; then
+        log_info "  Would delete ${FULL_STACK_NAME}"
+        continue
+    fi
+
     log_info "  Starting destroy: ${FULL_STACK_NAME}"
 
     destroy_stack \
@@ -215,7 +435,6 @@ for STACK in "${PARALLEL_STACKS[@]}"; do
 done
 
 # Wait for all parallel destroys and collect results
-FAILED_STACKS=()
 for i in "${!PIDS[@]}"; do
     if wait "${PIDS[$i]}"; then
         log_success "Destroyed ${CDK_PROJECT_PREFIX}-${STACK_NAMES[$i]}"
@@ -242,6 +461,17 @@ for FOUNDATION_STACK in "${FOUNDATION_STACKS[@]}"; do
     if ! stack_exists "${FULL_STACK_NAME}"; then
         log_info "  Skipping ${FULL_STACK_NAME} (does not exist in CloudFormation)"
         SKIPPED_STACKS+=("${FULL_STACK_NAME}")
+        continue
+    fi
+
+    log_info "  Buckets of ${FULL_STACK_NAME}:"
+    if ! empty_stack_buckets "${FULL_STACK_NAME}"; then
+        log_warn "  Could not empty the buckets of ${FULL_STACK_NAME}; not deleting it"
+        FAILED_STACKS+=("${FULL_STACK_NAME}")
+        continue
+    fi
+    if [ "${DRY_RUN}" = "true" ]; then
+        log_info "  Would delete ${FULL_STACK_NAME}"
         continue
     fi
 
@@ -275,7 +505,9 @@ if [ ${#SKIPPED_STACKS[@]} -gt 0 ]; then
         log_info "  - ${STACK}"
     done
 fi
-if [ ${#FAILED_STACKS[@]} -eq 0 ]; then
+if [ ${#FAILED_STACKS[@]} -eq 0 ] && [ "${DRY_RUN}" = "true" ]; then
+    log_success "Dry run complete. Nothing was deleted."
+elif [ ${#FAILED_STACKS[@]} -eq 0 ]; then
     log_success "All existing stacks destroyed successfully!"
 else
     log_warn "The following stacks failed to destroy:"

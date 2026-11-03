@@ -371,6 +371,17 @@ class StreamCoordinator:
         if session_manager is not None:
             session_manager.turn_lease = turn_lease
 
+        # Rewind (rewind spec §4.3): a rewind app-api recorded since the last
+        # turn cuts the live list in place, before anything else reads it, so
+        # the retained prefix stays byte-identical and is read from the prompt
+        # cache. Its row read is reused by the compaction re-read just below.
+        # Best-effort: never blocks the turn.
+        if session_manager is not None and hasattr(session_manager, "apply_rewind"):
+            try:
+                session_manager.apply_rewind(agent)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"apply_rewind failed, continuing: {e}")
+
         # Paid-when-free compaction (spec §3.5): if a cut is parked, apply it
         # to the live list now — before the first model call — only when the
         # prefix re-write is free (cache expired, model/agent switched) or
@@ -649,19 +660,7 @@ class StreamCoordinator:
                         # Record the start time for this specific assistant message
                         # This enables accurate per-message latency calculation
                         per_message_metadata.append(
-                            {
-                                "usage": {},
-                                "metrics": {},
-                                "start_time": time.time(),  # When this message started
-                                "first_token_time": None,  # When first token was received
-                                "end_time": None,  # When this message ended
-                                # The hooks that key per-call data by model
-                                # call (prefix fingerprints, tool census,
-                                # context ledger) count every BeforeModelCallEvent,
-                                # retried attempts included, so their index for
-                                # this call is its position plus the retries so far.
-                                "call_index": current_assistant_message_index + model_retries_seen,
-                            }
+                            self._new_call_slot(current_assistant_message_index + model_retries_seen)
                         )
                         logger.debug(f"📝 Assistant message {current_assistant_message_index} started at {per_message_metadata[-1]['start_time']}")
 
@@ -729,6 +728,21 @@ class StreamCoordinator:
                     # Memory. It is no longer "in flight", so an interruption
                     # from here on must not re-persist its text.
                     assistant_text_acc.clear()
+                    # Bedrock opens an EMPTY response with no `messageStart`:
+                    # the call streams only `messageStop` + `metadata`. With no
+                    # slot of its own, its usage overwrote the previous call's
+                    # (which then went unbilled) and was keyed to that call's
+                    # message. A stop with no open slot is therefore a call
+                    # that never announced itself; give it one.
+                    if not per_message_metadata or per_message_metadata[-1].get("end_time") is not None:
+                        current_assistant_message_index += 1
+                        per_message_metadata.append(
+                            self._new_call_slot(current_assistant_message_index + model_retries_seen)
+                        )
+                        logger.info(
+                            "Model call %d in session %s stopped without a message_start; opened its own slot",
+                            current_assistant_message_index, session_id,
+                        )
                     if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
                         per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
                         logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
@@ -736,6 +750,25 @@ class StreamCoordinator:
                 # Track individual metadata events (per assistant message)
                 if event.get("type") == "metadata":
                     event_data = event.get("data", {})
+                    # Usage arrives once per call, after its `messageStop`. Usage
+                    # for a slot that already holds a finished call's usage
+                    # belongs to a call that sent neither a start nor a stop;
+                    # open a closed slot for it rather than overwrite the last.
+                    if event_data.get("usage") and (
+                        not per_message_metadata
+                        or (
+                            per_message_metadata[-1].get("end_time") is not None
+                            and per_message_metadata[-1].get("usage")
+                        )
+                    ):
+                        current_assistant_message_index += 1
+                        orphan_slot = self._new_call_slot(current_assistant_message_index + model_retries_seen)
+                        orphan_slot["end_time"] = orphan_slot["start_time"]
+                        per_message_metadata.append(orphan_slot)
+                        logger.info(
+                            "Model call %d in session %s reported usage without a message boundary; opened its own slot",
+                            current_assistant_message_index, session_id,
+                        )
                     if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
                         msg_meta = per_message_metadata[current_assistant_message_index]
 
@@ -863,6 +896,12 @@ class StreamCoordinator:
                     ):
                         yield sse
                     for sse in await self._extract_browser_login_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
+                        yield sse
+                    for sse in await self._extract_client_tool_call_events(
                         agent,
                         session_id=session_id,
                         user_id=user_id,
@@ -1525,13 +1564,26 @@ class StreamCoordinator:
             # the `except` arm below.
             turn_usage_recorded = True
 
-            # Always update session metadata (for last_model, message_count, etc.)
-            await self._update_session_metadata(
-                session_id=session_id,
-                user_id=user_id,
-                message_id=message_id,  # May be None if no assistant messages
-                agent=main_agent_wrapper,  # Use wrapper instead of internal agent
-            )
+            # The user can delete the conversation while it streams (#1764).
+            # Its delete cleanup has already run by then, so the session writes
+            # below would only leave records behind for a conversation that is
+            # gone. Cost rows are still written: the turn was billed either way.
+            from apis.shared.sessions.metadata import session_is_deleted
+
+            session_deleted = await session_is_deleted(session_id, user_id)
+            if session_deleted:
+                logger.warning(
+                    "Session %s was deleted during the turn; skipping post-turn session writes",
+                    session_id,
+                )
+            else:
+                # Update session metadata (for last_model, message_count, etc.)
+                await self._update_session_metadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    message_id=message_id,  # May be None if no assistant messages
+                    agent=main_agent_wrapper,  # Use wrapper instead of internal agent
+                )
 
             # Store message-level metadata for assistant messages created during this stream
             # Use individual per-message metadata if we tracked it, otherwise fallback to accumulated
@@ -1560,7 +1612,7 @@ class StreamCoordinator:
             # didn't happen: a wrapper with no hook (voice, tests), or a
             # failed write. Skipped otherwise, so the normal path still makes
             # exactly one put.
-            if original_message and not self._display_text_written(main_agent_wrapper):
+            if original_message and not session_deleted and not self._display_text_written(main_agent_wrapper):
                 user_message_index = initial_message_count  # User message is first in this turn
                 try:
                     from apis.shared.sessions.metadata import store_user_display_text
@@ -1582,11 +1634,12 @@ class StreamCoordinator:
             # jumps to an `except` below, leaving the marker in place so the
             # next turn can re-send the attachments the model never saw. See
             # `set_pending_attachments` for the full lifecycle.
-            try:
-                from apis.shared.sessions.metadata import clear_pending_attachments
-                await clear_pending_attachments(session_id, user_id)
-            except Exception as e:
-                logger.error(f"Failed to clear pending attachments: {e}", exc_info=True)
+            if not session_deleted:
+                try:
+                    from apis.shared.sessions.metadata import clear_pending_attachments
+                    await clear_pending_attachments(session_id, user_id)
+                except Exception as e:
+                    logger.error(f"Failed to clear pending attachments: {e}", exc_info=True)
 
             # Same reasoning, applied to the interrupted-turn marker: a turn
             # that reached here produced a COMPLETE answer, so it was not
@@ -1616,11 +1669,12 @@ class StreamCoordinator:
             # happened. That is what this does. The real interruption arms
             # below re-set it after persisting their partial, so a genuine
             # interruption is unaffected.
-            try:
-                from apis.shared.sessions.metadata import clear_interrupted_turn
-                await clear_interrupted_turn(session_id, user_id)
-            except Exception as e:
-                logger.error(f"Failed to clear stale interrupted_turn: {e}", exc_info=True)
+            if not session_deleted:
+                try:
+                    from apis.shared.sessions.metadata import clear_interrupted_turn
+                    await clear_interrupted_turn(session_id, user_id)
+                except Exception as e:
+                    logger.error(f"Failed to clear stale interrupted_turn: {e}", exc_info=True)
 
             # Conversation search's archive (docs/specs/conversation-search.md
             # §4): one S3 object per turn, written in a background task. Last,
@@ -1632,22 +1686,25 @@ class StreamCoordinator:
             # message, and `message_id` then falls back to the session
             # manager's stale per-instance count (it once landed a resume on
             # the previous turn's key).
+            # Set even when the session was deleted, so the failure arms below
+            # don't archive the turn either.
             turn_archived = True
-            try:
-                from apis.shared.conversation_archive.live import schedule_turn_archive
-                archive_messages = getattr(agent, "messages", None) or []
-                schedule_turn_archive(
-                    messages=archive_messages,
-                    user_id=user_id,
-                    session_id=session_id,
-                    turn_first_index=initial_message_count,
-                    appended_count=appended_since(archive_messages, archive_anchor),
-                    original_message=original_message,
-                    project_id=turn_project_id,
-                    assistant_id=turn_agent_id,
-                )
-            except Exception as e:
-                logger.error(f"Failed to schedule conversation archive write: {e}", exc_info=True)
+            if not session_deleted:
+                try:
+                    from apis.shared.conversation_archive.live import schedule_turn_archive
+                    archive_messages = getattr(agent, "messages", None) or []
+                    schedule_turn_archive(
+                        messages=archive_messages,
+                        user_id=user_id,
+                        session_id=session_id,
+                        turn_first_index=initial_message_count,
+                        appended_count=appended_since(archive_messages, archive_anchor),
+                        original_message=original_message,
+                        project_id=turn_project_id,
+                        assistant_id=turn_agent_id,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to schedule conversation archive write: {e}", exc_info=True)
 
         except _CooperativeStopSignal:
             # Deliberate user Stop observed mid-stream (see the in-loop check).
@@ -1845,6 +1902,24 @@ class StreamCoordinator:
                 discard_provenance(user_id, session_id)
             except Exception:  # noqa: BLE001
                 logger.debug("source provenance discard failed", exc_info=True)
+
+    @staticmethod
+    def _new_call_slot(call_index: int) -> Dict[str, Any]:
+        """A ``per_message_metadata`` entry for one model call.
+
+        ``call_index`` is the call's position plus the retries so far: the
+        hooks that key per-call data by model call (prefix fingerprints, tool
+        census, context ledger) count every BeforeModelCallEvent, retried
+        attempts included.
+        """
+        return {
+            "usage": {},
+            "metrics": {},
+            "start_time": time.time(),  # When this message started
+            "first_token_time": None,  # When first token was received
+            "end_time": None,  # When this message ended
+            "call_index": call_index,
+        }
 
     @staticmethod
     def _last_persisted_role(agent: Any) -> Optional[str]:
@@ -2297,6 +2372,8 @@ class StreamCoordinator:
                 caching_enabled=snapshot_source.get("caching_enabled"),
                 max_tokens=inference_params.get("max_tokens"),
                 agent_type=snapshot_source.get("agent_type"),
+                client_surface=snapshot_source.get("client_surface"),
+                client_tools=snapshot_source.get("client_tools"),
                 enabled_skills=snapshot_source.get("enabled_skills"),
                 inference_params=dict(inference_params) if inference_params else None,
                 mantle_api_mode=snapshot_source.get("mantle_api_mode"),
@@ -2605,6 +2682,73 @@ class StreamCoordinator:
                     interrupt_id=interrupt.id,
                     tool_use_id=tool_use_id,
                     questions=questions,
+                ).to_sse_format()
+            )
+        return events
+
+    async def _extract_client_tool_call_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield one SSE-formatted `client_tool_call` event per pending
+        client-executed tool interrupt (``apis.shared.client_tools``).
+
+        Same shape as :meth:`_extract_user_question_required_events`: the tool
+        raised the interrupt itself through ``ToolContext``, and the client
+        answers by resuming with an ``interrupt_responses`` entry. Only a client
+        that declared ``client_tools`` on the request can receive one of these,
+        since only such a turn has the tools to call.
+        """
+        from apis.shared.client_tools import ClientToolCallEvent, INTERRUPT_TYPE
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != INTERRUPT_TYPE:
+                continue
+            tool_name = str(reason.get("toolName") or "")
+            if not tool_name:
+                logger.warning("client_tool_call interrupt has no toolName: id=%s", interrupt.id)
+                continue
+            tool_use_id = str(reason.get("toolUseId") or "")
+            arguments = reason.get("arguments")
+            if not isinstance(arguments, dict):
+                arguments = {}
+
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            kind="client_tool",
+                            tool_use_id=tool_use_id,
+                            tool_name=tool_name,
+                            tool_input=json.dumps(arguments, default=str),
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist client_tool pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
+            events.append(
+                ClientToolCallEvent(
+                    interrupt_id=interrupt.id,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    arguments=arguments,
                 ).to_sse_format()
             )
         return events
@@ -3325,6 +3469,14 @@ class StreamCoordinator:
 
             batch_id = str(batch.get("batchId") or "")
             tool_use_ids = [str(t) for t in (batch.get("toolUseIds") or [])]
+
+            # Deleted mid-turn (#1764): the delete cleanup has run, so a row
+            # written now would outlive the conversation.
+            from apis.shared.sessions.metadata import session_is_deleted
+
+            if await session_is_deleted(session_id, user_id):
+                logger.info("Session %s was deleted; tool batch summary not stored", session_id)
+                return None
 
             # Persist before returning: the emit loop may never get to this
             # payload (cancelled turn, dropped connection), but the row is
@@ -4262,6 +4414,22 @@ class StreamCoordinator:
                 # else on the row distinguishes them.
                 if turn_agent_id:
                     metadata_kwargs["turnAgentId"] = turn_agent_id
+                # The rewind epoch this call ran at (rewind spec §6). The
+                # metadata writer compares it with the previous call's to stamp
+                # `rewound`, which explains the history re-write a rewind past
+                # the cache TTL causes, the way `agentSwitched` explains a mention.
+                turn_session_manager = getattr(agent, "session_manager", None)
+                rewind_epoch = getattr(turn_session_manager, "_rewind_epoch", 0)
+                if isinstance(rewind_epoch, int) and rewind_epoch > 0:
+                    metadata_kwargs["rewindEpoch"] = rewind_epoch
+                # A fork's first call says where it came from and whether its
+                # history was seeded from the parent's live list (a cache hit is
+                # possible) or restored from the stored copy (it is not), so the
+                # spec's warm/cold claim is a row query. Consumed once.
+                fork_marker = getattr(turn_session_manager, "_pending_fork_marker", None)
+                if isinstance(fork_marker, dict) and fork_marker:
+                    metadata_kwargs.update(fork_marker)
+                    turn_session_manager._pending_fork_marker = None
                 # Shared Projects: which project this call is billed to. The metadata
                 # writer reads it back to bump PROJECT#{id}/COST#{YYYY-MM}.
                 if turn_project_id:

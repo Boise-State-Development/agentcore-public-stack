@@ -27,6 +27,7 @@ Requirements: 24.15
 """
 
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,18 @@ _KB_BACKEND = _BACKEND_SRC / "apis" / "shared" / "kb_backend"
 #: because it is the single largest dependency these Lambdas would otherwise
 #: pay for, and keeping it function-local is the convention this package follows.
 _FORBIDDEN_AT_IMPORT_TIME = ("apis.shared.assistants", "boto3")
+
+
+def _clean_env(env: dict) -> dict:
+    """A trimmed subprocess environment that still starts Python on Windows.
+
+    Windows needs ``SYSTEMROOT`` to initialise sockets (``import asyncio``
+    fails with WinError 10106 without it). It is absent on Linux and macOS,
+    so this adds nothing there.
+    """
+    if "SYSTEMROOT" in os.environ:
+        env = {**env, "SYSTEMROOT": os.environ["SYSTEMROOT"]}
+    return env
 
 
 def _extract_imports(filepath: Path) -> List[Tuple[str, int]]:
@@ -126,7 +139,7 @@ class TestKbBackendFreshImportIsLean:
             capture_output=True,
             text=True,
             cwd=str(_BACKEND_ROOT),
-            env={"PYTHONPATH": str(_BACKEND_SRC), "PATH": "/usr/bin:/bin"},
+            env=_clean_env({"PYTHONPATH": str(_BACKEND_SRC), "PATH": "/usr/bin:/bin"}),
         )
         assert result.returncode == 0, (
             f"importing {module} in a clean interpreter failed:\n{result.stderr}"

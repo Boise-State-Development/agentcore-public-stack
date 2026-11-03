@@ -151,7 +151,7 @@ install_cdk() {
         log_info "AWS CDK already installed: ${CDK_VERSION}"
     else
         log_info "Installing AWS CDK CLI globally..."
-        npm install -g aws-cdk@2.1113.0
+        npm install -g aws-cdk@2.1146.1
         log_info "AWS CDK installed successfully"
     fi
     

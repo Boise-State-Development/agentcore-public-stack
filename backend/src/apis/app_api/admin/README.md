@@ -45,6 +45,7 @@ Scope ids come from the closed registry in `apis/shared/rbac/admin_scopes.py`.
 |---|---|---|
 | `routes.py` (root) | `/admin` | `admin.models` |
 | `quota/` | `/admin/quota` | `admin.quota` |
+| `quota_requests/` | `/admin/quota-requests`, `/admin/quota-extensions` | `admin.quota_requests` |
 | `costs/` | `/admin/costs` | `admin.costs` |
 | `users/` | `/admin/users` | `admin.users` |
 | `tools/` | `/admin/tools` | `admin.tools` |

@@ -7,9 +7,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agentcore_tui import cli
-from agentcore_tui.config import ENV_API_KEY, ENV_BASE_URL, read_config_file
-from agentcore_tui.errors import ConfigError
+from aps_tui import cli
+from aps_tui.client.device_auth import DeviceAuthorization, DeviceSession
+from aps_tui.config import ENV_API_KEY, ENV_BASE_URL, read_config_file
+from aps_tui.errors import ConfigError, DeviceAuthDeniedError
 
 BASE_URL = "https://example.test/api"
 
@@ -58,6 +59,16 @@ class TestArgumentParsing:
 
     def test_absent_api_key_normalises_to_none(self) -> None:
         assert self.parse(["status"]).api_key is None
+
+    def test_banner_flag_is_tri_state(self) -> None:
+        """None means "decide from state", so absent must not become False."""
+        assert self.parse([]).banner is None
+        assert self.parse(["--banner"]).banner is True
+        assert self.parse(["--no-banner"]).banner is False
+
+    def test_banner_and_no_banner_together_is_rejected(self) -> None:
+        with pytest.raises(SystemExit):
+            self.parse(["--banner", "--no-banner"])
 
 
 class TestLogin:
@@ -112,15 +123,173 @@ class TestLogin:
         assert ENV_API_KEY in captured
 
 
+class FakeDeviceAuthClient:
+    """Stands in for the real device-flow client.
+
+    Constructed by ``cli`` rather than injected, so tests replace the class in
+    :mod:`aps_tui.client.device_auth` and record what it was asked to do.
+    """
+
+    #: Set by each test: either a DeviceSession, or an exception to raise.
+    outcome: object = None
+    instances: list[FakeDeviceAuthClient] = []
+
+    def __init__(self, base_url: str, **_kwargs: object) -> None:
+        self.base_url = base_url
+        self.polled = False
+        FakeDeviceAuthClient.instances.append(self)
+
+    async def __aenter__(self) -> FakeDeviceAuthClient:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def authorize(self) -> DeviceAuthorization:
+        return DeviceAuthorization(
+            device_code="d" * 43,
+            user_code="Y4GN-WKY3",
+            verification_uri=f"{BASE_URL}/auth/cli/verify",
+            verification_uri_complete=f"{BASE_URL}/auth/cli/verify?user_code=Y4GN-WKY3",
+            expires_in=600,
+            interval=5,
+        )
+
+    async def poll_for_session(self, _authorization: DeviceAuthorization, **_kwargs: object) -> DeviceSession:
+        self.polled = True
+        if isinstance(FakeDeviceAuthClient.outcome, BaseException):
+            raise FakeDeviceAuthClient.outcome
+        assert isinstance(FakeDeviceAuthClient.outcome, DeviceSession)
+        return FakeDeviceAuthClient.outcome
+
+
+@pytest.fixture
+def device_flow(monkeypatch: pytest.MonkeyPatch) -> type[FakeDeviceAuthClient]:
+    """Replace the device-flow client, and keep the keyring out of it."""
+    from aps_tui.client import device_auth
+
+    FakeDeviceAuthClient.instances = []
+    FakeDeviceAuthClient.outcome = DeviceSession(
+        session="sealed-envelope-value",
+        expires_in=28783,
+        user_id="28d1d380",
+        username="jordan",
+    )
+    monkeypatch.setattr(device_auth, "DeviceAuthClient", FakeDeviceAuthClient)
+    # Never launch a real browser from a test run.
+    monkeypatch.setattr(cli, "_try_open_browser", lambda _url: False)
+    return FakeDeviceAuthClient
+
+
+class TestLoginSso:
+    def test_stores_the_session_and_the_base_url(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        device_flow: type[FakeDeviceAuthClient],
+    ) -> None:
+        stored: dict[str, str] = {}
+        monkeypatch.setattr(cli, "save_session_to_keyring", lambda url, value: stored.update({url: value}))
+        config_file = tmp_path / "c.toml"
+
+        exit_code = cli.main(["login", "--sso", "--base-url", BASE_URL, "--config", str(config_file)])
+
+        assert exit_code == 0
+        assert stored == {BASE_URL: "sealed-envelope-value"}
+        assert read_config_file(config_file)["base_url"] == BASE_URL
+        out = capsys.readouterr().out
+        assert "Signed in as jordan" in out
+
+    def test_shows_the_code_and_url_even_when_a_browser_opens(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        device_flow: type[FakeDeviceAuthClient],
+    ) -> None:
+        """Browser launch fails silently on headless hosts and over SSH.
+
+        The URL is the only way through, so it is printed unconditionally —
+        including when ``webbrowser.open`` claims success.
+        """
+        monkeypatch.setattr(cli, "_try_open_browser", lambda _url: True)
+        monkeypatch.setattr(cli, "save_session_to_keyring", lambda *_a: None)
+
+        cli.main(["login", "--sso", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
+
+        out = capsys.readouterr().out
+        assert "Y4GN-WKY3" in out
+        assert "user_code=Y4GN-WKY3" in out
+
+    def test_never_prints_the_sealed_session(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        device_flow: type[FakeDeviceAuthClient],
+    ) -> None:
+        monkeypatch.setattr(cli, "save_session_to_keyring", lambda *_a: None)
+        cli.main(["login", "--sso", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
+        assert "sealed-envelope-value" not in capsys.readouterr().out
+
+    def test_a_declined_sign_in_reports_the_hint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        device_flow: type[FakeDeviceAuthClient],
+    ) -> None:
+        device_flow.outcome = DeviceAuthDeniedError()
+        saved: list[object] = []
+        monkeypatch.setattr(cli, "save_session_to_keyring", lambda *a: saved.append(a))
+
+        exit_code = cli.main(["login", "--sso", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
+
+        assert exit_code == 1
+        assert saved == []
+        err = capsys.readouterr().err
+        assert "declined" in err
+        assert "login --sso" in err
+
+    def test_requires_a_base_url(self, tmp_path: Path, device_flow: type[FakeDeviceAuthClient]) -> None:
+        assert cli.main(["login", "--sso", "--config", str(tmp_path / "c.toml")]) == 2
+
+    def test_does_not_need_cognito_configuration(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        device_flow: type[FakeDeviceAuthClient],
+    ) -> None:
+        """The reverted design needed a domain URL and a client id.
+
+        This one needs neither: the CLI never talks to Cognito. A base URL is
+        the whole configuration surface.
+        """
+        monkeypatch.setattr(cli, "save_session_to_keyring", lambda *_a: None)
+        assert cli.main(["login", "--sso", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")]) == 0
+
+
 class TestLogout:
+    @pytest.fixture(autouse=True)
+    def no_real_keyring(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Logout touches two services. Stub both, or tests hit the host."""
+        monkeypatch.setattr(cli, "delete_key_from_keyring", lambda _: False)
+        monkeypatch.setattr(cli, "delete_session_from_keyring", lambda _: False)
+
     def test_reports_removal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         monkeypatch.setattr(cli, "delete_key_from_keyring", lambda _: True)
         exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
         assert exit_code == 0
         assert "Removed" in capsys.readouterr().out
 
-    def test_reports_when_there_was_nothing_to_remove(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(cli, "delete_key_from_keyring", lambda _: False)
+    def test_removes_a_stored_session(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        monkeypatch.setattr(cli, "delete_session_from_keyring", lambda _: True)
+        exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
+        assert exit_code == 0
+        assert "Removed the stored session" in capsys.readouterr().out
+
+    def test_reports_when_there_was_nothing_to_remove(self, tmp_path: Path) -> None:
         exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
         assert exit_code == 1
 
@@ -129,6 +298,35 @@ class TestLogout:
 
 
 class TestStatus:
+    @pytest.fixture(autouse=True)
+    def no_real_keyring(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`status` reads the session store; keep the host keyring out of it."""
+        monkeypatch.setattr(cli, "load_session_from_keyring", lambda _: (None, None))
+
+    def test_reports_a_stored_session_without_printing_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv(ENV_BASE_URL, BASE_URL)
+        monkeypatch.setattr(cli, "load_session_from_keyring", lambda _: ("sealed-envelope-value", None))
+        monkeypatch.setattr(cli.httpx, "get", lambda *a, **k: httpx.Response(200))
+
+        cli.main(["status", "--config", str(tmp_path / "c.toml")])
+        out = capsys.readouterr().out
+
+        assert "sealed-envelope-value" not in out
+        assert "session     : present" in out
+
+    def test_reports_why_the_session_could_not_be_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A headless host with no Secret Service must say so, not say "none"."""
+        monkeypatch.setenv(ENV_BASE_URL, BASE_URL)
+        monkeypatch.setattr(cli, "load_session_from_keyring", lambda _: (None, "NoKeyringError: nope"))
+        monkeypatch.setattr(cli.httpx, "get", lambda *a, **k: httpx.Response(200))
+
+        cli.main(["status", "--config", str(tmp_path / "c.toml")])
+        assert "NoKeyringError" in capsys.readouterr().out
+
     def test_never_prints_the_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         monkeypatch.setenv(ENV_BASE_URL, BASE_URL)
         monkeypatch.setenv(ENV_API_KEY, "super-secret-value")

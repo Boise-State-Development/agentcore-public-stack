@@ -235,9 +235,20 @@ class QuotaCheckResult(BaseModel):
         description="The configured share (percent) that this session crossed",
     )
 
+    # Quota extensions (docs/specs/quota-requests-and-extensions.md §8.2).
+    # ``quota_limit`` is the *effective* limit — the base plus every active
+    # extension, or None under an uncapped standing extension — and
+    # ``base_limit`` is the tier or override limit underneath it, which the
+    # session notice scales to when there is no cap.
+    base_limit: Optional[Decimal] = Field(default=None, alias="baseLimit")
+    # Set while the user's spend above the base limit lands on a chargeback
+    # extension: the turn tells them a fund is being charged (§4.4).
+    funding_notice: Optional["FundingNotice"] = Field(default=None, alias="fundingNotice")
+
     @field_validator(
         'current_usage',
         'quota_limit',
+        'base_limit',
         'percentage_used',
         'remaining',
         'session_cost',
@@ -270,6 +281,11 @@ class ResolvedQuota(BaseModel):
     )
     assignment: Optional[QuotaAssignment] = None  # None for overrides
     override: Optional['QuotaOverride'] = None
+    # Extensions active when this resolution was filled, ordered by
+    # ``validUntil`` then ``createdAt``. They stack on whichever tier the ladder
+    # above returned; the checker re-filters them against the clock, because a
+    # resolution is cached for minutes and an extension can end inside that.
+    extensions: List['QuotaExtension'] = Field(default_factory=list)
 
 
 class QuotaOverride(BaseModel):
@@ -317,3 +333,90 @@ class QuotaOverride(BaseModel):
         if info.data.get('override_type') == 'custom_limit' and v is None:
             raise ValueError("monthly_cost_limit required for custom_limit type")
         return v
+
+
+# ========== Quota extensions (docs/specs/quota-requests-and-extensions.md §7.2) ==========
+
+FundingMode = Literal["central", "chargeback"]
+
+
+class FundingSource(BaseModel):
+    """Whose money an extension is (§4.3).
+
+    The deployment defines the field schema (``fundingFields`` on the policy);
+    the stack validates and stores the values and never interprets them.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: Optional[str] = Field(None, max_length=200)
+    fields: Dict[str, str] = Field(default_factory=dict)
+    authorizer_email: Optional[str] = Field(None, alias="authorizerEmail", max_length=320)
+
+
+class QuotaExtension(BaseModel):
+    """Additive, period-scoped quota on top of the base limit (§4.1).
+
+    ``amount`` is added to the effective limit in every quota period the
+    extension overlaps. ``None`` means uncapped and is only legal on a standing
+    extension (§4.4), which is always charged back.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    extension_id: str = Field(..., alias="extensionId")
+    user_id: str = Field(..., alias="userId")
+    user_email: str = Field("", alias="userEmail")
+
+    standing: bool = False
+    amount: Optional[Decimal] = Field(None, gt=0)
+    valid_from: str = Field(..., alias="validFrom")
+    valid_until: str = Field(..., alias="validUntil")
+
+    funding_mode: FundingMode = Field("central", alias="fundingMode")
+    funding_source: Optional[FundingSource] = Field(None, alias="fundingSource")
+    # Canonical "this fund" string (§7.3), derived from the fields, never typed.
+    funding_key: Optional[str] = Field(None, alias="fundingKey")
+
+    request_id: Optional[str] = Field(None, alias="requestId")
+    reason: str = ""
+    base_limit_snapshot: Optional[Decimal] = Field(None, alias="baseLimitSnapshot")
+
+    created_by: str = Field(..., alias="createdBy")
+    created_by_email: Optional[str] = Field(None, alias="createdByEmail")
+    created_at: str = Field(..., alias="createdAt")
+    enabled: bool = True
+
+    revoked_at: Optional[str] = Field(None, alias="revokedAt")
+    revoked_by: Optional[str] = Field(None, alias="revokedBy")
+    revoke_reason: Optional[str] = Field(None, alias="revokeReason")
+
+    @field_validator('amount', 'base_limit_snapshot', mode='before')
+    @classmethod
+    def convert_to_decimal(cls, v):
+        """Convert float/int to Decimal for DynamoDB compatibility"""
+        if v is None:
+            return v
+        if isinstance(v, (int, float)):
+            return Decimal(str(v))
+        if isinstance(v, str):
+            return Decimal(v)
+        return v
+
+    def is_active(self, now_iso: str) -> bool:
+        """Enabled and inside its window at ``now_iso`` (same ISO spelling)."""
+        return self.enabled and self.valid_from <= now_iso <= self.valid_until
+
+
+class FundingNotice(BaseModel):
+    """What the composer tab says while a fund is being charged (§8.2)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    label: str
+    charged_this_period: Decimal = Field(..., alias="chargedThisPeriod")
+    cap: Optional[Decimal] = None
+    remaining_under_cap: Optional[Decimal] = Field(None, alias="remainingUnderCap")
+    extension_id: str = Field(..., alias="extensionId")
+    standing: bool = False
+
+
+ResolvedQuota.model_rebuild()
+QuotaCheckResult.model_rebuild()

@@ -455,3 +455,117 @@ async def test_skills_disabled_blocks_even_the_owners_own_skill():
         result = await resolve_runnability(agent, _user("user-author"))
 
     assert result.state == "blocked"
+
+
+# ── bound skills: what the `/` menu offers a viewer ──────────────────────────────────
+from apis.app_api.agent_designer.services.agent_detail import resolve_bound_skills  # noqa: E402
+from apis.shared.skills.models import SkillStatus  # noqa: E402
+
+
+def _skill_catalog(*rows):
+    """``(skill_id, owner_id, display_name[, status])`` rows served by batch_get_skills."""
+    by_id = {
+        row[0]: SimpleNamespace(
+            skill_id=row[0],
+            owner_id=row[1],
+            display_name=row[2],
+            description=f"About {row[2]}",
+            status=row[3] if len(row) > 3 else SkillStatus.ACTIVE,
+        )
+        for row in rows
+    }
+    repo = SimpleNamespace(
+        batch_get_skills=AsyncMock(side_effect=lambda refs: [by_id[r] for r in refs if r in by_id])
+    )
+    return (
+        patch(f"{MODULE}.get_skill_catalog_repository", return_value=repo),
+        patch("apis.shared.skills.repository.get_skill_catalog_repository", return_value=repo),
+        patch(f"{MODULE}.skills_enabled", return_value=True),
+    )
+
+
+def _harness(**overrides) -> Assistant:
+    return _agent(kind="project", visibility="PRIVATE", **overrides)
+
+
+@pytest.mark.asyncio
+async def test_bound_skills_resolve_for_a_member_who_authored_none_of_them():
+    """The report: a member's own ``GET /skills/`` has neither the owner's nor another
+    editor's skill, so the ``/`` menu must be built from the Agent, by the turn's rule."""
+    harness = _harness(bindings=[
+        AgentBinding(kind="skill", ref="owner_style", config={"version": 1}),
+        AgentBinding(kind="skill", ref="erins_rubric", config={"version": 2, "addedBy": "user-erin"}),
+    ])
+    patches = _skill_catalog(
+        ("owner_style", "user-author", "Owner Style"), ("erins_rubric", "user-erin", "Erin's Rubric")
+    )
+    with patches[0], patches[1], patches[2], _viewer_skills():
+        skills = await resolve_bound_skills(harness, _user())
+
+    assert [(s.skill_id, s.display_name, s.slug) for s in skills] == [
+        ("owner_style", "Owner Style", "owner-style"),
+        ("erins_rubric", "Erin's Rubric", "erins-rubric"),
+    ]
+    assert skills[1].description == "About Erin's Rubric"
+
+
+@pytest.mark.asyncio
+async def test_a_skill_the_viewer_cannot_run_is_left_out_not_listed():
+    """A command that does nothing is worse than no command: the menu offers exactly what
+    the turn will disclose, so a catalog skill the member's role lacks is absent."""
+    harness = _harness(bindings=[
+        AgentBinding(kind="skill", ref="owner_style"),
+        AgentBinding(kind="skill", ref="payroll_runbook", config={"addedBy": "user-erin"}),
+        AgentBinding(kind="skill", ref="granted_catalog"),
+    ])
+    patches = _skill_catalog(
+        ("owner_style", "user-author", "Owner Style"),
+        ("payroll_runbook", "system", "Payroll Runbook"),
+        ("granted_catalog", "system", "Citation Format"),
+    )
+    with patches[0], patches[1], patches[2], _viewer_skills("granted_catalog"):
+        skills = await resolve_bound_skills(harness, _user())
+
+    assert [s.skill_id for s in skills] == ["owner_style", "granted_catalog"]
+
+
+@pytest.mark.asyncio
+async def test_an_editor_added_skill_runs_only_on_a_project_harness():
+    """On an ordinary Agent the adder clause is off (its config is client-writable), so the
+    same binding resolves for a viewer only through the owner."""
+    agent = _agent(bindings=[
+        AgentBinding(kind="skill", ref="erins_rubric", config={"addedBy": "user-erin"}),
+    ])
+    patches = _skill_catalog(("erins_rubric", "user-erin", "Erin's Rubric"))
+    with patches[0], patches[1], patches[2], _viewer_skills():
+        assert await resolve_bound_skills(agent, _user()) == []
+
+
+@pytest.mark.asyncio
+async def test_bound_skills_keep_binding_order_and_drop_inactive_and_duplicates():
+    harness = _harness(bindings=[
+        AgentBinding(kind="skill", ref="zeta"),
+        AgentBinding(kind="skill", ref="alpha@3"),
+        AgentBinding(kind="skill", ref="zeta"),
+        AgentBinding(kind="skill", ref="gone"),
+        AgentBinding(kind="tool", ref="calculator"),
+    ])
+    patches = _skill_catalog(
+        ("zeta", "user-author", "Zeta"),
+        ("alpha", "user-author", "Alpha"),
+        ("gone", "user-author", "Gone", SkillStatus.DISABLED),
+    )
+    with patches[0], patches[1], patches[2], _viewer_skills():
+        skills = await resolve_bound_skills(harness, _user())
+
+    assert [s.skill_id for s in skills] == ["zeta", "alpha"]
+
+
+@pytest.mark.asyncio
+async def test_bound_skills_are_empty_while_skills_are_disabled_or_none_are_bound():
+    harness = _harness(bindings=[AgentBinding(kind="skill", ref="owner_style")])
+    patches = _skill_catalog(("owner_style", "user-author", "Owner Style"))
+    with patches[0], patches[1], patch(f"{MODULE}.skills_enabled", return_value=False), _viewer_skills():
+        assert await resolve_bound_skills(harness, _user()) == []
+    with patches[0], patches[1], patches[2], _viewer_skills():
+        assert await resolve_bound_skills(_harness(bindings=[]), _user()) == []

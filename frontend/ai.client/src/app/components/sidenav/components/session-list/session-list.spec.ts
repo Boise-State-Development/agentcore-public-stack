@@ -4,13 +4,17 @@ import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
 import { of } from 'rxjs';
+import { readFileSync } from 'node:fs';
+import { fromProjectRoot } from '../../../../../testing/project-root';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
 import { ProjectsService } from '../../../../projects/services/projects.service';
 import { FEATURES } from '../../../../services/features';
+import { AgentPinService } from '../../../../agents/services/agent-pin.service';
 
 describe('SessionList', () => {
+  let mockAgentPinService: any;
   let mockSessionService: any;
   let mockSidenavService: any;
   let mockToastService: any;
@@ -57,8 +61,15 @@ describe('SessionList', () => {
       load: vi.fn().mockResolvedValue(undefined),
     };
 
+    mockAgentPinService = {
+      pins: signal([]),
+      load: vi.fn().mockResolvedValue([]),
+      unpin: vi.fn().mockResolvedValue(undefined),
+    };
+
     TestBed.configureTestingModule({
       providers: [
+        { provide: AgentPinService, useValue: mockAgentPinService },
         { provide: SessionService, useValue: mockSessionService },
         { provide: SidenavService, useValue: mockSidenavService },
         { provide: ToastService, useValue: mockToastService },
@@ -193,6 +204,12 @@ describe('SessionList', () => {
     const component = await createComponent();
     expect(component['getSessionTitle'](mockSession)).toBe('Test Session');
     expect(component['getSessionTitle']({ ...mockSession, title: '' })).toBe('Untitled Session');
+  });
+
+  it('marks an incognito chat for the icon before its title (#1738)', async () => {
+    const component = await createComponent();
+    expect(component['isIncognito']({ ...mockSession, preferences: { incognito: true } })).toBe(true);
+    expect(component['isIncognito'](mockSession)).toBe(false);
   });
 
   it('closes the sidenav and optimistically sets the clicked session on click', async () => {
@@ -385,6 +402,53 @@ describe('SessionList', () => {
       const component = await createComponent();
       (component as any).onUnpinnedDrop(drop(pinnedList, unpinnedList));
       expect(mockSessionService.setSessionPinned).toHaveBeenCalledWith('test-session', false);
+    });
+
+    // Below `lg` the hidden desktop sidebar and the mobile drawer each render a
+    // SessionList. CDK resolves `cdkDropListConnectedTo` ids to the FIRST list
+    // registered with that id, so shared ids wire the drawer to the hidden
+    // sidebar's lists and drops do nothing.
+    it('gives each instance its own drop-list ids', async () => {
+      const desktop = (await createComponent()) as any;
+      const drawer = (await createComponent()) as any;
+      const ids = [desktop.pinnedListId, desktop.unpinnedListId, drawer.pinnedListId, drawer.unpinnedListId];
+      expect(new Set(ids).size).toBe(4);
+    });
+
+    it('binds the drop lists to the per-instance ids, not literals', () => {
+      const html = readFileSync(
+        fromProjectRoot('src/app/components/sidenav/components/session-list/session-list.html'),
+        'utf8',
+      );
+      const dropLists = html.match(/<[a-z]+\s[^>]*\bcdkDropList\b[^>]*>/g) ?? [];
+      expect(dropLists).toHaveLength(2);
+      for (const tag of dropLists) {
+        expect(tag).toMatch(/\[id\]="(pinnedListId|unpinnedListId)"/);
+        expect(tag).toMatch(/\[cdkDropListConnectedTo\]="\[(pinnedListId|unpinnedListId)\]"/);
+        expect(tag).not.toMatch(/\sid="/);
+      }
+    });
+  });
+
+  describe('pinned agents', () => {
+    const agent = { agentId: 'ast-1', name: 'Canvas Helper', category: 'general', source: 'user' as const, locked: false };
+
+    it('lists pinned agents in Pinned', async () => {
+      mockAgentPinService.pins.set([agent]);
+      const component = await createComponent();
+      expect(component.pinnedAgents()).toEqual([agent]);
+      expect(component.hasPins()).toBe(true);
+    });
+
+    it('unpins an agent dragged out of Pinned', async () => {
+      const component = await createComponent();
+      (component as any).onUnpinnedDrop({
+        previousContainer: { id: 'session-list-pinned' },
+        container: { id: 'session-list-unpinned' },
+        item: { data: agent },
+      });
+      expect(mockAgentPinService.unpin).toHaveBeenCalledWith('ast-1');
+      expect(mockSessionService.setSessionPinned).not.toHaveBeenCalled();
     });
   });
 

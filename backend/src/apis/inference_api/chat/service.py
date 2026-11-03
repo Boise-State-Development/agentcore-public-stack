@@ -4,6 +4,7 @@ Contains business logic for chat operations, including agent creation and manage
 """
 
 import asyncio
+import copy
 import json
 import logging
 import hashlib
@@ -69,6 +70,8 @@ def _create_cache_key(
     memory_context: Optional[str] = None,
     knowledge_context: Optional[str] = None,
     memory_mode: str = "on",
+    client_surface: Optional[str] = None,
+    client_tools_digest: str = "",
 ) -> Tuple:
     """
     Create a cache key for agent instances.
@@ -122,17 +125,32 @@ def _create_cache_key(
     granted skills, which `enabled_tools` does not capture — so without this an
     edit to a granted skill (or a role grant change) would serve a stale agent.
     Empty for chat turns with no skills, so the default path is unaffected.
+
+    `client_surface` changes the *built* system prompt while leaving the raw
+    `system_prompt` argument untouched, and one conversation can be opened from
+    both the web app and the terminal, so it must separate keys. It is folded
+    into the prompt hash only for a non-web surface: a web turn (surface None
+    or "web") keys byte-identically to a key built without the field.
     """
     tools_hash = _hash_tools(enabled_tools)
+    # Client-executed tools are part of toolConfig, so a different declared set
+    # is a different agent. Folded into the tools element rather than given a
+    # slot of its own so the tuple shape (which tests index) is unchanged, and
+    # a turn without client tools keys exactly as before.
+    if client_tools_digest:
+        tools_hash = f"{tools_hash}+client:{client_tools_digest}"
 
     # Hash system prompt if provided (can be very long)
     prompt_hash = None
-    if system_prompt or memory_context or knowledge_context:
+    non_web_surface = client_surface if client_surface and client_surface != "web" else None
+    if system_prompt or memory_context or knowledge_context or non_web_surface:
         prompt_material = system_prompt or ""
         if memory_context:
             prompt_material += "\x00memory\x00" + memory_context
         if knowledge_context:
             prompt_material += "\x00knowledge\x00" + knowledge_context
+        if non_web_surface:
+            prompt_material += "\x00surface\x00" + non_web_surface
         prompt_hash = hashlib.md5(prompt_material.encode()).hexdigest()[:8]
 
     return (
@@ -372,8 +390,109 @@ def _adopt_session_conversation(
         dst_sm = getattr(agent, "session_manager", None)
         if src_sm is not None and dst_sm is not None and hasattr(src_sm, "_live_offset"):
             dst_sm._live_offset = src_sm._live_offset
+        # So does what the list has been cut to (rewind spec §4.3), and by
+        # reference: whichever manager next cuts the shared list for a rewind
+        # updates it for the other, which would otherwise cut it again.
+        if src_sm is not None and dst_sm is not None and hasattr(src_sm, "_live_conversation"):
+            dst_sm._live_conversation = src_sm._live_conversation
     except Exception:  # noqa: BLE001 - never let bookkeeping break a turn
         logger.debug("Session %s: could not sync compaction live offset", scrub_log(session_id), exc_info=True)
+
+
+def _same_turn_structure(stored: List[Dict[str, Any]], live: List[Dict[str, Any]]) -> bool:
+    """Whether a live history is the conversation a stored copy describes.
+
+    Not byte equality, which is the point of seeding: the live copy carries
+    the long-term-memory context and document bytes the stored one lost. The
+    turn structure must agree, though: the same roles, the same tool calls,
+    and every user message ending in the same words.
+    """
+    if len(stored) != len(live):
+        return False
+
+    def _tool_ids(message: Dict[str, Any]) -> List[str]:
+        return [
+            block["toolUse"].get("toolUseId")
+            for block in message.get("content") or []
+            if isinstance(block, dict) and isinstance(block.get("toolUse"), dict)
+        ]
+
+    def _last_text(message: Dict[str, Any]) -> Optional[str]:
+        texts = [
+            block["text"]
+            for block in message.get("content") or []
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ]
+        return texts[-1] if texts else None
+
+    for a, b in zip(stored, live):
+        if a.get("role") != b.get("role") or _tool_ids(a) != _tool_ids(b):
+            return False
+        if a.get("role") == "user" and _last_text(a) != _last_text(b):
+            return False
+    return True
+
+
+def _seed_forked_conversation(agent: BaseAgent, session_id: str, user_id: Optional[str]) -> None:
+    """Start a fork's first turn from its parent's live history, when it is here.
+
+    Rewind/fork spec §7. A fork's stored copy restores to different bytes than
+    the parent sent: long-term-memory context is spliced into user messages
+    when they are sent and never stored, and restore runs sanitizers live
+    accumulation does not (§2.3). Bedrock's cache is an exact-prefix match, so
+    a fork restored from storage re-writes its whole history on the first turn.
+    The parent's live list holds the exact bytes, and the fork's turns are
+    pinned to the parent's container (``affinity_session_id``) so it is usually
+    right here.
+
+    Seeds only on the fork's first build, and only when everything lines up:
+    the child holds exactly the copied history, nothing else of the child is
+    live in this process, the parent's list is in the same compaction
+    coordinates and rewind state the cut was taken against, and the two agree
+    turn for turn. Anything else keeps the restored copy, which is correct and
+    merely misses the cache, as any cold restore does today. A deep copy, never
+    an alias: the two conversations diverge from here.
+    """
+    from apis.shared.feature_flags import session_fork_enabled
+
+    if not session_fork_enabled() or not user_id:
+        return
+    child_sm = getattr(agent, "session_manager", None)
+    origin = child_sm.fork_origin() if hasattr(child_sm, "fork_origin") else None
+    inner = getattr(agent, "agent", None)
+    if origin is None or inner is None or not isinstance(getattr(inner, "messages", None), list):
+        return
+    offset = getattr(child_sm, "_live_offset", 0)
+    if offset + len(inner.messages) != origin.cut:
+        return  # not the first turn: the fork has history of its own
+    if any(cached is not agent for cached in live_conversation_agents(session_id, user_id)):
+        return
+
+    seeded = False
+    for parent in live_conversation_agents(origin.session_id, user_id):
+        parent_inner = getattr(parent, "agent", None)
+        parent_sm = getattr(parent, "session_manager", None)
+        live = getattr(parent_inner, "messages", None)
+        if not isinstance(live, list) or parent_sm is None:
+            continue
+        if getattr(parent_sm, "_live_offset", 0) != offset:
+            break
+        live_conversation = getattr(parent_sm, "_live_conversation", None)
+        if getattr(live_conversation, "rewind_epoch", 0) != origin.parent_rewind_epoch:
+            break
+        count = origin.cut - offset
+        if len(live) < count or not _same_turn_structure(inner.messages, live[:count]):
+            break
+        inner.messages = copy.deepcopy(live[:count])
+        seeded = True
+        break
+
+    child_sm._pending_fork_marker = {"forkedFrom": origin.session_id, "forkSeeded": seeded}
+    logger.info(
+        "Session %s: fork's first turn %s",
+        scrub_log(session_id),
+        "seeded from the parent's live history" if seeded else "restored from its stored copy",
+    )
 
 
 # Agent builds (cache misses) this process has run. Every conversation's first
@@ -415,6 +534,8 @@ async def get_agent(
     text_only_model: bool = False,
     knowledge_context: Optional[str] = None,
     memory_mode: MemoryMode = "on",
+    client_surface: Optional[str] = None,
+    client_tools_digest: str = "",
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -465,6 +586,9 @@ async def get_agent(
             (``is_text_only_model``), so the agent's model sees history with
             image, document and video blocks replaced by text. Not a key
             element: it follows from ``model_id``, which already is one.
+        client_surface: Which client the user is on ("web", "terminal").
+            Selects the agent's interface guidance; part of the key only when
+            not web, so web turns key exactly as before.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -523,6 +647,8 @@ async def get_agent(
         memory_context=memory_context,
         knowledge_context=knowledge_context,
         memory_mode=effective_memory_mode,
+        client_surface=client_surface,
+        client_tools_digest=client_tools_digest,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.
@@ -598,6 +724,8 @@ async def get_agent(
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
     )
+    if client_surface:
+        create_kwargs["client_surface"] = client_surface
     if memory_context:
         create_kwargs["memory_context"] = memory_context
     if knowledge_context:
@@ -645,6 +773,7 @@ async def get_agent(
     # extra_tools early return below, because an uncached agent still takes a
     # turn in the thread and must not fork it. See #741.
     _adopt_session_conversation(agent, session_id, user_id)
+    _seed_forked_conversation(agent, session_id, user_id)
 
     # Stamp the type onto the construction snapshot so a paused turn can
     # resume on the same factory variant after cache eviction. A turn carrying

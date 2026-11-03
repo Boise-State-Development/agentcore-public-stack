@@ -40,6 +40,8 @@ from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 
 from agents.main_agent.config.constants import Defaults, EnvVars
 from apis.shared.observability.build_stages import mark_stage
+from apis.shared.sessions.fork import ForkOrigin
+from apis.shared.sessions.rewind import RewindState
 
 from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
 from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
@@ -69,6 +71,29 @@ _MEMORY_RETRIEVAL_THROTTLE_CODES = ("ThrottlingException", "TooManyRequestsExcep
 # Serializes replacing the retrieval client: boto3 client creation on the
 # default session is not thread-safe, and the namespaces retrieve in parallel.
 _RETRIEVAL_CLIENT_LOCK = threading.Lock()
+
+
+class LiveConversation:
+    """State that belongs to a live message LIST, not to the manager holding it.
+
+    One conversation can be served by several cached agents whose managers
+    share one aliased ``agent.messages`` (``_adopt_session_conversation``).
+    Anything that describes what the list itself reflects has to be shared the
+    same way, or the second manager acts on a list a sibling already changed.
+    ``rewind_epoch`` is the rewind (spec §4) the list has been cut to: the
+    manager that cuts it updates this, and a sibling that adopted the list sees
+    the update instead of cutting again.
+    """
+
+    __slots__ = ("rewind_epoch",)
+
+    def __init__(self, rewind_epoch: int = 0) -> None:
+        self.rewind_epoch = rewind_epoch
+
+
+# Sentinel for "no session row read is stashed", distinct from a stashed
+# ``None`` (the read ran and found no row).
+_NO_STASHED_ROW = object()
 
 
 _LTM_PREFETCH_POOL: Optional["ThreadPoolExecutor"] = None
@@ -300,8 +325,35 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # dev without DynamoDB), which makes steering inert.
         self.turn_lease: Optional[Any] = None
 
-        # Message count tracking (for stream_coordinator compatibility)
+        # Message count tracking (for stream_coordinator compatibility).
+        # PHYSICAL: every stored message, including any a rewind hid, because
+        # it is the fallback base for new message indices and those are never
+        # reused (rewind spec §3, invariant 2).
         self.message_count: int = 0
+
+        # Rewind (docs/specs/conversation-rewind-and-fork.md §4). True only
+        # while the SDK's restore calls ``list_messages``, which is the one
+        # read that filters hidden messages: the coordinator counts messages
+        # with the same method and must see the physical count.
+        self._restoring: bool = False
+        self._restored_physical_count: Optional[int] = None
+        # The rewind epoch this manager's compaction state reflects. Per
+        # manager: siblings each hold their own compaction state.
+        self._rewind_epoch: int = 0
+        # What the live message list reflects; shared with siblings by
+        # ``_adopt_session_conversation``, alongside the list itself.
+        self._live_conversation: LiveConversation = LiveConversation()
+        # The session row read at the head of this turn (or during restore),
+        # handed to the compaction re-read that follows so the two share one
+        # GSI query. Consumed once.
+        self._stashed_session_row: Any = _NO_STASHED_ROW
+        # The row as the restore read it, kept for the one reader that needs it
+        # after compaction has consumed the stash: a fork's first-turn seed
+        # (``fork_origin``). None when the restore did not read the row.
+        self._restore_row: Optional[Dict] = None
+        # Set by the fork seed on a fork's first build, consumed by the first
+        # cost row: ``{"forkedFrom": <parent id>, "forkSeeded": bool}`` (spec §6).
+        self._pending_fork_marker: Optional[Dict[str, Any]] = None
 
         # Log initialization
         if compaction_config and compaction_config.enabled:
@@ -616,6 +668,57 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.error("Failed to retrieve customer context: %s", e)
         return all_context
 
+    def list_messages(
+        self,
+        session_id: str,
+        agent_id: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        **kwargs: Any,
+    ) -> Any:
+        """The SDK's message list; during a restore, without rewound messages.
+
+        Filtering here, at the load, rather than after ``super().initialize()``
+        is deliberate: the SDK repairs broken tool-use pairs on the list it
+        loaded, and a repair that inserted messages would shift every position
+        a filter applied afterwards relies on (rewind spec §4.3).
+
+        Every other caller gets the unfiltered, physical list. The stream
+        coordinator counts with this same method to number the turn's new
+        messages, and those numbers must never reuse a rewound message's.
+        """
+        messages = super().list_messages(session_id, agent_id, limit=limit, offset=offset, **kwargs)
+        if not self._restoring:
+            return messages
+        if limit is None:
+            self._restored_physical_count = offset + len(messages)
+
+        from apis.shared.feature_flags import session_fork_enabled, session_rewind_enabled
+
+        rewind_on = session_rewind_enabled()
+        if not rewind_on and not session_fork_enabled():
+            return messages
+        row = self._read_session_row()
+        # The compaction load right after this restore reads the same row.
+        self._stashed_session_row = row
+        self._restore_row = row
+        if not rewind_on:
+            return messages
+        state = RewindState.from_row(row)
+        self._rewind_epoch = state.epoch
+        if not state.active:
+            return messages
+        kept = [m for i, m in enumerate(messages) if not state.is_hidden(offset + i)]
+        logger.info(
+            "Restore: rewind epoch %d hides %d of %d stored message(s)",
+            state.epoch, len(messages) - len(kept), len(messages),
+        )
+        return kept
+
+    def fork_origin(self) -> Optional[ForkOrigin]:
+        """Where this session was forked from, as its restore read it; None if not a fork."""
+        return ForkOrigin.from_row(self._restore_row)
+
     def read_session(self, session_id: str, **kwargs: Any) -> Any:
         """The SDK's session read, preceded by a build-stage mark.
 
@@ -652,15 +755,36 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             super().initialize(agent, **kwargs)
             return
 
+        try:
+            self._restore_text_agent(agent, **kwargs)
+        finally:
+            # Whatever the restore produced is the list this manager's
+            # siblings may adopt, so its rewind epoch is fixed here.
+            self._live_conversation = LiveConversation(self._rewind_epoch)
+
+    def _restore_text_agent(self, agent: "Agent", **kwargs: Any) -> None:
+        """``initialize`` for a text agent: the SDK restore, then compaction."""
         # Let the SDK handle all session restore logic:
         # - read/create agent in session repository
         # - restore agent state, internal state, conversation manager state
-        # - load messages from AgentCore Memory
+        # - load messages from AgentCore Memory (rewound ones filtered out,
+        #   see ``list_messages``)
         # - fix broken tool-use histories
-        super().initialize(agent, **kwargs)
+        self._restoring = True
+        self._restored_physical_count = None
+        try:
+            super().initialize(agent, **kwargs)
+        finally:
+            self._restoring = False
 
         self._total_message_count_at_init = len(agent.messages)
-        self.message_count = self._total_message_count_at_init
+        # Physical when a restore listed messages: a rewind hides some from
+        # ``agent.messages`` without freeing their indices.
+        self.message_count = (
+            self._restored_physical_count
+            if self._restored_physical_count is not None
+            else self._total_message_count_at_init
+        )
 
         # Slice 0 diagnostic: confirm what restored history a turn actually
         # sees at init. Decisive for the max_tokens "Continue" flow — on the
@@ -1035,17 +1159,32 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.debug(f"GSI lookup failed: {e}")
             return None
 
+    def _read_session_row(self) -> Optional[Dict]:
+        """This session's metadata row, or None. One GSI query; never raises."""
+        if not self.user_id:
+            return None
+        try:
+            table = self._get_dynamodb_table()
+            return self._get_session_via_gsi(table) if table else None
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Session row read failed: {e}")
+            return None
+
+    def _take_session_row(self) -> Optional[Dict]:
+        """The row stashed earlier in this turn's head or restore, else a fresh read."""
+        row, self._stashed_session_row = self._stashed_session_row, _NO_STASHED_ROW
+        if row is _NO_STASHED_ROW:
+            return self._read_session_row()
+        return row
+
     def _load_compaction_state(self) -> CompactionState:
         """Load compaction state from DynamoDB session metadata."""
         if not self.user_id or not self.compaction_config or not self.compaction_config.enabled:
+            self._stashed_session_row = _NO_STASHED_ROW
             return CompactionState()
 
         try:
-            table = self._get_dynamodb_table()
-            if not table:
-                return CompactionState()
-
-            session_item = self._get_session_via_gsi(table)
+            session_item = self._take_session_row()
             if not session_item:
                 return CompactionState()
 
@@ -1765,6 +1904,106 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         except Exception as e:  # noqa: BLE001 - never break a turn
             logger.warning(f"apply_pending_compaction skipped: {e}", exc_info=True)
             return None
+
+    # =========================================================================
+    # Rewind (docs/specs/conversation-rewind-and-fork.md §4.3)
+    # =========================================================================
+
+    def apply_rewind(self, agent: "Agent") -> Optional[int]:
+        """Head-of-turn: cut the live list to a rewind app-api recorded since the last turn.
+
+        Called by the stream coordinator before ``apply_pending_compaction`` on
+        every turn, cached and freshly restored agents alike. The cut is a slice
+        assignment (``messages[:] = messages[:k]``), never a rebind: it keeps
+        the #741 alias, so every cached agent of this conversation sees it, and
+        it re-serializes nothing. The retained messages are the exact bytes the
+        earlier turns sent, which is why a rewind on a warm agent reads its
+        history from the prompt cache (spec §2.3) where a re-restore would not.
+
+        The row read here is handed to the compaction re-read that follows, so
+        with compaction on a turn still pays one GSI query. Returns the logical
+        length cut to, or None. Never raises.
+        """
+        from apis.shared.feature_flags import session_rewind_enabled
+
+        if not session_rewind_enabled():
+            return None
+        try:
+            row = self._take_session_row()
+            if self.compaction_config and self.compaction_config.enabled:
+                # Only when something this turn will consume it: a stash left
+                # unread would be handed to the NEXT turn as if it were fresh.
+                self._stashed_session_row = row
+            state = RewindState.from_row(row)
+            if state.epoch <= self._rewind_epoch and state.epoch <= self._live_conversation.rewind_epoch:
+                return None
+
+            cut_to: Optional[int] = None
+            live = self._live_conversation
+            messages = getattr(agent, "messages", None)
+            if state.epoch > live.rewind_epoch and isinstance(messages, list):
+                cut_to = self._cut_live_list(messages, state, live.rewind_epoch)
+                live.rewind_epoch = state.epoch
+
+            # This manager's own compaction state, which a sibling that cut the
+            # shared list did not touch. The anchor clamp is the one §5 makes
+            # required: left above the cut, it would truncate the new messages
+            # that take the cut's indices, and the adoption re-read that follows
+            # keeps the larger of the persisted and live anchors.
+            if state.epoch > self._rewind_epoch:
+                cuts = state.cuts_since(self._rewind_epoch)
+                if cuts and self.compaction_state is not None:
+                    floor = min(c.cut for c in cuts)
+                    current = self.compaction_state
+                    current.truncation_anchor = min(current.truncation_anchor, floor)
+                    current.pending_checkpoint = None
+                    current.pending_summary = None
+                    current.pending_hard_ceiling = None
+                    current.pending_since = None
+                self._rewind_epoch = state.epoch
+            return cut_to
+        except Exception as e:  # noqa: BLE001 - never break a turn
+            logger.warning(f"apply_rewind skipped: {e}", exc_info=True)
+            return None
+
+    def _cut_live_list(self, messages: List[Dict], state: RewindState, applied_epoch: int) -> Optional[int]:
+        """Slice ``messages`` in place to the rewinds after ``applied_epoch``.
+
+        Every rewind hides from its cut to the end, and nothing is appended in
+        this process between a rewind and the next turn's head (this runs
+        first), so the list is the conversation as it stood before the first
+        unapplied rewind and the right length is the smallest cut since. A list
+        that does not match that state (another replica wrote turns in between)
+        is still cut to it, which errs towards dropping a turn rather than
+        showing the model one the user rewound away.
+        """
+        cuts = state.cuts_since(applied_epoch)
+        if not cuts:
+            logger.warning(
+                "Rewind epoch %d -> %d with no cut records; live list left as is",
+                applied_epoch, state.epoch,
+            )
+            return None
+        target = min(c.cut for c in cuts)
+        live_length = self._live_offset + len(messages)
+        if live_length != cuts[0].visible_before or not state.covers_epochs_since(applied_epoch):
+            logger.warning(
+                "Rewind: live list (%d) does not match the state the cut was taken against (%d); cutting to %d",
+                live_length, cuts[0].visible_before, target,
+            )
+        keep = target - self._live_offset
+        if keep < 0 or (keep == 0 and self._live_offset > 0):
+            # The cut lands in what the summary covers. app-api refuses those,
+            # so this is a state it never wrote; leave the list alone.
+            logger.warning("Rewind cut %d is at or before the live offset %d; not applied", target, self._live_offset)
+            return None
+        if keep < len(messages):
+            messages[:] = messages[:keep]
+        logger.info(
+            "Rewind applied in place: epoch %d, live length %d -> %d",
+            state.epoch, live_length, self._live_offset + len(messages),
+        )
+        return target
 
     # =========================================================================
     # Document offload (offload spec §4C / §4D, PR-4)

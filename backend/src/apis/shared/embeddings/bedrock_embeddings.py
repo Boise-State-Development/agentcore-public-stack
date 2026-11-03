@@ -224,29 +224,33 @@ def _search_assistant_knowledgebase_sync(assistant_id: str, query: str) -> Dict[
 GET_VECTORS_MAX_KEYS = 100
 
 
-async def delete_vectors_for_document(document_id: str) -> int:
-    """
-    Delete all vectors for a specific document from the S3 vector store.
+# ---------------------------------------------------------------------------
+# Deletion
+#
+# Every function below is ``async`` for its callers' sake but does its work on
+# ``asyncio.to_thread``: boto3 is synchronous, and the full-index ``list_vectors``
+# fallback takes seconds per document. Run on the loop, as these once were, an
+# agent deletion with 41 documents blocked app-api's event loop for about
+# three and a half minutes, no ``/health`` was answered, and ECS replaced the
+# task with every in-flight request on it (production, 2026-10-19, -20, -30).
+# ---------------------------------------------------------------------------
 
-    Vectors are stored with keys formatted as {document_id}#{chunk_index}
-    where chunk_index is a sequential integer starting at 0.
+_DELETE_BATCH_SIZE = 500
 
-    Uses a probe-and-delete strategy: generates candidate keys in batches,
-    checks which exist via GetVectors, then deletes them. Stops probing
-    when a batch returns no results. Falls back to a full list scan if
-    the probe finds nothing (handles unexpected key formats).
 
-    Args:
-        document_id: The document identifier
+def _delete_keys(client: Any, vector_bucket: str, vector_index: str, keys: List[str]) -> int:
+    for i in range(0, len(keys), _DELETE_BATCH_SIZE):
+        batch = keys[i : i + _DELETE_BATCH_SIZE]
+        client.delete_vectors(vectorBucketName=vector_bucket, indexName=vector_index, keys=batch)
+    return len(keys)
 
-    Returns:
-        Number of vectors deleted
-    """
+
+def _delete_vectors_for_document_sync(document_id: str, scan_index: bool) -> int:
     client = boto3.client("s3vectors", region_name=AWS_REGION)
     vector_bucket = _get_vector_store_bucket()
     vector_index = _get_vector_store_index()
 
-    existing_keys = []
+    existing_keys: List[str] = []
     # GetVectors accepts at most 100 keys. At 500 every probe was rejected
     # (ValidationException) and each delete fell through to listing the whole index.
     probe_batch_size = GET_VECTORS_MAX_KEYS
@@ -273,8 +277,12 @@ async def delete_vectors_for_document(document_id: str) -> int:
 
         probe_offset += probe_batch_size
 
-    # Strategy 2: Fallback to list scan if probe found nothing
-    if not existing_keys:
+    # Strategy 2: Fallback to list scan if probe found nothing. This walks the
+    # WHOLE index (every document of every assistant, 1,000 keys a page), so
+    # it costs seconds per call and is only worth it where the vectors could
+    # exist under a key the probe does not know. A managed-KB document never
+    # had its vectors here, so its caller passes ``scan_index=False``.
+    if not existing_keys and scan_index:
         logger.info(f"Key probe found no vectors for {document_id}, falling back to list scan")
         next_token = None
         document_prefix = f"{document_id}#"
@@ -297,21 +305,52 @@ async def delete_vectors_for_document(document_id: str) -> int:
             if not next_token:
                 break
 
-    # Delete all found keys in batches
-    if existing_keys:
-        delete_batch_size = 500
-        deleted_count = 0
-
-        for i in range(0, len(existing_keys), delete_batch_size):
-            batch = existing_keys[i : i + delete_batch_size]
-            client.delete_vectors(vectorBucketName=vector_bucket, indexName=vector_index, keys=batch)
-            deleted_count += len(batch)
-
-        logger.info(f"Deleted {deleted_count} vectors for document {document_id}")
-        return deleted_count
-    else:
+    if not existing_keys:
         logger.info(f"No vectors found for document {document_id}")
         return 0
+
+    deleted_count = _delete_keys(client, vector_bucket, vector_index, existing_keys)
+    logger.info(f"Deleted {deleted_count} vectors for document {document_id}")
+    return deleted_count
+
+
+async def delete_vectors_for_document(document_id: str, *, scan_index: bool = True) -> int:
+    """
+    Delete all vectors for a specific document from the S3 vector store.
+
+    Vectors are stored with keys formatted as {document_id}#{chunk_index}
+    where chunk_index is a sequential integer starting at 0.
+
+    Uses a probe-and-delete strategy: generates candidate keys in batches,
+    checks which exist via GetVectors, then deletes them. Stops probing
+    when a batch returns no results. With ``scan_index`` (the default) a
+    probe that finds nothing falls back to a full list scan of the index,
+    which handles unexpected key formats at the cost of seconds per call;
+    pass ``scan_index=False`` for a document whose vectors were never
+    written to this index (a managed knowledge base), where the scan can
+    only ever come back empty.
+
+    Runs off the event loop.
+
+    Args:
+        document_id: The document identifier
+        scan_index: Whether an empty probe may fall back to the full index scan
+
+    Returns:
+        Number of vectors deleted
+    """
+    return await asyncio.to_thread(_delete_vectors_for_document_sync, document_id, scan_index)
+
+
+def _delete_vectors_for_document_deterministic_sync(document_id: str, chunk_count: int) -> int:
+    client = boto3.client("s3vectors", region_name=AWS_REGION)
+    vector_bucket = _get_vector_store_bucket()
+    vector_index = _get_vector_store_index()
+
+    keys = [f"{document_id}#{i}" for i in range(chunk_count)]
+    _delete_keys(client, vector_bucket, vector_index, keys)
+    logger.info(f"Deterministic delete: sent {chunk_count} keys for document {document_id}")
+    return chunk_count
 
 
 async def delete_vectors_for_document_deterministic(
@@ -322,7 +361,8 @@ async def delete_vectors_for_document_deterministic(
     Delete vectors using deterministic keys: {document_id}#{i} for i in range(chunk_count).
     No probing, no list-scan. O(chunk_count) with a single batch delete call.
 
-    Deletion of non-existent keys is a no-op in the S3 Vectors API.
+    Deletion of non-existent keys is a no-op in the S3 Vectors API. Runs off
+    the event loop.
 
     Args:
         document_id: The document identifier
@@ -336,24 +376,20 @@ async def delete_vectors_for_document_deterministic(
     """
     if chunk_count == 0:
         return 0
+    return await asyncio.to_thread(_delete_vectors_for_document_deterministic_sync, document_id, chunk_count)
 
+
+def _delete_vector_tail_sync(document_id: str, from_index: int, to_index: int) -> int:
     client = boto3.client("s3vectors", region_name=AWS_REGION)
     vector_bucket = _get_vector_store_bucket()
     vector_index = _get_vector_store_index()
 
-    keys = [f"{document_id}#{i}" for i in range(chunk_count)]
-    batch_size = 500
-
-    for i in range(0, len(keys), batch_size):
-        batch = keys[i : i + batch_size]
-        client.delete_vectors(
-            vectorBucketName=vector_bucket,
-            indexName=vector_index,
-            keys=batch,
-        )
-
-    logger.info(f"Deterministic delete: sent {chunk_count} keys for document {document_id}")
-    return chunk_count
+    keys = [f"{document_id}#{i}" for i in range(from_index, to_index)]
+    _delete_keys(client, vector_bucket, vector_index, keys)
+    logger.info(
+        f"Tail delete: sent {len(keys)} keys ({from_index}..{to_index - 1}) for document {document_id}"
+    )
+    return len(keys)
 
 
 async def delete_vector_tail(document_id: str, from_index: int, to_index: int) -> int:
@@ -363,53 +399,23 @@ async def delete_vector_tail(document_id: str, from_index: int, to_index: int) -
     Shrinkage cleanup for KB sync re-ingestion: when a re-indexed document
     produces fewer chunks than before, the in-place vector overwrite leaves
     stale tail chunks behind — this removes exactly that tail. Deletion of
-    non-existent keys is a no-op in the S3 Vectors API.
+    non-existent keys is a no-op in the S3 Vectors API. Runs off the event
+    loop.
 
     Returns:
         Number of keys sent for deletion (0 if the range is empty)
     """
     if to_index <= from_index:
         return 0
+    return await asyncio.to_thread(_delete_vector_tail_sync, document_id, from_index, to_index)
 
+
+def _delete_vectors_for_assistant_sync(assistant_id: str) -> int:
     client = boto3.client("s3vectors", region_name=AWS_REGION)
     vector_bucket = _get_vector_store_bucket()
     vector_index = _get_vector_store_index()
 
-    keys = [f"{document_id}#{i}" for i in range(from_index, to_index)]
-    batch_size = 500
-
-    for i in range(0, len(keys), batch_size):
-        batch = keys[i : i + batch_size]
-        client.delete_vectors(
-            vectorBucketName=vector_bucket,
-            indexName=vector_index,
-            keys=batch,
-        )
-
-    logger.info(
-        f"Tail delete: sent {len(keys)} keys ({from_index}..{to_index - 1}) for document {document_id}"
-    )
-    return len(keys)
-
-
-async def delete_vectors_for_assistant(assistant_id: str) -> int:
-    """
-    Delete ALL vectors belonging to an assistant from the S3 vector store.
-
-    Used when deleting an entire assistant to prevent orphaned vectors.
-    Scans the index filtering by assistant_id metadata via list + client-side filter.
-
-    Args:
-        assistant_id: The assistant identifier
-
-    Returns:
-        Number of vectors deleted
-    """
-    client = boto3.client("s3vectors", region_name=AWS_REGION)
-    vector_bucket = _get_vector_store_bucket()
-    vector_index = _get_vector_store_index()
-
-    keys_to_delete = []
+    keys_to_delete: List[str] = []
     next_token = None
 
     while True:
@@ -432,16 +438,27 @@ async def delete_vectors_for_assistant(assistant_id: str) -> int:
         if not next_token:
             break
 
-    if keys_to_delete:
-        batch_size = 500
-        deleted_count = 0
-        for i in range(0, len(keys_to_delete), batch_size):
-            batch = keys_to_delete[i : i + batch_size]
-            client.delete_vectors(vectorBucketName=vector_bucket, indexName=vector_index, keys=batch)
-            deleted_count += len(batch)
-
-        logger.info(f"Deleted {deleted_count} vectors for assistant {assistant_id}")
-        return deleted_count
-    else:
+    if not keys_to_delete:
         logger.info(f"No vectors found for assistant {assistant_id}")
         return 0
+
+    deleted_count = _delete_keys(client, vector_bucket, vector_index, keys_to_delete)
+    logger.info(f"Deleted {deleted_count} vectors for assistant {assistant_id}")
+    return deleted_count
+
+
+async def delete_vectors_for_assistant(assistant_id: str) -> int:
+    """
+    Delete ALL vectors belonging to an assistant from the S3 vector store.
+
+    Used when deleting an entire assistant to prevent orphaned vectors.
+    Scans the index filtering by assistant_id metadata via list + client-side
+    filter. Runs off the event loop.
+
+    Args:
+        assistant_id: The assistant identifier
+
+    Returns:
+        Number of vectors deleted
+    """
+    return await asyncio.to_thread(_delete_vectors_for_assistant_sync, assistant_id)

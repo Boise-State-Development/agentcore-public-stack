@@ -48,6 +48,17 @@ WORKSPACE_TOOL_IDS = frozenset({"workspace_files"})
 # ``skill_authoring_enabled()`` and ``skills_enabled()``.
 SKILL_AUTHORING_TOOL_IDS = frozenset({"my_skill_create"})
 
+# Meeting transcripts → GitHub issues (bound to user + the connector on the
+# row). One toggle per vendor, each provisioning its family: Google Calendar
+# (``list_calendar_meetings``), Zoom (``list_zoom_recordings`` /
+# ``get_zoom_transcript``) and GitHub (``list_github_repositories`` /
+# ``create_github_issues``). Additionally gated on ``meeting_tasks_enabled()``.
+# Kept as literals here (not imported from the tool module) so this leaf stays
+# import-light; ``tests/agents/local_tools/test_meeting_tasks.py`` pins them.
+MEETING_TASKS_TOOL_IDS = frozenset(
+    {"google_calendar_meetings", "zoom_meeting_transcripts", "github_issues_local"}
+)
+
 # Document retrieval (bound to session/user). Listed for the record, and
 # deliberately NOT folded into ``INJECTED_TOOL_IDS`` below: ``document_read``
 # is gated on the session having a readable attachment, not on
@@ -57,10 +68,11 @@ SKILL_AUTHORING_TOOL_IDS = frozenset({"my_skill_create"})
 # Memory-Space tools it never reaches ``ToolFilter``.
 DOCUMENT_TOOL_IDS = frozenset({"document_read"})
 
-# Every id owned by a per-request factory. Memory-Space and document tools are
-# deliberately absent: they are gated on an Agent's memory binding (or a
-# project harness) / the session's attachments rather than on
-# ``enabled_tools``, so they never reach the filter.
+# Every id owned by a per-request factory. Memory-Space, project-harness
+# (``shared_conversations_list``, ``shared_conversation_read``, ``project_files``)
+# and document tools are deliberately absent: they are gated on an Agent's
+# memory binding / the turn being a project's / the session's attachments
+# rather than on ``enabled_tools``, so they never reach the filter.
 INJECTED_TOOL_IDS = frozenset(
     SPREADSHEET_TOOL_IDS
     | ARTIFACT_TOOL_IDS
@@ -69,6 +81,7 @@ INJECTED_TOOL_IDS = frozenset(
     | POWERPOINT_PRESENTATION_TOOL_IDS
     | WORKSPACE_TOOL_IDS
     | SKILL_AUTHORING_TOOL_IDS
+    | MEETING_TASKS_TOOL_IDS
 )
 
 
@@ -122,6 +135,14 @@ INJECTED_TOOL_IDS = frozenset(
 #     than later: an opt-in family left out of this set makes every turn that
 #     enables it rebuild the agent and re-write the prompt-cache prefix.
 #
+#   - MEETING_TASKS (`_build_meeting_tools`) closes over `(user_id,
+#     provider_id)`, where `provider_id` is the connector on the family's
+#     catalog row (`requires_oauth_provider`). That is catalog data, and the key
+#     already carries `freshness_hash` — a digest of the enabled tools'
+#     `updated_at` — so an admin re-binding the row evicts the cached agent on
+#     the next turn. The tools read the user's token live from the OAuth token
+#     cache on every call, so a (re)connection never needs a rebuild either.
+#
 # Memory-Space tools are not in any set here (they are not gated on
 # `enabled_tools`), but they are described too: they close over the resolved
 # binding (space id, name, access) plus `(user_id, user_email)`, and
@@ -139,6 +160,7 @@ KEY_DESCRIBED_INJECTED_TOOL_IDS = frozenset(
     | WORKSPACE_TOOL_IDS
     | SPREADSHEET_TOOL_IDS
     | SKILL_AUTHORING_TOOL_IDS
+    | MEETING_TASKS_TOOL_IDS
 )
 
 

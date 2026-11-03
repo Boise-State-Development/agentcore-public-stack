@@ -100,4 +100,57 @@ export interface FeatureFlags {
    * the table render is slice three.
    */
   documentExtract: boolean;
+
+  /**
+   * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0): a mid-thread
+   * `@`-mention opens a review sheet instead of sending, then starts the Agent's
+   * conversation in the background while the user stays put, tracked by a
+   * handoff row in the thread. Off, a mid-thread mention sends straight into a
+   * new conversation, as before. Backend: HANDOFFS_ENABLED (app-api serves
+   * `/sessions/{id}/handoffs`; the Runtime takes `handoff_context`). In
+   * development, so `false` unless the environment has turned the backend on.
+   */
+  handoffs: boolean;
+
+  /**
+   * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
+   * user message offers "Rewind to here", which hides it and everything after
+   * it and puts its text back in the composer to edit and resend. Backend:
+   * SESSION_REWIND_ENABLED (app-api's `POST /sessions/{id}/rewind` 404s while
+   * off; the Runtime applies the cut). In development, so `false` everywhere
+   * until a deployment turns both sides on.
+   */
+  sessionRewind: boolean;
+
+  /**
+   * Conversation fork (docs/specs/conversation-rewind-and-fork.md §7): a user
+   * message offers "Fork from here", which starts a new conversation holding
+   * everything before it, with its text in the new composer. The parent stays
+   * as it is. Backend: SESSION_FORK_ENABLED (app-api's `POST /sessions/{id}/fork`
+   * 404s while off; the Runtime seeds the fork's first turn from the parent's
+   * live history). In development, so `false` everywhere.
+   */
+  sessionFork: boolean;
+
+  /**
+   * Quota requests (docs/specs/quota-requests-and-extensions.md §5): a user
+   * asks for more quota from the composer's quota tab, the blocked state or
+   * Settings → Usage, sees their requests and any granted extensions there,
+   * answers an admin's request for a funding source, and the notification bell
+   * shows with it. Backend: QUOTA_REQUESTS_ENABLED (app-api; `/quota/*` 404s
+   * while off). In development, so `false` everywhere until a deployment turns
+   * both sides on.
+   */
+  quotaRequests: boolean;
+  /**
+   * Project file readiness: a strip above a project chat's composer while any of
+   * the project's files are still being prepared ("Preparing 3 of 11 project
+   * files…"), "All 11 files ready" once they are, and a note on files that
+   * couldn't be added. It reads the project's file list
+   * (`GET /projects/{id}/knowledge`), so it needs nothing new from app-api. Its
+   * backend partner is PROJECT_FILE_READINESS_ENABLED on the AgentCore Runtime,
+   * which tells the model the same thing per turn. In development, so `false`
+   * until a deployment turns it on.
+   */
+  projectFileReadiness: boolean;
 }

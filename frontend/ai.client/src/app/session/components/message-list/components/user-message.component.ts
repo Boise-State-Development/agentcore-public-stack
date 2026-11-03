@@ -10,15 +10,22 @@ import {
   OnDestroy,
   inject,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowPath, heroArrowTurnDownRight, heroExclamationCircle } from '@ng-icons/heroicons/outline';
+import { heroArrowPath, heroArrowTurnDownRight, heroArrowUturnLeft, heroCheck, heroExclamationCircle, heroSquare2Stack } from '@ng-icons/heroicons/outline';
 import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
 import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
 import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import { FailedSendService } from '../../../services/chat/failed-send.service';
+import { ConversationRewindService } from '../../../services/session/conversation-rewind.service';
+import { ConversationForkService } from '../../../services/session/conversation-fork.service';
+import { TooltipDirective } from '../../../../components/tooltip';
 import { parseIso } from '../../../../utils/date';
+import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
+import { extractHandoffContext } from '../../../services/handoff/handoff-prompt';
+import { SessionService } from '../../../services/session/session.service';
 
 function isImageMimeType(mimeType: string): boolean {
   return mimeType.startsWith('image/');
@@ -26,30 +33,58 @@ function isImageMimeType(mimeType: string): boolean {
 
 const MAX_HEIGHT_PX = 200;
 
+/**
+ * A branch: one line splitting into two. Heroicons has no fork glyph, so this
+ * is drawn on its 24px outline grid, at its stroke width, to sit beside them.
+ */
+const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path stroke-linecap="round" stroke-linejoin="round" d="M6 7v1.5A3.5 3.5 0 0 0 9.5 12h5A3.5 3.5 0 0 0 18 8.5V7M12 12v5"/></svg>`;
+
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
-  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath })],
+  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon, RouterLink, TooltipDirective],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft, heroCheck, heroSquare2Stack, appFork: FORK_ICON })],
   template: `
     @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
       <div class="group relative flex w-full flex-col items-end gap-2">
-        <!-- Hover-revealed sent-at subtitle (positioned above the topmost slot) -->
-        @if (formattedSentAt()) {
-          <span
-            class="pointer-events-none absolute -top-5 right-1 text-xs text-gray-400 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none dark:text-gray-500"
-            aria-hidden="true"
-          >
-            {{ formattedSentAt() }}
-          </span>
-        }
-
         <!--
           Mid-turn steer: the user sent this INTO a response that was still
           streaming, and the agent picked it up at its next step. Labelled
           because the bubble alone reads as the start of a new turn, which is
           exactly what it isn't — the reply above and below it is one response.
         -->
+        <!--
+          The first message of a conversation a handoff started (handoffs spec §4.2): the bubble
+          shows what the user typed, and this says where the context came from and links back.
+          The context itself is one click away, read from the message the model received.
+        -->
+        @if (handoffOrigin(); as origin) {
+          <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
+            <span class="flex items-center gap-1">
+              <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
+              Context from
+              <a
+                [routerLink]="['/s', origin.sessionId]"
+                class="font-medium text-gray-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300"
+              >{{ origin.title }}</a>
+              @if (handoffContext()) {
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  class="font-medium text-gray-700 underline-offset-2 hover:underline dark:text-gray-300"
+                  [attr.aria-expanded]="contextOpen()"
+                  (click)="contextOpen.set(!contextOpen())"
+                >
+                  {{ contextOpen() ? 'Hide context' : 'Show context' }}
+                </button>
+              }
+            </span>
+            @if (contextOpen() && handoffContext(); as context) {
+              <pre tabindex="0" role="region" aria-label="Context carried by this handoff" class="max-h-64 w-full overflow-auto whitespace-pre-wrap rounded-lg bg-gray-100 p-2 text-left font-mono text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ context }}</pre>
+            }
+          </div>
+        }
+
         @if (message().steering) {
           <span class="flex items-center gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
             <ng-icon name="heroArrowTurnDownRight" class="size-3.5" aria-hidden="true" />
@@ -154,6 +189,70 @@ const MAX_HEIGHT_PX = 200;
             }
           </div>
         }
+
+        <!--
+          One action row under the bubble: when it was sent, Copy, and (behind
+          their flags) Rewind and Fork. Revealed on hover; opacity only, so the
+          buttons stay in the tab order and group-focus-within can reveal them
+          for a keyboard user. It stays up while an action it started is
+          showing its result.
+        -->
+        @if (formattedSentAt() || copyText() || showRewind() || showFork()) {
+          <div
+            class="flex items-center gap-1 pr-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
+            [class.opacity-100]="copied() || rewinding() || forking()"
+          >
+            @if (formattedSentAt()) {
+              <span class="mr-1 text-xs text-gray-400 dark:text-gray-500">{{ formattedSentAt() }}</span>
+            }
+            @if (copyText()) {
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              [appTooltip]="copied() ? 'Copied' : 'Copy'"
+              appTooltipPosition="top"
+              [attr.aria-label]="copied() ? 'Copied to clipboard' : 'Copy message'"
+              (click)="copy()"
+            >
+              @if (copied()) {
+                <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
+              } @else {
+                <ng-icon name="heroSquare2Stack" class="size-4" aria-hidden="true" />
+              }
+            </button>
+            }
+            @if (showRewind()) {
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              appTooltip="Rewind to here"
+              appTooltipPosition="top"
+              aria-label="Rewind to here"
+              [attr.aria-busy]="rewinding() ? 'true' : null"
+              [disabled]="!canRewind()"
+              (click)="rewind()"
+            >
+              <ng-icon name="heroArrowUturnLeft" class="size-4" aria-hidden="true" />
+            </button>
+            }
+            <!-- Fork (rewind/fork spec §7): a new conversation from everything
+                 before this message; this one stays as it is. -->
+            @if (showFork()) {
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              appTooltip="Fork from here"
+              appTooltipPosition="top"
+              aria-label="Fork from here"
+              [attr.aria-busy]="forking() ? 'true' : null"
+              [disabled]="!canFork()"
+              (click)="fork()"
+            >
+              <ng-icon name="appFork" class="size-4" aria-hidden="true" />
+            </button>
+            }
+          </div>
+        }
       </div>
     }
   `,
@@ -173,12 +272,107 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
 
   private localSettings = inject(LocalSettingsService);
   private failedSends = inject(FailedSendService);
+  private handoffState = inject(HandoffStateService);
+  private sessions = inject(SessionService);
+
+  protected readonly contextOpen = signal(false);
+
+  /**
+   * Set on the first message of a conversation a handoff started: the source to link back to,
+   * titled as the sidenav titles it now (falling back to the title the context was sent under).
+   */
+  protected readonly handoffOrigin = computed((): { sessionId: string; title: string } | null => {
+    const id = this.message().id;
+    const dash = id.lastIndexOf('-');
+    if (!id.startsWith('msg-') || dash < 0 || id.slice(dash + 1) !== '0') return null;
+    const spawned = this.handoffState.spawnedFrom(id.slice(4, dash));
+    if (!spawned) return null;
+    const listed = this.sessions
+      .mergedSessionsResource()
+      .sessions.find((s) => s.sessionId === spawned.sessionId)
+      ?.title?.trim();
+    return { sessionId: spawned.sessionId, title: listed || spawned.sourceTitle || 'another conversation' };
+  });
+
+  /** The context card this message carried, when the persisted message has it (after a reload). */
+  protected readonly handoffContext = computed((): string | null => {
+    if (!this.handoffOrigin()) return null;
+    const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
+    return text ? extractHandoffContext(text) : null;
+  });
 
   /** Offered only while a resend could start a turn — see FailedSendService. */
   canRetry = computed(() => this.failedSends.canRetry(this.message().id));
 
   retry(): void {
     this.failedSends.retry(this.message().id);
+  }
+
+  /**
+   * What Copy puts on the clipboard: the words the user typed. `displayText`
+   * when the sent prompt was augmented (attachment markers, folder
+   * manifests), else the message's text blocks. Independent of the debug
+   * setting, which only changes what the bubble shows.
+   */
+  copyText = computed((): string => {
+    const display = this.message().metadata?.['displayText'];
+    if (typeof display === 'string' && display.trim()) return display;
+    return this.message()
+      .content.filter((block: ContentBlock) => block.type === 'text' && block.text)
+      .map((block: ContentBlock) => block.text as string)
+      .join('\n\n');
+  });
+
+  copied = signal(false);
+  private copiedTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async copy(): Promise<void> {
+    const text = this.copyText();
+    if (!text || typeof navigator === 'undefined' || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard unavailable (insecure context, permissions): nothing to show.
+      return;
+    }
+    this.copied.set(true);
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+    this.copiedTimer = setTimeout(() => {
+      this.copied.set(false);
+      this.copiedTimer = null;
+    }, 2000);
+  }
+
+  private rewinder = inject(ConversationRewindService);
+
+  /** Only on messages the server numbered and could cut before; see ConversationRewindService. */
+  showRewind = computed(() => {
+    const message = this.message();
+    return this.rewinder.enabled && !message.steering && !message.sendFailure && message.id.startsWith('msg-');
+  });
+
+  /** False while this conversation streams or another rewind is in flight. */
+  canRewind = computed(() => this.rewinder.canRewind(this.message()));
+
+  rewinding = computed(() => this.rewinder.pendingMessageId() === this.message().id);
+
+  rewind(): void {
+    void this.rewinder.rewind(this.message());
+  }
+
+  private forker = inject(ConversationForkService);
+
+  showFork = computed(() => {
+    const message = this.message();
+    return this.forker.enabled && !message.steering && !message.sendFailure && message.id.startsWith('msg-');
+  });
+
+  canFork = computed(() => this.forker.canFork(this.message()));
+
+  forking = computed(() => this.forker.pendingMessageId() === this.message().id);
+
+  fork(): void {
+    void this.forker.fork(this.message());
   }
 
   readonly maxHeightPx = MAX_HEIGHT_PX;
@@ -194,7 +388,7 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   });
 
   /**
-   * Hover-revealed "sent at" subtitle rendered above the topmost message slot.
+   * The "sent at" label at the start of the hover-revealed action row.
    *
    * - Under 1 minute: "Just now"
    * - Under 1 hour: "{n}m ago"
@@ -293,6 +487,7 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.resizeObserver?.disconnect();
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
   }
 
   toggleExpanded(): void {

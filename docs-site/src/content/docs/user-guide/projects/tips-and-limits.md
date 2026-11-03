@@ -9,9 +9,14 @@ sidebar:
 ## Ask questions the files can answer
 
 Before the assistant answers, it searches the project's files once, using
-**the words of your message**. It can't go back and search again on its
-own. So the wording of your question decides which passages it gets to see.
+**the words of your message**, and it can open any **Ready** file whole when you
+name it. So either the wording of your question decides which passages it gets
+to see, or the file name decides which document it reads.
 
+- **Name the file** when you want work on one document: "read
+  sponsor-v2-redline.docx and list every change", "grade submission 7 against
+  the rubric". The assistant can list the project's files and read a named one
+  in full, so it never has to guess from a search which document you meant.
 - **Name the section and the subject.** "Playbook section 7, export control:
   what is the standard position on foreign nationals?" finds the right
   passage. A long message that opens with a greeting and ends with three
@@ -90,7 +95,10 @@ can tell you which have changed on your deployment.
 **Files and documents**
 
 - A file showing **Ready** can take a minute or two more before the assistant
-  finds it.
+  finds it in a search. It can be opened by name as soon as it shows **Ready**.
+- **Reading by name is for text.** PDF, Word, text, Markdown and HTML files open
+  whole, in pages. Spreadsheets, presentations and images are listed but can't
+  be opened this way; attach those to the conversation instead.
 - **Older redlines may still read flattened.** A redline added to Files before
   tracked changes were supported (October 2026) keeps its old text, with deleted
   and inserted wording run together. Delete it and upload it again (see

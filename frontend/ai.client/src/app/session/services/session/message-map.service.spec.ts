@@ -53,6 +53,58 @@ describe('MessageMapService', () => {
     expect(service).toBeTruthy();
   });
 
+  describe('numbering after a rewind', () => {
+    // Ids are positional and the server never reuses an index, so once a
+    // rewind hides messages the next one is numbered from the server's
+    // count, not from the list length. Reusing an index would attach the
+    // rewound message's feedback and cost rows to the new one.
+    it('numbers new messages past the hidden ones once rewound', () => {
+      service.addUserMessage('s1', 'first');
+      service.addVoiceMessage('s1', 'assistant', 'reply');
+      const second = service.addUserMessage('s1', 'second');
+      service.addVoiceMessage('s1', 'assistant', 'reply two');
+      expect(second.id).toBe('msg-s1-2');
+
+      expect(service.rewindToMessage('s1', 'msg-s1-2', 4)).toBe(true);
+
+      expect(service.getMessagesForSession('s1')().map((m) => m.id)).toEqual(['msg-s1-0', 'msg-s1-1']);
+      expect(service.nextMessageIndex('s1')).toBe(4);
+      expect(service.addUserMessage('s1', 'edited').id).toBe('msg-s1-4');
+    });
+
+    it('takes the hidden count from a reload\'s nextMessageIndex', async () => {
+      mockSessionService.getMessages.mockResolvedValue({
+        messages: [
+          { id: 'msg-s2-0', role: 'user', content: [{ type: 'text', text: 'hi' }] },
+          { id: 'msg-s2-1', role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+        ],
+        nextToken: null,
+        nextMessageIndex: 6,
+      });
+      await service.loadMessagesForSession('s2');
+
+      expect(service.nextMessageIndex('s2')).toBe(6);
+      expect(service.addUserMessage('s2', 'again').id).toBe('msg-s2-6');
+    });
+
+    it('numbers exactly as before when the server sends no nextMessageIndex', async () => {
+      mockSessionService.getMessages.mockResolvedValue({
+        messages: [{ id: 'msg-s3-0', role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        nextToken: null,
+      });
+      await service.loadMessagesForSession('s3');
+
+      expect(service.addUserMessage('s3', 'next').id).toBe('msg-s3-1');
+    });
+
+    it('leaves the list alone for a message it does not hold', () => {
+      service.addUserMessage('s4', 'only');
+      expect(service.rewindToMessage('s4', 'msg-s4-9', 10)).toBe(false);
+      expect(service.getMessagesForSession('s4')()).toHaveLength(1);
+      expect(service.nextMessageIndex('s4')).toBe(1);
+    });
+  });
+
   describe('a message with a Drive folder', () => {
     it('puts the folder chip after the files and before the text', () => {
       const folder = { folderAttachId: 'fa-1', name: 'Course', source: 'Drive', status: 'ready', fileCount: 1, files: ['a.pdf'], moreCount: 0 };

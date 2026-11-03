@@ -96,14 +96,23 @@ async def lifespan(app: FastAPI):
 
     reconcile_task = asyncio.create_task(run_reconcile_loop())
 
+    # Event-loop lag watchdog: one uvicorn worker means synchronous work on the
+    # loop stalls every request on this task, /health included. This measures
+    # the stall (EventLoopLagMs, alarmed in CDK) so a hang is a number and a
+    # WARNING line, not a gap in the access log. Nothing it does is per request.
+    from apis.app_api.telemetry.event_loop_lag import run_event_loop_lag_monitor
+
+    lag_task = asyncio.create_task(run_event_loop_lag_monitor())
+
     yield  # Application is running
 
     # Shutdown
     logger.info("=== Agent Core Service Shutting Down ===")
     reconcile_task.cancel()
-    # return_exceptions swallows the task's CancelledError, so shutdown waits
-    # for the loop to finish without re-raising it.
-    await asyncio.gather(reconcile_task, return_exceptions=True)
+    lag_task.cancel()
+    # return_exceptions swallows the tasks' CancelledError, so shutdown waits
+    # for the loops to finish without re-raising it.
+    await asyncio.gather(reconcile_task, lag_task, return_exceptions=True)
     # TODO: Cleanup agent pool, MCP clients, etc.
 
 # Create FastAPI app with lifespan
@@ -217,6 +226,7 @@ logger.info("Added proxied-redirect middleware")
 # Import routers
 from apis.app_api.health import router as health_router
 from apis.app_api.auth.routes import router as auth_router
+from apis.app_api.auth.bff import cli_router as bff_cli_auth_router
 from apis.app_api.auth.bff import router as bff_auth_router
 from apis.app_api.auth.api_keys.routes import router as api_keys_router
 from apis.app_api.sessions.routes import router as sessions_router
@@ -224,6 +234,7 @@ from apis.app_api.sessions.search_routes import router as session_search_router
 from apis.app_api.admin.routes import router as admin_router
 from apis.app_api.models.routes import router as models_router
 from apis.app_api.costs.routes import router as costs_router
+from apis.app_api.quota.routes import router as quota_requests_router
 from apis.app_api.chat.routes import router as chat_router
 from apis.app_api.chat.converse_routes import router as converse_router
 from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
@@ -270,6 +281,7 @@ from apis.app_api.schedules.routes import router as schedules_router
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(bff_auth_router)  # BFF Token Handler auth routes (Phase 3, dormant until SPA cutover)
+app.include_router(bff_cli_auth_router)  # CLI device-authorization flow (/auth/cli/*)
 app.include_router(api_keys_router)
 app.include_router(session_search_router)  # GET /sessions/search; 404s while CONVERSATION_SEARCH_ENABLED is off
 app.include_router(sessions_router)
@@ -285,6 +297,7 @@ app.include_router(users_router)
 app.include_router(user_settings_router)
 app.include_router(models_router)
 app.include_router(costs_router)
+app.include_router(quota_requests_router)  # /quota/* quota requests; 404s while QUOTA_REQUESTS_ENABLED is off
 app.include_router(chat_router)  # Application-specific chat endpoints
 app.include_router(converse_router)  # API-key authenticated /chat/api-converse (Bedrock Converse)
 app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Phase 4, dormant until SPA cutover)

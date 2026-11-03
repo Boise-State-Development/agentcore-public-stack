@@ -79,6 +79,17 @@ get_base_url() {
 }
 
 # ---------------------------------------------------------------------------
+# app-api base URL as clients reach it: CloudFront's /api/* behavior. The ALB
+# admits only CloudFront's origin-facing ranges (albRestrictToCloudFront), so
+# a GitHub runner cannot call it directly.
+# ---------------------------------------------------------------------------
+get_api_base_url() {
+    local frontend_url
+    frontend_url=$(get_base_url) || return 1
+    echo "${frontend_url%/}/api"
+}
+
+# ---------------------------------------------------------------------------
 # Patch Cognito App Client callback URLs to include the dynamic CloudFront URL
 # ---------------------------------------------------------------------------
 # The nightly stack has no custom domain, so the CloudFront distribution URL
@@ -415,19 +426,16 @@ print(json.dumps(register_input))
         --region "${CDK_AWS_REGION}" 2>/dev/null || true
 
     # Verify the service is healthy by hitting the health endpoint
-    local alb_url
-    alb_url=$(aws ssm get-parameter \
-        --name "/${CDK_PROJECT_PREFIX}/network/alb-url" \
-        --query "Parameter.Value" --output text \
-        --region "${CDK_AWS_REGION}" 2>/dev/null || true)
+    local api_url
+    api_url=$(get_api_base_url || true)
 
-    if [ -n "${alb_url}" ] && [ "${alb_url}" != "None" ]; then
+    if [ -n "${api_url}" ] && [ "${api_url}" != "None" ]; then
         log_info "  Verifying App API health after CORS patch..."
         local retries=0
         local max_retries=20
         while [ ${retries} -lt ${max_retries} ]; do
             local status_code
-            status_code=$(curl -s -o /dev/null -w "%{http_code}" "${alb_url}/health" --max-time 10 || echo "000")
+            status_code=$(curl -s -o /dev/null -w "%{http_code}" "${api_url}/health" --max-time 10 || echo "000")
             if [ "${status_code}" = "200" ]; then
                 log_success "  App API healthy after CORS patch (HTTP 200)"
                 # Verify the new task is actually serving by checking the
@@ -436,7 +444,7 @@ print(json.dumps(register_input))
                 # to confirm the BFF env var patch is active.
                 local verify_redirect
                 verify_redirect=$(curl -s -o /dev/null -w "%{redirect_url}" \
-                    "${alb_url}/auth/login" --max-time 10 || true)
+                    "${api_url}/auth/login" --max-time 10 || true)
                 local verify_uri=""
                 if [ -n "${verify_redirect}" ] && echo "${verify_redirect}" | grep -qF "redirect_uri="; then
                     verify_uri=$(echo "${verify_redirect}" | python3 -c "
@@ -545,17 +553,14 @@ main() {
     # This must run BEFORE seed-e2e-users.sh because seed-e2e-users is
     # idempotent and will simply confirm the user that first-boot created.
     log_info "Completing first-boot via App API..."
-    local alb_url
-    alb_url=$(aws ssm get-parameter \
-        --name "/${CDK_PROJECT_PREFIX}/network/alb-url" \
-        --query "Parameter.Value" --output text \
-        --region "${CDK_AWS_REGION}" 2>/dev/null || true)
+    local api_url
+    api_url=$(get_api_base_url || true)
 
-    if [ -n "${alb_url}" ] && [ "${alb_url}" != "None" ]; then
+    if [ -n "${api_url}" ] && [ "${api_url}" != "None" ]; then
         local admin_email="${ADMIN_USERNAME}@e2e-nightly.local"
         local first_boot_status
         first_boot_status=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "${alb_url}/system/first-boot" \
+            -X POST "${api_url}/system/first-boot" \
             -H "Content-Type: application/json" \
             -d "{\"username\": \"${ADMIN_USERNAME}\", \"email\": \"${admin_email}\", \"password\": \"${ADMIN_PASSWORD}\"}" \
             --max-time 30)
@@ -568,7 +573,7 @@ main() {
             log_warn "First-boot returned HTTP ${first_boot_status} — tests may fail on login"
         fi
     else
-        log_warn "Could not resolve ALB URL — skipping first-boot completion"
+        log_warn "Could not resolve the app-api URL — skipping first-boot completion"
     fi
 
     # --- Seed E2E test users in Cognito ---
@@ -580,18 +585,17 @@ main() {
 
     # --- Verify BFF auth configuration ---
     # Smoke-test the BFF login redirect to confirm the patched env vars are
-    # active. We verify BOTH through the ALB directly AND through CloudFront.
-    # The CloudFront verification is critical: the Playwright tests go through
-    # CloudFront, so we must confirm the patched task is actually serving
-    # requests that arrive via CloudFront's /api/* behavior.
-    if [ -n "${alb_url}" ] && [ "${alb_url}" != "None" ]; then
+    # active: once as a single check, then in a retry loop that waits for the
+    # patched task to take over. Both go through CloudFront's /api/* behavior
+    # (the ALB admits nothing else), which is also the path Playwright takes.
+    if [ -n "${api_url}" ] && [ "${api_url}" != "None" ]; then
         local expected_callback="${base_url}/api/auth/callback"
 
-        # --- Verify via ALB (direct) ---
-        log_info "Verifying BFF auth login redirect (via ALB)..."
+        # --- Single check ---
+        log_info "Verifying BFF auth login redirect..."
         local login_redirect
         login_redirect=$(curl -s -o /dev/null -w "%{redirect_url}" \
-            "${alb_url}/auth/login" --max-time 10 || true)
+            "${api_url}/auth/login" --max-time 10 || true)
 
         if [ -n "${login_redirect}" ]; then
             log_info "  BFF /auth/login redirects to: ${login_redirect:0:120}..."
@@ -681,7 +685,7 @@ print(params.get('redirect_uri', [''])[0])
         log_info "Verifying BFF /auth/session endpoint is functional..."
         local session_status
         session_status=$(curl -s -o /dev/null -w "%{http_code}" \
-            "${alb_url}/auth/session" --max-time 10 || echo "000")
+            "${api_url}/auth/session" --max-time 10 || echo "000")
         if [ "${session_status}" = "401" ]; then
             log_info "  /auth/session returns 401 (expected — no cookie sent)"
         else
@@ -689,7 +693,7 @@ print(params.get('redirect_uri', [''])[0])
             log_error "  This suggests the BFF middleware or JWT validator is broken."
             # Fetch the response body for diagnostics
             local session_body
-            session_body=$(curl -s "${alb_url}/auth/session" --max-time 10 || true)
+            session_body=$(curl -s "${api_url}/auth/session" --max-time 10 || true)
             log_error "  Response body: ${session_body:0:200}"
         fi
     fi

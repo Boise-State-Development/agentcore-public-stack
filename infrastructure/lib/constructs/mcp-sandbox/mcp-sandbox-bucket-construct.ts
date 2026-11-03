@@ -8,7 +8,6 @@ import { Construct } from 'constructs';
 
 import {
   AppConfig,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
 } from '../../config';
@@ -59,7 +58,6 @@ export class McpSandboxBucketConstruct extends Construct {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
     });
   }
 

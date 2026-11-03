@@ -45,6 +45,11 @@ export interface Connector {
   oauthDiscoveryUrl?: string | null;
   authorizationServerMetadata?: Record<string, unknown> | null;
   /**
+   * Microsoft only — the Entra directory (tenant) ID or verified domain that
+   * consent is sent to. Needed for a single-tenant app registration.
+   */
+  tenantId?: string | null;
+  /**
    * Vendor-specific OAuth params merged into AgentCore Identity's
    * `customParameters` at request time. Examples: Google `hd=mycorp.com`
    * for Workspace domain restriction, `prompt=consent` for stricter UX.
@@ -100,6 +105,8 @@ export interface ConnectorCreateRequest {
   iconData?: string;
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
+  /** Microsoft only; omit to use AgentCore's vendor default. */
+  tenantId?: string;
   customParameters?: Record<string, string>;
   /** File-source adapter key; omit when the connector is not a file source. */
   fileSourceAdapterId?: string;
@@ -126,6 +133,11 @@ export interface ConnectorUpdateRequest {
   iconData?: string;
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
+  /**
+   * Microsoft only. `""` clears the tenant; `undefined` leaves it alone. A
+   * real change must ride a credential rotation, like a discovery change.
+   */
+  tenantId?: string;
   customParameters?: Record<string, string>;
   /**
    * `""` clears the file-source mapping (the connector stops being a file

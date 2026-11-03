@@ -30,6 +30,12 @@ catalog:
    latency budget in docs/specs/admin-always-on-tools.md §4.1, and a
    separate cache here would spend exactly what that section refuses to.
 
+5. **Local-tool connector snapshot** (`get_local_tool_oauth_providers`).
+   `{tool_id: provider_id}` for first-party tools an admin bound to a user
+   OAuth connector through the row's `requiresOauthProvider`. Same single
+   read; what the inference route closes the Zoom / Google Calendar /
+   GitHub tool families over.
+
 Reads are TTL-cached so the per-turn overhead is bounded to at most
 one DynamoDB read per cache key per TTL window, per process. Admin
 routes call `invalidate(tool_id)` after a write so same-process
@@ -43,7 +49,7 @@ import asyncio
 import hashlib
 import logging
 import time
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 from apis.shared.timestamps import to_iso
 from apis.shared.tools.models import is_disabled_status
 from apis.shared.tools.scoped_ids import SCOPE_DELIMITER, base_tool_id, base_tool_ids
@@ -87,6 +93,14 @@ _system_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 # extra DynamoDB read.
 _disabled_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 
+# Single-slot snapshot of ({local_tool_id: oauth_provider_id}, monotonic_fetched_at).
+# The connector an admin bound to a first-party (``protocol == local``) tool via
+# the row's `requiresOauthProvider` — what the inference route needs to build
+# the Zoom / Google Calendar / GitHub tool families
+# (``agents/local_tools/meeting_tasks.py``). Filled by the same catalog pass as
+# the id snapshots, so reading it on a turn costs no DynamoDB round trip.
+_local_oauth_providers_cache: List[Optional[Tuple[Mapping[str, str], float]]] = [None]
+
 _TTL_SECONDS = 10.0
 
 
@@ -97,6 +111,7 @@ def _reset_for_tests() -> None:
     _always_on_tool_ids_cache[0] = None
     _system_tool_ids_cache[0] = None
     _disabled_tool_ids_cache[0] = None
+    _local_oauth_providers_cache[0] = None
 
 
 async def _fetch_updated_at(tool_id: str) -> Optional[str]:
@@ -237,6 +252,22 @@ async def get_disabled_tool_ids() -> FrozenSet[str]:
     return await _get_snapshot(_disabled_tool_ids_cache, "disabled")
 
 
+async def get_local_tool_oauth_providers() -> Mapping[str, str]:
+    """``{tool_id: oauth_provider_id}`` for first-party tools bound to a connector.
+
+    A ``protocol == local`` row whose admin set `requiresOauthProvider` names
+    the connector its tool family calls the vendor API with
+    (``agents/local_tools/meeting_tasks.py``). The route builds the family
+    with that id closed over; the consent hook reads the same id back off the
+    tool to warm the token before the call.
+
+    Same single catalog read, TTL and never-raise contract as
+    `get_all_tool_ids`: a read failure yields the last-known mapping, or an
+    empty one, and the tools then explain "no connector configured".
+    """
+    return await _get_snapshot(_local_oauth_providers_cache, "local-oauth")
+
+
 async def drop_disabled_tools(tool_ids: Optional[List[str]]) -> Optional[List[str]]:
     """``tool_ids`` without any tool whose catalog status is `disabled`.
 
@@ -290,15 +321,13 @@ def _always_on_ids_for(tool) -> List[str]:
     return ids
 
 
-async def _get_snapshot(
-    slot: List[Optional[Tuple[FrozenSet[str], float]]], which: str
-) -> FrozenSet[str]:
-    """Serve one id snapshot, refreshing all three from a single catalog read.
+async def _get_snapshot(slot: List[Optional[Tuple[Any, float]]], which: str) -> Any:
+    """Serve one catalog snapshot, refreshing every slot from a single catalog read.
 
-    `list_tools()` already carries `isPublic` and `alwaysOn`, so one read
-    fills the all-ids, public-ids and always-on slots together — a third
-    of the DynamoDB traffic of three independent caches, and the sets can
-    never disagree about the catalog they were derived from.
+    `list_tools()` already carries `isPublic`, `alwaysOn`, `system`, `status`
+    and `requiresOauthProvider`, so one read fills every slot together — a
+    fraction of the DynamoDB traffic of independent caches, and the snapshots
+    can never disagree about the catalog they were derived from.
     """
     now = time.monotonic()
     cached = slot[0]
@@ -311,8 +340,10 @@ async def _get_snapshot(
         repo = get_tool_catalog_repository()
         tools = await repo.list_tools()
     except Exception:
-        logger.exception("Failed to list tools for the %s-ids catalog snapshot", which)
-        return cached[0] if cached is not None else frozenset()
+        logger.exception("Failed to list tools for the %s catalog snapshot", which)
+        if cached is not None:
+            return cached[0]
+        return {} if slot is _local_oauth_providers_cache else frozenset()
 
     _all_tool_ids_cache[0] = (frozenset(t.tool_id for t in tools), now)
     _public_tool_ids_cache[0] = (
@@ -349,7 +380,25 @@ async def _get_snapshot(
         frozenset(t.tool_id for t in tools if is_disabled_status(getattr(t, "status", None))),
         now,
     )
+    # First-party tools bound to a user OAuth connector. Protocol-filtered so
+    # an MCP server's connector (resolved through its MCPClient) never lands
+    # here; the consent hook would otherwise see one tool with two providers.
+    _local_oauth_providers_cache[0] = (
+        {
+            t.tool_id: provider
+            for t in tools
+            if _is_local_protocol(t)
+            and (provider := (getattr(t, "requires_oauth_provider", None) or "").strip())
+        },
+        now,
+    )
     return slot[0][0]  # type: ignore[index]
+
+
+def _is_local_protocol(tool) -> bool:
+    """Whether a catalog row is a first-party (``local``) tool (enum or bare string)."""
+    protocol = getattr(tool, "protocol", None)
+    return getattr(protocol, "value", protocol) == "local"
 
 
 def _is_active_status(tool) -> bool:
@@ -381,3 +430,4 @@ def invalidate(tool_id: Optional[str] = None) -> None:
     _always_on_tool_ids_cache[0] = None
     _system_tool_ids_cache[0] = None
     _disabled_tool_ids_cache[0] = None
+    _local_oauth_providers_cache[0] = None
