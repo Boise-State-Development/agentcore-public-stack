@@ -22,6 +22,7 @@ describe('FEATURES', () => {
     expect(environment.features.sessionRewind).toBe(false);
     expect(environment.features.sessionFork).toBe(false);
     expect(environment.features.quotaRequests).toBe(false);
+    expect(environment.features.projectFileReadiness).toBe(false);
     expect(environment.features.awsLimits).toBe(false);
   });
 

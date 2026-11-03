@@ -1278,6 +1278,33 @@ def web_search_default_max_results_enabled() -> bool:
     )
 
 
+def project_file_readiness_enabled() -> bool:
+    """Whether a project turn tells the model which project files are not ready.
+
+    On, a Shared Project harness turn whose files include any that are still
+    being prepared (``provisioning`` → ``embedding``) or that ``failed`` gets a
+    short ``<project_files_status>`` note in the user message
+    (``apis.shared.assistants.kb_readiness``). Without it the model sees nothing
+    for those files, because retrieval and full-context both skip a document
+    until it is ``complete``, and answers as though the project had no such
+    file. A turn whose files are all ready is byte-for-byte unchanged. The note
+    rides the persisted user message like ``<project_member>``, never the
+    system prompt or ``toolConfig``, so no cached prefix moves.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.projectFileReadiness.enabled``. The SPA's matching switch,
+    ``features.projectFileReadiness``, shows the readiness strip above a
+    project chat's composer.
+
+    A **feature switch** once finished: what the assistant says about files it
+    cannot read yet, and whether the chat shows their progress, is a product
+    choice a deployment may make the other way.
+    """
+    return os.environ.get("PROJECT_FILE_READINESS_ENABLED", "").strip().lower() == "true"
+
+
 def document_extract_enabled() -> bool:
     """Whether a named field set can be run over a document as typed rows
     (``docs/specs/structured-extraction.md``).

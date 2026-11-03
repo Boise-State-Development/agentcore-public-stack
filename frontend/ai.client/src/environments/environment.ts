@@ -27,6 +27,7 @@ export const environment = {
         sessionRewind: false,
         sessionFork: false,
         quotaRequests: false,
+        projectFileReadiness: false,
         awsLimits: false,
     } satisfies FeatureFlags,
 };

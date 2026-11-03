@@ -403,6 +403,11 @@ jobs:
       # so only "true" enables. Sets the flag on the AgentCore Runtime only, and
       # only while on; no resources.
       CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: ${{ vars.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED }}
+      # Project file readiness: a project turn names the files the model cannot
+      # see yet (still being prepared, or failed). In development, so only "true"
+      # enables. Sets the flag on the AgentCore Runtime only, and only while on;
+      # no resources. The SPA half is features.projectFileReadiness.
+      CDK_PROJECT_FILE_READINESS_ENABLED: ${{ vars.CDK_PROJECT_FILE_READINESS_ENABLED }}
       CDK_DOCUMENT_EXTRACT_ENABLED: ${{ vars.CDK_DOCUMENT_EXTRACT_ENABLED }}
       CDK_DOCUMENT_EXTRACT_MODEL_ID: ${{ vars.CDK_DOCUMENT_EXTRACT_MODEL_ID }}
       CDK_DOCUMENT_EXTRACT_CONCURRENCY: ${{ vars.CDK_DOCUMENT_EXTRACT_CONCURRENCY }}
