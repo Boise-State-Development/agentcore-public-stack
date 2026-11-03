@@ -121,12 +121,61 @@ class Handoff(BaseModel):
         return self.status
 
 
+class HandoffView(BaseModel):
+    """A row as the SPA reads it: the stored status with ``abandoned`` derived, and no storage-only fields.
+
+    Shared by app-api's ``GET /sessions/{id}/handoffs/{handoffId}`` and the ``handoffs`` replay on
+    ``GET /sessions/{id}/messages``, so the SPA parses one shape.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    handoff_id: str = Field(..., alias="handoffId")
+    session_id: str = Field(..., alias="sessionId")
+    kind: str
+    status: EffectiveHandoffStatus
+    agent_id: str = Field(..., alias="agentId")
+    agent_name: str = Field(..., alias="agentName")
+    request: str
+    source_message_index: int = Field(..., alias="sourceMessageIndex")
+    excerpt_tokens: int = Field(..., alias="excerptTokens")
+    turns_covered: Optional[TurnsCovered] = Field(None, alias="turnsCovered")
+    created_at: str = Field(..., alias="createdAt")
+    updated_at: str = Field(..., alias="updatedAt")
+    target_session_id: Optional[str] = Field(None, alias="targetSessionId")
+    status_line: Optional[str] = Field(None, alias="statusLine")
+    waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
+    stopped_reason: Optional[str] = Field(None, alias="stoppedReason")
+
+    @classmethod
+    def from_row(cls, row: Handoff) -> "HandoffView":
+        return cls(
+            handoff_id=row.handoff_id,
+            session_id=row.session_id,
+            kind=row.kind,
+            status=row.effective_status(),
+            agent_id=row.agent_id,
+            agent_name=row.agent_name,
+            request=row.request,
+            source_message_index=row.source_message_index,
+            excerpt_tokens=row.excerpt_tokens,
+            turns_covered=row.turns_covered,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            target_session_id=row.target_session_id,
+            status_line=row.status_line,
+            waiting_on=row.waiting_on,
+            stopped_reason=row.stopped_reason,
+        )
+
+
 __all__ = [
     "ABANDON_AFTER",
     "EffectiveHandoffStatus",
     "HANDOFF_DISPLAY_MAX_CHARS",
     "HANDOFF_REQUEST_MAX_CHARS",
     "Handoff",
+    "HandoffView",
     "HandoffKind",
     "HandoffStatus",
     "TRANSITIONS",

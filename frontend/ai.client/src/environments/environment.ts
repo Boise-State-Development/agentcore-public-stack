@@ -23,6 +23,7 @@ export const environment = {
         folderSync: true,
         sourceProvenance: false,
         documentExtract: false,
+        handoffs: false,
         sessionRewind: false,
         sessionFork: false,
         quotaRequests: false,

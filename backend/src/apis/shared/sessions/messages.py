@@ -565,6 +565,24 @@ async def get_messages_from_cloud(
                 user_id=user_id,
             )
 
+        async def fetch_handoffs():
+            """Handoff rows on a source and ``spawnedFrom`` on a target (handoffs spec §4.3).
+
+            Reads the raw META row: the ``SessionMetadata`` model behind
+            ``get_pending_interrupts`` doesn't carry ``spawnedFrom``. Nothing
+            at all while ``HANDOFFS_ENABLED`` is off.
+            """
+            from apis.shared.feature_flags import handoffs_enabled
+
+            if not handoffs_enabled():
+                return [], None
+            from apis.shared.handoff.replay import load_handoff_replay
+
+            from .metadata import load_session_meta
+
+            meta = await load_session_meta(session_id, user_id)
+            return await load_handoff_replay(session_id, user_id, meta.row)
+
         async def fetch_rewind():
             """Which stored messages a rewind has hidden (rewind spec §4).
 
@@ -588,6 +606,7 @@ async def get_messages_from_cloud(
             tool_summary_rows,
             source_provenance_rows,
             extraction_rows,
+            handoff_replay,
             rewind_state,
         ) = await asyncio.gather(
             fetch_messages(),
@@ -597,6 +616,7 @@ async def get_messages_from_cloud(
             fetch_tool_summaries(),
             fetch_source_provenance(),
             fetch_extractions(),
+            fetch_handoffs(),
             fetch_rewind(),
         )
 
@@ -722,6 +742,11 @@ async def get_messages_from_cloud(
         if not next_token:
             extractions = [row for row in extraction_rows if row.get("fields")]
 
+        # Handoffs: the rows a source thread shows after `sourceMessageIndex`,
+        # and the link a target's first bubble labels. First page only, like
+        # the replays above; the SPA places rows by index, not by page.
+        handoff_rows, spawned_from = handoff_replay if not next_token else ([], None)
+
         return MessagesListResponse(
             messages=message_responses,
             next_token=next_page_token,
@@ -730,6 +755,8 @@ async def get_messages_from_cloud(
             tool_summaries=tool_summaries,
             source_provenance=source_provenance,
             extractions=extractions,
+            handoffs=handoff_rows,
+            spawned_from=spawned_from,
             next_message_index=len(messages_raw) if rewind_state is not None else None,
         )
 

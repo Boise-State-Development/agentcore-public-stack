@@ -39,9 +39,10 @@ from apis.shared.handoff import (
     wrap_handoff_context,
 )
 from apis.shared.handoff.metrics import emit_handoff_metric
-from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, EffectiveHandoffStatus, WaitingOn
+from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_compaction, get_session_metadata
+from apis.shared.sessions.rewind import parse_message_index
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -78,48 +79,16 @@ class CreateHandoffResponse(BaseModel):
     context_block: str = Field(..., alias="contextBlock", description="The excerpt wrapped as the Agent receives it")
     prompt: str = Field(..., description="The full first message the Agent receives: contextBlock, then request")
     request: str
-
-
-class HandoffView(BaseModel):
-    """A row as the SPA reads it: the stored status, with ``abandoned`` derived."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    handoff_id: str = Field(..., alias="handoffId")
-    session_id: str = Field(..., alias="sessionId")
-    kind: str
-    status: EffectiveHandoffStatus
-    agent_id: str = Field(..., alias="agentId")
-    agent_name: str = Field(..., alias="agentName")
-    request: str
-    source_message_index: int = Field(..., alias="sourceMessageIndex")
-    excerpt_tokens: int = Field(..., alias="excerptTokens")
-    turns_covered: Optional[TurnsCovered] = Field(None, alias="turnsCovered")
-    created_at: str = Field(..., alias="createdAt")
-    updated_at: str = Field(..., alias="updatedAt")
-    target_session_id: Optional[str] = Field(None, alias="targetSessionId")
-    status_line: Optional[str] = Field(None, alias="statusLine")
-    waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
-
-    @classmethod
-    def from_row(cls, row: Handoff) -> "HandoffView":
-        return cls(
-            handoff_id=row.handoff_id,
-            session_id=row.session_id,
-            kind=row.kind,
-            status=row.effective_status(),
-            agent_id=row.agent_id,
-            agent_name=row.agent_name,
-            request=row.request,
-            source_message_index=row.source_message_index,
-            excerpt_tokens=row.excerpt_tokens,
-            turns_covered=row.turns_covered,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-            target_session_id=row.target_session_id,
-            status_line=row.status_line,
-            waiting_on=row.waiting_on,
-        )
+    source_message_index: int = Field(
+        ...,
+        alias="sourceMessageIndex",
+        description="Index of the message the handoff row will sit after; -1 for an empty conversation",
+    )
+    source_title: str = Field(
+        ...,
+        alias="sourceTitle",
+        description="The title the wrapper names. The review sheet re-wraps an edited card with it, as the server will",
+    )
 
 
 @router.post(
@@ -155,7 +124,11 @@ async def create_handoff(
         listing = await get_messages(session_id=session_id, user_id=user.user_id)
     except FileNotFoundError:
         listing = None
-    messages = [m.model_dump(by_alias=True, exclude_none=True) for m in (listing.messages if listing else [])]
+    visible = listing.messages if listing else []
+    messages = [m.model_dump(by_alias=True, exclude_none=True) for m in visible]
+    # The row anchors to the last message's id, never its position: a rewind
+    # hides messages without renumbering, so the two differ once one has run.
+    anchor = parse_message_index(session_id, visible[-1].id) if visible else None
     checkpoint, summary = await get_session_compaction(session_id, user.user_id)
 
     excerpt = render_excerpt(messages, compaction_checkpoint=checkpoint, compaction_summary=summary)
@@ -181,7 +154,7 @@ async def create_handoff(
         agent_name=agent.name or "",
         request=request,
         source_title=source_title,
-        source_message_index=len(messages) - 1,
+        source_message_index=anchor if anchor is not None else len(messages) - 1,
         excerpt_hash=context_hash(excerpt.text),
         excerpt_tokens=excerpt.estimated_tokens,
         turns_covered=turns,
@@ -204,6 +177,8 @@ async def create_handoff(
         context_block=context_block,
         prompt=build_handoff_message(context_block, request),
         request=request,
+        source_message_index=row.source_message_index,
+        source_title=source_title,
     )
 
 

@@ -39,7 +39,8 @@ import { ComposerProject } from './components/chat-input/chat-input.component';
 import { ConversationBindingService } from './services/session/conversation-binding.service';
 import { AgentService } from '../agents/services/agent.service';
 import { AgentMentionService } from '../agents/services/agent-mention.service';
-import { routeMention } from './services/chat/mention-routing';
+import { routeMention, stripMention } from './services/chat/mention-routing';
+import { AgentHandoffService } from './services/handoff/agent-handoff.service';
 import { ToastService } from '../services/toast/toast.service';
 import { Agent, AgentRunnability } from '../agents/models/agent.model';
 import { ToolService } from '../services/tool/tool.service';
@@ -98,6 +99,7 @@ export class ConversationPage implements OnDestroy {
   private agentMentionService = inject(AgentMentionService);
   private toast = inject(ToastService);
   private features = inject(FEATURES);
+  private agentHandoff = inject(AgentHandoffService);
   private binding = inject(ConversationBindingService);
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
@@ -811,6 +813,22 @@ export class ConversationPage implements OnDestroy {
       sessionId: sessionIdToUse,
       threadHasMessages: this.hasMessages(),
     });
+
+    // Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): with the feature on, a
+    // mid-thread mention sends nothing yet. The review sheet opens above the composer with
+    // the request and a context card from this thread; Send starts the Agent's conversation
+    // in the background and the user stays here.
+    if (routed.handedOff && message.mentionAgentId && this.features.handoffs && sessionIdToUse) {
+      void this.agentHandoff.open(sessionIdToUse, {
+        agentId: message.mentionAgentId,
+        agentName: this.mentionedAgentName(message.mentionAgentId),
+        request: stripMention(message.content, this.mentionedAgentName(message.mentionAgentId)),
+        fileUploadIds: message.fileUploadIds,
+        invokedSkillIds: message.invokedSkillIds,
+        folders: message.folders,
+      });
+      return;
+    }
 
     if (routed.handedOff && message.mentionAgentId) {
       this.toast.info(

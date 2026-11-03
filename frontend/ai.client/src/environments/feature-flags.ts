@@ -102,6 +102,17 @@ export interface FeatureFlags {
   documentExtract: boolean;
 
   /**
+   * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0): a mid-thread
+   * `@`-mention opens a review sheet instead of sending, then starts the Agent's
+   * conversation in the background while the user stays put, tracked by a
+   * handoff row in the thread. Off, a mid-thread mention sends straight into a
+   * new conversation, as before. Backend: HANDOFFS_ENABLED (app-api serves
+   * `/sessions/{id}/handoffs`; the Runtime takes `handoff_context`). In
+   * development, so `false` unless the environment has turned the backend on.
+   */
+  handoffs: boolean;
+
+  /**
    * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:

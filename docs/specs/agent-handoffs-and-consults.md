@@ -83,7 +83,7 @@ send-back is a row we can count. **§7 turns those counts into the go/no-go for 
 
 | Phase | What the user gets | New plumbing | Status |
 |---|---|---|---|
-| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | In progress: PR-0.1 and PR-0.2 built (§11) |
+| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | In progress: PR-0.1–0.3 built (§11) |
 | **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8) | Proposed |
 | **0c — Suggested handoffs** | The model can offer a chip ("Hand off to Rubric Builder →") without stopping its turn; Start opens the same review sheet | `suggest_handoff` tool, `handoff_suggested` SSE event | Proposed, opt-in |
 | **Gate** | — | — | §7 |
@@ -1465,6 +1465,27 @@ has started", and the only one that spends money while nobody is watching.
 - **PR-0.3 — SPA handoff.** A mid-thread mention opens the review sheet (request, context card, full-prompt
   preview); a no-navigate send; the handoff row as a linked card with title and live status line, live and replayed; completion and needs-input toasts;
   the card on sent bubbles; the unload guard. Verify interrupt-service scoping (§4.3) here.
+  *Built.* Notes for the PRs that follow:
+  - **Interrupt scoping, settled for 0a:** tool approvals, questions and browser sign-ins were already filtered by
+    session in the message list. OAuth was not: a background target's `oauth_required` anchors to a message id that
+    is never in the source's list, so it rendered in the source's tail as though the source were waiting. The list
+    now filters it by session (a list bound to no session keeps the old behaviour). `session.page` still calls
+    `oauthConsent.clear()` on every route change, which drops a background target's live consent request until its
+    `GET /messages` re-hydrates it; 0.3c's relay has to deal with that.
+  - **SPA:** `HandoffStateService` (rows, `spawnedFrom`, reviews; seeded by `MessageMapService`) and
+    `AgentHandoffService` (open, edit, cancel, send, status refresh, toasts, unload guard) are split so hydration
+    has no injection cycle through `ChatRequestService`. `ChatRequestService.submitHandoffRequest` is the old
+    mention send with no `setViewedSession`, no navigation, no prewarmed id and no mode claim.
+  - **Preview parity** is pinned by `handoff-prompt.fixture.json`, generated from the Python and checked by
+    `test_handoff_prompt_fixture.py` and `handoff-prompt.spec.ts`. The create response gained `sourceTitle` and
+    `sourceMessageIndex` for it.
+  - **Replay:** `GET /messages` returns `handoffs` (sent ones only) and `spawnedFrom` (`{sessionId, handoffId,
+    sourceTitle, agentName}`), first page only, nothing while the flag is off. The target's first bubble shows
+    "Context from *{title}*" with the carried context one click away.
+  - **Status after a turn:** the row re-reads the server row when the target's stream ends. A row still `open`
+    means the Runtime never took it (refused before the stream: quota, an unavailable Agent; or never delivered: a
+    502): the row reads "Didn't start · open it to see why" instead of running forever.
+  - **Live in dev's SPA only** (`environment.development.ts`); local and prod stay off.
 - **PR-0.3b — Notifications.** The three `handoff_*` inbox kinds, written by inference-api after `done`; the scoped
   `PutItem` grant; the bell shown with `features.handoffs` and rendering the new kinds; read-state rules; browser
   notifications through the Notification API, with the in-context permission ask.

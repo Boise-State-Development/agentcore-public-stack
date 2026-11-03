@@ -147,6 +147,8 @@ def test_create_returns_the_card_and_the_exact_prompt(make_client, store):
     assert data["contextBlock"] == wrap_handoff_context(excerpt, "Course planning")
     assert data["prompt"] == build_handoff_message(data["contextBlock"], "draft a rubric for this")
     assert data["request"] == "draft a rubric for this"
+    assert data["sourceTitle"] == "Course planning"
+    assert data["sourceMessageIndex"] == 3
     assert data["excerptHash"] == context_hash(excerpt)
     assert data["turnsCovered"] == {"first": 1, "last": 2, "of": 2, "omitted": 0}
     assert data["excerptTokens"] > 0
@@ -158,6 +160,15 @@ def test_create_returns_the_card_and_the_exact_prompt(make_client, store):
     assert row.target_session_id is None
     assert row.excerpt_hash == data["excerptHash"]
 
+
+def test_create_anchors_to_the_last_messages_id_after_a_rewind(make_client, world):
+    """A rewind hides messages without renumbering, so the anchor is an id's index, not a count."""
+    world.messages = [*CONVERSATION[:2], _message(6, "user", "start over: plan BIO 102"), _message(7, "assistant", "Plan.")]
+
+    resp = _create(make_client())
+
+    assert resp.status_code == 201
+    assert resp.json()["sourceMessageIndex"] == 7
 
 def test_create_uses_the_compaction_summary(make_client, world):
     world.compaction = (2, "We planned BIO 101 week by week.")

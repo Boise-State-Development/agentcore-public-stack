@@ -24,6 +24,8 @@ export const environment = {
         folderSync: true,
         sourceProvenance: true,
         documentExtract: false,
+        // The `development` GitHub environment sets CDK_HANDOFFS_ENABLED=true.
+        handoffs: true,
         // The `development` GitHub environment sets CDK_SESSION_REWIND_ENABLED=true
         // and CDK_SESSION_FORK_ENABLED=true.
         sessionRewind: true,

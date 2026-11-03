@@ -75,6 +75,9 @@ COPY backend/src/apis/shared/tool_summaries/ ${LAMBDA_TASK_ROOT}/apis/shared/too
 COPY backend/src/apis/shared/conversation_archive/ ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/
 COPY backend/src/apis/shared/mcp_apps/ui_resource_store.py ${LAMBDA_TASK_ROOT}/apis/shared/mcp_apps/ui_resource_store.py
 COPY backend/src/apis/shared/files/provenance_store.py ${LAMBDA_TASK_ROOT}/apis/shared/files/provenance_store.py
+# Handoff rows and a target's link, which `messages.py` replays the same way
+# (handoffs spec §4.3). Inert while HANDOFFS_ENABLED is off, but reachable.
+COPY backend/src/apis/shared/handoff/ ${LAMBDA_TASK_ROOT}/apis/shared/handoff/
 # Structured extraction's stored rows, replayed by `messages.py` for the same
 # reason the provenance store above is: a scheduled run reads a session's
 # messages, and that module imports the store at module level.

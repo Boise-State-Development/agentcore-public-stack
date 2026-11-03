@@ -368,6 +368,82 @@ export class ChatRequestService implements OnDestroy {
   }
 
   /**
+   * Start a handoff's target conversation **in the background**
+   * (docs/specs/agent-handoffs-and-consults.md §4.2, step 3).
+   *
+   * The same turn a mid-thread `@`-mention used to send into a new conversation,
+   * built by the same `buildChatRequestObject`, so the Agent runs exactly as
+   * before. Three differences, all so the user stays in the thread they were in:
+   *  - No `setViewedSession` and no navigation. The target streams as a second
+   *    session; the chat stack is keyed by session, so it never touches the
+   *    viewed thread, and `setChatLoading` marks it unread when it finishes.
+   *  - A fresh id, never the page's prewarmed one (`claimNewConversationId`),
+   *    which belongs to the next conversation the user starts from the home page.
+   *  - No conversation-mode claim (`bindToSession`): the user didn't pick a mode
+   *    for the target, the Agent's bindings decide.
+   *
+   * It is registered in the session list at once, so it appears at the top of the
+   * sidenav with the streaming dot. `handoff_context` carries the card as sent;
+   * the server re-caps it, accepts the handoff once and prepends it wrapped.
+   */
+  async submitHandoffRequest(options: {
+    targetSessionId: string;
+    agentId: string;
+    message: string;
+    handoffId: string;
+    /** The context card as sent; absent when the user removed it. */
+    contextText?: string;
+    fileUploadIds?: string[];
+    invokedSkillIds?: string[];
+    folders?: FolderAttachmentData[];
+  }): Promise<void> {
+    const { targetSessionId, agentId, message, handoffId, contextText, fileUploadIds, invokedSkillIds, folders } =
+      options;
+
+    this.startTurnTiming(targetSessionId, true);
+    this.sessionPrewarm.noteTurn(targetSessionId);
+
+    const user = this.userService.getUser();
+    this.sessionService.addSessionToCache(targetSessionId, user?.user_id || 'anonymous');
+    this.chatStateService.setChatLoading(targetSessionId, true);
+
+    const fileAttachments = this.getFileAttachments(fileUploadIds);
+    const userMessage = this.messageMapService.addUserMessage(targetSessionId, message, fileAttachments, folders);
+    this.messageMapService.startStreaming(targetSessionId);
+
+    try {
+      await this.awaitSelectionSources();
+      const requestObject = this.buildChatRequestObject(
+        message,
+        targetSessionId,
+        fileUploadIds,
+        agentId,
+        undefined,
+        invokedSkillIds,
+        (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
+      );
+      requestObject['handoff_context'] =
+        contextText === undefined ? { handoffId } : { handoffId, text: contextText };
+      this.turnTiming.describe(targetSessionId, {
+        modelId: this.modelService.getSelectedModel()?.modelId ?? null,
+        hasAgent: true,
+        hasFiles: Boolean(fileUploadIds?.length),
+      });
+      await this.chatHttpService.sendChatRequest(requestObject);
+    } catch (error) {
+      this.turnTiming.abandon(targetSessionId);
+      this.chatStateService.setChatLoading(targetSessionId, false);
+      this.messageMapService.endStreaming(targetSessionId);
+      if (error instanceof StreamNotStartedError) {
+        this.markNotSent(targetSessionId, userMessage.id, error.reason, () =>
+          this.submitHandoffRequest(options),
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
    * "Continue" after a max_tokens truncation. Modeled on the OAuth/tool
    * resume flow, NOT on submitChatRequest: no user message is added (no
    * visible bubble, no new user turn) so the model resumes the truncated
