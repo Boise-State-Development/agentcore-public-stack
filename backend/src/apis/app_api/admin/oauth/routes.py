@@ -214,6 +214,7 @@ async def create_provider(
             client_secret=provider_data.client_secret,
             discovery_url=provider_data.oauth_discovery_url,
             authorization_server_metadata=provider_data.authorization_server_metadata,
+            tenant_id=provider_data.tenant_id,
         )
     except CredentialProviderConflictError:
         # We already verified the DB has no record for this provider_id
@@ -300,15 +301,28 @@ async def update_provider(
         and updates.authorization_server_metadata
         != existing.authorization_server_metadata
     )
+    # Same rule for the Entra tenant: the edit form round-trips it, so only
+    # a different value (`""` clearing a set tenant counts) is a change.
+    if updates.tenant_id and existing.provider_type != OAuthProviderType.MICROSOFT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "tenant_id is only valid for microsoft providers; "
+                f"'{provider_id}' is {existing.provider_type.value}"
+            ),
+        )
+    changing_tenant = updates.tenant_id is not None and (
+        updates.tenant_id or None
+    ) != existing.tenant_id
 
     credential_info: CredentialProviderInfo | None = None
-    if rotating_credentials or changing_discovery:
+    if rotating_credentials or changing_discovery or changing_tenant:
         if not rotating_credentials:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "Discovery config can only be updated together with a "
-                    "credential rotation (client_id + client_secret)."
+                    "Discovery config and tenant ID can only be updated together "
+                    "with a credential rotation (client_id + client_secret)."
                 ),
             )
         discovery_url = (
@@ -321,6 +335,11 @@ async def update_provider(
             if updates.authorization_server_metadata is not None
             else existing.authorization_server_metadata
         )
+        tenant_id = (
+            (updates.tenant_id or None)
+            if updates.tenant_id is not None
+            else existing.tenant_id
+        )
         try:
             credential_info = registrar.update_credential_provider(
                 provider_id=provider_id,
@@ -329,6 +348,7 @@ async def update_provider(
                 client_secret=updates.client_secret,
                 discovery_url=discovery_url,
                 authorization_server_metadata=authorization_server_metadata,
+                tenant_id=tenant_id,
                 fallback_arn=existing.credential_provider_arn,
             )
         except CredentialProviderNotFoundError:
@@ -466,6 +486,7 @@ def _build_provider_from_create(
         callback_url=credential_info.callback_url,
         oauth_discovery_url=data.oauth_discovery_url,
         authorization_server_metadata=data.authorization_server_metadata,
+        tenant_id=data.tenant_id,
         # `{}` from the form means "explicitly no extras" — store as None
         # so absent/empty are indistinguishable in DynamoDB and `from_*`
         # lookups round-trip identically.

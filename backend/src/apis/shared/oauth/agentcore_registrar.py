@@ -129,6 +129,7 @@ class AgentCoreRegistrar:
         client_secret: str,
         discovery_url: Optional[str] = None,
         authorization_server_metadata: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[str] = None,
     ) -> CredentialProviderInfo:
         """Register a new OAuth2 credential provider in AgentCore Identity.
 
@@ -146,6 +147,7 @@ class AgentCoreRegistrar:
             client_secret=client_secret,
             discovery_url=discovery_url,
             authorization_server_metadata=authorization_server_metadata,
+            tenant_id=tenant_id,
         )
 
         try:
@@ -176,6 +178,7 @@ class AgentCoreRegistrar:
         client_secret: str,
         discovery_url: Optional[str] = None,
         authorization_server_metadata: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[str] = None,
         fallback_arn: Optional[str] = None,
     ) -> CredentialProviderInfo:
         """Replace the AgentCore provider's full config.
@@ -204,6 +207,7 @@ class AgentCoreRegistrar:
             client_secret=client_secret,
             discovery_url=discovery_url,
             authorization_server_metadata=authorization_server_metadata,
+            tenant_id=tenant_id,
         )
 
         try:
@@ -267,6 +271,7 @@ class AgentCoreRegistrar:
         client_secret: str,
         discovery_url: Optional[str],
         authorization_server_metadata: Optional[Dict[str, Any]],
+        tenant_id: Optional[str] = None,
     ) -> tuple[str, Dict[str, Any]]:
         """Return `(vendor, oauth2ProviderConfigInput)` for AgentCore."""
         try:
@@ -290,6 +295,14 @@ class AgentCoreRegistrar:
                 f"Discovery config is only valid for CustomOauth2; "
                 f"provider_type={provider_type} ignores it"
             )
+
+        if tenant_id:
+            if config_key != "microsoftOauth2ProviderConfig":
+                raise ValueError(
+                    f"tenant_id is only valid for Microsoft; "
+                    f"provider_type={provider_type} ignores it"
+                )
+            vendor_config["tenantId"] = tenant_id
 
         return vendor, {config_key: vendor_config}
 

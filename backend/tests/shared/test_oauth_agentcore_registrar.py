@@ -202,6 +202,62 @@ class TestCreateCredentialProvider:
                 client_secret="sec",
             )
 
+    def test_microsoft_sends_tenant_id(self, registrar, boto_client):
+        boto_client.create_oauth2_credential_provider.return_value = _create_response()
+
+        registrar.create_credential_provider(
+            provider_id="azure-devops",
+            provider_type=OAuthProviderType.MICROSOFT,
+            client_id="cid",
+            client_secret="sec",
+            tenant_id="11111111-2222-3333-4444-555555555555",
+        )
+
+        call = boto_client.create_oauth2_credential_provider.call_args.kwargs
+        assert call["oauth2ProviderConfigInput"] == {
+            "microsoftOauth2ProviderConfig": {
+                "clientId": "cid",
+                "clientSecret": "sec",
+                "tenantId": "11111111-2222-3333-4444-555555555555",
+            }
+        }
+
+    def test_microsoft_without_tenant_omits_the_key(self, registrar, boto_client):
+        """No tenant leaves AgentCore's vendor default — never an empty string."""
+        boto_client.create_oauth2_credential_provider.return_value = _create_response()
+
+        registrar.create_credential_provider(
+            provider_id="p",
+            provider_type=OAuthProviderType.MICROSOFT,
+            client_id="cid",
+            client_secret="sec",
+        )
+
+        config = boto_client.create_oauth2_credential_provider.call_args.kwargs[
+            "oauth2ProviderConfigInput"
+        ]["microsoftOauth2ProviderConfig"]
+        assert "tenantId" not in config
+
+    @pytest.mark.parametrize(
+        "provider_type",
+        [OAuthProviderType.GOOGLE, OAuthProviderType.GITHUB, OAuthProviderType.CUSTOM],
+    )
+    def test_non_microsoft_rejects_tenant_id(self, registrar, boto_client, provider_type):
+        with pytest.raises(ValueError, match="tenant_id"):
+            registrar.create_credential_provider(
+                provider_id="p",
+                provider_type=provider_type,
+                client_id="cid",
+                client_secret="sec",
+                discovery_url=(
+                    "https://idp.example.edu/.well-known/openid-configuration"
+                    if provider_type == OAuthProviderType.CUSTOM
+                    else None
+                ),
+                tenant_id="contoso.onmicrosoft.com",
+            )
+        boto_client.create_oauth2_credential_provider.assert_not_called()
+
     def test_surfaces_client_id_when_echoed(self, registrar, boto_client):
         boto_client.create_oauth2_credential_provider.return_value = _create_response(
             config_output={"googleOauth2ProviderConfig": {"clientId": "cid"}},
@@ -234,6 +290,22 @@ class TestUpdateCredentialProvider:
             "clientId": "new-cid",
             "clientSecret": "new-sec",
         }
+
+    def test_resends_microsoft_tenant_id(self, registrar, boto_client):
+        boto_client.update_oauth2_credential_provider.return_value = _create_response()
+
+        registrar.update_credential_provider(
+            provider_id="p",
+            provider_type=OAuthProviderType.MICROSOFT,
+            client_id="new-cid",
+            client_secret="new-sec",
+            tenant_id="contoso.onmicrosoft.com",
+        )
+
+        call = boto_client.update_oauth2_credential_provider.call_args.kwargs
+        assert call["oauth2ProviderConfigInput"]["microsoftOauth2ProviderConfig"][
+            "tenantId"
+        ] == "contoso.onmicrosoft.com"
 
     def test_not_found_maps_to_domain_error(self, registrar, boto_client):
         boto_client.update_oauth2_credential_provider.side_effect = _client_error(
