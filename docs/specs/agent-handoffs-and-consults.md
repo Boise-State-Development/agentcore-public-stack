@@ -656,6 +656,13 @@ for byte, up to a new final message.
   write happens, and hooks don't run. The source's next real turn has the same `historyHash` lineage it would have
   had. `apply_pending_compaction` is **not** run: the brief reads the history the cache holds, and a pending cut
   stays pending for the next real turn.
+- **A rewind applies to the copy first.** On a warm agent, a rewind is cut from the live list only at the head of the
+  next turn (`TurnBasedSessionManager.apply_rewind`). A user who rewinds and then hands off before sending anything
+  has a live list that still holds the hidden messages, and a brief over it would describe what they just took back.
+  So the brief reads the session row's rewind state (`RewindState.from_row`) and cuts **its copy** to the length
+  `apply_rewind` would cut the live list to, leaving the live list, the manager's rewind epoch and the stashed row
+  alone for the next real turn. The retained messages are the bytes the earlier turns sent, so the read still hits
+  up to the cut. The excerpt never had this gap: it reads `GET /messages`, which leaves hidden messages out.
 - **Tools stay offered but aren't used.** Dropping tools or setting `tool_choice` to `none` would invalidate the
   cache, so the request keeps them and the instruction says not to call them. A response with a `toolUse` block
   keeps its text if it has some, and otherwise falls back to the excerpt. Nothing is ever executed.
@@ -673,10 +680,28 @@ for byte, up to a new final message.
 **Bookkeeping on the source.**
 - **The lease.** The brief takes the source's single-flight lease, like a turn: a brief can't run beside a turn on the
   same history, and a source that is streaming answers 409, which falls back to the excerpt.
+- **The user's own turn wins the lease.** The other direction matters more: the sheet sits above the source's
+  composer, and a send there while the brief holds the lease would 409 and show "Already responding" for a turn that
+  isn't one. The SPA started the brief, so it knows one is in flight: a send in the source first stops the brief
+  (the same cooperative cancel as Stop, which the brief checks between stream chunks), waits for the brief's stream to
+  close, then sends. The sheet falls back to the excerpt with its one-line note (`HandoffBriefFallback` reason
+  `preempted`). The brief is never shown as a streaming turn in the source, so the composer doesn't offer mid-turn
+  steering against it. Verify first that the lease is released before the brief's stream closes, or the send can
+  still lose the race.
 - **Quota.** Checked like a turn. Over quota falls back to the excerpt; the brief never streams the quota message.
 - **Metering.** One `C#` cost row on the **source** session, with `callKind: "handoff_brief"` and the usual
   `cacheStatus` and fingerprint hashes. Its `toolConfigHash` and `systemPromptHash` must equal the source's last
   turn's; that is the test that the cache was reused (§10). It counts against the user's quota.
+  - **No `messageId`.** A turn's `C#` rows carry the index of the assistant message they produced, and readers join
+    on it: the feedback join (`admin/costs/service.py`) matches `F#` rows to `C#` rows on it, and the fleet view
+    (`admin/feedback/fleet.py`) takes the *last* `C#` row carrying a `messageId` as that turn's row. A brief
+    produces no message. If its row carried the
+    source's last index, the user's thumb on that answer would attach to the brief. `callKind` is new on `C#` rows:
+    a row without it is a turn's, and a reader that counts turns or calls per turn skips the rest.
+  - **Classification needs no change.** A cold brief is `miss_ttl_expired`, which `compute_wasted_usd` prices at zero
+    and `AvoidableMiss` doesn't count. A warm brief that misses wrote a prefix a live entry already held (the agent
+    resolved differently), so `miss_avoidable` and the alarm are the right answer. The row records the source's
+    `rewindEpoch` like a turn's, so the `rewound` flag lands on whichever call is first after a rewind.
 - **The HANDOFF# row** records `briefHash`, `briefTokens` and `briefCacheStatus` at the end. Acceptance (PR-0.2)
   compares the sent card's hash with `briefHash` when there is one, else `excerptHash`, so `contextEdited` still
   means "the user changed what we wrote".
@@ -786,8 +811,8 @@ EMF, under the existing PromptCache namespace so the cost dashboard can show it:
 - `HandoffSent` / `HandoffCancelled` / `HandoffAbandoned` by `kind`
 - `HandoffPromptPreviewed`: the review sheet's full-prompt preview was opened
 - `HandoffBriefWritten` by `briefCacheStatus` (`hit`, `partial_miss`, `miss`), with `HandoffBriefMs` and
-  `HandoffBriefTokens`; `HandoffBriefFallback` by reason (`flag_off`, `busy`, `quota`, `timeout`, `error`,
-  `tool_use_only`, `short_source`). A high `miss` share decides §13's cold-cache question
+  `HandoffBriefTokens`; `HandoffBriefFallback` by reason (`flag_off`, `busy`, `preempted`, `quota`, `timeout`,
+  `error`, `tool_use_only`, `short_source`). A high `miss` share decides §13's cold-cache question
 - `HandoffContextEdited` / `HandoffContextRemoved`
 - `HandoffCompleted` / `HandoffNeedsInput` / `HandoffStopped`
 - `HandoffOpenedWhileRunning`: the user opened the target before it finished
@@ -1452,6 +1477,12 @@ has started", and the only one that spends money while nobody is watching.
   - Nothing persists: no session-manager write, no `MessageAddedEvent`, `agent.messages` unchanged by identity and
     content, compaction state unchanged, an interrupted-turn marker still set afterwards.
   - The lease is taken and released; a held lease answers 409 and the SPA shows the excerpt.
+  - A send in the source during a brief stops the brief and goes through without a 409; the sheet shows the excerpt
+    and records `preempted`.
+  - After a rewind with no turn since, the brief's copy ends at the cut and the live list is untouched (same length,
+    same identity, the manager's rewind epoch unchanged), and the next real turn still applies the rewind.
+  - The brief's `C#` row has `callKind: "handoff_brief"` and no `messageId`; the feedback join and the fleet view
+    still match a thumb on the source's last answer to that turn's row.
   - A `toolUse`-only response, a timeout, a refusal and over-quota each fall back, with the reason recorded.
   - On dev: a brief right after a source turn records `cacheStatus` `hit` with that turn's `toolConfigHash` and
     `systemPromptHash`, a `cacheReadInputTokens` near the source's history size, and the source's next turn is still
@@ -1631,8 +1662,9 @@ has started", and the only one that spends money while nobody is watching.
      lease as a turn, the skipped phases listed in §4.5.1, the non-persisting `stream_messages` call over a copy of
      the history, the fallbacks, the `C#` row with `callKind: "handoff_brief"`, and `briefHash` /
      `briefCacheStatus` on `HANDOFF#`. Settle the verify-firsts: the trailing-blocks and `tool_choice` arguments as
-     the event loop passes them, the per-call history projections (§4.5.1), and a history that ends on a user
-     message.
+     the event loop passes them, the per-call history projections (§4.5.1), a history that ends on a user
+     message, and that a stopped brief releases the lease before its stream closes. The brief cuts its copy to a
+     pending rewind, and its `C#` row carries no `messageId`.
   2. **SPA.** After `POST /handoffs` returns, stream the brief into the card ("Writing a brief…", then the text),
      keep the excerpt as the fallback with a one-line note when it is used, and send whichever the user ends up
      with. Acceptance compares against `briefHash`.
