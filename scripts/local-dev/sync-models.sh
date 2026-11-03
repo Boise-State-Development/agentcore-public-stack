@@ -13,7 +13,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="${REPO_ROOT}/backend/src/.env"
-CONFIG_FILE="${AGENTCORE_TUI_CONFIG:-${HOME}/.config/agentcore-tui/config.toml}"
+CONFIG_FILE="${APS_TUI_CONFIG:-${HOME}/.config/aps-tui/config.toml}"
 BASE_URL="${AGENTCORE_BASE_URL:-http://127.0.0.1:8000}"
 
 if [ ! -f "${ENV_FILE}" ]; then

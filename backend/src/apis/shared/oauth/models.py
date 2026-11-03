@@ -56,6 +56,34 @@ def validate_icon_data(value: Optional[str]) -> Optional[str]:
     return value
 
 
+# A Microsoft Entra tenant is named by its directory GUID or by one of its
+# verified domains (`contoso.onmicrosoft.com`). AgentCore places the value in
+# the authority URL, so anything else would only fail later, at consent time.
+_TENANT_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,126}[A-Za-z0-9])?$")
+
+
+def normalize_tenant_id(value: Optional[str]) -> Optional[str]:
+    """Strip and validate a Microsoft Entra tenant id.
+
+    Surrounding whitespace is removed because a pasted value with a stray
+    space names a different (nonexistent) tenant. `None` stays `None`; an
+    empty or blank string becomes `""`, which callers treat as "unset" on
+    create and "clear it" on update. Raises `ValueError` on anything that
+    is not a GUID or domain-shaped name.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    if not _TENANT_ID_RE.match(cleaned):
+        raise ValueError(
+            "tenant_id must be a Microsoft Entra directory (tenant) ID or a "
+            "verified domain such as contoso.onmicrosoft.com"
+        )
+    return cleaned
+
+
 class OAuthProviderType(str, Enum):
     """Supported OAuth provider types.
 
@@ -114,6 +142,11 @@ class OAuthProvider:
     # CANVAS; both are None for Google/Microsoft/GitHub.
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
+    # Microsoft vendor only — the Entra tenant AgentCore sends consent to.
+    # Needed for a single-tenant app registration (the Entra default); None
+    # leaves AgentCore's vendor default. Cached here because AgentCore's
+    # update API needs the full config re-sent on every credential rotation.
+    tenant_id: Optional[str] = None
     # Vendor-specific OAuth parameters forwarded verbatim into AgentCore
     # Identity's `customParameters` at request time. The delivered vendors
     # don't add these on their own, so a Google connector must set
@@ -163,6 +196,7 @@ class OAuthProvider:
             "callbackUrl": self.callback_url,
             "oauthDiscoveryUrl": self.oauth_discovery_url,
             "authorizationServerMetadata": self.authorization_server_metadata,
+            "tenantId": self.tenant_id,
             "customParameters": self.custom_parameters,
             "fileSourceAdapterId": self.file_source_adapter_id,
             "exportTargetAdapterId": self.export_target_adapter_id,
@@ -185,6 +219,7 @@ class OAuthProvider:
             callback_url=item.get("callbackUrl"),
             oauth_discovery_url=item.get("oauthDiscoveryUrl"),
             authorization_server_metadata=item.get("authorizationServerMetadata"),
+            tenant_id=item.get("tenantId"),
             custom_parameters=item.get("customParameters"),
             file_source_adapter_id=item.get("fileSourceAdapterId"),
             export_target_adapter_id=item.get("exportTargetAdapterId"),
@@ -222,6 +257,8 @@ class OAuthProviderCreate(BaseModel):
     icon_data: Optional[str] = None
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
+    # Microsoft only: the Entra directory (tenant) ID or verified domain.
+    tenant_id: Optional[str] = None
     custom_parameters: Optional[Dict[str, str]] = None
     # Adapter key that makes this connector a file source. Validated against
     # the adapter registry in the admin route.
@@ -258,6 +295,12 @@ class OAuthProviderCreate(BaseModel):
                 f"Discovery config is only valid for custom/canvas providers; "
                 f"provider_type={self.provider_type.value} does not accept it"
             )
+        self.tenant_id = normalize_tenant_id(self.tenant_id) or None
+        if self.tenant_id and self.provider_type != OAuthProviderType.MICROSOFT:
+            raise ValueError(
+                f"tenant_id is only valid for microsoft providers; "
+                f"provider_type={self.provider_type.value} does not accept it"
+            )
         self.icon_data = validate_icon_data(self.icon_data)
         return self
 
@@ -283,6 +326,10 @@ class OAuthProviderUpdate(BaseModel):
     icon_data: Optional[str] = None
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
+    # Microsoft only. `""` clears the tenant (back to AgentCore's vendor
+    # default); `None` leaves it unchanged. Like discovery config, a real
+    # change has to ride a credential rotation.
+    tenant_id: Optional[str] = None
     custom_parameters: Optional[Dict[str, str]] = None
     # `""` clears the file-source mapping (the connector stops being a file
     # source); a populated adapter key sets it; `None` leaves it unchanged.
@@ -302,6 +349,7 @@ class OAuthProviderUpdate(BaseModel):
             raise ValueError(
                 "oauth_discovery_url and authorization_server_metadata are mutually exclusive"
             )
+        self.tenant_id = normalize_tenant_id(self.tenant_id)
         if self.icon_data is not None:
             self.icon_data = validate_icon_data(self.icon_data)
         return self
@@ -322,6 +370,7 @@ class OAuthProviderResponse(BaseModel):
     callback_url: Optional[str] = None
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
+    tenant_id: Optional[str] = None
     custom_parameters: Optional[Dict[str, str]] = None
     file_source_adapter_id: Optional[str] = None
     export_target_adapter_id: Optional[str] = None
@@ -343,6 +392,7 @@ class OAuthProviderResponse(BaseModel):
             callback_url=provider.callback_url,
             oauth_discovery_url=provider.oauth_discovery_url,
             authorization_server_metadata=provider.authorization_server_metadata,
+            tenant_id=provider.tenant_id,
             custom_parameters=provider.custom_parameters,
             file_source_adapter_id=provider.file_source_adapter_id,
             export_target_adapter_id=provider.export_target_adapter_id,

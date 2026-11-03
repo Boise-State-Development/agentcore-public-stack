@@ -13,6 +13,7 @@ from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
     INJECTED_TOOL_IDS,
+    MEETING_TASKS_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
     SKILL_AUTHORING_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
@@ -74,6 +75,24 @@ class TestFilterToolsGateway:
         )
         assert local_tools == []
         assert set(gateway_ids) == {"gateway_wikipedia", "gateway_arxiv"}
+
+    def test_registered_gateway_id_without_prefix(self, tool_filter: ToolFilter, caplog):
+        """A Gateway catalog row may use any id (the admin form's Web Search
+        preset is ``agentcore_web_search``); once registered by protocol it
+        classifies as gateway in every entry point instead of being dropped
+        as unknown."""
+        tool_filter.set_gateway_tools(["agentcore_web_search"])
+        with caplog.at_level(logging.WARNING):
+            local_tools, gateway_ids = tool_filter.filter_tools(["agentcore_web_search"])
+            extended = tool_filter.filter_tools_extended(["agentcore_web_search::WebSearch"])
+        assert (local_tools, gateway_ids) == ([], ["agentcore_web_search"])
+        assert extended.gateway_tool_ids == ["agentcore_web_search::WebSearch"]
+        assert tool_filter.get_statistics(["agentcore_web_search"])["gateway_tools"] == 1
+        assert "not a known tool id" not in caplog.text
+
+    def test_unregistered_id_without_prefix_is_not_gateway(self, tool_filter: ToolFilter):
+        _, gateway_ids = tool_filter.filter_tools(["agentcore_web_search"])
+        assert gateway_ids == []
 
     def test_mixed_local_and_gateway(self, tool_filter: ToolFilter):
         local_tools, gateway_ids = tool_filter.filter_tools(
@@ -283,9 +302,12 @@ class TestInjectedToolIdsContract:
             | POWERPOINT_PRESENTATION_TOOL_IDS
             | WORKSPACE_TOOL_IDS
             | SKILL_AUTHORING_TOOL_IDS
+            | MEETING_TASKS_TOOL_IDS
         )
 
     def test_ids_are_gate_keys_not_tool_names(self):
         """workspace_files provisions list/read/write, so the set cannot be
         derived from the names of the objects the factories return."""
         assert "workspace_files" in INJECTED_TOOL_IDS
+        # Likewise zoom_meeting_transcripts provisions list + get.
+        assert "zoom_meeting_transcripts" in INJECTED_TOOL_IDS

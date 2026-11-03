@@ -12,6 +12,8 @@ import { UserConnectorsService } from '../../../settings/connectors/services/use
 import { SkillCommand, SkillCommandService } from '../../../services/skill/skill-command.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { Tool, ToolService } from '../../../services/tool/tool.service';
+import { Project } from '../../../projects/models/project.model';
+import { ConversationBindingService } from '../../services/session/conversation-binding.service';
 import { ComposerAddMenuComponent } from './composer-add-menu.component';
 
 const DRIVE: FileSourceConnector = {
@@ -25,6 +27,21 @@ const SKILLS: SkillCommand[] = [
   { skillId: 's1', slug: 'brand-deck', name: 'Brand Deck', description: 'Build a deck' },
   { skillId: 's2', slug: 'web-research', name: 'Web Research', description: 'Search the web' },
 ];
+
+const PROJECT: Project = {
+  projectId: 'prj_1',
+  name: 'Course redesign',
+  description: '',
+  ownerEmail: 'owner@example.edu',
+  ownerName: 'Owner',
+  role: 'editor',
+  status: 'active',
+  editorsManageMembers: true,
+  memberCount: 2,
+  harnessAgentId: 'ast-1',
+  createdAt: '2026-10-01T00:00:00Z',
+  updatedAt: '2026-10-01T00:00:00Z',
+};
 
 function tool(over: Partial<Tool>): Tool {
   return {
@@ -70,6 +87,7 @@ describe('ComposerAddMenuComponent', () => {
   let skillsLocked: ReturnType<typeof signal<boolean>>;
   let skillCommands: ReturnType<typeof signal<SkillCommand[]>>;
   let tools: ReturnType<typeof signal<Tool[]>>;
+  let boundProject: ReturnType<typeof signal<Project | null>>;
   let states: Record<string, 'connected' | 'disconnected' | 'unknown'>;
 
   beforeEach(async () => {
@@ -110,6 +128,7 @@ describe('ComposerAddMenuComponent', () => {
       tool({ toolId: 'pinned', displayName: 'Always On', isEnabled: true, alwaysOn: true }),
     ]);
     states = { google: 'connected', slack: 'disconnected' };
+    boundProject = signal<Project | null>(null);
 
     await TestBed.configureTestingModule({
       imports: [ComposerAddMenuComponent],
@@ -118,6 +137,7 @@ describe('ComposerAddMenuComponent', () => {
         { provide: Router, useValue: { navigate } },
         { provide: ToastService, useValue: { error: vi.fn(), warning: vi.fn(), info: vi.fn(), success: vi.fn() } },
         { provide: FileSourceService, useValue: { listFileSources } },
+        { provide: ConversationBindingService, useValue: { boundProject } },
         {
           provide: SkillCommandService,
           useValue: { commands: skillCommands, agentLocked: skillsLocked, load: vi.fn(async () => undefined) },
@@ -392,6 +412,62 @@ describe('ComposerAddMenuComponent', () => {
     const toolsMenu = overlay('composer-tools-menu')!;
     expect(toolsMenu.textContent).toContain("This agent doesn't use tools.");
     expect(toolsMenu.textContent).not.toContain('No tools available.');
+  });
+
+  it("in a project, says the project sets the tools and manages them on the project's Tools page", async () => {
+    boundProject.set(PROJECT);
+    agentLocked.set(true);
+    await openMenu();
+    await openSubmenu('composer-add-tools');
+    const toolsMenu = overlay('composer-tools-menu')!;
+    expect(toolsMenu.querySelector('[data-testid="composer-tools-project-note"]')!.textContent).toContain(
+      'This project sets its tools for everyone in it.',
+    );
+    expect(toolsMenu.textContent).not.toContain("This conversation's agent chooses its tools");
+    const manage = toolsMenu.querySelector('[data-testid="composer-manage-tools"]') as HTMLButtonElement;
+    expect(manage.textContent).toContain('Project tools');
+
+    manage.click();
+
+    expect(navigate).toHaveBeenCalledWith(['/projects/prj_1/tools']);
+    expect(navigate).not.toHaveBeenCalledWith(['/customize/tools']);
+  });
+
+  it('in a project with no tools, says the project uses none rather than naming an agent', async () => {
+    boundProject.set(PROJECT);
+    agentLocked.set(true);
+    tools.set([]);
+    await openMenu();
+    await openSubmenu('composer-add-tools');
+    const toolsMenu = overlay('composer-tools-menu')!;
+    expect(toolsMenu.textContent).toContain("This project doesn't use tools yet.");
+    expect(toolsMenu.textContent).not.toContain("This agent doesn't use tools.");
+  });
+
+  it("in a project, manages skills on the project's Skills page", async () => {
+    boundProject.set(PROJECT);
+    skillsLocked.set(true);
+    skillCommands.set([]);
+    await openMenu();
+    await openSubmenu('composer-add-skills');
+    const skills = overlay('composer-skills-menu')!;
+    expect(skills.querySelector('[data-testid="composer-skills-project-note"]')).not.toBeNull();
+    expect(skills.textContent).toContain("This project doesn't use skills yet.");
+
+    (skills.querySelector('[data-testid="composer-manage-skills"]') as HTMLButtonElement).click();
+
+    expect(navigate).toHaveBeenCalledWith(['/projects/prj_1/skills']);
+  });
+
+  it('outside a project, shows no project note and keeps "Manage tools" on Customize', async () => {
+    await openMenu();
+    await openSubmenu('composer-add-tools');
+    const toolsMenu = overlay('composer-tools-menu')!;
+    expect(toolsMenu.querySelector('[data-testid="composer-tools-project-note"]')).toBeNull();
+
+    (toolsMenu.querySelector('[data-testid="composer-manage-tools"]') as HTMLButtonElement).click();
+
+    expect(navigate).toHaveBeenCalledWith(['/customize/tools']);
   });
 
   it('lists connectors as switches with their connection state and probes the unknown ones', async () => {

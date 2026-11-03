@@ -33,6 +33,29 @@ export interface QuotaSessionNotice {
 }
 
 /**
+ * The user's spend has passed the central allowance onto a fund (a chargeback
+ * quota extension, quota-requests spec §8.2). The backend re-sends it every turn
+ * while the user is in that band; a dismissal lasts for the rest of the period.
+ */
+export interface QuotaFundingNotice {
+  type: 'quota_funding_notice';
+  label: string;
+  chargedThisPeriod: number;
+  cap?: number;
+  remainingUnderCap?: number;
+  standing?: boolean;
+  message: string;
+}
+
+/** `localStorage` key for the period (`YYYY-MM`, UTC) a funding notice was dismissed in. */
+export const DISMISSED_FUNDING_NOTICE_KEY = 'quota-funding-notice-dismissed';
+
+/** The current quota period as the backend names a month. */
+function currentPeriod(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+/**
  * Interface representing a quota exceeded event from the SSE stream.
  * This is sent when the user has exceeded their usage limit and the
  * response is streamed as an assistant message for better UX.
@@ -94,6 +117,8 @@ export class QuotaWarningService {
 
   /** The current per-session notice, null if this conversation is not heavy */
   private sessionNoticeSignal = signal<QuotaSessionNotice | null>(null);
+  /** The last notice set, kept past a turn's start so a dismissal survives the same notice coming back. */
+  private lastSessionNotice: QuotaSessionNotice | null = null;
 
   /** Timestamp when the warning was received */
   private warningTimestampSignal = signal<Date | null>(null);
@@ -106,6 +131,12 @@ export class QuotaWarningService {
 
   /** Whether the user has dismissed the current session notice */
   private isSessionNoticeDismissedSignal = signal<boolean>(false);
+
+  /** The current funding notice, null when no fund is being charged */
+  private fundingNoticeSignal = signal<QuotaFundingNotice | null>(null);
+
+  /** Whether the funding notice was dismissed this period; persisted */
+  private isFundingNoticeDismissedSignal = signal<boolean>(this.readFundingDismissedPeriod() === currentPeriod());
 
   // =========================================================================
   // Public Readonly Signals
@@ -143,6 +174,14 @@ export class QuotaWarningService {
 
     return `$${notice.sessionCost.toFixed(2)} of $${notice.quotaLimit.toFixed(2)}`;
   });
+
+  /** The active funding notice */
+  readonly fundingNotice = this.fundingNoticeSignal.asReadonly();
+
+  /** Whether there's a visible funding notice to show */
+  readonly hasVisibleFundingNotice = computed(
+    () => this.fundingNoticeSignal() !== null && !this.isFundingNoticeDismissedSignal(),
+  );
 
   /** Whether quota has been exceeded (for UI to show special styling) */
   readonly isQuotaExceeded = computed(() => {
@@ -315,14 +354,25 @@ export class QuotaWarningService {
    * another thread's composer.
    */
   setSessionNotice(notice: QuotaSessionNotice): void {
-    const current = this.sessionNoticeSignal();
+    const current = this.lastSessionNotice;
+    this.sessionNoticeSignal.set(notice);
     if (
       current?.sessionId !== notice.sessionId ||
       current?.sessionCost !== notice.sessionCost
     ) {
-      this.sessionNoticeSignal.set(notice);
       this.isSessionNoticeDismissedSignal.set(false);
     }
+    this.lastSessionNotice = notice;
+  }
+
+  /**
+   * Hide the session notice at the start of a turn. The backend re-sends it
+   * at the head of every turn still over the share, measured against the
+   * limit in force then; one left over from an earlier turn can name a limit
+   * that has since changed. A dismissal holds if the same notice comes back.
+   */
+  forgetSessionNotice(): void {
+    this.sessionNoticeSignal.set(null);
   }
 
   /** Dismiss the current session notice */
@@ -333,7 +383,41 @@ export class QuotaWarningService {
   /** Clear session-notice state (e.g. when switching conversations) */
   clearSessionNotice(): void {
     this.sessionNoticeSignal.set(null);
+    this.lastSessionNotice = null;
     this.isSessionNoticeDismissedSignal.set(false);
+  }
+
+  /** Set the funding notice from the SSE stream (re-sent every turn while in the band). */
+  setFundingNotice(notice: QuotaFundingNotice): void {
+    this.fundingNoticeSignal.set(notice);
+    this.isFundingNoticeDismissedSignal.set(this.readFundingDismissedPeriod() === currentPeriod());
+  }
+
+  /**
+   * Forget the funding notice (at the start of each turn). The backend re-sends
+   * it at the head of every turn still in the band, so a notice left over from
+   * an earlier turn would describe spend that has since moved on.
+   */
+  clearFundingNotice(): void {
+    this.fundingNoticeSignal.set(null);
+  }
+
+  /** Dismiss the funding notice for the rest of this period. */
+  dismissFundingNotice(): void {
+    this.isFundingNoticeDismissedSignal.set(true);
+    try {
+      localStorage.setItem(DISMISSED_FUNDING_NOTICE_KEY, currentPeriod());
+    } catch {
+      // Best-effort, like the warning dismissal.
+    }
+  }
+
+  private readFundingDismissedPeriod(): string | null {
+    try {
+      return localStorage.getItem(DISMISSED_FUNDING_NOTICE_KEY);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -361,6 +445,7 @@ export class QuotaWarningService {
     this.clearWarning();
     this.clearSessionNotice();
     this.clearQuotaExceeded();
+    this.clearFundingNotice();
   }
 
   /**
@@ -378,5 +463,11 @@ export class QuotaWarningService {
   resetForSignOut(): void {
     this.clearAll();
     this.forgetDismissed();
+    this.isFundingNoticeDismissedSignal.set(false);
+    try {
+      localStorage.removeItem(DISMISSED_FUNDING_NOTICE_KEY);
+    } catch {
+      // Best-effort.
+    }
   }
 }

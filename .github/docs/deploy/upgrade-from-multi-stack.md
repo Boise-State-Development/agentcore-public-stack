@@ -73,6 +73,8 @@ This destroys all existing CloudFormation stacks in the target environment.
 
 3. Wait for the workflow to complete.
 
+The workflow runs `scripts/teardown/destroy.sh`, which empties each stack's non-retained buckets before it deletes the stack. Use it (or run the script yourself) rather than a bare `cdk destroy` or a console delete. Those stop on "The bucket you tried to delete is not empty"; see [Troubleshooting](troubleshooting.md#teardown-issues) if that happens.
+
 ---
 
 ### Step 4: Clean Up Retained Resources
@@ -130,7 +132,8 @@ aws dynamodb delete-table --table-name {prefix}-users
 aws dynamodb delete-table --table-name {prefix}-app-roles
 # ... etc for all ~24 tables
 
-# S3 buckets (must empty first)
+# S3 buckets (must empty first). `rb --force` removes current objects only;
+# a versioned bucket with old versions left needs the S3 console's Empty action.
 aws s3 rb s3://{prefix}-user-file-uploads --force
 aws s3 rb s3://{prefix}-rag-documents --force
 # ... etc

@@ -631,3 +631,41 @@ class TestModelSwitchFlag:
 
         assert "modelSwitched" not in result
 
+
+
+class TestRewoundFlag:
+    """Rewind spec §6: the first call after a rewind re-sends a shorter history, so
+    past the TTL it reads tools + system and re-writes the history — a
+    ``partial_miss`` that is the user's choice, not a regression. ``rewound`` says
+    so; like ``agentSwitched`` it never changes the verdict or the waste."""
+
+    def _derive(self, table, meta):
+        return md._derive_cache_observability(
+            session_id="sess-1", table=table, timestamp=NOW.isoformat(),
+            message_metadata=meta,
+        )
+
+    def _meta(self, epoch, **kwargs):
+        meta = _metadata(**kwargs)
+        if epoch:
+            meta = MessageMetadata(**{**meta.model_dump(by_alias=True), "rewindEpoch": epoch})
+        return meta
+
+    def test_the_first_call_after_a_rewind_is_flagged(self):
+        table = _FakeTable([_prev_row(30, cache_read=4000)])
+        result = self._derive(table, self._meta(1, cache_read=1000, cache_write=3000))
+
+        assert result["rewound"] is True
+        assert "cacheStatus" in result
+
+    def test_later_calls_at_the_same_epoch_are_not(self):
+        prev = _prev_row(30, cache_read=4000)
+        prev["rewindEpoch"] = Decimal(1)
+        result = self._derive(_FakeTable([prev]), self._meta(1, cache_read=4000))
+
+        assert "rewound" not in result
+
+    def test_a_session_never_rewound_carries_no_flag(self):
+        result = self._derive(_FakeTable([_prev_row(30, cache_read=4000)]), self._meta(0, cache_read=4000))
+
+        assert "rewound" not in result

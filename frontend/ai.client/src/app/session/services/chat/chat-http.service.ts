@@ -1,5 +1,6 @@
-import { DestroyRef, inject, Injectable } from '@angular/core';
+import { DestroyRef, inject, Injectable, Injector } from '@angular/core';
 import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
+import { SessionAffinityService } from '../session/session-affinity.service';
 import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
@@ -12,6 +13,7 @@ import { ErrorService } from '../../../services/error/error.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { TurnTimingService } from './turn-timing.service';
 import { browserFrameHeight } from '../../../services/browser-login/browser-frame-height';
+import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 
 /**
  * Title fallback polling. A stream that outruns title generation closes a few
@@ -173,6 +175,18 @@ interface GenerateTitleResponse {
 })
 export class ChatHttpService {
   private streamParserService = inject(StreamParserService);
+  private sessionAffinity = inject(SessionAffinityService);
+
+  /**
+   * A fork's turns pin to its root conversation's microVM, where the parent's
+   * live history (the cached prefix) is (rewind/fork spec §7). Read by
+   * app-api's proxy for routing only.
+   */
+  private withAffinity(requestObject: Record<string, unknown>): Record<string, unknown> {
+    const sessionId = typeof requestObject['session_id'] === 'string' ? requestObject['session_id'] : null;
+    const affinity = this.sessionAffinity.affinityFor(sessionId);
+    return affinity ? { ...requestObject, affinity_session_id: affinity } : requestObject;
+  }
   private turnTiming = inject(TurnTimingService);
   private chatStateService = inject(ChatStateService);
   private messageMapService = inject(MessageMapService);
@@ -182,6 +196,7 @@ export class ChatHttpService {
   private bffSession = inject(BffSessionService);
   private errorService = inject(ErrorService);
   private destroyRef = inject(DestroyRef);
+  private injector = inject(Injector);
 
   constructor() {
     this.registerPageLifecycleAttribution();
@@ -217,6 +232,7 @@ export class ChatHttpService {
       // left behind here makes every completed turn in this tab eligible for
       // a `navigated_away` marker on the next refresh / tab close.
       this.chatStateService.releaseAbortController(sessionId, abortController);
+      this.reloadQuotaStatus();
     };
 
     try {
@@ -264,7 +280,7 @@ export class ChatHttpService {
             OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
             ...csrfHeaders,
           },
-          body: JSON.stringify(withBrowserFrameHeight(requestObject)),
+          body: JSON.stringify(this.withAffinity(withBrowserFrameHeight(requestObject))),
           signal: abortController.signal,
           // Keep the stream open when the tab is backgrounded. With the library
           // default (`openWhenHidden: false`) fetch-event-source aborts the
@@ -490,6 +506,18 @@ export class ChatHttpService {
     this.chatStateService.abortRequest(sessionId);
     this.messageMapService.endStreaming(sessionId);
     this.chatStateService.setChatLoading(sessionId, false);
+    this.reloadQuotaStatus();
+  }
+
+  /**
+   * Re-read the caller's quota status once a turn ends. A turn moves the
+   * spend, and the limit, an open request or a fund's charge may have changed
+   * while it ran; the composer's quota tab and the request dialog read this
+   * status, which otherwise dates from page load. One GET per turn, off the
+   * turn path (quota-requests spec §10.3).
+   */
+  private reloadQuotaStatus(): void {
+    this.injector.get(QuotaStatusService).reload();
   }
 
   /**

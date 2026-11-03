@@ -52,6 +52,8 @@ interface ConnectorFormGroup {
   clientId: FormControl<string>;
   clientSecret: FormControl<string>;
   oauthDiscoveryUrl: FormControl<string>;
+  /** Microsoft only: Entra tenant ID or verified domain, `''` when unset. */
+  tenantId: FormControl<string>;
   scopes: FormControl<string>;
   allowedRoles: FormControl<string[]>;
   grantAllRoles: FormControl<boolean>;
@@ -452,6 +454,34 @@ const ICON_ACCEPTED_MIME_TYPES = [
                   </div>
                 }
 
+                @if (isMicrosoft()) {
+                  <div>
+                    <label for="tenantId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Directory (tenant) ID
+                    </label>
+                    <input
+                      type="text"
+                      id="tenantId"
+                      formControlName="tenantId"
+                      placeholder="00000000-0000-0000-0000-000000000000 or contoso.onmicrosoft.com"
+                      [attr.aria-describedby]="connectorForm.controls.tenantId.invalid && connectorForm.controls.tenantId.touched ? 'tenantId-error tenantId-help' : 'tenantId-help'"
+                      [attr.aria-invalid]="connectorForm.controls.tenantId.invalid && connectorForm.controls.tenantId.touched"
+                      class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                      [class.border-state-danger-500]="connectorForm.controls.tenantId.invalid && connectorForm.controls.tenantId.touched"
+                    />
+                    @if (connectorForm.controls.tenantId.invalid && connectorForm.controls.tenantId.touched) {
+                      <p id="tenantId-error" class="mt-1.5 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
+                        Enter a directory (tenant) ID or a verified domain.
+                      </p>
+                    }
+                    <p id="tenantId-help" class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                      Required when the Entra app registration is single-tenant, the default for a new registration.
+                      Shown on the app's Overview page.
+                      @if (isEditMode()) { Changing it requires re-entering the client ID and secret. }
+                    </p>
+                  </div>
+                }
+
                 <div>
                   <label for="scopes" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Scopes</label>
                   <input
@@ -718,6 +748,11 @@ export class ConnectorFormPage implements OnInit {
     clientId: this.fb.control('', { nonNullable: true }),
     clientSecret: this.fb.control('', { nonNullable: true }),
     oauthDiscoveryUrl: this.fb.control('', { nonNullable: true }),
+    tenantId: this.fb.control('', {
+      nonNullable: true,
+      // Mirrors the backend's `normalize_tenant_id`: a GUID or a domain.
+      validators: [Validators.pattern(/^\s*[A-Za-z0-9](?:[A-Za-z0-9.-]{0,126}[A-Za-z0-9])?\s*$/)],
+    }),
     scopes: this.fb.control('', { nonNullable: true }),
     allowedRoles: this.fb.control<string[]>(['*'], { nonNullable: true }),
     grantAllRoles: this.fb.control(true, { nonNullable: true }),
@@ -747,6 +782,9 @@ export class ConnectorFormPage implements OnInit {
   private readonly providerTypeSignal = signal<ConnectorType>(
     this.connectorForm.controls.providerType.value,
   );
+
+  /** Only Microsoft connectors take an Entra tenant. */
+  readonly isMicrosoft = computed(() => this.providerTypeSignal() === 'microsoft');
 
   /** Vendor-relevant scopes example shown when the field is empty. */
   readonly scopesPlaceholder = computed<string>(() => {
@@ -787,6 +825,9 @@ export class ConnectorFormPage implements OnInit {
    * block every metadata-only edit on a discovery-URL connector.
    */
   private readonly discoveryLoadedFromServer = signal<string>('');
+
+  /** The tenant loaded from the server, for the same reason as discovery. */
+  private readonly tenantLoadedFromServer = signal<string>('');
 
   /** Every file-source adapter shipped in the backend registry. */
   readonly fileSourceAdapters = computed(() =>
@@ -899,6 +940,9 @@ export class ConnectorFormPage implements OnInit {
 
     this.connectorForm.controls.providerType.valueChanges.subscribe((value) => {
       this.providerTypeSignal.set(value);
+      if (value !== 'microsoft') {
+        this.connectorForm.controls.tenantId.setValue('');
+      }
       this.applyDiscoveryValidator();
       this.clearIncompatibleAdapter();
     });
@@ -969,6 +1013,7 @@ export class ConnectorFormPage implements OnInit {
         clientId: '',
         clientSecret: '',
         oauthDiscoveryUrl: connector.oauthDiscoveryUrl ?? '',
+        tenantId: connector.tenantId ?? '',
         scopes: connector.scopes.join(', '),
         allowedRoles: connector.allowedRoles.length > 0 ? connector.allowedRoles : ['*'],
         grantAllRoles: connector.allowedRoles.length === 0,
@@ -983,6 +1028,7 @@ export class ConnectorFormPage implements OnInit {
       this.adapterLoadedFromServer.set(connector.fileSourceAdapterId ?? '');
       this.exportAdapterLoadedFromServer.set(connector.exportTargetAdapterId ?? '');
       this.discoveryLoadedFromServer.set(connector.oauthDiscoveryUrl ?? '');
+      this.tenantLoadedFromServer.set(connector.tenantId ?? '');
       this.selectedRoles.set(connector.allowedRoles.length > 0 ? connector.allowedRoles : ['*']);
       this.applyDiscoveryValidator();
     } catch (error) {
@@ -1142,6 +1188,11 @@ export class ConnectorFormPage implements OnInit {
         ) {
           updates.oauthDiscoveryUrl = currentDiscovery;
         }
+        // Tenant: same rule, except `''` is a real value (it clears one).
+        const currentTenant = formValue.tenantId.trim();
+        if (this.isMicrosoft() && currentTenant !== this.tenantLoadedFromServer()) {
+          updates.tenantId = currentTenant;
+        }
         await this.connectorsService.updateConnector(this.providerId()!, updates);
         this.router.navigate(['/admin/connectors']);
       } else {
@@ -1161,6 +1212,9 @@ export class ConnectorFormPage implements OnInit {
         }
         if (this.needsDiscovery() && formValue.oauthDiscoveryUrl) {
           createData.oauthDiscoveryUrl = formValue.oauthDiscoveryUrl;
+        }
+        if (this.isMicrosoft() && formValue.tenantId.trim()) {
+          createData.tenantId = formValue.tenantId.trim();
         }
         if (Object.keys(customParameters).length > 0) {
           createData.customParameters = customParameters;

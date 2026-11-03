@@ -23,7 +23,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
-import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
+import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
 
 interface PolicyStatement {
   Effect?: string;
@@ -168,52 +168,40 @@ describe('Security policy hardening', () => {
   // 2b. App-api DynamoDB table grants
   // ──────────────────────────────────────────────────────────
 
-  describe('App-api shared-conversations table grant', () => {
-    // Regression guard: the shared-conversations table was threaded
-    // into the app-api container as an env var but never granted on
-    // the task role, so every /conversations/{id}/share PutItem and
-    // /conversations/{id}/shares Query returned AccessDeniedException
-    // (surfaced to users as a 500 "Failed to create share"). The grant
-    // lives in app-api-iam-grants.ts under Sid 'SharedConversationsAccess'.
-    it("app-api role can PutItem/Query/GetItem on the shared-conversations table (incl. its GSIs)", () => {
-      // Iterate both AWS::IAM::Policy AND AWS::IAM::ManagedPolicy because
-      // CDK auto-splits oversized inline policies into managed overflow
-      // policies attached to the same role.
+  describe('App-api DynamoDB table grant', () => {
+    // One statement covers every table this deployment names (and, since
+    // IAM's `*` crosses `/`, their GSIs), which is what the per-table grants
+    // here used to check one at a time. Two of those were regression guards
+    // for tables wired end-to-end except for IAM: shared-conversations (every
+    // share create/list AccessDenied, surfaced as a 500) and agent-templates.
+    // dynamodb-table-grants.test.ts evaluates this statement against every
+    // synthesized table, those two included, so a table can no longer be
+    // left out; what remains here is that the grant stays scoped.
+    it('app-api role has scoped read/write on the deployment\'s tables, never Resource:*', () => {
       const candidates: PolicyStatement[] = [];
-      for (const [, r] of Object.entries(template.findResources('AWS::IAM::Policy'))) {
-        const stmts = ((r.Properties as { PolicyDocument?: { Statement?: PolicyStatement[] } })?.PolicyDocument?.Statement) ?? [];
-        for (const s of stmts) candidates.push(s);
+      for (const type of ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy']) {
+        for (const [, r] of Object.entries(template.findResources(type))) {
+          const stmts = ((r.Properties as { PolicyDocument?: { Statement?: PolicyStatement[] } })?.PolicyDocument?.Statement) ?? [];
+          for (const s of stmts) candidates.push(s);
+        }
       }
-      for (const [, r] of Object.entries(template.findResources('AWS::IAM::ManagedPolicy'))) {
-        const stmts = ((r.Properties as { PolicyDocument?: { Statement?: PolicyStatement[] } })?.PolicyDocument?.Statement) ?? [];
-        for (const s of stmts) candidates.push(s);
-      }
-
-      const matches = candidates.filter((s) => s.Sid === 'SharedConversationsAccess');
-
+      const matches = candidates.filter((s) => s.Sid === 'DeploymentTablesReadWrite');
       if (matches.length === 0) {
         throw new Error(
-          "Could not locate the shared-conversations DynamoDB grant. " +
-            "Looked for Sid 'SharedConversationsAccess' in AWS::IAM::Policy + AWS::IAM::ManagedPolicy. " +
-            "Without it, creating/listing conversation shares fails with AccessDeniedException. " +
-            "If the Sid was renamed, update this test.",
+          "Could not locate app-api's DynamoDB grant. Looked for Sid 'DeploymentTablesReadWrite' "
+            + 'in AWS::IAM::Policy + AWS::IAM::ManagedPolicy. If the Sid was renamed, update this test.',
         );
       }
-
       for (const s of matches) {
         const actions = asArray(s.Action);
-        // The share service does PutItem (create), Query on SessionShareIndex
-        // (list/delete-for-session), and GetItem (retrieve a single share).
-        expect(actions).toContain('dynamodb:PutItem');
-        expect(actions).toContain('dynamodb:Query');
-        expect(actions).toContain('dynamodb:GetItem');
-        // Never a wildcard resource.
-        const resources = asArray(s.Resource);
-        expect(resources).not.toContain('*');
-        // Must cover the table's GSIs (SessionShareIndex) — the list/revoke
-        // paths Query that index, which requires an index/* resource entry.
-        const resourceStrs = resources.map((r) => JSON.stringify(r));
-        expect(resourceStrs.some((r) => r.includes('index/'))).toBe(true);
+        for (const a of ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+                         'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan']) {
+          expect(actions).toContain(a);
+        }
+        expect(actions).not.toContain('dynamodb:*');
+        expect(asArray(s.Resource)).toEqual([
+          `arn:aws:dynamodb:${MOCK_REGION}:${MOCK_ACCOUNT}:table/${MOCK_PREFIX}-*`,
+        ]);
       }
     });
   });
@@ -222,8 +210,8 @@ describe('Security policy hardening', () => {
   // 2c. Grants proven missing by prod CloudWatch AccessDenied
   // ──────────────────────────────────────────────────────────
 
-  // Both grants below were found the same way as SharedConversationsAccess
-  // above: the capability was wired end-to-end except for the IAM statement,
+  // The grants below were found the same way as the shared-conversations
+  // table grant above: the capability was wired end-to-end except for the IAM statement,
   // so the failure only ever surfaced as an AccessDeniedException in the
   // prod logs. Iterate AWS::IAM::Policy AND AWS::IAM::ManagedPolicy because
   // CDK auto-splits oversized inline policies into managed overflow policies
@@ -271,30 +259,6 @@ describe('Security policy hardening', () => {
         // (singular, what rag-ingestion holds) is a DIFFERENT action and
         // does not authorize the cleanup service's call.
         expect(actions).not.toContain('s3vectors:DeleteVector');
-        const resources = asArray(s.Resource);
-        expect(resources).not.toContain('*');
-      }
-    });
-  });
-
-  describe('App-api agent-templates grant', () => {
-    // The admin CRUD routes and the public /templates picker feed both run on
-    // app-api and read/write this table. Mirrors SystemPromptsTableAccess and
-    // must stay scoped — never Action:* / Resource:*.
-    it('app-api role has scoped read/write on the agent-templates table', () => {
-      const matches = statementsWithSid('AgentTemplatesTableAccess');
-      if (matches.length === 0) {
-        throw new Error(
-          "Could not locate the app-api agent-templates grant. " +
-            "Looked for Sid 'AgentTemplatesTableAccess'. If the Sid was renamed, update this test.",
-        );
-      }
-      for (const s of matches) {
-        const actions = asArray(s.Action);
-        for (const a of ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
-                         'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan']) {
-          expect(actions).toContain(a);
-        }
         const resources = asArray(s.Resource);
         expect(resources).not.toContain('*');
       }

@@ -16,12 +16,13 @@ For agent execution rules and the workspace-path map, see
 | Node.js                      | 22.22.3    | sha256-verified upstream tarball          |
 | npm                          | 11.2.0     | Matches `frontend/ai.client/package.json` |
 | AWS CLI                      | 2.34.40    | sha256 + PGP signature verified           |
-| AWS CDK CLI                  | 2.1128.0   | Matches `infrastructure/package.json`     |
+| AWS CDK CLI                  | 2.1146.1   | Matches `infrastructure/package.json`     |
 | Docker CLI (client only)     | 29.4.3     | sha256-verified static binary             |
 | Docker buildx (CLI plugin)   | 0.30.1     | sha256-verified GitHub release            |
 | actionlint (workflow linter) | 1.7.12     | sha256-verified GitHub release            |
 | ShellCheck (shell linter)    | 0.9.0      | Ubuntu 24.04 apt package                  |
 | Playwright chromium runtime  | n/a        | Apt deps for Playwright 1.59.x            |
+| OS keyring (gnome-keyring)   | n/a        | Apt, from the base image's snapshot       |
 
 > All artifacts downloaded over the network during the build are verified
 > against either a pinned sha256 or a PGP signature. Apt packages installed

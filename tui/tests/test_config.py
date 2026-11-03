@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agentcore_tui import config as config_module
-from agentcore_tui.config import (
+from aps_tui import config as config_module
+from aps_tui import keyring_store
+from aps_tui.config import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODELS,
     ENV_API_KEY,
@@ -18,7 +19,8 @@ from agentcore_tui.config import (
     resolve_config,
     write_config_file,
 )
-from agentcore_tui.errors import ConfigError
+from aps_tui.credentials import Capability, CredentialSource
+from aps_tui.errors import ConfigError
 
 MODEL_A = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 MODEL_B = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -30,14 +32,25 @@ def config_file(tmp_path: Path) -> Path:
 
 
 class TestConfigProperties:
-    def test_converse_url_is_joined_without_double_slash(self) -> None:
-        assert Config(base_url="https://h/api/").converse_url == "https://h/api/chat/api-converse"
-        assert Config(base_url="https://h/api").converse_url == "https://h/api/chat/api-converse"
-
-    def test_is_complete_requires_both_url_and_key(self) -> None:
+    def test_is_complete_requires_a_url_and_a_usable_credential(self) -> None:
+        """Asks the credential discriminant, not ``api_key``. Under SSO there is
+        no API key and the client is still fully configured."""
         assert not Config(base_url="https://h").is_complete
-        assert not Config(api_key="k").is_complete
-        assert Config(base_url="https://h", api_key="k").is_complete
+        assert not Config(credential_source=CredentialSource.API_KEY).is_complete
+        assert Config(base_url="https://h", credential_source=CredentialSource.API_KEY).is_complete
+        assert Config(base_url="https://h", api_key=None, credential_source=CredentialSource.BFF_SESSION).is_complete
+
+    def test_an_api_key_alone_does_not_make_it_complete(self) -> None:
+        """The field is set but the discriminant was never resolved, which is
+        exactly the state a directly-constructed Config is in."""
+        assert not Config(base_url="https://h", api_key="k").is_complete
+
+    def test_capabilities_follow_the_credential(self) -> None:
+        api_key = Config(base_url="https://h", credential_source=CredentialSource.API_KEY)
+        session = Config(base_url="https://h", credential_source=CredentialSource.BFF_SESSION)
+        assert api_key.can(Capability.CHAT) is True
+        assert api_key.can(Capability.SESSIONS) is False
+        assert session.can(Capability.SESSIONS) is True
 
     def test_missing_names_each_gap(self) -> None:
         assert Config().missing() == ["base URL", "API key"]
@@ -204,3 +217,112 @@ class TestScalarValidation:
         config_file.write_text("temperature = 1\n", encoding="utf-8")
         resolved = resolve_config(config_file=config_file, env={}, use_keyring=False)
         assert resolved.temperature == 1.0
+
+
+class TestBannerResolution:
+    """`--banner` > AGENTCORE_BANNER > config file > on."""
+
+    def test_defaults_to_enabled(self, config_file: Path) -> None:
+        resolved = resolve_config(config_file=config_file, env={}, use_keyring=False)
+        assert resolved.banner is True
+        assert resolved.force_banner is False
+
+    def test_dataclass_default_is_disabled(self) -> None:
+        """The opposite of resolve_config's default, on purpose: a
+        directly-constructed Config (tests, embedding) shows no animation."""
+        assert Config().banner is False
+
+    def test_config_file_can_disable_it(self, config_file: Path) -> None:
+        config_file.write_text("banner = false\n", encoding="utf-8")
+        assert resolve_config(config_file=config_file, env={}, use_keyring=False).banner is False
+
+    def test_env_var_overrides_the_config_file(self, config_file: Path) -> None:
+        config_file.write_text("banner = false\n", encoding="utf-8")
+        env = {"AGENTCORE_BANNER": "1"}
+        assert resolve_config(config_file=config_file, env=env, use_keyring=False).banner is True
+
+    @pytest.mark.parametrize("raw", ["0", "false", "FALSE", "no", "off"])
+    def test_env_var_falsey_spellings(self, config_file: Path, raw: str) -> None:
+        env = {"AGENTCORE_BANNER": raw}
+        assert resolve_config(config_file=config_file, env=env, use_keyring=False).banner is False
+
+    @pytest.mark.parametrize("raw", ["1", "true", "yes", "ON"])
+    def test_env_var_truthy_spellings(self, config_file: Path, raw: str) -> None:
+        env = {"AGENTCORE_BANNER": raw}
+        assert resolve_config(config_file=config_file, env=env, use_keyring=False).banner is True
+
+    def test_unparseable_env_var_is_an_error(self, config_file: Path) -> None:
+        """Silently treating `maybe` as False is the kind of thing nobody debugs."""
+        env = {"AGENTCORE_BANNER": "maybe"}
+        with pytest.raises(ConfigError, match="must be a boolean"):
+            resolve_config(config_file=config_file, env=env, use_keyring=False)
+
+    def test_empty_env_var_falls_through_to_the_file(self, config_file: Path) -> None:
+        config_file.write_text("banner = false\n", encoding="utf-8")
+        env = {"AGENTCORE_BANNER": ""}
+        assert resolve_config(config_file=config_file, env=env, use_keyring=False).banner is False
+
+    def test_non_boolean_config_file_value_is_an_error(self, config_file: Path) -> None:
+        config_file.write_text('banner = "sometimes"\n', encoding="utf-8")
+        with pytest.raises(ConfigError, match="must be a boolean"):
+            resolve_config(config_file=config_file, env={}, use_keyring=False)
+
+    def test_force_overrides_a_disabling_config_file(self, config_file: Path) -> None:
+        """`--banner` means "show me now", so it beats `banner = false`."""
+        config_file.write_text("banner = false\n", encoding="utf-8")
+        resolved = resolve_config(config_file=config_file, env={}, use_keyring=False, banner=True, force_banner=True)
+        assert resolved.banner is True
+        assert resolved.force_banner is True
+
+    def test_explicit_false_wins_over_the_env_var(self, config_file: Path) -> None:
+        """This is `--no-banner` against AGENTCORE_BANNER=1."""
+        env = {"AGENTCORE_BANNER": "1"}
+        resolved = resolve_config(config_file=config_file, env=env, use_keyring=False, banner=False)
+        assert resolved.banner is False
+
+
+class TestSessionKeyringAccessors:
+    """The sealed session is stored under its own keyring *service*.
+
+    Separate from API keys so revoking one credential cannot disturb the other.
+    """
+
+    def test_the_two_services_are_distinct(self) -> None:
+        assert keyring_store.API_KEY_SERVICE != keyring_store.SESSION_SERVICE
+
+    def test_save_and_load_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        vault: dict[tuple[str, str], str] = {}
+        monkeypatch.setattr(
+            keyring_store,
+            "store",
+            lambda service, base_url, secret, hint: vault.__setitem__((service, base_url), secret),
+        )
+        monkeypatch.setattr(
+            keyring_store,
+            "load",
+            lambda service, base_url: (vault.get((service, base_url)), None),
+        )
+
+        config_module.save_session_to_keyring("https://h", "sealed")
+
+        assert vault == {(keyring_store.SESSION_SERVICE, "https://h"): "sealed"}
+        assert config_module.load_session_from_keyring("https://h") == ("sealed", None)
+
+    def test_saving_a_session_does_not_suggest_an_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unlike the API key.
+
+        A sealed session is equivalent to being signed in and rotates on every
+        sign-in, so telling users to export it would be advice to leave a live
+        credential in their shell history and process table.
+        """
+        hints: list[str] = []
+        monkeypatch.setattr(keyring_store, "store", lambda service, base_url, secret, hint: hints.append(hint))
+        config_module.save_session_to_keyring("https://h", "sealed")
+        assert "AGENTCORE_" not in hints[0]
+        assert "keyring" in hints[0]
+
+    def test_delete_targets_the_session_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked: list[tuple[str, str]] = []
+        monkeypatch.setattr(keyring_store, "delete", lambda service, base_url: bool(asked.append((service, base_url))))
+        config_module.delete_session_from_keyring("https://h")
+        assert asked == [(keyring_store.SESSION_SERVICE, "https://h")]

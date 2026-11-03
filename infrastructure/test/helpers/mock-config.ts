@@ -76,6 +76,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     production: false,
     retainDataOnDelete: false,
     manageDnsRecords: true,
+    albRestrictToCloudFront: true,
     vpcCidr: '10.0.0.0/16',
     corsOrigins: 'http://localhost:4200',
     appVersion: '1.0.0-test',
@@ -181,7 +182,16 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     sessionPrewarm: {
       enabled: false,
     },
+    quotaRequests: {
+      enabled: false,
+    },
     handoffs: {
+      enabled: false,
+    },
+    sessionRewind: {
+      enabled: false,
+    },
+    sessionFork: {
       enabled: false,
     },
     clientTurnTiming: {
@@ -217,6 +227,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     assistantKbFullContext: {
       enabled: false,
     },
+    meetingTasks: {
+      enabled: false,
+    },
     largeDocumentAttachments: {
       enabled: false,
     },
@@ -230,6 +243,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       enabled: false,
     },
     sourceProvenance: {
+      enabled: false,
+    },
+    webSearchDefaultMaxResults: {
       enabled: false,
     },
     documentExtract: {

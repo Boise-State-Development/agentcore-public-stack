@@ -1,0 +1,123 @@
+event: init_event_loop
+data: {}
+
+event: session_title
+data: {"type": "session_title", "sessionId": "cli-e2e-00000000-0000-0000-0000-000000000000", "title": "Calculator Compute 4172 * 39"}
+
+event: start_event_loop
+data: {}
+
+event: event
+data: {"event": {"messageStart": {"role": "assistant"}}}
+
+event: message_start
+data: {"role": "assistant"}
+
+event: event
+data: {"event": {"contentBlockStart": {"start": {"toolUse": {"toolUseId": "tooluse_vJv8aTXKKuUITN10ztmQ5A", "name": "calculator", "type": "tool_use"}}, "contentBlockIndex": 0}}}
+
+event: content_block_start
+data: {"contentBlockIndex": 0, "type": "tool_use", "toolUse": {"toolUseId": "tooluse_vJv8aTXKKuUITN10ztmQ5A", "name": "calculator", "type": "tool_use"}}
+
+event: event
+data: {"event": {"contentBlockDelta": {"delta": {"toolUse": {"input": ""}}, "contentBlockIndex": 0}}}
+
+event: content_block_delta
+data: {"contentBlockIndex": 0, "type": "tool_use", "input": ""}
+
+event: tool_use
+data: {"tool_use": {"name": "calculator", "tool_use_id": "tooluse_vJv8aTXKKuUITN10ztmQ5A", "input": ""}}
+
+event: event
+data: {"event": {"contentBlockDelta": {"delta": {"toolUse": {"input": "{\"expression\": \"4172 * 39"}}, "contentBlockIndex": 0}}}
+
+event: content_block_delta
+data: {"contentBlockIndex": 0, "type": "tool_use", "input": "{\"expression\": \"4172 * 39"}
+
+event: tool_use
+data: {"tool_use": {"name": "calculator", "tool_use_id": "tooluse_vJv8aTXKKuUITN10ztmQ5A", "input": "{\"expression\": \"4172 * 39"}}
+
+event: event
+data: {"event": {"contentBlockDelta": {"delta": {"toolUse": {"input": "\"}"}}, "contentBlockIndex": 0}}}
+
+event: content_block_delta
+data: {"contentBlockIndex": 0, "type": "tool_use", "input": "\"}"}
+
+event: tool_use
+data: {"tool_use": {"name": "calculator", "tool_use_id": "tooluse_vJv8aTXKKuUITN10ztmQ5A", "input": "{\"expression\": \"4172 * 39\"}"}}
+
+event: event
+data: {"event": {"contentBlockStop": {"contentBlockIndex": 0}}}
+
+event: content_block_stop
+data: {"contentBlockIndex": 0}
+
+event: event
+data: {"event": {"messageStop": {"stopReason": "tool_use"}}}
+
+event: message_stop
+data: {"stopReason": "tool_use"}
+
+event: metadata
+data: {"usage": {"inputTokens": 3286, "outputTokens": 57, "totalTokens": 3343}, "metrics": {"latencyMs": 1075}}
+
+event: event
+data: {"event": {"metadata": {"usage": {"inputTokens": 3286, "outputTokens": 57, "totalTokens": 3343}, "metrics": {"latencyMs": 1075}}}}
+
+event: message
+data: {"message": {"role": "assistant", "content": [{"toolUse": {"toolUseId": "tooluse_vJv8aTXKKuUITN10ztmQ5A", "name": "calculator", "input": {"expression": "4172 * 39"}}}], "metadata": {"usage": {"inputTokens": 3286, "outputTokens": 57, "totalTokens": 3343}, "metrics": {"latencyMs": 1075, "timeToFirstByteMs": 938}}, "tracking_id": "be40bbe1-1a3b-4e27-8ff9-f041c5bdb9a5"}}
+
+event: message
+data: {"message": {"role": "user", "content": [{"toolResult": {"status": "success", "content": [{"text": "Result: 162708"}], "toolUseId": "tooluse_vJv8aTXKKuUITN10ztmQ5A"}}], "tracking_id": "06e08582-26fa-4c12-96e6-0ea2bb2cbd54"}}
+
+event: tool_result
+data: {"message": {"role": "user", "content": [{"toolResult": {"status": "success", "content": [{"text": "Result: 162708"}], "toolUseId": "tooluse_vJv8aTXKKuUITN10ztmQ5A"}}]}, "tool_result": {"status": "success", "content": [{"text": "Result: 162708"}], "toolUseId": "tooluse_vJv8aTXKKuUITN10ztmQ5A"}}
+
+event: start_event_loop
+data: {}
+
+event: event
+data: {"event": {"messageStart": {"role": "assistant"}}}
+
+event: message_start
+data: {"role": "assistant"}
+
+event: event
+data: {"event": {"contentBlockDelta": {"delta": {"text": "162"}, "contentBlockIndex": 0}}}
+
+event: content_block_delta
+data: {"contentBlockIndex": 0, "type": "text", "text": "162"}
+
+event: event
+data: {"event": {"contentBlockDelta": {"delta": {"text": "708"}, "contentBlockIndex": 0}}}
+
+event: content_block_delta
+data: {"contentBlockIndex": 0, "type": "text", "text": "708"}
+
+event: event
+data: {"event": {"contentBlockStop": {"contentBlockIndex": 0}}}
+
+event: content_block_stop
+data: {"contentBlockIndex": 0}
+
+event: event
+data: {"event": {"messageStop": {"stopReason": "end_turn"}}}
+
+event: message_stop
+data: {"stopReason": "end_turn"}
+
+event: metadata
+data: {"usage": {"inputTokens": 3360, "outputTokens": 5, "totalTokens": 3365}, "metrics": {"latencyMs": 844, "timeToFirstByteMs": 253}}
+
+event: event
+data: {"event": {"metadata": {"usage": {"inputTokens": 3360, "outputTokens": 5, "totalTokens": 3365}, "metrics": {"latencyMs": 844}}}}
+
+event: message
+data: {"message": {"role": "assistant", "content": [{"text": "162708"}], "metadata": {"usage": {"inputTokens": 3360, "outputTokens": 5, "totalTokens": 3365}, "metrics": {"latencyMs": 844, "timeToFirstByteMs": 754}}, "tracking_id": "ef3486b7-00dd-47a1-b2b7-56962ef0bc27"}}
+
+event: metadata
+data: {"usage": {"inputTokens": 3360, "outputTokens": 5, "totalTokens": 3365}, "metrics": {"latencyMs": 3150, "timeToFirstByteMs": 1722}, "cost": {"total": 0.006956, "inputCost": 0.006646, "outputCost": 0.00031, "cacheReadCost": 0.0, "cacheWriteCost": 0.0}, "contextWindow": 200000, "contextBreakdown": {"total": 3347, "partitions": [{"key": "system", "label": "System prompt", "tokens": 1600}, {"key": "tools", "label": "Tools", "tokens": 1682}, {"key": "messages", "label": "Messages", "tokens": 65}]}}
+
+event: done
+data: {}
+

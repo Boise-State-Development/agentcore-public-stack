@@ -48,7 +48,7 @@ def _python_files() -> Iterator[Tuple[str, Path]]:
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.py")):
-            yield str(path.relative_to(_BACKEND)), path
+            yield path.relative_to(_BACKEND).as_posix(), path
 
 
 def _strict_tools_sites() -> List[str]:

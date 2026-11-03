@@ -33,6 +33,15 @@ Design notes
   from ``invocation_state`` or from model input, exactly as ``document_read``
   does. ``upload_id`` is the only document selector and it is resolved against
   the caller's own rows.
+* **The document is named by what the model can see, or not at all.** A small
+  attachment reaches the model as an inline ``document`` block named by its
+  filename, with no upload id anywhere in the conversation, so a required id
+  sent Haiku 4.5 to guess one (``"0"``, five samples of five on dev) and pay
+  two extra tool rounds recovering. ``upload_id`` is therefore optional and
+  falls back to the session's own documents: the only one, or the one whose
+  filename it names. An ambiguous or unmatched name lists the session's
+  documents so the next call can pick. The listing query runs only on that
+  fallback; a real upload id resolves exactly as before.
 * **Content-free record per call** in ``AgentCoreStack/Compaction``
   (``SourceVerify``, ``SourceVerifyClaims``; properties ``format`` and the
   per-state counts), beside the ``document_read`` records. No quote, value or
@@ -43,12 +52,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from strands import tool
 from strands.types.tools import ToolContext
 
-from apis.shared.files.document_read import DocumentReadError, document_provenance_units
+from apis.shared.files.document_read import (
+    DocumentReadError,
+    document_provenance_units,
+    list_session_documents,
+)
 from apis.shared.files.provenance_broker import queue_provenance
 from apis.shared.files.source_provenance import (
     STATE_QUOTE_UNSUPPORTED,
@@ -59,7 +73,11 @@ from apis.shared.files.source_provenance import (
     document_units,
     verify_claims,
 )
-from apis.shared.files.workspace import WorkspaceError, WorkspaceStorageNotConfiguredError
+from apis.shared.files.workspace import (
+    WorkspaceError,
+    WorkspaceFileNotFoundError,
+    WorkspaceStorageNotConfiguredError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +88,10 @@ VERIFY_SOURCES_TOOL_NAME = "verify_sources"
 #: one document should verify them in batches, which costs one extra tool round
 #: and keeps both the stored row and the tool result bounded.
 MAX_CLAIMS_PER_CALL = 12
+
+#: Documents named in the "which document?" error. A session past this many is
+#: told to call ``document_read`` for the full listing instead.
+MAX_LISTED_DOCUMENTS = 20
 
 #: Refused outright rather than scanned. A passage longer than this is not a
 #: passage, and the quote is model-controlled input.
@@ -146,6 +168,75 @@ def _parse_claims(claims: Any) -> List[Claim]:
     return parsed
 
 
+def _name_key(name: str) -> str:
+    """A filename reduced to what survives Bedrock's document-name sanitizer.
+
+    The inline block for ``facilities_policy.md`` is named
+    ``facilities_policy_md``, the ``[Attached files: …]`` marker says
+    ``facilities_policy.md``, and a model may drop the extension or the case.
+    All of them reduce to the same key.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def _filename_keys(filename: str) -> set:
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    return {_name_key(filename), _name_key(stem)} - {""}
+
+
+async def _resolve_session_document(user_id: str, session_id: str, requested: str) -> str:
+    """The upload id of the session document ``requested`` names, or raise.
+
+    ``requested`` is whatever the model sent that is not an upload id: a
+    filename, a guess, or nothing. A unique filename match wins; otherwise a
+    session with exactly one document means that document, because there is
+    nothing else the model can have meant. Anything still ambiguous raises with
+    the session's documents listed, so the next call can name one.
+    """
+    listing = await list_session_documents(user_id, session_id)
+    documents = listing.get("documents") or []
+
+    key = _name_key(requested)
+    if key:
+        named = [d for d in documents if key in _filename_keys(d["filename"])]
+        if len(named) == 1:
+            return named[0]["upload_id"]
+    if len(documents) == 1:
+        return documents[0]["upload_id"]
+
+    if not documents:
+        raise DocumentReadError(
+            "This conversation has no readable document to verify a quote against."
+        )
+    shown = documents[:MAX_LISTED_DOCUMENTS]
+    choices = ", ".join(f"'{d['upload_id']}' ({d['filename']})" for d in shown)
+    more = (
+        f" and {len(documents) - len(shown)} more (call document_read with no arguments for all)"
+        if len(documents) > len(shown)
+        else ""
+    )
+    lead = f"No document matches '{requested}'." if requested else "Say which document."
+    raise DocumentReadError(
+        f"{lead} Pass one of these as upload_id: {choices}{more}."
+    )
+
+
+async def _provenance_units(user_id: str, session_id: str, requested: str):
+    """``document_provenance_units`` for the document the model named.
+
+    A real upload id costs exactly what it did before. Only a missing or
+    unknown one pays the session listing query.
+    """
+    requested = (requested or "").strip()
+    if requested:
+        try:
+            return await document_provenance_units(user_id, session_id, requested)
+        except WorkspaceFileNotFoundError:
+            pass
+    upload_id = await _resolve_session_document(user_id, session_id, requested)
+    return await document_provenance_units(user_id, session_id, upload_id)
+
+
 async def _persist(
     user_id: str, session_id: str, tool_use_id: str, verdicts: List[Dict[str, Any]]
 ) -> None:
@@ -177,9 +268,9 @@ def make_verify_sources_tool(session_id: str, user_id: str):
 
     @tool(name=VERIFY_SOURCES_TOOL_NAME, context=True)
     async def verify_sources(
-        upload_id: str,
         claims: List[Dict[str, Any]],
         tool_context: ToolContext,
+        upload_id: str = "",
     ) -> Any:
         """Check that each value you are asserting is really in the document.
 
@@ -207,8 +298,9 @@ def make_verify_sources_tool(session_id: str, user_id: str):
         you do not need to repeat the location in your answer.
 
         Args:
-            upload_id: The document's id, from the attachment note, the
-                document listing, or an earlier document_read call.
+            upload_id: Which document. Leave it out when the conversation has
+                one document. Otherwise give the document's filename, or its
+                upload_id from document_read's listing. Never guess an id.
             claims: One object per value, each with:
                 id — a short label for the value, e.g. "total_award";
                 value — the value exactly as you will state it to the user;
@@ -227,7 +319,7 @@ def make_verify_sources_tool(session_id: str, user_id: str):
             return _error(f"❌ {exc}")
 
         try:
-            meta, fmt, texts = await document_provenance_units(user_id, session_id, upload_id)
+            meta, fmt, texts = await _provenance_units(user_id, session_id, upload_id)
         except WorkspaceStorageNotConfiguredError:
             return _error(_NO_STORAGE_MESSAGE)
         except WorkspaceError as exc:
@@ -293,6 +385,7 @@ def make_verify_sources_tool(session_id: str, user_id: str):
 
 __all__ = [
     "MAX_CLAIMS_PER_CALL",
+    "MAX_LISTED_DOCUMENTS",
     "MAX_QUOTE_CHARS",
     "VERIFY_SOURCES_TOOL_NAME",
     "make_verify_sources_tool",

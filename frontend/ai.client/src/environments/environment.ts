@@ -24,5 +24,8 @@ export const environment = {
         sourceProvenance: false,
         documentExtract: false,
         handoffs: false,
+        sessionRewind: false,
+        sessionFork: false,
+        quotaRequests: false,
     } satisfies FeatureFlags,
 };

@@ -161,6 +161,11 @@
                   <button type="button" (click)="onEdit(agent)" [attr.aria-label]="'Edit ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Edit'" appTooltipPosition="top">
                     <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                   </button>
+                  @if (canDuplicate(agent)) {
+                    <button type="button" (click)="onDuplicate(agent)" [disabled]="duplicatingId() !== null" [attr.aria-label]="'Duplicate ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 disabled:opacity-50 dark:hover:bg-gray-700" [appTooltip]="'Duplicate'" appTooltipPosition="top">
+                      <ng-icon name="heroDocumentDuplicate" class="size-4" aria-hidden="true" />
+                    </button>
+                  }
                   @if ((agent.userPermission ?? 'owner') === 'owner') {
                     <button type="button" (click)="onShare(agent)" [attr.aria-label]="'Share ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Share'" appTooltipPosition="top">
                       <ng-icon name="heroShare" class="size-4" aria-hidden="true" />
@@ -212,6 +217,11 @@
                   <button type="button" (click)="onEdit(agent)" [attr.aria-label]="'Edit ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Edit'" appTooltipPosition="top">
                     <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                   </button>
+                  @if (canDuplicate(agent)) {
+                    <button type="button" (click)="onDuplicate(agent)" [disabled]="duplicatingId() !== null" [attr.aria-label]="'Duplicate ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 disabled:opacity-50 dark:hover:bg-gray-700" [appTooltip]="'Duplicate'" appTooltipPosition="top">
+                      <ng-icon name="heroDocumentDuplicate" class="size-4" aria-hidden="true" />
+                    </button>
+                  }
                   @if ((agent.userPermission ?? 'owner') === 'owner') {
                     <button type="button" (click)="onShare(agent)" [attr.aria-label]="'Share ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Share'" appTooltipPosition="top">
                       <ng-icon name="heroShare" class="size-4" aria-hidden="true" />

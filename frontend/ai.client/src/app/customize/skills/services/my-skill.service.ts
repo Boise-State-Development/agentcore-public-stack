@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import { AgentService } from '../../../agents/services/agent.service';
 import { ConfigService } from '../../../services/config.service';
 import {
   CreateMySkillRequest,
@@ -23,11 +24,18 @@ import {
  * switch is on; a 404 flips it false so the nav entry and page hide gracefully
  * rather than surfacing an error. `null` (unresolved) also hides, so nothing
  * flashes in before disappearing.
+ *
+ * Every write also drops the Agent Designer's memoised `skill` palette: an
+ * authored skill is part of the caller's accessible set (`resolve_accessible_skill_ids`
+ * unions catalog grants with ownership), so a project's Skills page or an Agent form
+ * that fetched the palette before the save must re-fetch it, or the new skill is
+ * missing there until a reload. A user report found exactly that gap.
  */
 @Injectable({ providedIn: 'root' })
 export class MySkillService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
+  private agents = inject(AgentService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/skills/mine`);
 
@@ -79,6 +87,7 @@ export class MySkillService {
         this.http.post<MySkill>(this.baseUrl(), request, { withCredentials: true }),
       );
       this.skills.update((current) => [...current, skill]);
+      this.agents.invalidateBindable('skill');
       return skill;
     } catch (err) {
       this.error.set(this.messageFor(err, 'Failed to create the skill'));
@@ -97,6 +106,7 @@ export class MySkillService {
       this.skills.update((current) =>
         current.map((s) => (s.skillId === skillId ? skill : s)),
       );
+      this.agents.invalidateBindable('skill');
       return skill;
     } catch (err) {
       this.error.set(this.messageFor(err, 'Failed to save the skill'));
@@ -111,6 +121,7 @@ export class MySkillService {
         this.http.delete(`${this.baseUrl()}/${skillId}`, { withCredentials: true }),
       );
       this.skills.update((current) => current.filter((s) => s.skillId !== skillId));
+      this.agents.invalidateBindable('skill');
     } catch (err) {
       this.error.set(this.messageFor(err, 'Failed to delete the skill'));
       throw err;

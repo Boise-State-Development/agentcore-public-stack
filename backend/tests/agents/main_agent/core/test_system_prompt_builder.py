@@ -184,3 +184,24 @@ class TestKatexGuidance:
 
     def test_still_offers_katex_for_equations(self):
         assert "KaTeX" in DEFAULT_SYSTEM_PROMPT
+
+
+class TestMissingToolsGuidance:
+    """The missing-tools section must not name a knowledge base search tool.
+
+    No such tool exists: an Agent's or a project's knowledge base is searched
+    for every message by the turn route (``_search_and_augment``) or sent whole
+    (``kb_full_context``). A prompt that named one sent users to Customize →
+    Tools and had the model draft "ask your administrator" messages when the
+    toggle changed nothing.
+    """
+
+    def test_names_no_knowledge_base_search_tool(self):
+        assert "knowledge base search tool" not in DEFAULT_SYSTEM_PROMPT
+        assert '"knowledge base search"' not in DEFAULT_SYSTEM_PROMPT
+
+    def test_says_the_knowledge_base_is_searched_automatically(self):
+        assert "searched for every message automatically" in DEFAULT_SYSTEM_PROMPT
+
+    def test_forbids_relaying_to_an_administrator(self):
+        assert "relay" in DEFAULT_SYSTEM_PROMPT and "administrator" in DEFAULT_SYSTEM_PROMPT

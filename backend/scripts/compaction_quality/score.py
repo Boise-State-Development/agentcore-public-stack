@@ -13,41 +13,13 @@ with its ``n``, or it is not reported).
 
 from __future__ import annotations
 
-import math
-import re
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-_QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
-
-
-def normalize(text: str) -> str:
-    text = (text or "").translate(_QUOTES).lower()
-    text = text.replace(",", "")
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def contains_any(text: str, values: Iterable[str]) -> bool:
-    haystack = normalize(text)
-    for value in values:
-        needle = normalize(value)
-        if needle and re.search(r"(?<!\w)" + re.escape(needle) + r"(?!\w)", haystack):
-            return True
-    return False
-
-
-def is_correct(answer: str, expected: Sequence[str], forbidden: Sequence[str] = ()) -> bool:
-    return contains_any(answer, expected) and not contains_any(answer, forbidden)
-
-
-def mcnemar_exact(b: int, c: int) -> float:
-    """Two-sided exact McNemar p-value on the discordant pairs ``b`` and ``c``."""
-    n = b + c
-    if n == 0:
-        return 1.0
-    k = min(b, c)
-    tail = sum(math.comb(n, i) for i in range(k + 1)) / (2 ** n)
-    return min(1.0, 2 * tail)
+# One definition for every harness: these moved to the shared eval harness
+# (``apis/shared/evals/score.py``) and are re-exported here for the callers
+# that already import them from this module.
+from apis.shared.evals.score import contains_any, is_correct, mcnemar_exact, normalize  # noqa: F401
 
 
 def task_outcomes(results: Iterable[Dict[str, Any]]) -> Dict[Tuple[str, int, str], Dict[str, Any]]:

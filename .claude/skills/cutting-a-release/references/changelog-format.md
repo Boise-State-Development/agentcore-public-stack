@@ -49,7 +49,17 @@ categories with no entries.
 
 ### 🔧 CI/CD
 - E2E pipeline added with dynamic CloudFront URL discovery and Cognito user provisioning (#255)
+
+### 🗑️ Removed
+- `KB_SEARCH_AHEAD_ENABLED` rollout switch and its off path; a deployment that set it `=false` loses that opt-out (#260)
 ```
+
+Two things the lead paragraph always states, even as "none": whether the release
+adds or re-defaults a **feature flag** (name the variable, and say "default off"
+or "now on by default"), and whether it needs a **manual step** (name the
+`backfill_*.py` script or the re-seed). A flag's `### 🚀 Added` line carries its
+variables inline, as `(in development, default off: X_ENABLED / CDK_X_ENABLED,
+features.x)`; a retired flag is a `### 🗑️ Removed` line naming the variable.
 
 ## Style rules
 

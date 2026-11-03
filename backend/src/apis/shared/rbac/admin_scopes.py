@@ -71,6 +71,12 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         description="Manage quota tiers, assignments, overrides, and quota events.",
     ),
     AdminScope(
+        id="admin.quota_requests",
+        label="Quota Requests",
+        group=GROUP_USAGE,
+        description="Decide quota requests and manage quota extensions.",
+    ),
+    AdminScope(
         id="admin.fine_tuning",
         label="Fine-Tuning",
         group=GROUP_USAGE,

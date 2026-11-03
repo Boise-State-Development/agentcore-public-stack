@@ -46,6 +46,9 @@ class PendingInterrupt(BaseModel):
       already looking at. Unlike the other two this interrupt is raised by the
       tool itself via ``ToolContext``, not by a hook — the persisted shape and
       the resume path are identical either way.
+    - ``client_tool`` — written for a client-executed tool (``apis.shared.
+      client_tools``). Reuses ``tool_name`` + ``tool_input`` so a terminal that
+      reconnects can re-offer the call it was asked to run.
     - ``browser_login`` — written for ``request_user_login``. Carries
       ``browser_session`` (JSON-encoded :class:`BrowserSessionRef`) so the live
       view can be re-offered after a refresh. Deliberately holds **no URL**:
@@ -60,7 +63,7 @@ class PendingInterrupt(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     interrupt_id: str = Field(..., alias="interruptId", description="Strands interrupt id used to resume the paused turn")
-    kind: Literal["oauth", "tool_approval", "user_question", "browser_login"] = Field(
+    kind: Literal["oauth", "tool_approval", "user_question", "browser_login", "client_tool"] = Field(
         default="oauth",
         description="Discriminator: which variant this interrupt represents",
     )
@@ -144,6 +147,17 @@ class PausedTurnSnapshot(BaseModel):
     caching_enabled: Optional[bool] = Field(default=None, alias="cachingEnabled")
     max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
     agent_type: Optional[str] = Field(default=None, alias="agentType")
+    # Part of the agent cache key, so a resume MUST reuse the value the
+    # paused turn ran with. Resuming under a different surface would rebuild
+    # under a different key and strand the paused agent, which Strands then
+    # reports as "must resume from interrupt with list of interruptResponse's".
+    client_surface: Optional[str] = Field(default=None, alias="clientSurface")
+    # JSON-encoded list of the client-executed tool specs the paused turn was
+    # built with (`apis.shared.client_tools.ClientToolSpec`). Resume MUST
+    # rebuild them: on resume Strands re-enters the paused tool body with the
+    # client's response, so the tool has to exist on the rebuilt agent. Also a
+    # cache-key element via its digest. None for turns without client tools.
+    client_tools: Optional[str] = Field(default=None, alias="clientTools")
     enabled_skills: Optional[List[str]] = Field(
         default=None,
         alias="enabledSkills",
@@ -192,12 +206,19 @@ class PausedTurnSnapshot(BaseModel):
                     "replays it or the paused agent is orphaned. None when the turn had no "
                     "memory tools and on snapshots written before the field existed.",
     )
+    memory_mode: Optional[str] = Field(
+        default=None,
+        alias="memoryMode",
+        description="Effective long-term-memory mode ('on' | 'read_only' | 'off') of "
+                    "the paused turn. A cache-key element: resume replays it or the paused "
+                    "agent is orphaned. None on snapshots written before the field existed "
+                    "(see resume_memory_mode).",
+    )
     long_term_memory: Optional[bool] = Field(
         default=None,
         alias="longTermMemory",
-        description="Whether the paused turn ran with long-term memory. A cache-key "
-                    "element: resume replays it or the paused agent is orphaned. None on "
-                    "snapshots written before the field existed (treated as on).",
+        description="Legacy: written by pre-three-mode builds of #114. Read only by "
+                    "resume_memory_mode(); False means off.",
     )
     memory_context: Optional[str] = Field(
         default=None,
@@ -215,6 +236,17 @@ class PausedTurnSnapshot(BaseModel):
     )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
+
+    def resume_memory_mode(self) -> str:
+        """The memory mode a resumed turn replays.
+
+        Snapshots written by the three-mode build carry ``memory_mode``. Older
+        ones carry only the legacy ``long_term_memory`` bool: False resumes off,
+        anything else on.
+        """
+        if self.memory_mode in ("on", "read_only", "off"):
+            return self.memory_mode
+        return "off" if self.long_term_memory is False else "on"
 
 
 #: How long an attended turn's pause stays resumable. The person was watching
@@ -246,6 +278,11 @@ class SessionPreferences(BaseModel):
     assistant_id: Optional[str] = Field(default=None, alias="assistantId", description="Assistant ID attached to this session")
     project_id: Optional[str] = Field(default=None, alias="projectId", description="Shared Project whose harness this session runs, when assistantId is a project's agent")
     agent_type: Optional[str] = Field(default=None, alias="agentType", description="Agent mode this conversation runs in ('skill' or 'chat'); reopening the session restores it")
+    # Incognito chat (#1738): the conversation reads long-term memory but never
+    # adds to it. Set by the server only when it creates the session row, from
+    # the first turn's request, and never changed after (see
+    # ``session_is_incognito``).
+    incognito: Optional[bool] = Field(default=None, alias="incognito", description="True when this conversation never writes to long-term memory")
 
     # System prompt hash for tracking exact prompt version sent to the model
     # This is a hash of the FINAL rendered system prompt (after date injection, variable substitution, etc.)
@@ -508,6 +545,75 @@ class SessionSteerRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class SessionRewindRequest(BaseModel):
+    """Request body for POST /sessions/{id}/rewind.
+
+    Names the user message to rewind to. The conversation is cut just before
+    it, so it and everything after it are hidden (never deleted), and its text
+    comes back for the composer. See docs/specs/conversation-rewind-and-fork.md §4.
+    """
+
+    message_id: str = Field(
+        min_length=1,
+        max_length=512,
+        alias="messageId",
+        description="The user message to rewind to, as `msg-{sessionId}-{index}`",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SessionForkRequest(BaseModel):
+    """Request body for POST /sessions/{id}/fork: the user message to fork from."""
+
+    message_id: str = Field(
+        min_length=1,
+        max_length=512,
+        alias="messageId",
+        description="The user message to fork from, as `msg-{sessionId}-{index}`. The fork holds everything before it",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SessionForkResponse(BaseModel):
+    """Result of a fork: the new session, and the message's text for its composer."""
+
+    session_id: str = Field(..., alias="sessionId")
+    title: str
+    prefill_text: str = Field(..., alias="prefillText")
+    root_session_id: str = Field(
+        ...,
+        alias="rootSessionId",
+        description="The conversation this family of forks started from. The SPA sends it as `affinity_session_id` on the fork's turns so they run in the container where the parent's history is warm",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SessionRewindResponse(BaseModel):
+    """Result of a rewind."""
+
+    next_message_index: int = Field(
+        ...,
+        alias="nextMessageIndex",
+        description="The index the next stored message will take; the SPA numbers its next message from it",
+    )
+    prefill_text: str = Field(
+        ...,
+        alias="prefillText",
+        description="The rewound message's text as the user typed it, for the composer",
+    )
+    rewound_message_ids: List[str] = Field(
+        default_factory=list,
+        alias="rewoundMessageIds",
+        description="The visible messages the rewind hid, oldest first",
+    )
+    epoch: int = Field(..., description="The session's rewind epoch after this rewind")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class SessionSteerResponse(BaseModel):
     """Result of arming a mid-turn steer.
 
@@ -612,6 +718,16 @@ class SessionMetadataResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     session_id: str = Field(..., alias="sessionId", description="Session identifier")
+    root_session_id: Optional[str] = Field(
+        None,
+        alias="rootSessionId",
+        description="Set on a fork: the conversation its family started from, which its turns pin their container to (rewind/fork spec §7)",
+    )
+    forked_from: Optional[Dict[str, Any]] = Field(
+        None,
+        alias="forkedFrom",
+        description="Set on a fork: {sessionId, messageIndex, cut, parentRewindEpoch}",
+    )
     title: str = Field(..., description="Session title")
     status: Literal["active", "archived", "deleted"] = Field(..., description="Session status")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
@@ -1016,4 +1132,9 @@ class MessagesListResponse(BaseModel):
         False,
         alias="fromArchive",
         description="True when Memory's events for this session have expired and these messages are the conversation archive's text-only copy. The agent cannot restore from the archive, and a new turn would be numbered from 0 and overwrite the archived first turn, so the SPA offers such a session read-only. Set on every page of an archive-served session.",
+    )
+    next_message_index: Optional[int] = Field(
+        None,
+        alias="nextMessageIndex",
+        description="The index the next stored message will take (the session's physical message count). Differs from the number of messages returned once a rewind has hidden some: ids stay positional (`msg-{sessionId}-{index}`) and are never reused, so the SPA numbers new messages from this rather than from its list length. Set only while SESSION_REWIND_ENABLED is on.",
     )

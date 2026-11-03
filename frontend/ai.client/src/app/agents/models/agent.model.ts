@@ -147,6 +147,25 @@ export interface AgentRunnability {
   missing: MissingCapability[];
 }
 
+/**
+ * One of an Agent's bound skills that will run for the signed-in user, from
+ * `GET /agents/{id}/skills`. What the composer's `/` menu is built from in an Agent
+ * conversation (a project's included): the user's own `/skills/` list cannot name a
+ * skill another member authored. `slug` is the runtime's activation key, served by the
+ * backend and never re-derived here.
+ */
+export interface AgentBoundSkill {
+  skillId: string;
+  displayName: string;
+  description: string;
+  slug: string;
+}
+
+export interface AgentSkillsResponse {
+  agentId: string;
+  skills: AgentBoundSkill[];
+}
+
 export interface CreateAgentDraftRequest {
   name?: string;
 }

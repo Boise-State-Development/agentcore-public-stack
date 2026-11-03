@@ -9,6 +9,8 @@ rule: **no audit record → no run** (no bearer mint, no HTTP).
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -293,6 +295,48 @@ async def test_timeout_surfaces_as_timeout_status(monkeypatch, delivery_spy):
     )
 
     assert result.status == "timeout"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({}, {}),
+        (
+            {"file_upload_ids": ["up-1"], "enabled_skills": ["web_research"]},
+            {"file_upload_ids": ["up-1"], "enabled_skills": ["web_research"]},
+        ),
+        ({"enabled_skills": []}, {"enabled_skills": []}),
+    ],
+)
+async def test_upload_ids_and_skills_pass_through_only_when_given(monkeypatch, delivery_spy, kwargs, expected):
+    """``None`` leaves the field off the request (the runtime's default); an empty list is sent as-is.
+
+    The eval harness relies on both: a document case attaches fixtures by upload id
+    the way the SPA does, and ``enabled_skills=[]`` must mean "no skills", not "all".
+    """
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_HAPPY_STREAM)
+
+    _mock_http(monkeypatch, handler)
+    await run_agent_headless(
+        user_id="user-1",
+        prompt="ping",
+        auth=StaticBearerAuth("t"),
+        invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()),
+        **kwargs,
+    )
+
+    payload = seen["payload"]
+    for field in ("file_upload_ids", "enabled_skills"):
+        if field in expected:
+            assert payload[field] == expected[field]
+        else:
+            assert field not in payload
 
 
 # ---------------------------------------------------------------------------

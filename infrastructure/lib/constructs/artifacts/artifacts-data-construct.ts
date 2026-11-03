@@ -6,7 +6,6 @@ import { Construct } from 'constructs';
 
 import {
   AppConfig,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
 } from '../../config';
@@ -135,7 +134,6 @@ export class ArtifactsDataConstruct extends Construct {
         },
       ],
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
     });
 
     // ── SSM publications (consumed by restore tooling, app-api runtime) ──

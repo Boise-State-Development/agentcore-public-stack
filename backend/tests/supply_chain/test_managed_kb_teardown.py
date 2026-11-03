@@ -30,6 +30,7 @@ Requirements: 20.8, 13.4, 13.5, 24.9
 import json
 import os
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -135,8 +136,21 @@ def _ours():
 @pytest.fixture
 def run_teardown(tmp_path):
     """Run ``managed-kb.sh`` against a scripted account. Returns (result, calls)."""
+    if sys.platform == "win32":
+        # The harness is POSIX throughout: a ':'-separated PATH, a stub `aws`
+        # run through its `#!/usr/bin/env python3` shebang, and bash itself
+        # (on Windows usually the WSL launcher). Linux and macOS still run it.
+        pytest.skip("managed-kb.sh harness needs a POSIX shell environment")
 
-    def _run(views, tags, tag_errors=None, delete_errors=None, extra_env=None, script=KB_SCRIPT):
+    def _run(
+        views,
+        tags,
+        tag_errors=None,
+        delete_errors=None,
+        extra_env=None,
+        script=KB_SCRIPT,
+        define_log_helpers=True,
+    ):
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir(exist_ok=True)
         stub = bin_dir / "aws"
@@ -182,15 +196,17 @@ def run_teardown(tmp_path):
 
         # The script sources load-env.sh only if log_info is undefined, so define
         # the log helpers up front and dot-source the script into that shell.
-        harness = textwrap.dedent(
-            f"""
-            log_info() {{ echo "[INFO] $1"; }}
-            log_warn() {{ echo "[WARN] $1"; }}
-            log_success() {{ echo "[SUCCESS] $1"; }}
+        # `define_log_helpers=False` is how destroy.sh really runs it: a child
+        # process with no shell functions, which then sources load-env.sh.
+        helpers = textwrap.dedent(
+            """
+            log_info() { echo "[INFO] $1"; }
+            log_warn() { echo "[WARN] $1"; }
+            log_success() { echo "[SUCCESS] $1"; }
             GREEN=""; NC=""
-            source "{script}"
             """
         )
+        harness = (helpers if define_log_helpers else "") + f'source "{script}"\n'
         # A hard wall. Every case here should finish in well under a second, so a
         # run that reaches this limit is a runaway loop and must fail the test
         # rather than block the suite. `timeout` raises, which is the correct
@@ -274,6 +290,23 @@ class TestOnlyTaggedResourcesAreDeleted:
 
         assert result.returncode == 0
         assert _deleted_ids(calls) == []
+        assert "No Managed Knowledge Bases to delete" in result.stdout
+
+    def test_runs_without_the_callers_log_helpers(self, run_teardown):
+        """destroy.sh runs this script as a child process, which inherits no
+        shell functions, so it gets only what load-env.sh defines. load-env.sh
+        has no log_success, and calling it exited 127 under `set -e`, which
+        aborted every teardown before a single stack was deleted. The harness
+        above defines log_success itself, which is how that went unseen."""
+        result, calls = run_teardown(
+            [[]],
+            {},
+            define_log_helpers=False,
+            extra_env={"CDK_PROJECT_PREFIX": PREFIX, "LOAD_ENV_QUIET": "true"},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "command not found" not in result.stderr
         assert "No Managed Knowledge Bases to delete" in result.stdout
 
     def test_pagination_is_followed(self, run_teardown):

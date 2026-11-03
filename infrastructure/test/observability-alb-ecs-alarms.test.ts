@@ -131,8 +131,11 @@ describe('ALB and ECS service alarms', () => {
   });
 
   describe('ECS service alarms', () => {
-    it('creates the three service alarms', () => {
-      for (const name of ['app-api-cpu-high', 'app-api-memory-high', 'app-api-running-tasks-low']) {
+    it('creates the four service alarms', () => {
+      for (const name of [
+        'app-api-cpu-high', 'app-api-memory-high', 'app-api-running-tasks-low',
+        'app-api-event-loop-lag',
+      ]) {
         byName(name);
       }
     });
@@ -165,6 +168,27 @@ describe('ALB and ECS service alarms', () => {
       expect(keys).toEqual(['ClusterName', 'ServiceName']);
     });
 
+    // The watchdog (backend/src/apis/app_api/telemetry/event_loop_lag.py) emits
+    // the worst asyncio.sleep drift every 10 s; Maximum over one minute is the
+    // longest single stall. A single-worker uvicorn stalled for 2 s has stalled
+    // /health too, so this is the early read on the hang that ECS otherwise
+    // only notices after three failed probes.
+    it('event-loop lag alarm reads Maximum EventLoopLagMs over 1-minute periods, > 2000 ms for 2 of 3', () => {
+      const alarm = byName('app-api-event-loop-lag');
+      expect(alarm.Properties.Namespace).toBe('AgentCoreStack/TurnLatency');
+      expect(alarm.Properties.MetricName).toBe('EventLoopLagMs');
+      expect(alarm.Properties.Statistic).toBe('Maximum');
+      expect(alarm.Properties.Period).toBe(60);
+      expect(alarm.Properties.Threshold).toBe(2000);
+      expect(alarm.Properties.EvaluationPeriods).toBe(3);
+      expect(alarm.Properties.DatapointsToAlarm).toBe(2);
+      expect(alarm.Properties.ComparisonOperator).toBe('GreaterThanThreshold');
+      // Absent data means no task is publishing, which running-tasks-low owns.
+      expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
+      // Dimension-less on purpose: every EMF metric here is a fleet aggregate.
+      expect(alarm.Properties.Dimensions).toBeUndefined();
+    });
+
     it('running-task alarm fires below desired count and treats missing data as BREACHING', () => {
       const alarm = byName('app-api-running-tasks-low');
       expect(alarm.Properties.ComparisonOperator).toBe('LessThanThreshold');
@@ -178,7 +202,7 @@ describe('ALB and ECS service alarms', () => {
       'alb-elb-5xx', 'alb-target-5xx', 'alb-unhealthy-hosts',
       'alb-target-connection-errors', 'alb-rejected-connections',
       'alb-target-p99-latency', 'app-api-cpu-high', 'app-api-memory-high',
-      'app-api-running-tasks-low',
+      'app-api-running-tasks-low', 'app-api-event-loop-lag',
     ]) {
       const alarm = byName(name);
       expect(alarm.Properties.AlarmActions).toHaveLength(1);

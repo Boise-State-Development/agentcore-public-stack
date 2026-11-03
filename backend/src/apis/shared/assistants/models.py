@@ -623,6 +623,33 @@ class AgentRunnabilityResponse(BaseModel):
         default_factory=list, description="What the viewer cannot reach; empty when ready"
     )
 
+class AgentBoundSkill(BaseModel):
+    """One of an Agent's bound skills that will run for the requesting user.
+
+    Served by ``GET /agents/{id}/skills`` for the composer's ``/`` menu in an Agent
+    conversation. Carries the id (the menu keys rows by it), the display fields, and the
+    runtime's activation ``slug`` — the token the menu writes into the message and the
+    name the model reads in ``<available_skills>``. The slug is the backend's, never
+    re-derived client-side (``UserSkillResponse.slug`` says why).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    skill_id: str = Field(..., alias="skillId")
+    display_name: str = Field(..., alias="displayName")
+    description: str
+    slug: str
+
+
+class AgentSkillsResponse(BaseModel):
+    """The Agent's bound skills resolved for the requesting user, in binding order."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId")
+    skills: List[AgentBoundSkill] = Field(default_factory=list)
+
+
 class AgentResponse(BaseModel):
     """Agent read-shape (D3) — the projection served by the ``/agents/*`` surface.
 

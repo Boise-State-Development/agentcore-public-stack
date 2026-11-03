@@ -169,6 +169,8 @@ async def run_agent_headless(
     enabled_tools: Optional[List[str]] = None,
     agent_type: Optional[str] = None,
     inference_params: Optional[Dict[str, Any]] = None,
+    file_upload_ids: Optional[List[str]] = None,
+    enabled_skills: Optional[List[str]] = None,
     trigger: str = "manual",
     invocations_base_url: Optional[str] = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
@@ -178,9 +180,13 @@ async def run_agent_headless(
     """Run one agent turn as ``user_id`` with no live session.
 
     The run-config parameters (``model_id``, ``rag_assistant_id``,
-    ``enabled_tools``, ``agent_type``, ``inference_params``) mirror the
-    existing ``InvocationRequest`` contract — the entrypoint resolves *no*
-    new config type (scheduled-agent-runs.md decision #6).
+    ``enabled_tools``, ``agent_type``, ``inference_params``,
+    ``file_upload_ids``, ``enabled_skills``) mirror the existing
+    ``InvocationRequest`` contract — the entrypoint resolves *no* new config
+    type (scheduled-agent-runs.md decision #6). ``file_upload_ids`` name READY
+    uploads in this session, as the SPA sends them after an upload completes;
+    ``enabled_skills=None`` means every RBAC-accessible skill, as it does for
+    the SPA.
 
     ``enabled_tools=None`` means "the user's defaults" — inference-api
     resolves it to **all RBAC-allowed tools** for the owner, exactly as an
@@ -243,6 +249,10 @@ async def run_agent_headless(
         payload["agent_type"] = agent_type
     if inference_params is not None:
         payload["inference_params"] = inference_params
+    if file_upload_ids is not None:
+        payload["file_upload_ids"] = file_upload_ids
+    if enabled_skills is not None:
+        payload["enabled_skills"] = enabled_skills
 
     acc = InvocationStreamAccumulator()
     try:

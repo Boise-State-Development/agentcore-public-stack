@@ -42,6 +42,12 @@ PUBLIC_ROUTE_PATTERNS: set[str] = {
     "/auth/logout",
     "/auth/callback",  # BFF Token Handler OAuth callback (Phase 3) — Cognito redirects here with the auth code; no Bearer involved.
     "/oauth/callback",
+    # CLI device-authorization flow (RFC 8628 shape). All three legs are
+    # necessarily pre-authentication — this *is* how a terminal logs in.
+    # What guards each one instead of a session:
+    "/auth/cli/authorize",  # entry point; the caller has no credential yet by definition. Rate-limited per IP.
+    "/auth/cli/verify",  # browser leg; authorizes nothing itself — it starts the normal Cognito login, exactly like /auth/login.
+    "/auth/cli/token",  # the 256-bit device_code in the body *is* the credential, and it is single-use.
     "/chat/api-converse",
     "/system/status",
     "/system/first-boot",

@@ -4,6 +4,8 @@ import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { Dialog, DialogRef } from '@angular/cdk/dialog';
 import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 import { Router } from '@angular/router';
+import { signal } from '@angular/core';
+import { AgentService } from '../services/agent.service';
 
 import { TemplatePickerDialogComponent } from './template-picker-dialog.component';
 import { AgentTemplatesService } from '../services/agent-templates.service';
@@ -42,6 +44,12 @@ describe('TemplatePickerDialogComponent', () => {
     { draft: DRAFT_A, pitch: 'Answers strictly from the documents you give it.' },
   ];
 
+  const AGENT_SERVICE_STUB = {
+    agents$: signal([]),
+    loadAgents: vi.fn().mockResolvedValue(undefined),
+    duplicateAgent: vi.fn(),
+  };
+
   /**
    * Build the component with a stubbed templates service. `loadResult` controls what the
    * service returns: a catalog array (success/empty) or a rejected promise (error). The
@@ -66,6 +74,7 @@ describe('TemplatePickerDialogComponent', () => {
             },
           },
         },
+        { provide: AgentService, useValue: AGENT_SERVICE_STUB },
         {
           provide: AgentTemplatesService,
           useValue: {
@@ -184,6 +193,7 @@ describe('TemplatePickerDialogComponent', () => {
       TestBed.configureTestingModule({
         providers: [
           { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+          { provide: AgentService, useValue: AGENT_SERVICE_STUB },
           { provide: AgentTemplatesService, useValue: { loadTemplates: () => Promise.resolve(CATALOG) } },
         ],
       });

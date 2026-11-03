@@ -14,6 +14,9 @@ export interface SidebarItemPreference {
   visible: boolean;
 }
 
+/** Mirrors `MemoryMode` in `apis/shared/user_settings/models.py`. */
+export type MemoryMode = 'on' | 'read_only' | 'off';
+
 export interface UserSettings {
   defaultModelId: string | null;
   /**
@@ -34,10 +37,11 @@ export interface UserSettings {
    */
   sidebarItems?: SidebarItemPreference[] | null;
   /**
-   * Long-term memory (learned preferences and facts) is on unless this is
-   * `false`; missing or null means on. It does not affect project or agent memory.
+   * Long-term memory mode: `on` uses and learns memories, `read_only` uses
+   * existing ones but learns nothing new, `off` does neither. Missing or null
+   * means `on`. Memory Spaces of projects and agents are separate.
    */
-  memoryEnabled?: boolean | null;
+  memoryMode?: MemoryMode | null;
 }
 
 /** `MAX_PERSONAL_INSTRUCTIONS_CHARS` in `apis/shared/user_settings/models.py`. */

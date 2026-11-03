@@ -3,11 +3,19 @@
 from typing import Optional, List
 from apis.shared.timestamps import to_iso, utc_now_iso
 from datetime import datetime, timezone
+import asyncio
 import boto3
 from botocore.exceptions import ClientError
 import logging
 import os
-from .models import QuotaTier, QuotaAssignment, QuotaEvent, QuotaAssignmentType, QuotaOverride
+from .models import (
+    QuotaTier,
+    QuotaAssignment,
+    QuotaEvent,
+    QuotaAssignmentType,
+    QuotaOverride,
+    QuotaExtension,
+)
 from agents.main_agent.config.constants import EnvVars, Defaults
 from apis.shared.security.log_sanitize import scrub_log
 
@@ -626,7 +634,10 @@ class QuotaRepository:
         now = utc_now_iso()
 
         try:
-            response = self.table.query(
+            # Off the event loop, so the resolver's concurrent extension read
+            # (``get_active_extensions``) actually overlaps it.
+            response = await asyncio.to_thread(
+                self.table.query,
                 IndexName="UserOverrideIndex",
                 KeyConditionExpression="GSI4PK = :pk AND GSI4SK >= :now",
                 ExpressionAttributeValues={
@@ -756,3 +767,207 @@ class QuotaRepository:
         except ClientError as e:
             logger.error(f"Error deleting override {scrub_log(override_id)}: {scrub_log(e)}")
             return False
+
+
+    # ========== Quota Extensions (docs/specs/quota-requests-and-extensions.md §7.2) ==========
+    #
+    # PK=QUOTA_EXT#{id}. GSI2 (UserAssignmentIndex) carries
+    # QUOTA_EXT#USER#{userId} / VALID_UNTIL#{validUntil} for the active-for-user
+    # read, the shape overrides use on GSI4; GSI1 (AssignmentTypeIndex) carries
+    # QUOTA_EXT#FUND#{fundingKey} for the chargeback report (PR-4). Both indexes
+    # are otherwise queried only by exact ``ASSIGNMENT_TYPE#`` / ``USER#``
+    # partition keys, so these prefixes cannot surface in an assignment read.
+
+    _EXTENSION_KEYS = ('PK', 'SK', 'GSI1PK', 'GSI1SK', 'GSI2PK', 'GSI2SK')
+
+    @staticmethod
+    def _extension_gsi_keys(extension: QuotaExtension) -> dict:
+        keys = {
+            "GSI2PK": f"QUOTA_EXT#USER#{extension.user_id}",
+            "GSI2SK": f"VALID_UNTIL#{extension.valid_until}",
+        }
+        if extension.funding_key:
+            keys["GSI1PK"] = f"QUOTA_EXT#FUND#{extension.funding_key}"
+            keys["GSI1SK"] = f"VALID_UNTIL#{extension.valid_until}"
+        return keys
+
+    def _item_to_extension(self, item: dict) -> QuotaExtension:
+        for key in self._EXTENSION_KEYS:
+            item.pop(key, None)
+        return QuotaExtension(**item)
+
+    async def create_extension(self, extension: QuotaExtension) -> QuotaExtension:
+        """Write an extension and one pointer per quota period it overlaps.
+
+        Pointers (``QUOTA_EXT_PERIOD#{YYYY-MM}`` / ``{userId}#{extensionId}``)
+        let the chargeback report find every extension that touched a period
+        without a scan. They are written **first**, then the extension: the
+        app-api role has no ``TransactWriteItems``, and a pointer whose
+        extension never landed is harmless (the report loads the extension and
+        skips a miss), while an extension without its pointer would silently
+        drop out of a period's report.
+        """
+        from .extensions import periods_overlapping
+
+        periods = periods_overlapping(extension.valid_from, extension.valid_until)
+
+        def _write() -> None:
+            with self.table.batch_writer() as batch:
+                for period in periods:
+                    batch.put_item(Item={
+                        "PK": f"QUOTA_EXT_PERIOD#{period}",
+                        "SK": f"{extension.user_id}#{extension.extension_id}",
+                        "extensionId": extension.extension_id,
+                        "userId": extension.user_id,
+                    })
+            self.table.put_item(
+                Item={
+                    "PK": f"QUOTA_EXT#{extension.extension_id}",
+                    "SK": "METADATA",
+                    **self._extension_gsi_keys(extension),
+                    **extension.model_dump(by_alias=True, exclude_none=True),
+                },
+                ConditionExpression="attribute_not_exists(PK)",
+            )
+
+        await asyncio.to_thread(_write)
+        return extension
+
+    async def get_extension(self, extension_id: str) -> Optional[QuotaExtension]:
+        try:
+            response = await asyncio.to_thread(
+                self.table.get_item,
+                Key={"PK": f"QUOTA_EXT#{extension_id}", "SK": "METADATA"},
+            )
+        except ClientError as e:
+            logger.error(f"Error getting extension {scrub_log(extension_id)}: {scrub_log(e)}")
+            return None
+        item = response.get('Item')
+        return self._item_to_extension(item) if item else None
+
+    async def get_active_extensions(self, user_id: str) -> List[QuotaExtension]:
+        """Extensions in force for a user now, ``validUntil`` then ``createdAt`` ascending.
+
+        One query on GSI2 bounded below by now, so ended extensions are never
+        read; a future-dated one is filtered by ``validFrom``. Raises on a
+        DynamoDB error: the resolver decides what a failed read means.
+        """
+        now = utc_now_iso()
+        params = {
+            "IndexName": "UserAssignmentIndex",
+            "KeyConditionExpression": "GSI2PK = :pk AND GSI2SK >= :now",
+            "ExpressionAttributeValues": {
+                ":pk": f"QUOTA_EXT#USER#{user_id}",
+                ":now": f"VALID_UNTIL#{now}",
+            },
+        }
+        items: list = []
+        while True:
+            response = await asyncio.to_thread(self.table.query, **params)
+            items.extend(response.get('Items', []))
+            last = response.get('LastEvaluatedKey')
+            if not last:
+                break
+            params["ExclusiveStartKey"] = last
+
+        extensions = [self._item_to_extension(item) for item in items]
+        active = [e for e in extensions if e.is_active(now)]
+        active.sort(key=lambda e: (e.valid_until, e.created_at))
+        return active
+
+    async def list_user_extensions(self, user_id: str) -> List[QuotaExtension]:
+        """Every extension a user has ever held, newest end date first."""
+        params = {
+            "IndexName": "UserAssignmentIndex",
+            "KeyConditionExpression": "GSI2PK = :pk",
+            "ExpressionAttributeValues": {":pk": f"QUOTA_EXT#USER#{user_id}"},
+            "ScanIndexForward": False,
+        }
+        items: list = []
+        while True:
+            response = await asyncio.to_thread(self.table.query, **params)
+            items.extend(response.get('Items', []))
+            last = response.get('LastEvaluatedKey')
+            if not last:
+                break
+            params["ExclusiveStartKey"] = last
+        return [self._item_to_extension(item) for item in items]
+
+    async def list_extensions(self) -> List[QuotaExtension]:
+        """Every extension (admin Extensions tab). A filtered scan, like ``list_overrides``."""
+        params = {
+            "FilterExpression": "begins_with(PK, :prefix) AND SK = :sk",
+            "ExpressionAttributeValues": {":prefix": "QUOTA_EXT#", ":sk": "METADATA"},
+        }
+        items: list = []
+        while True:
+            response = await asyncio.to_thread(self.table.scan, **params)
+            items.extend(response.get('Items', []))
+            last = response.get('LastEvaluatedKey')
+            if not last:
+                break
+            params["ExclusiveStartKey"] = last
+        return [self._item_to_extension(item) for item in items]
+
+    async def revoke_extension(
+        self,
+        extension_id: str,
+        *,
+        revoked_by: str,
+        reason: str,
+        now_iso: Optional[str] = None,
+    ) -> Optional[QuotaExtension]:
+        """End an extension now. Never deletes: a revoked one stays in the report.
+
+        Sets ``validUntil`` **and re-derives the GSI sort keys from it** — the
+        stale-GSI trap overrides fell into, where an edited end date left the
+        index sorting the row by the old one. Returns None when there is no
+        such extension or it was already revoked.
+        """
+        now = now_iso or utc_now_iso()
+        current = await self.get_extension(extension_id)
+        if current is None or current.revoked_at:
+            return None
+        # Revoking a future-dated extension must not leave validFrom > validUntil.
+        valid_until = max(now, current.valid_from)
+
+        names = {
+            "#validUntil": "validUntil",
+            "#revokedAt": "revokedAt",
+            "#revokedBy": "revokedBy",
+            "#revokeReason": "revokeReason",
+            "#gsi2sk": "GSI2SK",
+        }
+        values = {
+            ":validUntil": valid_until,
+            ":revokedAt": now,
+            ":revokedBy": revoked_by,
+            ":revokeReason": reason,
+            ":gsiSk": f"VALID_UNTIL#{valid_until}",
+        }
+        sets = [
+            "#validUntil = :validUntil",
+            "#revokedAt = :revokedAt",
+            "#revokedBy = :revokedBy",
+            "#revokeReason = :revokeReason",
+            "#gsi2sk = :gsiSk",
+        ]
+        if current.funding_key:
+            names["#gsi1sk"] = "GSI1SK"
+            sets.append("#gsi1sk = :gsiSk")
+
+        try:
+            response = await asyncio.to_thread(
+                self.table.update_item,
+                Key={"PK": f"QUOTA_EXT#{extension_id}", "SK": "METADATA"},
+                UpdateExpression="SET " + ", ".join(sets),
+                ConditionExpression="attribute_exists(PK) AND attribute_not_exists(revokedAt)",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return None
+            raise
+        return self._item_to_extension(response['Attributes'])

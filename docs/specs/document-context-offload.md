@@ -648,7 +648,13 @@ visual fidelity before any digest comparison is scored.
    (already pinned for thumbnails); DOCX text comes from a stdlib
    `zipfile` + `ElementTree` extractor over `word/document.xml`. `page_range`
    is PDF-only; DOCX and text use `pattern` or bounded `offset` reads
-   (the workspace read bound, 48 KB).
+   (the workspace read bound, 48 KB). **PDFium is not thread-safe**, and
+   every PDF path here runs on a worker thread (`asyncio.to_thread` for the
+   digest, the executor for thumbnails), so every pypdfium2 call takes the
+   one process-wide re-entrant lock in `apis/shared/files/pdfium_lock.py`.
+   Two PDFs imported 90 ms apart once had their digests parse concurrently
+   and the app-api process died with SIGSEGV (exit 139, no traceback); the
+   lock is what makes "off the request path" safe.
 8. **Token numbers are heuristics.** Bedrock reports no per-block usage;
    `documentTokens` is bytes/4 (documents) and a flat estimate per image,
    the compaction estimator's own numbers. They are comparable across rows and

@@ -72,6 +72,7 @@ from apis.shared.quota import (
     QuotaExceededEvent,
     build_no_quota_configured_event,
     build_quota_exceeded_event,
+    build_quota_funding_notice_event,
     build_quota_session_notice_event,
     build_quota_warning_event,
     get_quota_checker,
@@ -91,6 +92,7 @@ from apis.inference_api.chat.agent_binding_resolver import (
 from apis.shared.sessions.metadata import (
     ensure_session_metadata_exists,
     load_session_meta,
+    session_is_incognito,
 )
 from apis.shared.tools.always_on import (
     resolve_always_on_tool_ids,
@@ -100,6 +102,7 @@ from apis.shared.tools.always_on import (
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
+    MEETING_TASKS_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
     SKILL_AUTHORING_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
@@ -107,7 +110,12 @@ from apis.shared.tools.injected import (
     WORKSPACE_TOOL_IDS,
     injected_tools_are_key_described,
 )
-from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS, memory_enabled
+from apis.shared.user_settings.models import (
+    MAX_PERSONAL_INSTRUCTIONS_CHARS,
+    cap_memory_mode,
+    memory_capabilities,
+    memory_mode_from,
+)
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .app_context_dispatch import (
@@ -336,6 +344,14 @@ async def _find_managed_model(model_id: str | None):
 # remember a preference "just for me", Haiku 4.5 said it had saved or noted it without
 # calling `memory_save` (2 of 10 on dev before; the tool spec alone left 1 of 10). An empty
 # personal space renders no memory block, so this is the one place always in the prompt.
+# The tools paragraph is a 2026-10 support ticket: a harness runs only on the project's bound
+# tools, but the base prompt's missing-tool advice sent a faculty member to Customize →
+# Tools, where turning Canvas on changes nothing for a project. It names the project's
+# Tools page instead and says so over the base advice.
+# The files paragraph is the 2026-10-29 faculty report: a project with 41 .docx submissions was
+# told "I have no function that reads Files-area attachments", because retrieval sees passages
+# and the conversation's document tools see only the conversation's uploads; `project_files`
+# is the harness-only tool that lists and reads Files by name.
 # Constant text, so it costs one cache write per harness, on deploy.
 PROJECT_WORKSPACE_GUIDANCE = (
     "## Project Workspace\n\n"
@@ -345,7 +361,18 @@ PROJECT_WORKSPACE_GUIDANCE = (
     "relevant shared conversations, not only memory.\n\n"
     "When a member asks you to remember something, for the team or just for them, call `memory_save` "
     "in that same turn. Nothing carries into a later conversation until it succeeds, so never say "
-    "you've saved, noted or recorded something you haven't saved."
+    "you've saved, noted or recorded something you haven't saved.\n\n"
+    "The project's files are searched for each message automatically, and the best-matching passages "
+    "are given to you; that search sees passages, not files. To see what is in Files, or to work on one "
+    "file a member names (grade a submission, review a draft, compare two documents), call "
+    "`project_files`: with no arguments it lists every file, and with `filename` it reads that file "
+    "whole, in pages. The Word, PowerPoint, spreadsheet and `document_read` tools see only files attached "
+    "to this conversation, so an empty listing from them says nothing about the project's Files. Never say "
+    "you cannot read the project's files.\n\n"
+    "This project's tools are set on the project, for everyone in it: a member's own choices under "
+    "Customize → Tools do not reach project conversations. When a request needs a tool you don't have, "
+    "say this project doesn't include it, and that someone who can edit the project can add it from "
+    "the project's page under Tools. This replaces the Customize → Tools advice above for this project."
 )
 
 
@@ -360,8 +387,13 @@ def compose_agent_system_prompt(base_prompt: str, instructions: str, *, project_
     Deliberately takes nothing about the invoking user: this text is the head of the
     cacheable system block, and two members of one project must render it identically or
     each member pays a cache write for the same project (the prompt-cache contract).
+
+    A project with no instructions still gets the guidance, with no instructions heading:
+    a new project has none, and its harness runs on the project's tools all the same.
     """
     guidance = f"\n\n{PROJECT_WORKSPACE_GUIDANCE}" if project_harness else ""
+    if not instructions:
+        return f"{base_prompt}{guidance}"
     return f"{base_prompt}{guidance}\n\n## {_instructions_heading(project_harness)}\n\n{instructions}"
 
 
@@ -413,9 +445,19 @@ def _personal_instructions(settings: dict) -> Optional[str]:
     return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
 
 
-def _long_term_memory_for_turn(rag_assistant_id: Optional[str], settings: dict) -> bool:
-    """Long-term memory is off in an Agent conversation and when the user turned it off."""
-    return not rag_assistant_id and memory_enabled(settings)
+def _memory_mode_for_turn(
+    rag_assistant_id: Optional[str], settings: dict, incognito: bool = False
+) -> str:
+    """The user's long-term memory mode, capped to off in an Agent conversation
+    and to read only in an incognito one (#1738)."""
+    mode = cap_memory_mode(memory_mode_from(settings), "off" if rag_assistant_id else "on")
+    return cap_memory_mode(mode, "read_only" if incognito else "on")
+
+
+def _turn_is_incognito(input_data: InvocationRequest, session_meta) -> bool:
+    """Whether this turn's conversation is incognito: the stored flag, or the
+    request's choice when the session has no row yet."""
+    return session_is_incognito(session_meta.row, requested=bool(input_data.incognito))
 
 
 async def _plain_turn_prompt(
@@ -992,6 +1034,55 @@ def _build_skill_authoring_tools(
 
     tools = build_skill_authoring_tools(session_id, user_id, user_email)
     logger.info(f"Created {len(tools)} skill authoring tools")
+    return tools
+
+
+# ============================================================
+# Meeting Transcripts → GitHub Issues Tool Injection
+# ============================================================
+
+async def _build_meeting_tools(
+    enabled_tools: list | None,
+    user_id: str,
+) -> list:
+    """Create the Google Calendar / Zoom / GitHub tool families if enabled.
+
+    One catalog id per vendor (``MEETING_TASKS_TOOL_IDS``); each id present in
+    the turn's tools provisions its whole family
+    (``agents/local_tools/meeting_tasks.py``). Gated on
+    ``MEETING_TASKS_ENABLED`` (in development, default off): off, nothing is
+    built and no catalog read is made.
+
+    Each family closes over ``(user_id, provider_id)``, where ``provider_id``
+    is the connector the admin set on the row ("Required OAuth provider"). It
+    is read from the freshness snapshot the always-on resolver already filled
+    this turn, so the lookup is an in-memory dict read, not a DynamoDB call.
+    The family is built even when the row has no connector yet, so the tool
+    can say so instead of silently not existing. Key-described through the
+    cache key's ``freshness_hash`` (see ``KEY_DESCRIBED_INJECTED_TOOL_IDS``).
+    """
+    if not enabled_tools or not MEETING_TASKS_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    from apis.shared.feature_flags import meeting_tasks_enabled
+
+    if not meeting_tasks_enabled():
+        return []
+
+    from agents.local_tools.meeting_tasks import build_meeting_tasks_tools
+    from apis.shared.tools.freshness import get_local_tool_oauth_providers
+
+    providers = await get_local_tool_oauth_providers()
+    tools = build_meeting_tasks_tools(enabled_tools, user_id, dict(providers))
+    unbound = sorted(
+        tid for tid in MEETING_TASKS_TOOL_IDS.intersection(enabled_tools) if not providers.get(tid)
+    )
+    if unbound:
+        logger.warning(
+            "Meeting tool families enabled without a connector on their catalog row: %s",
+            unbound,
+        )
+    logger.info(f"Created {len(tools)} meeting-transcript tools")
     return tools
 
 
@@ -2099,8 +2190,9 @@ async def stream_conversational_message(
     user_id: str,
     user_input: str,
     persist: bool = True,
-    long_term_memory: bool = True,
+    memory_mode: str = "on",
     user_settings: Optional[dict] = None,
+    incognito_requested: Optional[bool] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -2115,11 +2207,15 @@ async def stream_conversational_message(
         user_id: User ID for persistence
         user_input: The user's original message to save
         persist: False streams the message without writing either turn to history
-        long_term_memory: False in an Agent conversation, whose writes skip
-            long-term memory extraction (``SessionFactory.create_session_manager``).
-            Also turned off here when the user's settings turn memory off.
+        memory_mode: The conversation's cap: "off" in an Agent conversation,
+            whose writes skip long-term memory extraction
+            (``SessionFactory.create_session_manager``). The user's own mode
+            lowers it further here.
         user_settings: The user's settings if the caller already loaded them;
             otherwise read once, and only when memory is still on.
+        incognito_requested: None when ``memory_mode`` already accounts for an
+            incognito conversation. Otherwise the request's incognito choice:
+            the session row is read and its stored flag wins (#1738).
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -2159,15 +2255,22 @@ async def stream_conversational_message(
     try:
         from agents.main_agent.session.persistence import persist_synthetic_messages
 
-        if long_term_memory:
-            long_term_memory = memory_enabled(
-                user_settings if user_settings is not None else await _load_user_settings(user_id)
+        if memory_mode != "off":
+            memory_mode = cap_memory_mode(
+                memory_mode,
+                memory_mode_from(
+                    user_settings if user_settings is not None else await _load_user_settings(user_id)
+                ),
             )
+        if memory_mode == "on" and incognito_requested is not None:
+            row = await load_session_meta(session_id, user_id)
+            if session_is_incognito(row.row, requested=incognito_requested):
+                memory_mode = "read_only"
         session_manager = SessionFactory.create_session_manager(
             session_id=session_id,
             user_id=user_id,
             caching_enabled=False,
-            long_term_memory=long_term_memory,
+            memory_extraction=memory_capabilities(memory_mode)[1],
         )
         persist_synthetic_messages(
             session_manager,
@@ -2358,7 +2461,8 @@ def _refuse_turn(
             user_id=user_id,
             user_input=input_data.message,
             persist=persist,
-            long_term_memory=not input_data.rag_assistant_id,
+            memory_mode="off" if input_data.rag_assistant_id else "on",
+            incognito_requested=bool(input_data.incognito),
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
@@ -2400,6 +2504,7 @@ async def _agent_for_app_dispatch(
     *,
     agent_type: str,
     accessible_skill_ids: Optional[list],
+    incognito: bool = False,
 ):
     """The conversation's agent for an MCP App dispatch (map stage B3).
 
@@ -2448,13 +2553,14 @@ async def _agent_for_app_dispatch(
         mantle_region=mantle_region,
         agent_type=agent_type,
         is_resume=False,
+        client_surface=input_data.client_surface,
         accessible_skill_ids=accessible_skill_ids,
         # This path builds no injected tools, but shares a cache slot
         # with the real turns that do. Read the slot; never seed it.
         cache_write=False,
         assistant_id=input_data.rag_assistant_id,
         text_only_model=is_text_only_model(input_modalities),
-        long_term_memory=_long_term_memory_for_turn(input_data.rag_assistant_id, settings),
+        memory_mode=_memory_mode_for_turn(input_data.rag_assistant_id, settings, incognito),
     )
 
 
@@ -2466,6 +2572,7 @@ async def _agent_for_app_tool_call(
     *,
     agent_type: str,
     accessible_skill_ids: Optional[list],
+    incognito: bool = False,
 ):
     """The agent an App's ``tools/call`` dispatches against.
 
@@ -2492,6 +2599,7 @@ async def _agent_for_app_tool_call(
         auth_token,
         agent_type=agent_type,
         accessible_skill_ids=accessible_skill_ids,
+        incognito=incognito,
     )
 
 
@@ -3142,7 +3250,10 @@ async def _prepare_session_state(
     is_new_session = False
     if not is_resume and not is_continuation:
         is_new_session = await ensure_session_metadata_exists(
-            input_data.session_id, user_id, snapshot=session_meta
+            input_data.session_id,
+            user_id,
+            snapshot=session_meta,
+            incognito=bool(input_data.incognito),
         )
         try:
             from apis.shared.sessions.metadata import (
@@ -3216,6 +3327,7 @@ class TurnQuota:
 
     warning_event: Any = None
     session_notice_event: Any = None
+    funding_notice_event: Any = None
     exceeded_event: Any = None
 
 
@@ -3232,6 +3344,7 @@ async def _check_turn_quota(
     # Check quota if enforcement is enabled
     quota_warning_event = None
     quota_session_notice_event = None
+    quota_funding_notice_event = None
     quota_exceeded_event = None
     if is_quota_enforcement_enabled() and not is_resume and not is_continuation:
         try:
@@ -3277,6 +3390,10 @@ async def _check_turn_quota(
                 if quota_session_notice_event:
                     logger.info("Quota session notice for user")
 
+                # Spend past the central allowance is landing on a fund (quota
+                # extensions §8.2). Built from numbers the check already has.
+                quota_funding_notice_event = build_quota_funding_notice_event(quota_result)
+
         except Exception as e:
             # Log error but don't block request - fail open for quota errors
             logger.error("Error checking quota for user", exc_info=True)
@@ -3284,6 +3401,7 @@ async def _check_turn_quota(
     return TurnQuota(
         warning_event=quota_warning_event,
         session_notice_event=quota_session_notice_event,
+        funding_notice_event=quota_funding_notice_event,
         exceeded_event=quota_exceeded_event,
     )
 
@@ -3513,10 +3631,14 @@ async def _build_turn_tools(
     project_memory,
     turn_has_document: bool,
     text_only_model: bool = False,
+    turn_project_id: Optional[str] = None,
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
-    gate, which is memoized per session once it answers yes."""
+    gate, which is memoized per session once it answers yes, and the meeting
+    tools' connector lookup, served from the catalog snapshot already in
+    memory. ``turn_project_id`` marks a project-harness turn, which also gets
+    ``project_files``."""
     extra_tools = _build_spreadsheet_tools(
         enabled_tools=effective_enabled_tools,
         assistant_id=input_data.rag_assistant_id,
@@ -3550,6 +3672,15 @@ async def _build_turn_tools(
         user_email=current_user.email,
     )
 
+    # Meeting transcripts → GitHub issues. The one builder here that awaits:
+    # the connector ids come from the catalog snapshot the always-on resolver
+    # filled moments ago, so this is a dict read, not IO, on every turn that
+    # carries one of the ids — and a set intersection on every other turn.
+    extra_tools = extra_tools + await _build_meeting_tools(
+        enabled_tools=effective_enabled_tools,
+        user_id=user_id,
+    )
+
     # A project harness addresses its spaces by scope (2.4b), and reads the
     # team's shared tasks (2.5c). Memory first, so the four memory specs keep
     # their place in the cached toolConfig.
@@ -3563,6 +3694,18 @@ async def _build_turn_tools(
             extra_tools
             + build_project_memory_tools(project_memory, current_user)
             + build_shared_task_tools(project_memory.project_id, current_user)
+        )
+
+    # A project harness lists the project's Files and reads one by name
+    # (`project_files`). Retrieval sees passages, never files, so "grade
+    # submission 7" needs this. Gated on the turn being a project's, not on
+    # memory spaces, and placed after the memory family so those specs keep
+    # their place in the cached toolConfig.
+    if turn_project_id and input_data.rag_assistant_id:
+        from apis.inference_api.chat.project_memory import build_project_files_tools
+
+        extra_tools = extra_tools + build_project_files_tools(
+            turn_project_id, input_data.rag_assistant_id, current_user
         )
 
     # document_read for any session that carries a readable attachment
@@ -3598,6 +3741,55 @@ async def _build_turn_tools(
         extra_tools_key_described=extra_tools_key_described,
         memory_binding_key=memory_binding_key,
     )
+
+
+def _build_client_tools(input_data: InvocationRequest) -> list:
+    """Interrupting tools for the request's declared client tools, or []."""
+    if not input_data.client_tools:
+        return []
+    from apis.shared.client_tools import build_client_tools
+
+    return build_client_tools(input_data.client_tools)
+
+
+def _record_client_tools_on(agent, input_data: InvocationRequest) -> None:
+    snapshot = getattr(agent, "_construction_snapshot", None)
+    if isinstance(snapshot, dict) and input_data.client_tools:
+        snapshot["client_tools"] = json.dumps([spec.model_dump(by_alias=True) for spec in input_data.client_tools])
+
+
+def _client_tools_digest(input_data: InvocationRequest) -> str:
+    if not input_data.client_tools:
+        return ""
+    from apis.shared.client_tools import client_tools_digest
+
+    return client_tools_digest(input_data.client_tools)
+
+
+def _client_tools_from_snapshot(snapshot) -> Optional[list]:
+    """Rebuild the paused turn's client tools from its snapshot, or None."""
+    if not getattr(snapshot, "client_tools", None):
+        return None
+    from apis.shared.client_tools import ClientToolSpec, build_client_tools
+
+    try:
+        specs = [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)]
+    except Exception as e:  # noqa: BLE001 - a bad snapshot should miss, not 500
+        logger.warning("Paused-turn snapshot carries unreadable client_tools: %s", e)
+        return None
+    return build_client_tools(specs) or None
+
+
+def _client_tools_digest_from_snapshot(snapshot) -> str:
+    if not getattr(snapshot, "client_tools", None):
+        return ""
+    from apis.shared.client_tools import ClientToolSpec, client_tools_digest
+
+    try:
+        specs = [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)]
+    except Exception:  # noqa: BLE001
+        return ""
+    return client_tools_digest(specs)
 
 
 ResumeUnavailableReason = Literal["missing", "expired", "unknown_interrupt"]
@@ -4016,6 +4208,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 auth_token,
                 agent_type=effective_agent_type,
                 accessible_skill_ids=effective_skill_ids,
+                incognito=_turn_is_incognito(input_data, session_meta),
             )
             payload = await dispatch_app_tool_call(
                 agent,
@@ -4185,6 +4378,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     )
     quota_warning_event = quota.warning_event
     quota_session_notice_event = quota.session_notice_event
+    quota_funding_notice_event = quota.funding_notice_event
     quota_exceeded_event = quota.exceeded_event
 
     # The quota check: a cached tier resolve, a cached O(1) cost-summary
@@ -4227,7 +4421,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # long-term-memory switch all come from it. A preview is an author testing an
     # agent, so it gets none of theirs.
     user_settings = await _load_user_settings(user_id)
-    turn_long_term_memory = _long_term_memory_for_turn(input_data.rag_assistant_id, user_settings)
+    # An incognito conversation (#1738) reads memory but learns nothing. The
+    # flag comes from the row read at the top of the turn, so only a first turn
+    # can set it.
+    turn_memory_mode = _memory_mode_for_turn(
+        input_data.rag_assistant_id,
+        user_settings,
+        _turn_is_incognito(input_data, session_meta),
+    )
     personal_instructions = (
         None if is_preview_session(input_data.session_id) else _personal_instructions(user_settings)
     )
@@ -4651,7 +4852,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
             # Build the base prompt with date
-            base_prompt_builder = SystemPromptBuilder()
+            base_prompt_builder = SystemPromptBuilder(surface=input_data.client_surface)
             base_prompt = base_prompt_builder.build(include_date=True)
 
             # Append assistant instructions to the base prompt.
@@ -4673,8 +4874,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if not system_prompt:
                 from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
-                base_prompt_builder = SystemPromptBuilder()
+                base_prompt_builder = SystemPromptBuilder(surface=input_data.client_surface)
                 system_prompt = base_prompt_builder.build(include_date=True)
+            if turn_project_id:
+                # A new project has no instructions; its harness still needs the
+                # project guidance (memory, shared conversations, where tools are set).
+                system_prompt = compose_agent_system_prompt(system_prompt, "", project_harness=True)
             logger.info(
                 "Assistant has no instructions - using fallback system prompt"
             )
@@ -4795,7 +5000,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # path can leave system_prompt unset).
             if not system_prompt:
                 from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
-                system_prompt = SystemPromptBuilder().build(include_date=True)
+                system_prompt = SystemPromptBuilder(surface=input_data.client_surface).build(include_date=True)
             system_prompt = append_active_prompt(system_prompt, prompt_name, prompt_text)
             logger.info(f"Appended custom system prompt: {prompt_name!r}")
 
@@ -4929,6 +5134,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 mantle_region=snapshot.mantle_region,
                 agent_type=snapshot.agent_type,
                 is_resume=True,
+                # A key dimension for non-web surfaces; replay the paused turn's.
+                client_surface=snapshot.client_surface or input_data.client_surface,
+                # Client-executed tools are the one injected family a resume
+                # MUST rebuild: Strands re-enters the paused tool body with the
+                # client's response, so the tool has to exist on the rebuilt
+                # agent or the resume fails. The specs ride the snapshot; the
+                # digest is replayed so the key lands on the paused agent.
+                extra_tools=_client_tools_from_snapshot(snapshot),
+                client_tools_digest=_client_tools_digest_from_snapshot(snapshot),
                 # The original turn's key carried whether the session had a
                 # readable document; the gate is monotonic, so re-asking it
                 # rebuilds the same key (an orphaned paused agent otherwise).
@@ -4944,9 +5158,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # The memory binding is a key element too (memory tools close
                 # over it); replay the snapshot's value for the same reason.
                 memory_binding=snapshot.memory_binding,
-                # The long-term-memory switch is a key element too; replay the
-                # snapshot's (None on older snapshots, which means on).
-                long_term_memory=snapshot.long_term_memory is not False,
+                # The long-term-memory mode is a key element too; replay the
+                # snapshot's. Legacy snapshots carry only longTermMemory, where
+                # False resumes off and None means on.
+                memory_mode=snapshot.resume_memory_mode(),
                 # The memory block is hashed with the system prompt in the key.
                 memory_context=snapshot.memory_context,
                 # So is a full-context knowledge base, which is too large for the
@@ -5032,7 +5247,17 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 project_memory=project_memory,
                 turn_has_document=attachments.turn_has_document,
                 text_only_model=turn_model.text_only,
+                turn_project_id=turn_project_id,
             )
+            # Client-executed tools (terminal only; the SPA never declares any).
+            # Key-described by construction: the digest is a cache-key element,
+            # so they do not veto caching the way an undescribed injected tool
+            # would. Appended last so the registry's and the other injected
+            # tools keep their positions in toolConfig.
+            client_tools = _build_client_tools(input_data)
+            client_tools_digest = _client_tools_digest(input_data)
+            if client_tools:
+                turn_tools.extra_tools = turn_tools.extra_tools + client_tools
             document_read_available = bool(turn_tools.document_tools)
             extracted_documents_section = _build_extracted_documents_section(
                 attachments.extracted_documents,
@@ -5070,7 +5295,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     # of the build was done: ~0 on a warm turn, its downloads on a
                     # conversation's first.
                     prelude.mark("agent_build.kb_full_context")
-                return await get_agent(
+                built_agent = await get_agent(
                     session_id=input_data.session_id,
                     user_id=user_id,
                     auth_token=auth_token,
@@ -5085,6 +5310,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     agent_type=effective_agent_type,
                     extra_tools=turn_tools.extra_tools,
                     is_resume=False,
+                    client_surface=input_data.client_surface,
+                    client_tools_digest=client_tools_digest,
                     accessible_skill_ids=effective_skill_ids,
                     extra_tools_key_described=turn_tools.extra_tools_key_described,
                     has_document_tools=bool(turn_tools.document_tools),
@@ -5095,8 +5322,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     memory_context=memory_context,
                     text_only_model=turn_model.text_only,
                     knowledge_context=knowledge_context,
-                    long_term_memory=turn_long_term_memory,
+                    memory_mode=turn_memory_mode,
                 )
+                if client_tools:
+                    # The paused-turn snapshot is written from this dict; a
+                    # resume rebuilds the client tools from it (see
+                    # `_client_tools_from_snapshot`). Same specs for a cache hit
+                    # by construction — the digest is in the key.
+                    _record_client_tools_on(built_agent, input_data)
+                return built_agent
 
             # Defer the build into the stream so it can be narrated.
             #
@@ -5177,6 +5411,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # quarter of your month" are different actions for the user.
             if quota_session_notice_event:
                 yield quota_session_notice_event.to_sse_format()
+
+            # …then whose money the turn is spending, once past the central
+            # allowance (quota extensions §8.2). SSE only, never the prompt.
+            if quota_funding_notice_event:
+                yield quota_funding_notice_event.to_sse_format()
 
             # …then what a project's harness is running without for this member (§9.6).
             if agent_notice_event:
@@ -5508,7 +5747,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                             session_id=input_data.session_id,
                             user_id=user_id,
                             user_input=input_data.message,
-                            long_term_memory=turn_long_term_memory,
+                            memory_mode=turn_memory_mode,
                             user_settings=user_settings,
                         ):
                             yield frame

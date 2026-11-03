@@ -28,5 +28,8 @@ export const environment = {
         sourceProvenance: false,
         documentExtract: false,
         handoffs: false,
+        sessionRewind: true,
+        sessionFork: true,
+        quotaRequests: false,
     } satisfies FeatureFlags,
 };

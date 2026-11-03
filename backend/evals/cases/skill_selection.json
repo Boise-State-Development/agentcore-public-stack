@@ -1,0 +1,217 @@
+[
+  {
+    "id": "skill_selection.cited_notes_from_a_page",
+    "family": "skill_selection",
+    "turns": [
+      {
+        "prompt": "Fetch https://example.com and turn it into short notes with a citation (page title and URL) for each point."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ],
+        "not_loads": [
+          "skill_creator"
+        ]
+      }
+    },
+    "notes": "Matches the web_research skill's description almost word for word."
+  },
+  {
+    "id": "skill_selection.research_with_sources",
+    "family": "skill_selection",
+    "turns": [
+      {
+        "prompt": "I'm gathering background on what example domains are for. Start from https://www.iana.org/help/example-domains and give me accurate notes with the source cited."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ],
+        "not_loads": [
+          "skill_creator"
+        ]
+      }
+    },
+    "notes": "Paraphrased research request on a stable public page."
+  },
+  {
+    "id": "skill_selection.summarize_page_with_citation",
+    "family": "skill_selection",
+    "turns": [
+      {
+        "prompt": "Can you read https://example.org and write me a two-sentence summary that cites where it came from?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ]
+      }
+    },
+    "notes": "Shorter, more casual phrasing of the same intent."
+  },
+  {
+    "id": "skill_selection.turn_workflow_into_skill",
+    "family": "skill_selection",
+    "turns": [
+      {
+        "prompt": "I write the same weekly status email every Friday. Help me turn how I do that into a reusable skill."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "skill_creator"
+        ],
+        "not_loads": [
+          "web_research"
+        ]
+      }
+    },
+    "notes": "Matches the skill-creator description's own trigger phrase."
+  },
+  {
+    "id": "skill_selection.skill_never_used",
+    "family": "skill_selection",
+    "turns": [
+      {
+        "prompt": "The skill I made for meeting notes never seems to get used. Why might that be, and how do I fix it?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "skill_creator"
+        ]
+      }
+    },
+    "notes": "Diagnosis of an existing skill, which the description names explicitly."
+  },
+  {
+    "id": "skill_selection.draft_new_skill_instructions",
+    "family": "skill_selection",
+    "turns": [
+      {
+        "prompt": "Help me draft the instructions for a new skill that formats references in APA style."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "skill_creator"
+        ],
+        "not_loads": [
+          "web_research"
+        ]
+      }
+    },
+    "notes": "Authoring a new skill; nothing here is web research."
+  },
+  {
+    "id": "skill_selection.arithmetic_loads_no_skill",
+    "family": "skill_selection",
+    "turns": [
+      {
+        "prompt": "What is 15% of 80?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "contains_any": [
+        "12"
+      ],
+      "skill": {
+        "not_loads": [
+          "web_research",
+          "skill_creator"
+        ]
+      }
+    },
+    "notes": "Negative: no skill applies."
+  },
+  {
+    "id": "skill_selection.poem_loads_no_skill",
+    "family": "skill_selection",
+    "turns": [
+      {
+        "prompt": "Write a haiku about the first frost."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "not_loads": [
+          "web_research",
+          "skill_creator"
+        ]
+      }
+    },
+    "notes": "Negative: creative writing is neither research nor skill authoring."
+  }
+]

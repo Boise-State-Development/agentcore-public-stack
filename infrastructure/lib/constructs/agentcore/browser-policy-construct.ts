@@ -6,7 +6,6 @@ import { Construct } from 'constructs';
 
 import {
   AppConfig,
-  getAutoDeleteObjects,
   getRemovalPolicy,
   getResourceName,
 } from '../../config';
@@ -122,7 +121,6 @@ export class AgentCoreBrowserPolicyConstruct extends Construct {
       // more than the pennies of storage.
       versioned: true,
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
     });
 
     new s3deploy.BucketDeployment(this, 'BrowserPolicyDeployment', {

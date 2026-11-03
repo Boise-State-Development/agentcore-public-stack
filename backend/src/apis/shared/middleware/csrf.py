@@ -61,10 +61,20 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # `state.bff_session` is only set by SessionRefreshMiddleware when a
-        # valid cookie was presented. Anything else — Bearer-token requests,
+        # valid session was presented. Anything else — Bearer-token requests,
         # anonymous public endpoints — bypasses CSRF entirely.
         session = getattr(request.state, "bff_session", None)
         if session is None:
+            return await call_next(request)
+
+        # A session resolved from `Authorization: BFF <sealed>` (the terminal
+        # client) is exempt. The attack depends on the browser attaching a
+        # credential to a cross-site request on its own, which is true of
+        # cookies and false of request headers: a hostile page cannot set
+        # `Authorization` cross-origin without the server allowing it through
+        # CORS preflight. The CLI also holds no cookie, so requiring a
+        # double-submit token would be unsatisfiable rather than safer.
+        if getattr(request.state, "bff_session_from_header", False):
             return await call_next(request)
 
         header_token = request.headers.get(CSRF_HEADER_NAME, "")

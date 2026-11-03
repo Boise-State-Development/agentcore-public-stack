@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-KEY_FILE="${AGENTCORE_KEY_FILE:-${HOME}/.config/agentcore-tui/local-api-key}"
+KEY_FILE="${AGENTCORE_KEY_FILE:-${HOME}/.config/aps-tui/local-api-key}"
 
 export AGENTCORE_BASE_URL="${AGENTCORE_BASE_URL:-http://127.0.0.1:8000}"
 
@@ -29,4 +29,4 @@ export TERM="${TERM:-xterm-256color}"
 export COLORTERM="${COLORTERM:-truecolor}"
 
 cd "${REPO_ROOT}/tui"
-exec uv run agentcore-tui "$@"
+exec uv run aps-tui "$@"

@@ -5,6 +5,8 @@ import { ConfigService } from '../../services/config.service';
 import {
   Agent,
   AgentRunnability,
+  AgentBoundSkill,
+  AgentSkillsResponse,
   AgentsListResponse,
   AgentSharesResponse,
   BindableKind,
@@ -49,6 +51,11 @@ export class AgentApiService {
     return this.http.post<Agent>(this.baseUrl(), request);
   }
 
+  /** Copy an agent the caller owns or can edit into a new private agent. The KB is not copied. */
+  duplicateAgent(id: string): Observable<Agent> {
+    return this.http.post<Agent>(`${this.baseUrl()}/${id}/duplicate`, {});
+  }
+
   getAgents(params?: { includeDrafts?: boolean }): Observable<AgentsListResponse> {
     let httpParams = new HttpParams();
     if (params?.includeDrafts !== undefined) {
@@ -70,6 +77,11 @@ export class AgentApiService {
    */
   getRunnability(id: string): Observable<AgentRunnability> {
     return this.http.get<AgentRunnability>(`${this.baseUrl()}/${id}/runnability`);
+  }
+
+  /** The Agent's bound skills that will run for the signed-in user, in binding order. */
+  getSkills(id: string): Observable<AgentSkillsResponse> {
+    return this.http.get<AgentSkillsResponse>(`${this.baseUrl()}/${id}/skills`);
   }
 
   updateAgent(id: string, request: UpdateAgentRequest): Observable<Agent> {

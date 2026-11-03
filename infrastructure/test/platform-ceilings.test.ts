@@ -30,9 +30,11 @@
  * flag that `allFlagsOn()` forgets fails a test of its own, by name.
  *
  * Both synths run **non-production with a domain configured**, which is the
- * expensive shape: `production: true` sheds 15 resources (measured — buckets
- * keep their contents instead of getting auto-delete custom resources), and a
- * configured domain adds its DNS records. Dev is non-production with a domain.
+ * shape dev deploys and the one a fork deploys first; a configured domain adds
+ * its DNS records. Non-production used to be 15 resources larger than
+ * production as well, because every bucket got CDK's `autoDeleteObjects` custom
+ * resource. `scripts/teardown/destroy.sh` empties the buckets instead, and the
+ * test below keeps the custom resource from coming back.
  * Both also carry `cdk.json`'s CDK feature flags, which a bare `new cdk.App()`
  * does not, because they change what is synthesized.
  *
@@ -126,8 +128,8 @@ const IAM_TREAT_AS_FULL_BYTES = 256;
 const MAX_LENGTH_PREFIX = 'platform-ceiling-test';
 
 /**
- * Context for the expensive deployed shape: non-production (auto-delete custom
- * resources present), a custom domain with DNS records and certificates.
+ * Context for the expensive deployed shape: non-production (buckets DESTROY on
+ * delete), a custom domain with DNS records and certificates.
  */
 const DEPLOYED_SHAPE: Record<string, unknown> = {
   projectPrefix: MAX_LENGTH_PREFIX,
@@ -232,7 +234,10 @@ function allFlagsOn(base: AppConfig): AppConfig {
     projects: { enabled: true },
     userGrants: { enabled: true },
     sessionPrewarm: { enabled: true },
+    quotaRequests: { enabled: true },
     handoffs: { enabled: true },
+    sessionRewind: { enabled: true },
+    sessionFork: { enabled: true },
     clientTurnTiming: { enabled: true },
     ttftProbe: { userId: 'ceilings-probe-user', modelId: 'us.anthropic.claude-haiku-4-5' },
     conversationIndex: { enabled: true },
@@ -257,6 +262,13 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // like source provenance it is here for the environment-variable ceilings
     // and for the flag-coverage test below, not for the resource count.
     documentExtract: { ...base.documentExtract, enabled: true },
+    // Web Search's result default is one Runtime variable, written only while
+    // on: here for the environment-variable ceilings and flag coverage.
+    webSearchDefaultMaxResults: { enabled: true },
+    // Meeting tasks add no resources — one Runtime variable, written only while
+    // on — so like Web Search above it is here for the environment-variable
+    // ceilings and flag coverage.
+    meetingTasks: { enabled: true },
     agents: { enabled: true },
     agentMarketplace: { enabled: true },
     dictation: { ...base.dictation, enabled: true },
@@ -278,9 +290,9 @@ function allFlagsOn(base: AppConfig): AppConfig {
 /**
  * Booleans in `AppConfig` that are a deployment's shape rather than a feature
  * switch, and which `allFlagsOn` deliberately leaves alone. `production` and
- * `retainDataOnDelete` make the stack *smaller* (no auto-delete custom
- * resources), so the worst case keeps them off; `manageDnsRecords` is already
- * on in `DEPLOYED_SHAPE`.
+ * `retainDataOnDelete` no longer change the resource count (measured: the
+ * same counts either way), so the worst case keeps them as dev runs them; `manageDnsRecords` is already on in
+ * `DEPLOYED_SHAPE`.
  */
 const NOT_FEATURE_SWITCHES = new Set(['production', 'retainDataOnDelete', 'manageDnsRecords']);
 
@@ -537,6 +549,16 @@ describe('platform ceilings', () => {
   it('stays under the resource ceiling with the shipped defaults', () => {
     // A deployment that turns nothing on still has to deploy.
     expect(deployedResourceCount(defaultsTemplate)).toBeLessThanOrEqual(ALL_ON_RESOURCE_CEILING);
+  });
+
+  it('never gives a bucket CDK auto-delete, which teardown does instead', () => {
+    // `autoDeleteObjects: true` costs a `Custom::S3AutoDeleteObjects` per bucket
+    // plus one provider Lambda and role: 15 resources across the stack's 13
+    // buckets. `scripts/teardown/destroy.sh` empties the stack's DESTROY buckets
+    // before deleting it, so the custom resources buy nothing a teardown needs.
+    for (const template of [defaultsTemplate, allOnTemplate]) {
+      expect(Object.keys(template.findResources('Custom::S3AutoDeleteObjects'))).toEqual([]);
+    }
   });
 
   it('keeps every IAM policy inside the limit CloudFormation enforces', () => {

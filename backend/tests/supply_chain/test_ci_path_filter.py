@@ -14,8 +14,12 @@ input. These tests pin three things:
    physical cores when psutil is installed, which on the 4-vCPU runner is 2.
 """
 
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import yaml
@@ -27,17 +31,43 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SUITES = ("backend", "backend_contracts", "frontend", "infra", "ios", "load", "scripts")
 
 
+def _find_bash() -> Optional[str]:
+    """``bash`` on Linux/macOS; Git Bash on Windows, or None if it is missing.
+
+    On Windows the ``bash`` on PATH is usually the WSL launcher in
+    ``WindowsApps``, which fails without a configured distro. Git for Windows
+    ships a real bash next to ``git.exe``.
+    """
+    if sys.platform != "win32":
+        return "bash"
+    candidates = []
+    git = shutil.which("git")
+    if git:
+        # <Git>\cmd\git.exe or <Git>\bin\git.exe -> <Git>\bin\bash.exe
+        candidates.append(Path(git).resolve().parent.parent / "bin" / "bash.exe")
+    for root in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+        if root:
+            candidates.append(Path(root) / "Git" / "bin" / "bash.exe")
+    return next((str(c) for c in candidates if c.is_file()), None)
+
+
+BASH = _find_bash()
+
+
 def classify(paths: list[str]) -> dict[str, bool]:
-    stdin = "".join(f"{p}\n" for p in paths)
+    if BASH is None:
+        pytest.skip("Git Bash not found; the classifier needs a real bash on Windows")
+    # Bytes, not text: text-mode stdin turns "\n" into "\r\n" on Windows, and
+    # the script would then see every path with a trailing "\r".
+    stdin = "".join(f"{p}\n" for p in paths).encode("utf-8")
     completed = subprocess.run(
-        ["bash", str(SCRIPT)],
+        [BASH, str(SCRIPT)],
         input=stdin,
         capture_output=True,
-        text=True,
         check=True,
     )
     result: dict[str, bool] = {}
-    for line in completed.stdout.splitlines():
+    for line in completed.stdout.decode("utf-8").splitlines():
         key, _, value = line.partition("=")
         assert value in ("true", "false"), line
         result[key] = value == "true"

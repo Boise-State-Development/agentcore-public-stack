@@ -6,6 +6,10 @@ import { NotificationBellComponent, describeNotification, relativeTime } from '.
 import { NotificationsService } from '../../services/notifications/notifications.service';
 import { AppNotification } from '../../services/notifications/notification.model';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
+import { FEATURES } from '../../services/features';
+import { QuotaRequestService } from '../../services/quota/quota-request.service';
+import { QuotaStatusService } from '../../services/quota/quota-status.service';
+import { environment } from '../../../environments/environment';
 
 function notif(over: Partial<AppNotification> = {}): AppNotification {
   return {
@@ -42,6 +46,23 @@ describe('describeNotification', () => {
     [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
     expect(describeNotification(n)).toBe(text);
+  });
+
+  it.each([
+    [notif({ kind: 'quota_request_decided', projectId: null, payload: { outcome: 'approved', amount: '20.00', requestedAmount: '20.00', through: '2026-11-30' } }), 'Your quota was increased by $20 per month through Nov 30, 2026.'],
+    [notif({ kind: 'quota_request_decided', projectId: null, payload: { outcome: 'approved', amount: '25.00', requestedAmount: '50.00', through: '2026-11-30' } }), 'Your quota was increased by $25 per month through Nov 30, 2026. You asked for $50; $25 was approved.'],
+    [notif({ kind: 'quota_request_decided', projectId: null, payload: { outcome: 'denied', note: 'Not this month' } }), 'Your quota request was declined.'],
+    [notif({ kind: 'quota_request_info_requested', projectId: null, payload: { note: 'Which fund?' } }), 'Your administrator asked for a funding source for your quota request.'],
+    [notif({ kind: 'quota_extension_granted', projectId: null, payload: { standing: false, amount: '10.00', through: '2026-12-31' } }), 'Your quota was increased by $10 per month through Dec 31, 2026.'],
+    [notif({ kind: 'quota_extension_granted', projectId: null, payload: { standing: true, amount: '200.00', fundingLabel: 'COAS Dean’s Office', through: '2027-06-30' } }), 'After your included quota, usage is now charged to COAS Dean’s Office, up to $200 per month through Jun 30, 2027.'],
+    [notif({ kind: 'quota_extension_revoked', projectId: null, payload: { reason: 'Project ended' } }), 'An extension to your quota was ended.'],
+  ])('%#: quota notifications read as a sentence', (n, text) => {
+    expect(describeNotification(n)).toBe(text);
+  });
+
+  it('words a quota amount in the tier’s period', () => {
+    const n = notif({ kind: 'quota_extension_granted', payload: { amount: '5.00', through: '2026-11-30' } });
+    expect(describeNotification(n, 'daily')).toBe('Your quota was increased by $5 per day through Nov 30, 2026.');
   });
 
   it('formats relative times', () => {
@@ -225,6 +246,16 @@ describe('NotificationBellComponent', () => {
     expect(component.noteOf(notif({ payload: { note: 'ignored' } }))).toBeNull();
   });
 
+  it('a quota notification opens Settings → Usage with its note', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    const n = notif({ kind: 'quota_request_decided', projectId: null, payload: { outcome: 'denied', note: 'Not this month' } });
+    expect(component.noteOf(n)).toBe('Not this month');
+    expect(component.noteOf(notif({ kind: 'quota_extension_revoked', payload: { reason: 'Project ended' } }))).toBe('Project ended');
+    component.open(n);
+    expect(navigate).toHaveBeenCalledWith(['/settings', 'usage']);
+  });
+
   it('a removal is only marked read: there is no project to open', () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const { component } = render();
@@ -241,5 +272,27 @@ describe('NotificationBellComponent', () => {
     component.lastRefresh = Date.now() - 61_000;
     component.onVisibilityChange();
     expect(service.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('a new quota notification re-reads the quota state, however full the inbox and the badge', () => {
+    const onQuotaNotification = vi.fn();
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, quotaRequests: true } });
+    TestBed.overrideProvider(QuotaRequestService, { useValue: { onQuotaNotification } });
+    TestBed.overrideProvider(QuotaStatusService, { useValue: { status: { value: () => undefined } } });
+    // A full first page, 14 unread: what the inbox already held is the baseline.
+    const page = Array.from({ length: 20 }, (_, i) =>
+      notif({ notificationId: `old-${i}`, kind: i % 2 ? 'quota_request_info_requested' : 'project_invited' }),
+    );
+    notifications.set(page);
+    unreadCount.set(14);
+    const { fixture } = render();
+    expect(onQuotaNotification).not.toHaveBeenCalled();
+
+    // The decision lands on top and the oldest drops off the page; the count stays at 9+.
+    notifications.set([notif({ notificationId: 'decided', kind: 'quota_request_decided', projectId: null }), ...page.slice(0, 19)]);
+    unreadCount.set(15);
+    fixture.detectChanges();
+    expect(onQuotaNotification).toHaveBeenCalledTimes(1);
+    expect(onQuotaNotification).toHaveBeenCalledWith('quota_request_decided');
   });
 });

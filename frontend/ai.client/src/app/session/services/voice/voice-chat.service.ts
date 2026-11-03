@@ -5,6 +5,7 @@ import { AudioRecorderService } from './audio-recorder.service';
 import { AudioPlayerService } from './audio-player.service';
 import { VoiceTicketService } from './voice-ticket.service';
 import { UserSettingsService } from '../../../services/user-settings.service';
+import { IncognitoChatService } from '../incognito';
 import { DEFAULT_VOICE_ID, findVoice, type NovaSonicVoice } from './voice-catalog';
 import { Message } from '../models/message.model';
 import {
@@ -55,6 +56,7 @@ export class VoiceChatService implements OnDestroy {
   private readonly ticketService = inject(VoiceTicketService);
   private readonly config = inject(ConfigService);
   private readonly userSettings = inject(UserSettingsService);
+  private readonly incognitoChat = inject(IncognitoChatService);
 
   // --- Voice choice ---
   /**
@@ -183,6 +185,9 @@ export class VoiceChatService implements OnDestroy {
     if (this._isConnected()) return;
 
     this.sessionId = sessionId || uuidv4();
+    // Before any await, while the new-chat composer's toggle still holds it
+    // (#1738). The backend honours it only if this connection creates the session.
+    const incognito = this.incognitoChat.claim(this.sessionId);
     this._status.set('connecting');
     this._bufferedTranscript.set('');
     this._revealedIndex.set(0);
@@ -213,7 +218,7 @@ export class VoiceChatService implements OnDestroy {
         : `${window.location.origin.replace(/^http/, 'ws')}${httpUrl}`;
       const url = `${wsBase}/voice/stream?ticket=${encodeURIComponent(ticket)}`;
 
-      await this.openWebSocket(url, this.sessionId!);
+      await this.openWebSocket(url, this.sessionId!, incognito);
       await this.recorder.start();
 
       // Wire audio chunks to WebSocket
@@ -331,7 +336,7 @@ export class VoiceChatService implements OnDestroy {
 
   // --- WebSocket ---
 
-  private openWebSocket(url: string, sessionId: string): Promise<void> {
+  private openWebSocket(url: string, sessionId: string, incognito = false): Promise<void> {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
 
@@ -349,6 +354,7 @@ export class VoiceChatService implements OnDestroy {
           type: 'config',
           session_id: sessionId,
           voice: this._voiceId(),
+          ...(incognito ? { incognito: true } : {}),
         });
         resolve();
       };

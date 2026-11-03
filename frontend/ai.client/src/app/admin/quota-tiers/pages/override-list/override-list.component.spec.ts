@@ -16,7 +16,9 @@ import type { QuotaOverride } from '../../models/quota.models';
  * throw never update until some later event triggers another pass. That is the
  * "cards appear, data populates slowly / only after a click" symptom.
  */
-const LEGACY = '2026-07-27T05:09:55.853557+00:00Z';
+// Midday UTC so DatePipe (which renders in the runner's local zone) shows
+// 7/27/26 anywhere from UTC-11 to UTC+11. At 05:09 UTC every US zone showed 7/26.
+const LEGACY = '2026-07-27T12:09:55.853557+00:00Z';
 
 function override(id: string, userId: string): QuotaOverride {
   return {

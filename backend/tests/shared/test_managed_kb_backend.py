@@ -26,6 +26,7 @@ Requirements: 7.1-7.8, 8.1-8.8, 9.1-9.6, 11.1-11.5, 20.7, 24.2, 24.3, 24.11
 
 import ast
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -1775,7 +1776,13 @@ class TestImportWeight:
             capture_output=True,
             text=True,
             cwd=str(backend_root),
-            env={"PYTHONPATH": str(backend_root / "src"), "PATH": "/usr/bin:/bin"},
+            env={
+                "PYTHONPATH": str(backend_root / "src"),
+                "PATH": "/usr/bin:/bin",
+                # Windows needs SYSTEMROOT to initialise sockets (asyncio
+                # import fails with WinError 10106). Absent on Linux/macOS.
+                **({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if "SYSTEMROOT" in os.environ else {}),
+            },
         )
         assert result.returncode == 0, result.stderr
         return [name for name in result.stdout.strip().split(",") if name]

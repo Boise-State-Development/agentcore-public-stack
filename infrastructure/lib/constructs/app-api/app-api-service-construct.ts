@@ -15,6 +15,23 @@ import { PlatformComputeRefs } from '../platform-compute-refs';
 import { grantAppApiPermissions } from './app-api-iam-grants';
 import { logRetentionFor } from '../observability/log-retention';
 
+/**
+ * Health-check cadence for the app-api target group and container. Exported
+ * so the test that pins them reads the same numbers the template does.
+ *
+ * Detection, worst case, from the moment a task stops answering:
+ *   - ALB stops routing to it: unhealthy x (interval + timeout) = 2 x 15 s = 30 s
+ *     (was 3 x 35 s = 105 s; typically ~20 s against ~90 s).
+ *   - ECS stops the task: retries x interval = 3 x 10 s = 30 s (was 90 s).
+ *   - A replacement receives traffic: healthy x interval = 20 s after its
+ *     first passing probe (was 60 s), plus the task start itself.
+ */
+export const APP_API_ALB_HEALTH_INTERVAL_SECONDS = 10;
+export const APP_API_ALB_HEALTHY_THRESHOLD = 2;
+export const APP_API_ALB_UNHEALTHY_THRESHOLD = 2;
+export const APP_API_CONTAINER_HEALTH_INTERVAL_SECONDS = 10;
+export const APP_API_CONTAINER_HEALTH_RETRIES = 3;
+
 export interface AppApiServiceConstructProps {
   config: AppConfig;
   /**
@@ -236,11 +253,18 @@ export class AppApiServiceConstruct extends Construct {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'app-api', logGroup }),
       environment,
       portMappings: [{ containerPort: 8000, protocol: ecs.Protocol.TCP }],
+      // One uvicorn worker: a loop blocked by synchronous work, or a process
+      // that died on a native fault, fails this probe for every retry. At
+      // 30 s x 3 that was ~90 s before ECS stopped the task (2026-10-30: a
+      // 3.5-minute S3 Vectors scan on the loop). 10 s x 3 is ~30 s. The
+      // probe is a python3 process every 10 s, a few tens of ms of CPU.
+      // startPeriod is unchanged: a cold task still imports the whole
+      // dependency tree before /health answers.
       healthCheck: {
         command: ['CMD-SHELL', "python3 -c 'import urllib.request,sys; urllib.request.urlopen(\"http://localhost:8000/health\", timeout=3).read(); sys.exit(0)' || exit 1"],
-        interval: cdk.Duration.seconds(30),
+        interval: cdk.Duration.seconds(APP_API_CONTAINER_HEALTH_INTERVAL_SECONDS),
         timeout: cdk.Duration.seconds(5),
-        retries: 3,
+        retries: APP_API_CONTAINER_HEALTH_RETRIES,
         startPeriod: cdk.Duration.seconds(60),
       },
     });
@@ -273,14 +297,22 @@ export class AppApiServiceConstruct extends Construct {
       port: 8000,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targetType: elbv2.TargetType.IP,
+      // The ALB decides which tasks get traffic, so this is what turns a hung
+      // or crashed task into a blip rather than an outage: 2 failed probes at
+      // 10 s pulls it in ~20 s (worst ~30 s with the 5 s timeouts) instead of
+      // the ~90 s that 3 at 30 s took, and a replacement is routed to after
+      // 20 s of passing probes instead of 60. Three tasks: while one is out,
+      // the other two take the traffic.
       healthCheck: {
         path: '/health',
-        interval: cdk.Duration.seconds(30),
+        interval: cdk.Duration.seconds(APP_API_ALB_HEALTH_INTERVAL_SECONDS),
         timeout: cdk.Duration.seconds(5),
-        healthyThresholdCount: 2,
-        unhealthyThresholdCount: 3,
+        healthyThresholdCount: APP_API_ALB_HEALTHY_THRESHOLD,
+        unhealthyThresholdCount: APP_API_ALB_UNHEALTHY_THRESHOLD,
         healthyHttpCodes: '200',
       },
+      // Unchanged: in-flight requests on a deregistering task get 30 s to
+      // finish. An SSE stream longer than that is cut, which was already so.
       deregistrationDelay: cdk.Duration.seconds(30),
     });
 

@@ -1,4 +1,14 @@
-import { ChangeDetectionStrategy, Component, computed, inject, viewChild } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  Injector,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+  viewChild,
+} from '@angular/core';
 import { Router } from '@angular/router';
 import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
@@ -11,6 +21,10 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { parseIso } from '../../utils/date';
 import { personLabel } from '../../shared/utils/person';
 import { SCHEDULE_STOPS } from '../../schedules/schedule-wording';
+import { FEATURES } from '../../services/features';
+import { QuotaStatusService } from '../../services/quota/quota-status.service';
+import { QUOTA_NOTIFICATION_KINDS, QuotaRequestService } from '../../services/quota/quota-request.service';
+import { formatAmount, formatQuotaDate, perPeriod } from '../../services/quota/quota-format';
 
 /** Re-read on returning to the tab at most this often. */
 const REFRESH_ON_FOCUS_MS = 60_000;
@@ -31,8 +45,57 @@ function describeSchedule(n: AppNotification, who: string, project: string): str
   return stop ? `${subject} in ${project} stopped ${mine ? stop.mine : stop.theirs}.` : `${subject} in ${project} stopped.`;
 }
 
-/** The sentence a notification reads as. Actor and project fall back to neutral words. */
-export function describeNotification(n: AppNotification): string {
+function amountOf(value: unknown): number | null {
+  const amount = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(amount) ? amount : null;
+}
+
+/** The quota kinds (quota-requests spec §5.3, §11.1). Amounts arrive as decimal strings. */
+function describeQuota(n: AppNotification, periodType?: string | null): string {
+  const per = perPeriod(periodType);
+  const amount = amountOf(n.payload?.['amount']);
+  const asked = amountOf(n.payload?.['requestedAmount']);
+  const through = typeof n.payload?.['through'] === 'string' ? formatQuotaDate(n.payload['through'] as string) : '';
+  const until = through ? ` through ${through}` : '';
+  const standing = n.payload?.['standing'] === true;
+  const fund = typeof n.payload?.['fundingLabel'] === 'string' && n.payload['fundingLabel'] ? ` to ${n.payload['fundingLabel']}` : '';
+  switch (n.kind) {
+    case 'quota_request_decided': {
+      if (n.payload?.['outcome'] !== 'approved') return 'Your quota request was declined.';
+      if (standing) {
+        const cap = amount !== null ? `, up to ${formatAmount(amount)} ${per}` : ' with no cap';
+        return `Your ongoing quota request was approved${cap}${until}.`;
+      }
+      const granted = amount !== null ? `Your quota was increased by ${formatAmount(amount)} ${per}${until}.` : 'Your quota request was approved.';
+      return asked !== null && amount !== null && asked !== amount
+        ? `${granted} You asked for ${formatAmount(asked)}; ${formatAmount(amount)} was approved.`
+        : granted;
+    }
+    case 'quota_request_info_requested':
+      return 'Your administrator asked for a funding source for your quota request.';
+    case 'quota_extension_granted':
+      if (standing) {
+        const cap = amount !== null ? `, up to ${formatAmount(amount)} ${per}` : '';
+        return `After your included quota, usage is now charged${fund}${cap}${until}.`;
+      }
+      return amount !== null ? `Your quota was increased by ${formatAmount(amount)} ${per}${until}.` : 'Your quota was increased.';
+    case 'quota_extension_revoked':
+      return 'An extension to your quota was ended.';
+    case 'quota_request_submitted': {
+      const who = typeof n.payload?.['userEmail'] === 'string' && n.payload['userEmail'] ? n.payload['userEmail'] : 'Someone';
+      return amount !== null ? `${who} asked for ${formatAmount(amount)} more quota${until}.` : `${who} asked for more quota.`;
+    }
+    default:
+      return 'You have a new notification.';
+  }
+}
+
+/**
+ * The sentence a notification reads as. Actor and project fall back to neutral words.
+ * `quotaPeriodType` words a quota amount (`per month` / `per day`); unknown reads as monthly.
+ */
+export function describeNotification(n: AppNotification, quotaPeriodType?: string | null): string {
+  if (n.kind.startsWith('quota_')) return describeQuota(n, quotaPeriodType);
   const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
   const project = n.projectName || 'a project';
   const role = ROLE_PHRASES[n.payload?.role ?? ''] ?? (n.payload?.role ? `a ${n.payload.role}` : null);
@@ -229,6 +292,11 @@ export class NotificationBellComponent {
   private service = inject(NotificationsService);
   private router = inject(Router);
   private sidenav = inject(SidenavService);
+  private features = inject(FEATURES);
+  private injector = inject(Injector);
+
+  /** Created once a quota notification is listed, for its period word; never for anyone else. */
+  private readonly quotaStatus = signal<QuotaStatusService | null>(null);
 
   protected readonly notifications = this.service.notifications;
   protected readonly unreadCount = this.service.unreadCount;
@@ -261,16 +329,45 @@ export class NotificationBellComponent {
 
   constructor() {
     void this.refresh();
+    if (this.features.quotaRequests) this.followQuotaNotifications();
+  }
+
+  /**
+   * A new quota notification (a decision, a grant, a request for a funding
+   * source) re-reads the quota status and the request list, so the Usage page and
+   * the composer show it at once (quota-requests spec §10.3). The first load only
+   * sets the baseline: what was already in the inbox changed nothing new.
+   */
+  private followQuotaNotifications(): void {
+    let seen: Set<string> | null = null;
+    effect(() => {
+      const quota = this.notifications().filter(n => QUOTA_NOTIFICATION_KINDS.has(n.kind));
+      untracked(() => {
+        if (quota.length && !this.quotaStatus()) this.quotaStatus.set(this.injector.get(QuotaStatusService));
+        const fresh = seen ? quota.filter(n => !seen!.has(n.notificationId)) : [];
+        seen = new Set(quota.map(n => n.notificationId));
+        if (fresh.length) {
+          const requests = this.injector.get(QuotaRequestService);
+          for (const n of fresh) requests.onQuotaNotification(n.kind);
+        }
+      });
+    });
   }
 
   protected describe(n: AppNotification): string {
-    return describeNotification(n);
+    return describeNotification(n, this.quotaStatus()?.status.value()?.periodType);
   }
 
-  /** The sharer's note on a shared task, or the reviewer's on a decision, if they left one. */
+  /** The note left with a share, a decision or a quota request, if there is one. */
   protected noteOf(n: AppNotification): string | null {
-    const noted = n.kind === 'project_task_shared' || n.kind === 'project_proposal_decided';
-    return noted && typeof n.payload?.note === 'string' ? n.payload.note : null;
+    if (n.kind === 'quota_extension_revoked') {
+      return typeof n.payload?.reason === 'string' && n.payload.reason ? n.payload.reason : null;
+    }
+    const noted =
+      n.kind === 'project_task_shared' ||
+      n.kind === 'project_proposal_decided' ||
+      (n.kind.startsWith('quota_') && n.kind !== 'quota_request_submitted');
+    return noted && typeof n.payload?.note === 'string' && n.payload.note ? n.payload.note : null;
   }
 
   protected when(n: AppNotification): string {
@@ -310,6 +407,14 @@ export class NotificationBellComponent {
 
   protected open(n: AppNotification): void {
     void this.service.markRead(n);
+    // A quota notification opens Settings → Usage, where the request and the
+    // limit it changed are; a reader re-reads both on the way.
+    if (n.kind.startsWith('quota_') && n.kind !== 'quota_request_submitted') {
+      if (this.features.quotaRequests) this.injector.get(QuotaRequestService).onQuotaNotification(n.kind);
+      void this.router.navigate(['/settings', 'usage']);
+      this.sidenav.close();
+      return;
+    }
     // A revoked share lands on /shared's "no longer shared" state, not an error.
     if (n.kind === 'project_task_shared' && typeof n.payload?.shareId === 'string') {
       void this.router.navigate(['/shared', n.payload.shareId]);

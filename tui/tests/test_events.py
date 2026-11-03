@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from agentcore_tui.client.events import (
+from aps_tui.client.events import (
     ContentBlockStart,
     ContentBlockStop,
     Done,
