@@ -172,6 +172,9 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "forkedFrom",
     "forkSeeded",
     "turnAgentId",
+    # Set on a call that is not a turn (a handoff brief): a closed vocabulary,
+    # no content. Absent on every turn's rows.
+    "callKind",
     "prefixFingerprints",
     "contextWindow",
     "toolCalls",            # per-call census, optional (PR-3)

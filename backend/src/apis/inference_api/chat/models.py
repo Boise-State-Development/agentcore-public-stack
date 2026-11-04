@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 from apis.shared.browser_takeover import coerce_frame_height
+from apis.shared.handoff.brief import HandoffBriefRequest
 from apis.shared.handoff.turn import HandoffContextRequest
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
@@ -218,6 +219,11 @@ class InvocationRequest(BaseModel):
     # with a warning while HANDOFFS_ENABLED is off, on a resume, and on a conversation that
     # already took a handoff.
     handoff_context: Optional[HandoffContextRequest] = None
+    # A request for the brief a handoff's context card shows (agent-handoffs-and-consults.md
+    # §4.5.1), sent on the SOURCE session with the body a turn there would carry. The route
+    # resolves and builds the agent exactly as for that turn, then streams the brief from a
+    # side call over a copy of the history instead of running a turn. Nothing is persisted.
+    handoff_brief: Optional[HandoffBriefRequest] = None
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.

@@ -146,6 +146,7 @@ from apis.shared.security.log_sanitize import scrub_log
 
 if TYPE_CHECKING:
     from apis.inference_api.chat.project_memory import ProjectMemoryTurn
+    from apis.shared.handoff.models import Handoff
     from apis.shared.projects.models import Project
 
 logger = logging.getLogger(__name__)
@@ -4462,9 +4463,101 @@ async def apply_turn_prompt_extras(
     return system_prompt
 
 
+class HandoffBriefResponse(StreamingResponse):
+    """A handoff brief's own stream (text or a fallback, then ``done``).
+
+    Distinct from every other ``StreamingResponse`` the turn path returns, so the brief's entry can
+    tell its own answer from a refusal the shared phases produced, which it discards unstreamed:
+    a refusal persists only when its generator runs, so nothing reaches the source.
+    """
+
+
+def _brief_fallback_response(handoff_id: str, kind: str, session_id: str, reason: str) -> HandoffBriefResponse:
+    """A brief that will not be written: one fallback frame and ``done``. The card stays the excerpt."""
+    from apis.shared.handoff.brief import brief_done_frame, brief_fallback_frame
+    from apis.shared.handoff.metrics import emit_handoff_metric
+
+    async def _frames() -> AsyncGenerator[str, None]:
+        emit_handoff_metric("HandoffBriefFallback", kind, session_id=session_id, detail=reason)
+        yield brief_fallback_frame(handoff_id, reason)
+        yield brief_done_frame(handoff_id, brief_hash=None, cache_status=None)
+
+    return HandoffBriefResponse(_frames(), media_type="text/event-stream", headers=_sse_headers(session_id))
+
+
+async def _handoff_target_description(agent_id: str, current_user: User) -> Optional[str]:
+    """The target Agent's description, for the brief's instruction. None when it can't be read.
+
+    Read with the caller's own access check: the handoff was created against it, and an Agent the
+    caller can no longer use gets no description rather than a leaked one.
+    """
+    from apis.shared.assistants.service import get_assistant_with_access_check
+
+    try:
+        agent, _permission = await get_assistant_with_access_check(
+            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+        )
+    except Exception:  # noqa: BLE001 - the description is optional
+        return None
+    return getattr(agent, "description", None) if agent is not None else None
+
+
+async def _handoff_brief_invocation(request: InvocationRequest, current_user: User):
+    """A ``handoff_brief`` invocation (agent-handoffs-and-consults.md §4.5.1).
+
+    Checks the flag and the handoff, then runs the turn path in brief mode, which resolves and
+    builds the source session's agent through the same phases a turn uses and returns the brief's
+    stream where a turn would start its own. Anything else that path returns is a turn that would
+    not have run (a refusal, a retired model, a quota block): discarded without streaming, so it
+    persists nothing, and answered with a fallback.
+    """
+    from apis.shared.feature_flags import handoff_brief_enabled
+    from apis.shared.handoff import get_handoff_store
+
+    handoff_id = request.handoff_brief.handoff_id
+    if not handoff_brief_enabled():
+        return _brief_fallback_response(handoff_id, "mention", request.session_id, "flag_off")
+    try:
+        handoff = await asyncio.to_thread(get_handoff_store().get, current_user.user_id, handoff_id)
+    except Exception:
+        logger.warning("handoff brief: reading the handoff failed", exc_info=True)
+        handoff = None
+    if handoff is None or handoff.session_id != request.session_id or handoff.effective_status() != "open":
+        kind = handoff.kind if handoff is not None else "mention"
+        return _brief_fallback_response(handoff_id, kind, request.session_id, "not_open")
+
+    try:
+        response = await _run_invocation(request, current_user, brief=handoff)
+    except HTTPException as exc:
+        reason = "busy" if exc.status_code == status.HTTP_409_CONFLICT else "refused"
+        return _brief_fallback_response(handoff_id, handoff.kind, request.session_id, reason)
+    if isinstance(response, HandoffBriefResponse):
+        return response
+    body = getattr(response, "body_iterator", None)
+    if body is not None and hasattr(body, "aclose"):
+        await body.aclose()
+    return _brief_fallback_response(handoff_id, handoff.kind, request.session_id, "refused")
+
+
 @router.post("/invocations")
 async def invocations(request: InvocationRequest, current_user: User = Depends(get_current_user_trusted)):
-    """The AgentCore Runtime invocation endpoint: one conversation turn.
+    """The AgentCore Runtime invocation endpoint: a conversation turn, or a handoff brief.
+
+    A ``handoff_brief`` request goes through ``_handoff_brief_invocation``; everything else is a
+    turn, ``_run_invocation``.
+    """
+    if request.handoff_brief is not None and not request.warm:
+        return await _handoff_brief_invocation(request, current_user)
+    return await _run_invocation(request, current_user)
+
+
+async def _run_invocation(
+    request: InvocationRequest,
+    current_user: User,
+    *,
+    brief: Optional["Handoff"] = None,
+):
+    """One conversation turn, or with ``brief`` the agent build for a handoff brief.
 
     Runs the sequence docs/specs/turn-path-ttft.md maps, in this order. The
     marks are the `turn_prelude` stage names; everything up to `stream_setup`
@@ -4512,6 +4605,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     input_data = request
     user_id = current_user.user_id
+    # A handoff brief (agent-handoffs-and-consults.md §4.5.1) runs this path to build the agent a
+    # turn here would, and skips every phase that writes, searches or answers: the attachment
+    # recovery, the session-state writes, the KB search, binding validation and persistence. It
+    # returns its own stream where a turn would start one.
+    is_brief = brief is not None
     auth_token = current_user.raw_token
 
     # Where the pre-stream time goes. Everything between here and the
@@ -4771,7 +4869,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # Attachments: recover the previous turn's unanswered uploads, fetch this
     # turn's from S3, dedupe, partition (inline / spreadsheet / deck /
     # oversized) and hold the inline set to one message's byte budget.
-    attachments = await _resolve_turn_attachments(
+    attachments = TurnAttachments() if is_brief else await _resolve_turn_attachments(
         input_data,
         user_id,
         session_meta,
@@ -4786,7 +4884,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     # Session state: the row pre-create, the four stale-marker clears and the
     # write-ahead attachment marker, all answered from `session_meta`.
-    is_new_session, interrupted_turn_reason = await _prepare_session_state(
+    # A brief must leave the session as it was: an interrupted-turn note in particular has to
+    # survive for the next real turn, and the stale-marker clears here would drop it.
+    is_new_session, interrupted_turn_reason = (False, None) if is_brief else await _prepare_session_state(
         input_data,
         user_id,
         session_meta,
@@ -4836,6 +4936,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     prelude.mark("preamble.quota")
 
     # If quota exceeded, stream the quota exceeded message instead of agent response
+    if quota_exceeded_event and is_brief:
+        return _brief_fallback_response(brief.handoff_id, brief.kind, input_data.session_id, "quota")
     if quota_exceeded_event:
         return _refuse_turn(
             input_data,
@@ -4961,6 +5063,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         if (
             is_agent_mention
             and not is_continuation
+            and not is_brief
             and not is_preview_session(input_data.session_id)
         ):
             thread_is_empty = not await _session_has_messages(
@@ -4981,7 +5084,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # below is untouched either way: this relaxes *binding* semantics, never
         # authorization. Rule in ``agent_binding_policy`` so it is testable without
         # this stack.
-        if not is_continuation and binds_conversation(
+        if not is_continuation and not is_brief and binds_conversation(
             is_agent_mention=is_agent_mention,
             is_preview=is_preview_session(input_data.session_id),
             thread_is_empty=bool(thread_is_empty),
@@ -5033,7 +5136,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             input_data,
             current_user,
             user_id,
-            is_continuation=is_continuation,
+            # A brief, like a continuation, sends no message of its own, so the project
+            # file-status note it would carry is not loaded; and it is not the user using
+            # the Agent, so the share and last-used writes are skipped.
+            is_continuation=is_continuation or is_brief,
+            record_use=not is_brief,
         )
         if isinstance(resolved_agent, StreamingResponse):
             return resolved_agent
@@ -5052,7 +5159,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # Skipped on a continuation: the turn carries an empty message, so a
         # knowledge-base search would spend a query on "" and augment nothing. The
         # context the original turn retrieved is already in the history being continued.
-        if not is_continuation:
+        # Skipped on a brief too: its message is an instruction, not something to search for.
+        if not is_continuation and not is_brief:
             # 3–4. Search the assistant's knowledge base and augment the message.
             # Started here, awaited after the agent build: the build reads
             # neither the chunks nor the augmented message — only the stream
@@ -5099,7 +5207,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # history was produced under other instructions. `thread_is_empty` is the
         # argument that makes a thread-starting mention bind, so it has to be passed
         # here too — dropping it is a silent one-turn Agent all over again.
-        if not is_continuation and binds_conversation(
+        if not is_continuation and not is_brief and binds_conversation(
             is_agent_mention=is_agent_mention,
             is_preview=is_preview_session(input_data.session_id),
             thread_is_empty=bool(thread_is_empty),
@@ -5501,6 +5609,31 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     # by construction — the digest is in the key.
                     _record_client_tools_on(built_agent, input_data)
                 return built_agent
+
+            # A handoff brief stops here, with the agent a turn would build: the same phases above,
+            # the same `_build_main_agent`. It streams the brief from a side call over a copy of
+            # this agent's history and owns the lease from here on (§4.5.1).
+            if is_brief:
+                from apis.inference_api.chat.handoff_brief import stream_handoff_brief
+
+                return HandoffBriefResponse(
+                    stream_handoff_brief(
+                        handoff=brief,
+                        user_id=user_id,
+                        session_id=input_data.session_id,
+                        session_row=session_meta.row,
+                        build_agent=_build_main_agent,
+                        release_lease=lambda: _release_turn_lease(None, session_lease),
+                        lease=session_lease,
+                        agent_description=asyncio.create_task(
+                            _handoff_target_description(brief.agent_id, current_user)
+                        ),
+                        turn_agent_id=input_data.rag_assistant_id,
+                        turn_project_id=turn_project_id,
+                    ),
+                    media_type="text/event-stream",
+                    headers=_sse_headers(input_data.session_id),
+                )
 
             # Defer the build into the stream so it can be narrated.
             #

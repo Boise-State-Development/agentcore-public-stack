@@ -1013,6 +1013,27 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Handoff brief feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_HANDOFF_BRIEF_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_HANDOFF_BRIEF_ENABLED is unset', () => {
+      delete process.env.CDK_HANDOFF_BRIEF_ENABLED;
+      expect(loadConfig(app).handoffs.briefEnabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_HANDOFF_BRIEF_ENABLED = '';
+      expect(loadConfig(app).handoffs.briefEnabled).toBe(false);
+    });
+
+    test('CDK_HANDOFF_BRIEF_ENABLED="true" turns it on', () => {
+      process.env.CDK_HANDOFF_BRIEF_ENABLED = ' TRUE ';
+      expect(loadConfig(app).handoffs.briefEnabled).toBe(true);
+    });
+  });
+
   describe('Session fork feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_SESSION_FORK_ENABLED;

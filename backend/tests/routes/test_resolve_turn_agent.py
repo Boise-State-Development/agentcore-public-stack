@@ -199,4 +199,4 @@ async def test_the_turn_resolves_its_agent_through_the_shared_function():
     assert response.status_code == 200
     assert "stop here" in response.text
     assert resolve.await_count == 1
-    assert resolve.await_args.kwargs == {"is_continuation": False}
+    assert resolve.await_args.kwargs == {"is_continuation": False, "record_use": True}
