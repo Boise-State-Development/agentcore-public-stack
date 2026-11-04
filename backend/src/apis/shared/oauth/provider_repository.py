@@ -64,11 +64,32 @@ class OAuthProviderRepository:
             logger.error("Error getting provider %s: %s", provider_id, e)
             raise
 
-    async def list_providers(self, enabled_only: bool = False) -> List[OAuthProvider]:
+    async def list_providers(
+        self, enabled_only: bool = False, *, fresh: bool = False
+    ) -> List[OAuthProvider]:
+        """List providers.
+
+        ``fresh=True`` reads the table directly, skipping the in-process
+        ``config_cache``. The cache is per ECS task, so a write only
+        invalidates the task that served it; the admin console must see its own
+        write on whichever task answers the next read, so it passes ``fresh``.
+        The per-user connector listings keep the cache (the hot path).
+        """
         if not self._enabled:
             return []
 
         try:
+            if fresh:
+                loader = (
+                    self._query_enabled_provider_items
+                    if enabled_only
+                    else self._scan_provider_items
+                )
+                items = await asyncio.to_thread(loader)
+                providers = [OAuthProvider.from_dynamo_item(item) for item in items]
+                providers.sort(key=lambda p: p.display_name.lower())
+                return providers
+
             # Two entries, because the branches return different rows. Both are
             # dropped on any write — see `invalidate_oauth_providers`. Parsing
             # stays per-call so each caller owns its OAuthProvider objects.

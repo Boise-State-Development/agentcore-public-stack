@@ -149,7 +149,9 @@ async def list_providers(
 ):
     """List all OAuth providers. Admin only."""
     logger.info("Admin listing OAuth providers")
-    providers = await provider_repo.list_providers(enabled_only=enabled_only)
+    # fresh: the config cache is per task, so a cached read could miss the
+    # write this admin just made on another task. Admin list is low-traffic.
+    providers = await provider_repo.list_providers(enabled_only=enabled_only, fresh=True)
     return OAuthProviderListResponse(
         providers=[OAuthProviderResponse.from_provider(p) for p in providers],
         total=len(providers),
