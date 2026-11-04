@@ -368,14 +368,21 @@ changed). Then do the backmerge (§7).
 branch's code is already deployed there. Run the smoke pass
 (`docs/testing/smoke-regression.md`, the `/smoke-regression` skill) and the eval
 harness's full golden set as the eval user, then paste the `score` table into the
-PR body. A `GATE: FAIL` is a release blocker until `--explain` shows why:
+PR body. A `GATE: FAIL` is a release blocker until `--explain` shows why.
+
+Run it once for **each model that is the catalog default in some environment**.
+Each has its own committed baseline in `backend/evals/baselines/`. Haiku 5.5 has
+been dev's default since 2026-11-04, and prod stays on Haiku 4.5 until a release
+carries the Haiku 5.5 row and an admin makes it the default there:
 
 ```bash
 cd backend
-AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-release-x.y.z \
-    --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
-    --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 --yes
-uv run python scripts/eval_harness.py score --out /tmp/eval-release-x.y.z
+for model in us.anthropic.claude-haiku-5-5 us.anthropic.claude-haiku-4-5-20251001-v1:0; do
+  AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-release-x.y.z-${model} \
+      --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
+      --model-id "${model}" --yes
+  uv run python scripts/eval_harness.py score --out /tmp/eval-release-x.y.z-${model}
+done
 ```
 
 Re-promote the baseline (`eval_harness.py baseline`) only on purpose — after a

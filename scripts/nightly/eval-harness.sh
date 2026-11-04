@@ -30,7 +30,7 @@ set -euo pipefail
 #
 # Optional:
 #   EVAL_REPORT           — path for the score JSON (default: eval-harness-report.json)
-#   EVAL_MODEL_ID         — model under test (default: the committed baseline's Haiku 4.5)
+#   EVAL_MODEL_ID         — model under test (default: Haiku 5.5, the catalog default on dev since 2026-11-04)
 #   EVAL_FAMILIES         — comma-separated families (default below)
 #
 # Exit status: 0 when no gating family regressed, 1 when one did, 2 for a setup
@@ -80,7 +80,7 @@ main() {
     local base_url
     base_url=$(get_base_url) || exit 2
     local api_url="${base_url}/api"
-    local model="${EVAL_MODEL_ID:-us.anthropic.claude-haiku-4-5-20251001-v1:0}"
+    local model="${EVAL_MODEL_ID:-us.anthropic.claude-haiku-5-5}"
     local families="${EVAL_FAMILIES:-tool_selection,document_qa,retention,instruction_following,refusal,skill_selection}"
     local report="${EVAL_REPORT:-${PROJECT_ROOT}/eval-harness-report.json}"
     local out="${PROJECT_ROOT}/eval-harness-run"
