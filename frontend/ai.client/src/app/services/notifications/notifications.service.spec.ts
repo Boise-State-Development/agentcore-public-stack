@@ -83,6 +83,25 @@ describe('NotificationsService', () => {
     expect(service.unreadCount()).toBe(2);
   });
 
+  it('a read made elsewhere takes only the listed unread entries off the count', async () => {
+    await load([notif('n3'), notif('n2'), notif('n1', '2026-09-24T01:00:00Z')], 2);
+    service.markedElsewhere(n => n.notificationId === 'n3', 1);
+    expect(service.unreadCount()).toBe(1);
+    expect(service.notifications()[0].readAt).toBeTruthy();
+    http.expectNone(`${BASE}?limit=20`);
+  });
+
+  it('an entry written since the last read is not taken off the count; a re-read settles it', async () => {
+    // Dev, 2026-11-04: a handoff's entry landed after the bell's last read and was marked read in
+    // view. Taking the server's count off the stale one showed 7 unread where the server said 8.
+    await load([notif('n2'), notif('n1')], 2);
+    service.markedElsewhere(n => n.notificationId === 'new', 1);
+    expect(service.unreadCount()).toBe(2);
+    http.expectOne(`${BASE}?limit=20`).flush({ notifications: [notif('n2'), notif('n1')], unreadCount: 2 });
+    await new Promise(r => setTimeout(r, 0));
+    expect(service.unreadCount()).toBe(2);
+  });
+
   it('keeps what it had and says so when a read fails', async () => {
     await load([notif('n1')], 1);
     const done = service.refresh();

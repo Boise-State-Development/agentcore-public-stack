@@ -77,12 +77,25 @@ export class NotificationsService {
   /**
    * The server marked `marked` entries read by some other route (a handoff's entries, read by
    * opening its conversation). Reflect it in the listed ones that `match`, and in the count.
+   *
+   * The count drops only by the unread entries this list holds: an entry written since the last
+   * read was never in the count, so taking `marked` off it would under-count. When the server
+   * marked more than are listed, the rest are either newer or beyond this page, and only a
+   * re-read can say which.
    */
   markedElsewhere(match: (n: AppNotification) => boolean, marked: number): void {
     if (marked <= 0) return;
     const readAt = new Date().toISOString();
-    this.items.update(list => list.map(n => (match(n) ? { ...n, readAt } : n)));
-    this.unread.update(n => Math.max(0, n - marked));
+    let listed = 0;
+    this.items.update(list =>
+      list.map(n => {
+        if (n.readAt || !match(n)) return n;
+        listed++;
+        return { ...n, readAt };
+      }),
+    );
+    this.unread.update(n => Math.max(0, n - listed));
+    if (marked > listed) void this.refresh();
   }
 
   async markAllRead(): Promise<void> {
