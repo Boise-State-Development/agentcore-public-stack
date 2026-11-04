@@ -33,6 +33,12 @@ class TestScoreSample:
         assert _score(expect, "The product is 44022121.").passed
         assert not _score(Expect(contains_any=("38",)), "It holds 385 people").passed
 
+    def test_latex_thousands_separator_matches(self):
+        # Haiku 5.5 writes math in KaTeX: `{,}` renders as a comma.
+        expect = Expect(contains_any=("39,168,090,127",))
+        assert _score(expect, r"$739{,}481 \times 52{,}967 = \mathbf{39{,}168{,}090{,}127}$").passed
+        assert not _score(expect, r"$\mathbf{39{,}168{,}090{,}128}$").passed
+
     def test_forbidden_value_fails_even_alongside_the_right_one(self):
         expect = Expect(contains_any=("5,750",), forbidden=("4,200",))
         assert _score(expect, "It's $5,750 now.").passed

@@ -809,7 +809,11 @@ export class StreamParserService {
           this.chatStateService.setLastTurnContinuable(state.sessionId, true);
         }
         if (streamError.metadata?.['error_kind'] === 'resume_unavailable') {
-          this.chatStateService.markResumeUnavailable(state.sessionId);
+          const reason = streamError.metadata?.['reason'];
+          this.chatStateService.markResumeUnavailable(
+            state.sessionId,
+            typeof reason === 'string' ? reason : undefined,
+          );
         }
       },
 

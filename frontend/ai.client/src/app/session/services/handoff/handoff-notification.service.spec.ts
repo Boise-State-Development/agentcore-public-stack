@@ -11,6 +11,7 @@ import { FEATURES } from '../../../services/features';
 import { NotificationsService } from '../../../services/notifications/notifications.service';
 import { ChatStateService } from '../chat/chat-state.service';
 import { ConversationBindingService } from '../session/conversation-binding.service';
+import { SessionService } from '../session/session.service';
 import { HandoffView } from './handoff.models';
 import { HandoffNotificationService, INBOX_WRITE_GRACE_MS, notificationTitle } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
@@ -77,6 +78,14 @@ describe('HandoffNotificationService', () => {
         { provide: ChatStateService, useValue: { viewedSessionId: () => viewed() } },
         { provide: ConversationBindingService, useValue: { queryParamsFor: (id: string) => ({ agent: id }) } },
         { provide: Router, useValue: { navigate } },
+        {
+          provide: SessionService,
+          useValue: {
+            mergedSessionsResource: () => ({
+              sessions: [{ sessionId: 'src', preferences: { assistantId: 'planner' } }],
+            }),
+          },
+        },
       ],
     });
     http = TestBed.inject(HttpTestingController);
@@ -303,6 +312,84 @@ describe('HandoffNotificationService', () => {
       });
       TestBed.tick();
       http.expectNone(READ_URL);
+    });
+  });
+
+  /**
+   * Notifications point where the answer is (§4.3, PR-0.3c): a prompt the source relays opens the
+   * source with the handoff row in view; a browser sign-in, and every other state, the target.
+   */
+  describe('where a click goes', () => {
+    const ref = { handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric' };
+
+    it.each(['oauth_consent', 'tool_approval', 'user_question'])(
+      'a needs-input entry waiting on %s opens the source at the row',
+      (waitingKind) => {
+        const service = setup();
+        service.openFromInbox({ ...ref, kind: 'handoff_needs_input', waitingKind });
+
+        expect(navigate).toHaveBeenCalledWith(['/s', 'src'], { queryParams: { assistantId: 'planner' } });
+        expect(TestBed.inject(HandoffStateService).focusedHandoffId()).toBe('h1');
+        expect(http.expectOne(EVENTS_URL).request.body).toEqual({ metric: 'HandoffNotificationOpened', channel: 'inbox' });
+      },
+    );
+
+    it('a browser sign-in opens the target, where its live view is', () => {
+      const service = setup();
+      service.openFromInbox({ ...ref, kind: 'handoff_needs_input', waitingKind: 'browser_login' });
+
+      expect(navigate).toHaveBeenCalledWith(['/s', 'tgt'], { queryParams: { agent: 'rubric' } });
+      expect(TestBed.inject(HandoffStateService).focusedHandoffId()).toBeNull();
+      http.expectOne(EVENTS_URL);
+    });
+
+    it('a finished or stopped handoff opens the target', () => {
+      const service = setup();
+      service.openFromInbox({ ...ref, kind: 'handoff_done' });
+      service.openFromInbox({ ...ref, kind: 'handoff_stopped' });
+
+      expect(navigate.mock.calls.map((c) => c[0])).toEqual([['/s', 'tgt'], ['/s', 'tgt']]);
+      http.match(EVENTS_URL);
+    });
+
+    it('an entry written before it named what it waits on reads the row this tab holds', () => {
+      const service = setup();
+      TestBed.inject(HandoffStateService).upsertRow(
+        row({ status: 'needs_input', relayedPrompts: [{ interruptId: 'a1', kind: 'tool_approval', toolName: 't' }] }),
+      );
+      service.openFromInbox({ ...ref, kind: 'handoff_needs_input' });
+
+      expect(navigate).toHaveBeenCalledWith(['/s', 'src'], { queryParams: { assistantId: 'planner' } });
+      http.expectOne(EVENTS_URL);
+    });
+
+    it('opening the source while it is in view only brings the row into view', () => {
+      viewed.set('src');
+      const service = setup();
+      service.openSource(ref);
+
+      expect(navigate).not.toHaveBeenCalled();
+      expect(TestBed.inject(HandoffStateService).focusedHandoffId()).toBe('h1');
+    });
+
+    it('a browser notification for a relayed prompt opens the source; for a sign-in, the target', () => {
+      FakeNotification.permission = 'granted';
+      vi.spyOn(window, 'focus').mockImplementation(() => undefined);
+      const service = setup();
+      setVisibility('hidden');
+      service.onStateChange(
+        row({ status: 'needs_input', relayedPrompts: [{ interruptId: 'i1', kind: 'oauth', providerId: 'canvas' }] }),
+      );
+      service.onStateChange(
+        row({ handoffId: 'h2', status: 'needs_input', relayedPrompts: [{ interruptId: 'b1', kind: 'browser_login' }] }),
+      );
+      http.match(() => true);
+
+      FakeNotification.instances[0].onclick?.();
+      FakeNotification.instances[1].onclick?.();
+
+      expect(navigate.mock.calls.map((c) => c[0])).toEqual([['/s', 'src'], ['/s', 'tgt']]);
+      http.match(() => true);
     });
   });
 

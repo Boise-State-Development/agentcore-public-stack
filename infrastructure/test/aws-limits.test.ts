@@ -78,6 +78,12 @@ describe('AWS Limits in PlatformStack', () => {
     expect(AWS_LIMITS_REQUESTABLE_SERVICES).not.toContain('ec2');
   });
 
+  it('reads metrics with GetMetricData and ListMetrics only', () => {
+    const metrics = statementsBySid(on).get('AwsLimitsMetricsRead')!;
+    expect(metrics.Action).toEqual(['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics']);
+    expect(metrics.Resource).toBe('*');
+  });
+
   it('lets only the Service Quotas service-linked role be created', () => {
     const slr = statementsBySid(on).get('AwsLimitsServiceLinkedRole')!;
     expect(slr.Action).toBe('iam:CreateServiceLinkedRole');

@@ -204,7 +204,12 @@ export class ChatHttpService {
     this.registerPageLifecycleAttribution();
   }
 
-  async sendChatRequest(requestObject: any): Promise<void> {
+  /**
+   * `quietConflict`: a 409 is the caller's to explain, so no "Already responding" notice. A relayed
+   * prompt answered after the other surface already resumed the turn (handoffs spec §4.3) reads it
+   * as "Already answered".
+   */
+  async sendChatRequest(requestObject: any, options: { quietConflict?: boolean } = {}): Promise<void> {
     const sessionId = requestObject.session_id as string;
 
     // A handoff brief holds this conversation's lease (handoffs spec §4.5.1). The user's own
@@ -413,7 +418,9 @@ export class ChatHttpService {
             // response is still generating. Show a soft, dismissible notice with
             // the server's explanation rather than a "Chat Request Failed" toast.
             if (err instanceof AlreadyStreamingError) {
-              this.errorService.addError('Already responding', err.message, undefined, undefined);
+              if (!options.quietConflict) {
+                this.errorService.addError('Already responding', err.message, undefined, undefined);
+              }
               throw err;
             }
 

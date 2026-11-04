@@ -36,11 +36,11 @@ Usage (from backend/):
     # As the eval user (seeded once per environment by scripts/seed_eval_user.py):
     AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-1 \
         --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
-        --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 --yes
+        --model-id us.anthropic.claude-haiku-5-5 --yes
     # As any other owner of an active headless grant:
     AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-1 \\
         --user-id <cognito-sub> --prefix dev-boisestateai-v2 \\
-        --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0            # estimate only
+        --model-id us.anthropic.claude-haiku-5-5            # estimate only
     AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-1 ... --yes
     uv run python scripts/eval_harness.py score --out /tmp/eval-1
     uv run python scripts/eval_harness.py score --out /tmp/eval-1 --explain tool_selection
@@ -123,6 +123,7 @@ EST_JUDGE_OUTPUT_TOKENS = 300
 #: estimate. The catalog (curated-models.ts) is the source of truth.
 RATES: Dict[str, Tuple[float, float]] = {
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": (1.10, 5.50),
+    "us.anthropic.claude-haiku-5-5": (0.11, 0.55),
     "us.anthropic.claude-sonnet-4-6": (3.30, 16.50),
     "us.anthropic.claude-sonnet-5": (2.20, 11.00),
 }

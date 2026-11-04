@@ -9,7 +9,8 @@ import { FEATURES } from '../../../services/features';
 import { NotificationKind } from '../../../services/notifications/notification.model';
 import { NotificationsService } from '../../../services/notifications/notifications.service';
 import { ChatStateService } from '../chat/chat-state.service';
-import { ConversationBindingService } from '../session/conversation-binding.service';
+import { ConversationBindingService, bindingQueryParams } from '../session/conversation-binding.service';
+import { SessionService } from '../session/session.service';
 import { HandoffStatus, HandoffView } from './handoff.models';
 import { HandoffStateService } from './handoff-state.service';
 
@@ -38,6 +39,21 @@ export interface HandoffRef {
   sourceSessionId: string;
   targetSessionId: string;
   agentId: string;
+  /** The entry's kind, when it came from the bell. */
+  kind?: NotificationKind;
+  /** What a `handoff_needs_input` entry waits on (`WaitingOn.kind`). */
+  waitingKind?: string;
+}
+
+/**
+ * Whether a handoff's prompt can be answered from its source (PR-0.3c): it waits on the user, on
+ * something other than a browser sign-in. The row's relayed prompts decide when the SPA has them
+ * (none at all means nothing there to answer); otherwise `waitingOn`.
+ */
+export function answeredInSource(row: Pick<HandoffView, 'status' | 'waitingOn' | 'relayedPrompts'>): boolean {
+  if (row.status !== 'needs_input') return false;
+  if (row.relayedPrompts) return row.relayedPrompts.some((prompt) => prompt.kind !== 'browser_login');
+  return !!row.waitingOn && row.waitingOn.kind !== 'browser_login';
 }
 
 /**
@@ -53,6 +69,10 @@ export interface HandoffRef {
  *   hidden, tagged with the handoff id so a later state replaces an earlier one. The text is
  *   generic ("*Agent* needs your input"), because it can show on a lock screen. Permission is
  *   asked only when the user presses the in-context offer or the setting; never on load.
+ * - **A click opens where the answer is** (PR-0.3c). For a prompt the source relays, the bell
+ *   entry and the browser notification open the **source**, scrolled to the handoff row, so the
+ *   user answers without losing their place. Anything else (a browser sign-in, a finished or
+ *   stopped handoff) opens the target.
  */
 @Injectable({ providedIn: 'root' })
 export class HandoffNotificationService {
@@ -63,6 +83,7 @@ export class HandoffNotificationService {
   private readonly state = inject(HandoffStateService);
   private readonly router = inject(Router);
   private readonly binding = inject(ConversationBindingService);
+  private readonly sessions = inject(SessionService);
   private readonly features = inject(FEATURES);
 
   private readonly options = { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) };
@@ -141,10 +162,30 @@ export class HandoffNotificationService {
     return marked;
   }
 
-  /** A bell entry for a handoff was opened: count it and go to the target. */
+  /** A bell entry for a handoff was opened: count it and go where the answer is. */
   openFromInbox(ref: HandoffRef): void {
     this.record(ref.sourceSessionId, ref.handoffId, { metric: 'HandoffNotificationOpened', channel: 'inbox' });
-    this.openTarget(ref);
+    if (this.inboxEntryAnsweredInSource(ref)) this.openSource(ref);
+    else this.openTarget(ref);
+  }
+
+  /**
+   * Open the source thread with the handoff's row in view (the relayed prompt sits under it). The
+   * row takes the focus request once it renders, so this works from any page, and in place when
+   * the source is already open.
+   */
+  openSource(ref: Pick<HandoffRef, 'handoffId' | 'sourceSessionId'>): void {
+    this.state.requestFocus(ref.handoffId);
+    if (this.chatState.viewedSessionId() === ref.sourceSessionId) return;
+    const listed = this.sessions.mergedSessionsResource().sessions.find((s) => s.sessionId === ref.sourceSessionId);
+    const { project, assistantId } = bindingQueryParams(
+      listed?.preferences?.assistantId,
+      listed?.preferences?.projectId,
+      this.features.projects,
+    );
+    void this.router.navigate(['/s', ref.sourceSessionId], {
+      queryParams: project ? { project } : assistantId ? { assistantId } : {},
+    });
   }
 
   /** Ask for browser-notification permission. Only ever from a click: the offer or the setting. */
@@ -201,6 +242,10 @@ export class HandoffNotificationService {
       window.focus();
       notification.close();
       this.record(row.sessionId, row.handoffId, { metric: 'HandoffNotificationOpened', channel: 'browser' });
+      if (answeredInSource(row)) {
+        this.openSource({ handoffId: row.handoffId, sourceSessionId: row.sessionId });
+        return;
+      }
       this.openTarget({
         handoffId: row.handoffId,
         sourceSessionId: row.sessionId,
@@ -209,6 +254,17 @@ export class HandoffNotificationService {
       });
     };
     this.record(row.sessionId, row.handoffId, { metric: 'HandoffNotified', channel: 'browser' });
+  }
+
+  /**
+   * A `handoff_needs_input` entry names what it waits on. An entry written before it did reads the
+   * row this tab holds, and otherwise opens the target, where any prompt can be answered.
+   */
+  private inboxEntryAnsweredInSource(ref: HandoffRef): boolean {
+    if (ref.kind !== undefined && ref.kind !== 'handoff_needs_input') return false;
+    if (ref.waitingKind) return ref.waitingKind !== 'browser_login';
+    const row = this.state.rowsFor(ref.sourceSessionId).find((r) => r.handoffId === ref.handoffId);
+    return !!row && answeredInSource(row);
   }
 
   private openTarget(ref: HandoffRef): void {

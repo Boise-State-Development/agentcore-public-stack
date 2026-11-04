@@ -189,8 +189,8 @@ class TestJudgeCommand:
         rows = [
             {"case_id": "general_chat.explain_mutex_vs_semaphore", "family": "general_chat", "sample": 0,
              "model_id": MODEL, "passed": True, "final_message": "ok", "tool_calls": [], "session": {}},
-            {"case_id": "tool_selection.square_root_reaches_for_calculator", "family": "tool_selection",
-             "sample": 0, "model_id": MODEL, "passed": True, "final_message": "87",
+            {"case_id": "tool_selection.irrational_square_root_reaches_for_calculator", "family": "tool_selection",
+             "sample": 0, "model_id": MODEL, "passed": True, "final_message": "295.535108",
              "tool_calls": [{"name": "calculator"}, {"name": "calculator"}], "session": {}},
         ]
         (out / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")

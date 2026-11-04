@@ -4,7 +4,18 @@ const NUMBER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 
 export function formatLimitValue(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—';
+  // A real but tiny value (0.004 requests per second) must not read as none at all.
+  if (value > 0 && value < 0.01) return '<0.01';
   return NUMBER.format(value);
+}
+
+const PERCENT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+
+/** "41.3%", "0%", or "<0.1%" for use too small to round to one place. */
+export function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined) return 'N/A';
+  if (value > 0 && value < 0.1) return '<0.1%';
+  return `${PERCENT.format(value)}%`;
 }
 
 /** "Count", "per second", "GB per minute"… Service Quotas reports "None" for unitless quotas. */

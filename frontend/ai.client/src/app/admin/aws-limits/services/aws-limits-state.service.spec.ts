@@ -25,6 +25,7 @@ function limit(overrides: Partial<AwsLimit> = {}): AwsLimit {
     globalQuota: false,
     hasUsageMetric: true,
     usage: 500,
+    usageSource: null,
     utilization: 50,
     consoleUrl: 'https://console',
     requestable: true,
@@ -47,6 +48,7 @@ function dashboard(groups: AwsLimitGroup[], overrides: Partial<AwsLimitsDashboar
     summary: { monitored: 3, atOrAbove80: 1, atOrAbove95: 0, openRequests: 0 },
     autoManagement: null,
     guidanceUrl: 'https://docs',
+    usageWindowDays: 7,
     ...overrides,
   };
 }

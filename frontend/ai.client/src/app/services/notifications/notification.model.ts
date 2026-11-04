@@ -54,7 +54,8 @@ export interface AppNotification {
    * for quota: `requestId`, `outcome`, `amount` / `requestedAmount` (decimal strings), `through`
    * (a date), `standing`, `fundingLabel`, `note`, and `reason` on a revoke;
    * for a handoff: `handoffId`, `sourceSessionId`, `targetSessionId`, `agentId`, `agentName`
-   * and `sourceTitle` (never request or conversation text).
+   * and `sourceTitle` (never request or conversation text), plus `waitingKind` on a
+   * `handoff_needs_input` entry, so a click opens where the answer is.
    */
   payload: {
     role?: string;
@@ -77,6 +78,7 @@ export interface AppNotification {
     agentId?: string;
     agentName?: string;
     sourceTitle?: string;
+    waitingKind?: string;
   } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;

@@ -27,6 +27,7 @@ const LIMIT: AwsLimit = {
   globalQuota: false,
   hasUsageMetric: true,
   usage: 850,
+  usageSource: null,
   utilization: 85,
   consoleUrl: 'https://console',
   requestable: true,

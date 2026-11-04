@@ -180,6 +180,7 @@ class TestInboxWrites:
             "agentId": "rubric",
             "agentName": "Rubric Builder",
             "sourceTitle": "Course planning",
+            "waitingKind": "oauth_consent",
         }
         assert "actorEmail" not in item and "readAt" not in item
         assert int(item["ttl"]) > 0
@@ -191,6 +192,13 @@ class TestInboxWrites:
         dumped = json.dumps(inbox_items(tables), default=str)
         for text in (REQUEST, "plan BIO 101", "Drafted a 4-row rubric", "conversation_excerpt"):
             assert text not in dumped
+
+    def test_only_a_needs_input_entry_names_what_it_waits_on(self, tables, store):
+        run_turn(first_turn(store), frame("done"))
+
+        [item] = inbox_items(tables)
+        assert item["kind"] == "handoff_done"
+        assert "waitingKind" not in item["payload"]
 
     def test_a_finished_turn_writes_done_and_a_turn_after_it_writes_nothing(self, tables, store):
         run_turn(first_turn(store), frame("done"))

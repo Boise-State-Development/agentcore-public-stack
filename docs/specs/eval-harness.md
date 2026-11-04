@@ -79,17 +79,17 @@ One file per family, `backend/evals/cases/<family>.json`, an array of cases:
 
 ```json
 {
-  "id": "tool_selection.multiplication_reaches_for_calculator",
+  "id": "tool_selection.large_product_reaches_for_calculator",
   "family": "tool_selection",
   "turns": [
-    {"prompt": "What is 48,217 multiplied by 913? I need the exact figure."}
+    {"prompt": "What is 739,481 multiplied by 52,967? I need the exact figure."}
   ],
   "run": {"enabled_tools": ["calculator", "whoami"], "enabled_skills": []},
   "expect": {
-    "contains_any": ["44,022,121"],
+    "contains_any": ["39,168,090,127", "39168090127"],
     "tools": {"must_call": ["calculator"], "must_not_call": ["whoami"]}
   },
-  "notes": "Exact five-by-three digit product: a model that answers from memory is often wrong."
+  "notes": "Six-by-five digit product: hand arithmetic is error-prone at this size for any model, thinking or not."
 }
 ```
 
