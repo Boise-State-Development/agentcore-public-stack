@@ -192,6 +192,28 @@ async def stream_handoff_brief(
     yield brief_done_frame(handoff.handoff_id, brief_hash=brief_hash, cache_status=cache_status)
 
 
+async def _estimate_cancelled_usage(
+    main_agent: Any, strands_agent: Any, messages: list, partial_text: str
+) -> Optional[Dict[str, Any]]:
+    """The cancelled brief's estimated usage, or ``None`` when it can't be sized honestly."""
+    try:
+        from agents.main_agent.streaming.interrupted_usage import build_side_call_usage
+
+        estimate = await build_side_call_usage(
+            strands_agent=strands_agent,
+            wrapper=main_agent,
+            history=messages[:-1],
+            appended_text=_message_text(messages[-1]),
+            partial_text=partial_text,
+        )
+    except Exception:  # noqa: BLE001 - metering must never break the brief's fallback
+        logger.warning("handoff brief: estimating the cancelled call's usage failed", exc_info=True)
+        return None
+    if estimate is None:
+        return None
+    return {**estimate, "metrics": {}}
+
+
 async def _call_model(
     main_agent: Any,
     strands_agent: Any,
@@ -228,6 +250,8 @@ async def _call_model(
     first_token: Optional[float] = None
     text_parts: list = []
     stop: Optional[tuple] = None
+    # The provider accepted the request: from here a cancel still leaves a prompt it billed.
+    answered = False
     async for event in stream_messages(
         strands_agent.model,
         system_prompt_str,
@@ -243,10 +267,14 @@ async def _call_model(
         if "stop" in event:
             stop = event["stop"]
             continue
+        chunk = event.get("event") if isinstance(event, dict) else None
+        if isinstance(chunk, dict) and "messageStart" in chunk:
+            answered = True
         text = event.get("data") if isinstance(event, dict) else None
         if isinstance(text, str) and text:
             if first_token is None:
                 first_token = time.time()
+            answered = True
             text_parts.append(text)
             yield brief_text_frame(text)
 
@@ -256,14 +284,20 @@ async def _call_model(
     stop_reason, message, usage, metrics = stop
 
     cache_status: Optional[str] = None
-    # Strands reports a zero-filled usage on a cancel before the provider answered; a row for it
-    # would be an empty cost record, so only a call that reported tokens is metered.
+    accumulated: Optional[Dict[str, Any]] = None
     if _reported_tokens(usage):
+        accumulated = {"usage": usage, "metrics": metrics or {}}
+    elif stop_reason == "cancelled" and answered:
+        # Strands reports a zero-filled usage on a cancel: the provider's terminal usage never
+        # arrived. It still billed the prompt and what it streamed, so the row is estimated, as a
+        # stopped turn's is, and labelled so (`usageEstimated`, `cacheStatus: estimated`).
+        accumulated = await _estimate_cancelled_usage(main_agent, strands_agent, messages, "".join(text_parts))
+    if accumulated is not None:
         observability = await main_agent.stream_coordinator._store_message_metadata(
             session_id=session_id,
             user_id=user_id,
             message_id=None,
-            accumulated_metadata={"usage": usage, "metrics": metrics or {}},
+            accumulated_metadata=accumulated,
             stream_start_time=stream_start,
             stream_end_time=time.time(),
             first_token_time=first_token,

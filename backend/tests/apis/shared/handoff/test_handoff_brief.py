@@ -305,7 +305,16 @@ def _main_agent(messages=None):
 
 
 class _World:
-    def __init__(self, monkeypatch, *, chunks=("Goal: ", "a rubric."), stop_reason="end_turn", message=None, slow=False):
+    def __init__(
+        self,
+        monkeypatch,
+        *,
+        chunks=("Goal: ", "a rubric."),
+        stop_reason="end_turn",
+        message=None,
+        slow=False,
+        cancel_before_answer=False,
+    ):
         self.events: List[str] = []
         self.model_calls: List[Dict[str, Any]] = []
         self.recorded: List[Dict[str, Any]] = []
@@ -316,11 +325,19 @@ class _World:
             world.model_calls.append(
                 {"model": model, "system_prompt": system_prompt, "messages": copy.deepcopy(messages), "tool_specs": tool_specs, **kwargs}
             )
+            # What Strands yields on a cancel: the provider's usage never arrived, so it is zero.
+            cancelled = {"stop": ("cancelled", {"role": "assistant", "content": []}, {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}, {})}
+            if cancel_before_answer:
+                while not kwargs["cancel_signal"].is_set():
+                    await asyncio.sleep(0.01)
+                yield cancelled
+                return
+            yield {"event": {"messageStart": {"role": "assistant"}}}
             for chunk in chunks:
                 if slow:
                     for _ in range(200):
                         if kwargs["cancel_signal"].is_set():
-                            yield {"stop": ("cancelled", {"role": "assistant", "content": []}, {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}, {})}
+                            yield cancelled
                             return
                         await asyncio.sleep(0.01)
                 yield {"data": chunk}
@@ -460,6 +477,61 @@ class TestBriefStream:
         assert [f["event"] for f in frames][-2:] == ["handoff_brief_fallback", "done"]
         assert frames[-2]["data"]["reason"] == "preempted"
         assert world.events.index("released") < world.events.index("done")
+
+    def _preempt(self, monkeypatch, world, agent):
+        monkeypatch.setattr(brief_module, "_LEASE_POLL_SECONDS", 0.01)
+
+        async def cancel_requested(lease):
+            return True
+
+        import apis.shared.sessions.session_lease as session_lease
+
+        monkeypatch.setattr(session_lease, "renew_session_lease", cancel_requested)
+        return world.run(agent, lease=object())
+
+    def test_a_preempted_brief_that_had_streamed_is_metered_as_an_estimate(self, monkeypatch):
+        """Dev, 2026-11-04: a preempted brief streamed 17 deltas and wrote no cost row, because a
+        cancel's usage is zero-filled. The provider still billed the prompt and those tokens."""
+        world = _World(monkeypatch, slow=True)
+        source = copy.deepcopy(SOURCE)
+        source[-1]["metadata"] = {
+            "usage": {"inputTokens": 3, "outputTokens": 326, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 9_203}
+        }
+        agent = _main_agent(messages=source)
+        agent.model_config = types.SimpleNamespace(bedrock_cache_points_supported=lambda: True)
+
+        frames = self._preempt(monkeypatch, world, agent)
+
+        assert frames[-2]["data"]["reason"] == "preempted"
+        [row] = agent.stream_coordinator.calls
+        assert row["message_id"] is None
+        assert row["call_kind"] == "handoff_brief"
+        accumulated = row["accumulated_metadata"]
+        assert accumulated["usage"]["cacheReadInputTokens"] == 9_203
+        assert accumulated["usage"]["inputTokens"] == 0
+        assert accumulated["usageEstimate"]["inputTokens"] == "prior_call_prompt"
+        assert accumulated["usageEstimate"]["reason"] == "interrupted"
+        # A cancelled brief records nothing on the handoff.
+        assert world.recorded == []
+
+    def test_a_preempted_brief_with_no_usage_in_its_history_writes_no_row(self, monkeypatch):
+        world = _World(monkeypatch, slow=True)
+        agent = _main_agent()
+
+        self._preempt(monkeypatch, world, agent)
+
+        assert agent.stream_coordinator.calls == []
+
+    def test_a_cancel_before_the_provider_answered_writes_no_row(self, monkeypatch):
+        world = _World(monkeypatch, cancel_before_answer=True)
+        source = copy.deepcopy(SOURCE)
+        source[-1]["metadata"] = {"usage": {"inputTokens": 3, "outputTokens": 10, "cacheWriteInputTokens": 9_203}}
+        agent = _main_agent(messages=source)
+
+        frames = self._preempt(monkeypatch, world, agent)
+
+        assert frames[-2]["data"]["reason"] == "preempted"
+        assert agent.stream_coordinator.calls == []
 
     def test_a_build_past_the_deadline_is_a_timeout(self, monkeypatch):
         world = _World(monkeypatch)

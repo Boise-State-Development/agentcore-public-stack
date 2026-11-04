@@ -1709,8 +1709,15 @@ has started", and the only one that spends money while nobody is watching.
   - **Metering** goes through the coordinator's `_store_message_metadata` with `call_kind="handoff_brief"`, no
     `messageId` and the brief's fingerprint. A brief adds to `totalCost` and the cache rollups but never sets
     `lastContextTokens`; it does not consume a fork's first-call marker. A model call that returned usage is metered
-    whether or not a brief came of it. A cancelled call that reported no usage writes no row (the interrupted-turn
-    estimator is not wired to the brief).
+    whether or not a brief came of it. A cancelled call (preempted or timed out) gets Strands' zero-filled usage,
+    because the provider's terminal usage never arrived. Once the provider has answered (`messageStart` or a text
+    delta), its row is **estimated** the way a stopped turn's is (`interrupted_usage.build_side_call_usage`). The
+    input is the last reported call's billed prompt plus that call's answer plus the instruction. The read/write split
+    takes that call's cache entry as the prefix, and the output counts the text streamed. The row carries
+    `usageEstimated` (`inputTokens: prior_call_prompt`), so it reads `cacheStatus: estimated` with zero `wastedUsd`.
+    There is no row when nothing in the history reports usage (a source restored into a fresh container) or the cancel
+    came before the provider answered. *Fixed 2026-11-04:* on dev, a preempted brief had streamed 17 deltas and
+    written no row.
   - **Not built:** the output cap (see "Output" above).
 
   *SPA built (2026-11-04)*, behind `features.handoffBrief` (on only in `environment.development.ts`):
