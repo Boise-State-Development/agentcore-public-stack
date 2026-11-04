@@ -1,0 +1,1436 @@
+{
+ "haiku45": {
+  "additionalModelRequestFields": {
+   "anthropic_beta": [
+    "fine-grained-tool-streaming-2025-05-14"
+   ]
+  },
+  "inferenceConfig": {
+   "maxTokens": 8192
+  },
+  "messages": [
+   {
+    "content": [
+     {
+      "text": "summarise this"
+     },
+     {
+      "document": {
+       "format": "txt",
+       "name": "notes",
+       "source": {
+        "bytes": {
+         "__bytes__": "aGVsbG8gd29ybGQ="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Looking it up."
+     },
+     {
+      "toolUse": {
+       "input": {
+        "id": 7
+       },
+       "name": "get_thread",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "toolResult": {
+       "content": [
+        {
+         "text": "thread body"
+        },
+        {
+         "json": {
+          "n": 1
+         }
+        }
+       ],
+       "status": "success",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Done."
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "text": "and again"
+     },
+     {
+      "image": {
+       "format": "png",
+       "source": {
+        "bytes": {
+         "__bytes__": "iVBORw0KGgo="
+        }
+       }
+      }
+     },
+     {
+      "cachePoint": {
+       "type": "default"
+      }
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "system": [
+   {
+    "text": "You are a helpful assistant."
+   },
+   {
+    "cachePoint": {
+     "type": "default"
+    }
+   }
+  ],
+  "toolConfig": {
+   "toolChoice": {
+    "auto": {}
+   },
+   "tools": [
+    {
+     "toolSpec": {
+      "description": "Tool number 0.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_0"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 1.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_1"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 2.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_2"
+     }
+    },
+    {
+     "cachePoint": {
+      "type": "default"
+     }
+    }
+   ]
+  }
+ },
+ "haiku45-global": {
+  "additionalModelRequestFields": {
+   "anthropic_beta": [
+    "fine-grained-tool-streaming-2025-05-14"
+   ]
+  },
+  "inferenceConfig": {
+   "maxTokens": 8192
+  },
+  "messages": [
+   {
+    "content": [
+     {
+      "text": "summarise this"
+     },
+     {
+      "document": {
+       "format": "txt",
+       "name": "notes",
+       "source": {
+        "bytes": {
+         "__bytes__": "aGVsbG8gd29ybGQ="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Looking it up."
+     },
+     {
+      "toolUse": {
+       "input": {
+        "id": 7
+       },
+       "name": "get_thread",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "toolResult": {
+       "content": [
+        {
+         "text": "thread body"
+        },
+        {
+         "json": {
+          "n": 1
+         }
+        }
+       ],
+       "status": "success",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Done."
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "text": "and again"
+     },
+     {
+      "image": {
+       "format": "png",
+       "source": {
+        "bytes": {
+         "__bytes__": "iVBORw0KGgo="
+        }
+       }
+      }
+     },
+     {
+      "cachePoint": {
+       "type": "default"
+      }
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "modelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "system": [
+   {
+    "text": "You are a helpful assistant."
+   },
+   {
+    "cachePoint": {
+     "type": "default"
+    }
+   }
+  ],
+  "toolConfig": {
+   "toolChoice": {
+    "auto": {}
+   },
+   "tools": [
+    {
+     "toolSpec": {
+      "description": "Tool number 0.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_0"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 1.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_1"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 2.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_2"
+     }
+    },
+    {
+     "cachePoint": {
+      "type": "default"
+     }
+    }
+   ]
+  }
+ },
+ "nova-micro": {
+  "inferenceConfig": {
+   "maxTokens": 512
+  },
+  "messages": [
+   {
+    "content": [
+     {
+      "text": "summarise this"
+     },
+     {
+      "document": {
+       "format": "txt",
+       "name": "notes",
+       "source": {
+        "bytes": {
+         "__bytes__": "aGVsbG8gd29ybGQ="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Looking it up."
+     },
+     {
+      "toolUse": {
+       "input": {
+        "id": 7
+       },
+       "name": "get_thread",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "toolResult": {
+       "content": [
+        {
+         "text": "thread body"
+        },
+        {
+         "text": "{\"n\": 1}"
+        }
+       ],
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Done."
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "text": "and again"
+     },
+     {
+      "image": {
+       "format": "png",
+       "source": {
+        "bytes": {
+         "__bytes__": "iVBORw0KGgo="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "modelId": "us.amazon.nova-micro-v1:0",
+  "system": [
+   {
+    "text": "You are a helpful assistant."
+   }
+  ],
+  "toolConfig": {
+   "toolChoice": {
+    "auto": {}
+   },
+   "tools": [
+    {
+     "toolSpec": {
+      "description": "Tool number 0.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_0"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 1.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_1"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 2.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_2"
+     }
+    }
+   ]
+  }
+ },
+ "opus47-thinking": {
+  "additionalModelRequestFields": {
+   "anthropic_beta": [
+    "fine-grained-tool-streaming-2025-05-14"
+   ],
+   "thinking": {
+    "type": "adaptive"
+   }
+  },
+  "inferenceConfig": {
+   "maxTokens": 32000
+  },
+  "messages": [
+   {
+    "content": [
+     {
+      "text": "summarise this"
+     },
+     {
+      "document": {
+       "format": "txt",
+       "name": "notes",
+       "source": {
+        "bytes": {
+         "__bytes__": "aGVsbG8gd29ybGQ="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "reasoningContent": {
+       "reasoningText": {
+        "signature": "EqQBCkgIARABGAIiQLAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "text": "let me check"
+       }
+      }
+     },
+     {
+      "text": "Looking it up."
+     },
+     {
+      "toolUse": {
+       "input": {
+        "id": 7
+       },
+       "name": "get_thread",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "toolResult": {
+       "content": [
+        {
+         "text": "thread body"
+        },
+        {
+         "json": {
+          "n": 1
+         }
+        }
+       ],
+       "status": "success",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Done."
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "text": "and again"
+     },
+     {
+      "image": {
+       "format": "png",
+       "source": {
+        "bytes": {
+         "__bytes__": "iVBORw0KGgo="
+        }
+       }
+      }
+     },
+     {
+      "cachePoint": {
+       "type": "default"
+      }
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "modelId": "us.anthropic.claude-opus-4-7",
+  "system": [
+   {
+    "text": "You are a helpful assistant."
+   },
+   {
+    "cachePoint": {
+     "type": "default"
+    }
+   }
+  ],
+  "toolConfig": {
+   "toolChoice": {
+    "auto": {}
+   },
+   "tools": [
+    {
+     "toolSpec": {
+      "description": "Tool number 0.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_0"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 1.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_1"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 2.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_2"
+     }
+    },
+    {
+     "cachePoint": {
+      "type": "default"
+     }
+    }
+   ]
+  }
+ },
+ "opus55-thinking": {
+  "additionalModelRequestFields": {
+   "anthropic_beta": [
+    "fine-grained-tool-streaming-2025-05-14"
+   ],
+   "thinking": {
+    "type": "adaptive"
+   }
+  },
+  "inferenceConfig": {
+   "maxTokens": 32000
+  },
+  "messages": [
+   {
+    "content": [
+     {
+      "text": "summarise this"
+     },
+     {
+      "document": {
+       "format": "txt",
+       "name": "notes",
+       "source": {
+        "bytes": {
+         "__bytes__": "aGVsbG8gd29ybGQ="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "reasoningContent": {
+       "reasoningText": {
+        "signature": "EqQBCkgIARABGAIiQLAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "text": "let me check"
+       }
+      }
+     },
+     {
+      "text": "Looking it up."
+     },
+     {
+      "toolUse": {
+       "input": {
+        "id": 7
+       },
+       "name": "get_thread",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "toolResult": {
+       "content": [
+        {
+         "text": "thread body"
+        },
+        {
+         "json": {
+          "n": 1
+         }
+        }
+       ],
+       "status": "success",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Done."
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "text": "and again"
+     },
+     {
+      "image": {
+       "format": "png",
+       "source": {
+        "bytes": {
+         "__bytes__": "iVBORw0KGgo="
+        }
+       }
+      }
+     },
+     {
+      "cachePoint": {
+       "type": "default"
+      }
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "modelId": "global.anthropic.claude-opus-5-5",
+  "system": [
+   {
+    "text": "You are a helpful assistant."
+   },
+   {
+    "cachePoint": {
+     "type": "default"
+    }
+   }
+  ],
+  "toolConfig": {
+   "toolChoice": {
+    "auto": {}
+   },
+   "tools": [
+    {
+     "toolSpec": {
+      "description": "Tool number 0.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_0"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 1.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_1"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 2.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_2"
+     }
+    },
+    {
+     "cachePoint": {
+      "type": "default"
+     }
+    }
+   ]
+  }
+ },
+ "sonnet46-1h-static-prefix": {
+  "additionalModelRequestFields": {
+   "anthropic_beta": [
+    "fine-grained-tool-streaming-2025-05-14"
+   ]
+  },
+  "inferenceConfig": {
+   "maxTokens": 8192
+  },
+  "messages": [
+   {
+    "content": [
+     {
+      "text": "summarise this"
+     },
+     {
+      "document": {
+       "format": "txt",
+       "name": "notes",
+       "source": {
+        "bytes": {
+         "__bytes__": "aGVsbG8gd29ybGQ="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Looking it up."
+     },
+     {
+      "toolUse": {
+       "input": {
+        "id": 7
+       },
+       "name": "get_thread",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "toolResult": {
+       "content": [
+        {
+         "text": "thread body"
+        },
+        {
+         "json": {
+          "n": 1
+         }
+        }
+       ],
+       "status": "success",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Done."
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "text": "and again"
+     },
+     {
+      "image": {
+       "format": "png",
+       "source": {
+        "bytes": {
+         "__bytes__": "iVBORw0KGgo="
+        }
+       }
+      }
+     },
+     {
+      "cachePoint": {
+       "type": "default"
+      }
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "modelId": "us.anthropic.claude-sonnet-4-6",
+  "system": [
+   {
+    "text": "You are a helpful assistant."
+   },
+   {
+    "cachePoint": {
+     "ttl": "1h",
+     "type": "default"
+    }
+   }
+  ],
+  "toolConfig": {
+   "toolChoice": {
+    "auto": {}
+   },
+   "tools": [
+    {
+     "toolSpec": {
+      "description": "Tool number 0.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_0"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 1.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_1"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 2.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_2"
+     }
+    },
+    {
+     "cachePoint": {
+      "ttl": "1h",
+      "type": "default"
+     }
+    }
+   ]
+  }
+ },
+ "sonnet46-mcp-apps-off": {
+  "inferenceConfig": {
+   "maxTokens": 8192
+  },
+  "messages": [
+   {
+    "content": [
+     {
+      "text": "summarise this"
+     },
+     {
+      "document": {
+       "format": "txt",
+       "name": "notes",
+       "source": {
+        "bytes": {
+         "__bytes__": "aGVsbG8gd29ybGQ="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Looking it up."
+     },
+     {
+      "toolUse": {
+       "input": {
+        "id": 7
+       },
+       "name": "get_thread",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "toolResult": {
+       "content": [
+        {
+         "text": "thread body"
+        },
+        {
+         "json": {
+          "n": 1
+         }
+        }
+       ],
+       "status": "success",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Done."
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "text": "and again"
+     },
+     {
+      "image": {
+       "format": "png",
+       "source": {
+        "bytes": {
+         "__bytes__": "iVBORw0KGgo="
+        }
+       }
+      }
+     },
+     {
+      "cachePoint": {
+       "type": "default"
+      }
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "modelId": "us.anthropic.claude-sonnet-4-6",
+  "system": [
+   {
+    "text": "You are a helpful assistant."
+   },
+   {
+    "cachePoint": {
+     "type": "default"
+    }
+   }
+  ],
+  "toolConfig": {
+   "toolChoice": {
+    "auto": {}
+   },
+   "tools": [
+    {
+     "toolSpec": {
+      "description": "Tool number 0.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_0"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 1.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_1"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 2.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_2"
+     }
+    },
+    {
+     "cachePoint": {
+      "type": "default"
+     }
+    }
+   ]
+  }
+ },
+ "sonnet46-no-max-tokens": {
+  "additionalModelRequestFields": {
+   "anthropic_beta": [
+    "fine-grained-tool-streaming-2025-05-14"
+   ]
+  },
+  "inferenceConfig": {},
+  "messages": [
+   {
+    "content": [
+     {
+      "text": "summarise this"
+     },
+     {
+      "document": {
+       "format": "txt",
+       "name": "notes",
+       "source": {
+        "bytes": {
+         "__bytes__": "aGVsbG8gd29ybGQ="
+        }
+       }
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Looking it up."
+     },
+     {
+      "toolUse": {
+       "input": {
+        "id": 7
+       },
+       "name": "get_thread",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "toolResult": {
+       "content": [
+        {
+         "text": "thread body"
+        },
+        {
+         "json": {
+          "n": 1
+         }
+        }
+       ],
+       "status": "success",
+       "toolUseId": "t1"
+      }
+     }
+    ],
+    "role": "user"
+   },
+   {
+    "content": [
+     {
+      "text": "Done."
+     }
+    ],
+    "role": "assistant"
+   },
+   {
+    "content": [
+     {
+      "text": "and again"
+     },
+     {
+      "image": {
+       "format": "png",
+       "source": {
+        "bytes": {
+         "__bytes__": "iVBORw0KGgo="
+        }
+       }
+      }
+     },
+     {
+      "cachePoint": {
+       "type": "default"
+      }
+     }
+    ],
+    "role": "user"
+   }
+  ],
+  "modelId": "us.anthropic.claude-sonnet-4-6",
+  "system": [
+   {
+    "text": "You are a helpful assistant."
+   },
+   {
+    "cachePoint": {
+     "type": "default"
+    }
+   }
+  ],
+  "toolConfig": {
+   "toolChoice": {
+    "auto": {}
+   },
+   "tools": [
+    {
+     "toolSpec": {
+      "description": "Tool number 0.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_0"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 1.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_1"
+     }
+    },
+    {
+     "toolSpec": {
+      "description": "Tool number 2.",
+      "inputSchema": {
+       "json": {
+        "properties": {
+         "x": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "x"
+        ],
+        "type": "object"
+       }
+      },
+      "name": "tool_2"
+     }
+    },
+    {
+     "cachePoint": {
+      "type": "default"
+     }
+    }
+   ]
+  }
+ }
+}

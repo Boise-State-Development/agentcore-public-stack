@@ -68,9 +68,7 @@ class TestMaxTokensDefault:
         assert "maxTokens" not in request.get("inferenceConfig", {})
 
     def test_catalog_max_tokens_still_reaches_the_request(self):
-        config = ModelConfig(
-            model_id="us.anthropic.claude-sonnet-4-6", inference_params={"max_tokens": 8192}
-        )
+        config = ModelConfig(model_id="us.anthropic.claude-sonnet-4-6", inference_params={"max_tokens": 8192})
         assert _format(_bedrock_model(config))["inferenceConfig"]["maxTokens"] == 8192
 
     @pytest.mark.parametrize("strict", [True, False])
@@ -90,9 +88,7 @@ class TestResolvedConfigMemo:
         assert model.model_info is model.model_info
 
     def test_update_config_drops_the_memo(self):
-        model = _bedrock_model(
-            ModelConfig(model_id="us.anthropic.claude-sonnet-4-6", caching_enabled=True)
-        )
+        model = _bedrock_model(ModelConfig(model_id="us.anthropic.claude-sonnet-4-6", caching_enabled=True))
         assert model._cache_strategy == "anthropic"
         assert model.get_config()["max_tokens"] is None
 
