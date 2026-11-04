@@ -41,8 +41,13 @@ def _svc() -> NotificationService:
 
 
 def notification_payload(handoff: Handoff, *, target_session_id: str) -> Dict[str, str]:
-    """What an entry carries: ids and display names only."""
-    return {
+    """What an entry carries: ids and display names only.
+
+    A ``needs_input`` entry also names the kind it waits on (``waitingKind``), so a click can open
+    where the answer is: the source for a prompt it relays, the target for a browser sign-in
+    (PR-0.3c).
+    """
+    payload = {
         "handoffId": handoff.handoff_id,
         "sourceSessionId": handoff.session_id,
         "targetSessionId": handoff.target_session_id or target_session_id,
@@ -50,6 +55,9 @@ def notification_payload(handoff: Handoff, *, target_session_id: str) -> Dict[st
         "agentName": handoff.agent_name,
         "sourceTitle": handoff.source_title,
     }
+    if handoff.status == "needs_input" and handoff.waiting_on is not None:
+        payload["waitingKind"] = handoff.waiting_on.kind
+    return payload
 
 
 def notify_handoff_state(

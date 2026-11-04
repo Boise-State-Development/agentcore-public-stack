@@ -4,7 +4,7 @@
     GET  /sessions/{session_id}/handoffs/{handoff_id}            read one
     POST /sessions/{session_id}/handoffs/{handoff_id}/dismiss    cancel an open one
     POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/read    mark its inbox entries read
-    POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/events  count a browser notification
+    POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/events  count a browser-side fact
 
 All 404 to a signed-in user while ``HANDOFFS_ENABLED`` is off (401 unauthenticated regardless).
 
@@ -43,6 +43,7 @@ from apis.shared.handoff import (
 from apis.shared.handoff.metrics import emit_handoff_metric
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
 from apis.shared.handoff.notify import HANDOFF_NOTIFICATION_KINDS
+from apis.shared.handoff.relay import load_relayed_prompts
 from apis.shared.notifications import NotificationService
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_compaction, get_session_metadata
@@ -190,6 +191,7 @@ async def create_handoff(
     "/{session_id}/handoffs/{handoff_id}",
     response_model=HandoffView,
     response_model_by_alias=True,
+    response_model_exclude_none=True,
 )
 async def get_handoff(
     session_id: str,
@@ -197,9 +199,16 @@ async def get_handoff(
     user: User = Depends(require_handoffs_user),
     store: HandoffStore = Depends(get_handoff_store),
 ) -> HandoffView:
-    """One of the caller's handoffs from this conversation."""
+    """One of the caller's handoffs from this conversation.
+
+    A ``needs_input`` handoff carries ``relayedPrompts``, read from its target as ``GET /messages``
+    reads them. The SPA reads this row when a target's turn ends, so the relay it shows then comes
+    from the same breadcrumbs a reload would, not from prompt state the tab may have cleared.
+    """
     row = await _owned_row(store, user, session_id, handoff_id)
-    return HandoffView.from_row(row)
+    view = HandoffView.from_row(row)
+    await load_relayed_prompts([view], user.user_id)
+    return view
 
 
 @router.post("/{session_id}/handoffs/{handoff_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
@@ -272,12 +281,31 @@ async def mark_handoff_notifications_read(
     return MarkHandoffNotificationsReadResponse(marked=marked)
 
 
-class HandoffNotificationEvent(BaseModel):
-    """A browser-side fact the server can't see (§4.7). ``outcome`` only for a permission ask."""
+RelayedPromptKind = Literal["oauth", "tool_approval", "user_question", "browser_login"]
 
-    metric: Literal["HandoffNotified", "HandoffNotificationOpened", "HandoffBrowserPermission"]
+
+class HandoffNotificationEvent(BaseModel):
+    """A browser-side fact the server can't see (§4.7).
+
+    ``outcome`` only for a permission ask. ``interruptKind`` for the three relayed-prompt counts
+    (PR-0.3c), and ``surface`` for ``RelayedPromptAnswered``: ``source`` when answered under the
+    handoff row, ``target`` when answered in the target conversation itself.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    metric: Literal[
+        "HandoffNotified",
+        "HandoffNotificationOpened",
+        "HandoffBrowserPermission",
+        "RelayedPromptShown",
+        "RelayedPromptAnswered",
+        "RelayedPromptConflict",
+    ]
     channel: Optional[Literal["inbox", "browser"]] = None
     outcome: Optional[Literal["granted", "denied", "dismissed"]] = None
+    interrupt_kind: Optional[RelayedPromptKind] = Field(None, alias="interruptKind")
+    surface: Optional[Literal["source", "target"]] = None
 
 
 @router.post(
@@ -289,11 +317,28 @@ async def record_handoff_notification_event(
     handoff_id: str,
     body: HandoffNotificationEvent,
     user: User = Depends(require_handoffs_user),
+    store: HandoffStore = Depends(get_handoff_store),
 ) -> Response:
-    """Count a browser notification shown or opened, an inbox entry opened, or a permission answer.
+    """Count a browser notification shown or opened, an inbox entry opened, a permission answer,
+    or a relayed prompt shown, answered or refused because the other surface answered first.
 
-    A count and nothing else: no row is read or written, so a stray call costs one EMF line.
+    A count and nothing else. No row is written, and only one count reads one: an answer given in
+    the target is counted only while its handoff is ``needs_input``, because once a handoff is
+    ``done`` its target is the user's own conversation and a prompt there is not a relayed one. The
+    target calls before it resumes, so the row has not moved yet.
     """
+    if body.metric.startswith("RelayedPrompt"):
+        if body.interrupt_kind is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="interruptKind is required")
+        surface = body.surface if body.metric == "RelayedPromptAnswered" else None
+        if body.metric == "RelayedPromptAnswered" and surface is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="surface is required")
+        if surface == "target":
+            row = await _owned_row(store, user, session_id, handoff_id)
+            if row.status != "needs_input":
+                return Response(status_code=status.HTTP_204_NO_CONTENT)
+        emit_handoff_metric(body.metric, "mention", session_id=session_id, detail=body.interrupt_kind, surface=surface)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     detail = body.outcome if body.metric == "HandoffBrowserPermission" else body.channel
     emit_handoff_metric(body.metric, "mention", session_id=session_id, detail=detail)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

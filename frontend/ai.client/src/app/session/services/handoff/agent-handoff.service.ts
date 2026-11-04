@@ -21,7 +21,7 @@ import {
   HandoffView,
 } from './handoff.models';
 import { HandoffBriefService } from './handoff-brief.service';
-import { HandoffNotificationService } from './handoff-notification.service';
+import { HandoffNotificationService, answeredInSource } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
 
 /** How long to keep asking for a finished target's status: the Runtime writes it just after the stream. */
@@ -45,6 +45,9 @@ const STATUS_REFRESH_INTERVAL_MS = 700;
  * Each state change also goes to `HandoffNotificationService` (PR-0.3b): it marks the inbox entry
  * read when the user is looking at the source or the target, and shows a browser notification
  * when the page is hidden. The needs-input toast offers to turn browser notifications on.
+ *
+ * A row that ends in `needs_input` carries `relayedPrompts` (PR-0.3c), read from the target with
+ * the row itself, and `HandoffRelayService` renders them under it.
  *
  * With `features.handoffBrief` (PR-0.3a, §4.5.1), `open` then asks the source conversation's own
  * model for a brief and streams it into the card; the excerpt stays as the fallback. Send waits
@@ -357,11 +360,18 @@ export class AgentHandoffService {
     this.announce(stopped);
   }
 
+  /**
+   * Say what changed, unless the user is looking at the target. A prompt the source relays gets
+   * "Answer", which opens the source at the row (PR-0.3c); a browser sign-in, and every other
+   * state, gets "Open" for the target.
+   */
   private announce(row: HandoffView): void {
     this.notifications.onStateChange(row);
     const target = row.targetSessionId;
     if (!target || this.chatState.viewedSessionId() === target) return;
-    const action = { label: 'Open', handler: () => this.openTarget(row.agentId, target) };
+    const action = answeredInSource(row)
+      ? { label: 'Answer', handler: () => this.notifications.openSource({ handoffId: row.handoffId, sourceSessionId: row.sessionId }) }
+      : { label: 'Open', handler: () => this.openTarget(row.agentId, target) };
     if (row.status === 'done') {
       this.toast.success(`${row.agentName} finished`, undefined, { action });
     } else if (row.status === 'needs_input') {

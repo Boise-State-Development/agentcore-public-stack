@@ -134,6 +134,20 @@ export class ToolApprovalService {
   }
 
   /**
+   * Drop a prompt without answering it: its pause is gone (a fresh turn
+   * superseded it), so there is nothing left to resume. It stays seen, so a
+   * late re-emission can't bring it back.
+   */
+  withdraw(interruptId: string): void {
+    this.requests.update((map) => {
+      if (!map.has(interruptId)) return map;
+      const next = new Map(map);
+      next.delete(interruptId);
+      return next;
+    });
+  }
+
+  /**
    * Register the chat layer's resume callback. Replaces any existing
    * handler; the chat layer is the single owner.
    */

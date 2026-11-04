@@ -208,4 +208,41 @@ describe('AgentHandoffService', () => {
     options.secondaryAction.handler();
     expect(requestPermission).toHaveBeenCalledTimes(1);
   });
+
+  /** A prompt the source relays is answered there: "Answer" opens the source at the row (PR-0.3c). */
+  it.each([
+    [{ kind: 'oauth', providerId: 'canvas' }, 'Answer', 'source'],
+    [{ kind: 'browser_login' }, 'Open', 'target'],
+  ])('a needs-input toast for %o reads %s and opens the %s', async (prompt, label, where) => {
+    const notifications = TestBed.inject(HandoffNotificationService);
+    vi.spyOn(notifications, 'onStateChange').mockImplementation(() => undefined);
+    const openSource = vi.spyOn(notifications, 'openSource').mockImplementation(() => undefined);
+    await openReady();
+    await service.send('src');
+    const target = submitHandoffRequest.mock.calls[0][0].targetSessionId as string;
+    toastWarning.mockClear();
+    navigate.mockClear();
+
+    loading.set(new Set([target]));
+    TestBed.tick();
+    loading.set(new Set());
+    TestBed.tick();
+    await vi.waitFor(() => http.expectOne(`${API}/sessions/src/handoffs/h1`).flush({
+      ...state.rowsFor('src')[0],
+      status: 'needs_input',
+      relayedPrompts: [{ interruptId: 'i1', ...prompt }],
+    }), { timeout: 3000 });
+    await vi.waitFor(() => expect(toastWarning).toHaveBeenCalled());
+
+    const [, , options] = toastWarning.mock.calls[0];
+    expect(options.action.label).toBe(label);
+    options.action.handler();
+    if (where === 'source') {
+      expect(openSource).toHaveBeenCalledWith({ handoffId: 'h1', sourceSessionId: 'src' });
+      expect(navigate).not.toHaveBeenCalled();
+    } else {
+      expect(openSource).not.toHaveBeenCalled();
+      expect(navigate).toHaveBeenCalledWith(['/s', target], { queryParams: { agent: 'rubric' } });
+    }
+  });
 });

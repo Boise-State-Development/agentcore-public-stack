@@ -22,6 +22,27 @@ export interface WaitingOn {
   name: string;
 }
 
+/** The breadcrumb kinds a source can relay (`apis.shared.handoff.relay`). */
+export type RelayedPromptKind = 'oauth' | 'tool_approval' | 'user_question' | 'browser_login';
+
+/**
+ * One prompt a paused target is waiting on, as its source relays it (handoffs spec §4.3, PR-0.3c).
+ * The target's `PendingInterrupt` breadcrumb in its wire names, minus the target's message id and a
+ * sign-in's browser session: the relay renders it with the prompt the SPA already has for its kind.
+ */
+export interface RelayedPrompt {
+  interruptId: string;
+  kind: RelayedPromptKind;
+  providerId?: string;
+  toolUseId?: string;
+  toolName?: string;
+  /** JSON-encoded, as on the breadcrumb. */
+  toolInput?: string;
+  message?: string;
+  /** JSON-encoded, as on the breadcrumb. */
+  questions?: string;
+}
+
 export interface TurnsCovered {
   first: number;
   last: number;
@@ -49,6 +70,8 @@ export interface HandoffView {
   statusLine?: string;
   waitingOn?: WaitingOn;
   stoppedReason?: string;
+  /** A `needs_input` handoff's prompts, read from its target. Never on any other status. */
+  relayedPrompts?: RelayedPrompt[];
 }
 
 /** `POST /sessions/{id}/handoffs`: the card to review and the exact prompt it makes. */

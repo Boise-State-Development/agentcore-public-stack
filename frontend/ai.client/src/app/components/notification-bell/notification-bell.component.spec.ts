@@ -273,20 +273,26 @@ describe('NotificationBellComponent', () => {
     expect(navigate).toHaveBeenCalledWith(['/settings', 'usage']);
   });
 
-  it('a handoff entry marks itself read and opens the target through the handoff service', async () => {
+  it('a handoff entry marks itself read and opens through the handoff service, with what it waits on', async () => {
     const openFromInbox = vi.fn();
     TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, handoffs: true } });
     TestBed.overrideProvider(HandoffNotificationService, { useValue: { openFromInbox } });
     const { component } = render();
     const n = notif({
       kind: 'handoff_needs_input', projectId: null,
-      payload: { handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric', agentName: 'Rubric Builder' },
+      payload: {
+        handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric', agentName: 'Rubric Builder',
+        waitingKind: 'oauth_consent',
+      },
     });
     component.open(n);
     expect(service.markRead).toHaveBeenCalledWith(n);
     expect(sidenav.close).toHaveBeenCalled();
     await vi.waitFor(() =>
-      expect(openFromInbox).toHaveBeenCalledWith({ handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric' }),
+      expect(openFromInbox).toHaveBeenCalledWith({
+        handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric',
+        kind: 'handoff_needs_input', waitingKind: 'oauth_consent',
+      }),
     );
   });
 
