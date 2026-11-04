@@ -233,7 +233,7 @@ export class HandoffNotificationService {
     if (this.permissionState() !== 'granted' || !target) return;
     let notification: Notification;
     try {
-      notification = new Notification(notificationTitle(row), { tag: row.handoffId });
+      notification = new Notification(notificationTitle(row), notificationOptions(row));
     } catch {
       // Some browsers (Chrome on Android) only allow notifications from a service worker.
       return;
@@ -282,6 +282,25 @@ export class HandoffNotificationService {
   private handoffUrl(sourceSessionId: string, handoffId: string): string {
     return `${this.config.appApiUrl()}/sessions/${encodeURIComponent(sourceSessionId)}/handoffs/${encodeURIComponent(handoffId)}`;
   }
+}
+
+/**
+ * The app's own square icon, from `public/favicon` (served at the root), so a deployment that
+ * replaces its favicons gets its own icon here too. On macOS the sender badge stays the browser's:
+ * the OS credits a notification to the app that posted it, unless the site is installed as an app.
+ */
+export const NOTIFICATION_ICON = '/android-chrome-192x192.png';
+
+/** `NotificationOptions` plus `renotify`, which Chromium implements and lib.dom no longer types. */
+export type HandoffNotificationOptions = NotificationOptions & { renotify?: boolean };
+
+/**
+ * One notification per handoff (`tag`). A later state replaces the earlier one, and `renotify`
+ * makes that replacement alert again (sound, banner), because a replacement is silent by default
+ * and "finished" after "needs your input" is news. Whether it plays a sound is the OS's setting.
+ */
+export function notificationOptions(row: Pick<HandoffView, 'handoffId'>): HandoffNotificationOptions {
+  return { tag: row.handoffId, icon: NOTIFICATION_ICON, renotify: true };
 }
 
 /** The one line a notification says. Never request or conversation text. */

@@ -13,7 +13,7 @@ import { ChatStateService } from '../chat/chat-state.service';
 import { ConversationBindingService } from '../session/conversation-binding.service';
 import { SessionService } from '../session/session.service';
 import { HandoffView } from './handoff.models';
-import { HandoffNotificationService, INBOX_WRITE_GRACE_MS, notificationTitle } from './handoff-notification.service';
+import { HandoffNotificationService, INBOX_WRITE_GRACE_MS, NOTIFICATION_ICON, notificationTitle } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
 
 const API = 'https://api.test';
@@ -130,7 +130,7 @@ describe('HandoffNotificationService', () => {
       const [shown] = FakeNotification.instances;
       expect(shown.title).toBe('Rubric Builder needs your input');
       expect(shown.title).not.toContain('rubric for this');
-      expect(shown.options).toEqual({ tag: 'h1' });
+      expect(shown.options).toEqual({ tag: 'h1', icon: NOTIFICATION_ICON, renotify: true });
       http.expectOne((r) => r.url === EVENTS_URL && r.body.metric === 'HandoffNotified' && r.body.channel === 'browser');
     });
 
@@ -153,6 +153,8 @@ describe('HandoffNotificationService', () => {
       service.onStateChange(row({ status: 'needs_input' }));
       service.onStateChange(row({ status: 'done' }));
 
+      // Same tag, and renotify so the replacement alerts again instead of swapping in silently.
+      expect(FakeNotification.instances.every((n) => (n.options as { renotify?: boolean }).renotify)).toBe(true);
       expect(FakeNotification.instances.map((n) => [n.title, n.options.tag])).toEqual([
         ['Rubric Builder needs your input', 'h1'],
         ['Rubric Builder finished', 'h1'],
