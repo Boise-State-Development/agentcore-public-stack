@@ -122,6 +122,8 @@ describe('AwsLimitsStateService', () => {
     );
     await loading;
 
+    // Start from no row filters; the defaults are covered below.
+    service.setFilters({ adjustableOnly: false, hideUnused: false });
     expect(service.visibleGroups()[0].limits.map(l => l.quotaCode)).toEqual(['b', 'a', 'c']);
     expect(service.visibleGroups().map(g => g.id)).toEqual(['jobs', 'data', 'kb']);
 
@@ -130,6 +132,23 @@ describe('AwsLimitsStateService', () => {
 
     service.setFilters({ nearLimitOnly: false, adjustableOnly: true, group: 'jobs' });
     expect(service.visibleGroups().map(g => g.limits.map(l => l.quotaCode))).toEqual([['b', 'a']]);
+  });
+
+  it('starts with Adjustable only and Hide unused on', async () => {
+    expect(service.filters()).toEqual({ group: '', adjustableOnly: true, nearLimitOnly: false, hideUnused: true });
+    const loading = service.load();
+    http.expectOne(BASE).flush(
+      dashboard([
+        group('jobs', [
+          limit({ quotaCode: 'used' }),
+          limit({ quotaCode: 'fixed', adjustable: false }),
+          limit({ quotaCode: 'idle', usage: 0, utilization: 0 }),
+        ]),
+        group('kb', [], { docLinks: [{ label: 'S3 Vectors limits', url: 'https://x' }] }),
+      ]),
+    );
+    await loading;
+    expect(service.visibleGroups().map(g => [g.id, g.limits.map(l => l.quotaCode)])).toEqual([['jobs', ['used']]]);
   });
 
   it('hides rows with a peak of 0 or nothing measured', async () => {

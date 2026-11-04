@@ -74,7 +74,8 @@ the account normally peaks. Hover a value to see the CloudWatch metric behind it
   which Bedrock reports with the base model), or "Not measured by AWS".
 
 **Hide unused** hides rows with no use in the last 7 days: a peak or count of 0,
-or nothing measured.
+or nothing measured. **Adjustable only** hides quotas Service Quotas cannot
+raise. Both are on when the page opens; clear them to see every monitored quota.
 
 AWS data is cached for about ten minutes. **Refresh** reads it again.
 

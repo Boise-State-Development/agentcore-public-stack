@@ -54,7 +54,9 @@ export class AwsLimitsStateService {
   readonly error = signal<string | null>(null);
   readonly historyError = signal<string | null>(null);
   readonly showAllBedrock = signal(false);
-  readonly filters = signal<AwsLimitFilters>({ group: '', adjustableOnly: false, nearLimitOnly: false, hideUnused: false });
+  // Adjustable only and Hide unused start on: a quota nobody uses, or one AWS
+  // will not raise, is rarely what an admin opened the page for.
+  readonly filters = signal<AwsLimitFilters>({ group: '', adjustableOnly: true, nearLimitOnly: false, hideUnused: true });
 
   readonly canRequestIncrease = computed(() => this.dashboard()?.canRequestIncrease ?? false);
   readonly summary = computed(() => this.dashboard()?.summary ?? null);
