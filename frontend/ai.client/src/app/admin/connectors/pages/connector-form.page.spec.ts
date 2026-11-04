@@ -4,7 +4,8 @@ import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angul
 import { ConnectorFormPage } from './connector-form.page';
 import { ConnectorsService } from '../services/connectors.service';
 import { RoleOptionsService } from '../../roles/services/role-options.service';
-import { Connector } from '../models/connector.model';
+import { Connector, CONNECTOR_PRESETS } from '../models/connector.model';
+import { getBrandIconDataUrl } from '../models/connector-brand-icons';
 
 const CONNECTOR = {
   providerId: 'example-drive',
@@ -206,5 +207,94 @@ describe('ConnectorFormPage Entra tenant', () => {
       tenantId: '',
       clientId: 'cid',
     });
+  });
+});
+
+describe('ConnectorFormPage provider picker', () => {
+  const radios = (el: HTMLElement) =>
+    Array.from(el.querySelectorAll<HTMLInputElement>('input[name="providerTypePreset"]'));
+
+  it('offers every preset once, as radio inputs', () => {
+    const fixture = setup(null);
+    fixture.detectChanges();
+
+    expect(radios(fixture.nativeElement)).toHaveLength(CONNECTOR_PRESETS.length);
+  });
+
+  it('narrows the presets by search', () => {
+    const fixture = setup(null);
+    fixture.componentInstance.presetQuery.set('git');
+    fixture.detectChanges();
+
+    expect(radios(fixture.nativeElement).map(r => r.value)).toEqual(['github']);
+  });
+
+  it('says so when nothing matches the search', () => {
+    const fixture = setup(null);
+    fixture.componentInstance.presetQuery.set('zzzz');
+    fixture.detectChanges();
+
+    expect(radios(fixture.nativeElement)).toHaveLength(0);
+    expect(fixture.nativeElement.textContent).toContain('No providers match');
+  });
+
+  it('fills the icon with the vendor logo when a preset is chosen', () => {
+    const fixture = setup(null);
+    fixture.detectChanges();
+    fixture.componentInstance.selectConnectorType('github');
+
+    expect(fixture.componentInstance.connectorForm.controls.iconData.value).toBe(
+      getBrandIconDataUrl('github'),
+    );
+  });
+
+  it('swaps the logo when the preset changes, and clears it when the new one has none', () => {
+    const fixture = setup(null);
+    fixture.detectChanges();
+    const icon = fixture.componentInstance.connectorForm.controls.iconData;
+
+    fixture.componentInstance.selectConnectorType('github');
+    fixture.componentInstance.selectConnectorType('zoom');
+    expect(icon.value).toBe(getBrandIconDataUrl('zoom'));
+
+    fixture.componentInstance.selectConnectorType('onelogin');
+    expect(icon.value).toBe('');
+  });
+
+  it("never replaces an admin's own upload", () => {
+    const fixture = setup(null);
+    fixture.detectChanges();
+    const icon = fixture.componentInstance.connectorForm.controls.iconData;
+    const upload = 'data:image/png;base64,AAAA';
+
+    icon.setValue(upload);
+    fixture.componentInstance.selectConnectorType('github');
+    expect(icon.value).toBe(upload);
+  });
+
+  it('shows the tenant endpoints only for tenant-hosted providers', () => {
+    const fixture = setup(null);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    fixture.componentInstance.selectConnectorType('okta');
+    fixture.detectChanges();
+    expect(el.querySelector('#tenantIssuer')).not.toBeNull();
+
+    fixture.componentInstance.selectConnectorType('atlassian');
+    fixture.detectChanges();
+    expect(el.querySelector('#tenantIssuer')).toBeNull();
+  });
+
+  it('marks a touched invalid field aria-invalid, not by a competing border class', () => {
+    const fixture = setup(null);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const id = el.querySelector<HTMLInputElement>('#providerId')!;
+    expect(id.getAttribute('aria-invalid')).toBeNull();
+
+    fixture.componentInstance.connectorForm.controls.providerId.markAsTouched();
+    fixture.detectChanges();
+    expect(id.getAttribute('aria-invalid')).toBe('true');
   });
 });

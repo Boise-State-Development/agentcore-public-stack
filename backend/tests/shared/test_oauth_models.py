@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import pytest
 
-from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
+from pydantic import ValidationError
+
+from apis.shared.oauth.models import (
+    OAuthProvider,
+    OAuthProviderCreate,
+    OAuthProviderType,
+)
 
 
 def _provider(**overrides) -> OAuthProvider:
@@ -52,3 +58,47 @@ class TestCustomParametersRoundTrip:
         del item["customParameters"]
         revived = OAuthProvider.from_dynamo_item(item)
         assert revived.custom_parameters is None
+
+
+class TestTenantProviderCreate:
+    """Tenant-hosted vendors need their endpoints; the rest must not send them."""
+
+    _base = dict(provider_id="p", display_name="P", client_id="c", client_secret="s")
+    _metadata = {
+        "issuer": "https://tenant.example.com",
+        "authorizationEndpoint": "https://tenant.example.com/authorize",
+        "tokenEndpoint": "https://tenant.example.com/token",
+    }
+
+    def test_accepts_full_metadata(self) -> None:
+        created = OAuthProviderCreate(
+            **self._base,
+            provider_type=OAuthProviderType.OKTA,
+            authorization_server_metadata=self._metadata,
+        )
+        assert created.authorization_server_metadata == self._metadata
+
+    def test_rejects_missing_or_blank_endpoint(self) -> None:
+        with pytest.raises(ValidationError, match="issuer"):
+            OAuthProviderCreate(
+                **self._base,
+                provider_type=OAuthProviderType.COGNITO,
+                authorization_server_metadata={**self._metadata, "issuer": "  "},
+            )
+
+    def test_rejects_discovery_url(self) -> None:
+        with pytest.raises(ValidationError):
+            OAuthProviderCreate(
+                **self._base,
+                provider_type=OAuthProviderType.PING,
+                oauth_discovery_url="https://x.example/.well-known/openid-configuration",
+                authorization_server_metadata=self._metadata,
+            )
+
+    def test_credentials_only_vendor_rejects_metadata(self) -> None:
+        with pytest.raises(ValidationError, match="only valid for custom"):
+            OAuthProviderCreate(
+                **self._base,
+                provider_type=OAuthProviderType.ATLASSIAN,
+                authorization_server_metadata=self._metadata,
+            )

@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { Router, ActivatedRoute } from '@angular/router';
 import {
+  AbstractControl,
   FormBuilder,
   FormGroup,
   FormControl,
@@ -24,12 +25,8 @@ import {
   heroCheckCircle,
   heroClipboard,
   heroClipboardDocumentCheck,
-  heroCloud,
-  heroCodeBracket,
-  heroAcademicCap,
-  heroLink,
-  heroChatBubbleLeftRight,
-  heroVideoCamera,
+  heroMagnifyingGlass,
+  heroChevronDown,
 } from '@ng-icons/heroicons/outline';
 import { ConnectorsService } from '../services/connectors.service';
 import { RoleOptionsService } from '../../roles/services/role-options.service';
@@ -39,9 +36,15 @@ import {
   ConnectorUpdateRequest,
   ConnectorType,
   CONNECTOR_PRESETS,
+  CONNECTOR_PRESET_GROUPS,
   getConnectorPreset,
+  getConnectorTypeLabel,
   requiresDiscovery,
+  requiresTenantEndpoints,
+  TENANT_ISSUER_PLACEHOLDERS,
 } from '../models/connector.model';
+import { getBrandIconDataUrl } from '../models/connector-brand-icons';
+import { ConnectorLogoComponent } from '../components/connector-logo.component';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
@@ -54,6 +57,10 @@ interface ConnectorFormGroup {
   oauthDiscoveryUrl: FormControl<string>;
   /** Microsoft only: Entra tenant ID or verified domain, `''` when unset. */
   tenantId: FormControl<string>;
+  /** Tenant-hosted vendors only (Okta, Auth0, ...): sent as `authorizationServerMetadata`. */
+  tenantIssuer: FormControl<string>;
+  tenantAuthorizationEndpoint: FormControl<string>;
+  tenantTokenEndpoint: FormControl<string>;
   scopes: FormControl<string>;
   allowedRoles: FormControl<string[]>;
   grantAllRoles: FormControl<boolean>;
@@ -95,7 +102,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
 @Component({
   selector: 'app-connector-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule, NgIcon, TooltipDirective, SpinnerComponent],
+  imports: [ReactiveFormsModule, NgIcon, TooltipDirective, SpinnerComponent, ConnectorLogoComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -106,598 +113,614 @@ const ICON_ACCEPTED_MIME_TYPES = [
       heroCheckCircle,
       heroClipboard,
       heroClipboardDocumentCheck,
-      heroCloud,
-      heroCodeBracket,
-      heroAcademicCap,
-      heroLink,
-      heroChatBubbleLeftRight,
-      heroVideoCamera,
+      heroMagnifyingGlass,
+      heroChevronDown,
     }),
   ],
   host: { class: 'block' },
   template: `
-    <div class="max-w-3xl">
+    <div class="min-h-dvh">
+      <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
         <button
           type="button"
           (click)="goBack()"
-          class="mb-6 inline-flex items-center gap-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+          class="-ml-2 mb-4 inline-flex items-center gap-1.5 rounded-2xl px-2 py-1 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
         >
-          <ng-icon name="heroArrowLeft" class="size-4" />
+          <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
           Back to Connectors
         </button>
 
-        <div class="mb-8">
-          <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">
-            {{ pageTitle() }}
-          </h1>
-          <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
-            {{ isEditMode() ? 'Update connector settings and credentials' : 'Register a new OAuth connector' }}
-          </p>
+        <div class="mb-8 flex items-center gap-4">
+          @if (isEditMode() && loadedConnector(); as loaded) {
+            <app-connector-logo
+              [type]="loaded.providerType"
+              [iconData]="loaded.iconData"
+              [iconName]="loaded.iconName"
+              size="lg"
+            />
+          }
+          <div class="min-w-0">
+            <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">{{ pageTitle() }}</h1>
+            <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+              {{ isEditMode() ? 'Update connector settings and credentials.' : 'Register an OAuth provider that users can connect for tool authentication.' }}
+            </p>
+          </div>
         </div>
 
         @if (loading()) {
           <div class="flex h-64 items-center justify-center">
             <div class="flex flex-col items-center gap-4">
               <app-spinner size="xl" label="Loading connector" />
-              <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading connector...</p>
+              <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading connector…</p>
             </div>
           </div>
         } @else if (createdConnector(); as created) {
-          <!-- Success screen after Create: show callback URL for vendor console -->
-          <div class="space-y-6">
-            <div class="rounded-sm border border-state-success-200 bg-state-success-50 p-4 dark:border-state-success-800 dark:bg-state-success-900/20">
-              <div class="flex gap-3">
-                <ng-icon name="heroCheckCircle" class="size-5 shrink-0 text-state-success-600 dark:text-state-success-400" />
-                <div>
-                  <h3 class="text-sm/6 font-medium text-state-success-800 dark:text-state-success-200">
-                    Connector created
-                  </h3>
+          <!-- After create: the callback URL has to be registered with the vendor -->
+          <div class="space-y-8">
+            <div class="rounded-2xl border border-state-success-200 bg-state-success-50 p-4 dark:border-state-success-800 dark:bg-state-success-900/20">
+              <div class="flex items-start gap-3">
+                <ng-icon name="heroCheckCircle" class="mt-0.5 size-5 shrink-0 text-state-success-600 dark:text-state-success-400" aria-hidden="true" />
+                <div class="min-w-0 flex-1">
+                  <h2 class="text-sm/6 font-semibold text-state-success-800 dark:text-state-success-200">Connector created</h2>
                   <p class="mt-1 text-sm/6 text-state-success-700 dark:text-state-success-300">
                     "{{ created.displayName }}" is registered with AgentCore Identity.
                   </p>
                 </div>
+                <app-connector-logo [type]="created.providerType" [iconData]="created.iconData" [iconName]="created.iconName" size="sm" />
               </div>
             </div>
 
-            <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-              <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">
-                Next step: register this callback URL
-              </h2>
-              <p class="mb-4 text-sm/6 text-gray-600 dark:text-gray-400">
-                Add the following URL to your OAuth provider's list of authorized redirect URIs
-                (in Google Cloud Console, Microsoft Entra, GitHub OAuth App settings, etc.).
-                Until this is done, users will see an error when they try to consent.
-              </p>
+            <section class="space-y-4">
+              <div>
+                <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Next step: register this callback URL</h2>
+                <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+                  Add it to {{ created.displayName }}'s list of authorized redirect URIs in the provider's developer console.
+                  Until you do, users will see an error when they try to consent.
+                </p>
+              </div>
               <div class="flex items-stretch gap-2">
+                <label for="createdCallbackUrl" class="sr-only">Callback URL</label>
                 <input
                   type="text"
+                  id="createdCallbackUrl"
                   [value]="created.callbackUrl || ''"
                   readonly
-                  class="block w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2.5 font-mono text-sm/6 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                  [class]="monoInputClass"
                 />
                 <button
                   type="button"
                   (click)="copyCallbackUrl(created.callbackUrl || '')"
                   aria-label="Copy callback URL"
-                  class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                  [class]="secondaryButtonClass"
                   [appTooltip]="callbackCopied() ? 'Copied!' : 'Copy to clipboard'"
                 >
-                  <ng-icon [name]="callbackCopied() ? 'heroClipboardDocumentCheck' : 'heroClipboard'" class="size-5" />
+                  <ng-icon [name]="callbackCopied() ? 'heroClipboardDocumentCheck' : 'heroClipboard'" class="size-5" aria-hidden="true" />
                 </button>
               </div>
-            </div>
+            </section>
 
-            <div class="flex gap-3">
-              <button
-                type="button"
-                (click)="goBack()"
-                class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-6 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50"
-              >
-                Done
-              </button>
+            <div class="border-t border-gray-200 pt-6 dark:border-gray-700">
+              <button type="button" (click)="goBack()" [class]="primaryButtonClass">Done</button>
             </div>
           </div>
         } @else {
           <form [formGroup]="connectorForm" (ngSubmit)="onSubmit()" class="space-y-8">
 
             @if (!isEditMode()) {
-              <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-                <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">Connector Type</h2>
-                <p class="mb-6 text-sm/6 text-gray-600 dark:text-gray-400">
-                  Choose a preset or use Custom for any OIDC-compliant provider.
-                </p>
-                <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  @for (preset of presets; track preset.type) {
-                    <button
-                      type="button"
-                      (click)="selectConnectorType(preset.type)"
-                      [class.ring-3]="connectorForm.controls.providerType.value === preset.type"
-                      [class.ring-primary-500]="connectorForm.controls.providerType.value === preset.type"
-                      [class.border-primary-500]="connectorForm.controls.providerType.value === preset.type"
-                      class="flex flex-col items-center gap-2 rounded-sm border border-gray-200 bg-white p-4 text-center transition-all hover:border-gray-300 hover:shadow-xs focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:hover:border-gray-500"
-                    >
-                      <div [class]="getPresetIconClasses(preset.type)">
-                        <ng-icon [name]="preset.iconName" class="size-5" />
-                      </div>
-                      <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ preset.displayName }}</span>
-                      @if (preset.hint) {
-                        <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ preset.hint }}</span>
-                      }
-                    </button>
-                  }
-                </div>
-              </div>
-            }
-
-            <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-              <h2 class="mb-6 text-xl/8 font-semibold text-gray-900 dark:text-white">Basic Information</h2>
-              <div class="space-y-5">
+              <section class="space-y-4" aria-labelledby="provider-heading">
                 <div>
-                  <label for="providerId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Connector ID <span class="text-state-danger-600">*</span>
-                  </label>
+                  <h2 id="provider-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">Choose a provider</h2>
+                  <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+                    Pick a built-in provider to pre-fill its scopes and logo, or use Custom for any OpenID Connect provider.
+                  </p>
+                </div>
+
+                <div class="relative">
+                  <ng-icon
+                    name="heroMagnifyingGlass"
+                    class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                    aria-hidden="true"
+                  />
+                  <label for="presetSearch" class="sr-only">Search providers</label>
                   <input
                     type="text"
-                    id="providerId"
-                    formControlName="providerId"
-                    placeholder="e.g., google-workspace, github-enterprise"
-                    [readonly]="isEditMode()"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 read-only:cursor-not-allowed read-only:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:read-only:bg-gray-600"
-                    [class.border-state-danger-500]="connectorForm.controls.providerId.invalid && connectorForm.controls.providerId.touched"
+                    id="presetSearch"
+                    [value]="presetQuery()"
+                    (input)="presetQuery.set($any($event.target).value)"
+                    placeholder="Search providers…"
+                    autocomplete="off"
+                    class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                   />
-                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                    Unique identifier. Lowercase letters, numbers, and hyphens only.
-                  </p>
-                  @if (connectorForm.controls.providerId.invalid && connectorForm.controls.providerId.touched) {
-                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
-                      @if (connectorForm.controls.providerId.errors?.['required']) { Connector ID is required }
-                      @else if (connectorForm.controls.providerId.errors?.['pattern']) { Must be lowercase letters, numbers, and hyphens only }
-                      @else if (connectorForm.controls.providerId.errors?.['maxlength']) { Must be at most 64 characters }
+                </div>
+
+                <fieldset class="space-y-6">
+                  <legend class="sr-only">Connector type</legend>
+                  @for (group of presetGroups(); track group.category) {
+                    <div>
+                      <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ group.label }}</h3>
+                      <p class="text-xs/5 text-gray-600 dark:text-gray-400">{{ group.description }}</p>
+                      <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        @for (preset of group.presets; track preset.type) {
+                          <label
+                            class="flex cursor-pointer items-center gap-3 rounded-2xl border border-gray-200 bg-white p-3 transition-colors hover:border-gray-300 hover:bg-gray-50 has-checked:border-primary-500 has-checked:ring-2 has-checked:ring-primary-500 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600 dark:hover:bg-gray-700/50"
+                          >
+                            <input
+                              type="radio"
+                              name="providerTypePreset"
+                              class="sr-only"
+                              [value]="preset.type"
+                              [checked]="providerTypeSignal() === preset.type"
+                              (change)="selectConnectorType(preset.type)"
+                            />
+                            <app-connector-logo [type]="preset.type" [iconName]="preset.iconName" size="md" />
+                            <span class="min-w-0">
+                              <span class="block truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ preset.displayName }}</span>
+                              @if (preset.hint) {
+                                <span class="block text-xs/5 text-gray-600 dark:text-gray-400">{{ preset.hint }}</span>
+                              }
+                            </span>
+                          </label>
+                        }
+                      </div>
+                    </div>
+                  } @empty {
+                    <p class="rounded-2xl border border-dashed border-gray-300 p-6 text-center text-sm/6 text-gray-600 dark:border-gray-700 dark:text-gray-400">
+                      No providers match "{{ presetQuery() }}". Use Custom for any OpenID Connect provider.
                     </p>
                   }
-                </div>
-
-                <div>
-                  <label for="displayName" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Display Name <span class="text-state-danger-600">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    id="displayName"
-                    formControlName="displayName"
-                    placeholder="e.g., Google Workspace, GitHub Enterprise"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-state-danger-500]="connectorForm.controls.displayName.invalid && connectorForm.controls.displayName.touched"
-                  />
-                  @if (connectorForm.controls.displayName.invalid && connectorForm.controls.displayName.touched) {
-                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Display name is required</p>
-                  }
-                </div>
-
-                <div>
-                  <label class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Icon
-                    <span class="font-normal text-gray-400 dark:text-gray-500">(optional)</span>
-                  </label>
-                  <div class="flex items-center gap-4">
-                    <div class="flex size-14 shrink-0 items-center justify-center rounded-sm border border-gray-200 bg-gray-50 dark:border-gray-600 dark:bg-gray-900">
-                      @if (connectorForm.controls.iconData.value) {
-                        <img
-                          [src]="connectorForm.controls.iconData.value"
-                          alt="Connector icon preview"
-                          class="size-10 object-contain"
-                        />
-                      } @else {
-                        <ng-icon
-                          [name]="connectorForm.controls.iconName.value || 'heroLink'"
-                          class="size-6 text-gray-400 dark:text-gray-500"
-                          aria-hidden="true"
-                        />
-                      }
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2">
-                      <label
-                        class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus-within:outline-hidden focus-within:ring-3 focus-within:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
-                      >
-                        {{ connectorForm.controls.iconData.value ? 'Replace' : 'Upload' }}
-                        <input
-                          type="file"
-                          class="sr-only"
-                          [accept]="acceptedIconTypes"
-                          (change)="onIconFileSelected($event)"
-                        />
-                      </label>
-                      @if (connectorForm.controls.iconData.value) {
-                        <button
-                          type="button"
-                          (click)="removeUploadedIcon()"
-                          class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
-                        >
-                          Remove
-                        </button>
-                      }
-                    </div>
-                  </div>
-                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                    PNG, JPEG, GIF, WebP, or SVG. Max 100KB. Falls back to the default icon when no image is uploaded.
-                  </p>
-                  @if (iconUploadError(); as iconErr) {
-                    <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ iconErr }}</p>
-                  }
-                </div>
-
-                <div class="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    id="enabled"
-                    formControlName="enabled"
-                    class="size-4 rounded-xs border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700"
-                  />
-                  <label for="enabled" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Connector Enabled</label>
-                </div>
-              </div>
-            </div>
-
-            <!-- Edit mode: existing AgentCore metadata read-only -->
-            @if (isEditMode() && loadedConnector(); as loaded) {
-              <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-                <h2 class="mb-6 text-xl/8 font-semibold text-gray-900 dark:text-white">AgentCore Identity</h2>
-                <div class="space-y-4">
-                  <div>
-                    <label class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Callback URL</label>
-                    <div class="flex items-stretch gap-2">
-                      <input
-                        type="text"
-                        [value]="loaded.callbackUrl || ''"
-                        readonly
-                        class="block w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2.5 font-mono text-sm/6 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
-                      />
-                      <button
-                        type="button"
-                        (click)="copyCallbackUrl(loaded.callbackUrl || '')"
-                        aria-label="Copy callback URL"
-                        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
-                        [appTooltip]="callbackCopied() ? 'Copied!' : 'Copy to clipboard'"
-                      >
-                        <ng-icon [name]="callbackCopied() ? 'heroClipboardDocumentCheck' : 'heroClipboard'" class="size-5" />
-                      </button>
-                    </div>
-                  </div>
-                  @if (loaded.credentialProviderArn) {
-                    <div>
-                      <label class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Credential Provider ARN</label>
-                      <input
-                        type="text"
-                        [value]="loaded.credentialProviderArn"
-                        readonly
-                        class="block w-full rounded-sm border border-gray-300 bg-gray-50 px-3 py-2.5 font-mono text-xs/5 text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
-                      />
-                    </div>
-                  }
-                </div>
-              </div>
+                </fieldset>
+              </section>
             }
 
-            <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-              <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">OAuth Credentials</h2>
-              <p class="mb-6 text-sm/6 text-gray-600 dark:text-gray-400">
-                @if (isEditMode()) {
-                  Enter both fields to rotate credentials. Leave both blank to keep existing.
-                } @else {
-                  Credentials are stored by AWS Bedrock AgentCore Identity — never by this application.
+            <section class="space-y-4" [class.border-t]="!isEditMode()" [class.border-gray-200]="!isEditMode()" [class.pt-8]="!isEditMode()" [class.dark:border-gray-700]="!isEditMode()">
+              <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Basic information</h2>
+
+              <div>
+                <label for="providerId" [class]="labelClass">
+                  Connector ID <span class="text-state-danger-600 dark:text-state-danger-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="providerId"
+                  formControlName="providerId"
+                  placeholder="e.g., google-workspace, github-enterprise"
+                  [readonly]="isEditMode()"
+                  [attr.aria-invalid]="isInvalid(connectorForm.controls.providerId)"
+                  class="mt-1"
+                  [class]="inputClass"
+                />
+                <p [class]="helpClass">Unique identifier. Lowercase letters, numbers, and hyphens only.</p>
+                @if (isInvalid(connectorForm.controls.providerId)) {
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400" role="alert">
+                    @if (connectorForm.controls.providerId.errors?.['required']) { Connector ID is required }
+                    @else if (connectorForm.controls.providerId.errors?.['pattern']) { Must be lowercase letters, numbers, and hyphens only }
+                    @else if (connectorForm.controls.providerId.errors?.['maxlength']) { Must be at most 64 characters }
+                  </p>
                 }
-              </p>
+              </div>
 
-              <div class="space-y-5">
-                <div>
-                  <label for="clientId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Client ID
-                    @if (!isEditMode()) { <span class="text-state-danger-600">*</span> }
-                  </label>
-                  <input
-                    type="text"
-                    id="clientId"
-                    formControlName="clientId"
-                    autocomplete="off"
-                    placeholder="Your OAuth client ID"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-state-danger-500]="connectorForm.controls.clientId.invalid && connectorForm.controls.clientId.touched"
+              <div>
+                <label for="displayName" [class]="labelClass">
+                  Display name <span class="text-state-danger-600 dark:text-state-danger-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="displayName"
+                  formControlName="displayName"
+                  placeholder="e.g., Google Workspace, GitHub Enterprise"
+                  [attr.aria-invalid]="isInvalid(connectorForm.controls.displayName)"
+                  class="mt-1"
+                  [class]="inputClass"
+                />
+                @if (isInvalid(connectorForm.controls.displayName)) {
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400" role="alert">Display name is required</p>
+                }
+              </div>
+
+              <div>
+                <span id="icon-label" [class]="labelClass">
+                  Icon <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
+                </span>
+                <div class="mt-2 flex items-center gap-4" role="group" aria-labelledby="icon-label">
+                  <app-connector-logo
+                    [iconData]="iconDataSignal()"
+                    [iconName]="connectorForm.controls.iconName.value"
+                    size="lg"
                   />
+                  <div class="flex flex-wrap items-center gap-2">
+                    <label [class]="secondaryButtonClass" class="cursor-pointer focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary-500">
+                      {{ iconDataSignal() ? 'Replace' : 'Upload' }}
+                      <input
+                        type="file"
+                        class="sr-only"
+                        [accept]="acceptedIconTypes"
+                        (change)="onIconFileSelected($event)"
+                      />
+                    </label>
+                    @if (iconDataSignal()) {
+                      <button type="button" (click)="removeUploadedIcon()" [class]="ghostButtonClass">Remove</button>
+                    }
+                  </div>
                 </div>
+                <p [class]="helpClass">
+                  @if (usingBrandLogo()) {
+                    Using the {{ providerLabel() }} logo. Upload your own to replace it.
+                  } @else {
+                    PNG, JPEG, GIF, WebP, or SVG. Max 100KB. Falls back to a generic icon when none is set.
+                  }
+                </p>
+                @if (iconUploadError(); as iconErr) {
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400" role="alert">{{ iconErr }}</p>
+                }
+              </div>
 
+              <div class="flex items-center gap-3">
+                <input type="checkbox" id="enabled" formControlName="enabled" [class]="checkboxClass" />
+                <label for="enabled" [class]="labelClass">Connector enabled</label>
+              </div>
+            </section>
+
+            <!-- Edit mode: AgentCore-owned metadata, read-only -->
+            @if (isEditMode() && loadedConnector(); as loaded) {
+              <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
+                <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">AgentCore Identity</h2>
                 <div>
-                  <label for="clientSecret" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Client Secret
-                    @if (!isEditMode()) { <span class="text-state-danger-600">*</span> }
-                  </label>
-                  <div class="relative">
-                    <input
-                      [type]="showClientSecret() ? 'text' : 'password'"
-                      id="clientSecret"
-                      formControlName="clientSecret"
-                      autocomplete="off"
-                      [placeholder]="isEditMode() ? 'Leave blank to keep existing' : 'Your OAuth client secret'"
-                      class="block w-full rounded-sm border border-gray-300 bg-white py-2.5 pl-3 pr-10 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                    />
+                  <label for="callbackUrl" [class]="labelClass">Callback URL</label>
+                  <div class="mt-1 flex items-stretch gap-2">
+                    <input type="text" id="callbackUrl" [value]="loaded.callbackUrl || ''" readonly [class]="monoInputClass" />
                     <button
                       type="button"
-                      (click)="showClientSecret.set(!showClientSecret())"
-                      [attr.aria-label]="showClientSecret() ? 'Hide client secret' : 'Show client secret'"
-                      class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                      [appTooltip]="showClientSecret() ? 'Hide secret' : 'Show secret'"
+                      (click)="copyCallbackUrl(loaded.callbackUrl || '')"
+                      aria-label="Copy callback URL"
+                      [class]="secondaryButtonClass"
+                      [appTooltip]="callbackCopied() ? 'Copied!' : 'Copy to clipboard'"
                     >
-                      <ng-icon [name]="showClientSecret() ? 'heroEyeSlash' : 'heroEye'" class="size-5" />
+                      <ng-icon [name]="callbackCopied() ? 'heroClipboardDocumentCheck' : 'heroClipboard'" class="size-5" aria-hidden="true" />
                     </button>
                   </div>
                 </div>
-
-                @if (credentialPairError()) {
-                  <p class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ credentialPairError() }}</p>
-                }
-
-                @if (needsDiscovery()) {
+                @if (loaded.credentialProviderArn) {
                   <div>
-                    <label for="oauthDiscoveryUrl" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                      OIDC Discovery URL <span class="text-state-danger-600">*</span>
+                    <label for="credentialProviderArn" [class]="labelClass">Credential provider ARN</label>
+                    <input type="text" id="credentialProviderArn" [value]="loaded.credentialProviderArn" readonly class="mt-1 text-xs/5" [class]="monoInputClass" />
+                  </div>
+                }
+              </section>
+            }
+
+            <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
+              <div>
+                <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">OAuth credentials</h2>
+                <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+                  @if (isEditMode()) {
+                    Enter both fields to rotate credentials. Leave both blank to keep the existing ones.
+                  } @else {
+                    Credentials are stored by AWS Bedrock AgentCore Identity, never by this application.
+                  }
+                </p>
+              </div>
+
+              <div>
+                <label for="clientId" [class]="labelClass">
+                  Client ID
+                  @if (!isEditMode()) { <span class="text-state-danger-600 dark:text-state-danger-400">*</span> }
+                </label>
+                <input
+                  type="text"
+                  id="clientId"
+                  formControlName="clientId"
+                  autocomplete="off"
+                  placeholder="Your OAuth client ID"
+                  [attr.aria-invalid]="isInvalid(connectorForm.controls.clientId)"
+                  class="mt-1"
+                  [class]="monoInputClass"
+                />
+              </div>
+
+              <div>
+                <label for="clientSecret" [class]="labelClass">
+                  Client secret
+                  @if (!isEditMode()) { <span class="text-state-danger-600 dark:text-state-danger-400">*</span> }
+                </label>
+                <div class="relative mt-1">
+                  <input
+                    [type]="showClientSecret() ? 'text' : 'password'"
+                    id="clientSecret"
+                    formControlName="clientSecret"
+                    autocomplete="off"
+                    [placeholder]="isEditMode() ? 'Leave blank to keep existing' : 'Your OAuth client secret'"
+                    class="pr-10"
+                    [class]="monoInputClass"
+                  />
+                  <button
+                    type="button"
+                    (click)="showClientSecret.set(!showClientSecret())"
+                    [attr.aria-label]="showClientSecret() ? 'Hide client secret' : 'Show client secret'"
+                    class="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-2xl text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                    [appTooltip]="showClientSecret() ? 'Hide secret' : 'Show secret'"
+                  >
+                    <ng-icon [name]="showClientSecret() ? 'heroEyeSlash' : 'heroEye'" class="size-5" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+
+              @if (credentialPairError()) {
+                <p class="text-sm/6 text-state-danger-600 dark:text-state-danger-400" role="alert">{{ credentialPairError() }}</p>
+              }
+
+              @if (needsDiscovery()) {
+                <div>
+                  <label for="oauthDiscoveryUrl" [class]="labelClass">
+                    OIDC discovery URL <span class="text-state-danger-600 dark:text-state-danger-400">*</span>
+                  </label>
+                  <input
+                    type="url"
+                    id="oauthDiscoveryUrl"
+                    formControlName="oauthDiscoveryUrl"
+                    placeholder="https://example.com/.well-known/openid-configuration"
+                    [attr.aria-invalid]="isInvalid(connectorForm.controls.oauthDiscoveryUrl)"
+                    class="mt-1"
+                    [class]="monoInputClass"
+                  />
+                  <p [class]="helpClass">AgentCore fetches this URL to resolve the authorization and token endpoints.</p>
+                </div>
+              }
+
+              @if (needsTenantEndpoints()) {
+                <div class="space-y-4 border-l-2 border-gray-200 pl-4 dark:border-gray-700">
+                  <div>
+                    <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">Tenant endpoints</h3>
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+                      {{ providerLabel() }} runs in your own tenant, so AgentCore needs its issuer and OAuth endpoints. All three must be HTTPS URLs.
+                    </p>
+                  </div>
+                  <div>
+                    <label for="tenantIssuer" [class]="labelClass">
+                      Issuer <span class="text-state-danger-600 dark:text-state-danger-400">*</span>
                     </label>
                     <input
                       type="url"
-                      id="oauthDiscoveryUrl"
-                      formControlName="oauthDiscoveryUrl"
-                      placeholder="https://example.com/.well-known/openid-configuration"
-                      class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                      [class.border-state-danger-500]="connectorForm.controls.oauthDiscoveryUrl.invalid && connectorForm.controls.oauthDiscoveryUrl.touched"
+                      id="tenantIssuer"
+                      formControlName="tenantIssuer"
+                      autocomplete="off"
+                      [placeholder]="tenantIssuerPlaceholder()"
+                      [attr.aria-invalid]="isInvalid(connectorForm.controls.tenantIssuer)"
+                      class="mt-1"
+                      [class]="monoInputClass"
                     />
-                    <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                      AgentCore fetches this URL to resolve authorization and token endpoints.
-                    </p>
                   </div>
-                }
-
-                @if (isMicrosoft()) {
                   <div>
-                    <label for="tenantId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                      Directory (tenant) ID
+                    <label for="tenantAuthorizationEndpoint" [class]="labelClass">
+                      Authorization endpoint <span class="text-state-danger-600 dark:text-state-danger-400">*</span>
                     </label>
                     <input
-                      type="text"
-                      id="tenantId"
-                      formControlName="tenantId"
-                      placeholder="00000000-0000-0000-0000-000000000000 or contoso.onmicrosoft.com"
-                      [attr.aria-describedby]="connectorForm.controls.tenantId.invalid && connectorForm.controls.tenantId.touched ? 'tenantId-error tenantId-help' : 'tenantId-help'"
-                      [attr.aria-invalid]="connectorForm.controls.tenantId.invalid && connectorForm.controls.tenantId.touched"
-                      class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                      [class.border-state-danger-500]="connectorForm.controls.tenantId.invalid && connectorForm.controls.tenantId.touched"
+                      type="url"
+                      id="tenantAuthorizationEndpoint"
+                      formControlName="tenantAuthorizationEndpoint"
+                      autocomplete="off"
+                      [placeholder]="tenantIssuerPlaceholder() + '/authorize'"
+                      [attr.aria-invalid]="isInvalid(connectorForm.controls.tenantAuthorizationEndpoint)"
+                      class="mt-1"
+                      [class]="monoInputClass"
                     />
-                    @if (connectorForm.controls.tenantId.invalid && connectorForm.controls.tenantId.touched) {
-                      <p id="tenantId-error" class="mt-1.5 text-sm/6 text-state-danger-600 dark:text-state-danger-400">
-                        Enter a directory (tenant) ID or a verified domain.
-                      </p>
-                    }
-                    <p id="tenantId-help" class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                      Required when the Entra app registration is single-tenant, the default for a new registration.
-                      Shown on the app's Overview page.
-                      @if (isEditMode()) { Changing it requires re-entering the client ID and secret. }
-                    </p>
                   </div>
-                }
+                  <div>
+                    <label for="tenantTokenEndpoint" [class]="labelClass">
+                      Token endpoint <span class="text-state-danger-600 dark:text-state-danger-400">*</span>
+                    </label>
+                    <input
+                      type="url"
+                      id="tenantTokenEndpoint"
+                      formControlName="tenantTokenEndpoint"
+                      autocomplete="off"
+                      [placeholder]="tenantIssuerPlaceholder() + '/token'"
+                      [attr.aria-invalid]="isInvalid(connectorForm.controls.tenantTokenEndpoint)"
+                      class="mt-1"
+                      [class]="monoInputClass"
+                    />
+                  </div>
+                </div>
+              }
 
+              @if (isMicrosoft()) {
                 <div>
-                  <label for="scopes" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Scopes</label>
+                  <label for="tenantId" [class]="labelClass">Directory (tenant) ID</label>
                   <input
                     type="text"
-                    id="scopes"
-                    formControlName="scopes"
-                    [placeholder]="scopesPlaceholder()"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    id="tenantId"
+                    formControlName="tenantId"
+                    placeholder="00000000-0000-0000-0000-000000000000 or contoso.onmicrosoft.com"
+                    [attr.aria-describedby]="isInvalid(connectorForm.controls.tenantId) ? 'tenantId-error tenantId-help' : 'tenantId-help'"
+                    [attr.aria-invalid]="isInvalid(connectorForm.controls.tenantId)"
+                    class="mt-1"
+                    [class]="monoInputClass"
                   />
-                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                    Comma-separated list of OAuth scopes to request during authorization.
-                  </p>
-                </div>
-
-                <div>
-                  <label for="customParameters" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Custom OAuth Parameters
-                    <span class="font-normal text-gray-400 dark:text-gray-500">(optional)</span>
-                  </label>
-                  <textarea
-                    id="customParameters"
-                    formControlName="customParameters"
-                    rows="3"
-                    [placeholder]="customParametersPlaceholder()"
-                    spellcheck="false"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                  ></textarea>
-                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                    One <code class="rounded-xs bg-gray-100 px-1 py-0.5 dark:bg-gray-700">key=value</code> pair per line, forwarded to AgentCore Identity as <code class="rounded-xs bg-gray-100 px-1 py-0.5 dark:bg-gray-700">customParameters</code>.
-                    Required vendor params (e.g. Google's <code class="rounded-xs bg-gray-100 px-1 py-0.5 dark:bg-gray-700">access_type=offline</code>) are sent automatically and override any conflicting entries here.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-              <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">Access Control</h2>
-              <p class="mb-6 text-sm/6 text-gray-600 dark:text-gray-400">
-                Restrict which application roles can use this connector.
-              </p>
-              <div>
-                <label class="mb-2 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Allowed Roles</label>
-                <div class="mb-4 flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    id="grantAllRoles"
-                    formControlName="grantAllRoles"
-                    (change)="onGrantAllRolesChange()"
-                    class="size-4 rounded-xs border-gray-300 text-primary-600 focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700"
-                  />
-                  <label for="grantAllRoles" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Allow all roles (unrestricted access)
-                  </label>
-                </div>
-
-                @if (!connectorForm.controls.grantAllRoles.value) {
-                  @if (rolesResource.isLoading() || rolesResource.value() === undefined) {
-                    <div class="flex items-center gap-2">
-                      <app-spinner size="sm" variant="brand" label="Loading roles" />
-                      <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading roles...</p>
-                      <!-- phase-3-outlier-colors: converted from border-t-purple-600 to app-spinner brand variant (removed copy-paste color drift) -->
-                    </div>
-                  } @else if (availableRoles().length > 0) {
-                    <div class="flex flex-wrap gap-2">
-                      @for (role of availableRoles(); track role.roleId) {
-                        <button
-                          type="button"
-                          (click)="toggleRole(role.roleId)"
-                          [class.bg-primary-600]="isRoleSelected(role.roleId)"
-                          [class.text-white]="isRoleSelected(role.roleId)"
-                          [class.bg-gray-100]="!isRoleSelected(role.roleId)"
-                          [class.text-gray-700]="!isRoleSelected(role.roleId)"
-                          [class.dark:bg-primary-500]="isRoleSelected(role.roleId)"
-                          [class.dark:bg-gray-700]="!isRoleSelected(role.roleId)"
-                          [class.dark:text-gray-300]="!isRoleSelected(role.roleId)"
-                          class="rounded-sm px-3 py-1.5 text-sm/6 font-medium transition-colors hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50"
-                          [appTooltip]="role.description || 'No description'"
-                        >
-                          {{ role.displayName }}
-                        </button>
-                      }
-                    </div>
-                  } @else {
-                    <p class="text-sm/6 text-gray-500 dark:text-gray-400">
-                      No roles available. Create roles in Role Management first.
+                  @if (isInvalid(connectorForm.controls.tenantId)) {
+                    <p id="tenantId-error" class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400" role="alert">
+                      Enter a directory (tenant) ID or a verified domain.
                     </p>
                   }
-                }
-                <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
-                  Only users with selected roles will be able to use this connector.
+                  <p id="tenantId-help" [class]="helpClass">
+                    Required when the Entra app registration is single-tenant, the default for a new registration.
+                    Shown on the app's Overview page.
+                    @if (isEditMode()) { Changing it requires re-entering the client ID and secret. }
+                  </p>
+                </div>
+              }
+
+              <div>
+                <label for="scopes" [class]="labelClass">Scopes</label>
+                <input
+                  type="text"
+                  id="scopes"
+                  formControlName="scopes"
+                  [placeholder]="scopesPlaceholder()"
+                  class="mt-1"
+                  [class]="inputClass"
+                />
+                <p [class]="helpClass">Comma-separated list of OAuth scopes to request during authorization.</p>
+              </div>
+
+              <div>
+                <label for="customParameters" [class]="labelClass">
+                  Custom OAuth parameters
+                  <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
+                </label>
+                <textarea
+                  id="customParameters"
+                  formControlName="customParameters"
+                  rows="3"
+                  [placeholder]="customParametersPlaceholder()"
+                  spellcheck="false"
+                  class="mt-1"
+                  [class]="monoInputClass"
+                ></textarea>
+                <p [class]="helpClass">
+                  One <code class="rounded bg-gray-100 px-1 py-0.5 dark:bg-gray-700">key=value</code> pair per line, forwarded to AgentCore Identity as <code class="rounded bg-gray-100 px-1 py-0.5 dark:bg-gray-700">customParameters</code>.
+                  Required vendor params (e.g. Google's <code class="rounded bg-gray-100 px-1 py-0.5 dark:bg-gray-700">access_type=offline</code>) are sent automatically and override any conflicting entries here.
                 </p>
               </div>
-            </div>
+            </section>
 
-            <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-              <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">File Source</h2>
-              <p class="mb-6 text-sm/6 text-gray-600 dark:text-gray-400">
-                Optionally map this connector to a file-source adapter so it can import
-                files into an assistant's knowledgebase from the assistant editor.
-              </p>
+            <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
+              <div>
+                <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Access control</h2>
+                <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">Restrict which application roles can use this connector.</p>
+              </div>
+
+              <div class="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="grantAllRoles"
+                  formControlName="grantAllRoles"
+                  (change)="onGrantAllRolesChange()"
+                  [class]="checkboxClass"
+                />
+                <label for="grantAllRoles" [class]="labelClass">Allow all roles (unrestricted access)</label>
+              </div>
+
+              @if (!connectorForm.controls.grantAllRoles.value) {
+                @if (rolesResource.isLoading() || rolesResource.value() === undefined) {
+                  <div class="flex items-center gap-2">
+                    <app-spinner size="sm" variant="brand" label="Loading roles" />
+                    <p class="text-sm/6 text-gray-600 dark:text-gray-400">Loading roles…</p>
+                  </div>
+                } @else if (availableRoles().length > 0) {
+                  <div class="flex flex-wrap gap-2" role="group" aria-label="Allowed roles">
+                    @for (role of availableRoles(); track role.roleId) {
+                      <button
+                        type="button"
+                        (click)="toggleRole(role.roleId)"
+                        [attr.aria-pressed]="isRoleSelected(role.roleId)"
+                        [class]="roleChipClass"
+                        [appTooltip]="role.description || 'No description'"
+                      >
+                        {{ role.displayName }}
+                      </button>
+                    }
+                  </div>
+                } @else {
+                  <p class="text-sm/6 text-gray-600 dark:text-gray-400">No roles available. Create roles in Role Management first.</p>
+                }
+              }
+              <p [class]="helpClass">Only users with the selected roles will be able to use this connector.</p>
+            </section>
+
+            <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
+              <div>
+                <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">File source</h2>
+                <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+                  Optionally map this connector to a file-source adapter so it can import files into an assistant's knowledge base from the assistant editor.
+                </p>
+              </div>
               @if (compatibleAdapters().length > 0) {
                 <div>
-                  <label for="fileSourceAdapterId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    File-source adapter
-                  </label>
-                  <select
-                    id="fileSourceAdapterId"
-                    formControlName="fileSourceAdapterId"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                  >
-                    <option value="">Not a file source</option>
-                    @for (adapter of compatibleAdapters(); track adapter.key) {
-                      <option [value]="adapter.key">{{ adapter.displayName }}</option>
-                    }
-                  </select>
-                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                    When set, this connector appears as a file source in the assistant editor
-                    for any user allowed to use it.
-                  </p>
+                  <label for="fileSourceAdapterId" [class]="labelClass">File-source adapter</label>
+                  <div class="relative mt-1">
+                    <select id="fileSourceAdapterId" formControlName="fileSourceAdapterId" class="pr-9" [class]="selectClass">
+                      <option value="">Not a file source</option>
+                      @for (adapter of compatibleAdapters(); track adapter.key) {
+                        <option [value]="adapter.key">{{ adapter.displayName }}</option>
+                      }
+                    </select>
+                    <ng-icon name="heroChevronDown" class="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                  </div>
+                  <p [class]="helpClass">When set, this connector appears as a file source in the assistant editor for any user allowed to use it.</p>
                   @if (scopeCoverageWarning(); as warning) {
-                    <div class="mt-3 rounded-sm border border-state-warning-200 bg-state-warning-50 p-3 dark:border-state-warning-800 dark:bg-state-warning-900/20">
-                      <div class="flex gap-2">
-                        <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
-                        <p class="text-sm/6 text-state-warning-700 dark:text-state-warning-300">{{ warning }}</p>
-                      </div>
+                    <div class="mt-3 flex gap-2 rounded-2xl border border-state-warning-200 bg-state-warning-50 p-3 dark:border-state-warning-800 dark:bg-state-warning-900/20">
+                      <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+                      <p class="text-sm/6 text-state-warning-700 dark:text-state-warning-300">{{ warning }}</p>
                     </div>
                   }
                 </div>
               } @else {
-                <p class="text-sm/6 text-gray-500 dark:text-gray-400">
-                  No file-source adapter is available for this connector type.
-                </p>
+                <p class="text-sm/6 text-gray-600 dark:text-gray-400">No file-source adapter is available for this connector type.</p>
               }
-            </div>
+            </section>
 
-            <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
-              <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">Export Target</h2>
-              <p class="mb-6 text-sm/6 text-gray-600 dark:text-gray-400">
-                Optionally map this connector to an export-target adapter so users can
-                save a conversation to it from the chat "Save to…" dialog.
-              </p>
+            <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
+              <div>
+                <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Export target</h2>
+                <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+                  Optionally map this connector to an export-target adapter so users can save a conversation to it from the chat "Save to…" dialog.
+                </p>
+              </div>
               @if (compatibleExportAdapters().length > 0) {
                 <div>
-                  <label for="exportTargetAdapterId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                    Export-target adapter
-                  </label>
-                  <select
-                    id="exportTargetAdapterId"
-                    formControlName="exportTargetAdapterId"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                  >
-                    <option value="">Not an export target</option>
-                    @for (adapter of compatibleExportAdapters(); track adapter.key) {
-                      <option [value]="adapter.key">{{ adapter.displayName }}</option>
-                    }
-                  </select>
-                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                    When set, this connector appears as a destination in the "Save to…"
-                    dialog for any user allowed to use it.
-                  </p>
+                  <label for="exportTargetAdapterId" [class]="labelClass">Export-target adapter</label>
+                  <div class="relative mt-1">
+                    <select id="exportTargetAdapterId" formControlName="exportTargetAdapterId" class="pr-9" [class]="selectClass">
+                      <option value="">Not an export target</option>
+                      @for (adapter of compatibleExportAdapters(); track adapter.key) {
+                        <option [value]="adapter.key">{{ adapter.displayName }}</option>
+                      }
+                    </select>
+                    <ng-icon name="heroChevronDown" class="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                  </div>
+                  <p [class]="helpClass">When set, this connector appears as a destination in the "Save to…" dialog for any user allowed to use it.</p>
                   @if (exportScopeCoverageWarning(); as warning) {
-                    <div class="mt-3 rounded-sm border border-state-warning-200 bg-state-warning-50 p-3 dark:border-state-warning-800 dark:bg-state-warning-900/20">
-                      <div class="flex gap-2">
-                        <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
-                        <p class="text-sm/6 text-state-warning-700 dark:text-state-warning-300">{{ warning }}</p>
-                      </div>
+                    <div class="mt-3 flex gap-2 rounded-2xl border border-state-warning-200 bg-state-warning-50 p-3 dark:border-state-warning-800 dark:bg-state-warning-900/20">
+                      <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+                      <p class="text-sm/6 text-state-warning-700 dark:text-state-warning-300">{{ warning }}</p>
                     </div>
                   }
                 </div>
               } @else {
-                <p class="text-sm/6 text-gray-500 dark:text-gray-400">
-                  No export-target adapter is available for this connector type.
-                </p>
+                <p class="text-sm/6 text-gray-600 dark:text-gray-400">No export-target adapter is available for this connector type.</p>
               }
-            </div>
+            </section>
 
             @if (isEditMode()) {
-              <div class="rounded-sm border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
-                <div class="flex gap-3">
-                  <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" />
-                  <div>
-                    <h3 class="text-sm/6 font-medium text-state-warning-800 dark:text-state-warning-200">Security Notice</h3>
-                    <p class="mt-1 text-sm/6 text-state-warning-700 dark:text-state-warning-300">
-                      Changing scopes forces connected users to re-consent on their next tool call.
-                      Rotating credentials requires re-entering both Client ID and Client Secret.
-                    </p>
-                  </div>
+              <div class="flex items-start gap-3 rounded-2xl border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
+                <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+                <div>
+                  <h2 class="text-sm/6 font-semibold text-state-warning-800 dark:text-state-warning-200">Security notice</h2>
+                  <p class="mt-1 text-sm/6 text-state-warning-700 dark:text-state-warning-300">
+                    Changing scopes forces connected users to re-consent on their next tool call.
+                    Rotating credentials requires re-entering both Client ID and Client Secret.
+                  </p>
                 </div>
               </div>
             }
 
-            <div class="flex gap-3 border-t border-gray-200 pt-6 dark:border-gray-700">
+            <div class="flex items-center gap-3 border-t border-gray-200 pt-6 dark:border-gray-700">
               <button
                 type="submit"
                 [disabled]="isSubmitting() || connectorForm.invalid || !!credentialPairError()"
-                class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-6 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:cursor-not-allowed disabled:opacity-50"
+                [class]="primaryButtonClass"
               >
                 @if (isSubmitting()) {
                   <app-spinner size="sm" variant="on-solid" label="Saving" />
-                  Saving...
+                  Saving…
                 } @else {
-                  <ng-icon name="heroCheckCircle" class="size-5" />
-                  {{ isEditMode() ? 'Update Connector' : 'Create Connector' }}
+                  {{ isEditMode() ? 'Update connector' : 'Create connector' }}
                 }
               </button>
-              <button
-                type="button"
-                (click)="goBack()"
-                [disabled]="isSubmitting()"
-                class="rounded-2xl border border-gray-300 bg-white px-6 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
-              >
-                Cancel
-              </button>
+              <button type="button" (click)="goBack()" [disabled]="isSubmitting()" [class]="ghostButtonClass">Cancel</button>
             </div>
           </form>
         }
+      </div>
     </div>
   `,
 })
@@ -711,6 +734,56 @@ export class ConnectorFormPage implements OnInit {
   readonly rolesResource = this.roleOptionsService.rolesResource;
 
   readonly presets = CONNECTOR_PRESETS;
+
+  // Shared control styling. Kept as constants because the page repeats these
+  // on a dozen controls; Tailwind still sees the full class names here.
+  readonly labelClass = 'block text-sm/6 font-medium text-gray-700 dark:text-gray-300';
+  readonly helpClass = 'mt-1 text-xs/5 text-gray-600 dark:text-gray-400';
+  readonly inputClass =
+    'block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 aria-invalid:border-state-danger-500 read-only:cursor-not-allowed read-only:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500 dark:read-only:bg-gray-900';
+  readonly monoInputClass = `${this.inputClass} font-mono`;
+  readonly selectClass =
+    'block w-full appearance-none rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white';
+  readonly checkboxClass =
+    'size-4 rounded border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800';
+  readonly primaryButtonClass =
+    'inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:brightness-110';
+  readonly secondaryButtonClass =
+    'inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700';
+  readonly ghostButtonClass =
+    'rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white';
+  readonly roleChipClass =
+    'rounded-full border border-gray-300 bg-white px-3.5 py-1 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-pressed:border-gray-900 aria-pressed:bg-gray-900 aria-pressed:text-white dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:aria-pressed:border-white dark:aria-pressed:bg-white dark:aria-pressed:text-gray-900';
+
+  readonly presetQuery = signal('');
+
+  /** Presets grouped for the picker, narrowed by the search box. */
+  readonly presetGroups = computed(() => {
+    const query = this.presetQuery().trim().toLowerCase();
+    return CONNECTOR_PRESET_GROUPS.map(group => ({
+      ...group,
+      presets: this.presets.filter(
+        preset =>
+          preset.category === group.category &&
+          (!query ||
+            preset.displayName.toLowerCase().includes(query) ||
+            preset.type.includes(query)),
+      ),
+    })).filter(group => group.presets.length > 0);
+  });
+
+  /** Mirrors the `iconData` control so the preview and hint can react to it. */
+  readonly iconDataSignal = signal('');
+  /** The logo this page last filled in itself, so an admin's own upload is never overwritten. */
+  private readonly prefilledIcon = signal<string | null>(null);
+
+  /** The preview is showing the vendor's logo that picking the preset filled in. */
+  readonly usingBrandLogo = computed(() => {
+    const current = this.iconDataSignal();
+    return !!current && current === getBrandIconDataUrl(this.providerTypeSignal());
+  });
+
+  readonly providerLabel = computed(() => getConnectorTypeLabel(this.providerTypeSignal()));
   readonly acceptedIconTypes = ICON_ACCEPTED_MIME_TYPES.join(',');
 
   readonly isEditMode = signal(false);
@@ -753,6 +826,9 @@ export class ConnectorFormPage implements OnInit {
       // Mirrors the backend's `normalize_tenant_id`: a GUID or a domain.
       validators: [Validators.pattern(/^\s*[A-Za-z0-9](?:[A-Za-z0-9.-]{0,126}[A-Za-z0-9])?\s*$/)],
     }),
+    tenantIssuer: this.fb.control('', { nonNullable: true }),
+    tenantAuthorizationEndpoint: this.fb.control('', { nonNullable: true }),
+    tenantTokenEndpoint: this.fb.control('', { nonNullable: true }),
     scopes: this.fb.control('', { nonNullable: true }),
     allowedRoles: this.fb.control<string[]>(['*'], { nonNullable: true }),
     grantAllRoles: this.fb.control(true, { nonNullable: true }),
@@ -778,8 +854,13 @@ export class ConnectorFormPage implements OnInit {
     requiresDiscovery(this.connectorForm.controls.providerType.value)
   );
 
+  /** True for built-in vendors that need the tenant's issuer and endpoints. */
+  readonly needsTenantEndpoints = signal(
+    requiresTenantEndpoints(this.connectorForm.controls.providerType.value)
+  );
+
   /** Mirrors `providerType` so computed placeholders react to changes. */
-  private readonly providerTypeSignal = signal<ConnectorType>(
+  protected readonly providerTypeSignal = signal<ConnectorType>(
     this.connectorForm.controls.providerType.value,
   );
 
@@ -791,6 +872,11 @@ export class ConnectorFormPage implements OnInit {
     const preset = getConnectorPreset(this.providerTypeSignal());
     return preset?.scopesPlaceholder ?? 'openid, email, profile';
   });
+
+  /** Issuer example for the selected tenant vendor. */
+  readonly tenantIssuerPlaceholder = computed<string>(
+    () => TENANT_ISSUER_PLACEHOLDERS[this.providerTypeSignal()] ?? 'https://your-tenant.example.com',
+  );
 
   /**
    * Vendor-relevant `key=value` example for the custom-parameters
@@ -825,6 +911,8 @@ export class ConnectorFormPage implements OnInit {
    * block every metadata-only edit on a discovery-URL connector.
    */
   private readonly discoveryLoadedFromServer = signal<string>('');
+  /** Tenant endpoints as loaded, to send them only when actually changed. */
+  private readonly tenantEndpointsLoadedFromServer = signal<string>('');
 
   /** The tenant loaded from the server, for the same reason as discovery. */
   private readonly tenantLoadedFromServer = signal<string>('');
@@ -947,6 +1035,10 @@ export class ConnectorFormPage implements OnInit {
       this.clearIncompatibleAdapter();
     });
 
+    this.connectorForm.controls.iconData.valueChanges.subscribe((value) => {
+      this.iconDataSignal.set(value);
+    });
+
     this.connectorForm.controls.scopes.valueChanges.subscribe((value) => {
       this.scopesSignal.set(value);
     });
@@ -998,6 +1090,36 @@ export class ConnectorFormPage implements OnInit {
       ctrl.setValue('');
     }
     ctrl.updateValueAndValidity({ emitEvent: false });
+    this.applyTenantValidator();
+  }
+
+  private applyTenantValidator(): void {
+    const needs = requiresTenantEndpoints(this.connectorForm.controls.providerType.value);
+    this.needsTenantEndpoints.set(needs);
+    const controls = [
+      this.connectorForm.controls.tenantIssuer,
+      this.connectorForm.controls.tenantAuthorizationEndpoint,
+      this.connectorForm.controls.tenantTokenEndpoint,
+    ];
+    for (const ctrl of controls) {
+      if (needs) {
+        ctrl.setValidators([Validators.required, Validators.pattern(/^https:\/\/.+/)]);
+      } else {
+        ctrl.clearValidators();
+        ctrl.setValue('');
+      }
+      ctrl.updateValueAndValidity({ emitEvent: false });
+    }
+  }
+
+  /** The three tenant fields as the API's `authorizationServerMetadata`. */
+  private tenantMetadata(): Record<string, string> {
+    const v = this.connectorForm.getRawValue();
+    return {
+      issuer: v.tenantIssuer.trim(),
+      authorizationEndpoint: v.tenantAuthorizationEndpoint.trim(),
+      tokenEndpoint: v.tenantTokenEndpoint.trim(),
+    };
   }
 
   private async loadConnectorData(id: string): Promise<void> {
@@ -1014,6 +1136,11 @@ export class ConnectorFormPage implements OnInit {
         clientSecret: '',
         oauthDiscoveryUrl: connector.oauthDiscoveryUrl ?? '',
         tenantId: connector.tenantId ?? '',
+        tenantIssuer: String(connector.authorizationServerMetadata?.['issuer'] ?? ''),
+        tenantAuthorizationEndpoint: String(
+          connector.authorizationServerMetadata?.['authorizationEndpoint'] ?? '',
+        ),
+        tenantTokenEndpoint: String(connector.authorizationServerMetadata?.['tokenEndpoint'] ?? ''),
         scopes: connector.scopes.join(', '),
         allowedRoles: connector.allowedRoles.length > 0 ? connector.allowedRoles : ['*'],
         grantAllRoles: connector.allowedRoles.length === 0,
@@ -1029,6 +1156,10 @@ export class ConnectorFormPage implements OnInit {
       this.exportAdapterLoadedFromServer.set(connector.exportTargetAdapterId ?? '');
       this.discoveryLoadedFromServer.set(connector.oauthDiscoveryUrl ?? '');
       this.tenantLoadedFromServer.set(connector.tenantId ?? '');
+      this.applyDiscoveryValidator();
+      this.tenantEndpointsLoadedFromServer.set(
+        requiresTenantEndpoints(connector.providerType) ? JSON.stringify(this.tenantMetadata()) : '',
+      );
       this.selectedRoles.set(connector.allowedRoles.length > 0 ? connector.allowedRoles : ['*']);
       this.applyDiscoveryValidator();
     } catch (error) {
@@ -1059,30 +1190,30 @@ export class ConnectorFormPage implements OnInit {
             }
           : {}),
       });
+      this.prefillBrandIcon(type);
     }
     this.applyDiscoveryValidator();
   }
 
-  getPresetIconClasses(type: ConnectorType): string {
-    const base = 'flex size-10 items-center justify-center rounded-sm';
-    switch (type) {
-      case 'google':
-        return `${base} bg-vendor-google-100 text-vendor-google-600 dark:bg-vendor-google-900/30 dark:text-vendor-google-400`;
-      case 'microsoft':
-        return `${base} bg-vendor-microsoft-100 text-vendor-microsoft-600 dark:bg-vendor-microsoft-900/30 dark:text-vendor-microsoft-400`;
-      case 'github':
-        return `${base} bg-gray-800 text-white dark:bg-gray-600`;
-      case 'slack':
-        return `${base} bg-vendor-slack-100 text-vendor-slack-700 dark:bg-vendor-slack-900/30 dark:text-vendor-slack-300`;
-      case 'salesforce':
-        return `${base} bg-vendor-salesforce-100 text-vendor-salesforce-700 dark:bg-vendor-salesforce-900/30 dark:text-vendor-salesforce-300`;
-      case 'zoom':
-        return `${base} bg-vendor-zoom-100 text-vendor-zoom-700 dark:bg-vendor-zoom-900/30 dark:text-vendor-zoom-400`;
-      case 'canvas':
-        return `${base} bg-vendor-canvas-100 text-vendor-canvas-600 dark:bg-vendor-canvas-900/30 dark:text-vendor-canvas-400`;
-      default:
-        return `${base} bg-vendor-generic-100 text-vendor-generic-600 dark:bg-vendor-generic-900/30 dark:text-vendor-generic-400`;
-    }
+  /** `true` for `aria-invalid` once a touched control fails, else `null` so the attribute is omitted. */
+  isInvalid(control: AbstractControl): true | null {
+    return control.invalid && control.touched ? true : null;
+  }
+
+  /**
+   * Fill the icon with the vendor's logo when picking a preset. Only touches
+   * the field while it is empty or still holds the logo filled in earlier, so
+   * switching presets swaps logos but never replaces an admin's own upload.
+   */
+  private prefillBrandIcon(type: ConnectorType): void {
+    const control = this.connectorForm.controls.iconData;
+    const current = control.value;
+    if (current && current !== this.prefilledIcon()) return;
+
+    const next = getBrandIconDataUrl(type) ?? '';
+    control.setValue(next);
+    this.prefilledIcon.set(next || null);
+    this.iconUploadError.set(null);
   }
 
   onGrantAllRolesChange(): void {
@@ -1193,6 +1324,14 @@ export class ConnectorFormPage implements OnInit {
         if (this.isMicrosoft() && currentTenant !== this.tenantLoadedFromServer()) {
           updates.tenantId = currentTenant;
         }
+        // Same rule for tenant endpoints: the backend only accepts a change
+        // alongside a credential rotation, so omit them when untouched.
+        if (
+          this.needsTenantEndpoints() &&
+          JSON.stringify(this.tenantMetadata()) !== this.tenantEndpointsLoadedFromServer()
+        ) {
+          updates.authorizationServerMetadata = this.tenantMetadata();
+        }
         await this.connectorsService.updateConnector(this.providerId()!, updates);
         this.router.navigate(['/admin/connectors']);
       } else {
@@ -1215,6 +1354,9 @@ export class ConnectorFormPage implements OnInit {
         }
         if (this.isMicrosoft() && formValue.tenantId.trim()) {
           createData.tenantId = formValue.tenantId.trim();
+        }
+        if (this.needsTenantEndpoints()) {
+          createData.authorizationServerMetadata = this.tenantMetadata();
         }
         if (Object.keys(customParameters).length > 0) {
           createData.customParameters = customParameters;
