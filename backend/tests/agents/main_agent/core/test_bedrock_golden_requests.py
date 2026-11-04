@@ -56,6 +56,16 @@ CASES = [
         "true",
     ),
     ("nova-micro", "us.amazon.nova-micro-v1:0", {"max_tokens": 512}, False, "", "true"),
+    # Thinks by default and carries the drop_block binding + its beta on every
+    # request (model_config._apply_thinking_binding).
+    (
+        "haiku55-thinking",
+        "us.anthropic.claude-haiku-5-5",
+        {"max_tokens": 32000, "effort": "medium"},
+        True,
+        "",
+        "true",
+    ),
 ]
 
 
