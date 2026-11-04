@@ -93,11 +93,21 @@ def aws(monkeypatch):
     async def load_models():
         return models
 
-    service = AwsLimitsService(region=REGION, quotas_client=quotas, cloudwatch_client=cloudwatch, model_loader=load_models)
-    with Stubber(quotas) as sq, Stubber(cloudwatch) as scw:
-        yield SimpleNamespace(service=service, sq=sq, scw=scw, audit=audit, models=models)
+    agentcore = boto3.client("bedrock-agentcore-control", region_name=REGION)
+    # One worker: Stubber answers in order, so the reads must happen in order.
+    service = AwsLimitsService(
+        region=REGION,
+        quotas_client=quotas,
+        cloudwatch_client=cloudwatch,
+        agentcore_client=agentcore,
+        model_loader=load_models,
+        max_workers=1,
+    )
+    with Stubber(quotas) as sq, Stubber(cloudwatch) as scw, Stubber(agentcore) as sac:
+        yield SimpleNamespace(service=service, sq=sq, scw=scw, sac=sac, audit=audit, models=models)
         sq.assert_no_pending_responses()
         scw.assert_no_pending_responses()
+        sac.assert_no_pending_responses()
 
 
 def _only_groups(monkeypatch, *ids: str) -> None:
@@ -605,8 +615,12 @@ class _RecordingCloudWatch:
         self.requests.append(params)
         results = []
         for q in params["MetricDataQueries"]:
+            if "Expression" in q:
+                points = self.series.get(("expr", q["Expression"]), {})
+                results.append({"Id": q["Id"], "Timestamps": list(points), "Values": list(points.values())})
+                continue
             stat = q["MetricStat"]
-            dims = tuple((d["Name"], d["Value"]) for d in stat["Metric"]["Dimensions"])
+            dims = tuple((d["Name"], d["Value"]) for d in sorted(stat["Metric"]["Dimensions"], key=lambda d: d["Name"]))
             points = self.series.get((stat["Metric"]["MetricName"], dims), {})
             results.append({"Id": q["Id"], "Timestamps": list(points), "Values": list(points.values())})
         return {"MetricDataResults": results}
@@ -692,3 +706,153 @@ async def test_small_utilization_keeps_its_precision(aws, monkeypatch):
     aws.service._cloudwatch = _RecordingCloudWatch({("ActiveSessionCount", (("Service", "AgentCore.Runtime"),)): {T1: 1.0}}, model_ids=[])
     (group,) = (await aws.service.dashboard()).groups
     assert group.limits[0].utilization == 0.02
+
+
+# ── quotas measured from the service's own metrics, or counted ──────────────
+
+
+def _gateways(sac: Stubber, targets: Dict[str, int]) -> None:
+    sac.add_response("list_memories", {"memories": [_memory("memory-one-abc"), _memory("memory-two-def")]}, {})
+    sac.add_response(
+        "list_gateways",
+        {"items": [_gateway(g) for g in targets]},
+        {},
+    )
+    for gateway_id, n in targets.items():
+        sac.add_response(
+            "list_gateway_targets",
+            {"items": [_target(f"{gateway_id}-t{i}") for i in range(n)]},
+            {"gatewayIdentifier": gateway_id},
+        )
+
+
+def _memory(memory_id: str) -> dict:
+    now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    return {
+        "arn": f"arn:aws:bedrock-agentcore:us-west-2:1:memory/{memory_id}",
+        "id": memory_id,
+        "status": "ACTIVE",
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+
+def _gateway(gateway_id: str) -> dict:
+    now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    return {
+        "gatewayId": gateway_id,
+        "name": gateway_id,
+        "status": "READY",
+        "createdAt": now,
+        "updatedAt": now,
+        "authorizerType": "AWS_IAM",
+        "protocolType": "MCP",
+    }
+
+
+def _target(target_id: str) -> dict:
+    now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    return {"targetId": target_id, "name": target_id, "status": "READY", "createdAt": now, "updatedAt": now}
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_quotas_are_measured_or_counted(aws, monkeypatch):
+    _only_groups(monkeypatch, "agent_runtime")
+    rows = [
+        _quota("bedrock-agentcore", "L-81002DCC", "Memories", 150),
+        _quota("bedrock-agentcore", "L-410A4D7F", "Gateways per Region", 1000),
+        _quota("bedrock-agentcore", "L-3601D726", "Targets per gateway", 100),
+        _quota("bedrock-agentcore", "L-CAF6F552", "Total number of concurrent active code interpreter sessions per account", 1000),
+        _quota("bedrock-agentcore", "L-E3D6644C", "Tokens per minute for long-term memory extraction", 150000),
+        _quota("bedrock-agentcore", "L-A0D48779", "Rate of tool-call/tool-list requests", 200),
+    ]
+    _stub_service(aws.sq, "bedrock-agentcore", [rows], rows)
+    _stub_history(aws.sq, [])
+    _stub_auto(aws.sq)
+    _gateways(aws.sac, {"gw-a": 3, "gw-b": 5})
+    ext = (("Operation", "Extraction"),)
+    aws.service._cloudwatch = _RecordingCloudWatch(
+        {
+            ("ActiveSessionCount", (("Service", "AgentCore.CodeInterpreter"),)): {T1: 4.0},
+            ("InputTokenUsage", ext): {T1: 140_000.0, T2: 10.0},
+            ("OutputTokenUsage", ext): {T1: 1_000.0},
+            ("Invocations", (("Method", "tools/call"), ("Operation", "InvokeGateway"), ("Protocol", "MCP"))): {T1: 600.0},
+            ("Invocations", (("Method", "tools/list"), ("Operation", "InvokeGateway"), ("Protocol", "MCP"))): {T1: 60.0},
+        },
+        model_ids=[],
+    )
+
+    (group,) = (await aws.service.dashboard()).groups
+
+    by_code = {q.quota_code: q for q in group.limits}
+    assert (by_code["L-81002DCC"].usage, by_code["L-81002DCC"].usage_basis) == (2.0, "current")
+    assert (by_code["L-410A4D7F"].usage, by_code["L-410A4D7F"].usage_basis) == (2.0, "current")
+    # The gateway with the most targets is what the per-gateway quota is about.
+    assert by_code["L-3601D726"].usage == 5.0 and by_code["L-3601D726"].utilization == 5.0
+    assert (by_code["L-CAF6F552"].usage, by_code["L-CAF6F552"].usage_basis) == (4.0, "peak")
+    assert by_code["L-E3D6644C"].usage == 141_000.0 and by_code["L-E3D6644C"].utilization == 94.0
+    # A per-second quota: 660 calls in the busiest minute is 11 per second.
+    assert by_code["L-A0D48779"].usage == 11.0
+    assert all(q.usage_note is None for q in group.limits)
+
+
+@pytest.mark.asyncio
+async def test_per_resource_quotas_take_the_busiest_resource(aws, monkeypatch):
+    _only_groups(monkeypatch, "app_api", "data")
+    fargate = _quota("fargate", "L-3032A538", "Fargate On-Demand vCPU resource count", 512)
+    tasks = _quota("ecs", "L-92E49DE3", "Tasks per service", 5000)
+    reads = _quota("dynamodb", "L-CF0CBE56", "Table-level read throughput limit", 40000)
+    writes = _quota("dynamodb", "L-AB614373", "Table-level write throughput limit", 40000)
+    _stub_service(aws.sq, "fargate", [[fargate]], [fargate])
+    _stub_service(aws.sq, "ecs", [[tasks]], [tasks])
+    _stub_service(aws.sq, "dynamodb", [[reads, writes]], [reads, writes])
+    _stub_history(aws.sq, [])
+    _stub_auto(aws.sq)
+    read_expr = "MAX(SEARCH('{AWS/DynamoDB,TableName} MetricName=\"ConsumedReadCapacityUnits\"', 'Sum', 60))"
+    aws.service._cloudwatch = cloudwatch = _RecordingCloudWatch({("expr", read_expr): {T1: 1200.0}}, model_ids=[])
+
+    groups = (await aws.service.dashboard()).groups
+
+    by_code = {q.quota_code: q for g in groups for q in g.limits}
+    assert by_code["L-CF0CBE56"].usage == 20.0  # 1,200 units in a minute is 20 per second
+    # DynamoDB always publishes for active tables, so no datapoints is no use.
+    assert by_code["L-AB614373"].usage == 0.0
+    # No series for RunningTaskCount means Container Insights is off, not zero tasks.
+    assert by_code["L-92E49DE3"].usage is None
+    assert by_code["L-92E49DE3"].usage_note == "Turn on Container Insights to measure this"
+    assert by_code["L-3032A538"].usage is None and by_code["L-3032A538"].usage_note == "Not measured by AWS"
+    expressions = [q["Expression"] for r in cloudwatch.requests for q in r["MetricDataQueries"] if "Expression" in q]
+    assert read_expr in expressions
+    assert any("ECS/ContainerInsights,ClusterName,ServiceName" in e and "'Maximum', 3600" in e for e in expressions)
+
+
+@pytest.mark.asyncio
+async def test_rows_say_why_there_is_no_number(aws, monkeypatch):
+    _only_groups(monkeypatch, "model_inference", "fine_tuning")
+    long_ctx = _quota("bedrock", "L-1M", "Cross-region model inference tokens per minute for Anthropic Claude Haiku 4.5 V1 1M Context Length", 1e6)
+    mantle = _quota("bedrock", "L-MA", "[bedrock-mantle endpoint] Output tokens per minute for GPT-5.4", 2e5)
+    gpu = _quota(
+        "sagemaker",
+        "L-G5",
+        "ml.g5.xlarge for training job usage",
+        0,
+        UsageMetric={
+            "MetricNamespace": "AWS/Usage",
+            "MetricName": "ResourceCount",
+            "MetricDimensions": {"Service": "SageMaker"},
+            "MetricStatisticRecommendation": "Maximum",
+        },
+    )
+    _stub_service(aws.sq, "bedrock", [[long_ctx, mantle]], [long_ctx, mantle])
+    _stub_service(aws.sq, "sagemaker", [[gpu]], [gpu])
+    _stub_history(aws.sq, [])
+    _stub_auto(aws.sq)
+    aws.models.append(ModelRef(model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0", model_name="Claude Haiku 4.5"))
+    aws.models.append(ModelRef(model_id="openai.gpt-5.4", model_name="GPT-5.4", provider="mantle"))
+    aws.service._cloudwatch = _RecordingCloudWatch({}, model_ids=[])
+
+    by_code = {q.quota_code: q for g in (await aws.service.dashboard()).groups for q in g.limits}
+    assert by_code["L-1M"].usage_note.startswith("Bedrock reports long-context traffic")
+    assert by_code["L-MA"].usage_note == "bedrock-mantle usage is not published to CloudWatch"
+    assert by_code["L-G5"].usage == 0.0 and by_code["L-G5"].utilization is None
+    assert by_code["L-G5"].usage_note == "Limit is 0. Request an increase to use this."

@@ -110,6 +110,9 @@ export type SummaryCardIcon =
           </span>
         </div>
       }
+
+      <!-- Optional action under the figure (AWS Limits: "View all"). -->
+      <ng-content />
     </div>
   `,
 })

@@ -22,6 +22,7 @@ import asyncio
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -171,6 +172,10 @@ class _Series:
     metric_name: str
     dimensions: Tuple[Tuple[str, str], ...]
     stat: str
+    # A metric-math expression instead of one metric: ``MAX(SEARCH(...))``
+    # collapses every matching series (each table, each ECS service) to the
+    # highest at each timestamp, for quotas that apply per resource.
+    expression: Optional[str] = None
 
     @property
     def period(self) -> int:
@@ -178,6 +183,29 @@ class _Series:
         # gauge loses nothing at an hour. A Sum must stay per minute: an hour's
         # total is not the busiest minute.
         return _MAX_PERIOD_SECONDS if self.stat == "Maximum" else _SUM_PERIOD_SECONDS
+
+    def query(self, query_id: str) -> Dict[str, Any]:
+        if self.expression:
+            return {"Id": query_id, "Expression": self.expression, "Period": self.period, "ReturnData": True}
+        return {
+            "Id": query_id,
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": self.namespace,
+                    "MetricName": self.metric_name,
+                    "Dimensions": [{"Name": k, "Value": v} for k, v in self.dimensions],
+                },
+                "Period": self.period,
+                "Stat": self.stat,
+            },
+            "ReturnData": True,
+        }
+
+
+def _search_max(namespace: str, dimension: str, metric_name: str, stat: str) -> _Series:
+    period = _MAX_PERIOD_SECONDS if stat == "Maximum" else _SUM_PERIOD_SECONDS
+    search = f"SEARCH('{{{namespace},{dimension}}} MetricName=\"{metric_name}\"', '{stat}', {period})"
+    return _Series(namespace, metric_name, (), stat, expression=f"MAX({search})")
 
 
 @dataclass(frozen=True)
@@ -187,6 +215,77 @@ class _UsagePlan:
     series: Tuple[_Series, ...]
     factor: float
     source: str
+    # Set when no datapoints means "not measured here" rather than "not used":
+    # a search that finds no series because Container Insights is off.
+    empty_note: Optional[str] = None
+
+
+BASIS_PEAK = "peak"
+BASIS_CURRENT = "current"
+
+NOTE_UNMEASURED = "Not measured by AWS"
+NOTE_ZERO_LIMIT = "Limit is 0. Request an increase to use this."
+NOTE_LONG_CONTEXT = "Bedrock reports long-context traffic with the base model, not separately"
+NOTE_MANTLE = "bedrock-mantle usage is not published to CloudWatch"
+
+
+def _agentcore(metric: str, stat: str, **dims: str) -> _Series:
+    return _Series("AWS/Bedrock-AgentCore", metric, tuple(sorted(dims.items())), stat)
+
+
+# Quotas Service Quotas links no usage metric to, measured from the service's
+# own CloudWatch metrics (checked against the dev account, Nov 2026).
+_CATALOG_PLANS: Dict[Tuple[str, str], _UsagePlan] = {
+    ("bedrock-agentcore", "L-CAF6F552"): _UsagePlan(
+        series=(_agentcore("ActiveSessionCount", "Maximum", Service="AgentCore.CodeInterpreter"),),
+        factor=1.0,
+        source="AWS/Bedrock-AgentCore ActiveSessionCount (Maximum) for AgentCore.CodeInterpreter",
+    ),
+    ("bedrock-agentcore", "L-1CB82154"): _UsagePlan(
+        series=(_agentcore("ActiveSessionCount", "Maximum", Service="AgentCore.Browser"),),
+        factor=1.0,
+        source="AWS/Bedrock-AgentCore ActiveSessionCount (Maximum) for AgentCore.Browser",
+    ),
+    # Input plus output: the quota does not say which it counts, so this errs high.
+    ("bedrock-agentcore", "L-E3D6644C"): _UsagePlan(
+        series=(
+            _agentcore("InputTokenUsage", "Sum", Operation="Extraction"),
+            _agentcore("OutputTokenUsage", "Sum", Operation="Extraction"),
+        ),
+        factor=1.0,
+        source="AWS/Bedrock-AgentCore Input + OutputTokenUsage per minute for Operation=Extraction",
+    ),
+    # A per-second quota: the busiest minute's calls / 60.
+    ("bedrock-agentcore", "L-A0D48779"): _UsagePlan(
+        series=tuple(_agentcore("Invocations", "Sum", Method=m, Operation="InvokeGateway", Protocol="MCP") for m in ("tools/call", "tools/list")),
+        factor=1 / _SUM_PERIOD_SECONDS,
+        source="AWS/Bedrock-AgentCore gateway Invocations (tools/call + tools/list) per minute / 60",
+    ),
+    ("ecs", "L-92E49DE3"): _UsagePlan(
+        series=(_search_max("ECS/ContainerInsights", "ClusterName,ServiceName", "RunningTaskCount", "Maximum"),),
+        factor=1.0,
+        source="ECS/ContainerInsights RunningTaskCount (Maximum), the busiest service",
+        empty_note="Turn on Container Insights to measure this",
+    ),
+    ("dynamodb", "L-CF0CBE56"): _UsagePlan(
+        series=(_search_max("AWS/DynamoDB", "TableName", "ConsumedReadCapacityUnits", "Sum"),),
+        factor=1 / _SUM_PERIOD_SECONDS,
+        source="AWS/DynamoDB ConsumedReadCapacityUnits per minute / 60, the busiest table",
+    ),
+    ("dynamodb", "L-AB614373"): _UsagePlan(
+        series=(_search_max("AWS/DynamoDB", "TableName", "ConsumedWriteCapacityUnits", "Sum"),),
+        factor=1 / _SUM_PERIOD_SECONDS,
+        source="AWS/DynamoDB ConsumedWriteCapacityUnits per minute / 60, the busiest table",
+    ),
+}
+
+# Quotas on how many of something exist, counted from the control-plane API.
+# A count has no history, so these show the current number.
+COUNTED_QUOTAS: Dict[Tuple[str, str], str] = {
+    ("bedrock-agentcore", "L-81002DCC"): "AgentCore ListMemories",
+    ("bedrock-agentcore", "L-410A4D7F"): "AgentCore ListGateways",
+    ("bedrock-agentcore", "L-3601D726"): "AgentCore ListGatewayTargets, the gateway with the most",
+}
 
 
 def _service_quotas_plan(quota: Dict[str, Any]) -> Optional[_UsagePlan]:
@@ -241,10 +340,18 @@ class AwsLimitsService:
         cloudwatch_client: Any = None,
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
         model_loader: Optional[Callable[[], Awaitable[List[ModelRef]]]] = None,
+        agentcore_client: Any = None,
+        max_workers: int = 4,
     ):
         self.region = region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-west-2"
         self._quotas = quotas_client
         self._cloudwatch = cloudwatch_client
+        self._agentcore = agentcore_client
+        # Reads run in parallel: the Bedrock and SageMaker lists are ~26 pages
+        # each, and a cold load drops from ~20 s to ~11 s in dev. More than 4
+        # workers was no faster and meets Service Quotas throttling sooner.
+        # 1 makes the call order deterministic for tests.
+        self._max_workers = max(1, max_workers)
         self._model_loader = model_loader or _load_managed_models
         self._cache: TTLCache = TTLCache(maxsize=256, ttl=max(1, ttl_seconds))
         self._lock = threading.Lock()
@@ -258,8 +365,34 @@ class AwsLimitsService:
         if self._quotas is None:
             import boto3
 
-            self._quotas = boto3.client("service-quotas", region_name=self.region)
+            from botocore.config import Config
+
+            # Parallel paging can meet Service Quotas' low rate limits; standard
+            # retries back off and try again rather than failing a group.
+            self._quotas = boto3.client("service-quotas", region_name=self.region, config=Config(retries={"mode": "standard", "max_attempts": 8}))
         return self._quotas
+
+    @property
+    def agentcore(self) -> Any:
+        if self._agentcore is None:
+            import boto3
+
+            self._agentcore = boto3.client("bedrock-agentcore-control", region_name=self.region)
+        return self._agentcore
+
+    def _parallel(self, calls: List[Callable[[], Any]]) -> List[Any]:
+        """Run ``calls`` on the worker pool; each result is its value or its exception."""
+
+        def run(call: Callable[[], Any]) -> Any:
+            try:
+                return call()
+            except Exception as e:  # noqa: BLE001 — the caller decides what an error means
+                return e
+
+        if self._max_workers == 1 or len(calls) < 2:
+            return [run(c) for c in calls]
+        with ThreadPoolExecutor(max_workers=min(self._max_workers, len(calls))) as pool:
+            return list(pool.map(run, calls))
 
     @property
     def cloudwatch(self) -> Any:
@@ -306,8 +439,17 @@ class AwsLimitsService:
 
     def _service_snapshot(self, service_code: str) -> Tuple[Dict[str, Dict[str, Any]], str]:
         def load() -> Dict[str, Dict[str, Any]]:
-            applied = {q["QuotaCode"]: q for q in self._paginate("list_service_quotas", "Quotas", ServiceCode=service_code)}
-            defaults = {q["QuotaCode"]: q for q in self._paginate("list_aws_default_service_quotas", "Quotas", ServiceCode=service_code)}
+            lists = self._parallel(
+                [
+                    lambda: self._paginate("list_service_quotas", "Quotas", ServiceCode=service_code),
+                    lambda: self._paginate("list_aws_default_service_quotas", "Quotas", ServiceCode=service_code),
+                ]
+            )
+            for result in lists:
+                if isinstance(result, Exception):
+                    raise result
+            applied = {q["QuotaCode"]: q for q in lists[0]}
+            defaults = {q["QuotaCode"]: q for q in lists[1]}
             return {code: _merge_quota(applied.get(code), defaults.get(code)) for code in dict.fromkeys([*applied, *defaults])}
 
         return self._cached(("service", service_code), load)
@@ -355,7 +497,7 @@ class AwsLimitsService:
         bedrock_ids: Optional[List[str]] = None
         for quota in quotas:
             key = f"{quota['service_code']}/{quota['quota_code']}"
-            plan = _service_quotas_plan(quota)
+            plan = _service_quotas_plan(quota) or _CATALOG_PLANS.get((quota["service_code"], quota["quota_code"]))
             if plan is None and quota["service_code"] == "bedrock" and quota_usage_metric(quota.get("quota_name") or ""):
                 if bedrock_ids is None:
                     try:
@@ -370,7 +512,7 @@ class AwsLimitsService:
                 plans[key] = plan
         return plans
 
-    def _usage(self, plans: Dict[str, _UsagePlan]) -> Dict[str, float]:
+    def _usage(self, plans: Dict[str, _UsagePlan]) -> Dict[str, Optional[float]]:
         """Peak usage over the last ``USAGE_WINDOW_DAYS`` days, keyed like ``plans``.
 
         Each distinct series is read once; a quota measured by several series
@@ -383,22 +525,7 @@ class AwsLimitsService:
                 series_ids.setdefault(series, f"q{len(series_ids)}")
         if not series_ids:
             return {}
-        queries = [
-            {
-                "Id": query_id,
-                "MetricStat": {
-                    "Metric": {
-                        "Namespace": series.namespace,
-                        "MetricName": series.metric_name,
-                        "Dimensions": [{"Name": k, "Value": v} for k, v in series.dimensions],
-                    },
-                    "Period": series.period,
-                    "Stat": series.stat,
-                },
-                "ReturnData": True,
-            }
-            for series, query_id in series_ids.items()
-        ]
+        queries = [series.query(query_id) for series, query_id in series_ids.items()]
         points: Dict[str, Dict[Any, float]] = {query_id: {} for query_id in series_ids.values()}
         end = _now()
         start = end - _USAGE_WINDOW
@@ -420,28 +547,82 @@ class AwsLimitsService:
                 if not token:
                     break
 
-        usage: Dict[str, float] = {}
+        usage: Dict[str, Optional[float]] = {}
         for key, plan in plans.items():
             combined: Dict[Any, float] = {}
             for series in plan.series:
                 for stamp, value in points[series_ids[series]].items():
                     combined[stamp] = combined.get(stamp, 0.0) + value
+            if not combined and plan.empty_note:
+                usage[key] = None
+                continue
             usage[key] = (max(combined.values()) if combined else 0.0) * plan.factor
         return usage
+
+    def _counts(self) -> Dict[Tuple[str, str], Optional[float]]:
+        """Current counts for ``COUNTED_QUOTAS``; a count that could not be read is None."""
+
+        def items(operation: str, key: str, **params: Any) -> List[Dict[str, Any]]:
+            paginator = self.agentcore.get_paginator(operation)
+            found: List[Dict[str, Any]] = []
+            for page in paginator.paginate(**params):
+                found.extend(page.get(key, []))
+            return found
+
+        def load() -> Dict[Tuple[str, str], Optional[float]]:
+            counts: Dict[Tuple[str, str], Optional[float]] = {k: None for k in COUNTED_QUOTAS}
+            try:
+                counts[("bedrock-agentcore", "L-81002DCC")] = float(len(items("list_memories", "memories")))
+            except (ClientError, BotoCoreError) as e:
+                logger.warning("AWS Limits could not count memories: %s", _error_text(e))
+            try:
+                gateways = items("list_gateways", "items")
+                counts[("bedrock-agentcore", "L-410A4D7F")] = float(len(gateways))
+                targets = self._parallel(
+                    [
+                        (lambda g=g: len(items("list_gateway_targets", "items", gatewayIdentifier=g["gatewayId"])))
+                        for g in gateways
+                        if g.get("gatewayId")
+                    ]
+                )
+                if not any(isinstance(t, Exception) for t in targets):
+                    counts[("bedrock-agentcore", "L-3601D726")] = float(max(targets, default=0))
+            except (ClientError, BotoCoreError) as e:
+                logger.warning("AWS Limits could not count gateways: %s", _error_text(e))
+            return counts
+
+        value, _ = self._cached(("counts",), load)
+        return dict(value)
 
     # ------------------------------------------------------------------
     # Groups (sync)
     # ------------------------------------------------------------------
 
-    def _to_limit(self, quota: Dict[str, Any], usage: Dict[str, float], plans: Dict[str, _UsagePlan]) -> AwsLimit:
+    def _to_limit(
+        self,
+        quota: Dict[str, Any],
+        usage: Dict[str, Optional[float]],
+        plans: Dict[str, _UsagePlan],
+        counts: Optional[Dict[Tuple[str, str], Optional[float]]] = None,
+    ) -> AwsLimit:
         key = f"{quota['service_code']}/{quota['quota_code']}"
         plan = plans.get(key)
-        value = usage.get(key) if plan is not None else None
+        counted = (quota["service_code"], quota["quota_code"]) in COUNTED_QUOTAS
+        value: Optional[float]
+        if counted:
+            value = (counts or {}).get((quota["service_code"], quota["quota_code"]))
+            basis: Optional[str] = BASIS_CURRENT if value is not None else None
+            source = COUNTED_QUOTAS[(quota["service_code"], quota["quota_code"])] if value is not None else None
+        else:
+            value = usage.get(key) if plan is not None else None
+            basis = BASIS_PEAK if value is not None else None
+            source = plan.source if plan is not None else None
         applied = quota.get("applied_value")
         utilization = None
         if value is not None and applied:
             # Three places, so 0.02% stays 0.02% and the UI can say "<0.1%" rather than "0%".
             utilization = round(value / applied * 100, 3)
+        note = self._usage_note(quota, value, plan, counted)
         return AwsLimit(
             service_code=quota["service_code"],
             service_name=quota.get("service_name") or quota["service_code"],
@@ -455,18 +636,45 @@ class AwsLimitsService:
             period_unit=quota.get("period_unit"),
             adjustable=quota.get("adjustable", False),
             global_quota=quota.get("global_quota", False),
-            has_usage_metric=plan is not None,
+            has_usage_metric=value is not None,
             usage=round(value, 4) if value is not None else None,
-            usage_source=plan.source if plan is not None else None,
+            usage_source=source,
+            usage_basis=basis,
+            usage_note=note,
             utilization=utilization,
             console_url=catalog.console_url(self.region, quota["service_code"], quota["quota_code"]),
             requestable=bool(quota.get("adjustable")),
         )
 
-    def _build_group(self, group: catalog.CatalogGroup, *, all_bedrock: bool, models: Optional[List[ModelRef]]) -> AwsLimitGroup:
+    @staticmethod
+    def _usage_note(quota: Dict[str, Any], value: Optional[float], plan: Optional[_UsagePlan], counted: bool) -> Optional[str]:
+        """Why a row has no usage or no utilization, in words an admin can act on."""
+        if value is not None:
+            return NOTE_ZERO_LIMIT if quota.get("applied_value") == 0 else None
+        name = (quota.get("quota_name") or "").lower()
+        if counted:
+            return "Could not be counted right now"
+        if plan is not None and plan.empty_note:
+            return plan.empty_note
+        if quota["service_code"] == "bedrock" and "context length" in name:
+            return NOTE_LONG_CONTEXT
+        if name.startswith("[bedrock-mantle"):
+            return NOTE_MANTLE
+        return NOTE_UNMEASURED
+
+    def _build_group(
+        self,
+        group: catalog.CatalogGroup,
+        *,
+        all_bedrock: bool,
+        models: Optional[List[ModelRef]],
+        failed: Optional[Dict[str, Exception]] = None,
+    ) -> AwsLimitGroup:
         selected: List[Dict[str, Any]] = []
         fetched: List[str] = []
         for service_code in group.service_codes:
+            if failed and service_code in failed:
+                raise failed[service_code]  # already tried once this load; do not ask again
             snapshot, fetched_at = self._service_snapshot(service_code)
             fetched.append(fetched_at)
             for quota in snapshot.values():
@@ -495,15 +703,25 @@ class AwsLimitsService:
             usage = {}
             plans = {}
             result.usage_error = f"Usage could not be read from CloudWatch ({_error_text(e)})."
-        result.limits = [self._to_limit(q, usage, plans) for q in selected]
+        counts = None
+        if any((q["service_code"], q["quota_code"]) in COUNTED_QUOTAS for q in selected):
+            counts = self._counts()
+        result.limits = [self._to_limit(q, usage, plans, counts) for q in selected]
         return result
 
-    def _group(self, group: catalog.CatalogGroup, *, all_bedrock: bool, models: Optional[List[ModelRef]]) -> AwsLimitGroup:
+    def _group(
+        self,
+        group: catalog.CatalogGroup,
+        *,
+        all_bedrock: bool,
+        models: Optional[List[ModelRef]],
+        failed: Optional[Dict[str, Exception]] = None,
+    ) -> AwsLimitGroup:
         flag = all_bedrock and bool(group.show_all_services)
         try:
             value, _ = self._cached(
                 ("group", group.id, flag),
-                lambda: self._build_group(group, all_bedrock=flag, models=models),
+                lambda: self._build_group(group, all_bedrock=flag, models=models, failed=failed),
             )
             return value
         except Exception as e:  # noqa: BLE001 — isolate one group
@@ -618,7 +836,13 @@ class AwsLimitsService:
         models = await self._models() if has_bedrock else None
 
         def build() -> AwsLimitsDashboard:
-            groups = [self._group(g, all_bedrock=all_bedrock, models=models) for g in groups_def]
+            # Warm every service list, the history and Automatic Management at
+            # once; the groups then build from the cache. A list that fails here
+            # is reported by its group without being asked for again.
+            codes = list(dict.fromkeys(c for g in groups_def for c in g.service_codes))
+            warmed = self._parallel([(lambda c=c: self._service_snapshot(c)) for c in codes] + [self._history_raw, self._auto_management])
+            failed = {c: r for c, r in zip(codes, warmed) if isinstance(r, Exception)}
+            groups = self._parallel([(lambda g=g: self._group(g, all_bedrock=all_bedrock, models=models, failed=failed)) for g in groups_def])
             if needs_models and models is None:
                 for g in groups:
                     if g.id == "model_inference" and not g.error:
@@ -673,7 +897,8 @@ class AwsLimitsService:
             except (ClientError, BotoCoreError) as e:
                 logger.warning("AWS Limits usage read failed for %s/%s: %s", service_code, quota_code, e)
                 usage, plans = {}, {}
-            return self._to_limit(quota, usage, plans)
+            counts = self._counts() if (service_code, quota_code) in COUNTED_QUOTAS else None
+            return self._to_limit(quota, usage, plans, counts)
 
         return await asyncio.to_thread(load)
 

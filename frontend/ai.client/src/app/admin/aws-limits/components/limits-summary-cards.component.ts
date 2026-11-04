@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { SystemSummaryCardComponent } from '../../costs/components/system-summary-card.component';
 import { AwsLimitsSummary } from '../models';
 
@@ -27,13 +27,24 @@ import { AwsLimitsSummary } from '../models';
         [value]="'' + summary().openRequests"
         icon="heroInboxArrowDown"
         detail="Pending or with a support case"
-      />
+      >
+        <button
+          type="button"
+          (click)="viewRequests.emit()"
+          class="mt-2 text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
+        >
+          View all<span class="sr-only"> increase requests</span>
+        </button>
+      </app-system-summary-card>
     </div>
   `,
 })
 export class LimitsSummaryCardsComponent {
   readonly summary = input.required<AwsLimitsSummary>();
   readonly windowDays = input(7);
+
+  /** "View all" on the open requests card. */
+  readonly viewRequests = output<void>();
 
   protected readonly windowDetail = computed(() => `Peak of the last ${this.windowDays()} days, where measured`);
 }

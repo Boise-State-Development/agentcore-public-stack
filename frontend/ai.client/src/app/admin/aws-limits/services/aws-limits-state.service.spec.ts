@@ -26,6 +26,8 @@ function limit(overrides: Partial<AwsLimit> = {}): AwsLimit {
     hasUsageMetric: true,
     usage: 500,
     usageSource: null,
+    usageBasis: 'peak',
+    usageNote: null,
     utilization: 50,
     consoleUrl: 'https://console',
     requestable: true,
@@ -92,10 +94,9 @@ describe('AwsLimitsStateService', () => {
     expect(again.request.params.get('refresh')).toBe('true');
     expect(again.request.params.get('all_bedrock')).toBe('true');
     again.flush(dashboard([]));
-    const history = http.expectOne(r => r.url === `${BASE}/requests`);
-    expect(history.request.params.get('refresh')).toBe('true');
-    history.flush({ region: 'us-west-2', requests: [], asOf: 'x' });
     await refreshing;
+    // The history is read when its dialog opens, not on every refresh.
+    http.expectNone(r => r.url === `${BASE}/requests`);
   });
 
   it('shows the API error and keeps going', async () => {
@@ -129,6 +130,24 @@ describe('AwsLimitsStateService', () => {
 
     service.setFilters({ nearLimitOnly: false, adjustableOnly: true, group: 'jobs' });
     expect(service.visibleGroups().map(g => g.limits.map(l => l.quotaCode))).toEqual([['b', 'a']]);
+  });
+
+  it('hides rows with a peak of 0 or nothing measured', async () => {
+    const loading = service.load();
+    http.expectOne(BASE).flush(
+      dashboard([
+        group('runtime', [
+          limit({ quotaCode: 'used', usage: 3, utilization: 1 }),
+          limit({ quotaCode: 'idle', usage: 0, utilization: 0 }),
+          limit({ quotaCode: 'unmeasured', usage: null, utilization: null, usageBasis: null, usageNote: 'Not measured by AWS' }),
+        ]),
+        group('fine_tuning', [limit({ quotaCode: 'gpu', usage: 0, utilization: null, usageNote: 'Limit is 0.' })]),
+      ]),
+    );
+    await loading;
+
+    service.setFilters({ hideUnused: true });
+    expect(service.visibleGroups().map(g => [g.id, g.limits.map(l => l.quotaCode)])).toEqual([['runtime', ['used']]]);
   });
 
   it('adds a submitted request to the history at once, then re-reads', async () => {

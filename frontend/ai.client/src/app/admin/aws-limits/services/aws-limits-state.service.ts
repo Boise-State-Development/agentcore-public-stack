@@ -14,6 +14,13 @@ export interface AwsLimitFilters {
   group: string;
   adjustableOnly: boolean;
   nearLimitOnly: boolean;
+  /** Hide rows with no use in the window: a peak of 0, or nothing measured. */
+  hideUnused: boolean;
+}
+
+/** In use: a measured, non-zero peak or count. */
+export function isInUse(limit: AwsLimit): boolean {
+  return (limit.usage ?? 0) > 0;
 }
 
 /** Highest utilization first; rows without usage last, then by name. */
@@ -47,7 +54,7 @@ export class AwsLimitsStateService {
   readonly error = signal<string | null>(null);
   readonly historyError = signal<string | null>(null);
   readonly showAllBedrock = signal(false);
-  readonly filters = signal<AwsLimitFilters>({ group: '', adjustableOnly: false, nearLimitOnly: false });
+  readonly filters = signal<AwsLimitFilters>({ group: '', adjustableOnly: false, nearLimitOnly: false, hideUnused: false });
 
   readonly canRequestIncrease = computed(() => this.dashboard()?.canRequestIncrease ?? false);
   readonly summary = computed(() => this.dashboard()?.summary ?? null);
@@ -56,15 +63,18 @@ export class AwsLimitsStateService {
   readonly visibleGroups = computed<AwsLimitGroup[]>(() => {
     const dashboard = this.dashboard();
     if (!dashboard) return [];
-    const { group, adjustableOnly, nearLimitOnly } = this.filters();
-    const rowFilter = adjustableOnly || nearLimitOnly;
+    const { group, adjustableOnly, nearLimitOnly, hideUnused } = this.filters();
+    const rowFilter = adjustableOnly || nearLimitOnly || hideUnused;
     return dashboard.groups
       .filter(g => !group || g.id === group)
       .map(g => ({
         ...g,
         limits: sortByUtilization(
           g.limits.filter(
-            l => (!adjustableOnly || l.adjustable) && (!nearLimitOnly || (l.utilization ?? 0) >= WARN_THRESHOLD),
+            l =>
+              (!adjustableOnly || l.adjustable) &&
+              (!nearLimitOnly || (l.utilization ?? 0) >= WARN_THRESHOLD) &&
+              (!hideUnused || isInUse(l)),
           ),
         ),
       }))
@@ -97,9 +107,12 @@ export class AwsLimitsStateService {
     }
   }
 
-  /** Re-read both from AWS, bypassing the server's cache. */
+  /**
+   * Re-read from AWS, bypassing the server's cache. The server drops the
+   * history with everything else, so the requests dialog reads it fresh on open.
+   */
   async refresh(): Promise<void> {
-    await Promise.all([this.load({ refresh: true }), this.loadHistory(true)]);
+    await this.load({ refresh: true });
   }
 
   async setShowAllBedrock(value: boolean): Promise<void> {
