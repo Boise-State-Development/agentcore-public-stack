@@ -300,6 +300,22 @@ class TestFirstTurn:
         asyncio.run(first_turn(store, text=EXCERPT.replace("\n", "\r\n") + "\n").context_block())
         assert store.get("alice", "h1").context_edited is False
 
+    def test_an_unchanged_brief_is_not_edited(self, store, meta):
+        """With a brief written, the card the user saw was the brief, not the excerpt (§4.5.1)."""
+        brief = "Goal: a rubric for the BIO 101 lab reports."
+        store.record_brief("alice", "h1", brief_hash=context_hash(brief), brief_tokens=12, brief_cache_status="hit")
+
+        asyncio.run(first_turn(store, text=brief).context_block())
+
+        assert store.get("alice", "h1").context_edited is False
+
+    def test_sending_the_excerpt_after_a_brief_was_written_is_an_edit(self, store, meta):
+        store.record_brief("alice", "h1", brief_hash=context_hash("A brief."), brief_tokens=3, brief_cache_status="hit")
+
+        asyncio.run(first_turn(store, text=EXCERPT).context_block())
+
+        assert store.get("alice", "h1").context_edited is True
+
     def test_a_removed_card_still_sends_the_handoff(self, store, meta):
         block = asyncio.run(first_turn(store, text=None).context_block())
 

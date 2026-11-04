@@ -385,3 +385,90 @@ class TestBuildInterruptedCallUsage:
 
         assert result["usage"]["inputTokens"] == 5_000
         assert result["usageEstimate"]["cacheSplit"] == iu.METHOD_UNCACHED
+
+
+class TestBuildSideCallUsage:
+    """A cancelled handoff brief (agent-handoffs-and-consults.md §4.5.1): the source's last request
+    plus one appended message, cut off by a send in the source before usage arrived.
+
+    Dev, 2026-11-04: a completed brief on a 2-turn source read 9,203 (turn 2's whole write) and
+    wrote 572 (turn 2's 326-token answer plus the instruction). A preempted brief on the same
+    shape wrote no row at all, though 17 text deltas had streamed.
+    """
+
+    def _wrapper(self, caching: bool = True, model_id: str | None = None):
+        config = SimpleNamespace(bedrock_cache_points_supported=lambda: caching, caching_enabled=caching)
+        if model_id is not None:
+            config.model_id = model_id
+        return SimpleNamespace(model_config=config)
+
+    def _history(self, usage):
+        return [
+            {"role": "user", "content": [{"text": "plan BIO 101"}]},
+            {"role": "assistant", "content": [{"text": "Week 1"}], "metadata": {"usage": {"inputTokens": 4_021}}},
+            {"role": "user", "content": [{"text": "add assessments"}]},
+            {"role": "assistant", "content": [{"text": "Added."}], "metadata": {"usage": usage}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_reads_the_last_calls_entry_and_writes_what_was_added_since(self):
+        history = self._history(
+            {"inputTokens": 3, "outputTokens": 326, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 9_203}
+        )
+
+        result = await iu.build_side_call_usage(
+            strands_agent=SimpleNamespace(model=None),
+            wrapper=self._wrapper(),
+            history=history,
+            appended_text="x" * 984,
+            partial_text="y" * 68,
+        )
+
+        # Prompt = the last call's 9,206 + its 326-token answer + the 246-token instruction.
+        assert result["usage"] == {
+            "inputTokens": 0,
+            "cacheReadInputTokens": 9_203,
+            "cacheWriteInputTokens": 575,
+            "outputTokens": 17,
+            "totalTokens": 9_795,
+        }
+        assert result["usageEstimate"] == {
+            "reason": "interrupted",
+            "inputTokens": iu.METHOD_PRIOR_PROMPT,
+            "outputTokens": iu.METHOD_ESTIMATE,
+            "cacheSplit": iu.METHOD_PRIOR_CALL,
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_history_with_no_reported_usage_means_no_row(self):
+        """A conversation restored into a fresh container: nothing sizes the prompt honestly."""
+        history = [
+            {"role": "user", "content": [{"text": "plan"}]},
+            {"role": "assistant", "content": [{"text": "Week 1"}]},
+        ]
+
+        assert await iu.build_side_call_usage(
+            strands_agent=SimpleNamespace(model=None),
+            wrapper=self._wrapper(),
+            history=history,
+            appended_text="instruction",
+            partial_text="some words",
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_a_source_below_the_cache_floor_stays_plain_input(self):
+        history = self._history(
+            {"inputTokens": 2_000, "outputTokens": 100, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}
+        )
+
+        result = await iu.build_side_call_usage(
+            strands_agent=SimpleNamespace(model=None),
+            wrapper=self._wrapper(model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+            history=history,
+            appended_text="x" * 400,
+            partial_text="",
+        )
+
+        assert result["usage"]["inputTokens"] == 2_200
+        assert result["usage"]["cacheWriteInputTokens"] == 0
+        assert result["usageEstimate"]["cacheSplit"] == iu.METHOD_BELOW_MINIMUM

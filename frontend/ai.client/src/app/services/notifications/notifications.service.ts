@@ -74,6 +74,17 @@ export class NotificationsService {
     }
   }
 
+  /**
+   * The server marked `marked` entries read by some other route (a handoff's entries, read by
+   * opening its conversation). Reflect it in the listed ones that `match`, and in the count.
+   */
+  markedElsewhere(match: (n: AppNotification) => boolean, marked: number): void {
+    if (marked <= 0) return;
+    const readAt = new Date().toISOString();
+    this.items.update(list => list.map(n => (match(n) ? { ...n, readAt } : n)));
+    this.unread.update(n => Math.max(0, n - marked));
+  }
+
   async markAllRead(): Promise<void> {
     const readAt = new Date().toISOString();
     this.items.update(list => list.map(n => (n.readAt ? n : { ...n, readAt })));

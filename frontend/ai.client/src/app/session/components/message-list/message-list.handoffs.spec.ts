@@ -10,6 +10,7 @@ import type { Message } from '../../services/models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
 import type { HandoffView } from '../../services/handoff/handoff.models';
+import { HandoffNotificationService } from '../../services/handoff/handoff-notification.service';
 
 /**
  * Handoffs in the message list (handoffs spec §4.3).
@@ -127,6 +128,32 @@ describe('MessageListComponent — handoffs', () => {
       expect(link.getAttribute('href')).toContain('/s/tgt');
       expect(link.getAttribute('aria-label')).toContain('Rubric Builder');
       expect(link.textContent).toContain('Finished · Drafted a four-row rubric');
+    });
+
+    it('a row that needs input offers browser notifications beside the link, never inside it', () => {
+      const notifications = TestBed.inject(HandoffNotificationService);
+      Object.assign(notifications, { canOffer: () => true });
+      const requestPermission = vi.spyOn(notifications, 'requestPermission').mockResolvedValue('granted');
+      TestBed.inject(HandoffStateService).upsertRow(handoff({ status: 'needs_input', waitingOn: { kind: 'oauth_consent', name: 'canvas' } }));
+
+      render([message('src', 0), message('src', 1)], 'src');
+
+      const row = fixture.nativeElement.querySelector('app-handoff-row') as HTMLElement;
+      const buttons = [...row.querySelectorAll('button')] as HTMLButtonElement[];
+      expect(buttons.map((b) => b.textContent?.trim())).toEqual(['Get a browser notification next time', 'No thanks']);
+      expect(row.querySelector('a button')).toBeNull();
+      expect(requestPermission).not.toHaveBeenCalled();
+      buttons[0].click();
+      expect(requestPermission).toHaveBeenCalledTimes(1);
+    });
+
+    it('a finished row makes no offer', () => {
+      Object.assign(TestBed.inject(HandoffNotificationService), { canOffer: () => true });
+      TestBed.inject(HandoffStateService).upsertRow(handoff({ status: 'done' }));
+
+      render([message('src', 0), message('src', 1)], 'src');
+
+      expect(fixture.nativeElement.querySelector('app-handoff-row button')).toBeNull();
     });
 
     it("renders a row whose message isn't loaded at the tail rather than dropping it", () => {

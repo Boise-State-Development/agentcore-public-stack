@@ -1014,6 +1014,14 @@ Next, in this order, each its own PR:
 
 1. The assistant block (B8) into `resolve_agent_turn(...)` returning either a refusal to
    stream or the resolved instructions/overrides/citations, with its writes moved per P4.
+   *Done as `resolve_turn_agent` (2026-11-03)*, with the same order and the same awaits:
+   access, version snapshot, the use writes (skippable with `record_use=False`), the
+   project gate and its two tasks, `resolve_agent_invocation` and the full-context load.
+   Binding validation stays ahead of it, and the KB search, `compose_turn_system_prompt`
+   (steps 5–5a), the project-memory await and binding persistence follow it. The custom
+   prompt and plain-turn personal instructions are `apply_turn_prompt_extras`. Split out
+   so a handoff brief resolves the agent a turn would (agent-handoffs-and-consults.md
+   §4.5.1). The P4 write moves are still open.
 2. The build's three sync→async bridges (F8) into one `run_blocking_async(coro)` helper
    with the contextvar capture in one place.
 3. `stream_with_quota_warning` and `_guarded_stream` into a `TurnStream` object that owns

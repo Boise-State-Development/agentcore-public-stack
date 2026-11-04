@@ -1223,6 +1223,86 @@ class TestSignalTurnInterrupted:
         assert resp.status_code == 204
         cancel.assert_not_awaited()
 
+    def test_brief_preempt_arms_cancel_and_writes_no_marker(
+        self, app, make_user, authenticated_client, monkeypatch
+    ):
+        """A send in a conversation whose handoff brief holds the lease.
+
+        The brief is not a turn, so nothing was interrupted: Stop's marker here
+        gave the source's next real turn a false "the user deliberately stopped
+        your previous response" note. Only the owner-scoped cancel is armed, so
+        the user's own send wins the lease (handoffs spec §4.5.1).
+        """
+        monkeypatch.setenv("HANDOFFS_ENABLED", "true")
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        cancel = AsyncMock(return_value=True)
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            recorder,
+        ), patch(
+            "apis.shared.sessions.session_lease.request_session_cancel",
+            cancel,
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "handoff_brief_preempted"},
+            )
+
+        assert resp.status_code == 204
+        cancel.assert_awaited_once_with("sess-001", user.user_id)
+        recorder.assert_not_awaited()
+
+    def test_brief_preempt_is_inert_with_handoffs_off(
+        self, app, make_user, authenticated_client, monkeypatch
+    ):
+        monkeypatch.delenv("HANDOFFS_ENABLED", raising=False)
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        cancel = AsyncMock(return_value=True)
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            recorder,
+        ), patch(
+            "apis.shared.sessions.session_lease.request_session_cancel",
+            cancel,
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "handoff_brief_preempted"},
+            )
+
+        assert resp.status_code == 204
+        cancel.assert_not_awaited()
+        recorder.assert_not_awaited()
+
+    def test_brief_preempt_succeeds_even_if_cancel_arm_fails(
+        self, app, make_user, authenticated_client, monkeypatch
+    ):
+        monkeypatch.setenv("HANDOFFS_ENABLED", "true")
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            recorder,
+        ), patch(
+            "apis.shared.sessions.session_lease.request_session_cancel",
+            AsyncMock(side_effect=RuntimeError("ddb down")),
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "handoff_brief_preempted"},
+            )
+
+        assert resp.status_code == 204
+        recorder.assert_not_awaited()
+
     def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
         client = unauthenticated_client(app)
         resp = client.post(

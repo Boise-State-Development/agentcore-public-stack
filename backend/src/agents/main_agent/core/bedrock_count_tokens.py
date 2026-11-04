@@ -36,6 +36,15 @@ counts sat in front of the model call the *reply* waited out that backoff (p95
 5.8 s measured on a 40k-user load run, docs/specs/load-test-assessment-2026-09.md
 §1 fix 3). Counting therefore goes through a dedicated client with a single
 attempt and a short read timeout: a throttle costs at most one failed request.
+
+**Resolved config.** strands-agents 1.63.0 re-resolves ``model_info`` (a
+lookup in its bundled ``model_info.json`` plus a dataclass merge) on every
+read, and ``format_request`` reads it nine times through ``_cache_strategy``
+and ``get_config``. On our production shape (40 tools, a 60k-character system
+prompt) that took ``format_request`` from 22 µs on 1.61.1 to 102 µs, paid
+before every model call. Both are pure functions of ``self.config``, whose
+only writer is ``update_config``, so this subclass resolves them once and
+clears them there. Retire this when upstream caches ``model_info`` itself.
 """
 
 import asyncio
@@ -145,6 +154,29 @@ class CountTokensBedrockModel(BedrockModel):
         #: throttle, any failure. Monotonic, so a reader that needs to know
         #: whether *its* counts were real compares two readings.
         self.heuristic_count_fallbacks = 0
+
+    def update_config(self, **model_config: Any) -> None:  # type: ignore[override]
+        """Apply the change, then drop the resolved config and model info.
+
+        ``BedrockModel.__init__`` calls this before ``__init__`` above runs, so
+        it also creates the two memo slots.
+        """
+        super().update_config(**model_config)
+        self._resolved_config: Optional[Any] = None
+        self._resolved_model_info: Optional[Any] = None
+
+    def get_config(self) -> Any:  # type: ignore[override]
+        """``BedrockModel.get_config``, resolved once per config change."""
+        if self._resolved_config is None:
+            self._resolved_config = super().get_config()
+        return self._resolved_config
+
+    @property
+    def model_info(self) -> Any:
+        """``Model.model_info``, resolved once per config change."""
+        if self._resolved_model_info is None:
+            self._resolved_model_info = super().model_info
+        return self._resolved_model_info
 
     @property
     def token_count_is_authoritative(self) -> bool:

@@ -26,6 +26,29 @@ logger = logging.getLogger(__name__)
 # tool-input rendering — see `ModelConfig.to_bedrock_config`.
 _FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
 
+# Preserved-thinking binding controls. The 5.5-generation Claude models bind
+# each replayed thinking block to the history before it, and accounts that
+# enforce the binding (Anthropic: every account created on or after
+# 2026-08-31) reject a request whose history changed ahead of a replayed
+# block. Keep-recent-turns compaction changes exactly that history.
+# `drop_block` makes the API drop the stale blocks instead of answering 400.
+#
+# Strands' own recovery (1.62+, `BedrockModel._converse`) only retries when
+# the request already carries a `thinking` dict, and these models think by
+# default without one, so nothing would retry and the turn would fail. We
+# therefore set the binding on every request up front.
+#
+# Only models with no live conversations are listed. Adding one that has
+# them changes `additionalModelRequestFields` and re-writes every such
+# conversation's cached prefix once, so price it first. Opus 5.5 is in that
+# position: docs/kaizen/review-queue.md, [2026-11-03] Opus 5.5 drop-block entry.
+#
+# Probed on dev for Haiku 5.5 (2026-11-03): accepted with the beta, and
+# "thinking.adaptive.block_binding: Extra inputs are not permitted" without it.
+_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+_THINKING_BINDING_DROP_BLOCK = {"prefix_mismatch_behavior": "drop_block"}
+_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5",)
+
 
 class ModelProvider(str, Enum):
     """Supported LLM providers"""
@@ -134,6 +157,9 @@ _BEDROCK_ADAPTIVE_THINKING_MARKERS = (
     "claude-opus-4-6",
     "claude-sonnet-4-6",
     "claude-mythos",
+    # Probed 2026-11-03: `{type: "enabled", budget_tokens}` 400s with
+    # "thinking.type.enabled is not supported for this model".
+    "claude-haiku-5-5",
 )
 
 
@@ -141,6 +167,29 @@ def _bedrock_uses_adaptive_thinking(model_id: Optional[str]) -> bool:
     """True when the Bedrock model id requires/recommends adaptive thinking."""
     mid = (model_id or "").lower()
     return any(marker in mid for marker in _BEDROCK_ADAPTIVE_THINKING_MARKERS)
+
+
+def _apply_thinking_binding(config: Dict[str, Any], model_id: Optional[str]) -> None:
+    """Ask a listed 5.5-generation model to drop stale replayed thinking blocks.
+
+    These models think by default, so a request that names no ``thinking``
+    gets ``{type: "adaptive"}`` (what they would do anyway, display left at
+    its default) plus the ``drop_block`` binding and its beta. A thinking
+    config that is disabled, not adaptive, or already carries a
+    ``block_binding`` is left as written. See ``_BEDROCK_THINKING_BINDING_MARKERS``.
+    """
+    mid = (model_id or "").lower()
+    if not any(marker in mid for marker in _BEDROCK_THINKING_BINDING_MARKERS):
+        return
+    arf = config.setdefault("additional_request_fields", {})
+    thinking = arf.get("thinking", {"type": "adaptive"})
+    if not isinstance(thinking, dict) or thinking.get("type") != "adaptive" or "block_binding" in thinking:
+        return
+    arf["thinking"] = {**thinking, "block_binding": dict(_THINKING_BINDING_DROP_BLOCK)}
+    betas = list(arf.get("anthropic_beta") or [])
+    if _THINKING_BINDING_BETA not in betas:
+        betas.append(_THINKING_BINDING_BETA)
+    arf["anthropic_beta"] = betas
 
 
 def _shape_thinking_value(
@@ -360,11 +409,20 @@ class ModelConfig:
     def bedrock_cache_points_supported(self) -> bool:
         """Whether a hand-placed Bedrock system cachePoint may be sent.
 
-        Mirrors Strands' ``BedrockModel._cache_strategy`` predicate. What it is
-        load-bearing FOR is the system cachePoint that
+        Agrees with Strands' ``BedrockModel._cache_strategy`` on every id we
+        curate, but is no longer the same test. Since strands-agents 1.63.0,
+        ``"auto"`` reads ``model_info.capabilities.prompt_caching`` from the
+        SDK's bundled ``model_info.json`` and keeps the claude/anthropic name
+        test only for ids the data does not list. Every curated Claude id is
+        listed as ``cache_points``, and Nova, the hosted OpenAI family, Qwen
+        and Kimi resolve to no strategy, so the two still agree; they would
+        part if upstream lists a non-Claude Converse model as
+        ``cache_points`` (the message point would appear while this keeps
+        the system and tools points off). What it is load-bearing FOR is the
+        system cachePoint that
         ``AgentFactory.create_agent`` places — the one explicit point in this
         codebase upstream will not filter for us. ``format_request`` copies
-        ``system_prompt_content`` verbatim (bedrock.py:376) and
+        ``system_prompt_content`` verbatim and
         ``_apply_system_cache_ttl`` only ever rewrites a TTL, never removes a
         point, so a point placed on a model that cannot cache reaches Bedrock
         and the call fails with **AccessDeniedException** — "You invoked an
@@ -376,7 +434,7 @@ class ModelConfig:
         It is also passed as ``tools_ttl``, where since strands-agents 1.55.0
         it is belt-and-braces rather than load-bearing:
         ``_build_tools_cache_point`` applies the same
-        ``_cache_strategy != "anthropic"`` test itself (bedrock.py:579), so
+        ``_cache_strategy != "anthropic"`` test itself (bedrock.py:680 in 1.63.0), so
         True and False emit byte-identical requests on a non-Anthropic model.
         Kept as the single predicate both points read, so the two can never
         disagree about which models get an explicit point.
@@ -424,6 +482,17 @@ class ModelConfig:
         _apply_canonical_params(
             config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock", self.model_id
         )
+        # Our catalog owns maxTokens; an explicit None opts out of the default
+        # strands-agents 1.63.0 fills in when the key is absent (#5645,
+        # resolve_max_tokens: the model's output limit from its bundled
+        # model_info.json). That data is not safe to send: it gives Claude
+        # Sonnet 4.6 128,000, and the Bedrock model card says 64K, so a
+        # turn reaching here without a catalog max_tokens would 400. Unset,
+        # maxTokens is omitted exactly as before 1.63.0, and Converse
+        # documents the omitted default as "the maximum allowed value for the
+        # model" — the right ceiling, from the one source that knows it.
+        config.setdefault("max_tokens", None)
+        _apply_thinking_binding(config, self.model_id)
 
         # Native Bedrock CountTokens is available to this model — the
         # foundation for per-call context attribution (decomposing the

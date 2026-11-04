@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 INBOX_PK_PREFIX = "INBOX#"
 NOTIF_SK_PREFIX = "NOTIF#"
 _KEY_ATTRS = ("PK", "SK", "ttl")
+#: The actor on a notification nobody else caused; ``actorEmail`` stays unset.
+_NO_ACTOR = User(email="", user_id="system", name="", roles=[])
 
 
 def _normalize(email: str) -> str:
@@ -77,6 +79,29 @@ class NotificationService:
             return notification
         except Exception:
             logger.warning("Could not write %s notification for project %s", kind, project_id, exc_info=True)
+            return None
+
+    def notify_own(
+        self,
+        *,
+        recipient_email: str,
+        kind: NotificationKind,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Notification]:
+        """Tell a user about their own work that finished out of sight (a background handoff).
+
+        :meth:`notify` skips the actor, which here is the recipient, so this writes with no actor.
+        Never raises, like :meth:`notify`.
+        """
+        recipient = _normalize(recipient_email)
+        if not self.enabled or not recipient:
+            return None
+        notification = self._build(recipient, kind, _NO_ACTOR, None, None, payload)
+        try:
+            self.table.put_item(Item=self._to_item(notification))
+            return notification
+        except Exception:
+            logger.warning("Could not write %s notification", kind, exc_info=True)
             return None
 
     def notify_many(
@@ -215,6 +240,36 @@ class NotificationService:
             if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
                 return False
             raise
+
+    def mark_read_matching(self, email: str, *, kinds: Iterable[str], payload: Dict[str, str]) -> int:
+        """Mark read every unread notification of ``kinds`` whose payload has these values.
+
+        For read state that follows the work rather than the bell (a handoff's entries, read by
+        opening its conversation). A filtered query over the caller's own partition, which the
+        90-day TTL keeps small. Returns how many were marked.
+        """
+        wanted = sorted(set(kinds))
+        if not self.enabled or not _normalize(email) or not wanted or not payload:
+            return 0
+        from boto3.dynamodb.conditions import Attr, Key
+
+        condition = Attr("readAt").not_exists() & Attr("kind").is_in(wanted)
+        for name, value in sorted(payload.items()):
+            condition = condition & Attr(f"payload.{name}").eq(value)
+        params: Dict[str, Any] = {
+            "KeyConditionExpression": Key("PK").eq(_pk(email)) & Key("SK").begins_with(NOTIF_SK_PREFIX),
+            "FilterExpression": condition,
+            "ProjectionExpression": "SK",
+        }
+        marked = 0
+        while True:
+            resp = self.table.query(**params)
+            for item in resp.get("Items", []):
+                marked += int(self.mark_read(email, str(item["SK"])[len(NOTIF_SK_PREFIX):]))
+            last = resp.get("LastEvaluatedKey")
+            if not last:
+                return marked
+            params["ExclusiveStartKey"] = last
 
     def mark_all_read(self, email: str) -> int:
         """Mark every unread notification read; returns how many there were."""

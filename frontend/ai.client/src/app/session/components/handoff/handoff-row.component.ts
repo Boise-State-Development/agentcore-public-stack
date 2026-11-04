@@ -6,6 +6,7 @@ import { heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCirc
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { AgentHandoffService } from '../../services/handoff/agent-handoff.service';
+import { HandoffNotificationService } from '../../services/handoff/handoff-notification.service';
 import { HandoffStatus, HandoffView, WaitingOn } from '../../services/handoff/handoff.models';
 import { SessionService } from '../../services/session/session.service';
 
@@ -23,6 +24,9 @@ type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'sto
  *   after that, the persisted `status` with `statusLine` / `waitingOn`.
  * - **One link, one tab stop.** The status line is not a live region: announcing every tool batch
  *   would talk over the thread being read. State changes are announced once, by the toast.
+ * - **The browser-notification offer** (PR-0.3b) sits under a row that needs input, as sibling
+ *   buttons, never inside the link, until the user answers it once (here, in the toast or in
+ *   Settings) or waves it away.
  */
 @Component({
   selector: 'app-handoff-row',
@@ -68,6 +72,24 @@ type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'sto
           aria-hidden="true"
         />
       </a>
+      @if (offerNotifications()) {
+        <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 text-xs/5">
+          <button
+            type="button"
+            (click)="enableNotifications()"
+            class="rounded-md font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50"
+          >
+            Get a browser notification next time
+          </button>
+          <button
+            type="button"
+            (click)="notifications.dismissOffer()"
+            class="rounded-md text-gray-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400"
+          >
+            No thanks
+          </button>
+        </div>
+      }
     }
   `,
 })
@@ -76,6 +98,7 @@ export class HandoffRowComponent {
   private readonly chatState = inject(ChatStateService);
   private readonly insight = inject(ToolInsightService);
   private readonly sessions = inject(SessionService);
+  protected readonly notifications = inject(HandoffNotificationService);
 
   readonly row = input.required<HandoffView>();
 
@@ -120,6 +143,14 @@ export class HandoffRowComponent {
         return 'Stopped';
     }
   });
+
+  protected readonly offerNotifications = computed(
+    () => this.state() === 'needs_input' && this.notifications.canOffer(),
+  );
+
+  protected enableNotifications(): void {
+    void this.notifications.requestPermission(this.row());
+  }
 
   protected readonly accessibleName = computed(
     () => `${this.title()}, ${this.row().agentName}, ${this.statusLine()}`,

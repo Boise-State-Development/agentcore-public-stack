@@ -288,6 +288,11 @@ jobs:
       # environment to turn it on there. Sets it on app-api and on the AgentCore
       # Runtime (only while on).
       CDK_HANDOFFS_ENABLED: ${{ vars.CDK_HANDOFFS_ENABLED }}
+      # The handoff brief: the source's own model writes the context card from
+      # its prompt cache (agent-handoffs-and-consults.md §4.5.1). Opt-in while in
+      # development; set `CDK_HANDOFF_BRIEF_ENABLED` to "true" to turn it on.
+      # AgentCore Runtime only, and only while handoffs are on too.
+      CDK_HANDOFF_BRIEF_ENABLED: ${{ vars.CDK_HANDOFF_BRIEF_ENABLED }}
       # Conversation rewind: "Rewind to here" on a user message
       # (docs/specs/conversation-rewind-and-fork.md §4). Opt-in while in
       # development: set `CDK_SESSION_REWIND_ENABLED` to "true" in an environment

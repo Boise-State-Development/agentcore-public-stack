@@ -90,12 +90,28 @@ function describeQuota(n: AppNotification, periodType?: string | null): string {
   }
 }
 
+/** The handoff kinds (handoffs spec §4.3): the Agent and where the work came from, never what was asked. */
+function describeHandoff(n: AppNotification): string {
+  const agent = typeof n.payload?.agentName === 'string' && n.payload.agentName ? n.payload.agentName : 'An agent';
+  const title = typeof n.payload?.sourceTitle === 'string' ? n.payload.sourceTitle.trim() : '';
+  const from = title ? `the handoff from “${title}”` : 'your handoff';
+  switch (n.kind) {
+    case 'handoff_needs_input':
+      return `${agent} needs your input on ${from}.`;
+    case 'handoff_done':
+      return `${agent} finished ${from}.`;
+    default:
+      return `${agent} stopped before finishing ${from}.`;
+  }
+}
+
 /**
  * The sentence a notification reads as. Actor and project fall back to neutral words.
  * `quotaPeriodType` words a quota amount (`per month` / `per day`); unknown reads as monthly.
  */
 export function describeNotification(n: AppNotification, quotaPeriodType?: string | null): string {
   if (n.kind.startsWith('quota_')) return describeQuota(n, quotaPeriodType);
+  if (n.kind.startsWith('handoff_')) return describeHandoff(n);
   const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
   const project = n.projectName || 'a project';
   const role = ROLE_PHRASES[n.payload?.role ?? ''] ?? (n.payload?.role ? `a ${n.payload.role}` : null);
@@ -160,7 +176,7 @@ export function relativeTime(iso: string, now = Date.now()): string {
  * invitation sent while the tab sat in the background shows up.
  *
  * Opening a notification marks it read and, unless it says you were removed,
- * takes you to the project (its Members tab when someone left). The panel shows the newest 20; the inbox keeps 90
+ * takes you to what it is about: a handoff's conversation, or the project (its Members tab when someone left). The panel shows the newest 20; the inbox keeps 90
  * days, and older entries are not worth a pager in a menu.
  */
 @Component({
@@ -407,6 +423,18 @@ export class NotificationBellComponent {
 
   protected open(n: AppNotification): void {
     void this.service.markRead(n);
+    // A handoff entry opens the Agent's conversation, which marks its other entries read. The
+    // handoff service loads on demand: the bell is in the initial bundle and the chat stack isn't.
+    if (n.kind.startsWith('handoff_')) {
+      const { handoffId, sourceSessionId, targetSessionId, agentId } = n.payload ?? {};
+      if (this.features.handoffs && handoffId && sourceSessionId && targetSessionId && agentId) {
+        this.sidenav.close();
+        void import('../../session/services/handoff/handoff-notification.service').then(({ HandoffNotificationService }) =>
+          this.injector.get(HandoffNotificationService).openFromInbox({ handoffId, sourceSessionId, targetSessionId, agentId }),
+        );
+      }
+      return;
+    }
     // A quota notification opens Settings → Usage, where the request and the
     // limit it changed are; a reader re-reads both on the way.
     if (n.kind.startsWith('quota_') && n.kind !== 'quota_request_submitted') {

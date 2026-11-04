@@ -263,15 +263,18 @@ class AgentFactory:
         # point misses — see the cachePoint budget comment in
         # ModelConfig.to_bedrock_config.
         #
-        # INVARIANT, as of strands-agents 1.55.0 (the pinned version): this
-        # hand-placed system cachePoint is honored, never doubled. 1.55 does
-        # place a system cachePoint of its own — _should_cache_system(), with
-        # CacheConfig.system_prompt_ttl defaulting to True — but it arms on two
-        # conditions that together can never catch a block list this branch
-        # skipped. (1) It returns early unless _cache_strategy == "anthropic",
-        # i.e. "claude"/"anthropic" in the model id — the same test inside
-        # bedrock_cache_points_supported(), so on any model where upstream
-        # would place one, the list below already carries ours. (2) Its final
+        # INVARIANT, established on strands-agents 1.55.0 and still true on
+        # 1.63.0: this hand-placed system cachePoint is honored, never
+        # doubled. Upstream does place a system cachePoint of its own —
+        # _should_cache_system(), with CacheConfig.system_prompt_ttl defaulting
+        # to True — but it arms on two conditions that together can never catch
+        # a block list this branch skipped. (1) It returns early unless
+        # _cache_strategy == "anthropic". Since 1.63.0 that reads
+        # model_info.json's prompt_caching rather than a "claude"/"anthropic"
+        # name test, but it agrees with bedrock_cache_points_supported() on
+        # every id we run (test_strands_model_info_defaults.py pins this), so
+        # on any model where upstream would place one, the list below already
+        # carries ours. (2) Its final
         # guard is `not any("cachePoint" in block for block in system_blocks)`,
         # which sees that block and stands down. Upstream's own CacheConfig
         # docstring says the same thing ("A hand-placed system cache point is
@@ -279,10 +282,11 @@ class AgentFactory:
         # "strips only message-level cachePoints, never system ones" was a
         # 1.51-era fact and is NOT the reason this is safe — do not restore it.
         #
-        # Measured on the pinned 1.55.0 (2026-09-11) rather than read off the
-        # source: formatting a request with this block present yields exactly
-        # ONE system cachePoint, and with it absent upstream injects exactly one
-        # of its own. The same probe shows the converse, which is why the
+        # Measured on 1.55.0 (2026-09-11) rather than read off the source:
+        # formatting a request with this block present yields exactly ONE
+        # system cachePoint, and with it absent upstream injects exactly one
+        # of its own. test_bedrock_golden_requests.py now pins the whole
+        # formatted request, so a bump that breaks this fails CI. The same probe shows the converse, which is why the
         # bedrock_cache_points_supported() gate below cannot be dropped —
         # on a NON-Anthropic model this block is passed through untouched and
         # Bedrock rejects the call with AccessDeniedException.

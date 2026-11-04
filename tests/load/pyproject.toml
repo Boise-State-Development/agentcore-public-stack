@@ -19,6 +19,11 @@ dev = [
     "ruff==0.14.5",
 ]
 
+[tool.uv]
+# Security: constrain locust's transitive msgpack past GHSA-j586-36cw-2gc2
+# (C-extension memory leak on strict_map_key validation failure), patched in 1.2.3.
+constraint-dependencies = ["msgpack>=1.2.3"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"

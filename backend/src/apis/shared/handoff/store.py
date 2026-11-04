@@ -232,6 +232,47 @@ class HandoffStore:
             raise
         return _from_item(resp["Attributes"])
 
+    def record_brief(
+        self,
+        user_id: str,
+        handoff_id: str,
+        *,
+        brief_hash: str,
+        brief_tokens: int,
+        brief_cache_status: Optional[str],
+    ) -> bool:
+        """Record the brief written for an ``open`` handoff (spec §4.5.1). False if it is no longer open.
+
+        Acceptance compares the sent card with ``briefHash`` when it is set, so ``contextEdited`` still
+        means "the user changed what we wrote". A row already sent or dismissed is left alone: its
+        acceptance has happened, against whatever the card held then.
+        """
+        table = self._require_table()
+        names = {"#status": "status", "#updatedAt": "updatedAt"}
+        values: Dict[str, Any] = {
+            ":open": "open",
+            ":hash": brief_hash,
+            ":tokens": int(brief_tokens),
+            ":now": datetime.now(timezone.utc).isoformat(),
+        }
+        sets = ["briefHash = :hash", "briefTokens = :tokens", "#updatedAt = :now"]
+        if brief_cache_status:
+            values[":cache"] = brief_cache_status
+            sets.append("briefCacheStatus = :cache")
+        try:
+            table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{handoff_id}"},
+                UpdateExpression="SET " + ", ".join(sets),
+                ConditionExpression="attribute_exists(SK) AND #status = :open",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return False
+            raise
+        return True
+
     def delete_for_session(self, user_id: str, session_id: str) -> int:
         """Delete this user's handoffs from a source conversation. Best-effort; returns the count."""
         if self._table is None:

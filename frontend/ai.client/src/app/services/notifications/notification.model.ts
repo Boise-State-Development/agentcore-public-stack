@@ -22,7 +22,18 @@ export type NotificationKind =
   | 'quota_request_decided'
   | 'quota_request_info_requested'
   | 'quota_extension_granted'
-  | 'quota_extension_revoked';
+  | 'quota_extension_revoked'
+  // Handoffs (agent-handoffs-and-consults §4.3, PR-0.3b): a background conversation's state.
+  | 'handoff_needs_input'
+  | 'handoff_done'
+  | 'handoff_stopped';
+
+/** The inbox kinds a handoff writes. */
+export const HANDOFF_NOTIFICATION_KINDS: ReadonlySet<NotificationKind> = new Set([
+  'handoff_needs_input',
+  'handoff_done',
+  'handoff_stopped',
+]);
 
 export interface AppNotification {
   notificationId: string;
@@ -41,7 +52,9 @@ export interface AppNotification {
    * `runId`, `fileCount` and up to ten `slugs` for a maintenance run's proposals;
    * `scheduleId`, `label`, `reason` and `createdBy` (the creator's email) for a schedule that stopped;
    * for quota: `requestId`, `outcome`, `amount` / `requestedAmount` (decimal strings), `through`
-   * (a date), `standing`, `fundingLabel`, `note`, and `reason` on a revoke.
+   * (a date), `standing`, `fundingLabel`, `note`, and `reason` on a revoke;
+   * for a handoff: `handoffId`, `sourceSessionId`, `targetSessionId`, `agentId`, `agentName`
+   * and `sourceTitle` (never request or conversation text).
    */
   payload: {
     role?: string;
@@ -58,6 +71,12 @@ export interface AppNotification {
     label?: string;
     reason?: string;
     createdBy?: string;
+    handoffId?: string;
+    sourceSessionId?: string;
+    targetSessionId?: string;
+    agentId?: string;
+    agentName?: string;
+    sourceTitle?: string;
   } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;

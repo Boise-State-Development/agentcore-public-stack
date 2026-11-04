@@ -867,6 +867,24 @@ def handoffs_enabled() -> bool:
     return os.environ.get("HANDOFFS_ENABLED", "").strip().lower() == "true"
 
 
+def handoff_brief_enabled() -> bool:
+    """Whether a handoff's context card is a brief the source's own model writes.
+
+    ``docs/specs/agent-handoffs-and-consults.md`` §4.5.1. While on, the Runtime
+    answers a ``handoff_brief`` invocation by re-sending the source
+    conversation's last request plus one instruction, so the history reads from
+    the source's prompt cache; while off, that invocation answers with a
+    ``flag_off`` fallback and the card stays the PR-0.1 excerpt. Meaningless
+    without ``HANDOFFS_ENABLED``, so both must be on. **Opt-in while in
+    development**: only ``"true"`` enables it. CDK writes it to the Runtime only
+    while on, so the default spends none of the V2 environment budget.
+
+    A **feature switch** once finished: it spends model tokens on every handoff,
+    which a deployment may decline.
+    """
+    return handoffs_enabled() and os.environ.get("HANDOFF_BRIEF_ENABLED", "").strip().lower() == "true"
+
+
 def session_rewind_enabled() -> bool:
     """Whether a user can rewind a conversation to one of their earlier messages.
 

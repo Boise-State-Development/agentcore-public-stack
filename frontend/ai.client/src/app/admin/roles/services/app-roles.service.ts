@@ -9,6 +9,7 @@ import {
   AppRoleUpdateRequest,
 } from '../models/app-role.model';
 import { AdminScopeListResponse } from '../../admin-scope.model';
+import { RoleOptionsService } from './role-options.service';
 
 /**
  * Service to manage AppRoles.
@@ -22,6 +23,8 @@ import { AdminScopeListResponse } from '../../admin-scope.model';
 export class AppRolesService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
+  /** The pickers' cached copy of the role list, refreshed whenever a role changes. */
+  private roleOptions = inject(RoleOptionsService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/roles`);
 
@@ -99,6 +102,7 @@ export class AppRolesService {
       this.http.post<AppRole>(`${this.baseUrl()}/`, roleData)
     );
     this.rolesResource.reload();
+    this.roleOptions.reload();
     return response;
   }
 
@@ -110,6 +114,7 @@ export class AppRolesService {
       this.http.patch<AppRole>(`${this.baseUrl()}/${roleId}`, updates)
     );
     this.rolesResource.reload();
+    this.roleOptions.reload();
     return response;
   }
 
@@ -121,6 +126,7 @@ export class AppRolesService {
       this.http.delete<void>(`${this.baseUrl()}/${roleId}`)
     );
     this.rolesResource.reload();
+    this.roleOptions.reload();
   }
 
   /**

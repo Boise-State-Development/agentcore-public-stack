@@ -3,7 +3,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { TestBed } from '@angular/core/testing';
 import { expectNamedDialog, openInCdkDialog } from '../../../../testing/cdk-dialog';
 import { AdminToolService } from '../services/admin-tool.service';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import { AdminTool } from '../models/admin-tool.model';
 import {
   ToolRoleDialogComponent,
@@ -17,7 +17,7 @@ describe('ToolRoleDialogComponent', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: AdminToolService, useValue: { getToolRoles: vi.fn().mockResolvedValue([]) } },
-        { provide: AppRolesService, useValue: { fetchRoles: vi.fn().mockResolvedValue({ roles: [] }) } },
+        { provide: RoleOptionsService, useValue: { fetchRoles: vi.fn().mockResolvedValue({ roles: [] }) } },
       ],
     });
   });

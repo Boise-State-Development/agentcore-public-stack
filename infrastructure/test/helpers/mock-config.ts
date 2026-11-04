@@ -190,6 +190,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     handoffs: {
       enabled: false,
+      briefEnabled: false,
     },
     sessionRewind: {
       enabled: false,

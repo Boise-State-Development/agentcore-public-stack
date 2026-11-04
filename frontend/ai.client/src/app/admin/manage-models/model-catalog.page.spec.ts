@@ -280,6 +280,31 @@ describe('ModelCatalogPage', () => {
     });
   });
 
+  describe('curated Claude Haiku 5.5', () => {
+    const haiku = CURATED_BEDROCK_MODELS.find(m => m.key === 'claude-haiku-5-5')!;
+
+    it('caps the window below the 100K long-context price step', () => {
+      // The card's window is 1M, but a prompt over 100K bills 5x on every
+      // bucket and the row holds one flat rate. Compaction forces a cut at
+      // 0.7x this value, so anything over ~142K lets a turn cross the step.
+      expect(haiku.template.maxInputTokens).toBe(100_000);
+    });
+
+    it('declares only the params the model accepts', () => {
+      // Probed 2026-11-03: temperature and top_p 400 as deprecated, and the
+      // backend owns thinking (adaptive + drop_block binding on every request).
+      expect(Object.keys(haiku.template.supportedParams?.params ?? {}).sort()).toEqual([
+        'effort',
+        'max_tokens',
+      ]);
+    });
+
+    it('is not the default model', () => {
+      // Output tokens per turn are measured before it replaces Haiku 4.5.
+      expect(haiku.template.isDefault).toBe(false);
+    });
+  });
+
   describe('curated bedrock-responses entries', () => {
     // The tab is a TRANSPORT, not a vendor. Three of its invariants below were
     // written when every entry was an `openai.*` id and are measured facts

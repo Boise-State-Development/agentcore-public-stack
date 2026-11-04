@@ -522,6 +522,14 @@ export interface AwsLimitsConfig {
  */
 export interface HandoffsConfig {
   enabled: boolean;
+  /**
+   * The model-written brief for a handoff's context card (spec §4.5.1). **Opt-in
+   * while in development**: off unless CDK_HANDOFF_BRIEF_ENABLED=true (or a
+   * `handoffs.briefEnabled: true` cdk.json context). Sets HANDOFF_BRIEF_ENABLED on
+   * the **AgentCore Runtime** only, and only while both it and `enabled` are on,
+   * so the default spends none of the V2 environment budget. No new resources.
+   */
+  briefEnabled: boolean;
 }
 
 /**
@@ -1702,6 +1710,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_HANDOFFS_ENABLED
         ? process.env.CDK_HANDOFFS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('handoffs')?.enabled ?? false,
+      briefEnabled: process.env.CDK_HANDOFF_BRIEF_ENABLED
+        ? process.env.CDK_HANDOFF_BRIEF_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('handoffs')?.briefEnabled ?? false,
     },
     sessionRewind: {
       // Opt-in while in development, same parsing as sessionPrewarm above.
