@@ -431,7 +431,7 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       // Here rather than on the role for the same overflow-policy reason, and
       // rather than in a managed policy of its own because the stack is a few
       // resources under its ceiling (platform-ceilings.test.ts).
-      ...(config.awsLimits.enabled ? awsLimitsStatements() : []),
+      ...(config.awsLimits.enabled ? awsLimitsStatements(config) : []),
     ],
   });
 
@@ -929,7 +929,7 @@ export const AWS_LIMITS_REQUESTABLE_SERVICES = [
  * is deliberately not created in CDK (`CfnServiceLinkedRole`): that deploy
  * fails in any account where it already exists.
  */
-function awsLimitsStatements(): iam.PolicyStatement[] {
+function awsLimitsStatements(config: AppConfig): iam.PolicyStatement[] {
   return [
     // Read: these actions have no resource-level permissions.
     new iam.PolicyStatement({
@@ -956,6 +956,21 @@ function awsLimitsStatements(): iam.PolicyStatement[] {
       effect: iam.Effect.ALLOW,
       actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
       resources: ['*'],
+    }),
+    // Counts for the quotas on how many exist (Memories, Gateways, Targets per
+    // gateway), which CloudWatch does not measure. Read-only lists. The two
+    // account-level lists have no resource type; targets are listed per gateway.
+    new iam.PolicyStatement({
+      sid: 'AwsLimitsAgentCoreCounts',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock-agentcore:ListMemories', 'bedrock-agentcore:ListGateways'],
+      resources: ['*'],
+    }),
+    new iam.PolicyStatement({
+      sid: 'AwsLimitsAgentCoreGatewayTargets',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock-agentcore:ListGatewayTargets'],
+      resources: [`arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:gateway/*`],
     }),
     // Write: limited to the monitored services.
     new iam.PolicyStatement({

@@ -28,6 +28,8 @@ const LIMIT: AwsLimit = {
   hasUsageMetric: true,
   usage: 850,
   usageSource: null,
+  usageBasis: 'peak',
+  usageNote: null,
   utilization: 85,
   consoleUrl: 'https://console',
   requestable: true,

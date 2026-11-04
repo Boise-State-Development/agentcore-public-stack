@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatLimitValue, formatPercent, unitAndPeriod } from './aws-limits-format';
+import { formatLimitValue, formatPercent, unitAndPeriod, usageHeaders } from './aws-limits-format';
 
 describe('aws-limits-format', () => {
   it('never rounds real use down to nothing', () => {
@@ -15,5 +15,15 @@ describe('aws-limits-format', () => {
   it('describes unit and period', () => {
     expect(unitAndPeriod({ unit: 'None', periodUnit: 'SECOND', periodValue: 1 })).toBe('per second');
     expect(unitAndPeriod({ unit: 'Count', periodUnit: null, periodValue: null })).toBe('Count');
+  });
+
+  it('names the usage column after what the group measures', () => {
+    expect(usageHeaders([{ usageBasis: 'peak' }, { usageBasis: null }], 7)).toEqual({
+      usage: '7-day peak', utilization: 'Peak utilization', perRow: false,
+    });
+    expect(usageHeaders([{ usageBasis: 'current' }], 7)).toEqual({ usage: 'Current count', utilization: 'Utilization', perRow: false });
+    expect(usageHeaders([{ usageBasis: 'current' }, { usageBasis: 'peak' }], 7)).toEqual({
+      usage: 'Usage', utilization: 'Utilization', perRow: true,
+    });
   });
 });

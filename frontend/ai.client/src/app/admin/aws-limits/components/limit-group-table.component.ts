@@ -1,8 +1,8 @@
-import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowTopRightOnSquare } from '@ng-icons/heroicons/outline';
 import { AwsLimit, AwsLimitGroup } from '../models';
-import { formatLimitValue, raisedFromDefault, unitAndPeriod } from '../utils/aws-limits-format';
+import { basisLabel, formatLimitValue, raisedFromDefault, unitAndPeriod, usageHeaders } from '../utils/aws-limits-format';
 import { UtilizationBarComponent } from './utilization-bar.component';
 
 /** One catalog group: its quotas, or its inline error, or its documentation links. */
@@ -61,8 +61,8 @@ import { UtilizationBarComponent } from './utilization-bar.component';
               <tr>
                 <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Quota</th>
                 <th scope="col" class="px-4 py-2 text-right font-semibold text-gray-900 dark:text-white">Applied value</th>
-                <th scope="col" class="px-4 py-2 text-right font-semibold text-gray-900 dark:text-white">{{ windowDays() }}-day peak</th>
-                <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Peak utilization</th>
+                <th scope="col" class="px-4 py-2 text-right font-semibold text-gray-900 dark:text-white">{{ headers().usage }}</th>
+                <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">{{ headers().utilization }}</th>
                 <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Unit / period</th>
                 <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Adjustable</th>
                 <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white"><span class="sr-only">Actions</span></th>
@@ -81,13 +81,25 @@ import { UtilizationBarComponent } from './utilization-bar.component';
                       <div class="text-xs/5 text-gray-500 dark:text-gray-400">AWS default {{ value(limit.defaultValue) }}</div>
                     }
                   </td>
-                  <td
-                    class="px-4 py-3 text-right tabular-nums text-gray-700 dark:text-gray-300"
-                    [attr.title]="limit.usageSource ?? 'Nothing in CloudWatch measures this quota'"
-                  >
-                    {{ limit.usage === null ? 'N/A' : value(limit.usage) }}
+                  <td class="px-4 py-3 text-right tabular-nums text-gray-700 dark:text-gray-300" [attr.title]="limit.usageSource">
+                    @if (limit.usage === null) {
+                      <span class="text-xs/5 text-gray-500 dark:text-gray-400" data-testid="usage-note">{{ limit.usageNote ?? 'Not measured by AWS' }}</span>
+                    } @else {
+                      {{ value(limit.usage) }}
+                      @if (headers().perRow) {
+                        <div class="text-xs/5 text-gray-500 dark:text-gray-400">{{ basis(limit.usageBasis, windowDays()) }}</div>
+                      }
+                    }
                   </td>
-                  <td class="px-4 py-3"><app-utilization-bar [utilization]="limit.utilization" /></td>
+                  <td class="px-4 py-3">
+                    @if (limit.utilization !== null) {
+                      <app-utilization-bar [utilization]="limit.utilization" />
+                    } @else if (limit.usage !== null && limit.usageNote) {
+                      <span class="text-xs/5 text-gray-500 dark:text-gray-400" data-testid="utilization-note">{{ limit.usageNote }}</span>
+                    } @else {
+                      <span class="text-gray-400 dark:text-gray-500" aria-label="No utilization">—</span>
+                    }
+                  </td>
                   <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{{ unit(limit) }}</td>
                   <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{{ limit.adjustable ? 'Yes' : 'No' }}</td>
                   <td class="px-4 py-3">
@@ -146,7 +158,10 @@ export class LimitGroupTableComponent {
 
   readonly requestIncrease = output<AwsLimit>();
 
+  protected readonly headers = computed(() => usageHeaders(this.group().limits, this.windowDays()));
+
   protected value = formatLimitValue;
+  protected basis = basisLabel;
   protected unit = unitAndPeriod;
   protected raised = raisedFromDefault;
 }

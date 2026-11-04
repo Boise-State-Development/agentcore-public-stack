@@ -40,8 +40,13 @@ class AwsLimit(_CamelModel):
     # Peak usage over the last 7 days, in the quota's own unit and period. None
     # when nothing measures this quota.
     usage: Optional[float] = None
-    # Which CloudWatch series the usage came from, for the row's tooltip.
+    # Which CloudWatch series or API the usage came from, for the row's tooltip.
     usage_source: Optional[str] = None
+    # "peak" (the highest point of the usage window) or "current" (a count of
+    # what exists now, which has no history). None without usage.
+    usage_basis: Optional[str] = None
+    # Why there is no usage or no utilization ("Not measured by AWS", "Limit is 0…").
+    usage_note: Optional[str] = None
     # usage / applied value, as a percentage. None without usage.
     utilization: Optional[float] = None
     console_url: str

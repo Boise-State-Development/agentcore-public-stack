@@ -67,7 +67,7 @@ import { formatDateTime, formatLimitValue, statusClass, statusLabel } from '../u
       </div>
     } @else {
       <p class="rounded-2xl border border-dashed border-gray-300 py-8 text-center text-sm/6 text-gray-600 dark:border-gray-600 dark:text-gray-400">
-        No increase requests in this Region.
+        {{ emptyMessage() }}
         <a
           [href]="guidanceUrl()"
           target="_blank"
@@ -81,6 +81,7 @@ import { formatDateTime, formatLimitValue, statusClass, statusLabel } from '../u
 export class IncreaseHistoryTableComponent {
   readonly requests = input.required<IncreaseRequestRecord[]>();
   readonly guidanceUrl = input('');
+  readonly emptyMessage = input('No increase requests in this Region.');
 
   protected value = formatLimitValue;
   protected date = formatDateTime;

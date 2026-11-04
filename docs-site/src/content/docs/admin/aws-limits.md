@@ -56,12 +56,34 @@ the account normally peaks. Hover a value to see the CloudWatch metric behind it
   counts calls through the geographic profile (`us.…`), a global quota calls
   through `global.…`, and an on-demand quota calls to the model itself. A model
   nobody called that way this week shows 0%.
-- **N/A** means nothing in CloudWatch measures the quota: resource counts such as
-  Memories or Gateways, the bedrock-mantle endpoint, and long-context variants
-  ("1M Context Length") whose traffic Bedrock does not report separately from the
-  base model.
+- **Other quotas without a Service Quotas metric** are measured from the
+  service's own metrics: Code Interpreter and Browser sessions from AgentCore's
+  `ActiveSessionCount`, long-term memory extraction from AgentCore's input and
+  output token usage (both counted, so it errs high), the gateway tool-call rate
+  from gateway `Invocations`, and DynamoDB per-table throughput from consumed
+  capacity on the busiest table.
+- **ECS tasks per service** is the busiest service's `RunningTaskCount`, which
+  needs Container Insights. Without it the row says so.
+- **Counts of what exists** (Memories, Gateways, Targets per gateway) are read
+  from the AgentCore APIs and show the **current** number, since a count has no
+  history. The column heading says which kind a group shows: "7-day peak",
+  "Current count", or "Usage" with each row labelled when a group has both.
+- **Rows without a number say why**: "Limit is 0. Request an increase to use
+  this." (many SageMaker instance types start at 0), the bedrock-mantle endpoint
+  (not published to CloudWatch), long-context variants ("1M Context Length",
+  which Bedrock reports with the base model), or "Not measured by AWS".
+
+**Hide unused** hides rows with no use in the last 7 days: a peak or count of 0,
+or nothing measured.
 
 AWS data is cached for about ten minutes. **Refresh** reads it again.
+
+The first load and each refresh read about 2,000 quotas from Service Quotas
+(Bedrock and SageMaker alone are about 26 pages each) and a week of CloudWatch
+data, so they take about 10 to 30 seconds. That time depends on how many quotas
+AWS lists, not on traffic, so production takes as long as development. The page
+says so while it loads. The cache belongs to each App API task, so with more
+than one task a later load can land on a task that has not read AWS yet.
 
 ## Requesting AWS limit increases
 
@@ -72,9 +94,11 @@ app asks Service Quotas for the increase and shows the status AWS returns.
 Every submission is recorded in the audit log as `aws_limit.increase_requested`
 with the admin, the quota, the current and requested values and the AWS request
 ID. AWS itself records the App API's role as the requester, so the audit record is
-the only place that says which admin asked. The **Increase requests** table shows
-that admin, **Outside this app** for requests made in the console or CLI, or
-**Automatic Management** for requests AWS made itself.
+the only place that says which admin asked. **View all** on the *Open increase
+requests* card opens every request AWS still lists for the account and Region,
+with that admin, **Outside this app** for requests made in the console or CLI, or
+**Automatic Management** for requests AWS made itself. Approved requests are
+hidden by default; clear **Hide approved requests** to see them.
 
 ### Lead times
 

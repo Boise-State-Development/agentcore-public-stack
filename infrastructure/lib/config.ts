@@ -501,7 +501,8 @@ export interface QuotaRequestsConfig {
  * CDK_AWS_LIMITS_ENABLED=true (or an `awsLimits.enabled: true` cdk.json
  * context). Sets AWS_LIMITS_ENABLED on **app-api only**, which serves
  * `/admin/aws-limits`, and only while on grants the App API task role the
- * Service Quotas reads, cloudwatch:GetMetricData and ListMetrics, RequestServiceQuotaIncrease
+ * Service Quotas reads, cloudwatch:GetMetricData and ListMetrics, the AgentCore
+ * memory/gateway/target lists, RequestServiceQuotaIncrease
  * (conditioned to the monitored services) and creation of the Service Quotas
  * service-linked role. The Runtime needs no copy. No new resources: increase
  * submissions are audited in the existing audit-log table.

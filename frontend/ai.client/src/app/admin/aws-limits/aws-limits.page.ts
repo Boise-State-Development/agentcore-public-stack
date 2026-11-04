@@ -7,7 +7,7 @@ import { AwsLimit } from './models';
 import { AwsLimitsStateService } from './services/aws-limits-state.service';
 import { LimitsSummaryCardsComponent } from './components/limits-summary-cards.component';
 import { LimitGroupTableComponent } from './components/limit-group-table.component';
-import { IncreaseHistoryTableComponent } from './components/increase-history-table.component';
+import { IncreaseHistoryDialogComponent } from './components/increase-history-dialog.component';
 import {
   RequestIncreaseDialogComponent,
   RequestIncreaseDialogData,
@@ -26,7 +26,7 @@ const CHECKBOX =
 @Component({
   selector: 'app-aws-limits-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, LimitsSummaryCardsComponent, LimitGroupTableComponent, IncreaseHistoryTableComponent],
+  imports: [NgIcon, LimitsSummaryCardsComponent, LimitGroupTableComponent],
   providers: [provideIcons({ heroArrowPath, heroArrowTopRightOnSquare })],
   host: { class: 'block' },
   template: `
@@ -39,15 +39,13 @@ const CHECKBOX =
             <span>Region <strong class="font-medium text-gray-900 dark:text-white">{{ d.region }}</strong>.</span>
             <span>
               Usage is the high point of the last {{ d.usageWindowDays }} days: the busiest minute for requests and
-              tokens, the highest count for things like concurrent sessions. Hover a value to see its metric.
+              tokens, the highest count for things like concurrent sessions. Counts of what exists, such as
+              Memories, are current. Hover a value to see where it came from.
             </span>
           }
         </p>
       </div>
-      <div class="flex items-center gap-3">
-        @if (dashboard(); as d) {
-          <span class="text-sm/6 text-gray-500 dark:text-gray-400" data-testid="as-of">as of {{ age(d.asOf) }}</span>
-        }
+      <div class="flex shrink-0 flex-col items-start gap-1 sm:items-end">
         <button
           type="button"
           (click)="refresh()"
@@ -57,8 +55,24 @@ const CHECKBOX =
           <ng-icon name="heroArrowPath" class="size-4" aria-hidden="true" />
           {{ state.loading() ? 'Refreshing…' : 'Refresh' }}
         </button>
+        @if (dashboard(); as d) {
+          <span class="text-sm/6 whitespace-nowrap text-gray-500 dark:text-gray-400" data-testid="as-of">
+            Data as of {{ age(d.asOf) }}
+          </span>
+        }
       </div>
     </div>
+
+    @if (state.loading()) {
+      <p
+        role="status"
+        class="mb-6 rounded-2xl bg-state-info-50 px-4 py-3 text-sm/6 text-state-info-900 dark:bg-state-info-900/20 dark:text-state-info-200"
+        data-testid="load-notice"
+      >
+        Reading quotas and usage from AWS. This reads about 2,000 quotas and a week of CloudWatch metrics,
+        so the first load and each refresh can take 10 to 30 seconds. The results are then kept for 10 minutes.
+      </p>
+    }
 
     @if (dashboard()?.autoManagement; as auto) {
       <div
@@ -94,12 +108,13 @@ const CHECKBOX =
       </p>
     }
 
-    @if (state.loading() && !dashboard()) {
-      <p class="py-10 text-center text-sm/6 text-gray-600 dark:text-gray-400">Reading quotas from AWS…</p>
-    }
-
     @if (dashboard(); as d) {
-      <app-limits-summary-cards class="mb-8" [summary]="d.summary" [windowDays]="d.usageWindowDays" />
+      <app-limits-summary-cards
+        class="mb-8"
+        [summary]="d.summary"
+        [windowDays]="d.usageWindowDays"
+        (viewRequests)="openHistory()"
+      />
 
       <div class="mb-6 flex flex-wrap items-center gap-x-6 gap-y-3" role="group" aria-label="Filter limits">
         <div class="flex items-center gap-2">
@@ -128,6 +143,14 @@ const CHECKBOX =
           <input id="aws-limits-all-bedrock" type="checkbox" [class]="checkbox" [checked]="state.showAllBedrock()" [disabled]="state.loading()" (change)="setAllBedrock($event)" />
           <label for="aws-limits-all-bedrock" class="text-sm/6 text-gray-700 dark:text-gray-300">Show all Bedrock quotas</label>
         </div>
+        <div class="flex items-center gap-2">
+          <input id="aws-limits-hide-unused" type="checkbox" [class]="checkbox" [checked]="state.filters().hideUnused" (change)="setFilter('hideUnused', $event)" />
+          <label
+            for="aws-limits-hide-unused"
+            class="text-sm/6 text-gray-700 dark:text-gray-300"
+            [title]="'Hides quotas with no use in the last ' + d.usageWindowDays + ' days, or that nothing measures'"
+          >Hide unused</label>
+        </div>
       </div>
 
       <div class="flex flex-col gap-10">
@@ -147,26 +170,6 @@ const CHECKBOX =
         }
       </div>
 
-      <section class="mt-12" aria-labelledby="aws-limits-history">
-        <div class="mb-3 flex items-baseline justify-between gap-4">
-          <div>
-            <h2 id="aws-limits-history" class="text-lg/7 font-semibold text-gray-900 dark:text-white">Increase requests</h2>
-            <p class="text-sm/6 text-gray-600 dark:text-gray-400">
-              Requests AWS still lists for this account and Region, from this app, the console, the CLI or Automatic Management.
-            </p>
-          </div>
-        </div>
-        @if (state.historyError(); as message) {
-          <p role="alert" class="mb-3 rounded-2xl bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
-            {{ message }}
-          </p>
-        }
-        @if (state.historyLoading() && !state.history().length) {
-          <p class="py-6 text-center text-sm/6 text-gray-600 dark:text-gray-400">Loading requests…</p>
-        } @else {
-          <app-increase-history-table [requests]="state.history()" [guidanceUrl]="d.guidanceUrl" />
-        }
-      </section>
     }
   `,
 })
@@ -180,7 +183,6 @@ export class AwsLimitsPage implements OnInit {
 
   ngOnInit(): void {
     void this.state.load();
-    void this.state.loadHistory();
   }
 
   refresh(): Promise<void> {
@@ -191,7 +193,7 @@ export class AwsLimitsPage implements OnInit {
     this.state.setFilters({ group: (event.target as HTMLSelectElement).value });
   }
 
-  setFilter(key: 'adjustableOnly' | 'nearLimitOnly', event: Event): void {
+  setFilter(key: 'adjustableOnly' | 'nearLimitOnly' | 'hideUnused', event: Event): void {
     this.state.setFilters({ [key]: (event.target as HTMLInputElement).checked });
   }
 
@@ -203,6 +205,10 @@ export class AwsLimitsPage implements OnInit {
     return groupId === 'model_inference' && !this.state.showAllBedrock()
       ? 'No Bedrock quotas match a model in the managed-model catalog. Turn on "Show all Bedrock quotas" to see them all.'
       : 'No quotas to show here.';
+  }
+
+  openHistory(): void {
+    this.dialog.open(IncreaseHistoryDialogComponent);
   }
 
   async openRequest(limit: AwsLimit): Promise<void> {

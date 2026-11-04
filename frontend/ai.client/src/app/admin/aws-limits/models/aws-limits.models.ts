@@ -24,14 +24,20 @@ export interface AwsLimit {
   hasUsageMetric: boolean;
   /** Peak over the last `usageWindowDays` days, in the quota's own unit and period. Null when nothing measures it. */
   usage: number | null;
-  /** The CloudWatch series the usage came from. */
+  /** The CloudWatch series or API the usage came from. */
   usageSource: string | null;
+  /** 'peak': the high point of the usage window. 'current': a count of what exists now. Null without usage. */
+  usageBasis: UsageBasis | null;
+  /** Why there is no usage or no utilization, in words an admin can act on. */
+  usageNote: string | null;
   /** usage / applied value, percent. */
   utilization: number | null;
   consoleUrl: string;
   /** Adjustable and in the monitored catalog. */
   requestable: boolean;
 }
+
+export type UsageBasis = 'peak' | 'current';
 
 export interface AwsLimitGroup {
   id: string;

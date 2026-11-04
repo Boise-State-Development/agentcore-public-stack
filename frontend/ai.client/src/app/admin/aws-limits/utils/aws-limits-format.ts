@@ -1,4 +1,4 @@
-import { AwsLimit, IncreaseRequestStatus } from '../models';
+import { AwsLimit, IncreaseRequestStatus, UsageBasis } from '../models';
 
 const NUMBER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 
@@ -25,6 +25,31 @@ export function unitAndPeriod(limit: Pick<AwsLimit, 'unit' | 'periodUnit' | 'per
     ? `per ${limit.periodValue && limit.periodValue > 1 ? `${limit.periodValue} ` : ''}${limit.periodUnit.toLowerCase()}${limit.periodValue && limit.periodValue > 1 ? 's' : ''}`
     : '';
   return [unit, period].filter(Boolean).join(' ') || 'Count';
+}
+
+export interface UsageHeaders {
+  usage: string;
+  utilization: string;
+  /** Rows mix peaks and current counts, so each value says which it is. */
+  perRow: boolean;
+}
+
+/**
+ * Column headings that say what a group's numbers are. A group of counts reads
+ * "Current count"; a group of peaks "7-day peak"; a group with both "Usage",
+ * with each row labelled.
+ */
+export function usageHeaders(limits: readonly Pick<AwsLimit, 'usageBasis'>[], windowDays: number): UsageHeaders {
+  const bases = new Set(limits.map(l => l.usageBasis).filter((b): b is UsageBasis => !!b));
+  if (bases.size > 1) return { usage: 'Usage', utilization: 'Utilization', perRow: true };
+  if (bases.has('current')) return { usage: 'Current count', utilization: 'Utilization', perRow: false };
+  return { usage: `${windowDays}-day peak`, utilization: 'Peak utilization', perRow: false };
+}
+
+export function basisLabel(basis: UsageBasis | null, windowDays: number): string {
+  if (basis === 'current') return 'now';
+  if (basis === 'peak') return `${windowDays}-day peak`;
+  return '';
 }
 
 export function raisedFromDefault(limit: Pick<AwsLimit, 'appliedValue' | 'defaultValue'>): boolean {

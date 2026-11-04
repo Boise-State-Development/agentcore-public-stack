@@ -9,7 +9,14 @@ import { AppConfig } from '../lib/config';
 import { AWS_LIMITS_REQUESTABLE_SERVICES } from '../lib/constructs/app-api/app-api-iam-grants';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
 
-const SIDS = ['AwsLimitsRead', 'AwsLimitsMetricsRead', 'AwsLimitsRequestIncrease', 'AwsLimitsServiceLinkedRole'];
+const SIDS = [
+  'AwsLimitsRead',
+  'AwsLimitsMetricsRead',
+  'AwsLimitsAgentCoreCounts',
+  'AwsLimitsAgentCoreGatewayTargets',
+  'AwsLimitsRequestIncrease',
+  'AwsLimitsServiceLinkedRole',
+];
 
 function synth(overrides: Partial<AppConfig> = {}): Template {
   const config = createMockConfig(overrides);
@@ -63,7 +70,7 @@ describe('AWS Limits in PlatformStack', () => {
     expect(appApiEnv(off).AWS_LIMITS_ENABLED).toBe('false');
   });
 
-  it('adds the four statements and the flag when on, and no resources', () => {
+  it('adds the statements and the flag when on, and no resources', () => {
     const sids = statementsBySid(on);
     for (const sid of SIDS) expect(sids.has(sid)).toBe(true);
     expect(appApiEnv(on).AWS_LIMITS_ENABLED).toBe('true');
@@ -82,6 +89,17 @@ describe('AWS Limits in PlatformStack', () => {
     const metrics = statementsBySid(on).get('AwsLimitsMetricsRead')!;
     expect(metrics.Action).toEqual(['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics']);
     expect(metrics.Resource).toBe('*');
+  });
+
+  it('only lists AgentCore memories, gateways and gateway targets', () => {
+    const sids = statementsBySid(on);
+    expect(sids.get('AwsLimitsAgentCoreCounts')!.Action).toEqual([
+      'bedrock-agentcore:ListMemories',
+      'bedrock-agentcore:ListGateways',
+    ]);
+    const targets = sids.get('AwsLimitsAgentCoreGatewayTargets')!;
+    expect(targets.Action).toBe('bedrock-agentcore:ListGatewayTargets');
+    expect(JSON.stringify(targets.Resource)).toContain(':gateway/*');
   });
 
   it('lets only the Service Quotas service-linked role be created', () => {
