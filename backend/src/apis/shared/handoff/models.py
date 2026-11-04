@@ -20,9 +20,11 @@ the row stops following it.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Dict, FrozenSet, Literal, Optional
+from typing import Dict, FrozenSet, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from apis.shared.sessions.models import PendingInterrupt
 
 HandoffKind = Literal["mention", "suggested", "send_back"]
 WaitingKind = Literal["oauth_consent", "tool_approval", "user_question", "browser_login"]
@@ -64,6 +66,40 @@ class WaitingOn(BaseModel):
 
     kind: WaitingKind
     name: str = ""
+
+
+class RelayedPrompt(BaseModel):
+    """One prompt a paused target is waiting on, as its source thread relays it (§4.3, PR-0.3c).
+
+    A subset of the target's ``PendingInterrupt`` breadcrumb, in its wire names, so the SPA renders
+    it with the prompt it already has for that kind. Left out: the triggering message id (a target
+    message the source never shows) and a browser sign-in's session ref (the live view is the
+    target's screen; the relay only links there).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    interrupt_id: str = Field(..., alias="interruptId")
+    kind: Literal["oauth", "tool_approval", "user_question", "browser_login"]
+    provider_id: Optional[str] = Field(None, alias="providerId")
+    tool_use_id: Optional[str] = Field(None, alias="toolUseId")
+    tool_name: Optional[str] = Field(None, alias="toolName")
+    tool_input: Optional[str] = Field(None, alias="toolInput", description="JSON-encoded, as on the breadcrumb")
+    message: Optional[str] = None
+    questions: Optional[str] = Field(None, description="JSON-encoded, as on the breadcrumb")
+
+    @classmethod
+    def from_interrupt(cls, interrupt: PendingInterrupt) -> "RelayedPrompt":
+        return cls(
+            interrupt_id=interrupt.interrupt_id,
+            kind=interrupt.kind,
+            provider_id=interrupt.provider_id,
+            tool_use_id=interrupt.tool_use_id,
+            tool_name=interrupt.tool_name,
+            tool_input=interrupt.tool_input,
+            message=interrupt.message,
+            questions=interrupt.questions,
+        )
 
 
 class TurnsCovered(BaseModel):
@@ -153,6 +189,11 @@ class HandoffView(BaseModel):
     status_line: Optional[str] = Field(None, alias="statusLine")
     waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
     stopped_reason: Optional[str] = Field(None, alias="stoppedReason")
+    relayed_prompts: Optional[List[RelayedPrompt]] = Field(
+        None,
+        alias="relayedPrompts",
+        description="A needs_input handoff's prompts, read from its target's breadcrumbs (apis.shared.handoff.relay)",
+    )
 
     @classmethod
     def from_row(cls, row: Handoff) -> "HandoffView":
@@ -185,6 +226,7 @@ __all__ = [
     "HandoffView",
     "HandoffKind",
     "HandoffStatus",
+    "RelayedPrompt",
     "TRANSITIONS",
     "TurnsCovered",
     "WaitingKind",

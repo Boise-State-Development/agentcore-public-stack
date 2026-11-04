@@ -1,4 +1,14 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  computed,
+  effect,
+  inject,
+  input,
+  untracked,
+  viewChild,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCircle } from '@ng-icons/heroicons/outline';
@@ -7,8 +17,10 @@ import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { AgentHandoffService } from '../../services/handoff/agent-handoff.service';
 import { HandoffNotificationService } from '../../services/handoff/handoff-notification.service';
+import { HandoffStateService } from '../../services/handoff/handoff-state.service';
 import { HandoffStatus, HandoffView, WaitingOn } from '../../services/handoff/handoff.models';
 import { SessionService } from '../../services/session/session.service';
+import { HandoffRelayComponent } from './handoff-relay.component';
 
 /** The row's state as the user sees it: live while the target streams in this tab, persisted otherwise. */
 type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'stopped'>;
@@ -27,15 +39,20 @@ type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'sto
  * - **The browser-notification offer** (PR-0.3b) sits under a row that needs input, as sibling
  *   buttons, never inside the link, until the user answers it once (here, in the toast or in
  *   Settings) or waves it away.
+ * - **The relayed prompt** (PR-0.3c) sits under the row too: the target's prompt, answered here
+ *   without leaving the source (`HandoffRelayComponent`).
+ * - **Focus on request.** A notification for a prompt the source can answer opens the source and
+ *   asks for this row; it scrolls into view and takes focus once it renders.
  */
 @Component({
   selector: 'app-handoff-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink],
+  imports: [NgIcon, RouterLink, HandoffRelayComponent],
   providers: [provideIcons({ heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCircle })],
   template: `
     @if (link(); as l) {
       <a
+        #card
         [routerLink]="l.commands"
         [queryParams]="l.queryParams"
         [attr.aria-label]="accessibleName()"
@@ -90,6 +107,7 @@ type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'sto
           </button>
         </div>
       }
+      <app-handoff-relay [row]="row()" />
     }
   `,
 })
@@ -99,8 +117,23 @@ export class HandoffRowComponent {
   private readonly insight = inject(ToolInsightService);
   private readonly sessions = inject(SessionService);
   protected readonly notifications = inject(HandoffNotificationService);
+  private readonly handoffState = inject(HandoffStateService);
+  private readonly card = viewChild<ElementRef<HTMLAnchorElement>>('card');
 
   readonly row = input.required<HandoffView>();
+
+  constructor() {
+    effect(() => {
+      const handoffId = this.row().handoffId;
+      if (this.handoffState.focusedHandoffId() !== handoffId) return;
+      const card = this.card()?.nativeElement;
+      if (!card) return;
+      untracked(() => {
+        this.handoffState.clearFocus(handoffId);
+        bringIntoView(card);
+      });
+    });
+  }
 
   protected readonly link = computed(() => this.handoff.targetLink(this.row()));
 
@@ -155,6 +188,12 @@ export class HandoffRowComponent {
   protected readonly accessibleName = computed(
     () => `${this.title()}, ${this.row().agentName}, ${this.statusLine()}`,
   );
+}
+
+/** Scroll the card to the middle of the thread and focus it without a second jump. */
+function bringIntoView(card: HTMLElement): void {
+  if (typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  card.focus({ preventScroll: true });
 }
 
 function waitingLine(waiting: WaitingOn | undefined): string {

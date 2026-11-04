@@ -1776,6 +1776,59 @@ has started", and the only one that spends money while nobody is watching.
   that isn't viewed), then: `relayedPrompts` on the source's `GET /messages`; the relay under the row for consent,
   approval and questions, and the link-only relay for a browser sign-in; resume of the target from the source;
   first-answer-wins handling; notifications that open the source for a relayable prompt.
+  *Built (2026-11-04).* The verify-firsts, settled:
+  - **Interrupt scoping.** Every prompt slot in the source's message list is filtered by its own session: OAuth
+    since PR-0.3, tool approvals, questions and browser sign-ins before that (a list bound to no session shows none
+    of the last three). The stream parser tags each prompt with the session whose stream raised it, so a background
+    target's prompt is held under the target's id and never matches. Quota and error state are not prompt slots:
+    `quota_warning` and `quota_exceeded` are the user's (account-wide, shown wherever they are), `quota_session_notice`
+    is scoped to the conversation it names, and a `stream_error` is a message in the stream's own thread plus a
+    stored `lastError`, never a toast. One leftover, outside this PR: a background turn's `reset()` clears the
+    account-wide quota-exceeded and funding banners the source shows, because every turn starts without them.
+  - **The `oauthConsent.clear()` gap.** `session.page` still clears the consent queue on every route change. The relay
+    no longer depends on it: its prompts live on the row (`relayedPrompts`), and `HandoffRelayService` re-registers
+    them whenever the queue changes, so a clear is undone on the next tick.
+  - **Resuming a session that isn't viewed.** The resume is addressed by the request's `session_id` end to end: the
+    snapshot lookup (`get_paused_turn(session_id, user_id)`), the lease (taken for that session before the snapshot is
+    read, so a second answer while the first one streams is a 409) and `seed_steer_queue` (seeded on that lease, from
+    the target's own composer queue, which is empty when answering from the source). In the SPA,
+    `beginContinuationStreaming`, loading, the abort controller and the parser are all keyed by the resumed session;
+    nothing in the resume path calls `setViewedSession` or navigates. The consent popup returns over a
+    `BroadcastChannel` to the opener and the resume handler runs from there, so the user stays in the source.
+
+  Notes for the PRs that follow:
+  - **The relay is read, never written.** `apis/shared/handoff/relay.py` reads the target's `META` row for
+    `(target, user)` (`load_session_meta`, so another user's target has no row and relays nothing) and keeps a
+    breadcrumb only while the pause can still be answered: breadcrumbs **and** an unexpired `pausedTurn`, the rule
+    `derive_awaiting_input` uses for the sidenav dot. OAuth is deduplicated by `providerId`, `client_tool` is never
+    relayed, and a sign-in carries only its interrupt id. It runs for `needs_input` rows only, on `GET /messages`
+    and on `GET /sessions/{id}/handoffs/{handoffId}`, which the SPA reads when a target's turn ends: that is how the
+    live relay comes from the same breadcrumbs a reload reads, instead of from prompt state a route change clears.
+    Neither is on the turn path, and nothing is written to the source (pinned by a test that the source's `META` row
+    and its three prefix hashes are unchanged by a relayed and answered pause).
+  - **The SPA puts the relayed prompts in the interrupt services the target's own thread reads**, tagged with the
+    target's session id, and renders the same consent, approval and question components under the row. Answering
+    in either place resolves the one request, so the other surface clears at once in the same tab. When a row stops
+    waiting (superseded, or re-read without them), what the relay registered is withdrawn (`withdraw` on the
+    approval and question services).
+  - **One resume path.** `ChatRequestService`'s four resumes share `resumePausedTurn`, which reports a handoff target's
+    resume to `HandoffRelayService` (`beginResume` / `endResume`) with its outcome: the guard's streamed refusal
+    (`resume_unavailable`, its `reason` now kept by `ChatStateService`) is `conflict` for `missing` /
+    `unknown_interrupt` and `expired` for `expired`, and a 409 is `conflict`. A conflict reads "Already answered" (a
+    line under the row in the source, a toast in the target), re-reads the target's thread, which drops the
+    refusal it streamed, and re-reads the row. A relayed resume passes `quietConflict` so the 409 shows no "Already
+    responding" notice. An ordinary resume is unchanged.
+  - **Notifications.** A `handoff_needs_input` inbox entry now carries `waitingKind`. The bell, the amber toast
+    ("Answer") and the browser notification open the source with the row scrolled into view and focused
+    (`HandoffStateService.requestFocus`) when the prompt is relayable; a sign-in, and every other state, opens the
+    target ("Open"). An entry written before `waitingKind` existed reads the row the tab holds, else the target.
+  - **Metrics** ride the existing `/notifications/events` route: `RelayedPromptShown` (once per interrupt, when the
+    user can see it), `RelayedPromptAnswered` with `relaySurface` (`source` after a resumed turn; `target` before
+    the resume, counted only while the row is still `needs_input`, the one count that reads the row) and
+    `RelayedPromptConflict`.
+  - **Not built:** "Connected · *Agent* resumed" is held per tab, so a reload shows the row's live status instead.
+    A relay registered for a consent never takes over another conversation's pending consent for the same
+    provider (the queue is keyed by provider); that relay shows nothing for it until the other is answered.
 - **PR-0.4 — Send back over delivery.** `create_delivery` and the `DELIVERY#` store in `apis.shared.handoff`, with
   wrapper-tag neutralising; the `deliveries` request field and its acceptance in the same prelude phase as
   `handoff_context`; replay as `deliveries`; the dismiss route. Bring back result on a `done` row; Send to

@@ -13,6 +13,8 @@ import { HandoffReview, HandoffView, SpawnedFrom } from './handoff.models';
  * - **spawnedFrom**, by target session: where a conversation's context came from, for
  *   the "Context from *{title}*" label on its first bubble.
  * - **reviews**, by source session: the open review sheet, at most one per thread.
+ * - **focus**: the row a notification asked to bring into view (PR-0.3c). It waits here until that
+ *   row renders, which may be after the source's messages load.
  *
  * Everything is keyed by session id, like the rest of the chat stack, so a handoff
  * running in the background never touches the state of the thread being viewed.
@@ -22,6 +24,19 @@ export class HandoffStateService {
   private readonly rowsBySource = signal<ReadonlyMap<string, readonly HandoffView[]>>(new Map());
   private readonly spawnedByTarget = signal<ReadonlyMap<string, SpawnedFrom>>(new Map());
   private readonly reviewsBySource = signal<ReadonlyMap<string, HandoffReview>>(new Map());
+  private readonly focusRequest = signal<string | null>(null);
+
+  /** The handoff whose row should scroll into view and take focus, once. */
+  readonly focusedHandoffId = this.focusRequest.asReadonly();
+
+  requestFocus(handoffId: string): void {
+    this.focusRequest.set(handoffId);
+  }
+
+  /** The row took the focus it was asked to. */
+  clearFocus(handoffId: string): void {
+    if (this.focusRequest() === handoffId) this.focusRequest.set(null);
+  }
 
   rowsFor(sourceSessionId: string | null | undefined): readonly HandoffView[] {
     if (!sourceSessionId) return [];
