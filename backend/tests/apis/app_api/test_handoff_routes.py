@@ -291,3 +291,85 @@ def test_authentication_runs_before_the_flag(monkeypatch, store, world):
     resp = TestClient(app).post("/sessions/src/handoffs", json={"agentId": "rubric", "request": "x"})
 
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------- notifications (PR-0.3b)
+
+
+class _Inbox:
+    def __init__(self) -> None:
+        self.calls: List[tuple] = []
+
+    def mark_read_matching(self, email: str, *, kinds, payload):
+        self.calls.append((email, list(kinds), payload))
+        return 2
+
+
+@pytest.fixture()
+def inbox_client(make_client):
+    inbox = _Inbox()
+
+    def build(user: User = ALICE) -> TestClient:
+        client = make_client(user)
+        client.app.dependency_overrides[routes.get_inbox] = lambda: inbox
+        return client
+
+    return build, inbox
+
+
+def test_mark_read_marks_the_callers_entries_for_that_handoff(inbox_client):
+    build, inbox = inbox_client
+    client = build()
+    handoff_id = _create(client).json()["handoffId"]
+
+    resp = client.post(f"/sessions/src/handoffs/{handoff_id}/notifications/read", json={"kinds": ["handoff_done"]})
+
+    assert resp.status_code == 200 and resp.json() == {"marked": 2}
+    assert inbox.calls == [("alice@example.edu", ["handoff_done"], {"handoffId": handoff_id})]
+
+
+def test_mark_read_defaults_to_every_handoff_kind(inbox_client):
+    build, inbox = inbox_client
+    client = build()
+    handoff_id = _create(client).json()["handoffId"]
+
+    client.post(f"/sessions/src/handoffs/{handoff_id}/notifications/read", json={})
+
+    assert sorted(inbox.calls[0][1]) == ["handoff_done", "handoff_needs_input", "handoff_stopped"]
+
+
+def test_mark_read_refuses_another_kind_another_user_and_the_wrong_conversation(inbox_client):
+    build, inbox = inbox_client
+    client = build()
+    handoff_id = _create(client).json()["handoffId"]
+    url = f"/sessions/src/handoffs/{handoff_id}/notifications/read"
+
+    assert client.post(url, json={"kinds": ["project_invited"]}).status_code == 422
+    assert build(BOB).post(url, json={}).status_code == 404
+    assert client.post(f"/sessions/other/handoffs/{handoff_id}/notifications/read", json={}).status_code == 404
+    assert inbox.calls == []
+
+
+def test_notification_events_are_counted_and_validated(make_client, monkeypatch):
+    emitted: List[tuple] = []
+    monkeypatch.setattr(routes, "emit_handoff_metric", lambda name, kind, **kw: emitted.append((name, kw["detail"])))
+    client = make_client()
+    url = "/sessions/src/handoffs/h1/notifications/events"
+
+    assert client.post(url, json={"metric": "HandoffNotified", "channel": "browser"}).status_code == 204
+    assert client.post(url, json={"metric": "HandoffBrowserPermission", "outcome": "granted"}).status_code == 204
+    assert client.post(url, json={"metric": "Anything"}).status_code == 422
+
+    assert emitted == [("HandoffNotified", "browser"), ("HandoffBrowserPermission", "granted")]
+
+
+def test_notification_routes_404_while_the_flag_is_off(inbox_client, monkeypatch):
+    build, _ = inbox_client
+    client = build()
+    handoff_id = _create(client).json()["handoffId"]
+    monkeypatch.setenv("HANDOFFS_ENABLED", "false")
+
+    assert client.post(f"/sessions/src/handoffs/{handoff_id}/notifications/read", json={}).status_code == 404
+    assert client.post(
+        f"/sessions/src/handoffs/{handoff_id}/notifications/events", json={"metric": "HandoffNotified"}
+    ).status_code == 404

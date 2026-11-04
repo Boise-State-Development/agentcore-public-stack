@@ -5308,6 +5308,7 @@ async def _run_invocation(
         is_resume=is_resume,
         is_continuation=is_continuation,
         is_preview=is_preview_session(input_data.session_id),
+        user_email=current_user.email,
     )
 
     session_lease = None

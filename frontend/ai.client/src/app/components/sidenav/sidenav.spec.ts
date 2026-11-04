@@ -259,6 +259,14 @@ describe('Sidenav — nav entries', () => {
     expect(el.querySelector('app-notification-bell')).toBeNull();
   });
 
+  it('shows the bell in a build with only Handoffs on: handoffs are an inbox producer too', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, quotaRequests: false, handoffs: true } });
+    const fixture = await renderSidenav();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('a[href="/projects"]')).toBeNull();
+    expect(el.querySelector('app-notification-bell')).not.toBeNull();
+  });
+
   it('offers the search button in the header, beside the collapse control, in a build with search on', async () => {
     TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
     const { SearchDialogService } = await import('../search/search-dialog.service');
