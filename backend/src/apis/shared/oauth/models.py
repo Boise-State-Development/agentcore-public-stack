@@ -91,11 +91,17 @@ class OAuthProviderType(str, Enum):
     as a distinct type so the admin UI can surface Canvas-specific guidance
     if/when we add a preset. Today the admin form treats it as Custom.
 
-    `SLACK`, `SALESFORCE`, and `ZOOM` are first-class AgentCore Identity
-    vendors (per
+    Every other member except `CANVAS` and `CUSTOM` is a first-class
+    AgentCore Identity vendor (per
     https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity-idps.html)
     — endpoints and provider-specific defaults are pre-configured by
     AgentCore, so admins only need to supply client credentials and scopes.
+
+    The tenant-hosted identity providers (`OKTA`, `AUTH0`, `COGNITO`,
+    `CYBERARK`, `FUSIONAUTH`, `ONELOGIN`, `PING`) are the exception: the
+    vendor is built in but the tenant is yours, so AgentCore also needs the
+    tenant's issuer and authorization/token endpoints. They travel in
+    `authorization_server_metadata` (see `TENANT_PROVIDER_TYPES`).
     """
 
     GOOGLE = "google"
@@ -104,8 +110,53 @@ class OAuthProviderType(str, Enum):
     SLACK = "slack"
     SALESFORCE = "salesforce"
     ZOOM = "zoom"
+    ATLASSIAN = "atlassian"
+    LINKEDIN = "linkedin"
+    X = "x"
+    FACEBOOK = "facebook"
+    YANDEX = "yandex"
+    REDDIT = "reddit"
+    TWITCH = "twitch"
+    SPOTIFY = "spotify"
+    DROPBOX = "dropbox"
+    NOTION = "notion"
+    HUBSPOT = "hubspot"
+    OKTA = "okta"
+    AUTH0 = "auth0"
+    COGNITO = "cognito"
+    CYBERARK = "cyberark"
+    FUSIONAUTH = "fusionauth"
+    ONELOGIN = "onelogin"
+    PING = "ping"
     CANVAS = "canvas"
     CUSTOM = "custom"
+
+
+# Built-in vendors whose endpoints belong to the customer's own tenant. Their
+# `includedOauth2ProviderConfig` needs the keys below on top of the client
+# credentials, carried in `authorization_server_metadata`.
+TENANT_PROVIDER_TYPES = frozenset(
+    {
+        OAuthProviderType.OKTA,
+        OAuthProviderType.AUTH0,
+        OAuthProviderType.COGNITO,
+        OAuthProviderType.CYBERARK,
+        OAuthProviderType.FUSIONAUTH,
+        OAuthProviderType.ONELOGIN,
+        OAuthProviderType.PING,
+    }
+)
+TENANT_METADATA_KEYS = ("issuer", "authorizationEndpoint", "tokenEndpoint")
+
+
+def missing_tenant_metadata_keys(metadata: Optional[Dict[str, Any]]) -> List[str]:
+    """Return the tenant endpoint keys absent (or blank) in `metadata`."""
+    metadata = metadata or {}
+    return [
+        key
+        for key in TENANT_METADATA_KEYS
+        if not (isinstance(metadata.get(key), str) and metadata[key].strip())
+    ]
 
 
 def compute_scopes_hash(scopes: List[str]) -> str:
@@ -289,6 +340,18 @@ class OAuthProviderCreate(BaseModel):
                 raise ValueError(
                     "Custom providers require exactly one of "
                     "oauth_discovery_url or authorization_server_metadata"
+                )
+        elif self.provider_type in TENANT_PROVIDER_TYPES:
+            if self.oauth_discovery_url:
+                raise ValueError(
+                    f"provider_type={self.provider_type.value} takes its tenant "
+                    "endpoints in authorization_server_metadata, not a discovery URL"
+                )
+            missing = missing_tenant_metadata_keys(self.authorization_server_metadata)
+            if missing:
+                raise ValueError(
+                    f"provider_type={self.provider_type.value} requires "
+                    f"authorization_server_metadata with: {', '.join(missing)}"
                 )
         elif self.oauth_discovery_url or self.authorization_server_metadata:
             raise ValueError(
