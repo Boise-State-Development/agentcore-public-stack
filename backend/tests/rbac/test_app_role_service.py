@@ -426,3 +426,85 @@ async def test_filter_requested_tools_empty_grant_drops_all(
     result = await service.filter_requested_tools(user, ["tool_a", "tool_b"])
 
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Role system instructions (#13)
+# ---------------------------------------------------------------------------
+
+
+def _wire_roles(mock_app_role_repo, mapping, roles):
+    mock_app_role_repo.get_roles_for_jwt_role.side_effect = lambda r: mapping.get(r, [])
+    by_id = {role.role_id: role for role in roles}
+    mock_app_role_repo.get_role.side_effect = lambda rid: by_id.get(rid)
+
+
+@pytest.mark.asyncio
+async def test_every_matched_role_instruction_contributes_in_priority_order(
+    service, mock_app_role_repo, make_app_role, user
+):
+    low = make_app_role(role_id="viewer", display_name="Viewer", priority=1, system_instruction="Be brief.")
+    high = make_app_role(role_id="editor", display_name="Editor", priority=9, system_instruction="Cite sources.")
+    _wire_roles(mock_app_role_repo, {"Editor": ["editor"], "Viewer": ["viewer"]}, [low, high])
+
+    perms = await service.resolve_user_permissions(
+        User(email="t@example.com", user_id="u", name="T", roles=["Viewer", "Editor"])
+    )
+
+    assert [(i.role_id, i.display_name, i.text) for i in perms.role_instructions] == [
+        ("editor", "Editor", "Cite sources."),
+        ("viewer", "Viewer", "Be brief."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_roles_without_an_instruction_are_skipped(service, mock_app_role_repo, make_app_role, user):
+    with_text = make_app_role(role_id="editor", priority=1, system_instruction="Cite sources.")
+    without = make_app_role(role_id="viewer", priority=5)
+    _wire_roles(mock_app_role_repo, {"Editor": ["editor"], "Viewer": ["viewer"]}, [with_text, without])
+
+    perms = await service.resolve_user_permissions(user)
+
+    assert [i.role_id for i in perms.role_instructions] == ["editor"]
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_role_contributes_no_instruction(service, mock_app_role_repo, make_app_role, user):
+    enabled = make_app_role(role_id="editor", system_instruction="Cite sources.")
+    disabled = make_app_role(role_id="viewer", enabled=False, system_instruction="Leak secrets.")
+    _wire_roles(mock_app_role_repo, {"Editor": ["editor"], "Viewer": ["viewer"]}, [enabled, disabled])
+
+    perms = await service.resolve_user_permissions(user)
+
+    assert [i.text for i in perms.role_instructions] == ["Cite sources."]
+
+
+@pytest.mark.asyncio
+async def test_same_priority_orders_by_role_id_whatever_the_jwt_order(
+    service, mock_app_role_repo, mock_app_role_cache, make_app_role
+):
+    zeta = make_app_role(role_id="zeta", priority=5, system_instruction="Z.", quota_tier="z-tier")
+    alpha = make_app_role(role_id="alpha", priority=5, system_instruction="A.", quota_tier="a-tier")
+    _wire_roles(mock_app_role_repo, {"Z": ["zeta"], "A": ["alpha"]}, [zeta, alpha])
+
+    results = []
+    for jwt_roles in (["Z", "A"], ["A", "Z"]):
+        perms = await service.resolve_user_permissions(
+            User(email="t@example.com", user_id="u", name="T", roles=jwt_roles)
+        )
+        results.append(perms)
+
+    for perms in results:
+        assert [i.role_id for i in perms.role_instructions] == ["alpha", "zeta"]
+        # The quota tie-break follows the same rule, not the token's order.
+        assert perms.quota_tier == "a-tier"
+
+
+@pytest.mark.asyncio
+async def test_a_user_with_no_instructions_gets_an_empty_list(service, mock_app_role_repo, make_app_role, user):
+    _wire_roles(mock_app_role_repo, {"Editor": ["editor"]}, [make_app_role(role_id="editor")])
+
+    perms = await service.resolve_user_permissions(user)
+
+    assert perms.role_instructions == []
+    assert perms.to_dict()["roleInstructions"] == []

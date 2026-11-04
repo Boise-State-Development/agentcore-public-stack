@@ -54,6 +54,7 @@ class AppRoleAdminService:
         "granted_admin_scopes",
         "priority",
         "enabled",
+        "system_instruction",
     ]
 
     def __init__(
@@ -132,6 +133,7 @@ class AppRoleAdminService:
             granted_admin_scopes=normalize_scopes(role_data.granted_admin_scopes),
             priority=role_data.priority,
             enabled=role_data.enabled,
+            system_instruction=role_data.system_instruction,
             is_system_role=False,
             created_by=admin.user_id,
         )

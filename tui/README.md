@@ -308,6 +308,11 @@ timeout_seconds = 300
 banner = true
 ```
 
+`system_prompt` applies in API-key mode only (`/chat/api-converse`). A signed-in
+session (`aps-tui login`) never sends it: the server ignores a client prompt on
+`/chat/stream`, so your conversations keep the platform prompt and any
+instructions your administrator set on your role.
+
 `api_key` in this file is honoured for environments with no keyring, but the
 client warns on startup because it is plain text on disk. `aps-tui login`
 never writes it there.

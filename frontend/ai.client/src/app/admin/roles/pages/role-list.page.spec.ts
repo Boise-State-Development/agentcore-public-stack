@@ -134,4 +134,14 @@ describe('RoleListPage — delegated admin visibility', () => {
       'admin.not_in_registry'
     );
   });
+
+  it('shows no instruction badge for a role without one', () => {
+    expect(page.instructionBadge(role())).toBeNull();
+    expect(page.instructionBadge(role({ systemInstruction: '   ' }))).toBeNull();
+  });
+
+  it('badges a role that carries an instruction with its length', () => {
+    const badge = page.instructionBadge(role({ systemInstruction: 'x'.repeat(1234) }));
+    expect(badge?.label).toBe('Instruction · 1,234 chars');
+  });
 });

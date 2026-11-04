@@ -50,6 +50,11 @@ export interface AppRole {
   updatedAt: string;
   /** User ID who created the role */
   createdBy: string;
+  /**
+   * Free-text instruction added to the system prompt of plain chats (no agent)
+   * for every user holding this role. Not inherited. `null` or absent: none.
+   */
+  systemInstruction?: string | null;
 }
 
 /**
@@ -84,6 +89,8 @@ export interface AppRoleCreateRequest {
   priority?: number;
   /** Whether this role is active */
   enabled?: boolean;
+  /** System instruction (max 8,000 chars). Empty or `null` clears it. */
+  systemInstruction?: string | null;
 }
 
 /**
@@ -109,6 +116,8 @@ export interface AppRoleUpdateRequest {
   priority?: number;
   /** Whether this role is active */
   enabled?: boolean;
+  /** System instruction (max 8,000 chars). Empty or `null` clears it. */
+  systemInstruction?: string | null;
 }
 
 /**
@@ -125,4 +134,8 @@ export interface AppRoleFormData {
   grantedAdminScopes: string[];
   priority: number;
   enabled: boolean;
+  systemInstruction: string;
 }
+
+/** Per-role cap on `systemInstruction`; the server enforces the same limit. */
+export const MAX_ROLE_SYSTEM_INSTRUCTION_CHARS = 8000;

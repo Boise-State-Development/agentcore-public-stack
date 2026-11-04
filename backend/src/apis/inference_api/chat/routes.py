@@ -136,8 +136,8 @@ from .service import (
     process_build_count,
 )
 from .turn_timing import TurnPrelude
+from .role_instructions import compose_plain_turn_prompt, resolve_role_instructions
 from .system_prompt_resolver import (
-    append_active_prompt,
     resolve_active_prompt_text,
     should_resolve_custom_prompt,
 )
@@ -402,15 +402,21 @@ def _instructions_heading(project_harness: bool) -> str:
     return "Project Instructions" if project_harness else "Assistant-Specific Instructions"
 
 
-def compose_personal_instructions(system_prompt: str, personal: str, *, over: Optional[str]) -> str:
+def compose_personal_instructions(
+    system_prompt: str, personal: str, *, over: Optional[str], overrides: Optional[str] = None
+) -> str:
     """Append the user's personal instructions, last in the instructions block.
 
     ``over`` names the section above that wins a conflict: the agent's or the project's
-    instructions (shared-projects §4.5). The precedence sentence is written only when
-    there is something to rank, and nothing at all is written for a user with no
-    personal instructions, so their prompt, and its cached prefix, is unchanged.
+    instructions (shared-projects §4.5). ``overrides`` names a section above that these
+    personal instructions win over: the Role Instructions of a plain turn (#13). The
+    precedence sentence is written only when there is something to rank, and nothing at
+    all is written for a user with no personal instructions, so their prompt, and its
+    cached prefix, is unchanged.
     """
     precedence = f" Where they conflict with the {over} above, follow the {over}." if over else ""
+    if overrides:
+        precedence += f" Where these conflict with the {overrides} above, follow these personal instructions."
     return (
         f"{system_prompt}\n\n## Personal Instructions\n\n"
         f"The user's standing preferences for how you work with them.{precedence}\n\n{personal}"
@@ -419,12 +425,26 @@ def compose_personal_instructions(system_prompt: str, personal: str, *, over: Op
 
 def personal_plain_prompt(system_prompt: Optional[str], personal: Optional[str]) -> Optional[str]:
     """A turn without an agent: the request's (or the default) prompt plus personal instructions."""
-    if not personal:
-        return system_prompt
-    from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
+    return compose_plain_turn_prompt(system_prompt, personal=personal)
 
-    base = system_prompt or SystemPromptBuilder().build(include_date=True)
-    return compose_personal_instructions(base, personal, over=None)
+
+def gated_client_system_prompt(input_data) -> Optional[str]:
+    """The request's ``system_prompt``, honored only in an Agent Designer preview.
+
+    Anywhere else a client could replace the platform prompt, and with it the role
+    instructions an admin set (#13, Decision 2). The field is ignored rather than
+    refused, so an older client that still sends it keeps working; the drop is logged
+    with the session id only, never the text. ``/chat/api-converse`` is a separate
+    route and keeps its documented ``system_prompt``.
+    """
+    text = getattr(input_data, "system_prompt", None)
+    if not text:
+        return None
+    session_id = getattr(input_data, "session_id", "") or ""
+    if is_preview_session(session_id):
+        return text
+    logger.warning("Ignoring client-sent system_prompt outside a preview session=%s", scrub_log(session_id))
+    return None
 
 
 async def _load_user_settings(user_id: Optional[str]) -> dict:
@@ -462,19 +482,29 @@ def _turn_is_incognito(input_data: InvocationRequest, session_meta) -> bool:
 
 
 async def _plain_turn_prompt(
-    input_data, user_id: Optional[str], settings: Optional[dict] = None
+    input_data,
+    user_id: Optional[str],
+    settings: Optional[dict] = None,
+    *,
+    current_user: Optional[User] = None,
 ) -> Optional[str]:
     """The system prompt a no-model App dispatch must pass to reuse the turn's cached agent.
 
-    The agent cache keys on the system prompt, so a dispatch that left out the personal
-    instructions a plain turn adds would build a second agent, and an App's pushed model
-    context (stashed on the agent's state) would never reach the next turn.
+    The agent cache keys on the system prompt, so a dispatch that left out the role or
+    personal instructions a plain turn adds would build a second agent, and an App's
+    pushed model context (stashed on the agent's state) would never reach the next turn.
+    Composed by the same helper as the main turn, from the same inputs.
     """
+    client_prompt = gated_client_system_prompt(input_data)
     if input_data.rag_assistant_id:
-        return input_data.system_prompt
-    return personal_plain_prompt(
-        input_data.system_prompt,
-        _personal_instructions(settings if settings is not None else await _load_user_settings(user_id)),
+        return client_prompt
+    preview = is_preview_session(getattr(input_data, "session_id", "") or "")
+    return compose_plain_turn_prompt(
+        client_prompt,
+        role_instructions=[] if preview else await resolve_role_instructions(current_user),
+        personal=None
+        if preview
+        else _personal_instructions(settings if settings is not None else await _load_user_settings(user_id)),
     )
 
 
@@ -2546,7 +2576,7 @@ async def _agent_for_app_dispatch(
             current_user,
         ),
         model_id=dispatch_model_id,
-        system_prompt=await _plain_turn_prompt(input_data, user_id, settings),
+        system_prompt=await _plain_turn_prompt(input_data, user_id, settings, current_user=current_user),
         caching_enabled=caching_enabled,
         provider=dispatch_provider or registry_provider,
         inference_params=inference_params,
@@ -4417,7 +4447,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # loaded alongside everything up to the agent build and awaited by it: the
     # block goes into the system prompt. None on a plain turn or a resume.
     kb_full_context_task: Optional["asyncio.Task[Optional[str]]"] = None
-    system_prompt = input_data.system_prompt  # Start with provided system prompt
+    # A client-sent prompt counts only in an Agent Designer preview (#13).
+    system_prompt = gated_client_system_prompt(input_data)
     # One settings read per turn: the default model, personal instructions and the
     # long-term-memory switch all come from it. A preview is an author testing an
     # agent, so it gets none of theirs.
@@ -4866,8 +4897,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Import here to avoid circular dependency
             from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
-            # Build the base prompt with date
-            base_prompt_builder = SystemPromptBuilder(surface=input_data.client_surface)
+            # Build the base prompt with date. No surface here: BaseAgent appends the
+            # surface block after </user_instructions>, so adding it here sent it twice.
+            base_prompt_builder = SystemPromptBuilder()
             base_prompt = base_prompt_builder.build(include_date=True)
 
             # Append assistant instructions to the base prompt.
@@ -4889,7 +4921,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if not system_prompt:
                 from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
-                base_prompt_builder = SystemPromptBuilder(surface=input_data.client_surface)
+                base_prompt_builder = SystemPromptBuilder()
                 system_prompt = base_prompt_builder.build(include_date=True)
             if turn_project_id:
                 # A new project has no instructions; its harness still needs the
@@ -4995,33 +5027,41 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # Zero on a plain chat turn, which is what makes it worth separating.
     prelude.mark("rag")
 
-    # Append active custom system prompt (if any). Gating rules + lookup live
-    # in `system_prompt_resolver.py` so they can be unit-tested independently
-    # of the route.
+    # The active Conversation Mode, if any. Gating rules + lookup live in
+    # `system_prompt_resolver.py` so they can be unit-tested independently of
+    # the route. Composed below with the other plain-turn sections.
+    active_mode: Optional[Tuple[str, str]] = None
     if should_resolve_custom_prompt(
         is_resume=is_resume,
         is_continuation=is_continuation,
         is_preview=is_preview_session(input_data.session_id),
         has_assistant=bool(input_data.rag_assistant_id),
     ):
-        resolved = await resolve_active_prompt_text(
+        active_mode = await resolve_active_prompt_text(
             session_id=input_data.session_id,
             user_id=user_id,
             request_prompt_id=input_data.selected_prompt_id,
         )
-        if resolved:
-            prompt_name, prompt_text = resolved
-            # Build the base system prompt if not already built (no-assistant
-            # path can leave system_prompt unset).
-            if not system_prompt:
-                from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
-                system_prompt = SystemPromptBuilder(surface=input_data.client_surface).build(include_date=True)
-            system_prompt = append_active_prompt(system_prompt, prompt_name, prompt_text)
-            logger.info(f"Appended custom system prompt: {prompt_name!r}")
+        if active_mode:
+            logger.info(f"Appending custom system prompt: {active_mode[0]!r}")
 
-    # A turn without an agent carries the user's personal instructions too.
+    # A turn without an agent: base → Role Instructions → Active Mode → Personal
+    # Instructions (#13). Role instructions apply on continuations too, so a
+    # continuation rebuilds the original turn's prompt and hits its cached agent;
+    # a resume replays `snapshot.system_prompt` and needs none. A preview is an
+    # author testing an agent and gets none of the user's own sections.
     if not input_data.rag_assistant_id:
-        system_prompt = personal_plain_prompt(system_prompt, personal_instructions)
+        role_instructions = (
+            []
+            if is_resume or is_preview_session(input_data.session_id)
+            else await resolve_role_instructions(current_user)
+        )
+        system_prompt = compose_plain_turn_prompt(
+            system_prompt,
+            role_instructions=role_instructions,
+            mode=active_mode,
+            personal=personal_instructions,
+        )
 
     # Per-session single-flight guard (docs/specs/session-single-flight-guard.md,
     # follow-up to PR #653). A client abort doesn't propagate through the
