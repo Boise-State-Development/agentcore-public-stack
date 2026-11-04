@@ -12,6 +12,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes — the preserved-thinking probe item and the stale caching comment in `model_config.py`
 - **Unlocks**: Haiku 5.5 as the cheap default
 - **Status**: open
+- **Status 2026-11-04**: bump in review (`feature/strands-1.63.0`). Readout: (a) #5645 would send `maxTokens` from Strands' `model_info.json`, which gives Sonnet 4.6 128K against a 64K card, so `to_bedrock_config` and the extractor opt out with `max_tokens=None`; (b) the cache predicate is unchanged for every id we run; (c) #4618 not shipped, `metrics.py` byte-identical. `model_info` re-resolves on every read (upstream `format_request` 22 → 102 µs), memoized in `CountTokensBedrockModel` (ours: 22 µs on both). Open: the Haiku 5.5 row, and our Opus 4.7 row's 64K output cap (card says 128K).
 
 ### [2026-11-03] Find out why Nightly Build & Test has failed on `main` for seven nights
 - **Source**: research/2026-11-03.md

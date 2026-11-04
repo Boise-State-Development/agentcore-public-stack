@@ -360,11 +360,20 @@ class ModelConfig:
     def bedrock_cache_points_supported(self) -> bool:
         """Whether a hand-placed Bedrock system cachePoint may be sent.
 
-        Mirrors Strands' ``BedrockModel._cache_strategy`` predicate. What it is
-        load-bearing FOR is the system cachePoint that
+        Agrees with Strands' ``BedrockModel._cache_strategy`` on every id we
+        curate, but is no longer the same test. Since strands-agents 1.63.0,
+        ``"auto"`` reads ``model_info.capabilities.prompt_caching`` from the
+        SDK's bundled ``model_info.json`` and keeps the claude/anthropic name
+        test only for ids the data does not list. Every curated Claude id is
+        listed as ``cache_points``, and Nova, the hosted OpenAI family, Qwen
+        and Kimi resolve to no strategy, so the two still agree; they would
+        part if upstream lists a non-Claude Converse model as
+        ``cache_points`` (the message point would appear while this keeps
+        the system and tools points off). What it is load-bearing FOR is the
+        system cachePoint that
         ``AgentFactory.create_agent`` places — the one explicit point in this
         codebase upstream will not filter for us. ``format_request`` copies
-        ``system_prompt_content`` verbatim (bedrock.py:376) and
+        ``system_prompt_content`` verbatim and
         ``_apply_system_cache_ttl`` only ever rewrites a TTL, never removes a
         point, so a point placed on a model that cannot cache reaches Bedrock
         and the call fails with **AccessDeniedException** — "You invoked an
@@ -376,7 +385,7 @@ class ModelConfig:
         It is also passed as ``tools_ttl``, where since strands-agents 1.55.0
         it is belt-and-braces rather than load-bearing:
         ``_build_tools_cache_point`` applies the same
-        ``_cache_strategy != "anthropic"`` test itself (bedrock.py:579), so
+        ``_cache_strategy != "anthropic"`` test itself (bedrock.py:680 in 1.63.0), so
         True and False emit byte-identical requests on a non-Anthropic model.
         Kept as the single predicate both points read, so the two can never
         disagree about which models get an explicit point.
@@ -424,6 +433,16 @@ class ModelConfig:
         _apply_canonical_params(
             config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock", self.model_id
         )
+        # Our catalog owns maxTokens; an explicit None opts out of the default
+        # strands-agents 1.63.0 fills in when the key is absent (#5645,
+        # resolve_max_tokens: the model's output limit from its bundled
+        # model_info.json). That data is not safe to send: it gives Claude
+        # Sonnet 4.6 128,000, and the Bedrock model card says 64K, so a
+        # turn reaching here without a catalog max_tokens would 400. Unset,
+        # maxTokens is omitted exactly as before 1.63.0, and Converse
+        # documents the omitted default as "the maximum allowed value for the
+        # model" — the right ceiling, from the one source that knows it.
+        config.setdefault("max_tokens", None)
 
         # Native Bedrock CountTokens is available to this model — the
         # foundation for per-call context attribution (decomposing the
