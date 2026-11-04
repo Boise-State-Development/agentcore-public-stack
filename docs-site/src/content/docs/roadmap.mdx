@@ -6,10 +6,10 @@ prev: false
 next: false
 hero:
   title: |
-    <span class="hero-kicker">Roadmap · Updated July 2026</span>
+    <span class="hero-kicker">Roadmap · Updated November 2026</span>
     From chat app,
     <span class="hero-accent">to agent platform.</span>
-  tagline: Chat is the home base — where people converse, run tools, and build agents today. The roadmap is about everything that runs beyond the chat window — shared agents, portable skills, scheduled work, and a governed registry of what your org has built.
+  tagline: Chat is the home base, where people converse, run tools and build agents today. The roadmap is about everything that runs beyond the chat window — shared agents, portable skills, scheduled work, budgets that follow the money, and a governed registry of what your organization has built.
   actions:
     - text: Get started
       link: /agentcore-public-stack/getting-started/introduction/
@@ -31,125 +31,144 @@ hero:
 	<li><span class="rm-dot rm-dot--exploring"></span><strong>Exploring</strong> a direction, not a commitment</li>
 </ul>
 
-{/* ── 01 · Conversation ─────────────────────────────────────────────── */}
+{/* ── 01 · the home base ─────────────────────────────────────────────── */}
 
 <section id="conversation" class="lp-section rm-section lp-reveal">
 	<p class="lp-eyebrow"><span class="lp-eyebrow-num">01</span> the home base</p>
 	<h2 class="lp-h2">the conversation is <span class="lp-accent">home.</span></h2>
 	<p class="lp-lede">
-		Everything starts in chat: streaming responses, tools, artifacts, and voice. The work
-		here is about making a conversation durable — something you can leave, interrupt, and
-		return to without losing anything.
+		Everything starts in chat: streaming responses, tools, artifacts and voice. The work here is about making a conversation durable, something you can leave, interrupt, steer and return to without losing anything.
 	</p>
 	<div class="rm-grid">
-		<div class="rm-card"><div class="rm-card-head"><h3>Streaming chat over SSE</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Token-by-token responses with tool calls, errors, and metadata all riding the same stream.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Artifacts panel</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Generated documents, code, and pages rendered in a docked side panel.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Voice mode</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Speak to the assistant and hear responses back.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Streaming chat</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Token-by-token responses with tool calls, live agent status, errors and metadata on one stream.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Artifacts panel</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Documents, charts, pages and Markdown with math in a docked panel, with versions and safe sharing.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Voice mode and dictation</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Talk with the assistant through Amazon Nova Sonic, or dictate into the composer through Amazon Transcribe.</p></div>
 		<div class="rm-card"><div class="rm-card-head"><h3>Terminal client</h3><span class="rm-pill rm-pill--live">Live</span></div><p>The same assistant in your shell, every feature a slash command, with local tools that read, write and run on your machine with your approval.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Automatic context compaction</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Long conversations roll older turns into a summary — surfaced in the UI as it happens.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Session workspace files</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Give each conversation a real file workspace the agent can read and write.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Interrupted-turn continuity</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Stop or refresh mid-response and keep the partial turn as context instead of losing it.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Search, pin and steer</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Search every conversation with <code>Cmd/Ctrl+K</code>, pin the ones you use, and steer a running turn without waiting for it to finish.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Clarifying questions</h3><span class="rm-pill rm-pill--live">Live</span></div><p>The agent can pause and ask a structured question when it genuinely needs an answer to continue.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Automatic compaction</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Long conversations roll older turns into a summary, surfaced in the UI as it happens.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Interrupted-turn continuity</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Stop or refresh mid-response and the partial turn stays as context, metered for what it actually used.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Rewind and fork</h3><span class="rm-pill rm-pill--partial">Partial</span></div><p>Rewind to any message, or fork a new conversation from it. Finished and running in our production, still opt-in for a new deployment.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Full-text conversation search</h3><span class="rm-pill rm-pill--partial">Partial</span></div><p>Search matches titles and opening prompts everywhere; indexing everything said is a per-deployment retention choice, off by default.</p></div>
 	</div>
 </section>
 
-{/* ── 02 · Agents ───────────────────────────────────────────────────── */}
+{/* ── 02 · agents for everyone ───────────────────────────────────────── */}
 
 <section id="agents" class="lp-section rm-section lp-reveal">
 	<p class="lp-eyebrow"><span class="lp-eyebrow-num">02</span> agents for everyone</p>
 	<h2 class="lp-h2">build once, <span class="lp-accent">share everywhere.</span></h2>
 	<p class="lp-lede">
-		Agents bundle instructions, tools, skills, and knowledge into something shareable. The
-		direction: lower the skill floor for building them, and raise the ceiling on what they
-		can be trusted to do.
+		Agents bundle instructions, tools, skills and knowledge into something shareable. The direction: lower the skill floor for building them, and raise the ceiling on what they can be trusted to do together.
 	</p>
 	<div class="rm-grid">
-		<div class="rm-card"><div class="rm-card-head"><h3>Custom agents</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Instructions, model, tools, skills, and knowledge bases — composed per agent.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Agent marketplace</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Publish agents with reach controls; teammates browse and pin in one click.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Agent Designer</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Compose an agent from the models, tools, skills and knowledge your role allows, with a live preview.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Agent marketplace</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Publish with reach controls and admin review; teammates browse, pin and duplicate.</p></div>
 		<div class="rm-card"><div class="rm-card-head"><h3>Version snapshots &amp; rollback</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Every publish is a snapshot; a bad release rolls back without touching the editor.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>@-mentions</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Pull another agent into the middle of a conversation when you need its capabilities.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Collaborative editing</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Viewer and editor sharing on agents — ownership is an access gate, not a silo.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Skill Creator</h3><span class="rm-pill rm-pill--next">Next</span></div><p>An agent that writes skills — turn a working conversation into a reusable capability.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Agent Designer</h3><span class="rm-pill rm-pill--next">Next</span></div><p>A governed design surface for composing agents from platform primitives.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>@-mentions and sharing</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Pull another agent into a conversation. Viewer and editor sharing makes ownership an access gate, not a silo.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Skills and slash commands</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Portable, versioned instruction bundles with reference files and bound tools, triggered with <code>/</code>.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Agent-authored skills</h3><span class="rm-pill rm-pill--live">Live</span></div><p>The agent writes and refines a skill from a working conversation, with the user approving every write.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Agent handoffs and consults</h3><span class="rm-pill rm-pill--building">Building</span></div><p>One agent hands a conversation to another with a reviewed excerpt and brief, and the result is delivered back.</p></div>
 	</div>
 </section>
 
-{/* ── 03 · Tools ────────────────────────────────────────────────────── */}
+{/* ── 03 · shared work ───────────────────────────────────────────────── */}
+
+<section id="projects" class="lp-section rm-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">03</span> shared work</p>
+	<h2 class="lp-h2">teams, not just <span class="lp-accent">individuals.</span></h2>
+	<p class="lp-lede">
+		Shared Projects give an office, a lab or a committee one assistant, one set of files and one memory. The work here is making shared work as natural as a personal chat.
+	</p>
+	<div class="rm-grid">
+		<div class="rm-card"><div class="rm-card-head"><h3>Shared Projects</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Owner, editor and viewer roles, project instructions, model, tools and skills that apply to every member.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Project files and Drive sync</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Upload, add web content, or save a Drive folder as a project that stays in sync with it.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Project memory</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Governed shared memory beside each member's own.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Scheduled runs</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Put a prompt on a schedule and deliver each run to the project or to yourself.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Project file readiness</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Tell the agent, and the people in the project, which files are still being prepared.</p></div>
+	</div>
+</section>
+
+{/* ── 04 · tools &amp; integrations ──────────────────────────────────── */}
 
 <section id="tools" class="lp-section rm-section lp-reveal">
-	<p class="lp-eyebrow"><span class="lp-eyebrow-num">03</span> tools &amp; integrations</p>
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">04</span> tools &amp; integrations</p>
 	<h2 class="lp-h2">every protocol, <span class="lp-accent">one registry.</span></h2>
 	<p class="lp-lede">
-		Direct functions, AWS SDK calls, MCP servers behind AgentCore Gateway, and remote A2A
-		agents — registered once, governed by roles, and increasingly able to render their own
-		interfaces inside the conversation.
+		Direct functions, AWS SDK calls, MCP servers behind AgentCore Gateway, external MCP servers and remote A2A agents, registered once, governed by roles, and increasingly able to render their own interfaces inside the conversation.
 	</p>
 	<div class="rm-grid">
-		<div class="rm-card"><div class="rm-card-head"><h3>Multi-protocol tools</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Direct, AWS SDK, MCP + SigV4 via Gateway, and A2A client calls — one tool registry.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>MCP Apps</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Tools render live interactive UIs inline in chat, streaming their inputs as the model types.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>OAuth consent mid-conversation</h3><span class="rm-pill rm-pill--live">Live</span></div><p>External tools request user consent in-stream and resume the turn after sign-in.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Per-tool enablement</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Enable individual tools within a server — expose exactly what each role needs.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Admin Gateway registration</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Register Lambda-backed MCP targets from the admin console, no redeploy required.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Tool search at scale</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Keep agent context small while the full tool catalog stays available on demand.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>A2A server surface</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>Expose platform agents to the outside world with their own AgentCards.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Multi-protocol tools</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Direct, AWS SDK, MCP with SigV4 through Gateway, external MCP and A2A client calls in one tool registry.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>MCP Apps</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Tools render live interactive UIs inline in chat, streaming their inputs as the model writes them.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>OAuth consent mid-conversation</h3><span class="rm-pill rm-pill--live">Live</span></div><p>External tools request consent in the stream and resume the turn after sign-in.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Per-tool enablement</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Enable individual tools within a server to expose exactly what each role needs.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Browser hand-off</h3><span class="rm-pill rm-pill--live">Live</span></div><p>When a site needs the user to sign in, the agent hands over the browser in a docked live view.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Admin Gateway registration</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Register Lambda-backed MCP targets from the admin console, with no redeploy.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Tool search at scale</h3><span class="rm-pill rm-pill--next">Next</span></div><p>Keep agent context small while the full tool catalog stays available on demand.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Export as an agent tool</h3><span class="rm-pill rm-pill--next">Next</span></div><p>Let the agent file results into your connected systems mid-conversation.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>A2A server surface</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>Expose platform agents to other platforms with their own AgentCards.</p></div>
 	</div>
 </section>
 
-{/* ── 04 · Knowledge ────────────────────────────────────────────────── */}
+{/* ── 05 · knowledge &amp; memory ────────────────────────────────────── */}
 
 <section id="knowledge" class="lp-section rm-section lp-reveal">
-	<p class="lp-eyebrow"><span class="lp-eyebrow-num">04</span> knowledge &amp; memory</p>
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">05</span> knowledge &amp; memory</p>
 	<h2 class="lp-h2">what your agents <span class="lp-accent">know.</span></h2>
 	<p class="lp-lede">
-		Retrieval today, memory next. Knowledge bases ground answers in documents; memory
-		spaces will let people and teams carry curated context between conversations.
+		Knowledge bases ground answers in documents; memory carries context between conversations. The work here is making answers over documents verifiable, and memory something people can curate and share.
 	</p>
 	<div class="rm-grid">
-		<div class="rm-card"><div class="rm-card-head"><h3>Per-agent knowledge bases</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Each agent retrieves from its own Bedrock Knowledge Base inside your account.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Scheduled knowledge sync</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Connected sources re-index on a schedule so answers track changing documents.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Conversation export</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Save conversations out to connected storage services.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Memory spaces</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Bindable, shareable markdown "second brains" that agents load as context.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Export as an agent tool</h3><span class="rm-pill rm-pill--next">Next</span></div><p>Let the agent itself file results into your connected systems mid-conversation.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Per-agent and project knowledge bases</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Each agent or project retrieves from its own Amazon Bedrock knowledge base inside your account.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Scheduled knowledge sync</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Sync policies re-index connected sources on a schedule so answers track changing documents.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Large documents and folders</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Documents up to 50 MB read by reference, and Drive folders attached as a manifest.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Word tracked changes and redlines</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Insertions and deletions reach the model as written, and the agent can redline a document back.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Long-term memory modes</h3><span class="rm-pill rm-pill--live">Live</span></div><p>On, Read only or Off, plus incognito chats that use memory without adding to it.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Source provenance verification</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Check that a cited passage is really in the document and that the asserted value appears in it.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Structured extraction</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Run a typed field set across a batch of documents, with provenance on every value.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Full-context mode for small knowledge bases</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Give the model a small knowledge base whole instead of retrieving excerpts.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Memory Spaces</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Bindable, shareable Markdown "second brains" that agents load as context.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Spoken audio generation</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Turn long-form content into narrated audio.</p></div>
 	</div>
 </section>
 
-{/* ── 05 · Governance ───────────────────────────────────────────────── */}
+{/* ── 06 · governance &amp; cost ─────────────────────────────────────── */}
 
 <section id="governance" class="lp-section rm-section lp-reveal">
-	<p class="lp-eyebrow"><span class="lp-eyebrow-num">05</span> governance &amp; cost</p>
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">06</span> governance &amp; cost</p>
 	<h2 class="lp-h2">trust is a <span class="lp-accent">feature.</span></h2>
 	<p class="lp-lede">
-		Everything an agent can touch is granted by a role, and everything a model call costs
-		is measured. The work here is making that visibility effortless — for admins and for
-		the people paying the bill.
+		Everything an agent can touch is granted by a role, and everything a model call costs is measured. The work here is making spend follow the money: requested, approved and charged back to the fund that pays for it.
 	</p>
 	<div class="rm-grid">
-		<div class="rm-card"><div class="rm-card-head"><h3>RBAC from your identity provider</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Roles bind to IdP groups with inheritance and wildcard grants across models, tools, and skills.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>RBAC from your identity provider</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Roles bind to IdP claims with inheritance and wildcard grants across models, tools and skills.</p></div>
 		<div class="rm-card"><div class="rm-card-head"><h3>Delegated admin scopes</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Scope each admin surface to the people who own it instead of one all-powerful role.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Usage quotas</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Per-user budgets with in-stream warnings before the cutoff, not after.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Cost analytics</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Per-session, per-call cost breakdowns in the admin console.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Prompt-cache observability</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Cache status and prefix fingerprints on every call — the change that burned money has a name.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Admin audit log</h3><span class="rm-pill rm-pill--building">Building</span></div><p>A durable record of who changed what across the admin surfaces.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Cache-cost dashboard</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Fleet-wide cache write/read ratios and per-call anatomy, visualized.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Direct user grants</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Grant a model, tool or skill to one person without inventing a role for them.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Admin audit log</h3><span class="rm-pill rm-pill--live">Live</span></div><p>A durable record of who changed what across the admin surfaces, with before and after values.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Quota tiers and warnings</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Dollar limits by role, claim, domain or person, warnings in the conversation, and a per-conversation notice.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Cost analytics</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Spend by user, model and period, with per-session and per-call drill-down.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Prompt-cache observability</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Cache status and prefix fingerprints on every call, so the change that burned money has a name.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Quota requests and chargeback</h3><span class="rm-pill rm-pill--building">Building</span></div><p>Users request more from inside the conversation; admins grant timed extensions, funded centrally or charged to a cost center, grant or department fund, with a monthly chargeback report.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>AWS account limits</h3><span class="rm-pill rm-pill--building">Building</span></div><p>See the account's service quotas for the stack and request increases from the admin console.</p></div>
 		<div class="rm-card"><div class="rm-card-head"><h3>Quota cooldown windows</h3><span class="rm-pill rm-pill--next">Next</span></div><p>Anchored usage windows and a platform-wide spend ceiling as a hard backstop.</p></div>
 	</div>
 </section>
 
-{/* ── 06 · Beyond chat ──────────────────────────────────────────────── */}
+{/* ── 07 · beyond the chat window ────────────────────────────────────── */}
 
 <section id="beyond-chat" class="lp-section rm-section lp-reveal">
-	<p class="lp-eyebrow"><span class="lp-eyebrow-num">06</span> beyond the chat window</p>
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">07</span> beyond the chat window</p>
 	<h2 class="lp-h2">systems, not just <span class="lp-accent">conversations.</span></h2>
 	<p class="lp-lede">
-		The long arc: successful agent work should become a system you can run again — on a
-		schedule, headlessly, from other surfaces — with the same identity, grants, and cost
-		controls as an interactive session.
+		The long arc: successful agent work should become a system you can run again, on a schedule, headlessly, from other surfaces, with the same identity, grants and cost controls as an interactive session.
 	</p>
 	<div class="rm-grid">
-		<div class="rm-card"><div class="rm-card-head"><h3>Single-stack CDK deploy</h3><span class="rm-pill rm-pill--live">Live</span></div><p>One <code>PlatformStack</code>, three workflows — infrastructure and app code ship independently.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>API keys for programmatic access</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Call the platform from scripts and services with scoped keys.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Scheduled runs</h3><span class="rm-pill rm-pill--partial">Partial</span></div><p>Recurring agent runs exist behind a kill switch — the product surface is still to come.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Headless agent entrypoint</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>Run the same governed agents without a chat session attached.</p></div>
-		<div class="rm-card"><div class="rm-card-head"><h3>Capability registry</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>A governed catalog of every agent, skill, and tool the org has built — discovery with guardrails.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Single-stack CDK deploy</h3><span class="rm-pill rm-pill--live">Live</span></div><p>One <code>PlatformStack</code> and a set of workflows; infrastructure and application code ship independently.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>API keys for programmatic access</h3><span class="rm-pill rm-pill--live">Live</span></div><p>Call the same models under the same roles and quotas from any language, with a built-in code generator.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Evaluation harness</h3><span class="rm-pill rm-pill--live">Live</span></div><p>A golden set scored against a committed baseline on every release.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Headless agent entrypoint</h3><span class="rm-pill rm-pill--next">Next</span></div><p>Run the same governed agents on a schedule, from a webhook or from another system, without a chat session attached.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Capability registry</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>A governed catalog of every agent, skill and tool the organization has built: discovery with guardrails.</p></div>
+		<div class="rm-card"><div class="rm-card-head"><h3>Native companion apps</h3><span class="rm-pill rm-pill--exploring">Exploring</span></div><p>Mobile apps sharing the platform's sign-in.</p></div>
 	</div>
 </section>
 
