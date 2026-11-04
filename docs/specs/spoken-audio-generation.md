@@ -272,11 +272,24 @@ only option that goes at the capacity problem without a standing cost. The
 evidence is indirect but consistent: `g6e.xlarge` failed to launch 1,331 times
 across four cycles in all four AZs, its pool scores 1 in every US region, and
 `g7.2xlarge` scores 9 in every one. The validation is one cold cycle on
-`g7.2xlarge` (about $0.40) that renders the 18-minute script, the memory
-ceiling. It checks four things: that the AMI's driver runs the image, the peak
-memory, the render speed, and WER and voice hold scored as in Appendix B. If
-the script does not fit in 32 GiB, `g7e.2xlarge` at $3.36312/h is the next
-candidate. It scores 3 in us-west-2 and 9 in us-east-1. A deployment that
+`g7.2xlarge` that renders the 18-minute script, the memory ceiling: about 16
+minutes of instance time, or $0.70. It checks four things: that the AMI's
+driver runs the image, the peak memory, the render speed, and WER and voice
+hold scored as in Appendix B. If the script does not fit in 32 GiB,
+`g7e.2xlarge` at $3.36312/h is the next candidate. It scores 3 in us-west-2
+and 9 in us-east-1.
+
+**The validation also renders the same script once on `g7e.2xlarge`,** for
+under $1, to measure its speed. Generating one token at a time is mostly bound
+by GPU memory bandwidth, and its RTX PRO 6000 has far more than the L40S, so it
+may render markedly faster. That is unmeasured. A faster card changes the
+per-job cost little, because scale to zero bills each job for its own time: at
+$3.36312/h it costs the same as `g6e.xlarge` only if it renders 1.8× faster,
+and the roughly 5 minutes of startup bill at the higher rate either way. What
+it can change is the wait on long scripts, which render in about half their
+length on the L40S. If `g7e.2xlarge` is that much faster, it could be the first
+type rather than the fallback. Either way, getting an instance stays a far
+bigger part of a cold job's wait than rendering. A deployment that
 needs a bounded wait regardless can keep one instance running, or reserve it
 (C); either costs about $1,359 a month for `g6e.xlarge`. Running one only in
 working hours (10 hours on each of 22 days) costs $409 a month, but it has to
@@ -637,10 +650,11 @@ minutes after the last job (§4.3).
      image as Batch jobs on `g6e`, which moved the renderer from SageMaker to
      Batch (§4.3).
 2. **PR-1, renderer stack.**
-   - **First, the `g7.2xlarge` validation run** (§4.3): one cold cycle that
-     renders the 18-minute script and records driver, peak memory, render
-     speed, WER and voice hold. It needs the usual go-ahead for a GPU launch.
-     Its result picks the instance types.
+   - **First, the validation run** (§4.3): one cold cycle on `g7.2xlarge`
+     that renders the 18-minute script and records the driver, peak memory,
+     render speed, WER and voice hold, then the same render on `g7e.2xlarge`
+     for its speed. About $1.70 in all. It needs the usual go-ahead for a GPU
+     launch. Its results pick the instance types and their order.
    - Container, stack (VPC, compute environment, launch template, job queue
      with its wait limit, job definition, EventBridge rule), workflow, and the
      submit and finalize Lambdas.
