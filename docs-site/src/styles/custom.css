@@ -1016,6 +1016,17 @@ site-search button[data-open-modal] kbd {
 	background-size: 32px 32px;
 }
 
+.shot-body--image {
+	display: block;
+	background-image: none;
+}
+
+.shot-body--image img {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
 .shot-placeholder {
 	display: flex;
 	flex-direction: column;

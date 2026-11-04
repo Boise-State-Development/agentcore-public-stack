@@ -1,6 +1,6 @@
 ---
 title: Introduction
-description: What the AgentCore Public Stack is and who it is for.
+description: What the AgentCore Public Stack is, who it is for, and what it gives an institution that deploys it.
 sidebar:
   order: 1
 ---
@@ -8,61 +8,125 @@ sidebar:
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import YouTube from '../../../components/YouTube.astro';
 
-A production-ready, multi-agent conversational AI platform built on **AWS Bedrock
-AgentCore** and **Strands Agents** — for teams who want to run their own AI
-assistant on infrastructure they control, instead of renting per-seat access to
-someone else's.
+AgentCore Public Stack is the open-source AI platform for **universities and state
+and local government**. It packages **AWS Bedrock AgentCore** and **Strands
+Agents** into a complete product: a chat experience, custom agents and skills,
+shared team workspaces, document intelligence, voice, a terminal client, and an
+admin console for identity, access, quotas and cost. It deploys into an AWS
+account you control.
+
+It is the working codebase behind the AI platform that serves students, faculty
+and staff at Boise State University. Fork it, deploy it, brand it, and hand your
+whole organization an AI platform you own, without writing agent code: models,
+tools, roles and policies are configured in the admin console.
 
 <YouTube id="hoYHY1JpCbg" title="AgentCore Public Stack — Introduction" />
 
-## What you get
+## Who it's for
 
-The platform ships the pieces of a modern conversational AI product, wired
-together and ready to deploy:
-
-- **Streaming chat** — token-by-token responses over SSE, with conversation
-  history and automatic context management.
-- **Multi-agent tools** — agents call tools across several protocols: direct
-  functions, the AWS SDK, MCP servers, and remote A2A agents.
-- **RAG** — ground answers in your own documents and knowledge bases.
-- **MCP Apps** — rich, interactive tool UIs rendered inline in the conversation.
-- **Artifacts** — generated documents and code rendered in a dedicated side panel.
-- **Voice** — speak to the assistant and hear responses back.
-
-## Why an Internal AI Platform?
-
-Commercial AI subscriptions are convenient, but at scale they lock you into
-someone else's roadmap, pricing, and data practices. Running your own platform on
-infrastructure you control changes that calculus.
+The platform is general-purpose, but it was shaped by the needs of a public
+university and the agencies it works alongside.
 
 <CardGrid>
-	<Card title="No Vendor Lock-in">
-		Stay free to choose — and swap — the best-fit model for each task. No
-		multi-year contracts and no large up-front CapEx; pay for what you use and
-		change course as the field moves.
+	<Card title="Universities" icon="open-book">
+		Course and program assistants built by faculty and shared with a class, so
+		every student gets the same assistant under the same guardrails. Shared
+		Projects for research offices and labs. Canvas, Google Drive, the library
+		catalog and your SIS as tools, with consent asked for in the conversation.
 	</Card>
-	<Card title="Data Sovereignty">
-		Your data stays inside your own AWS account. Nothing leaves the security
-		boundary you control.
-	</Card>
-	<Card title="No Training on Your Data">
-		Models are used for inference only. Your prompts and data are never used to
-		train third-party models.
-	</Card>
-	<Card title="No Per Seat Licensing">
-		Per-seat pricing doesn't scale — costs balloon with every user you add. A
-		consumption-based, self-hosted platform means you pay for actual usage, not
-		headcount.
-	</Card>
-	<Card title="Equitable Access">
-		Everyone gets the same capable models — no tiered "haves and have-nots"
-		based on who can afford a premium subscription.
-	</Card>
-	<Card title="Systems Integration">
-		Teams can bring their own MCP servers to connect the systems they rely on, so
-		the assistant can safely act on real data — all within your own controls.
+	<Card title="State and local government" icon="document">
+		Staff and constituent assistants grounded in your own ordinances, policy
+		manuals and procedure documents, kept in sync as they change. Large
+		documents, whole Drive folders and Word tracked changes in; Word, Excel and
+		PowerPoint out. SSO through the identity provider you already run.
 	</Card>
 </CardGrid>
+
+## What you get
+
+- **A finished conversation surface.** Token-by-token streaming with tool calls,
+  interactive tool UIs and errors on one stream; artifacts in a docked side panel;
+  voice mode and dictation; conversation search, pinning and mid-turn steering;
+  automatic compaction of long conversations.
+- **Agents and skills.** The Agent Designer composes instructions, a model,
+  tools, skills and a knowledge base into an agent, and the marketplace publishes
+  it with reach controls and version snapshots. Skills are portable instruction
+  bundles triggered with `/`. See [Agents](/agentcore-public-stack/features/agents/).
+- **Shared Projects.** A workspace with owner, editor and viewer roles, one
+  assistant, shared files and memory, and schedules. See
+  [Projects](/agentcore-public-stack/features/projects/).
+- **Documents and knowledge.** Per-agent and per-project knowledge bases on
+  Amazon Bedrock with scheduled sync, documents up to 50 MB read by reference,
+  Drive folder attachments and Word tracked changes. See
+  [Knowledge Bases](/agentcore-public-stack/features/rag/).
+- **Every integration in one registry.** Direct tools, AWS SDK calls, MCP servers
+  behind AgentCore Gateway, external MCP servers and remote A2A agents, with
+  [MCP Apps](/agentcore-public-stack/features/mcp-apps/) and OAuth consent
+  mid-conversation.
+- **Three ways in.** The web app, the
+  [terminal client](/agentcore-public-stack/features/terminal-client/), and
+  [API keys](/agentcore-public-stack/features/api-keys/), all under the same
+  roles and quotas.
+- **Governance.** Roles from your identity provider, delegated admin scopes,
+  direct user grants, an audit log, quota tiers and cost analytics down to the
+  model call. See the [Admin Overview](/agentcore-public-stack/admin/overview/).
+
+## Why an institutional AI platform?
+
+Commercial AI subscriptions are convenient, but at the scale of a campus or a
+workforce they lock you into someone else's roadmap, pricing and data practices.
+Running your own platform on infrastructure you control changes that calculus.
+
+<CardGrid>
+	<Card title="No per-seat licensing">
+		Per-seat pricing grows with every person you add. At 30,000 users,
+		commercial subscriptions would cost upwards of $7.2M a year. Here you pay for
+		the tokens people use, through the AWS account and agreement you already have.
+	</Card>
+	<Card title="Data under your control">
+		Every conversation, document and knowledge base lives inside your AWS account.
+		Models are used for inference only and never train on your data.
+	</Card>
+	<Card title="No vendor lock-in">
+		Choose and swap the best model for each task, from Bedrock, OpenAI and Gemini,
+		curated by your admins and governed by role. No multi-year contract and no
+		up-front capital cost.
+	</Card>
+	<Card title="Equitable access">
+		Everyone gets the same capable models and tools. Premium capability is a role
+		grant, not a price tier.
+	</Card>
+	<Card title="Systems integration">
+		Connect the systems your people rely on through MCP servers registered in the
+		admin console, so the assistant can act on real data within your controls.
+	</Card>
+	<Card title="Accountability">
+		Role-based access from your identity provider, delegated admin scopes, an
+		audit log of every admin change, and cost attribution down to the individual
+		model call.
+	</Card>
+</CardGrid>
+
+## Budgets everyone can see
+
+Consumption billing only works for an institution if spend is predictable per
+person and visible before it becomes a problem. Quotas are enforced in dollars on
+every conversational surface:
+
+- A **tier** sets a monthly limit and an optional daily one, and chooses whether
+  reaching it blocks the next turn or only warns.
+- Tiers attach to a role, an identity-provider claim, an email domain or an
+  individual, so a new user lands in the right tier on first sign-in.
+- Users are warned **in the conversation** as they approach the limit, and when
+  one conversation alone has spent a notable share of the month. A blocked turn is
+  a message that says when the quota resets, never an error.
+- Admins grant **timed overrides**, see exactly which tier applied to a user in
+  the **quota inspector**, and export the log of every warning and block.
+
+Quota requests and extensions, with chargeback to a cost center, grant or
+department fund, are in development; see
+[Quotas](/agentcore-public-stack/admin/quotas/) and the
+[roadmap](/agentcore-public-stack/roadmap/).
 
 ## Next steps
 
