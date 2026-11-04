@@ -1,10 +1,10 @@
 [
   {
-    "id": "tool_selection.multiplication_reaches_for_calculator",
+    "id": "tool_selection.large_product_reaches_for_calculator",
     "family": "tool_selection",
     "turns": [
       {
-        "prompt": "What is 48,217 multiplied by 913? I need the exact figure."
+        "prompt": "What is 739,481 multiplied by 52,967? I need the exact figure."
       }
     ],
     "run": {
@@ -16,7 +16,8 @@
     },
     "expect": {
       "contains_any": [
-        "44,022,121"
+        "39,168,090,127",
+        "39168090127"
       ],
       "tools": {
         "must_call": [
@@ -27,7 +28,7 @@
         ]
       }
     },
-    "notes": "Exact five-by-three digit product: a model that answers from memory is often wrong, so the calculator is the right tool.",
+    "notes": "Six-by-five digit product. Replaces a five-by-three product that a thinking model works out by hand, correctly and without the tool (Haiku 5.5 on dev, 2026-11-04, every sample). At this size hand arithmetic is error-prone for any model, so the calculator is the right reach whether or not the model thinks first.",
     "judge": {
       "evaluators": [
         "tool_selection"
@@ -35,11 +36,11 @@
     }
   },
   {
-    "id": "tool_selection.square_root_reaches_for_calculator",
+    "id": "tool_selection.irrational_square_root_reaches_for_calculator",
     "family": "tool_selection",
     "turns": [
       {
-        "prompt": "What is the square root of 7,569? Give the exact value."
+        "prompt": "What is the square root of 87,341, to six decimal places?"
       }
     ],
     "run": {
@@ -50,7 +51,8 @@
     },
     "expect": {
       "contains_any": [
-        "87"
+        "295.535108",
+        "295.5351079"
       ],
       "tools": {
         "must_call": [
@@ -58,7 +60,7 @@
         ]
       }
     },
-    "notes": "Perfect square, so the expected value is unambiguous.",
+    "notes": "Irrational root to six places (295.5351078975...). Replaces the perfect square 7,569, whose root a thinking model checks by squaring 87 in its head (Haiku 5.5, 2026-11-04). Accepts the rounded value or a longer correct prefix, so printing the calculator's extra digits is not a failure.",
     "judge": {
       "evaluators": [
         "tool_selection"
