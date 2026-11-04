@@ -398,7 +398,8 @@ sidenav). It isn't tied to projects; handoffs become its second producer.
 - ⚠️ Two changes this needs:
   - **An IAM grant.** inference-api can `UpdateItem` on the projects table but not `PutItem`, and its policy comment
     says it never creates rows there. Add a separate `PutItem` statement limited to inbox rows with a
-    `dynamodb:LeadingKeys` condition (`INBOX#*`), rather than widening the existing one.
+    `dynamodb:LeadingKeys` condition (`INBOX#*`), rather than widening the existing one. *(2026-11-04: already there.
+    Shared Projects 2.5a added exactly this statement, `ProjectsInboxWrite`, for `memory_propose`; see PR-0.3b.)*
   - **The bell's visibility.** The sidenav shows the bell only when `features.projects` is on, because projects were
     its only producer. Show it when `features.projects || features.handoffs`.
 
@@ -1740,6 +1741,37 @@ has started", and the only one that spends money while nobody is watching.
 - **PR-0.3b — Notifications.** The three `handoff_*` inbox kinds, written by inference-api after `done`; the scoped
   `PutItem` grant; the bell shown with `features.handoffs` and rendering the new kinds; read-state rules; browser
   notifications through the Notification API, with the in-context permission ask.
+  *Built (2026-11-04).* Notes for the PRs that follow:
+  - **Inbox writes** live in `apis/shared/handoff/notify.py`, called from `HandoffTurn._transition` right after a
+    transition that actually moved the row, in the same background step. So an entry is written exactly when the
+    row changes, a frozen `done` repeated by a later turn writes nothing, and a second pause (or a stop after a
+    stop) is a second entry, which the browser notification's tag replaces. A Stop the user pressed
+    (`user_stopped`) writes none: they know. An error stop and `connection_lost` do.
+  - **The recipient is the token's email** (`current_user.email` on the Runtime, the same claim app-api's
+    `GET /notifications` reads), passed into `HandoffTurn.for_turn`. A token without one skips the inbox, never the
+    row. `NotificationService.notify` skips the actor, who is the recipient here, so handoffs use `notify_own`,
+    which writes with no `actorEmail`.
+  - **The IAM grant already existed.** Shared Projects 2.5a gave the Runtime a `ProjectsInboxWrite` statement
+    (`PutItem` / `BatchWriteItem` under `ForAllValues:StringLike dynamodb:LeadingKeys INBOX#*`), separate from
+    `ProjectsTableReadUpdate` and pinned by `test/projects-table.test.ts`. No CDK change, no new resource, no
+    Runtime environment bytes (`DYNAMODB_PROJECTS_TABLE_NAME` is already derived).
+  - **Read state.** `POST /sessions/{id}/handoffs/{handoffId}/notifications/read {kinds}` marks the caller's unread
+    entries of those kinds for that handoff (`NotificationService.mark_read_matching`, a filtered query over their
+    own partition), after the usual owner check on the handoff row. The SPA calls it on opening a target (once per
+    visit, only when the bell has unread entries or this tab saw that handoff change while the user was elsewhere)
+    and when a change lands while the source or target is in view. The entry is written a moment after the row
+    moves and the SPA learns the status from the row, so the in-view mark waits 1.5 s and looks once more at 3 s.
+    Bring back result (0.4) should call the same route with `["handoff_done"]`.
+  - **Browser notifications** (`HandoffNotificationService`) fire from the same place the toasts do, only while
+    `document.visibilityState === "hidden"`, with `tag: handoffId` and a title only ("*Agent* needs your input" /
+    "finished" / "stopped"). A failed `new Notification` (a browser that wants a service worker) is ignored. The
+    offer is a secondary toast action (`ToastOptions.secondaryAction`, new) and two buttons under a `needs_input`
+    row, both shown until the user answers the browser prompt or presses No thanks (kept in `localStorage`); the
+    setting is a card in Settings → Chat Preferences. 0.3c changes only where a click goes for a relayable prompt.
+  - **Metrics.** `HandoffNotified{inbox}` is emitted where the entry is written. The browser-side ones
+    (`HandoffNotified{browser}`, `HandoffNotificationOpened{inbox|browser}`, `HandoffBrowserPermission{outcome}`)
+    go through `POST /sessions/{id}/handoffs/{handoffId}/notifications/events`, which emits and reads nothing. A
+    permission answered from Settings has no handoff and isn't counted; the in-context ask is the one §4.7 is for.
 - **PR-0.3c — Relayed prompts.** Settle the two §4.3 verify-firsts (interrupt-service scoping, resuming a session
   that isn't viewed), then: `relayedPrompts` on the source's `GET /messages`; the relay under the row for consent,
   approval and questions, and the link-only relay for a browser sign-in; resume of the target from the source;

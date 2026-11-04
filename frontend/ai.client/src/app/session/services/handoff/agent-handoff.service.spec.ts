@@ -14,6 +14,7 @@ import { ConversationBindingService } from '../session/conversation-binding.serv
 import { AgentHandoffService } from './agent-handoff.service';
 import { buildHandoffMessage, wrapHandoffContext } from './handoff-prompt';
 import { CreateHandoffResponse } from './handoff.models';
+import { HandoffNotificationService } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
 
 const API = 'https://api.test';
@@ -44,12 +45,14 @@ describe('AgentHandoffService', () => {
   const submitHandoffRequest = vi.fn().mockResolvedValue(undefined);
   const draftRequest = vi.fn();
   const toastInfo = vi.fn();
+  const toastWarning = vi.fn();
   const navigate = vi.fn().mockResolvedValue(true);
 
   beforeEach(() => {
     submitHandoffRequest.mockClear();
     draftRequest.mockClear();
     toastInfo.mockClear();
+    toastWarning.mockClear();
     loading = signal<ReadonlySet<string>>(new Set());
     TestBed.configureTestingModule({
       providers: [
@@ -66,7 +69,7 @@ describe('AgentHandoffService', () => {
         { provide: Router, useValue: { navigate } },
         {
           provide: ToastService,
-          useValue: { info: toastInfo, success: vi.fn(), warning: vi.fn() },
+          useValue: { info: toastInfo, success: vi.fn(), warning: toastWarning },
         },
       ],
     });
@@ -177,5 +180,32 @@ describe('AgentHandoffService', () => {
     expect(service.hasRunningHandoff()).toBe(false);
     loading.set(new Set([target]));
     expect(service.hasRunningHandoff()).toBe(true);
+  });
+
+  it('a target that pauses tells the notification layer and its toast offers browser notifications', async () => {
+    const notifications = TestBed.inject(HandoffNotificationService);
+    const onStateChange = vi.spyOn(notifications, 'onStateChange').mockImplementation(() => undefined);
+    const requestPermission = vi.spyOn(notifications, 'requestPermission').mockResolvedValue('granted');
+    Object.assign(notifications, { canOffer: () => true });
+    await openReady();
+    await service.send('src');
+    const target = submitHandoffRequest.mock.calls[0][0].targetSessionId as string;
+
+    loading.set(new Set([target]));
+    TestBed.tick();
+    loading.set(new Set());
+    TestBed.tick();
+    await vi.waitFor(() => http.expectOne(`${API}/sessions/src/handoffs/h1`).flush({
+      ...state.rowsFor('src')[0], status: 'needs_input', waitingOn: { kind: 'oauth_consent', name: 'canvas' },
+    }), { timeout: 3000 });
+    await vi.waitFor(() => expect(toastWarning).toHaveBeenCalled());
+
+    expect(onStateChange).toHaveBeenCalledWith(expect.objectContaining({ handoffId: 'h1', status: 'needs_input' }));
+    const [title, , options] = toastWarning.mock.calls[0];
+    expect(title).toBe('Rubric Builder needs your input');
+    expect(options.secondaryAction.label).toBe('Get a browser notification next time');
+    expect(requestPermission).not.toHaveBeenCalled();
+    options.secondaryAction.handler();
+    expect(requestPermission).toHaveBeenCalledTimes(1);
   });
 });

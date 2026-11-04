@@ -10,6 +10,7 @@ import { FEATURES } from '../../services/features';
 import { QuotaRequestService } from '../../services/quota/quota-request.service';
 import { QuotaStatusService } from '../../services/quota/quota-status.service';
 import { environment } from '../../../environments/environment';
+import { HandoffNotificationService } from '../../session/services/handoff/handoff-notification.service';
 
 function notif(over: Partial<AppNotification> = {}): AppNotification {
   return {
@@ -57,6 +58,22 @@ describe('describeNotification', () => {
     [notif({ kind: 'quota_extension_granted', projectId: null, payload: { standing: true, amount: '200.00', fundingLabel: 'COAS Dean’s Office', through: '2027-06-30' } }), 'After your included quota, usage is now charged to COAS Dean’s Office, up to $200 per month through Jun 30, 2027.'],
     [notif({ kind: 'quota_extension_revoked', projectId: null, payload: { reason: 'Project ended' } }), 'An extension to your quota was ended.'],
   ])('%#: quota notifications read as a sentence', (n, text) => {
+    expect(describeNotification(n)).toBe(text);
+  });
+
+  const handoff = (kind: AppNotification['kind'], payload: AppNotification['payload'] = {}) =>
+    notif({
+      kind, projectId: null, projectName: null, actorEmail: null,
+      payload: { handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric',
+        agentName: 'Rubric Builder', sourceTitle: 'Course planning', ...payload },
+    });
+
+  it.each([
+    [handoff('handoff_needs_input'), 'Rubric Builder needs your input on the handoff from “Course planning”.'],
+    [handoff('handoff_done'), 'Rubric Builder finished the handoff from “Course planning”.'],
+    [handoff('handoff_stopped'), 'Rubric Builder stopped before finishing the handoff from “Course planning”.'],
+    [handoff('handoff_done', { agentName: '', sourceTitle: '' }), 'An agent finished your handoff.'],
+  ])('%#: handoff notifications name the Agent and the source, never the request', (n, text) => {
     expect(describeNotification(n)).toBe(text);
   });
 
@@ -254,6 +271,21 @@ describe('NotificationBellComponent', () => {
     expect(component.noteOf(notif({ kind: 'quota_extension_revoked', payload: { reason: 'Project ended' } }))).toBe('Project ended');
     component.open(n);
     expect(navigate).toHaveBeenCalledWith(['/settings', 'usage']);
+  });
+
+  it('a handoff entry marks itself read and opens the target through the handoff service', () => {
+    const openFromInbox = vi.fn();
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, handoffs: true } });
+    TestBed.overrideProvider(HandoffNotificationService, { useValue: { openFromInbox } });
+    const { component } = render();
+    const n = notif({
+      kind: 'handoff_needs_input', projectId: null,
+      payload: { handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric', agentName: 'Rubric Builder' },
+    });
+    component.open(n);
+    expect(service.markRead).toHaveBeenCalledWith(n);
+    expect(openFromInbox).toHaveBeenCalledWith({ handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric' });
+    expect(sidenav.close).toHaveBeenCalled();
   });
 
   it('a removal is only marked read: there is no project to open', () => {

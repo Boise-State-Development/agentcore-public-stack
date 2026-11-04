@@ -21,6 +21,7 @@ import {
   HandoffView,
 } from './handoff.models';
 import { HandoffBriefService } from './handoff-brief.service';
+import { HandoffNotificationService } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
 
 /** How long to keep asking for a finished target's status: the Runtime writes it just after the stream. */
@@ -41,6 +42,10 @@ const STATUS_REFRESH_INTERVAL_MS = 700;
  * what happened if the user isn't looking at the target. A tab with a running handoff asks before
  * it closes, because closing it stops the handoff (§4.6).
  *
+ * Each state change also goes to `HandoffNotificationService` (PR-0.3b): it marks the inbox entry
+ * read when the user is looking at the source or the target, and shows a browser notification
+ * when the page is hidden. The needs-input toast offers to turn browser notifications on.
+ *
  * With `features.handoffBrief` (PR-0.3a, §4.5.1), `open` then asks the source conversation's own
  * model for a brief and streams it into the card; the excerpt stays as the fallback. Send waits
  * for the brief to settle, so what the user reviewed is what goes.
@@ -58,6 +63,7 @@ export class AgentHandoffService {
   private readonly toast = inject(ToastService);
   private readonly features = inject(FEATURES);
   private readonly briefs = inject(HandoffBriefService);
+  private readonly notifications = inject(HandoffNotificationService);
 
   /** Targets seen streaming, so a falling edge is a finish and not a row that never started. */
   private readonly streamingTargets = new Set<string>();
@@ -352,13 +358,18 @@ export class AgentHandoffService {
   }
 
   private announce(row: HandoffView): void {
+    this.notifications.onStateChange(row);
     const target = row.targetSessionId;
     if (!target || this.chatState.viewedSessionId() === target) return;
     const action = { label: 'Open', handler: () => this.openTarget(row.agentId, target) };
     if (row.status === 'done') {
       this.toast.success(`${row.agentName} finished`, undefined, { action });
     } else if (row.status === 'needs_input') {
-      this.toast.warning(`${row.agentName} needs your input`, undefined, { action, duration: 0 });
+      // The first time something waits on the user is when a browser notification makes sense.
+      const secondaryAction = this.notifications.canOffer()
+        ? { label: 'Get a browser notification next time', handler: () => void this.notifications.requestPermission(row) }
+        : undefined;
+      this.toast.warning(`${row.agentName} needs your input`, undefined, { action, secondaryAction, duration: 0 });
     } else if (row.status === 'stopped') {
       this.toast.info(`${row.agentName} stopped`, undefined, { action });
     }
