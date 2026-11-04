@@ -22,8 +22,10 @@ export interface AwsLimit {
   adjustable: boolean;
   globalQuota: boolean;
   hasUsageMetric: boolean;
-  /** Peak over the last hour, in the quota's own unit and period. Null without a usage metric. */
+  /** Peak over the last `usageWindowDays` days, in the quota's own unit and period. Null when nothing measures it. */
   usage: number | null;
+  /** The CloudWatch series the usage came from. */
+  usageSource: string | null;
   /** usage / applied value, percent. */
   utilization: number | null;
   consoleUrl: string;
@@ -68,6 +70,8 @@ export interface AwsLimitsDashboard {
   summary: AwsLimitsSummary;
   autoManagement: AutoManagementStatus | null;
   guidanceUrl: string;
+  /** How far back usage looks. */
+  usageWindowDays: number;
 }
 
 export type IncreaseRequestStatus =

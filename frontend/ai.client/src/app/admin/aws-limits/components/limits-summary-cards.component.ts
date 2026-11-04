@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { SystemSummaryCardComponent } from '../../costs/components/system-summary-card.component';
 import { AwsLimitsSummary } from '../models';
 
@@ -14,13 +14,13 @@ import { AwsLimitsSummary } from '../models';
         title="At 80% or more"
         [value]="'' + summary().atOrAbove80"
         icon="heroExclamationTriangle"
-        detail="Where AWS publishes usage"
+        [detail]="windowDetail()"
       />
       <app-system-summary-card
         title="At 95% or more"
         [value]="'' + summary().atOrAbove95"
         icon="heroExclamationTriangle"
-        detail="Where AWS publishes usage"
+        [detail]="windowDetail()"
       />
       <app-system-summary-card
         title="Open increase requests"
@@ -33,4 +33,7 @@ import { AwsLimitsSummary } from '../models';
 })
 export class LimitsSummaryCardsComponent {
   readonly summary = input.required<AwsLimitsSummary>();
+  readonly windowDays = input(7);
+
+  protected readonly windowDetail = computed(() => `Peak of the last ${this.windowDays()} days, where measured`);
 }

@@ -9,7 +9,7 @@ isolation, POST validation and error mapping, and the audit record.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
@@ -104,6 +104,9 @@ def _only_groups(monkeypatch, *ids: str) -> None:
     monkeypatch.setattr(catalog, "CATALOG", tuple(g for g in catalog.CATALOG if g.id in ids))
 
 
+_METRIC_PARAMS = {"MetricDataQueries": ANY, "StartTime": ANY, "EndTime": ANY}
+
+
 def _stub_service(sq: Stubber, service: str, applied_pages: List[List[dict]], defaults: List[dict]) -> None:
     for i, page in enumerate(applied_pages):
         response: Dict[str, Any] = {"Quotas": page}
@@ -166,6 +169,7 @@ async def test_paginates_merges_defaults_and_reads_usage(aws, monkeypatch):
     assert [q.quota_code for q in jobs.limits] == [LAMBDA_CONCURRENCY]
     limit = jobs.limits[0]
     assert limit.usage == 850.0 and limit.utilization == 85.0 and limit.has_usage_metric
+    assert limit.usage_source == "AWS/Lambda ConcurrentExecutions (Maximum)"
     assert limit.console_url.endswith("/services/lambda/quotas/L-B99A9384")
     assert {q.quota_code: (q.applied_value, q.default_value) for q in app_api.limits} == {
         "L-3032A538": (512, 6),
@@ -259,14 +263,23 @@ async def test_bedrock_is_filtered_to_managed_models_unless_all_are_shown(aws, m
     aws.models.append(ModelRef(model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0", model_name="Claude Haiku 4.5"))
 
     _stub_service(aws.sq, "bedrock", [[haiku, opus, batch]], [haiku, opus, batch])
+    aws.scw.add_response("list_metrics", {"Metrics": []}, {"Namespace": "AWS/Bedrock", "MetricName": "Invocations"})
+    aws.scw.add_response("get_metric_data", {"MetricDataResults": []}, _METRIC_PARAMS)
     _stub_history(aws.sq, [])
     _stub_auto(aws.sq)
     (filtered,) = (await aws.service.dashboard()).groups
     assert [q.quota_code for q in filtered.limits] == ["L-1"]
+    assert filtered.usage_error is None
+    # No traffic this week is zero use, not N/A.
+    assert filtered.limits[0].usage == 0.0 and filtered.limits[0].utilization == 0.0
 
-    # The service snapshot is cached, so "Show all" costs no further list call.
+    # The service snapshot and the ModelId list are cached, so "Show all" lists nothing again.
+    aws.scw.add_response("get_metric_data", {"MetricDataResults": []}, _METRIC_PARAMS)
     (everything,) = (await aws.service.dashboard(all_bedrock=True)).groups
     assert sorted(q.quota_code for q in everything.limits) == ["L-1", "L-2", "L-3"]
+    by_code = {q.quota_code: q for q in everything.limits}
+    # Opus is in no catalog and had no traffic, and batch quotas are not throughput.
+    assert by_code["L-2"].usage is None and by_code["L-3"].usage is None
 
 
 def test_feature_groups_hide_with_their_feature(monkeypatch):
@@ -564,3 +577,118 @@ def test_flag_off_is_404_after_auth(api, monkeypatch):
 
     del api.client.app.dependency_overrides[get_current_user_from_session]
     assert api.client.get("/admin/aws-limits").status_code == 401
+
+
+# ── usage over the week ─────────────────────────────────────────────────────
+
+
+class _RecordingCloudWatch:
+    """A CloudWatch stand-in that answers from a table and keeps the requests."""
+
+    def __init__(self, series: Dict[tuple, Dict[datetime, float]], model_ids: List[str]):
+        self.series = series
+        self.model_ids = model_ids
+        self.requests: List[dict] = []
+
+    def get_paginator(self, name):
+        assert name == "list_metrics"
+        ids = self.model_ids
+
+        class _P:
+            def paginate(self, **kw):
+                assert kw == {"Namespace": "AWS/Bedrock", "MetricName": "Invocations"}
+                yield {"Metrics": [{"Dimensions": [{"Name": "ModelId", "Value": i}]} for i in ids]}
+
+        return _P()
+
+    def get_metric_data(self, **params):
+        self.requests.append(params)
+        results = []
+        for q in params["MetricDataQueries"]:
+            stat = q["MetricStat"]
+            dims = tuple((d["Name"], d["Value"]) for d in stat["Metric"]["Dimensions"])
+            points = self.series.get((stat["Metric"]["MetricName"], dims), {})
+            results.append({"Id": q["Id"], "Timestamps": list(points), "Values": list(points.values())})
+        return {"MetricDataResults": results}
+
+
+T1 = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+T2 = datetime(2026, 11, 1, 12, 1, tzinfo=timezone.utc)
+HAIKU = "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_quotas_are_measured_from_bedrock_metrics_over_seven_days(aws, monkeypatch):
+    _only_groups(monkeypatch, "model_inference", "background_jobs")
+    quotas = [
+        _quota("bedrock", "L-XR", "Cross-region model inference tokens per minute for Anthropic Claude Haiku 4.5", 5_000_000),
+        _quota("bedrock", "L-OD", "On-demand model inference requests per minute for Anthropic Claude Haiku 4.5", 1000),
+        _quota("bedrock", "L-GL", "Global cross-region model inference tokens per minute for Anthropic Claude Haiku 4.5", 5_000_000),
+        _quota("bedrock", "L-1M", "Cross-region model inference tokens per minute for Anthropic Claude Haiku 4.5 V1 1M Context Length", 1e6),
+    ]
+    _stub_service(aws.sq, "bedrock", [quotas], quotas)
+    concurrency = _quota("lambda", LAMBDA_CONCURRENCY, "Concurrent executions", 1000, UsageMetric=LAMBDA_USAGE)
+    _stub_service(aws.sq, "lambda", [[concurrency]], [concurrency])
+    _stub_history(aws.sq, [])
+    _stub_auto(aws.sq)
+    aws.models.append(ModelRef(model_id=f"us.{HAIKU}", model_name="Claude Haiku 4.5"))
+    tpm = ("EstimatedTPMQuotaUsage", (("ModelId", f"us.{HAIKU}"),))
+    cloudwatch = _RecordingCloudWatch(
+        {
+            tpm: {T1: 100_000.0, T2: 250_000.0},
+            # The on-demand model was invoked by id and by ARN; both count, per minute.
+            ("Invocations", (("ModelId", HAIKU),)): {T1: 30.0, T2: 10.0},
+            ("Invocations", (("ModelId", f"arn:aws:bedrock:us-west-2::foundation-model/{HAIKU}"),)): {T1: 15.0},
+            ("ConcurrentExecutions", ()): {T1: 7.0},
+        },
+        model_ids=[HAIKU, f"arn:aws:bedrock:us-west-2::foundation-model/{HAIKU}", f"us.{HAIKU}"],
+    )
+    aws.service._cloudwatch = cloudwatch
+
+    dashboard = await aws.service.dashboard()
+
+    by_code = {q.quota_code: q for g in dashboard.groups for q in g.limits}
+    assert by_code["L-XR"].usage == 250_000.0 and by_code["L-XR"].utilization == 5.0
+    assert "EstimatedTPMQuotaUsage" in by_code["L-XR"].usage_source
+    assert by_code["L-OD"].usage == 45.0 and by_code["L-OD"].utilization == 4.5
+    # The catalog model could be invoked globally; nobody did this week.
+    assert by_code["L-GL"].usage == 0.0
+    # A long-context variant cannot be told apart from the base model's traffic.
+    assert by_code["L-1M"].usage is None and by_code["L-1M"].utilization is None
+    assert by_code[LAMBDA_CONCURRENCY].usage == 7.0
+    assert dashboard.usage_window_days == 7
+
+    queries = {
+        (q["MetricStat"]["Metric"]["MetricName"], q["MetricStat"]["Stat"], q["MetricStat"]["Period"])
+        for r in cloudwatch.requests
+        for q in r["MetricDataQueries"]
+    }
+    # Sums stay per minute (the busiest minute); a Maximum loses nothing at an hour.
+    assert ("EstimatedTPMQuotaUsage", "Sum", 60) in queries
+    assert ("Invocations", "Sum", 60) in queries
+    assert ("ConcurrentExecutions", "Maximum", 3600) in queries
+    for r in cloudwatch.requests:
+        assert r["EndTime"] - r["StartTime"] == timedelta(days=7)
+
+
+@pytest.mark.asyncio
+async def test_small_utilization_keeps_its_precision(aws, monkeypatch):
+    _only_groups(monkeypatch, "agent_runtime")
+    sessions = _quota(
+        "bedrock-agentcore",
+        "L-3E5722B2",
+        "Active Session Workloads per Account",
+        5000,
+        UsageMetric={
+            "MetricNamespace": "AWS/Bedrock-AgentCore",
+            "MetricName": "ActiveSessionCount",
+            "MetricDimensions": {"Service": "AgentCore.Runtime"},
+            "MetricStatisticRecommendation": "Maximum",
+        },
+    )
+    _stub_service(aws.sq, "bedrock-agentcore", [[sessions]], [sessions])
+    _stub_history(aws.sq, [])
+    _stub_auto(aws.sq)
+    aws.service._cloudwatch = _RecordingCloudWatch({("ActiveSessionCount", (("Service", "AgentCore.Runtime"),)): {T1: 1.0}}, model_ids=[])
+    (group,) = (await aws.service.dashboard()).groups
+    assert group.limits[0].utilization == 0.02

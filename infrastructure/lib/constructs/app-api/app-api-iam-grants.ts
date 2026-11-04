@@ -948,11 +948,13 @@ function awsLimitsStatements(): iam.PolicyStatement[] {
       ],
       resources: ['*'],
     }),
-    // Usage: GetMetricData has no resource-level permissions.
+    // Usage: neither action has resource-level permissions. ListMetrics finds
+    // the Bedrock ModelIds that had traffic, whose AWS/Bedrock series measure
+    // the model inference quotas Service Quotas publishes no usage for.
     new iam.PolicyStatement({
       sid: 'AwsLimitsMetricsRead',
       effect: iam.Effect.ALLOW,
-      actions: ['cloudwatch:GetMetricData'],
+      actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
       resources: ['*'],
     }),
     // Write: limited to the monitored services.

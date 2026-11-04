@@ -37,6 +37,10 @@ const CHECKBOX =
           Service quotas on this AWS account for the services the stack uses.
           @if (dashboard(); as d) {
             <span>Region <strong class="font-medium text-gray-900 dark:text-white">{{ d.region }}</strong>.</span>
+            <span>
+              Usage is the high point of the last {{ d.usageWindowDays }} days: the busiest minute for requests and
+              tokens, the highest count for things like concurrent sessions. Hover a value to see its metric.
+            </span>
           }
         </p>
       </div>
@@ -95,7 +99,7 @@ const CHECKBOX =
     }
 
     @if (dashboard(); as d) {
-      <app-limits-summary-cards class="mb-8" [summary]="d.summary" />
+      <app-limits-summary-cards class="mb-8" [summary]="d.summary" [windowDays]="d.usageWindowDays" />
 
       <div class="mb-6 flex flex-wrap items-center gap-x-6 gap-y-3" role="group" aria-label="Filter limits">
         <div class="flex items-center gap-2">
@@ -131,6 +135,7 @@ const CHECKBOX =
           <app-limit-group-table
             [group]="group"
             [canRequest]="d.canRequestIncrease"
+            [windowDays]="d.usageWindowDays"
             [guidanceUrl]="d.guidanceUrl"
             [emptyMessage]="emptyMessage(group.id)"
             (requestIncrease)="openRequest($event)"

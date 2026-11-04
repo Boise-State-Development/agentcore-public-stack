@@ -36,9 +36,30 @@ By default, Bedrock rows are limited to the models in the managed-model catalog
 (the admin **Models** page). **Show all Bedrock quotas** lists every Bedrock quota.
 
 Each row shows the applied value (and the AWS default, when it differs), usage,
-utilization and a link to the quota in the Service Quotas console. Usage is the
-peak over the last hour. Many quotas, including most Bedrock model quotas, publish
-no usage metric; those show **N/A**. Utilization turns amber at 80% and red at 95%.
+utilization and a link to the quota in the Service Quotas console. Utilization
+turns amber at 80% and red at 95%.
+
+### How usage is measured
+
+Usage is the **high point of the last 7 days**, so a quiet day still shows where
+the account normally peaks. Hover a value to see the CloudWatch metric behind it.
+
+- **Rates and tokens** (requests per second, tokens per minute) use the busiest
+  minute. A per-second quota shows that minute's average rate, so a burst inside
+  the minute can run higher.
+- **Counts** (concurrent sessions, Lambda concurrency, tables) use the highest
+  value recorded.
+- **Bedrock model quotas** have no usage metric in Service Quotas, so they are
+  measured from Bedrock's own per-model metrics: `EstimatedTPMQuotaUsage` for
+  tokens per minute (it counts output tokens at their quota burndown rate, as
+  AWS does) and `Invocations` for requests per minute. A cross-Region quota
+  counts calls through the geographic profile (`us.…`), a global quota calls
+  through `global.…`, and an on-demand quota calls to the model itself. A model
+  nobody called that way this week shows 0%.
+- **N/A** means nothing in CloudWatch measures the quota: resource counts such as
+  Memories or Gateways, the bedrock-mantle endpoint, and long-context variants
+  ("1M Context Length") whose traffic Bedrock does not report separately from the
+  base model.
 
 AWS data is cached for about ten minutes. **Refresh** reads it again.
 

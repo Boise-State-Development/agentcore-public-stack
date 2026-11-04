@@ -156,3 +156,153 @@ def filter_quotas_for_models(quota_names: Iterable[str], models: Iterable[ModelR
     """The inference quota names that match at least one of ``models``."""
     refs = [m for m in models if m.provider.lower() in AWS_MODEL_PROVIDERS]
     return [name for name in quota_names if any(model_matches_quota(m, name) for m in refs)]
+
+
+# ---------------------------------------------------------------------------
+# Usage: which Bedrock metric series count against an inference quota
+#
+# Bedrock publishes per-model metrics in AWS/Bedrock keyed by the ``ModelId``
+# the caller invoked: the base id for on-demand ("anthropic.claude-…"), a
+# geographic inference profile for cross-Region ("us.anthropic.claude-…") and
+# ``global.`` for global inference. A quota's inference type is in its name, so
+# the ModelIds that count against it are the ones of the same type whose tokens
+# match the quota's model.
+# ---------------------------------------------------------------------------
+
+ON_DEMAND = "on_demand"
+CROSS_REGION = "cross_region"
+GLOBAL = "global"
+
+# Tokens-per-minute quotas compare against EstimatedTPMQuotaUsage, which counts
+# output tokens at their quota burndown rate; requests-per-minute quotas
+# against Invocations. Both publish one datapoint per request, so the
+# per-minute Sum is the minute's usage.
+TPM_METRIC = "EstimatedTPMQuotaUsage"
+RPM_METRIC = "Invocations"
+
+# Tokens a quota name may carry beyond the model's own without naming a
+# different variant: the vendor, and "V1"-style version suffixes. Anything
+# else ("1M Context Length") is a separate quota the base model's traffic
+# cannot be attributed to.
+_USAGE_REMAINDER_OK = _PROVIDER_PREFIXES | {"v"}
+
+
+def quota_inference_type(quota_name: str) -> Optional[str]:
+    """``on_demand`` / ``cross_region`` / ``global``, or None (mantle and non-inference quotas)."""
+    name = quota_name.strip().lower()
+    if not is_inference_quota(quota_name):
+        return None
+    if name.startswith("on-demand"):
+        return ON_DEMAND
+    if name.startswith("global cross-region"):
+        return GLOBAL
+    if name.startswith("cross-region"):
+        return CROSS_REGION
+    return None  # [bedrock-mantle endpoint]: metrics are not in AWS/Bedrock
+
+
+def quota_usage_metric(quota_name: str) -> Optional[str]:
+    """The AWS/Bedrock metric a quota is measured with, or None."""
+    if quota_inference_type(quota_name) is None:
+        return None
+    name = quota_name.lower()
+    if " tokens per minute " in name:
+        return TPM_METRIC
+    if " requests per minute " in name:
+        return RPM_METRIC
+    return None
+
+
+def model_id_inference_type(model_id: str) -> Optional[str]:
+    """How a ``ModelId`` dimension value was invoked. None for application profiles."""
+    ident = model_id.strip()
+    if ident.startswith("arn:"):
+        if ":application-inference-profile/" in ident:
+            return None  # an opaque id; its model is not in the name
+        ident = ident.rsplit("/", 1)[-1]
+    first = ident.split(".", 1)[0].lower()
+    if "." not in ident:
+        return None
+    if first == "global":
+        return GLOBAL
+    if first in _REGION_PREFIXES:
+        return CROSS_REGION
+    return ON_DEMAND
+
+
+def _base_model_id(model_id: str) -> Optional[str]:
+    ident = model_id.strip()
+    if ident.startswith("arn:"):
+        if ":application-inference-profile/" in ident:
+            return None
+        ident = ident.rsplit("/", 1)[-1]
+    parts = ident.split(".")
+    while len(parts) > 2 and parts[0].lower() in _REGION_PREFIXES:
+        parts = parts[1:]
+    return ".".join(parts) if len(parts) >= 2 else None
+
+
+def geo_prefix(region: str) -> Optional[str]:
+    """The cross-Region inference profile prefix for a Region ("us-west-2" -> "us")."""
+    region = region.lower()
+    if region.startswith("us-gov-"):
+        return "us-gov"
+    for start, prefix in (("us-", "us"), ("eu-", "eu"), ("ap-", "apac"), ("ca-", "ca")):
+        if region.startswith(start):
+            return prefix
+    return None
+
+
+def model_id_variants(model_id: str, region: str) -> List[str]:
+    """The ModelIds one catalog model can be invoked as: on-demand, geographic and global.
+
+    A variant nobody has invoked has no metric, which reads as zero use: true
+    for a model the platform could call that way but has not this week.
+    """
+    base = _base_model_id(model_id)
+    if base is None:
+        return [model_id]
+    variants = [model_id, base, f"global.{base}"]
+    geo = geo_prefix(region)
+    if geo:
+        variants.append(f"{geo}.{base}")
+    return list(dict.fromkeys(variants))
+
+
+def _usage_tokens_match(candidate: Sequence[str], quota_tokens: Sequence[str]) -> bool:
+    n = len(candidate)
+    if n < 2 or not _contains(quota_tokens, candidate):
+        return False
+    for start in range(len(quota_tokens) - n + 1):
+        if list(quota_tokens[start : start + n]) != list(candidate):
+            continue
+        rest = list(quota_tokens[:start]) + list(quota_tokens[start + n :])
+        if all(t in _USAGE_REMAINDER_OK or t.isdigit() for t in rest):
+            return True
+    return False
+
+
+def usage_model_ids(quota_name: str, model_ids: Iterable[str], models: Iterable[ModelRef] = ()) -> List[str]:
+    """The ``ModelId`` values whose AWS/Bedrock metrics count against ``quota_name``.
+
+    ``model_ids`` are candidates (from the managed catalog and from the metrics
+    Bedrock has published); ``models`` lend their display names to ids that
+    tokenize differently from the quota name. Stricter than
+    :func:`model_matches_quota`: the quota may not name a variant the id does not.
+    """
+    kind = quota_inference_type(quota_name)
+    part = quota_model_part(quota_name)
+    if kind is None or part is None:
+        return []
+    quota_tokens = tokenize(part)
+    names = {m.model_id: m.model_name for m in models if m.model_name}
+    found: List[str] = []
+    for model_id in dict.fromkeys(model_ids):
+        if model_id_inference_type(model_id) != kind:
+            continue
+        candidates = [model_id_tokens(model_id)]
+        if model_id in names:
+            candidates.append(model_name_tokens(names[model_id]))
+        if any(_usage_tokens_match(c, quota_tokens) for c in candidates):
+            found.append(model_id)
+    return found
