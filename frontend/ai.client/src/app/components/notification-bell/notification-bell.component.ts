@@ -25,7 +25,6 @@ import { FEATURES } from '../../services/features';
 import { QuotaStatusService } from '../../services/quota/quota-status.service';
 import { QUOTA_NOTIFICATION_KINDS, QuotaRequestService } from '../../services/quota/quota-request.service';
 import { formatAmount, formatQuotaDate, perPeriod } from '../../services/quota/quota-format';
-import { HandoffNotificationService } from '../../session/services/handoff/handoff-notification.service';
 
 /** Re-read on returning to the tab at most this often. */
 const REFRESH_ON_FOCUS_MS = 60_000;
@@ -424,12 +423,15 @@ export class NotificationBellComponent {
 
   protected open(n: AppNotification): void {
     void this.service.markRead(n);
-    // A handoff entry opens the Agent's conversation, which marks its other entries read.
+    // A handoff entry opens the Agent's conversation, which marks its other entries read. The
+    // handoff service loads on demand: the bell is in the initial bundle and the chat stack isn't.
     if (n.kind.startsWith('handoff_')) {
       const { handoffId, sourceSessionId, targetSessionId, agentId } = n.payload ?? {};
       if (this.features.handoffs && handoffId && sourceSessionId && targetSessionId && agentId) {
-        this.injector.get(HandoffNotificationService).openFromInbox({ handoffId, sourceSessionId, targetSessionId, agentId });
         this.sidenav.close();
+        void import('../../session/services/handoff/handoff-notification.service').then(({ HandoffNotificationService }) =>
+          this.injector.get(HandoffNotificationService).openFromInbox({ handoffId, sourceSessionId, targetSessionId, agentId }),
+        );
       }
       return;
     }

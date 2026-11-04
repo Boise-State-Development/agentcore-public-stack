@@ -273,7 +273,7 @@ describe('NotificationBellComponent', () => {
     expect(navigate).toHaveBeenCalledWith(['/settings', 'usage']);
   });
 
-  it('a handoff entry marks itself read and opens the target through the handoff service', () => {
+  it('a handoff entry marks itself read and opens the target through the handoff service', async () => {
     const openFromInbox = vi.fn();
     TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, handoffs: true } });
     TestBed.overrideProvider(HandoffNotificationService, { useValue: { openFromInbox } });
@@ -284,8 +284,10 @@ describe('NotificationBellComponent', () => {
     });
     component.open(n);
     expect(service.markRead).toHaveBeenCalledWith(n);
-    expect(openFromInbox).toHaveBeenCalledWith({ handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric' });
     expect(sidenav.close).toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(openFromInbox).toHaveBeenCalledWith({ handoffId: 'h1', sourceSessionId: 'src', targetSessionId: 'tgt', agentId: 'rubric' }),
+    );
   });
 
   it('a removal is only marked read: there is no project to open', () => {
