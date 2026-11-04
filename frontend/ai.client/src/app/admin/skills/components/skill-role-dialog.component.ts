@@ -8,8 +8,8 @@ import {
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { AdminSkillService } from '../services/admin-skill.service';
 import { AdminSkill, SkillRoleAssignment } from '../models/admin-skill.model';
-import { AppRolesService } from '../../roles/services/app-roles.service';
-import { AppRole } from '../../roles/models/app-role.model';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
+import { AppRoleOption } from '../../roles/models/app-role.model';
 import { DialogDescriptionDirective } from '../../../components/dialog/dialog-description.directive';
 import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
@@ -107,11 +107,11 @@ export class SkillRoleDialogComponent implements OnInit {
   protected readonly data = inject<SkillRoleDialogData>(DIALOG_DATA);
 
   private adminSkillService = inject(AdminSkillService);
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
   loading = signal(true);
   saving = signal(false);
-  allRoles = signal<AppRole[]>([]);
+  allRoles = signal<AppRoleOption[]>([]);
   currentAssignments = signal<Map<string, SkillRoleAssignment>>(new Map());
   selectedRoleIds = signal<Set<string>>(new Set());
 
@@ -119,7 +119,7 @@ export class SkillRoleDialogComponent implements OnInit {
     this.loading.set(true);
     try {
       const [rolesResponse, assignments] = await Promise.all([
-        this.appRolesService.fetchRoles(),
+        this.roleOptionsService.fetchRoles(),
         this.adminSkillService.getSkillRoles(this.data.skill.skillId),
       ]);
 

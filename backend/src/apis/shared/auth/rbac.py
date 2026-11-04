@@ -133,6 +133,60 @@ def require_admin_scope(scope: str) -> Callable:
     return checker
 
 
+async def has_any_admin_scope(user: User) -> bool:
+    """Whether ``user`` holds at least one delegable admin scope, or ``system_admin``.
+
+    The predicate behind ``require_any_admin_scope``. Only *delegable* scope ids count:
+    a stale or hand-written id on a role (an unknown scope, or a non-delegable one that
+    slipped past ``validate_admin_scopes``) is not evidence of delegated admin power, so it
+    opens nothing here either.
+
+    Fails closed, like ``has_admin_scope``.
+    """
+    from apis.shared.rbac.admin_scopes import DELEGABLE_SCOPES
+    from apis.shared.rbac.service import get_app_role_service
+
+    try:
+        permissions = await get_app_role_service().resolve_user_permissions(user)
+    except Exception:
+        logger.exception(
+            f"Failed to resolve admin scopes for {user.name}, denying access"
+        )
+        return False
+    return "system_admin" in permissions.app_roles or any(
+        scope in DELEGABLE_SCOPES for scope in permissions.admin_scopes
+    )
+
+
+def require_any_admin_scope() -> Callable:
+    """
+    Create a dependency for the few reads every delegated admin surface shares.
+
+    Passes ``system_admin`` and any user holding at least one delegable admin scope.
+    Deliberately narrow in what it is for: a route behind it must return nothing that
+    would let one scope's holder act outside that scope — today, only the role picker's
+    id/name list (``admin/roles/picker.py``). Anything that writes, or that reads one
+    area's data, takes ``require_admin_scope(<that area>)`` instead.
+
+    Raises:
+        HTTPException: 403 if the user holds no admin scope at all.
+    """
+    async def checker(user: User = Depends(get_current_user_from_session)) -> User:
+        if await has_any_admin_scope(user):
+            return user
+
+        logger.warning(
+            f"User {user.name} (jwt_roles: {user.roles}) denied access — "
+            "requires any admin scope"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied.",
+        )
+
+    return checker
+
+
 # ---------------------------------------------------------------------------
 # Predefined checkers
 # ---------------------------------------------------------------------------

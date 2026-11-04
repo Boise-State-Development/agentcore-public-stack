@@ -1041,6 +1041,14 @@ from .users.routes import router as users_router
 
 router.include_router(users_router)
 
+# ========== Include Role Picker Subrouter ==========
+# ⚠️ Must be included BEFORE the roles CRUD router below: its `/roles/{role_id}` is a
+# single-segment catch-all and would answer `GET /roles/picker-options` as a lookup of a
+# role by that id (system_admin-only, so a delegated admin would get a 403 again).
+from .roles.picker import router as role_picker_router
+
+router.include_router(role_picker_router)
+
 # ========== Include Roles Admin Subrouter ==========
 from .roles.routes import router as roles_router
 

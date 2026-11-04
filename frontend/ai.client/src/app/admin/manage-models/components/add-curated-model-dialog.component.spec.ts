@@ -3,7 +3,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { expectNamedDialog, openInCdkDialog } from '../../../../testing/cdk-dialog';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import { AppRole } from '../../roles/models/app-role.model';
 import { CuratedModel } from '../models/curated-models';
 import {
@@ -20,10 +20,10 @@ describe('AddCuratedModelDialogComponent', () => {
 
   const model = { template: { modelName: 'Claude Opus 5.5' } } as CuratedModel;
 
-  function provideRoles(service: Pick<AppRolesService, 'rolesResource' | 'getEnabledRoles'>) {
+  function provideRoles(service: Pick<RoleOptionsService, 'rolesResource' | 'getEnabledRoles'>) {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
-      providers: [{ provide: AppRolesService, useValue: service }],
+      providers: [{ provide: RoleOptionsService, useValue: service }],
     });
   }
 
@@ -32,8 +32,8 @@ describe('AddCuratedModelDialogComponent', () => {
     provideRoles({
       rolesResource: {
         isLoading: () => false,
-        error: () => new HttpErrorResponse({ status, url: '/admin/roles/' }),
-      } as unknown as AppRolesService['rolesResource'],
+        error: () => new HttpErrorResponse({ status, url: '/admin/roles/picker-options' }),
+      } as unknown as RoleOptionsService['rolesResource'],
       getEnabledRoles: () => {
         throw new Error('Resource is currently in an error state');
       },
@@ -45,7 +45,7 @@ describe('AddCuratedModelDialogComponent', () => {
       rolesResource: {
         isLoading: () => false,
         error: () => undefined,
-      } as unknown as AppRolesService['rolesResource'],
+      } as unknown as RoleOptionsService['rolesResource'],
       getEnabledRoles: () => roles,
     }),
   );
@@ -99,7 +99,7 @@ describe('AddCuratedModelDialogComponent', () => {
     expect(addButton(container).disabled).toBe(false);
   });
 
-  // A delegated models admin: the roles API is system_admin-only, the create route is not.
+  // A refused role list (e.g. an SPA ahead of its app-api) must not block the add.
   it('lets an admin who cannot read roles add the model with no roles, and says why', async () => {
     failRoles(403);
     const { ref, container } = await open();

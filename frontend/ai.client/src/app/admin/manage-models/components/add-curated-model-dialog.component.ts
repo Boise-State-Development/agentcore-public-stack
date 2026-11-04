@@ -7,7 +7,7 @@ import {
 } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { HttpErrorResponse } from '@angular/common/http';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import { CuratedModel } from '../models/curated-models';
 import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 
@@ -132,15 +132,17 @@ export class AddCuratedModelDialogComponent {
   protected readonly dialogRef = inject(DialogRef<AddCuratedModelDialogResult>);
   protected readonly data = inject<AddCuratedModelDialogData>(DIALOG_DATA);
 
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
-  readonly rolesResource = this.appRolesService.rolesResource;
-  readonly availableRoles = computed(() => this.appRolesService.getEnabledRoles());
+  readonly rolesResource = this.roleOptionsService.rolesResource;
+  readonly availableRoles = computed(() => this.roleOptionsService.getEnabledRoles());
 
   /**
-   * The roles API is `system_admin`-only, so an admin holding just the
-   * delegable models scope gets a 403 here while the create route still
-   * accepts them. Named apart from other failures so the copy can say why.
+   * The picker list is open to every delegated admin, so a 403 here should not
+   * happen to anyone who can reach this dialog. If it does (say, an SPA ahead of
+   * its app-api), the create route may still accept them, so the dialog falls
+   * back to adding with no roles. Named apart from other failures so the copy
+   * can say why.
    */
   readonly rolesForbidden = computed(() => {
     const error = this.rolesResource.error();

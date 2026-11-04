@@ -32,7 +32,7 @@ import {
   heroVideoCamera,
 } from '@ng-icons/heroicons/outline';
 import { ConnectorsService } from '../services/connectors.service';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import {
   Connector,
   ConnectorCreateRequest,
@@ -706,9 +706,9 @@ export class ConnectorFormPage implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private connectorsService = inject(ConnectorsService);
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
-  readonly rolesResource = this.appRolesService.rolesResource;
+  readonly rolesResource = this.roleOptionsService.rolesResource;
 
   readonly presets = CONNECTOR_PRESETS;
   readonly acceptedIconTypes = ICON_ACCEPTED_MIME_TYPES.join(',');
@@ -766,7 +766,7 @@ export class ConnectorFormPage implements OnInit {
 
   readonly pageTitle = computed(() => (this.isEditMode() ? 'Edit Connector' : 'Add Connector'));
 
-  readonly availableRoles = computed(() => this.appRolesService.getEnabledRoles());
+  readonly availableRoles = computed(() => this.roleOptionsService.getEnabledRoles());
 
   readonly selectedRoles = signal<string[]>(['*']);
 
