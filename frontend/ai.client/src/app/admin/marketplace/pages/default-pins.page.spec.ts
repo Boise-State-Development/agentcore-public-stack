@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { Dialog } from '@angular/cdk/dialog';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import { MarketplaceDefaultPinsPage } from './default-pins.page';
 import { LOCK_WARN_THRESHOLD, RoleAgentPinsResponse } from '../models/marketplace.model';
 
@@ -62,7 +62,7 @@ describe('MarketplaceDefaultPinsPage — locked-seed friction', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: AdminMarketplaceService, useValue: mockService },
-        { provide: AppRolesService, useValue: mockRoles },
+        { provide: RoleOptionsService, useValue: mockRoles },
         { provide: Dialog, useValue: { open: vi.fn() } },
       ],
     });

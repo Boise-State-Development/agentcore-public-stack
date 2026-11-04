@@ -4,7 +4,7 @@ import { FormBuilder, FormGroup, FormControl, Validators, ReactiveFormsModule } 
 import { CurrencyPipe } from '@angular/common';
 import { QuotaStateService } from '../../services/quota-state.service';
 import { QuotaAssignmentCreate, QuotaAssignmentType } from '../../models/quota.models';
-import { AppRolesService } from '../../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../../roles/services/role-options.service';
 import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 
 interface AssignmentFormGroup {
@@ -30,7 +30,7 @@ export class AssignmentDetailComponent implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private quotaStateService = inject(QuotaStateService);
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
   // Form state
   readonly isEditMode = signal<boolean>(false);
@@ -42,8 +42,8 @@ export class AssignmentDetailComponent implements OnInit {
   readonly tiers = this.quotaStateService.tiers;
 
   // Available app roles (for app_role assignment type)
-  readonly appRolesResource = this.appRolesService.rolesResource;
-  readonly appRoles = computed(() => this.appRolesService.getEnabledRoles());
+  readonly appRolesResource = this.roleOptionsService.rolesResource;
+  readonly appRoles = computed(() => this.roleOptionsService.getEnabledRoles());
 
   // Assignment types
   readonly assignmentTypes = [

@@ -17,7 +17,7 @@ import {
   AnnouncementSeverity,
   AnnouncementSurface,
 } from './models/announcement.model';
-import { AppRolesService } from '../roles/services/app-roles.service';
+import { RoleOptionsService } from '../roles/services/role-options.service';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 const URL_PATTERN = /^https?:\/\/.+/i;
@@ -439,7 +439,7 @@ function byteLength(value: string): number {
 })
 export class AnnouncementFormPage implements OnInit {
   private readonly service = inject(AnnouncementsAdminService);
-  private readonly rolesService = inject(AppRolesService);
+  private readonly rolesService = inject(RoleOptionsService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
 

@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
 import { ConnectorFormPage } from './connector-form.page';
 import { ConnectorsService } from '../services/connectors.service';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import { Connector } from '../models/connector.model';
 
 const CONNECTOR = {
@@ -48,7 +48,7 @@ function setup(providerId: string | null, connector: Connector = CONNECTOR) {
         useValue: service,
       },
       {
-        provide: AppRolesService,
+        provide: RoleOptionsService,
         useValue: {
           rolesResource: { isLoading: () => false, value: () => [] },
           getEnabledRoles: () => [],

@@ -391,6 +391,39 @@ class AppRoleListResponse(BaseModel):
     total: int
 
 
+class AppRoleOptionResponse(BaseModel):
+    """One role as a picker shows it: who it is, never what it grants.
+
+    Served to every delegated admin (``GET /admin/roles/picker-options``), so it must
+    stay this narrow. A grant list here would let, say, a Tools admin read which models
+    and admin scopes each role holds — role administration's view, which is
+    ``system_admin``-only (``admin.roles`` is non-delegable).
+    """
+
+    role_id: str = Field(..., alias="roleId")
+    display_name: str = Field(..., alias="displayName")
+    description: str
+    enabled: bool
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def from_app_role(cls, role: AppRole) -> "AppRoleOptionResponse":
+        return cls(
+            role_id=role.role_id,
+            display_name=role.display_name,
+            description=role.description,
+            enabled=role.enabled,
+        )
+
+
+class AppRoleOptionListResponse(BaseModel):
+    """Every role, ordered highest priority first, then by id."""
+
+    roles: List[AppRoleOptionResponse]
+    total: int
+
+
 class AdminScopeResponse(BaseModel):
     """One entry from the delegated admin scope registry."""
 

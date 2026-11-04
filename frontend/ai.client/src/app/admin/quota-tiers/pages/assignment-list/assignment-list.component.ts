@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { DatePipe } from '@angular/common';
 import { QuotaStateService } from '../../services/quota-state.service';
 import { QuotaAssignment, QuotaAssignmentType } from '../../models/quota.models';
-import { AppRolesService } from '../../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../../roles/services/role-options.service';
 
 @Component({
   selector: 'app-assignment-list',
@@ -15,7 +15,7 @@ import { AppRolesService } from '../../../roles/services/app-roles.service';
 })
 export class AssignmentListComponent implements OnInit {
   private quotaStateService = inject(QuotaStateService);
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
   // Filter signals
   searchQuery = signal<string>('');
@@ -135,7 +135,7 @@ export class AssignmentListComponent implements OnInit {
         return assignment.userId || 'N/A';
       case QuotaAssignmentType.APP_ROLE:
         if (assignment.appRoleId) {
-          const role = this.appRolesService.getRoleById(assignment.appRoleId);
+          const role = this.roleOptionsService.getRoleById(assignment.appRoleId);
           return role ? `${role.displayName} (${assignment.appRoleId})` : assignment.appRoleId;
         }
         return 'N/A';
