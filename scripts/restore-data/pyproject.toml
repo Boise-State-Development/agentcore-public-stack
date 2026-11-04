@@ -19,4 +19,6 @@ package = false
 
 # Security: constrain transitive cryptography to patched OpenSSL (GHSA-537c-gmf6-5ccf)
 # and to the PKCS#7 Bleichenbacher-oracle fix (CVE-2026-69247), patched in 50.0.0.
-constraint-dependencies = ["cryptography>=50.0.1"]
+# Security: constrain moto's transitive joserfc (dev only) past GHSA-jpxq-7h8p-2q76
+# (JWE recipients CPU DoS, 1.7.5) and GHSA-9pg5-8c7x-5hfx (compact JWS size guard, 1.7.6).
+constraint-dependencies = ["cryptography>=50.0.1", "joserfc>=1.7.6"]
