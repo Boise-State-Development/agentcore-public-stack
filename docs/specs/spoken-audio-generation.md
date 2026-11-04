@@ -1,7 +1,8 @@
 # Spoken audio generation: scripts rendered as speech
 
-Status: proposed, nothing built. Will ship in development behind
-`SPOKEN_AUDIO_ENABLED` (off by default).
+Status: proposed, nothing built. The PR-0 renderer spike ran on 2026-11-03
+(Appendix B). Will ship in development behind `SPOKEN_AUDIO_ENABLED` (off by
+default).
 
 ## 1. Summary
 
@@ -123,15 +124,32 @@ the renderer.
   revisions**. Both load with `trust_remote_code`, so the modeling code is
   reviewed and vendored into the image at that revision, and the container runs
   with `HF_HUB_OFFLINE=1`. Nothing is downloaded at runtime.
-- Weights (~16 GB) ship as a SageMaker `model.tar.gz` in the stack's model-data
-  bucket, not in the image, so the image stays small enough for a GitHub runner
-  to build. A runner with the default disk is still tight for a CUDA base image;
-  PR-1 confirms it or moves the build to a larger runner.
+- Weights (23.8 GB: 16 GB of MOSS-TTSD and 6.7 GB of codec) ship **uncompressed**
+  under an S3 prefix in the stack's model-data bucket (`ModelDataSource`,
+  `S3DataType: S3Prefix`, `CompressionType: None`), not in the image and not
+  as a `model.tar.gz`. SageMaker copied the 38 files to `/opt/ml/model` in
+  2m47s in PR-0, and nothing had to be unpacked (Appendix B).
+- **The image** needs no CUDA base image: torch's cu128 wheels carry their own
+  CUDA runtime, so PR-0 used `python:3.12-slim` (from ECR Public) plus ffmpeg.
+  It was 12.7 GB unpacked and 4.5 GB compressed in ECR. PR-1 confirms a
+  default GitHub runner has the disk for it or moves the build to a larger one.
+- **The image manifest must be Docker v2 schema 2.** SageMaker `CreateModel`
+  rejected both an OCI image index and a plain OCI image manifest. Build
+  without attestations and with Docker media types (`docker buildx build
+  --provenance=false --output type=registry,oci-mediatypes=false`).
+- The endpoint uses `InferenceAmiVersion: al2023-ami-sagemaker-inference-gpu-4-1`,
+  whose driver ran the cu128 wheels in PR-0.
+- **Attention stays on SDPA.** FlashAttention 2 was slower on the L40S (Appendix
+  B). transformers 5.0 applies `attn_implementation` only to the outer
+  MOSS-TTSD config and leaves the Qwen3 backbone on SDPA. Anyone re-testing it
+  must also set `model.language_model.config._attn_implementation` and check
+  every attention layer.
 - **House voices only.** v1 ships five synthetic voices, one per speaker tag
   `[S1]`–`[S5]`: short clips MOSS-TTSD generated from fixed seeds with no
   reference audio, plus their transcripts, versioned in the image under
-  `voices/`. The bake-off minted and tested two; PR-0 mints the remaining three
-  from fixed seeds. Requests name a voice id; the request schema has **no audio
+  `voices/`. The bake-off minted two (seeds 7 and 11), and PR-0 minted the
+  other three (seeds 13, 31 and 19) and checked all five in one render
+  (Appendix B). Requests name a voice id; the request schema has **no audio
   field**, and the renderer rejects any voice id it does
   not ship. No user-supplied or real person's voice is ever used. (MOSS-TTSD's own
   sample reference clips are recordings of public figures and are not used.)
@@ -140,8 +158,9 @@ the renderer.
 
 ### 4.3 Endpoint and scaling
 
-- **Instance:** `ml.g6e.xlarge` (NVIDIA L40S, 48 GB). The bake-off peaked at
-  24.8 GB of GPU memory, so 24 GB cards (A10G, L4) are ruled out.
+- **Instance:** `ml.g6e.xlarge` (NVIDIA L40S, 48 GB). The weights alone take
+  23.9 GB on the GPU, and an 18-minute render peaked at 28.1 GB allocated (30.4 GB
+  reserved), so 24 GB cards (A10G, L4) are ruled out.
 - **Scale to zero:** an Application Auto Scaling target with minimum 0 and maximum
   `CDK_SPOKEN_AUDIO_RENDERER_MAX_INSTANCES` (default 1, matching dev's quota of one
   `ml.g6e.xlarge` endpoint instance). It scales out from zero on the
@@ -151,11 +170,31 @@ the renderer.
 - **One render per instance** (`MaxConcurrentInvocationsPerInstance: 1`). Jobs
   queue in SageMaker's own async queue.
 - **Request TTL:** a request that waits longer than 1 hour lands in
-  `failures/` and is finalized as failed, so nothing waits forever.
-- **Cold start is unmeasured.** It covers provisioning an instance, pulling the
-  image and loading 16 GB of weights. PR-0 measures it; the target is under 8
-  minutes. An environment can add a keep-warm schedule (minimum 1 during working
-  hours) at $2.6054 per hour if cold starts prove too slow.
+  `failures/` and is finalized as failed, so nothing waits forever. This must
+  be set explicitly on every `InvokeEndpointAsync` (`RequestTTLSeconds`). PR-0
+  left it unset, and a request that never got an instance was still queued,
+  with nothing in `failures/`, 2h53m later.
+- **Cold start (measured in PR-0, Appendix B) has two parts, and only one is
+  bounded.**
+  - **Once SageMaker has an instance, it is about 6 minutes.** From host boot to
+    `/ping` passing took 4m59s: the weights copied to `/opt/ml/model` in 2m47s,
+    the container started 32 s later, and the model loaded and warmed up in 34 s.
+    DescribeEndpoint reported `InService` about 70 s after that. The old
+    8-minute target holds for this part.
+  - **Getting an instance is unbounded.** Creating the endpoint waited 25m43s
+    before its host booted. The one scale-from-zero cycle never got an instance:
+    the backlog alarm fired 4m23s after the request was queued, and SageMaker
+    then reported `InsufficientInstanceCapacity` for `ml.g6e.xlarge`. Application
+    Auto Scaling marked the scale-out `Unfulfilled` after 2 hours. The endpoint
+    was still at zero instances when PR-0 tore it down 2h48m after the request.
+    That is one night in one region, but a scale-to-zero design has to treat
+    "no capacity for hours" as a normal outcome, not an edge case.
+  - **Consequences:** the 1-hour request TTL and the `expired` state (§5.3) are
+    paths users will see, not just a safety net. The card never promises a time
+    while cold (§6). An environment that needs predictable latency keeps one
+    instance warm (§14). A warm instance is the only way PR-0 found to bound the
+    wait, at $2.6054 per hour: about $573 a month for 10 hours on each of 22
+    working days.
 
 ### 4.4 The bucket contract
 
@@ -199,13 +238,17 @@ create_spoken_audio(title: str, script: str) -> card
   MOSS-TTSD and the bake-off used. Each tag maps to one house voice (§4.2), so
   one to five speakers, a single narrator included. Choosing voices is an open
   question (§14).
-- **Quality is measured for two speakers only.** The bake-off rendered a
-  two-host script. A single narrator and three to five speakers are unmeasured
-  until PR-0 renders them (§12).
-- **Validation:** at most 3,000 words in v1 (about 15 minutes at the 3.4 words
-  per second MOSS-TTSD spoke in the bake-off), until PR-0 measures long-form
-  renders. At least one turn, every turn tagged `[S1]` to `[S5]`, and at most 2
-  unfinished jobs per user.
+- **Quality is measured for one, two and five speakers** (Appendix B). A
+  single-narrator `[S1]` script scored WER 0.000. A five-speaker panel scored
+  0.002, with every scored turn attributed to the right house voice.
+- **Validation:** at most **3,600 words** in v1, about 18 minutes at the 3.3–3.8
+  words per second MOSS-TTSD spoke in PR-0. That is the longest render PR-0
+  measured, at 3,678 words. It rendered in one pass in 558 s with WER 0.008 and
+  no voice drift, at 28.1 GB peak GPU memory. Longer scripts are unmeasured,
+  not known to fail. The renderer's `max_new_tokens` must scale with the word
+  count: PR-0 used `words / 2.2 × 12.5` frames, and no render reached it. At
+  least one turn, every turn tagged `[S1]` to `[S5]`, and at most 2 unfinished
+  jobs per user.
 - **Quota pre-check:** the estimated cost (§7) is checked against the user's
   remaining quota with the same check the turn path uses. Over quota, the tool
   returns a refusal the model can relay, and nothing is submitted.
@@ -282,7 +325,7 @@ shared copy.
 **Alternatives rejected:**
 
 - **The tool waits for the render.** A render takes about half the audio's length
-  plus a cold start of minutes, which breaks the 600 s turn limit for anything
+  plus a cold start of minutes to hours (§4.3), which breaks the 600 s turn limit for anything
   but a short clip. It would also hold the session's single-flight lease, so the
   user could not send another message, and tie the render to a Runtime microVM.
 - **app-api finalizes lazily when the card polls.** A render whose user closes
@@ -324,10 +367,18 @@ ordinary tool rail.
 
 | State | Card |
 |---|---|
-| `queued` / `submitted`, `coldStart: true` | "Warming up the renderer. The first render in a while takes a few extra minutes." Indeterminate bar |
+| `queued` / `submitted`, `coldStart: true` | "Starting the renderer. After it has been idle this can take anywhere from a few minutes to over an hour. You can leave; the audio will be saved to this chat's Files." Indeterminate bar, no time estimate |
 | `submitted` | "Rendering *Title*, about N min of audio". A progress bar driven by `estimatedReadyAt` that slows near the end and never shows 100% before `ready` |
 | `ready` | Native `<audio controls preload="none">` player, duration, a Download button and "Saved to this chat's Files" |
-| `failed` / `expired` | What happened, in a sentence, and that asking again will retry. No cost was charged |
+| `failed` / `expired` | What happened, in a sentence, and that asking again will retry. No cost was charged. When the request timed out without an instance, say the renderer could not start and suggest trying later, because asking again right away will most likely wait in the same queue |
+
+- **Cold copy names no number of minutes.** PR-0 measured about 6 minutes once
+  an instance exists, but 26 minutes to get one on create and no instance at all
+  within 2h48m on scale-from-zero (§4.3). The submit Lambda does not set
+  `estimatedReadyAt` while `coldStart` is true, so a cold job's card shows no
+  estimate until it reaches a terminal state. Nothing in this design notices
+  when the instance arrives; switching to an estimate partway through would
+  need a writer that does, which is left out of v1.
 
 - **Polling:** every 5 s for the first minute, then every 15 s. It pauses while
   `document.hidden` and stops at a terminal state. A reloaded conversation
@@ -372,17 +423,25 @@ costUsd = renderS × gpuUsdPerHour / 3600
   the endpoint's actual instance-hours. Charging a cold start to whoever happened
   to trigger it would make the same render cost a user anywhere from $0.05 to
   $0.40.
-- **Pre-check estimate** (§5.1): `wordCount / 3.4 × 0.5 × rate / 3600 × 1.5`,
-  which uses the bake-off's speaking rate and render speed with a 50% margin.
+- **Render speed is 0.52× real time and flat with length** (PR-0, SDPA, one L40S):
+  0.517–0.522 across every render from 2 to 18 minutes of audio. FlashAttention 2
+  was slower, at 0.608–0.614, so the figure is not an upper bound waiting on
+  a faster kernel.
+- **Pre-check estimate** (§5.1): `wordCount / 3.3 × 0.52 × rate / 3600 × 1.5`.
+  It uses the slowest two-speaker speaking rate and the render speed PR-0
+  measured, with a 50% margin. A 3,600-word script estimates at $0.62.
 
-| Script | Render (at 0.5× real time) | Charged |
-|---|---|---|
-| Bake-off script (487 words, 2.3 min) | ~70 s | ~$0.05 |
-| 10 minutes | ~300 s | ~$0.22 |
-| 15 minutes (v1 cap) | ~450 s | ~$0.33 |
+| Script (PR-0 renders) | Audio | Render | Charged |
+|---|---|---|---|
+| Bake-off script (466 words) | 2.3 min | 73.4 s | $0.053 |
+| 2,018 words | 9.9 min | 305.8 s | $0.221 |
+| 2,992 words | 13.6 min | 420.9 s | $0.305 |
+| 3,678 words (≈ v1 cap) | 18.0 min | 558.2 s | $0.404 |
 
-The overhead per cold cycle is roughly the warm-up (~5 min, ~$0.22, unmeasured)
-plus 15 idle minutes (~$0.65).
+The overhead per cold cycle is the time from host boot to serving (4m59s,
+$0.22, measured), plus 15 idle minutes ($0.65). PR-0 does not show whether
+SageMaker bills the time it spends waiting for capacity before the host boots.
+The monthly reconciliation against the endpoint's instance-hours will show it.
 
 ## 8. Flags and configuration
 
@@ -409,7 +468,7 @@ plus 15 idle minutes (~$0.65).
 - **Tool spec:** a constant, about 250 tokens in `toolConfig`, present only for
   users granted the tool, in deterministic order.
 - **Script:** model output once, then part of the conversation history as the
-  tool call's input. The 3,000-word cap bounds it at about 4k tokens, read from
+  tool call's input. The 3,600-word cap bounds it at about 5k tokens, read from
   the cache at 0.1× on later turns.
 - **Result:** under 60 tokens: no URL, no transcript, no status.
 - **Nothing re-enters the conversation when the render finishes.** History stays
@@ -445,7 +504,8 @@ plus 15 idle minutes (~$0.65).
 
 ## 12. Phasing
 
-1. **PR-0, renderer spike (no platform change).**
+1. **PR-0, renderer spike (no platform change). Done 2026-11-03; results in
+   Appendix B.**
    - Render 5, 10 and 15 minutes in a single pass, and record memory and quality.
    - Measure a SageMaker async cold start from zero.
    - Build FlashAttention and re-measure render speed.
@@ -511,8 +571,16 @@ plus 15 idle minutes (~$0.65).
    MOSS-TTSD gives no word timestamps, so WebVTT would need alignment.
 5. **Labelling:** whether to mark generated audio as AI-made, in ID3 metadata
    and/or spoken.
-6. **Cold starts in prod:** whether to add a keep-warm schedule, decided from
-   PR-0's measurement and real usage.
+6. **Cold starts in prod:** PR-0 found that getting an `ml.g6e.xlarge` from zero
+   took 26 minutes once and failed for over 2 hours the other time (§4.3). The
+   options:
+   - A keep-warm schedule. About $573 a month for working hours, and a scale-in
+     outside those hours meets the same capacity problem the next morning.
+   - A second instance type or region as a fallback.
+   - Accepting long waits for a feature whose output lands in Files anyway.
+
+   The choice is per deployment and needs real usage. PR-1 can make the
+   schedule a config knob.
 7. **Other clients:** later expose the same renderer as an MCP server for Claude
    Desktop and Code. The hybrid keeps that door open: the renderer does not know
    the platform exists, apart from the finalizer.
@@ -534,9 +602,201 @@ is the scorer's floor.
 
 - **Only the unconditioned Dia2 arm garbled content:** a whole passage came back
   as nonsense.
-- **MOSS-TTSD ran without FlashAttention** (it fell back to SDPA), so its render
-  times are an upper bound.
+- **MOSS-TTSD ran without FlashAttention** (it fell back to SDPA). PR-0 later
+  found FlashAttention 2 slower on this card (Appendix B), so SDPA stays.
 - **The house voices** were two ~5.5 s clips MOSS-TTSD generated with no
   reference. Both open models cloned them.
 - **Excluded:** VibeVoice (Microsoft withdrew the TTS code), Fish Audio S2 Pro
   (research licence) and Higgs Audio v3 (non-commercial).
+
+## Appendix B: PR-0 renderer spike, 2026-11-03
+
+Everything ran in dev, us-west-2:
+
+- Renders and scoring on one EC2 g6e.xlarge (NVIDIA L40S, 46,068 MiB, driver
+  595), from the same weights the endpoint read.
+- The FlashAttention wheel and the endpoint image were built on a c7i.8xlarge.
+- The cold-start measurement used a SageMaker async endpoint on `ml.g6e.xlarge`.
+
+All of it was torn down afterwards. The scripts that produced these numbers are in
+[`spoken-audio-generation/pr0-spike/`](spoken-audio-generation/pr0-spike/).
+
+**Setup.**
+
+- Model revisions:
+  - MOSS-TTSD v1.0 `c7cd852d87aff71cab5bd2b9b05509cedc0ef1ba`
+  - MOSS-Audio-Tokenizer `3cd226ba2947efa357ef453bcad111b6eafba782`
+  - The MOSS-TTSD repository's `generation_utils.py` at `46973e425d`
+- Rendering: BF16, `voice_clone_and_continuation` against the house voices,
+  temperature 1.1, top-p 0.9, top-k 50, repetition penalty 1.1, seed 42.
+- Scoring:
+  - WER is Whisper `medium.en` against the script.
+  - Voice hold aligns Whisper's word timestamps to the script's turns. It embeds
+    every turn of at least 2 s with WavLM base-plus-sv and attributes the turn
+    to the most similar house voice in that script.
+  - "Similarity" is the mean cosine to the right voice. "Margin" is how far
+    that beats the closest other voice.
+- **Comparing WER with Appendix A:** this scorer gives the bake-off script
+  0.017, against Appendix A's 0.050 for the same arm. The scorer's text
+  normalisation is the likely cause; Polly's 0.048 floor in Appendix A points
+  the same way. Compare WERs within this appendix, not across the two.
+
+### B.1 Long-form and speaker-count renders (SDPA)
+
+| Script | Speakers | Words | Audio | Render | × real time | Peak GPU (alloc / reserved) | WER | WER by third |
+|---|---|---|---|---|---|---|---|---|
+| Bake-off | 2 | 466 | 140.7 s | 73.4 s | 0.522 | 24.8 / 25.4 GB | 0.017 | 0.019 / 0.006 / 0.025 |
+| Narrator | 1 | 409 | 107.4 s | 55.9 s | 0.521 | 24.6 GB | 0.000 | — |
+| Panel | 5 | 472 | 133.8 s | 69.7 s | 0.521 | 25.3 GB | 0.002 | — |
+| ~5 min | 2 | 1,004 | 272.6 s | 141.4 s | 0.519 | 25.4 / 26.4 GB | 0.006 | — |
+| ~10 min | 2 | 2,018 | 591.2 s | 305.8 s | 0.517 | 26.4 / 27.4 GB | 0.005 | 0.010 / 0.000 / 0.006 |
+| ~15 min | 2 | 2,992 | 814.2 s | 420.9 s | 0.517 | 27.4 / 28.8 GB | 0.004 | 0.005 / 0.004 / 0.004 |
+| ~18 min | 2 | 3,678 | 1,078.9 s | 558.2 s | 0.517 | 28.1 / 30.4 GB | 0.008 | 0.008 / 0.008 / 0.007 |
+
+**Voice hold.** No render attributed any scored turn to the wrong voice.
+
+| Script | Turns scored | Similarity by third | Margin by third |
+|---|---|---|---|
+| Bake-off | 17 | 0.961 / 0.949 / 0.967 | 0.228 / 0.217 / 0.229 |
+| Narrator | 9 | 0.971 / 0.961 / 0.958 | — |
+| Panel (5 voices) | 16 | 0.957 / 0.955 / 0.945 | 0.191 / 0.226 / 0.161 |
+| ~5 min | 28 | 0.966 / 0.965 / 0.958 | 0.259 / 0.243 / 0.233 |
+| ~10 min | 59 | 0.966 / 0.960 / 0.961 | 0.225 / 0.219 / 0.219 |
+| ~15 min | 86 | 0.964 / 0.960 / 0.961 | 0.252 / 0.244 / 0.250 |
+| ~18 min | 109 | 0.966 / 0.965 / 0.960 | 0.207 / 0.217 / 0.209 |
+
+- **No late-render drift.** In every render, the last third's similarity and
+  margin are within about 0.01 of the first third's, and its WER is no worse.
+- **One pass, no chunking.** No render reached its token cap.
+- **Render speed and memory with length.** Render speed did not change with
+  length. Peak memory grew about 1 GB per 1,000 words above the weights' 23.9 GB.
+- **Speaking rate** was 3.3–3.8 words per second.
+
+### B.2 FlashAttention 2
+
+- **Build:** FlashAttention `v2.8.3.post2` built from source for
+  `torch==2.9.1+cu128` / cp312, with `FLASH_ATTN_CUDA_ARCHS=80`. That code
+  runs on the L40S's sm_89. The build took 1,178 s on a c7i.8xlarge with
+  `MAX_JOBS=10` and produced a 59.6 MB wheel.
+- **The first run was a silent no-op.** Its WAVs were byte-identical to the SDPA
+  run. transformers 5.0 had applied `attn_implementation="flash_attention_2"` to
+  the outer `MossTTSDelayModel` config only, so all 36 Qwen3 attention layers
+  stayed on SDPA. The second run set the backbone's
+  `config._attn_implementation` too and asserted that every attention layer
+  reported it.
+
+| Script | SDPA × real time | FlashAttention 2 × real time | FA2 WER | FA2 turns misattributed |
+|---|---|---|---|---|
+| Bake-off | 0.522 | 0.614 | 0.015 | 0 / 20 |
+| ~5 min | 0.519 | 0.608 | 0.005 | 0 / 29 |
+| ~10 min | 0.517 | 0.608 | 0.004 | 0 / 57 |
+
+- **FlashAttention 2 was about 17% slower and saved no memory.** Peak GPU
+  memory matched SDPA. Quality was the same within noise. SDPA stays.
+
+### B.3 House voices
+
+- **Seeds:** S1 and S2 are the bake-off's voices, from seeds 7 and 11. Their
+  re-mints matched the bake-off clips (cosine 1.000 to 3 dp, same length).
+- **Minting S3–S5:** each was minted under seeds 13, 17, 19, 23, 29 and 31 with
+  no reference audio.
+- **Selection:**
+  - Candidates Whisper could not read back word for word were dropped:
+    S4 seeds 17 and 23, and S5 seed 23.
+  - S3, S4 and S5 were then chosen in turn. For each, the candidate least
+    similar to the voices already chosen was taken.
+
+| Voice | Seed | Clip |
+|---|---|---|
+| S1 | 7 | 5.6 s |
+| S2 | 11 | 5.4 s |
+| S3 | 13 | 5.9 s |
+| S4 | 31 | 5.1 s |
+| S5 | 19 | 5.4 s |
+
+Pairwise similarity of the clips:
+
+| | S2 | S3 | S4 | S5 |
+|---|---|---|---|---|
+| **S1** | 0.756 | 0.639 | 0.563 | 0.274 |
+| **S2** | | 0.372 | 0.696 | 0.672 |
+| **S3** | | | 0.641 | 0.165 |
+| **S4** | | | | 0.632 |
+
+- **The voices stay apart in a render, even the closest pair.** S1 and S2 are
+  the most similar clips (0.756), yet in the panel render every turn still
+  matched its own voice best, by a margin of 0.16–0.23 per third.
+- **No real recordings.** None of MOSS-TTSD's bundled reference clips was used.
+
+### B.4 SageMaker async cold start
+
+**Endpoint configuration.**
+
+- The PR-0 image (`python:3.12-slim` + ffmpeg + the pinned stack): 12.7 GB
+  unpacked, 4.5 GB compressed. Docker build 331 s, push to ECR 66 s.
+- Weights: an uncompressed `S3Prefix` of 38 files, 23.8 GB.
+- Instance and AMI: `ml.g6e.xlarge`, `InferenceAmiVersion
+  al2023-ami-sagemaker-inference-gpu-4-1`, `MaxConcurrentInvocationsPerInstance 1`.
+- **Manifest format:** SageMaker rejected the image as pushed, both as an OCI
+  image index and as an OCI image manifest. The manifest had to be rewritten
+  as Docker v2 schema 2.
+
+**Where each timestamp came from.**
+
+- The container's own log lines: the host boot time from `/proc/stat`, the
+  modification-time window of the files SageMaker wrote to `/opt/ml/model`, and
+  each startup stage.
+- DescribeEndpoint, polled every 10 s.
+- The backlog alarm's history and the Application Auto Scaling activities.
+
+**Endpoint create (InitialInstanceCount 1):**
+
+| Stage | Time | Elapsed from create |
+|---|---|---|
+| `CreateEndpoint` called | 00:13:06.6Z | 0 |
+| Host booted | 00:38:50Z | 25m43s |
+| First weight file written | 00:39:55Z | 26m48s |
+| Last weight file written (2m47s of copying) | 00:42:42Z | 29m36s |
+| Container process started | 00:43:14.7Z | 30m08s |
+| torch imported, CUDA up | 00:43:18.6Z | 30m12s |
+| Model loaded (20.6 s, 23.9 GB on GPU) | 00:43:46.5Z | 30m40s |
+| Warm-up render done (2.2 s), `/ping` healthy | 00:43:48.7Z | 30m42s |
+| DescribeEndpoint shows `InService` | 00:44:59.5Z | 31m53s |
+
+- **Host boot to serving took 4m59s.** The image pull is not separately
+  visible: it fits inside the same window, which also holds the weight copy.
+
+**Warm render on the endpoint.** The bake-off script was queued at 00:45:23.6Z,
+and the container received it 0.1 s later. Its manifest reported:
+
+- 145.7 s of audio
+- 73.5 s of generation
+- 76.6 s of render, including MP3 encoding
+- 24.8 GB peak GPU memory
+
+The output and the 2.3 MB MP3 landed in S3 at 00:46:41Z, about 77 s end to end.
+
+**Scale to zero.** `DesiredInstanceCount 0` was set at 00:47:08Z. The instance
+count read 0 by 00:47:39Z, and the endpoint was back to `InService` at 0/0 by
+00:48:28Z.
+
+**Scale from zero (step scaling on `HasBacklogWithoutCapacity`, values from the
+SageMaker async autoscaling guide: 60 s period, 2 of 2 datapoints):**
+
+| Event | Time | Elapsed from queue |
+|---|---|---|
+| Request queued | 00:48:54.4Z | 0 |
+| Alarm `INSUFFICIENT_DATA` → `OK` | 00:50:17.7Z | 1m23s |
+| Alarm `OK` → `ALARM`; scaling activity starts, desired 0 → 1 | 00:53:17.7Z | 4m23s |
+| DescribeEndpoint: `InService`, 0 of 1, "Unable to provision all the requested ML compute capacity due to InsufficientInstanceCapacity error" | by 01:28:24Z | ≤ 39m30s |
+| Scaling activity ends `Unfulfilled` | 02:53:47Z | 2h04m53s |
+| Still 0 of 1, nothing in `failures/`; torn down | 03:41:55Z | 2h53m01s |
+
+- **The one scale-from-zero attempt never got an instance.** The alarm took
+  4m23s to act on a queued request. After that, the wait was entirely
+  SageMaker looking for `ml.g6e.xlarge` capacity, which it did not find in
+  nearly three hours.
+- **A second cycle was not attempted.** With no capacity available, it would
+  have measured the same queue.
+- **The request TTL was left at its default.** The request was still queued
+  when the endpoint was deleted.
