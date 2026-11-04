@@ -9,10 +9,12 @@ the callback URL that the admin must register with the vendor.
 import asyncio
 import logging
 import os
+import re
 from functools import lru_cache
 from typing import Optional
 
 import boto3
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apis.app_api.export_targets.registry import registry as export_target_registry
@@ -64,6 +66,36 @@ _ORPHAN_METRIC_NAME = "ProviderOrphaned"
 def _cloudwatch_client():
     region = os.environ.get("AWS_REGION", "us-west-2")
     return boto3.client("cloudwatch", region_name=region)
+
+
+# AgentCore error codes that mean "your configuration was rejected". Only
+# these have their message echoed to the (admin-only) caller; any other
+# ClientError keeps the global handler's generic 502.
+_VALIDATION_ERROR_CODES = frozenset({"ValidationException", "InvalidParameterValue"})
+_MAX_REJECTION_REASON_CHARS = 300
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _agentcore_rejection(err: ClientError) -> HTTPException | None:
+    """Turn an AgentCore validation rejection into a 400 naming the reason.
+
+    The global handler hides the vendor message because most routes are
+    user-facing. This route is admin-only and the admin typed the config
+    (tenant issuer, endpoints), so "TokenEndpoint is not a valid URL" is
+    what they need to fix it. Returns None for any non-validation code so
+    the caller re-raises and the generic handler applies.
+    """
+    error = err.response.get("Error", {})
+    if error.get("Code") not in _VALIDATION_ERROR_CODES:
+        return None
+    reason = _CONTROL_CHARS.sub(" ", str(error.get("Message") or "")).strip()
+    if len(reason) > _MAX_REJECTION_REASON_CHARS:
+        reason = reason[:_MAX_REJECTION_REASON_CHARS].rstrip() + "..."
+    logger.warning("AgentCore rejected provider configuration: %s", reason)
+    detail = "AgentCore rejected the configuration"
+    if reason:
+        detail = f"{detail}: {reason}"
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
 async def _rollback_orphaned_provider(
@@ -239,6 +271,11 @@ async def create_provider(
         )
     except InvalidCustomProviderConfigError as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
+    except ClientError as err:
+        rejection = _agentcore_rejection(err)
+        if rejection is None:
+            raise
+        raise rejection from err
 
     try:
         provider = _build_provider_from_create(provider_data, credential_info)
@@ -363,6 +400,11 @@ async def update_provider(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)
             )
+        except ClientError as err:
+            rejection = _agentcore_rejection(err)
+            if rejection is None:
+                raise
+            raise rejection from err
 
     provider = await provider_repo.apply_metadata_update(provider_id, updates)
     if provider is None:
