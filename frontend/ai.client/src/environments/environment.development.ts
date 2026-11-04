@@ -26,6 +26,8 @@ export const environment = {
         documentExtract: false,
         // The `development` GitHub environment sets CDK_HANDOFFS_ENABLED=true.
         handoffs: true,
+        // The `development` GitHub environment sets CDK_HANDOFF_BRIEF_ENABLED=true.
+        handoffBrief: true,
         // The `development` GitHub environment sets CDK_SESSION_REWIND_ENABLED=true
         // and CDK_SESSION_FORK_ENABLED=true.
         sessionRewind: true,

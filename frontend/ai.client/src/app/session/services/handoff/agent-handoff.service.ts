@@ -5,13 +5,22 @@ import { firstValueFrom } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 
 import { ConfigService } from '../../../services/config.service';
+import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ChatRequestService } from '../chat/chat-request.service';
 import { ChatStateService } from '../chat/chat-state.service';
 import { ComposerDraftService } from '../session/composer-draft.service';
 import { BindingQueryParams, ConversationBindingService } from '../session/conversation-binding.service';
 import { buildHandoffMessage, normalizeContextText, wrapHandoffContext } from './handoff-prompt';
-import { CreateHandoffResponse, HandoffDraft, HandoffReview, HandoffView } from './handoff.models';
+import {
+  BriefFallbackReason,
+  CreateHandoffResponse,
+  HandoffBrief,
+  HandoffDraft,
+  HandoffReview,
+  HandoffView,
+} from './handoff.models';
+import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffStateService } from './handoff-state.service';
 
 /** How long to keep asking for a finished target's status: the Runtime writes it just after the stream. */
@@ -31,6 +40,10 @@ const STATUS_REFRESH_INTERVAL_MS = 700;
  * the row's persisted status (written by the Runtime after `done`) is fetched, and a toast says
  * what happened if the user isn't looking at the target. A tab with a running handoff asks before
  * it closes, because closing it stops the handoff (§4.6).
+ *
+ * With `features.handoffBrief` (PR-0.3a, §4.5.1), `open` then asks the source conversation's own
+ * model for a brief and streams it into the card; the excerpt stays as the fallback. Send waits
+ * for the brief to settle, so what the user reviewed is what goes.
  */
 @Injectable({ providedIn: 'root' })
 export class AgentHandoffService {
@@ -43,6 +56,8 @@ export class AgentHandoffService {
   private readonly binding = inject(ConversationBindingService);
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
+  private readonly features = inject(FEATURES);
+  private readonly briefs = inject(HandoffBriefService);
 
   /** Targets seen streaming, so a falling edge is a finish and not a row that never started. */
   private readonly streamingTargets = new Set<string>();
@@ -99,12 +114,15 @@ export class AgentHandoffService {
         void this.dismiss(sourceSessionId, created.handoffId);
         return;
       }
+      const brief: HandoffBrief | undefined = this.features.handoffBrief ? { status: 'writing', text: '' } : undefined;
       this.state.updateReview(sourceSessionId, {
         phase: 'ready',
         created,
         request: created.request,
         card: created.excerpt,
+        brief,
       });
+      if (brief) void this.requestBrief(sourceSessionId, created, draft);
     } catch (error) {
       this.state.updateReview(sourceSessionId, {
         phase: 'error',
@@ -137,11 +155,20 @@ export class AgentHandoffService {
     return buildHandoffMessage(block, review.request);
   }
 
+  /** Stop waiting for the brief and keep the excerpt in the card. */
+  useExcerpt(sourceSessionId: string): void {
+    if (this.state.reviewFor(sourceSessionId)?.brief?.status !== 'writing') return;
+    this.settleBriefFallback(sourceSessionId, 'preempted');
+    void this.briefs.preempt(sourceSessionId);
+  }
+
   /** Close the sheet without sending: dismiss the handoff and give the request back to the composer. */
   cancel(sourceSessionId: string): void {
     const review = this.state.reviewFor(sourceSessionId);
     if (!review) return;
     this.state.clearReview(sourceSessionId);
+    // A brief still writing holds the source's lease: stop it the cancel-only way, never Stop's.
+    if (review.brief?.status === 'writing') void this.briefs.preempt(sourceSessionId);
     if (review.created) void this.dismiss(sourceSessionId, review.created.handoffId);
     const text = review.request.trim();
     if (text) this.composerDraft.request(sourceSessionId, text);
@@ -152,6 +179,7 @@ export class AgentHandoffService {
     const review = this.state.reviewFor(sourceSessionId);
     const created = review?.created;
     if (!review || !created || review.phase !== 'ready') return;
+    if (review.brief?.status === 'writing') return;
     const request = review.request.trim();
     if (!request) return;
 
@@ -216,6 +244,69 @@ export class AgentHandoffService {
       commands: ['/s', row.targetSessionId],
       queryParams: this.binding.queryParamsFor(row.agentId),
     };
+  }
+
+  /**
+   * Ask the source's model for the brief and stream it into the card (§4.5.1). Every frame is
+   * checked against the review it was started for, so a brief that outlives its sheet (cancelled,
+   * sent, replaced by another mention) changes nothing.
+   */
+  private async requestBrief(sourceSessionId: string, created: CreateHandoffResponse, draft: HandoffDraft): Promise<void> {
+    const handoffId = created.handoffId;
+    const writing = (): HandoffReview | undefined => {
+      const review = this.state.reviewFor(sourceSessionId);
+      return review?.created?.handoffId === handoffId && review.brief?.status === 'writing' ? review : undefined;
+    };
+
+    let body: Record<string, unknown>;
+    try {
+      // A brief from an earlier sheet on this thread would hold the lease and answer `busy`.
+      await this.briefs.preempt(sourceSessionId);
+      body = await this.chatRequest.buildHandoffBriefRequest({
+        sourceSessionId,
+        handoffId,
+        request: created.request,
+        sourceAssistantId: draft.sourceAssistantId,
+      });
+    } catch {
+      if (writing()) this.settleBriefFallback(sourceSessionId, 'error');
+      return;
+    }
+    if (!writing()) return;
+
+    await this.briefs.stream(sourceSessionId, handoffId, body, {
+      onText: (text) => {
+        const review = writing();
+        if (!review?.brief) return;
+        this.state.updateReview(sourceSessionId, { brief: { ...review.brief, text: review.brief.text + text } });
+      },
+      onFallback: (reason) => {
+        if (writing()) this.settleBriefFallback(sourceSessionId, reason);
+      },
+      onDone: ({ briefHash, cacheStatus }) => {
+        const review = writing();
+        if (!review?.brief) return;
+        const text = review.brief.text.trim();
+        if (!text) {
+          this.settleBriefFallback(sourceSessionId, 'error');
+          return;
+        }
+        this.state.updateReview(sourceSessionId, {
+          card: text,
+          brief: { status: 'written', text, briefHash, cacheStatus },
+        });
+      },
+    });
+  }
+
+  /** No brief: discard whatever streamed and keep the excerpt in the card. */
+  private settleBriefFallback(sourceSessionId: string, reason: BriefFallbackReason): void {
+    const review = this.state.reviewFor(sourceSessionId);
+    if (!review?.created) return;
+    this.state.updateReview(sourceSessionId, {
+      card: review.created.excerpt,
+      brief: { status: 'fallback', text: '', fallbackReason: reason },
+    });
   }
 
   private trackTarget(row: HandoffView, target: string, loading: boolean): void {

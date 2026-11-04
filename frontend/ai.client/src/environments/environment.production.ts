@@ -28,6 +28,7 @@ export const environment = {
         sourceProvenance: false,
         documentExtract: false,
         handoffs: false,
+        handoffBrief: false,
         sessionRewind: true,
         sessionFork: true,
         quotaRequests: false,

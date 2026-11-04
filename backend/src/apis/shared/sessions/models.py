@@ -500,6 +500,11 @@ class SessionInterruptRequest(BaseModel):
                             close, navigation) while a turn was streaming.
                             NOT a rejection: the user left, they didn't say
                             "stop". Sent from a `pagehide` handler.
+      * `handoff_brief_preempted` — the user sent in a conversation whose
+                            handoff brief (agent-handoffs-and-consults.md
+                            §4.5.1) still holds the lease. Cancels the brief
+                            and nothing else: the brief is not a turn, so no
+                            turn was interrupted and no marker is written.
 
     `connection_lost` is never client-sent. It is the server-side
     cancellation backstop's fallback — literally "the stream died and nothing
@@ -512,7 +517,7 @@ class SessionInterruptRequest(BaseModel):
     departures at the source is what makes the remainder diagnosable.
     """
 
-    reason: Literal["user_stopped", "navigated_away"] = Field(
+    reason: Literal["user_stopped", "navigated_away", "handoff_brief_preempted"] = Field(
         description="Interruption reason. Only client-attested reasons are accepted",
     )
 
