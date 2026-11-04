@@ -1,8 +1,9 @@
 # Spoken audio generation: scripts rendered as speech
 
 Status: proposed, nothing built. The PR-0 renderer spike ran on 2026-11-03
-(Appendix B). Will ship in development behind `SPOKEN_AUDIO_ENABLED` (off by
-default).
+(Appendix B), and an AWS Batch cold-start probe on 2026-11-04 (Appendix C)
+moved the renderer from a SageMaker async endpoint to Batch on EC2. Will ship
+in development behind `SPOKEN_AUDIO_ENABLED` (off by default).
 
 ## 1. Summary
 
@@ -14,8 +15,9 @@ script-to-speech renderer with one to five speakers; nothing in it is specific t
 podcasts, which are the motivating example.
 
 The tool hands the script to an **external renderer**: an open-weight
-text-to-speech model (MOSS-TTSD v1.0) on a SageMaker asynchronous endpoint that
-scales to zero, deployed as its own stack outside `PlatformStack`. When the render finishes, the finished MP3 lands in the
+text-to-speech model (MOSS-TTSD v1.0) run as one AWS Batch job per render on
+EC2 GPU instances that scale to zero, deployed as its own stack outside
+`PlatformStack`. When the render finishes, the finished MP3 lands in the
 conversation's Files, a cost row charges the GPU time to the user's quota, and
 an inline card in the chat turns from "Rendering…" into an audio player.
 
@@ -38,7 +40,7 @@ Three shapes were weighed (2026-10-31):
 `PlatformStack` sits against CloudFormation's 500-resource limit (432 all-on in
 dev as of 2026-11-01, guarded by `infrastructure/test/platform-ceilings.test.ts`),
 and the app-api and Runtime roles' fullest overflow policies have a few hundred
-characters free. A SageMaker endpoint with its autoscaling, roles and
+characters free. A GPU compute environment with its job queue, roles and
 completion pipeline would spend a large share of that headroom on one optional
 feature. An MCP server avoids the cost but loses the two things that make the
 feature fit the platform: metering against the user's quota and the file landing
@@ -59,17 +61,19 @@ Apache-2.0 licensed, supports up to five speakers and, per its model card, up to
  create_spoken_audio(title, script)
    ├─ PutItem   SPKA#<jobId>  status=queued ──┐
    └─ PutObject requests/<jobId>.json ────────┼──▶ S3 event ─▶ spoken-audio-submit λ
-      (allowed by the renderer bucket's       │                 ├─ InvokeEndpointAsync
+      (allowed by the renderer bucket's       │                 ├─ batch:SubmitJob
        resource policy, not the Runtime role) │                 └─ SPKA# status=submitted,
    returns ~1 s later: a "rendering" card     │                    coldStart, estimatedReadyAt
                                               │
-                                              │   SageMaker async endpoint (MOSS-TTSD, 0..N)
-                                              │     writes audio/<jobId>.mp3 + outputs/<id>.out
-                                              │                       │ (or failures/<id>.out)
+                                              │   Batch job queue → compute environment
+                                              │   (EC2 GPU, 0..N instances, MOSS-TTSD image)
+                                              │     writes audio/<jobId>.mp3 + outputs/<jobId>.json
+                                              │                       │ (or failures/<jobId>.json)
                                               │                       ▼
- SPA card polls app-api                       │   S3 event ─▶ spoken-audio-finalize λ
-   GET /sessions/{id}/spoken-audio/{jobId}        │                 ├─ copy MP3 → user-files bucket
-   (one row read)  ◀──────────────────────────┴──────────────── ├─ FileMetadata row (READY)
+ SPA card polls app-api                       │   S3 event, or Batch "Job State Change"
+   GET /sessions/{id}/spoken-audio/{jobId}        │   FAILED via EventBridge ─▶ spoken-audio-finalize λ
+   (one row read)  ◀──────────────────────────┴──────────────── ├─ copy MP3 → user-files bucket
+                                                                ├─ FileMetadata row (READY)
                                                                 ├─ C# cost row → user-cost-summary
                                                                 └─ SPKA# status=ready
 ```
@@ -78,13 +82,14 @@ Apache-2.0 licensed, supports up to five speakers and, per its model card, up to
 
 ### 4.1 Where it lives and how it deploys
 
-- **Container:** `backend/src/spoken_audio_renderer/`. A SageMaker bring-your-own-container
-  server (`/ping`, `/invocations`) on the AWS PyTorch inference deep learning
-  container, which is pulled from AWS ECR and so avoids the Docker Hub rate limit
-  that has blocked backend deploys before. The package is outside the `apis/`
-  import boundary and never imports `apis.shared`: it carries its own exactly
-  pinned torch/transformers stack (MOSS-TTSD pins `transformers==5.0.0`,
-  `torch==2.9.1+cu128`).
+- **Container:** `backend/src/spoken_audio_renderer/`. A Batch job entry point,
+  not a server: it reads one request, copies the weights to local disk, loads
+  the model, renders, uploads the MP3 and its manifest, and exits. Its base is
+  `python:3.12-slim` from ECR Public, which avoids the Docker Hub rate limit
+  that has blocked backend deploys before (Appendix C ran this image). The
+  package is outside the `apis/` import boundary and never imports
+  `apis.shared`: it carries its own exactly pinned torch/transformers stack
+  (MOSS-TTSD pins `transformers==5.0.0`, `torch==2.9.1+cu128`).
 - **Stack:** `infrastructure/lib/spoken-audio-renderer/spoken-audio-renderer-stack.ts`, with
   its own entry point `infrastructure/bin/spoken-audio-renderer.ts`. It reuses
   `config.ts` (`loadConfig`, `getResourceName`), so every name it derives for
@@ -125,20 +130,24 @@ the renderer.
   reviewed and vendored into the image at that revision, and the container runs
   with `HF_HUB_OFFLINE=1`. Nothing is downloaded at runtime.
 - Weights (23.8 GB: 16 GB of MOSS-TTSD and 6.7 GB of codec) ship **uncompressed**
-  under an S3 prefix in the stack's model-data bucket (`ModelDataSource`,
-  `S3DataType: S3Prefix`, `CompressionType: None`), not in the image and not
-  as a `model.tar.gz`. SageMaker copied the 38 files to `/opt/ml/model` in
-  2m47s in PR-0, and nothing had to be unpacked (Appendix B).
+  under an S3 prefix in the stack's model-data bucket, not in the image and not
+  as a `model.tar.gz`. The job copies them to the instance's NVMe instance store
+  before loading. That took 100.5–101.1 s in every Batch cycle (about 237 MB/s,
+  boto3 with 4 files in parallel and 16 parts per file; Appendix C). An EBS
+  volume restored from a snapshot was meant to be compared against it, but that
+  cycle never got an instance (Appendix C.3), so it is unmeasured.
 - **The image** needs no CUDA base image: torch's cu128 wheels carry their own
   CUDA runtime, so PR-0 used `python:3.12-slim` (from ECR Public) plus ffmpeg.
   It was 12.7 GB unpacked and 4.5 GB compressed in ECR. PR-1 confirms a
   default GitHub runner has the disk for it or moves the build to a larger one.
-- **The image manifest must be Docker v2 schema 2.** SageMaker `CreateModel`
-  rejected both an OCI image index and a plain OCI image manifest. Build
-  without attestations and with Docker media types (`docker buildx build
-  --provenance=false --output type=registry,oci-mediatypes=false`).
-- The endpoint uses `InferenceAmiVersion: al2023-ami-sagemaker-inference-gpu-4-1`,
-  whose driver ran the cu128 wheels in PR-0.
+  ECS pulled it in 85–97 s on a cold instance (Appendix C).
+- **Build without attestations** (`docker buildx build --provenance=false`).
+  That pushes a Docker v2 schema 2 manifest, which ECS pulled as is. SageMaker
+  had rejected both an OCI image index and a plain OCI image manifest in PR-0,
+  so keep this even though Batch is less strict.
+- The compute environment uses the ECS GPU AMI (`ec2Configuration` image type
+  `ECS_AL2023_NVIDIA`), whose driver ran the cu128 wheels on the L40S in
+  Appendix C.
 - **Attention stays on SDPA.** FlashAttention 2 was slower on the L40S (Appendix
   B). transformers 5.0 applies `attn_implementation` only to the outer
   MOSS-TTSD config and leaves the Qwen3 backbone on SDPA. Anyone re-testing it
@@ -156,45 +165,144 @@ the renderer.
 - Output: mono MP3, 128 kbps, loudness-normalised to -16 LUFS (ffmpeg in the
   image), the format used in the bake-off.
 
-### 4.3 Endpoint and scaling
+### 4.3 Compute, scaling and capacity
 
-- **Instance:** `ml.g6e.xlarge` (NVIDIA L40S, 48 GB). The weights alone take
-  23.9 GB on the GPU, and an 18-minute render peaked at 28.1 GB allocated (30.4 GB
-  reserved), so 24 GB cards (A10G, L4) are ruled out.
-- **Scale to zero:** an Application Auto Scaling target with minimum 0 and maximum
-  `CDK_SPOKEN_AUDIO_RENDERER_MAX_INSTANCES` (default 1, matching dev's quota of one
-  `ml.g6e.xlarge` endpoint instance). It scales out from zero on the
-  `HasBacklogWithoutCapacity` metric and back in on
-  `ApproximateBacklogSizePerInstance`, after
-  `CDK_SPOKEN_AUDIO_RENDERER_IDLE_MINUTES` (default 15) with an empty queue.
-- **One render per instance** (`MaxConcurrentInvocationsPerInstance: 1`). Jobs
-  queue in SageMaker's own async queue.
-- **Request TTL:** a request that waits longer than 1 hour lands in
-  `failures/` and is finalized as failed, so nothing waits forever. This must
-  be set explicitly on every `InvokeEndpointAsync` (`RequestTTLSeconds`). PR-0
-  left it unset, and a request that never got an instance was still queued,
-  with nothing in `failures/`, 2h53m later.
-- **Cold start (measured in PR-0, Appendix B) has two parts, and only one is
-  bounded.**
-  - **Once SageMaker has an instance, it is about 6 minutes.** From host boot to
-    `/ping` passing took 4m59s: the weights copied to `/opt/ml/model` in 2m47s,
-    the container started 32 s later, and the model loaded and warmed up in 34 s.
-    DescribeEndpoint reported `InService` about 70 s after that. The old
-    8-minute target holds for this part.
-  - **Getting an instance is unbounded.** Creating the endpoint waited 25m43s
-    before its host booted. The one scale-from-zero cycle never got an instance:
-    the backlog alarm fired 4m23s after the request was queued, and SageMaker
-    then reported `InsufficientInstanceCapacity` for `ml.g6e.xlarge`. Application
-    Auto Scaling marked the scale-out `Unfulfilled` after 2 hours. The endpoint
-    was still at zero instances when PR-0 tore it down 2h48m after the request.
-    That is one night in one region, but a scale-to-zero design has to treat
-    "no capacity for hours" as a normal outcome, not an edge case.
-  - **Consequences:** the 1-hour request TTL and the `expired` state (§5.3) are
-    paths users will see, not just a safety net. The card never promises a time
-    while cold (§6). An environment that needs predictable latency keeps one
-    instance warm (§14). A warm instance is the only way PR-0 found to bound the
-    wait, at $2.6054 per hour: about $573 a month for 10 hours on each of 22
-    working days.
+**The renderer runs as AWS Batch jobs on EC2, not on a SageMaker async
+endpoint.** PR-0 built the endpoint (Appendix B.4), and Appendix C ran the same
+image as Batch jobs. The time from instance to finished audio came out the
+same, and nothing on the SageMaker side made up for the rest of the table:
+
+| | SageMaker async (Appendix B.4) | Batch on EC2 (Appendix C) |
+|---|---|---|
+| Rate for one L40S (`g6e.xlarge`), us-west-2 | $2.6054/h | **$1.861/h**, 29% less |
+| Host boot to ready to render | 4m59s | 4m47s–5m04s |
+| Idle time billed after the last job | 15 minutes, set by the scale-in alarm | **1m39s–2m10s** measured, with nothing to configure |
+| Instance types | one per endpoint configuration | a list per compute environment, and several compute environments per queue |
+| Wait limit on a queued request | `RequestTTLSeconds` on every invoke | the queue's `jobStateTimeLimitActions` |
+| Failure signal | an object in `failures/` | the job's `FAILED` state change on EventBridge, plus `failures/` when the container catches the error itself |
+| Getting a `g6e.xlarge` from zero | 25m43s once, nothing within 2h48m once | 2m10s, 6m46s, 31m23s, and nothing within 1h58m |
+
+The capacity problem is the same on both, because both draw on the same EC2
+`g6e` pool. Moving to Batch does not fix it. What Batch adds is the means to
+work around it, through instance types and queues. The bucket contract (§4.4)
+and the finalizer (§5.3) carry over unchanged, apart from the extra failure
+trigger.
+
+**Shape.**
+
+- **Compute environment:** managed, EC2 On-Demand, `minvCpus` 0 and `maxvCpus`
+  from `CDK_SPOKEN_AUDIO_RENDERER_MAX_VCPUS`. Allocation strategy
+  `BEST_FIT_PROGRESSIVE`, which tries the cheapest type per vCPU first. It runs
+  in the renderer stack's own VPC: one public subnet in every AZ that offers the
+  instance types, an internet gateway, and a security group with no inbound
+  rules. No NAT gateway, so the network costs nothing while idle.
+- **Launch template:** IMDSv2, a 100 GB gp3 root volume, and user data that
+  formats the NVMe instance store and mounts it at `/scratch` for the weights.
+- **Job definition:** one GPU per job, so each single-GPU instance runs one
+  render at a time. `attemptDurationSeconds` 1800 bounds a job that hangs: the
+  longest render at the word cap took 558 s (Appendix B), plus about 5 minutes
+  to start. Retries are off (`attempts: 1`). A failed render is finalized as
+  failed, and the user can ask again.
+- **Wait limit:** the job queue's `jobStateTimeLimitActions` cancels a job that
+  has been `RUNNABLE` at the head of the queue for 3,600 s. Its `FAILED` event
+  finalizes it as `failed` with the error code `no_capacity`. The probe did not
+  set this, so PR-1 confirms in dev that a job blocked on capacity is the one it
+  cancels. The read-time `expired` state (§5.3) stays as the backstop.
+- **Scale-in:** Batch terminated each instance 1m39s–2m10s after its job
+  finished. A user who asks for a second render a few minutes after the first
+  pays a second cold start. That is the price of not billing an idle tail.
+- **Batch can launch more instances than jobs.** In one cycle it launched two
+  `g6e.xlarge` instances for one job. The unused one ran 3m55s before Batch
+  terminated it (Appendix C.2). That is platform overhead, like the cold start.
+
+**Cold start, measured in Appendix C.** As with SageMaker, it has two parts,
+and only one is bounded.
+
+- **Once an instance launches, the audio lands about 6 minutes later.** From
+  instance launch to the finished MP3 took 6m12s–6m29s for a 2.5-minute clip,
+  with these stages:
+
+  | Stage | Time |
+  |---|---|
+  | Boot and ECS agent registration | 31–37 s |
+  | Image pull | 85–97 s |
+  | Container create | 39–51 s |
+  | Weights copied to NVMe | 100.5–101.1 s |
+  | torch import, model load and warm-up | 18–26 s |
+  | Render | 76–81 s |
+
+  The image pull and the weights copy are about half of it. Putting the weights
+  on a snapshot volume to save the copy was not measured (Appendix C.3).
+- **Getting an instance is unbounded.** From submit to instance launch, four
+  cold cycles took 2m10s, 6m46s, 31m23s and then 1h58m with no instance, until
+  the job was cancelled. Every capacity failure was
+  `InsufficientInstanceCapacity` for `g6e.xlarge`: 1,331 failed launches in
+  all, in all four us-west-2 AZs in each of the three longer waits. Together with PR-0, that is six tries at a `g6e.xlarge` from zero across
+  two services. The waits ran from 2 minutes to never.
+- **Listing fallback types did not get around it.** The compute environment
+  listed `g6e.xlarge`, `g6e.2xlarge` and `g7e.2xlarge`. Batch kept retrying
+  `g6e.xlarge`. Only once, after 29 minutes, did it launch a `g6e.2xlarge`, and
+  it never launched a `g7e.2xlarge`. The cheapest type per vCPU is the one Batch
+  retries, so a list in one compute environment is not a capacity strategy.
+  The type PR-1 wants first has to be the only type, or the cheapest per vCPU,
+  in its compute environment.
+- **Consequences:** the 1-hour wait limit and the `expired` state (§5.3) are
+  paths users will see, not just a safety net. The card never promises a time
+  while cold (§6).
+
+**Instance type and capacity options for PR-1.** The model needs one GPU with
+more than 24 GB. The weights alone take 23.9 GB on the GPU, and an 18-minute
+render peaked at 28.1 GB allocated and 30.4 GB reserved (Appendix B; 1 GB =
+10⁹ bytes), so 24 GB cards are ruled out at BF16. Every price below is EC2
+On-Demand, Linux, from the Price List API on 2026-11-04. The spot placement
+scores (1 to 10, one instance, all three US regions) are a free signal of how
+tight a type's pool is. They describe Spot capacity, not On-Demand, so they
+hint at the problem without proving it.
+
+| Option | Cost | Evidence | Unknowns |
+|---|---|---|---|
+| **A. `g7.2xlarge` first** (RTX PRO 4500, 32 GiB, one GPU), `g7e.2xlarge` (96 GiB) after it | $2.52/h, 35% above `g6e.xlarge`. Nothing while idle | Offered in all four us-west-2 AZs. Spot placement score 9 in us-west-2, us-east-1 and us-east-2. `g6e.xlarge` and `g6e.2xlarge` score 1 in all three | Never run. 32 GiB against a 28.3 GiB reserved peak leaves about 3.7 GiB, before the CUDA context. A Blackwell GPU needs the cu128 build (which the image has) and a recent enough ECS GPU AMI driver (unverified). Render speed and voice quality on it are unmeasured |
+| **B. `g6e` in another region** | $1.861/h, the same in us-east-1 and us-east-2 | `g6e.xlarge` scores 1 in both, the same as us-west-2 | The script and the MP3 cross regions, and the image and weights need a second copy. Nothing suggests the pool there is any looser |
+| **C. On-Demand Capacity Reservation**, one `g6e.xlarge` | $1.861 × 730 h = **$1,358.53 a month**, billed whether it is used or not | Removes the wait completely | Creating the reservation needs the same capacity a launch does, and fails with `InsufficientInstanceCapacity` when the pool is empty. It costs the same as leaving one instance running all month, which also removes the cold start. Reserving only for working hours means re-creating it each morning against the same pool |
+| **D. 8-bit model on a 24 GB card** | `g6.xlarge` (L4) $0.8048/h; `g5.xlarge` (A10G) $1.006/h | Spot placement scores 1–3. Quantizing the 16.7 GB backbone to 8 bits should halve it, for a peak of roughly 20 GB at the word cap. That is arithmetic, not a measurement | Quality, voice hold and speed are all unmeasured, and 8-bit kernels are usually slower. These pools look no looser than `g6e` |
+| **E. Accept the wait** | None | The output lands in Files whenever it finishes | Users will often see `expired`, and the next request meets the same pool |
+
+**Recommendation: A, conditional on one validation run in PR-1.** It is the
+only option that goes at the capacity problem without a standing cost. The
+evidence is indirect but consistent: `g6e.xlarge` failed to launch 1,331 times
+across four cycles in all four AZs, its pool scores 1 in every US region, and
+`g7.2xlarge` scores 9 in every one. The validation is one cold cycle on
+`g7.2xlarge` that renders the 18-minute script, the memory ceiling: about 16
+minutes of instance time, or $0.70. It checks four things: that the AMI's
+driver runs the image, the peak memory, the render speed, and WER and voice
+hold scored as in Appendix B. If the script does not fit in 32 GiB,
+`g7e.2xlarge` at $3.36312/h is the next candidate. It scores 3 in us-west-2
+and 9 in us-east-1.
+
+**The validation also renders the same script once on `g7e.2xlarge`,** for
+under $1, to measure its speed. Generating one token at a time is mostly bound
+by GPU memory bandwidth, and its RTX PRO 6000 has far more than the L40S, so it
+may render markedly faster. That is unmeasured. A faster card changes the
+per-job cost little, because scale to zero bills each job for its own time: at
+$3.36312/h it costs the same as `g6e.xlarge` only if it renders 1.8× faster,
+and the roughly 5 minutes of startup bill at the higher rate either way. What
+it can change is the wait on long scripts, which render in about half their
+length on the L40S. If `g7e.2xlarge` is that much faster, it could be the first
+type rather than the fallback. Either way, getting an instance stays a far
+bigger part of a cold job's wait than rendering. A deployment that
+needs a bounded wait regardless can keep one instance running, or reserve it
+(C); either costs about $1,359 a month for `g6e.xlarge`. Running one only in
+working hours (10 hours on each of 22 days) costs $409 a month, but it has to
+be launched each morning from the same pool.
+
+With option A, the compute environment lists `g7.2xlarge` and `g7e.2xlarge`
+only. Both have 8 vCPUs and `g7.2xlarge` costs less per vCPU, so
+`BEST_FIT_PROGRESSIVE` tries it first. It does not list `g6e`: Appendix C showed
+Batch spending from 29 minutes to two hours retrying it.
+
+**Alternative rejected: SageMaker async (PR-0's design).** It costs 40% more
+per hour, bills a 15-minute idle tail, and allows one instance type per
+endpoint. It drew on the same capacity and was no better at getting it.
 
 ### 4.4 The bucket contract
 
@@ -206,8 +314,8 @@ side and the CDK stack read, with a test on each side pinning them.
 | Prefix | Written by | Holds | Lifecycle |
 |---|---|---|---|
 | `requests/` | Runtime role (bucket policy, `PutObject` on this prefix only) | `{jobId, userId, sessionId, title, script, voices, wordCount}` | 7 days |
-| `outputs/` | SageMaker | JSON manifest `{jobId, audioKey, audioS, renderS, model, modelRevision}` | 7 days |
-| `failures/` | SageMaker | error body | 7 days |
+| `outputs/` | the container | JSON manifest `{jobId, audioKey, audioS, renderS, instanceType, model, modelRevision}` | 7 days |
+| `failures/` | the container, for an error it catches | `{jobId, error}`, a short code and no script text | 7 days |
 | `audio/` | the container | the MP3 | 7 days (the user's copy lives in Files) |
 
 The Runtime finds the bucket by deriving its name from `PROJECT_PREFIX` and
@@ -284,19 +392,27 @@ rows (the owner in the partition key, reachable per session through
 |---|---|
 | `status`: `queued` → `submitted` → `ready` / `failed` | tool / submit λ / finalize λ |
 | `title`, `wordCount`, `estAudioS`, `createdAt` | tool |
-| `inferenceId`, `coldStart`, `submittedAt`, `estimatedReadyAt` | submit λ |
+| `batchJobId`, `coldStart`, `submittedAt`, `estimatedReadyAt` | submit λ |
 | `uploadId`, `audioS`, `renderS`, `costUsd`, `completedAt` | finalize λ |
 | `error` (a short code, never a stack trace) | finalize λ |
 
-`coldStart` is the submit Lambda reading the endpoint's current instance count
-(`DescribeEndpoint`): zero means the card should say "warming up".
+`coldStart` is the submit Lambda reading the compute environment's
+`desiredvCpus` (`DescribeComputeEnvironments`): zero means no instance is up or
+on its way, and the card should say "warming up". The job is submitted with the
+SPKA job id as its name, so a Batch event leads back to the row.
 
 ### 5.3 How the platform learns a job finished: push, not poll
 
-The finalizer is triggered by S3 events on `outputs/` and `failures/`. It is the
-**only** writer of terminal state. Steps, all idempotent:
+The finalizer has two triggers: S3 events on `outputs/` and `failures/`, and
+an EventBridge rule for Batch "Job State Change" events with status `FAILED` on
+the renderer's queue. The second covers every failure the container cannot
+report itself: the job was cancelled by the wait limit (§4.3), hit its
+timeout, ran out of memory, or the instance died. A caught error can arrive
+both ways, and the claim in step 2 makes the second one a no-op. The finalizer
+is the **only** writer of terminal state. Steps, all idempotent:
 
-1. Read the manifest (or the failure body) and the original request.
+1. Read the manifest (or the failure body, or the Batch event's status reason)
+   and the original request.
 2. **Claim** the job: a conditional update of `SPKA#` from `submitted` or
    `queued` to `finalizing`. If the condition fails, another delivery already
    handled it, and the finalizer exits.
@@ -314,8 +430,10 @@ Its grants live on its own role in the renderer stack: read the renderer bucket;
 put to `user-files/*` in the user-files bucket; write the user-file-uploads,
 sessions-metadata, user-cost-summary and system-rollup tables. The user-files
 bucket is SSE-S3 and the tables use AWS-managed keys, so no key policy needs
-editing. The submit Lambda gets `InvokeEndpointAsync`, `DescribeEndpoint` and
-`UpdateItem` on sessions-metadata.
+editing. The submit Lambda gets `batch:SubmitJob` on the queue and job
+definition, `batch:DescribeComputeEnvironments`, and `UpdateItem` on
+sessions-metadata. The job role reads `requests/` and the model-data prefix
+and writes `outputs/`, `failures/` and `audio/`; nothing else.
 
 `_store_document`'s key scheme and `FileMetadata` construction currently live in
 `agents/builtin_tools/office/_storage.py`, which a Lambda cannot import. PR-2
@@ -372,11 +490,11 @@ ordinary tool rail.
 | `ready` | Native `<audio controls preload="none">` player, duration, a Download button and "Saved to this chat's Files" |
 | `failed` / `expired` | What happened, in a sentence, and that asking again will retry. No cost was charged. When the request timed out without an instance, say the renderer could not start and suggest trying later, because asking again right away will most likely wait in the same queue |
 
-- **Cold copy names no number of minutes.** PR-0 measured about 6 minutes once
-  an instance exists, but 26 minutes to get one on create and no instance at all
-  within 2h48m on scale-from-zero (§4.3). The submit Lambda does not set
-  `estimatedReadyAt` while `coldStart` is true, so a cold job's card shows no
-  estimate until it reaches a terminal state. Nothing in this design notices
+- **Cold copy names no number of minutes.** Once an instance exists the audio
+  lands about 6 minutes later, but getting one from zero took anywhere from 2
+  minutes to never across six tries on SageMaker and Batch (§4.3). The submit
+  Lambda does not set `estimatedReadyAt` while `coldStart` is true, so a cold
+  job's card shows no estimate until it reaches a terminal state. Nothing in this design notices
   when the instance arrives; switching to an estimate partway through would
   need a writer that does, which is left out of v1.
 
@@ -404,44 +522,54 @@ costUsd = renderS × gpuUsdPerHour / 3600
 
 - **`renderS`** is measured inside the container: wall time around generation
   plus MP3 encoding for this job only, rounded up to the second.
-- **`gpuUsdPerHour`** comes from renderer config
-  (`CDK_SPOKEN_AUDIO_RENDERER_GPU_USD_PER_HOUR`), set on the finalizer. The
-  SageMaker async-inference rate for `ml.g6e.xlarge` in us-west-2 is
-  **$2.6054/hour** (Price List API, `AmazonSageMaker`, usage type
-  `USW2-AsyncInf:ml.g6e.xlarge`, verified 2026-11-02), about 40% above the EC2
-  on-demand rate for the same instance. The value is re-verified whenever the
-  instance type or region changes.
+- **`gpuUsdPerHour`** is the EC2 On-Demand rate of the instance type that ran
+  the job. The container records its type from instance metadata in the
+  manifest, and the finalizer looks it up in a map from renderer config
+  (`CDK_SPOKEN_AUDIO_RENDERER_GPU_USD_PER_HOUR`, JSON), so a job that lands on a
+  fallback type is charged at that type's rate. A type missing from the map
+  fails the finalize loudly rather than charging nothing. us-west-2 rates (Price
+  List API, Linux, shared tenancy, verified 2026-11-04): `g6e.xlarge`
+  **$1.861/hour**, `g6e.2xlarge` $2.24208, `g7.2xlarge` $2.52, `g7e.2xlarge`
+  $3.36312. The SageMaker async rate PR-0 priced for `ml.g6e.xlarge` was
+  $2.6054. EC2 bills per second with a 60-second minimum. The map is re-verified
+  whenever a type or region changes.
 - **The cost row** is a normal `C#` row written through `store_message_metadata`
   with message id `spoken-audio:<jobId>` and model `spoken-audio/moss-ttsd-v1.0`, so it
   updates the user's cost summary (quota), the system rollup and the admin cost
   drill-down exactly as a model call does. Its cost is never `None`, so
   `UnmeteredModelCall` does not fire. Like voice rows, it carries no prompt-cache
   fields.
-- **Not charged to users:** the cold start, the idle tail before scale-in, and
-  failed renders. These are platform overhead, reported through EMF metrics
-  (`SpokenAudioRenderSeconds`, `SpokenAudioBilledUsd`) and reconciled monthly against
-  the endpoint's actual instance-hours. Charging a cold start to whoever happened
-  to trigger it would make the same render cost a user anywhere from $0.05 to
-  $0.40.
+- **Not charged to users:** the cold start, the idle tail before scale-in, an
+  extra instance Batch launched and dropped, and failed renders. These are
+  platform overhead, reported through EMF metrics (`SpokenAudioRenderSeconds`,
+  `SpokenAudioBilledUsd`) and reconciled monthly against the compute
+  environment's actual instance-hours. Charging a cold start to whoever happened
+  to trigger it would make the same 2.5-minute render cost a user $0.04 on a
+  warm instance and $0.25–$0.37 on a cold one (Appendix C).
 - **Render speed is 0.52× real time and flat with length** (PR-0, SDPA, one L40S):
   0.517–0.522 across every render from 2 to 18 minutes of audio. FlashAttention 2
   was slower, at 0.608–0.614, so the figure is not an upper bound waiting on
-  a faster kernel.
+  a faster kernel. The Batch cycles rendered at 0.51–0.52 on the same card
+  (Appendix C). On `g7.2xlarge` it is unmeasured until PR-1's validation run,
+  and the figures below assume the L40S.
 - **Pre-check estimate** (§5.1): `wordCount / 3.3 × 0.52 × rate / 3600 × 1.5`.
   It uses the slowest two-speaker speaking rate and the render speed PR-0
-  measured, with a 50% margin. A 3,600-word script estimates at $0.62.
+  measured, with a 50% margin. A 3,600-word script estimates at $0.44 on
+  `g6e.xlarge`.
 
-| Script (PR-0 renders) | Audio | Render | Charged |
+| Script (PR-0 renders) | Audio | Render | Charged at `g6e.xlarge`'s $1.861/h |
 |---|---|---|---|
-| Bake-off script (466 words) | 2.3 min | 73.4 s | $0.053 |
-| 2,018 words | 9.9 min | 305.8 s | $0.221 |
-| 2,992 words | 13.6 min | 420.9 s | $0.305 |
-| 3,678 words (≈ v1 cap) | 18.0 min | 558.2 s | $0.404 |
+| Bake-off script (466 words) | 2.3 min | 73.4 s | $0.038 |
+| 2,018 words | 9.9 min | 305.8 s | $0.158 |
+| 2,992 words | 13.6 min | 420.9 s | $0.218 |
+| 3,678 words (≈ v1 cap) | 18.0 min | 558.2 s | $0.289 |
 
-The overhead per cold cycle is the time from host boot to serving (4m59s,
-$0.22, measured), plus 15 idle minutes ($0.65). PR-0 does not show whether
-SageMaker bills the time it spends waiting for capacity before the host boots.
-The monthly reconciliation against the endpoint's instance-hours will show it.
+**The overhead per cold cycle** is the instance's whole life, from launch to
+shutdown, less the render the user pays for. In Appendix C those lives were
+8m00s ($0.25 in all), 8m39s on a `g6e.2xlarge` ($0.32), and 11m46s ($0.37) in
+the cycle where Batch launched a second instance it never used. A failed launch
+creates no instance and costs nothing, so a long wait for capacity is free;
+only its users pay for it, in time.
 
 ## 8. Flags and configuration
 
@@ -449,10 +577,13 @@ The monthly reconciliation against the endpoint's instance-hours will show it.
 |---|---|---|
 | Backend (Runtime builds the tool; app-api mounts the status route) | `SPOKEN_AUDIO_ENABLED` / `CDK_SPOKEN_AUDIO_ENABLED` / `config.spokenAudio.enabled` | off; only `"true"` enables |
 | SPA | `features.spokenAudio` | `false` in all three environment files until dev turns the backend on |
-| Renderer instance type | `CDK_SPOKEN_AUDIO_RENDERER_INSTANCE_TYPE` | `ml.g6e.xlarge` |
-| Renderer max instances | `CDK_SPOKEN_AUDIO_RENDERER_MAX_INSTANCES` | `1` |
-| Idle before scale-in | `CDK_SPOKEN_AUDIO_RENDERER_IDLE_MINUTES` | `15` |
-| GPU rate | `CDK_SPOKEN_AUDIO_RENDERER_GPU_USD_PER_HOUR` | `2.6054` |
+| Renderer instance types, in the compute environment | `CDK_SPOKEN_AUDIO_RENDERER_INSTANCE_TYPES` | `g7.2xlarge,g7e.2xlarge`, subject to PR-1's validation run (§4.3) |
+| Renderer max vCPUs (one 8-vCPU instance is 8) | `CDK_SPOKEN_AUDIO_RENDERER_MAX_VCPUS` | `8` |
+| Wait limit for a queued job | `CDK_SPOKEN_AUDIO_RENDERER_MAX_WAIT_SECONDS` | `3600` |
+| GPU rates by instance type | `CDK_SPOKEN_AUDIO_RENDERER_GPU_USD_PER_HOUR` | `{"g7.2xlarge": 2.52, "g7e.2xlarge": 3.36312, "g6e.xlarge": 1.861, "g6e.2xlarge": 2.24208}` |
+
+There is no idle-minutes setting: Batch scales in on its own, about two
+minutes after the last job (§4.3).
 
 - The Runtime copy of the flag is written only while on, so the default spends
   none of the V2 environment budget. While on it costs one short variable.
@@ -484,7 +615,7 @@ The monthly reconciliation against the endpoint's instance-hours will show it.
   field and the renderer rejects unknown voice ids.
 - **Script text:** user content. It stays in the renderer bucket for at most 7
   days, never appears in logs (job ids and counts only), and is never sent
-  anywhere but the endpoint.
+  anywhere but the renderer.
 - **Ownership:** only the Runtime role can write `requests/`. The finalizer
   trusts the `userId`/`sessionId` in that request, because nothing else can write
   it, and the status route checks `(session, user)`.
@@ -515,9 +646,20 @@ The monthly reconciliation against the endpoint's instance-hours will show it.
      a two-host script, so these are unmeasured until then. The
      three-to-five-speaker render is also the check on the new house voices.
    - These results set the word cap and the cold-start copy.
+   - **Batch probe, done 2026-11-04 (Appendix C).** Four cold cycles of the PR-0
+     image as Batch jobs on `g6e`, which moved the renderer from SageMaker to
+     Batch (§4.3).
 2. **PR-1, renderer stack.**
-   - Container, stack, workflow, and the submit and finalize Lambdas.
-   - Deployed to dev only and smoke-tested by writing a request object by hand.
+   - **First, the validation run** (§4.3): one cold cycle on `g7.2xlarge`
+     that renders the 18-minute script and records the driver, peak memory,
+     render speed, WER and voice hold, then the same render on `g7e.2xlarge`
+     for its speed. About $1.70 in all. It needs the usual go-ahead for a GPU
+     launch. Its results pick the instance types and their order.
+   - Container, stack (VPC, compute environment, launch template, job queue
+     with its wait limit, job definition, EventBridge rule), workflow, and the
+     submit and finalize Lambdas.
+   - Deployed to dev only and smoke-tested by writing a request object by hand,
+     including one request left to hit the wait limit.
 3. **PR-2, platform backend.**
    - Flag pair, the `apis/shared/spoken_audio/` contract module, and the tool with its
      catalog seed and injected family.
@@ -545,9 +687,12 @@ The monthly reconciliation against the endpoint's instance-hours will show it.
   - Injected-family cache eligibility (`tests/shared/test_injected_tool_cache_eligibility.py`).
 - **Finalizer** (moto):
   - Success writes the file row, `C#` row and `SPKA#`.
-  - A second delivery is a no-op.
+  - A second delivery is a no-op, including a caught error that arrives as
+    both a `failures/` object and a Batch `FAILED` event.
+  - A Batch `FAILED` event (wait limit, timeout) finalizes the job as failed.
   - A failure writes no cost row.
-  - Cost arithmetic.
+  - Cost arithmetic, at the rate of the manifest's instance type; an unknown
+    type fails loudly.
 - **Status route:**
   - Auth before flag.
   - Another user's job and another session's job both 404.
@@ -571,16 +716,23 @@ The monthly reconciliation against the endpoint's instance-hours will show it.
    MOSS-TTSD gives no word timestamps, so WebVTT would need alignment.
 5. **Labelling:** whether to mark generated audio as AI-made, in ID3 metadata
    and/or spoken.
-6. **Cold starts in prod:** PR-0 found that getting an `ml.g6e.xlarge` from zero
-   took 26 minutes once and failed for over 2 hours the other time (§4.3). The
-   options:
-   - A keep-warm schedule. About $573 a month for working hours, and a scale-in
-     outside those hours meets the same capacity problem the next morning.
-   - A second instance type or region as a fallback.
-   - Accepting long waits for a feature whose output lands in Files anyway.
+6. **Capacity and cold starts in prod.** Getting a `g6e.xlarge` from zero took
+   from 2 minutes to never across six tries, two on SageMaker (Appendix B.4)
+   and four on Batch (Appendix C), with `InsufficientInstanceCapacity` in all
+   four us-west-2 AZs. §4.3 compares five options:
+   - **A.** `g7.2xlarge` (32 GiB) first, then `g7e.2xlarge`.
+   - **B.** `g6e` in another region.
+   - **C.** An On-Demand Capacity Reservation, $1,358.53 a month for one
+     `g6e.xlarge`.
+   - **D.** An 8-bit model on a 24 GB L4 or A10G, with quality unmeasured.
+   - **E.** Accepting the wait.
 
-   The choice is per deployment and needs real usage. PR-1 can make the
-   schedule a config knob.
+   **Recommended: A**, if PR-1's validation run shows the 18-minute script
+   fits in 32 GiB and renders as well as on the L40S. It is the only option
+   that goes at capacity without a standing cost, and its pool scored 9
+   against `g6e`'s 1 in every US region. What stays open is per deployment: whether
+   one that needs a bounded wait pays about $1,359 a month for an always-on
+   or reserved instance (C), and what usage would justify it.
 7. **Other clients:** later expose the same renderer as an MCP server for Claude
    Desktop and Code. The hybrid keeps that door open: the renderer does not know
    the platform exists, apart from the finalizer.
@@ -800,3 +952,139 @@ SageMaker async autoscaling guide: 60 s period, 2 of 2 datapoints):**
   have measured the same queue.
 - **The request TTL was left at its default.** The request was still queued
   when the endpoint was deleted.
+
+## Appendix C: AWS Batch cold-start probe, 2026-11-04
+
+The PR-0 image was run as AWS Batch jobs on EC2 to compare a cold start with
+SageMaker's (Appendix B.4), and to see whether Batch could get around the
+missing `g6e` capacity. Everything ran in dev, us-west-2, and was torn down
+afterwards: compute environments, queues, job definition, launch template,
+image, weights, snapshot, roles, log group and VPC. The scripts are in
+[`spoken-audio-generation/batch-probe/`](spoken-audio-generation/batch-probe/).
+
+**Setup.**
+
+- **Network:** a throwaway VPC with one public subnet in each of us-west-2a–2d,
+  an internet gateway, and a security group with no inbound rules.
+- **Image:** the PR-0 image plus `batch_job.py`, which copies the weights,
+  loads the model, renders one job, uploads the MP3 and exits. Built on a
+  c7i.2xlarge (AL2023, Docker 25.0.18) with `--provenance=false` in 94 s, and
+  pushed in 190 s. It is 8.1 GB locally and 4.5 GB compressed in ECR.
+- **Weights:** 41 files and 23.8 GB (the model, the codec and the house
+  voices), held both under an S3 prefix and on a 30 GB gp3 EBS snapshot.
+- **Two compute environments, each with its own queue:**
+  - Managed, EC2 On-Demand, `BEST_FIT_PROGRESSIVE`, 0–8 vCPUs.
+  - Instance types `g6e.xlarge`, `g6e.2xlarge` and `g7e.2xlarge`, in all four
+    subnets, on the `ECS_AL2023_NVIDIA` image type.
+  - Launch template: a 2-hour self-terminate, a 100 GB gp3 root volume, and the
+    NVMe instance store at `/scratch`. The second compute environment's
+    template also attached a volume from the snapshot at `/weights`.
+- **Job definition:** 4 vCPUs, 28,000 MiB, 1 GPU, a 1,800 s timeout, one
+  attempt.
+- **Every job** rendered the bake-off script (466 words) with house voices S1
+  and S2, with the settings in Appendix B.
+- **Where the timestamps came from:**
+  - Batch `DescribeJobs`.
+  - The ECS task's image-pull times.
+  - The EC2 instance's launch time and state changes.
+  - The Auto Scaling group's scaling activities, for every failed launch.
+  - The container's own log lines, which include the host's boot time from
+    `/proc/stat`.
+
+  A watcher polled all of them every 5 s. Cycle 2's ECS task and instance
+  records had expired by the time they were collected, so its image pull is
+  missing and its instance details come from the watcher's log.
+
+### C.1 Cycles
+
+All times are UTC on 2026-11-04. Cycles 1–3 copied the weights from S3 to
+NVMe; cycle 4 was to read them from the snapshot volume.
+
+| | Cycle 1 | Cycle 2 | Cycle 3 | Cycle 4 |
+|---|---|---|---|---|
+| Job submitted | 05:01:39.3 | 05:23:09.2 | 17:21:34.6 | 18:08:01.7 |
+| `RUNNABLE` | 05:01:48 | 05:23:20 | 17:21:45 | 18:08:11 |
+| Compute environment asks for 4 vCPUs | 05:03:46 | 05:24:46 | 17:23:41 | 18:09:47 |
+| Failed launches, all `InsufficientInstanceCapacity` for `g6e.xlarge` | 27 from 05:04:04 to 05:08:27, all four AZs | 4 from 05:24:59 to 05:25:21, 2b and 2c | 265 from 17:24:00 to 17:52:59, all four AZs | 1,035 from 18:09:54 to 20:06:33, all four AZs |
+| Instance launched | 05:08:25, `g6e.xlarge`, 2b | 05:25:19, `g6e.xlarge`, 2d (and 05:25:20, `g6e.xlarge`, 2a, never used) | 17:52:58, `g6e.2xlarge`, 2a | none |
+| Host booted | 05:08:32 | 05:25:27 | 17:53:06 | |
+| ECS agent registered | 05:09:09 | not recorded | 17:53:37 | |
+| Image pull | 85.2 s | not recorded | 96.7 s | |
+| Container started | 05:11:18.5 | 05:28:07.3 | 17:56:12.0 | |
+| Weights copied to NVMe | 101.1 s | 100.7 s | 100.5 s | |
+| Model load, then warm-up | 13.0 s, 2.4 s | 13.2 s, 2.2 s | 6.0 s, 1.9 s | |
+| Render (audio length) | 80.7 s (155.0 s) | 76.5 s (146.8 s) | 76.1 s (148.6 s) | |
+| Peak GPU memory | 24.8 GB | 24.8 GB | 24.8 GB | |
+| MP3 in S3, job done | 05:14:46.4 | 05:31:30.6 | 17:59:26.7 | |
+| Instance shutting down | 05:16:25 | 05:33:10 (the unused one at 05:29:15) | 18:01:37 | |
+| **Submit to instance launch** | **6m46s** | **2m10s** | **31m23s** | **none in 1h58m** |
+| **Instance launch to MP3** | **6m21s** | **6m12s** | **6m29s** | |
+| **Submit to MP3** | **13m07s** | **8m21s** | **37m52s** | cancelled |
+| Instance time billed, launch to shutdown | 8m00s, $0.25 | 7m51s + 3m55s, $0.37 | 8m39s, $0.32 | none |
+
+- **Host boot to ready to render** (warm-up done) took 4m54s, 4m47s and 5m04s,
+  against SageMaker's 4m59s to `/ping` (Appendix B.4).
+- **Render speed** was 0.521, 0.521 and 0.512 × real time on the L40S, in line
+  with Appendix B's 0.517–0.522. Cycle 3's model load was faster (6.0 s) on the
+  `g6e.2xlarge`, which has twice the host memory and vCPUs.
+- **Batch waits before it asks.** The compute environment raised its desired
+  vCPUs 1m26s–1m58s after the job became `RUNNABLE`, before any launch was
+  attempted. Even with capacity on hand, a cold job waits about two minutes for
+  an instance to be requested.
+
+### C.2 What Batch did around the capacity failures
+
+- **It kept retrying the type it preferred.** `g6e.xlarge` is the cheapest of
+  the three per vCPU, and every one of the 1,331 logged capacity failures names
+  it. In cycle 3, after 29 minutes of failures, Batch launched a `g6e.2xlarge`
+  and raised its desired vCPUs from 4 to 8 to match. It never launched a
+  `g7e.2xlarge`. The two fallback types did not shorten any wait.
+- **It launched two instances for one job.** In cycle 2 it launched
+  `g6e.xlarge` instances in 2d and 2a one second apart. The job ran on the 2d
+  instance, and Batch terminated the idle 2a instance 3m55s after its launch.
+- **It scaled in quickly.** The instance was shut down 1m39s, 1m39s and 2m10s
+  after the job finished, with no idle setting configured.
+
+### C.3 Cycle 4: the snapshot path was not measured
+
+Cycle 4 never got an instance. It was submitted at 18:08:01.7Z and cancelled at
+the end of the probe, after the last logged capacity failure at 20:06:33Z.
+During that time the Auto Scaling group logged:
+
+- **1,035 `InsufficientInstanceCapacity` failures for `g6e.xlarge`:** 263 in
+  2a, 259 in 2b, 261 in 2c and 252 in 2d.
+- **29 failures from the probe's own launch template,** from 18:18:00Z to
+  20:01:31Z: `InvalidParameterValue - Iops to volume size ratio of 533.333333
+  is too high; maximum is 500`. The snapshot volume asked for 16,000 IOPS
+  without setting a size, so it took the snapshot's 30 GB, and 16,000 / 30 is
+  over gp3's limit of 500 IOPS per GB.
+
+Neither message names the instance type. The two kinds of failure ran
+side by side. It is therefore unknown whether any of those 29 attempts had
+found capacity, possibly for one of the other two types, and would have
+launched with a correct template. The comparison of the snapshot volume with
+the S3 copy was never made. One caution for whoever runs it: a volume restored
+from a snapshot loads its blocks from S3 on first read unless Fast Snapshot
+Restore is enabled, so it may not beat the NVMe copy without that extra cost.
+
+### C.4 Capacity signals
+
+Taken at 20:14Z on 2026-11-04, while cycle 4's pool was still failing. Prices
+are EC2 On-Demand, Linux, from the Price List API. The scores are spot
+placement scores (1–10, one instance) for each region. They describe Spot
+capacity, not On-Demand, so they are a signal, not a measurement.
+
+| Type | GPU | GPU memory | us-west-2 price | Score us-west-2 | Score us-east-1 | Score us-east-2 |
+|---|---|---|---|---|---|---|
+| `g6e.xlarge` | L40S | 48 GB | $1.861/h | 1 | 1 | 1 |
+| `g6e.2xlarge` | L40S | 48 GB | $2.24208/h | 1 | 1 | 1 |
+| `g7.2xlarge` | RTX PRO 4500 | 32 GiB | $2.52/h | 9 | 9 | 9 |
+| `g7e.2xlarge` | RTX PRO Server 6000 | 96 GiB | $3.36312/h | 3 | 9 | 2 |
+| `g6.xlarge` | L4 | 24 GB | $0.8048/h | 3 | 2 | 1 |
+| `g5.xlarge` | A10G | 24 GB | $1.006/h | 2 | 2 | 1 |
+
+- `g6e.xlarge` costs the same $1.861/h in us-east-1 and us-east-2.
+- `g6e.xlarge`, `g7.2xlarge` and `g7e.2xlarge` are offered in all four
+  us-west-2 AZs.
+- **No GPU instance in this probe ran on anything but an L40S.** Every figure
+  for `g7.2xlarge` here is a price or a signal, not a run.
