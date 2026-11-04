@@ -96,6 +96,13 @@ class Handoff(BaseModel):
     )
     excerpt_hash: Optional[str] = Field(None, alias="excerptHash")
     excerpt_tokens: int = Field(0, alias="excerptTokens")
+    brief_hash: Optional[str] = Field(
+        None, alias="briefHash", description="Hash of the model-written brief, when one was written (spec §4.5.1)"
+    )
+    brief_tokens: Optional[int] = Field(None, alias="briefTokens")
+    brief_cache_status: Optional[str] = Field(
+        None, alias="briefCacheStatus", description="The brief call's cacheStatus on the source: hit, partial_miss or miss"
+    )
     turns_covered: Optional[TurnsCovered] = Field(None, alias="turnsCovered")
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")

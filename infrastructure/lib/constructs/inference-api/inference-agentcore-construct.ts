@@ -435,6 +435,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // target's first turn and keeps the source's HANDOFF# row current. Written
         // only while ON, so the default costs nothing against the V2 payload budget.
         ...(config.handoffs.enabled ? { HANDOFFS_ENABLED: 'true' } : {}),
+        // The handoff brief (in development): the source's own model writes the
+        // context card from its prompt cache. Meaningless without handoffs, so
+        // written only while both are ON; the default costs nothing.
+        ...(config.handoffs.enabled && config.handoffs.briefEnabled ? { HANDOFF_BRIEF_ENABLED: 'true' } : {}),
         // Conversation rewind (in development): the Runtime filters rewound
         // messages at restore and cuts a warm agent's list in place. Written
         // only while ON, so the default costs nothing against the V2 payload budget.

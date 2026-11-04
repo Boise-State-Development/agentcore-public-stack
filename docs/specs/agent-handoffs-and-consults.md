@@ -676,6 +676,13 @@ for byte, up to a new final message.
   (`HANDOFF_BRIEF_MAX_TOKENS`, default 2,000 including thinking). The text streams back as `content_block_delta`
   frames and ends with `metadata` and `done`. The SPA reads this stream into the review sheet's card only, never
   into any session's message map.
+  *As built (PR-0.3a Runtime):* there is **no per-call output cap yet**. Our model wrappers (the TEXT-only
+  projection, the partial-output marker) bind `model.stream` to the agent's model instance, so a per-call copy
+  with a different `max_tokens` still streams with the original's config, and changing the shared model's config
+  would leak into the next turn. The brief is bounded by the instruction's "about 800 words" and by the turn's own
+  `max_tokens`; `briefTokens` on `HANDOFF#` records what each brief cost, and a cap returns once the wrappers can
+  take a per-call override. The stream ends with `done` carrying `briefHash` and `cacheStatus` (no `metadata`
+  frame), or with one `handoff_brief_fallback` frame and `done`.
 
 **Bookkeeping on the source.**
 - **The lease.** The brief takes the source's single-flight lease, like a turn: a brief can't run beside a turn on the
@@ -811,8 +818,11 @@ EMF, under the existing PromptCache namespace so the cost dashboard can show it:
 - `HandoffSent` / `HandoffCancelled` / `HandoffAbandoned` by `kind`
 - `HandoffPromptPreviewed`: the review sheet's full-prompt preview was opened
 - `HandoffBriefWritten` by `briefCacheStatus` (`hit`, `partial_miss`, `miss`), with `HandoffBriefMs` and
-  `HandoffBriefTokens`; `HandoffBriefFallback` by reason (`flag_off`, `busy`, `preempted`, `quota`, `timeout`,
-  `error`, `tool_use_only`, `short_source`). A high `miss` share decides §13's cold-cache question
+  `HandoffBriefTokens`; `HandoffBriefFallback` by reason (`flag_off`, `not_open`, `busy`, `preempted`, `quota`,
+  `refused`, `timeout`, `error`, `tool_use_only`, `short_source`, `history_ends_on_user`). `not_open`: the handoff
+  is not this conversation's open one. `refused`: the turn path ended before the model (an Agent or model refusal,
+  a retired model, an error building the turn), which the brief discards unstreamed so nothing persists. A high
+  `miss` share decides §13's cold-cache question
 - `HandoffContextEdited` / `HandoffContextRemoved`
 - `HandoffCompleted` / `HandoffNeedsInput` / `HandoffStopped`
 - `HandoffOpenedWhileRunning`: the user opened the target before it finished
@@ -1672,6 +1682,33 @@ has started", and the only one that spends money while nobody is watching.
   Dev validation: a handoff right after a source turn shows a `hit` brief on the source's `C#` rows with the
   source's hashes, and the source's next turn is still a `hit`; one sent after a 6-minute pause shows the `miss`
   and the next source turn reading what it wrote.
+
+  *Runtime built (2026-11-03).* Notes for the SPA half:
+  - **The brief is a mode of the turn path, not a second copy of it.** `_handoff_brief_invocation` checks the flag
+    and that the handoff is this conversation's open one, then runs `_run_invocation(brief=handoff)`. That path
+    resolves the agent through the same phases (`resolve_turn_agent(record_use=False)`, `compose_turn_system_prompt`,
+    `apply_turn_prompt_extras`, `_resolve_turn_model`, `_resolve_effective_tools`, `_build_turn_tools`) and the same
+    `_build_main_agent`, and returns the brief's stream where a turn would start its own. It skips the attachment
+    recovery, the session-state writes (an interrupted-turn note survives), the KB search, binding validation and
+    persistence. A route test sends one body as a turn and as a brief and asserts `get_agent` gets identical
+    arguments.
+  - **Anything else that path returns is discarded unstreamed** (a refusal persists only when its generator runs)
+    and answered with a fallback; a 409 becomes `busy`; quota is checked like a turn and answers `quota`.
+  - **The request** is `stream_messages` with the agent's model, its system prompt in content-block form, the
+    registry's tool specs, `tool_choice=None` and a snapshot of the model state: what the event loop sends, since we
+    register no Strands middleware and `dynamic_trailing_blocks` is 0. The history is
+    `session_manager.rewound_copy(...)`, cut to a pending rewind. The fingerprint is computed by the hook's own
+    function over the request actually sent.
+  - **The lease** is the turn's, owned by the brief stream from the route's return; it polls it every second for a
+    cancel (`preempted`) and the deadline (`timeout`, `HANDOFF_BRIEF_TIMEOUT_SECONDS`, default 30, build included),
+    and releases it before `done`. The agent's own cancel flag is never touched, so a stopped brief cannot leave a
+    sticky Stop on the cached agent.
+  - **Metering** goes through the coordinator's `_store_message_metadata` with `call_kind="handoff_brief"`, no
+    `messageId` and the brief's fingerprint. A brief adds to `totalCost` and the cache rollups but never sets
+    `lastContextTokens`; it does not consume a fork's first-call marker. A model call that returned usage is metered
+    whether or not a brief came of it. A cancelled call that reported no usage writes no row (the interrupted-turn
+    estimator is not wired to the brief).
+  - **Not built:** the output cap (see "Output" above).
 - **PR-0.3b — Notifications.** The three `handoff_*` inbox kinds, written by inference-api after `done`; the scoped
   `PutItem` grant; the bell shown with `features.handoffs` and rendering the new kinds; read-state rules; browser
   notifications through the Notification API, with the in-context permission ask.

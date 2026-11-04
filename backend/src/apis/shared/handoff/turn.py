@@ -258,7 +258,9 @@ class HandoffTurn:
             return None, ""
         text = cap_context_text(request.text or "")
         removed = not text
-        edited = not removed and context_hash(text) != row.excerpt_hash
+        # The card the SPA offered: the brief when one was written for this handoff, else the excerpt.
+        offered_hash = row.brief_hash or row.excerpt_hash
+        edited = not removed and context_hash(text) != offered_hash
         accepted = self.store.accept(
             self.user_id,
             request.handoff_id,
