@@ -1703,7 +1703,7 @@ has started", and the only one that spends money while nobody is watching.
   Then flip defaults on and start the §7 clock.
 
 **Phase 1** (after the gate)
-- **PR-1.1 — Extract `resolve_turn_agent`.** Pure refactor. *Moved into PR-0.3a (2026-10-22)*, which needs it.
+- **PR-1.1 — Extract `resolve_turn_agent`.** Pure refactor. *Moved into PR-0.3a (2026-10-22)*, which needs it. *Built (2026-11-03):* `resolve_turn_agent` returns the refusal to stream or a `ResolvedTurnAgent`; `record_use=False` skips the share and last-used writes. Prompt composition is `compose_turn_system_prompt` and `apply_turn_prompt_extras`, so the brief's system prompt is the turn's, byte for byte. The consult's `degrade=False` is not a parameter yet; Phase 1 adds it.
 - **PR-1.2 — Backend consult** (flag off): session prefix + list filter, orchestration, report, `CONSULT#` rows,
   SSE events, metering attributes, interrupt handling, `CLAUDE.md` SSE table.
 - **PR-1.3 — SPA**: Ask here / Hand off choice, consult card, disclosure, replay.
