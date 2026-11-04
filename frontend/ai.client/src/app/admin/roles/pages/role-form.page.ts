@@ -17,6 +17,7 @@ import {
   ReactiveFormsModule,
 } from '@angular/forms';
 import { map } from 'rxjs';
+import { MarkdownComponent } from 'ngx-markdown';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -25,7 +26,11 @@ import {
 import { AppRolesService } from '../services/app-roles.service';
 import { AdminToolService } from '../../tools/services/admin-tool.service';
 import { ManagedModelsService } from '../../manage-models/services/managed-models.service';
-import { AppRoleCreateRequest, AppRoleUpdateRequest } from '../models/app-role.model';
+import {
+  AppRoleCreateRequest,
+  AppRoleUpdateRequest,
+  MAX_ROLE_SYSTEM_INSTRUCTION_CHARS,
+} from '../models/app-role.model';
 import { AdminScope } from '../../admin-scope.model';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { ToolSelectorComponent } from '../../../components/tool-selector/tool-selector.component';
@@ -43,6 +48,7 @@ interface RoleFormGroup {
   grantedAdminScopes: FormControl<string[]>;
   priority: FormControl<number>;
   enabled: FormControl<boolean>;
+  systemInstruction: FormControl<string>;
 }
 
 /** The form's list-valued grants, each drawn by one `<app-tool-selector>`. */
@@ -54,7 +60,7 @@ const WILDCARD = '*';
 @Component({
   selector: 'app-role-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule, NgIcon, SpinnerComponent, ToolSelectorComponent],
+  imports: [ReactiveFormsModule, MarkdownComponent, NgIcon, SpinnerComponent, ToolSelectorComponent],
   providers: [
     provideIcons({ heroArrowLeft, heroInformationCircle }),
   ],
@@ -366,11 +372,58 @@ const WILDCARD = '*';
               }
             </div>
 
+            <!-- System Instruction Section -->
+            <div class="rounded-sm border border-gray-300 bg-white p-6 dark:border-gray-600 dark:bg-gray-800">
+              <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">
+                <label for="systemInstruction">System Instruction</label>
+              </h2>
+              <p id="system-instruction-hint" class="mb-6 text-sm/6 text-gray-600 dark:text-gray-400">
+                Applies to chats without an agent. Users with several roles get every role's
+                instruction, highest priority first. A user's personal instructions win over
+                these. Changes reach users within about 15 minutes.
+              </p>
+
+              @if (isSystemAdminRole()) {
+                <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+                  The System Admin role can't carry a system instruction.
+                </p>
+              } @else {
+                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <textarea
+                    id="systemInstruction"
+                    formControlName="systemInstruction"
+                    rows="12"
+                    placeholder="e.g., Our users are undergraduate students. Explain your reasoning step by step and point to campus resources when relevant."
+                    aria-describedby="system-instruction-hint system-instruction-count"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="instructionOverLimit()"
+                  ></textarea>
+                  <div class="rounded-sm border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900">
+                    <p class="mb-2 text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Preview</p>
+                    <div class="message-block text-sm/6 text-gray-700 dark:text-gray-300">
+                      <markdown [data]="instructionPreview()" />
+                    </div>
+                  </div>
+                </div>
+                <p
+                  id="system-instruction-count"
+                  class="mt-1 text-xs/5"
+                  [class]="instructionOverLimit() ? 'text-state-danger-600 dark:text-state-danger-400' : 'text-gray-500 dark:text-gray-400'"
+                >
+                  {{ instructionLength().toLocaleString() }} / {{ maxInstructionLength.toLocaleString() }} characters
+                  (about {{ instructionTokens().toLocaleString() }} tokens)
+                  @if (instructionOverLimit()) {
+                    &middot; shorten it to save
+                  }
+                </p>
+              }
+            </div>
+
             <!-- Form Actions -->
             <div class="flex gap-3 border-t border-gray-200 pt-6 dark:border-gray-700">
               <button
                 type="submit"
-                [disabled]="isSubmitting() || roleForm.invalid"
+                [disabled]="isSubmitting() || roleForm.invalid || instructionOverLimit()"
                 class="rounded-2xl bg-primary-accessible px-6 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 @if (isSubmitting()) {
@@ -440,7 +493,31 @@ export class RoleFormPage implements OnInit {
       validators: [Validators.min(0), Validators.max(1000)],
     }),
     enabled: this.fb.control(true, { nonNullable: true }),
+    systemInstruction: this.fb.control('', {
+      nonNullable: true,
+      validators: [Validators.maxLength(MAX_ROLE_SYSTEM_INSTRUCTION_CHARS)],
+    }),
   });
+
+  protected readonly maxInstructionLength = MAX_ROLE_SYSTEM_INSTRUCTION_CHARS;
+
+  /** The instruction text as a signal, so the count and preview are `computed()`. */
+  private readonly instructionText = toSignal(this.roleForm.controls.systemInstruction.valueChanges, {
+    initialValue: this.roleForm.controls.systemInstruction.value,
+  });
+
+  readonly instructionLength = computed(() => (this.instructionText() ?? '').length);
+  /** A rough estimate (characters ÷ 4), shown so admins can weigh prompt cost. */
+  readonly instructionTokens = computed(() => Math.ceil(this.instructionLength() / 4));
+  readonly instructionOverLimit = computed(
+    () => this.instructionLength() > MAX_ROLE_SYSTEM_INSTRUCTION_CHARS,
+  );
+  readonly instructionPreview = computed(
+    () => (this.instructionText() ?? '').trim() || '*(nothing to preview yet)*',
+  );
+
+  /** The server strips the field from `system_admin` updates, so the form hides it. */
+  readonly isSystemAdminRole = computed(() => this.roleId() === 'system_admin');
 
   readonly pageTitle = computed(() =>
     this.isEditMode() ? 'Edit Role' : 'Create Role'
@@ -559,6 +636,7 @@ export class RoleFormPage implements OnInit {
         grantedAdminScopes: role.grantedAdminScopes ?? [],
         priority: role.priority,
         enabled: role.enabled,
+        systemInstruction: role.systemInstruction ?? '',
       });
     } catch (error) {
       console.error('Error loading role:', error);
@@ -623,6 +701,8 @@ export class RoleFormPage implements OnInit {
           grantedAdminScopes: formValue.grantedAdminScopes,
           priority: formValue.priority,
           enabled: formValue.enabled,
+          // `null` clears it; the server stores blank text as none too.
+          systemInstruction: formValue.systemInstruction?.trim() || null,
         };
         await this.appRolesService.updateRole(this.roleId()!, updates);
       } else {
@@ -637,6 +717,8 @@ export class RoleFormPage implements OnInit {
           grantedAdminScopes: formValue.grantedAdminScopes,
           priority: formValue.priority,
           enabled: formValue.enabled,
+          // `null` clears it; the server stores blank text as none too.
+          systemInstruction: formValue.systemInstruction?.trim() || null,
         };
         await this.appRolesService.createRole(createData);
       }

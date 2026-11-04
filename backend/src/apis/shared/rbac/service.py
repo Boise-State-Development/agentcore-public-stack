@@ -40,7 +40,7 @@ from apis.shared.models.models import ManagedModel
 from apis.shared.tools.freshness import get_public_tool_ids
 from apis.shared.tools.scoped_ids import base_tool_id
 
-from .models import AppRole, UserEffectivePermissions, UserGrant
+from .models import AppRole, RoleInstruction, UserEffectivePermissions, UserGrant
 from .repository import AppRoleRepository
 from .cache import AppRoleCache, get_app_role_cache, roles_fingerprint
 from .model_access import grants_model_access
@@ -265,7 +265,9 @@ class AppRoleService:
         - Models: Union (user gets access to all models from all roles)
         - Admin scopes: Union (but no ``"*"`` — there is no wildcard on this
           axis; full admin is the ``system_admin`` role, not a scope)
-        - Quota Tier: Highest priority role's tier wins
+        - Quota Tier: Highest priority role's tier wins (ties: lowest role_id)
+        - Role instructions: every matched role's own ``system_instruction``,
+          priority descending then role_id (none inherited)
         - Direct grant: unioned into tools/models/skills exactly like one more
           role, and recorded on ``direct_*`` so a display can attribute it.
           A ``"*"`` in a stored grant is ignored (the write path refuses it;
@@ -316,8 +318,10 @@ class AppRoleService:
             if "*" not in all_skills:
                 all_skills.update(direct_skills)
 
-        # Determine quota tier (highest priority wins)
-        sorted_roles = sorted(roles, key=lambda r: r.priority, reverse=True)
+        # Determine quota tier (highest priority wins). The role_id tie-break
+        # keeps the winner independent of the order the JWT lists the roles in
+        # (Python's sort is stable, so without it the first-listed role won).
+        sorted_roles = sorted(roles, key=lambda r: (-r.priority, r.role_id))
         quota_tier = None
         for role in sorted_roles:
             if (
@@ -326,6 +330,24 @@ class AppRoleService:
             ):
                 quota_tier = role.effective_permissions.quota_tier
                 break
+
+        # Every matched role's own system instruction, in the same fixed order:
+        # two users holding the same roles get a byte-identical prompt whatever
+        # order their token lists them in. A role listed twice by two JWT
+        # mappings contributes once.
+        role_instructions: List[RoleInstruction] = []
+        seen_instruction_roles: Set[str] = set()
+        for role in sorted_roles:
+            if not role.system_instruction or role.role_id in seen_instruction_roles:
+                continue
+            seen_instruction_roles.add(role.role_id)
+            role_instructions.append(
+                RoleInstruction(
+                    role_id=role.role_id,
+                    display_name=role.display_name or role.role_id,
+                    text=role.system_instruction,
+                )
+            )
 
         return UserEffectivePermissions(
             user_id=user_id,
@@ -343,6 +365,7 @@ class AppRoleService:
             direct_tools=direct_tools,
             direct_models=direct_models,
             direct_skills=direct_skills,
+            role_instructions=role_instructions,
         )
 
     async def _tool_grant_set(self, user: User) -> Set[str]:

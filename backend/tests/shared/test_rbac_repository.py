@@ -96,6 +96,25 @@ class TestAppRoleRepository:
         assert set(role.granted_skills) == {"pdf_workflows", "doc_basics"}
 
     @pytest.mark.asyncio
+    async def test_system_instruction_round_trip(self, role_repository):
+        await role_repository.create_role(_make_role(system_instruction="Cite sources."))
+        result = await role_repository.get_role("editor")
+        assert result.system_instruction == "Cite sources."
+
+        result.system_instruction = None
+        await role_repository.update_role(result)
+        assert (await role_repository.get_role("editor")).system_instruction is None
+
+    @pytest.mark.asyncio
+    async def test_a_row_written_before_system_instruction_loads_as_none(self, role_repository):
+        await role_repository.create_role(_make_role())
+        role_repository._table.update_item(
+            Key={"PK": "ROLE#editor", "SK": "DEFINITION"},
+            UpdateExpression="REMOVE systemInstruction",
+        )
+        assert (await role_repository.get_role("editor")).system_instruction is None
+
+    @pytest.mark.asyncio
     async def test_get_roles_for_skill(self, role_repository):
         await role_repository.create_role(
             _make_role("r1", granted_skills=["pdf_workflows"])

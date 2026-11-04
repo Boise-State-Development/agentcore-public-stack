@@ -100,6 +100,21 @@ class TestPayload:
         assert body["message"] == "what is 2+2"
         assert "messages" not in body
 
+    async def test_never_sends_the_configured_system_prompt(self) -> None:
+        """The server ignores it on /chat/stream outside a preview (#13), so a plain
+        turn keeps the platform prompt and the user's role instructions. It is an
+        API-key (api-converse) setting only."""
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return sse_response(agent_body())
+
+        async with build(handler, config=make_config(system_prompt="be terse")) as client:
+            await drain(client)
+
+        assert "system_prompt" not in json.loads(captured[0].content)
+
     async def test_posts_to_chat_stream(self) -> None:
         captured: list[httpx.Request] = []
 

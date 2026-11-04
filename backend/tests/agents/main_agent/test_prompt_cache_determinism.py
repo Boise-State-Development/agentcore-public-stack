@@ -33,6 +33,7 @@ from agents.main_agent.session.hooks.prefix_fingerprint import (
 )
 from agents.main_agent.skills import strands_mapping as sm
 from apis.shared.rbac.service import AppRoleService
+from apis.inference_api.chat.role_instructions import compose_plain_turn_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +88,14 @@ def _role(role_id: str, tools: list, skills: list, priority: int = 10) -> Simple
     # and the merge under test reads every axis off it.
     return SimpleNamespace(
         role_id=role_id,
+        display_name=role_id.replace("-", " ").title(),
         priority=priority,
         effective_permissions=EffectivePermissions(
             tools=tools, models=[], skills=skills, quota_tier=None
         ),
+        # Same priority on every role: the order must come from the role_id
+        # tie-break, not from the order the JWT listed the roles in (#13).
+        system_instruction=f"Instruction for {role_id}.",
     )
 
 
@@ -130,7 +135,11 @@ async def _build_and_fingerprint(monkeypatch, rng: random.Random) -> dict:
     model.config = {}
     agent = Agent(
         model=model,
-        system_prompt="You are the campus assistant.",
+        # The plain-turn composition the route does, so role instruction order
+        # is part of the fingerprinted prefix.
+        system_prompt=compose_plain_turn_prompt(
+            "You are the campus assistant.", role_instructions=merged.role_instructions
+        ),
         tools=tools,
         plugins=[plugin],
     )
@@ -178,3 +187,17 @@ async def test_skills_xml_actually_present_in_fingerprinted_prompt(monkeypatch):
     prompt_text = str(agent.system_prompt)
     assert "available_skills" in prompt_text
     assert "alpha-skill" in prompt_text
+
+
+def test_role_instructions_are_byte_identical_whatever_the_jwt_role_order():
+    """#13: two users holding the same roles share one cached prefix."""
+    forward = [_role("role-b", [], []), _role("role-a", [], []), _role("role-c", [], [], priority=50)]
+    merged_a = AppRoleService._merge_permissions(None, user_id="user-1", roles=forward)
+    merged_b = AppRoleService._merge_permissions(None, user_id="user-2", roles=list(reversed(forward)))
+
+    prompt_a = compose_plain_turn_prompt("Base.", role_instructions=merged_a.role_instructions)
+    prompt_b = compose_plain_turn_prompt("Base.", role_instructions=merged_b.role_instructions)
+
+    assert prompt_a == prompt_b
+    # Priority first, then role_id for the tie.
+    assert prompt_a.index("Role C") < prompt_a.index("Role A") < prompt_a.index("Role B")
