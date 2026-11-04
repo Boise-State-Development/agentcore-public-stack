@@ -826,6 +826,7 @@ export class ConversationPage implements OnDestroy {
         fileUploadIds: message.fileUploadIds,
         invokedSkillIds: message.invokedSkillIds,
         folders: message.folders,
+        sourceAssistantId: boundAssistantId,
       });
       return;
     }

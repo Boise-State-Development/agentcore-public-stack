@@ -60,6 +60,7 @@ from apis.shared.feature_flags import (
     browser_takeover_enabled,
     session_rewind_enabled,
     session_fork_enabled,
+    handoffs_enabled,
 )
 from apis.shared.auth.models import User
 from apis.shared.system_prompts.service import get_system_prompts_service
@@ -849,6 +850,13 @@ async def signal_turn_interrupted_endpoint(
         offers to continue it. Recorded only while the session's
         single-flight lease is held: "mid-turn" is a claim this endpoint
         verifies rather than takes from the client (see the gate below).
+      * ``handoff_brief_preempted`` — the user sent in a conversation whose
+        handoff brief still holds the lease (handoffs spec §4.5.1). **Cancel
+        only**: it arms the same owner-scoped cancel as Stop so the user's
+        send wins the lease, and writes no interrupted-turn marker, because
+        the brief is not a turn. Stop's marker here gave the source's next
+        real turn a false "the user deliberately stopped your previous
+        response" note.
 
     Lives on app-api, not inference-api: the AgentCore Runtime data plane
     only proxies ``/invocations`` + ``/ping``, so a custom inference-api
@@ -864,6 +872,17 @@ async def signal_turn_interrupted_endpoint(
     user_id = current_user.user_id
 
     logger.info("POST /sessions/.../interrupt (reason=%s)", body.reason)
+
+    if body.reason == "handoff_brief_preempted":
+        if not handoffs_enabled():
+            return Response(status_code=204)
+        try:
+            from apis.shared.sessions.session_lease import request_session_cancel
+
+            await request_session_cancel(session_id, user_id)
+        except Exception:
+            logger.warning("Failed to arm session cancel on brief preempt", exc_info=True)
+        return Response(status_code=204)
 
     try:
         # A departure can only interrupt a turn that is actually running.

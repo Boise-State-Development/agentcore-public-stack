@@ -113,6 +113,17 @@ export interface FeatureFlags {
   handoffs: boolean;
 
   /**
+   * Handoff brief (docs/specs/agent-handoffs-and-consults.md §4.5.1): once the
+   * review sheet has its excerpt, ask the source conversation's own model for
+   * a brief, read from its prompt cache, and stream it into the context card.
+   * The excerpt stays as the fallback. Off, the card is the excerpt, as before.
+   * Only meaningful with `handoffs`. Backend: HANDOFF_BRIEF_ENABLED (the
+   * Runtime). In development, so `false` unless the environment has turned
+   * the backend on.
+   */
+  handoffBrief: boolean;
+
+  /**
    * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:

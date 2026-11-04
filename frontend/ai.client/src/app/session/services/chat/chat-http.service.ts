@@ -14,6 +14,7 @@ import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { TurnTimingService } from './turn-timing.service';
 import { browserFrameHeight } from '../../../services/browser-login/browser-frame-height';
 import { QuotaStatusService } from '../../../services/quota/quota-status.service';
+import { HandoffBriefService } from '../handoff/handoff-brief.service';
 
 /**
  * Title fallback polling. A stream that outruns title generation closes a few
@@ -197,6 +198,7 @@ export class ChatHttpService {
   private errorService = inject(ErrorService);
   private destroyRef = inject(DestroyRef);
   private injector = inject(Injector);
+  private handoffBrief = inject(HandoffBriefService);
 
   constructor() {
     this.registerPageLifecycleAttribution();
@@ -204,6 +206,17 @@ export class ChatHttpService {
 
   async sendChatRequest(requestObject: any): Promise<void> {
     const sessionId = requestObject.session_id as string;
+
+    // A handoff brief holds this conversation's lease (handoffs spec §4.5.1). The user's own
+    // turn wins it: stop the brief and wait for its stream to close before sending, or the send
+    // would 409 as "Already responding" for a turn that isn't one. Nothing to wait on, and no
+    // latency added, when no brief is in flight. A send that a newer one superseded meanwhile
+    // leaves the session to it.
+    if (this.handoffBrief.isRunning(sessionId)) {
+      const ownStreamId = this.streamParserService.getCurrentStreamId(sessionId);
+      await this.handoffBrief.preempt(sessionId);
+      if (this.streamParserService.getCurrentStreamId(sessionId) !== ownStreamId) return;
+    }
 
     // Fresh controller per request, keyed by session. Creating it aborts any
     // in-flight stream for the SAME session (double-submit guard) without

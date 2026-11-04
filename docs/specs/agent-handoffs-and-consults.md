@@ -690,8 +690,11 @@ for byte, up to a new final message.
 - **The user's own turn wins the lease.** The other direction matters more: the sheet sits above the source's
   composer, and a send there while the brief holds the lease would 409 and show "Already responding" for a turn that
   isn't one. The SPA started the brief, so it knows one is in flight: a send in the source first stops the brief
-  (the same cooperative cancel as Stop, which the brief checks between stream chunks), waits for the brief's stream to
-  close, then sends. The sheet falls back to the excerpt with its one-line note (`HandoffBriefFallback` reason
+  (`POST /sessions/{id}/interrupt` with `reason: "handoff_brief_preempted"`, which arms the same owner-scoped lease
+  cancel as Stop, which the brief polls, and **nothing else**), waits for the brief's stream to close, then sends.
+  Never Stop's `user_stopped`: that also writes the interrupted-turn marker, and on dev (2026-11-04) a brief
+  preempted that way gave the source's next real turn a false "The user deliberately stopped your previous
+  response" note. The brief is not a turn, so nothing was interrupted. The sheet falls back to the excerpt with its one-line note (`HandoffBriefFallback` reason
   `preempted`). The brief is never shown as a streaming turn in the source, so the composer doesn't offer mid-turn
   steering against it. Verify first that the lease is released before the brief's stream closes, or the send can
   still lose the race.
@@ -1709,6 +1712,24 @@ has started", and the only one that spends money while nobody is watching.
     whether or not a brief came of it. A cancelled call that reported no usage writes no row (the interrupted-turn
     estimator is not wired to the brief).
   - **Not built:** the output cap (see "Output" above).
+
+  *SPA built (2026-11-04)*, behind `features.handoffBrief` (on only in `environment.development.ts`):
+  - **The request** is `ChatRequestService.buildHandoffBriefRequest`: `buildChatRequestObject` for the source, with
+    the source's binding (`HandoffDraft.sourceAssistantId`, the same bound Agent a turn there sends) and the
+    handoff's request as the message, plus `handoff_brief`. `HandoffBriefService` streams it to `/chat/stream` with
+    the same transport fields a turn carries (the fork pin, the sign-in panel height) and **its own fetch**, never
+    `ChatHttpService.sendChatRequest`: no message map, no loading flag, no abort controller, no turn timing, so the
+    source never shows as streaming and the composer never offers steering against a brief.
+  - **The card** shows "Writing a brief…" until the first text, then the text as it streams; Send is disabled while
+    it writes, so what the user reviewed is what goes, and "Use the conversation excerpt instead" stops waiting. A
+    written brief becomes the card (trimmed, as the Runtime hashes it); Edit, Remove and Preview act on it, and Send
+    carries it as `handoff_context.text`. A `handoff_brief_fallback` frame, a `done` without `briefHash`, or a
+    stream that closes without either discards any streamed text and keeps the excerpt, with a one-line note.
+  - **Preempt.** `ChatHttpService.sendChatRequest` awaits `HandoffBriefService.preempt` before any turn on a session
+    with a brief in flight (a map lookup otherwise, so no latency is added to a turn). The preempt re-arms the
+    cancel every 1.5 s until the stream closes, because a cancel armed before the brief has taken the lease finds no
+    owner and is a no-op, and after 8 s it cuts the transport and lets the send go. Cancelling the sheet while a
+    brief writes stops it the same way.
 - **PR-0.3b — Notifications.** The three `handoff_*` inbox kinds, written by inference-api after `done`; the scoped
   `PutItem` grant; the bell shown with `features.handoffs` and rendering the new kinds; read-state rules; browser
   notifications through the Notification API, with the in-context permission ask.
