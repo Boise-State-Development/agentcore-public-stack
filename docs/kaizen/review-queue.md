@@ -5,6 +5,33 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-11-03] Attribute the drop-block cache re-write on the `C#` row, the way `modelSwitched` explains a model switch
+- **Source**: #1850 readout (strands-agents 1.62.0, harness-sdk#5171)
+- **Surface**: backend (`session/hooks/prefix_fingerprint.py`, the `C#` row writer, the admin cost diagnoses)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — a class of "unexplained" waste that would otherwise send someone hunting for a cache-buster that isn't there
+- **Unlocks**: a measured count of how often compaction on a preserved-thinking model (Opus 5.5) hits the thinking-binding 400
+- **Notes**: since 1.62.0, `BedrockModel._converse` retries a "block is bound to a different conversation" `ValidationException` with `drop_block` (an `anthropic_beta` entry plus a changed `thinking` field), and sets `_drop_stale_thinking_model_id` so every later request on that model instance carries it. Our fingerprints hash tool specs, system prompt and history, never `additionalModelRequestFields`, so the call that first carries `drop_block` re-writes the prefix with **unchanged hashes** and lands as unexplained waste. Before 1.62 the same case failed the turn, so this is a net improvement; the gap is attribution only. Read the flag off the model instance after the call (never in a `Before*` hook; TTFT) and write a `thinkingDropBlock` marker, subtracted like `agentSwitched`/`modelSwitched`. The instance is per `(session, user)` (`_create_cache_key`), so the flag never crosses conversations
+- **Status**: open
+
+### [2026-11-03] `document_extract`: record which structured-output mechanism answered, before the feature is promoted
+- **Source**: #1850 readout (strands-agents 1.63.0 `_native_output.py`)
+- **Surface**: backend (`apis/shared/extraction/extractor.py`, the `document_extraction` event's `schemaEnforced`)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — a guard on a contract the spec already states ("it is never silent")
+- **Unlocks**: native structured output (`outputConfig`) as a second enforced path on models that cannot force a tool, e.g. Opus 5.5
+- **Notes**: 1.63.0's `BedrockModel.structured_output` cascades forced → native → auto and swallows a mechanism's rejection to try the next. On the forced path our capacity errors still surface (they are not in Strands' forced-unsupported list), so `SchemaTooComplexError` survives. But where forced is skipped (`model_info` says `forcedToolChoice: false`, which is Opus 5.5) and native rejects the schema ("Schema is too complex", "Schemas contains too many"), Strands falls back to auto tool choice with only a `warnings.warn`, and our `schemaEnforced` would read `true` for a best-effort answer. Detect the mechanism (or the warning) and mark the run unenforced, or pin the extractor to the forced mechanism. `DOCUMENT_EXTRACT_ENABLED` is off everywhere, so no deployment is exposed yet. Fix before promotion
+- **Status**: open
+
+### [2026-11-03] Strategic read of strands-agents 1.62 + 1.63: what the new primitives let us build or delete
+- **Source**: #1850 (the bump read the diff for breakage, not for opportunity)
+- **Surface**: backend
+- **Effort × Impact**: L × M
+- **Subtracts**: possibly — candidates below
+- **Unlocks**: see candidates
+- **Notes**: candidates found in the wheel diff, none evaluated: `Model.model_info` / `model_info.json` as a second source for catalog limits and capabilities (with the caveat that its Sonnet 4.6 output limit is wrong, so never authoritative); native structured output as the extraction path on models that support it; request-wide Graph/Swarm limits (harness-sdk#5306) against the [2026-07-17] headless `Limits` item and handoffs §9.5; the public `strands.middleware` module against hooks we wrote as workarounds; `vended_tools` `read`/`write`/`edit`/`stop`; `InvocationContext` usage (request-wide, across sub-agents) against our per-call usage aggregation. Read the 1.62.0 and 1.63.0 release notes end to end, with both lenses
+- **Status**: open
+
 ### [2026-11-03] Take Strands 1.63.0 with a written readout, then curate Haiku 5.5
 - **Source**: research/2026-11-03.md
 - **Surface**: backend
@@ -12,6 +39,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes — the preserved-thinking probe item and the stale caching comment in `model_config.py`
 - **Unlocks**: Haiku 5.5 as the cheap default
 - **Status**: open
+- **Status 2026-11-03**: bump in review as #1850 (`feature/strands-1.63.0`). Readout: (a) #5645 would send `maxTokens` from Strands' `model_info.json`, which gives Sonnet 4.6 128K against a 64K card, so `to_bedrock_config` and the extractor opt out with `max_tokens=None`; (b) the cache predicate is unchanged for every id we run; (c) #4618 not shipped, `metrics.py` byte-identical. `model_info` re-resolves on every read (upstream `format_request` 22 → 102 µs), memoized in `CountTokensBedrockModel` (ours: 22 µs on both). Open: the Haiku 5.5 row, and our Opus 4.7 row's 64K output cap (card says 128K).
 
 ### [2026-11-03] Find out why Nightly Build & Test has failed on `main` for seven nights
 - **Source**: research/2026-11-03.md

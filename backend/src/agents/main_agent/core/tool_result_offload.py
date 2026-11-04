@@ -169,28 +169,22 @@ def _offloader_class():
     class BoundedToolResultOffloader(_OffloaderMixin, ContextOffloader):  # type: ignore[misc, valid-type]
         pass
 
-    # Carry the base's ``@hook`` registration onto our override.
+    # How our override gets called. Since strands-agents 1.63.0 the base no
+    # longer marks ``_handle_tool_result`` with ``@hook``; ``init_agent``
+    # registers ``self._handle_tool_result`` explicitly
+    # (``agent.add_hook(..., AfterToolCallEvent, order=70)``), and the bound
+    # method resolves through the MRO to the mixin's override. Nothing to copy.
     #
-    # ``strands.plugins._discovery`` walks the MRO and, for every name in each
-    # class's ``__dict__``, tests ``getattr(instance, name)`` for the
-    # ``_hook_event_types`` attribute the ``@hook`` decorator writes. The name
-    # resolves through the MRO, so ``_OffloaderMixin``'s undecorated override
-    # answers for ``ContextOffloader``'s decorated method: it fails the
-    # predicate, the name is marked seen, and the callback is never registered.
-    # The plugin still loads and still publishes ``retrieve_offloaded_content``
-    # — it just silently offloads nothing, which is how a 107k-token tool result
-    # reached the prompt in prod with the offloader enabled.
-    #
-    # Copying rather than re-decorating: ``@hook`` infers the event type from
-    # the annotation via ``get_type_hints``, which resolves against the
-    # function's module globals. ``AfterToolCallEvent`` cannot be imported at
-    # this module's scope without pulling in boto3 and the plugin, which is
-    # exactly what the lazy build exists to avoid. Taking the base's value also
-    # tracks upstream if it ever binds the callback to a different event.
-    # ``TestHookRegistration`` guards all of this.
-    _OffloaderMixin._handle_tool_result._hook_event_types = (  # type: ignore[attr-defined]
-        ContextOffloader._handle_tool_result._hook_event_types
-    )
+    # Through 1.62 it was discovered instead, and an override without the
+    # ``_hook_event_types`` marker shadowed the base's decorated method by name
+    # and was silently never registered: the plugin loaded, published
+    # ``retrieve_offloaded_content``, and offloaded nothing, which is how a
+    # 107k-token tool result reached the prompt in prod with the offloader
+    # enabled. The marker is now absent on purpose: on top of the explicit
+    # registration it would run the callback twice. ``TestHookRegistration``
+    # pins exactly one registration against the pinned Strands, so a bump that
+    # moves the callback back to discovery fails CI instead of offloading
+    # nothing.
 
     BoundedToolResultOffloader.__name__ = "BoundedToolResultOffloader"
     return BoundedToolResultOffloader

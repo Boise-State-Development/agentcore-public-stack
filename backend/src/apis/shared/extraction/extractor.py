@@ -132,8 +132,11 @@ def _build_model(model_id: str, *, strict: bool):
     """
     from strands.models import BedrockModel
 
-    return BedrockModel(model_id=model_id, strict_tools=True) if strict else BedrockModel(
-        model_id=model_id
+    # max_tokens=None: omit maxTokens and take Bedrock's per-model maximum,
+    # not the strands-agents 1.63.0 default from its model_info.json, which
+    # overstates some Claude limits (see ModelConfig.to_bedrock_config).
+    return BedrockModel(model_id=model_id, max_tokens=None, strict_tools=True) if strict else BedrockModel(
+        model_id=model_id, max_tokens=None
     )
 
 

@@ -15,7 +15,7 @@ cachetools==6.2.4
 # reader app-api's shares use. It reads AgentCore Memory through
 # bedrock_agentcore.memory.integrations.strands, which imports Strands (the base
 # package; none of its bidi extras are imported). Versions match backend/uv.lock.
-strands-agents==1.61.1
+strands-agents==1.63.0
 mcp==1.30.0
 # OpenTelemetry is AHEAD of backend/uv.lock here, deliberately: 1.45.1 fixes
 # GHSA-xcq7-p3pf-p88h (O(N^2) tracestate parsing). backend/uv.lock cannot follow

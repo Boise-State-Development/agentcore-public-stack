@@ -138,8 +138,8 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.12" },
     { name = "soupsieve", specifier = "==2.9.0" },
     { name = "starlette", specifier = "==1.3.1" },
-    { name = "strands-agents", marker = "extra == 'agentcore'", specifier = "==1.61.1" },
-    { name = "strands-agents", extras = ["bidi"], marker = "extra == 'bidi'", specifier = "==1.61.1" },
+    { name = "strands-agents", marker = "extra == 'agentcore'", specifier = "==1.63.0" },
+    { name = "strands-agents", extras = ["bidi"], marker = "extra == 'bidi'", specifier = "==1.63.0" },
     { name = "strands-agents-evals", marker = "extra == 'dev'", specifier = "==1.7.0" },
     { name = "strands-agents-tools", marker = "extra == 'agentcore'", specifier = "==0.8.8" },
     { name = "tiktoken", marker = "extra == 'dev'", specifier = "==0.12.0" },
@@ -4470,7 +4470,7 @@ wheels = [
 
 [[package]]
 name = "strands-agents"
-version = "1.61.1"
+version = "1.63.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -4487,9 +4487,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b7/38/1b15f10b681acf682521382af050f0a16cb498f0cfa949d77487797c1b8b/strands_agents-1.61.1.tar.gz", hash = "sha256:ccf14ac4b7a036f0460ca0a9e09407540910c0d2906729e8ceed097eb502e803", size = 1769033, upload-time = "2026-10-15T20:26:10.608Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a6/ab/74fc54111f3009fc52337afd84ee27c02df7c0b932ba471a84a8ba15a2a7/strands_agents-1.63.0.tar.gz", hash = "sha256:b6ac864ac3726b9d5566fecf09688ab12d00fd6f16379ad1c91465ae9d197bfb", size = 1929378, upload-time = "2026-10-30T19:53:37.774Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/00/f04e7113e9d25e81a0affac2c686e0387869d29126108758121ebd8774be/strands_agents-1.61.1-py3-none-any.whl", hash = "sha256:ee0720a0dacdfa2fc745f7260a58d9868067d7bd16c2cfbcb7631475fc0258dd", size = 886728, upload-time = "2026-10-15T20:26:08.58Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/85/37b156ba498cadd833c806c9fe0ef137433950219fe335f368438c65a3a2/strands_agents-1.63.0-py3-none-any.whl", hash = "sha256:fc0a140943855c0199a83fe5a78fc07f1e82ef7d60592538c2d52793121980f0", size = 972613, upload-time = "2026-10-30T19:53:35.714Z" },
 ]
 
 [package.optional-dependencies]
