@@ -3,7 +3,9 @@
 <!-- IMAGE PLACEHOLDER: Animated GIF or hero banner showing the chat interface in action — a user asking a question, the agent streaming a response, and a tool rendering (e.g., a chart or an artifact opening in the side panel). ~800x400px, optimized for GitHub. -->
 <!-- Example: ![AgentCore Demo](docs/images/hero-demo.gif) -->
 
-<h1><img src="frontend/ai.client/public/img/logo-light.png" alt="AgentCore Logo" height="50" align="center" /> AgentCore Public Stack</h1>
+<img src="frontend/ai.client/public/img/logo-dark.png" alt="AgentCore Logo" height="96" />
+
+<h1>AgentCore Public Stack</h1>
 
 **The open-source AI platform for universities and state & local government.**
 *Chat, agents, tools, knowledge and governance, deployed into an AWS account you control. Built by Boise State University, designed for every public institution.*
