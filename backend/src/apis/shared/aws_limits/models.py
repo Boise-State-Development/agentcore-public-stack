@@ -37,9 +37,11 @@ class AwsLimit(_CamelModel):
     adjustable: bool = False
     global_quota: bool = False
     has_usage_metric: bool = False
-    # Peak usage over the last hour, in the quota's own unit and period. None
-    # when AWS publishes no usage metric (most Bedrock model quotas).
+    # Peak usage over the last 7 days, in the quota's own unit and period. None
+    # when nothing measures this quota.
     usage: Optional[float] = None
+    # Which CloudWatch series the usage came from, for the row's tooltip.
+    usage_source: Optional[str] = None
     # usage / applied value, as a percentage. None without usage.
     utilization: Optional[float] = None
     console_url: str
@@ -89,6 +91,8 @@ class AwsLimitsDashboard(_CamelModel):
     summary: AwsLimitsSummary = Field(default_factory=AwsLimitsSummary)
     auto_management: Optional[AutoManagementStatus] = None
     guidance_url: str
+    # How far back "usage" looks.
+    usage_window_days: int = 7
 
 
 class IncreaseRequest(_CamelModel):

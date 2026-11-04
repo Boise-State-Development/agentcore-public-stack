@@ -3,8 +3,17 @@
 import pytest
 
 from apis.shared.aws_limits.bedrock_match import (
+    CROSS_REGION,
+    GLOBAL,
+    ON_DEMAND,
     ModelRef,
     filter_quotas_for_models,
+    geo_prefix,
+    model_id_inference_type,
+    model_id_variants,
+    quota_inference_type,
+    quota_usage_metric,
+    usage_model_ids,
     is_inference_quota,
     model_id_tokens,
     model_matches_quota,
@@ -133,3 +142,65 @@ def test_filter_keeps_only_matching_inference_quotas():
         "Batch inference job size (in GB) for Claude Haiku 4.5",
     ]
     assert filter_quotas_for_models(names, [HAIKU_45]) == [names[0]]
+
+
+# ── usage: which ModelIds count against a quota ─────────────────────────────
+
+HAIKU = "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.mark.parametrize(
+    "name,kind,metric",
+    [
+        ("On-demand model inference requests per minute for Amazon Nova Pro", ON_DEMAND, "Invocations"),
+        ("Cross-region model inference tokens per minute for Anthropic Claude Haiku 4.5", CROSS_REGION, "EstimatedTPMQuotaUsage"),
+        ("Global cross-region model inference tokens per minute for Anthropic Claude Sonnet 4.6", GLOBAL, "EstimatedTPMQuotaUsage"),
+        ("[bedrock-mantle endpoint] Output tokens per minute for GPT-5.4", None, None),
+        ("Batch inference job size (in GB) for Claude Haiku 4.5", None, None),
+    ],
+)
+def test_quota_inference_type_and_metric(name, kind, metric):
+    assert quota_inference_type(name) == kind
+    assert quota_usage_metric(name) == metric
+
+
+@pytest.mark.parametrize(
+    "model_id,kind",
+    [
+        (HAIKU, ON_DEMAND),
+        (f"us.{HAIKU}", CROSS_REGION),
+        (f"apac.{HAIKU}", CROSS_REGION),
+        ("global.anthropic.claude-sonnet-4-6", GLOBAL),
+        (f"arn:aws:bedrock:us-west-2::foundation-model/{HAIKU}", ON_DEMAND),
+        (f"arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.{HAIKU}", CROSS_REGION),
+        ("arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123", None),
+    ],
+)
+def test_model_id_inference_type(model_id, kind):
+    assert model_id_inference_type(model_id) == kind
+
+
+def test_a_catalog_model_can_be_invoked_three_ways():
+    assert geo_prefix("us-west-2") == "us" and geo_prefix("eu-central-1") == "eu" and geo_prefix("ap-south-1") == "apac"
+    assert set(model_id_variants(f"us.{HAIKU}", "us-west-2")) == {f"us.{HAIKU}", HAIKU, f"global.{HAIKU}"}
+
+
+def test_usage_ids_follow_the_inference_type():
+    ids = [HAIKU, f"us.{HAIKU}", f"global.{HAIKU}", "us.anthropic.claude-sonnet-4-6"]
+    assert usage_model_ids("Cross-region model inference tokens per minute for Anthropic Claude Haiku 4.5", ids) == [f"us.{HAIKU}"]
+    assert usage_model_ids("On-demand model inference requests per minute for Anthropic Claude Haiku 4.5", ids) == [HAIKU]
+    assert usage_model_ids("Global cross-region model inference tokens per minute for Anthropic Claude Haiku 4.5", ids) == [f"global.{HAIKU}"]
+
+
+def test_usage_never_attributes_a_variant_quota_to_the_base_model():
+    ids = ["us.anthropic.claude-sonnet-4-5-20250929-v1:0"]
+    assert usage_model_ids("Cross-region model inference tokens per minute for Anthropic Claude Sonnet 4.5", ids) == ids
+    assert usage_model_ids("Cross-region model inference tokens per minute for Anthropic Claude Sonnet 4.5 V1", ids) == ids
+    assert usage_model_ids("Cross-region model inference tokens per minute for Anthropic Claude Sonnet 4.5 V1 1M Context Length", ids) == []
+    assert usage_model_ids("Cross-region model inference tokens per minute for Anthropic Claude Sonnet 4", ids) == []
+
+
+def test_a_display_name_rescues_an_id_that_tokenizes_differently():
+    ref = ModelRef(model_id="us.meta.llama3-1-70b-instruct-v1:0", model_name="Llama 3.1 70B Instruct")
+    name = "Cross-region model inference tokens per minute for Meta Llama 3.1 70B Instruct"
+    assert usage_model_ids(name, [ref.model_id], [ref]) == [ref.model_id]

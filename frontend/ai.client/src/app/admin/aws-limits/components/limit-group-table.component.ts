@@ -61,8 +61,8 @@ import { UtilizationBarComponent } from './utilization-bar.component';
               <tr>
                 <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Quota</th>
                 <th scope="col" class="px-4 py-2 text-right font-semibold text-gray-900 dark:text-white">Applied value</th>
-                <th scope="col" class="px-4 py-2 text-right font-semibold text-gray-900 dark:text-white">Usage</th>
-                <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Utilization</th>
+                <th scope="col" class="px-4 py-2 text-right font-semibold text-gray-900 dark:text-white">{{ windowDays() }}-day peak</th>
+                <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Peak utilization</th>
                 <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Unit / period</th>
                 <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white">Adjustable</th>
                 <th scope="col" class="px-4 py-2 font-semibold text-gray-900 dark:text-white"><span class="sr-only">Actions</span></th>
@@ -81,7 +81,10 @@ import { UtilizationBarComponent } from './utilization-bar.component';
                       <div class="text-xs/5 text-gray-500 dark:text-gray-400">AWS default {{ value(limit.defaultValue) }}</div>
                     }
                   </td>
-                  <td class="px-4 py-3 text-right tabular-nums text-gray-700 dark:text-gray-300">
+                  <td
+                    class="px-4 py-3 text-right tabular-nums text-gray-700 dark:text-gray-300"
+                    [attr.title]="limit.usageSource ?? 'Nothing in CloudWatch measures this quota'"
+                  >
                     {{ limit.usage === null ? 'N/A' : value(limit.usage) }}
                   </td>
                   <td class="px-4 py-3"><app-utilization-bar [utilization]="limit.utilization" /></td>
@@ -134,6 +137,8 @@ import { UtilizationBarComponent } from './utilization-bar.component';
 })
 export class LimitGroupTableComponent {
   readonly group = input.required<AwsLimitGroup>();
+  /** Days the usage peak covers. */
+  readonly windowDays = input(7);
   /** The caller may submit increases (server-decided). */
   readonly canRequest = input(false);
   readonly guidanceUrl = input('');
