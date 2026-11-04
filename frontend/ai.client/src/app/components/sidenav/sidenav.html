@@ -177,8 +177,8 @@
     @if (userService.currentUser(); as user) {
         <div class="flex shrink-0 items-center gap-1 border-t border-gray-200 px-3 py-2 dark:border-white/10">
             <app-user-dropdown class="min-w-0 flex-1" [user]="user" [isAdmin]="isAdmin()" (logout)="handleLogout()"></app-user-dropdown>
-            @if (features.projects || features.quotaRequests) {
-                <!-- The inbox's producers are projects and quota requests; show the bell with either. -->
+            @if (features.projects || features.quotaRequests || features.handoffs) {
+                <!-- The inbox's producers are projects, quota requests and handoffs; show the bell with any. -->
                 <app-notification-bell class="shrink-0" />
             }
         </div>

@@ -146,6 +146,7 @@ from apis.shared.security.log_sanitize import scrub_log
 
 if TYPE_CHECKING:
     from apis.inference_api.chat.project_memory import ProjectMemoryTurn
+    from apis.shared.handoff.models import Handoff
     from apis.shared.projects.models import Project
 
 logger = logging.getLogger(__name__)
@@ -4044,9 +4045,560 @@ def _build_citations(assistant, context_chunks, rag_assistant_id: Optional[str])
     return citations_for_storage
 
 
+@dataclass
+class ResolvedTurnAgent:
+    """An Agent turn's configuration for the invoking user, before its knowledge base is searched.
+
+    What ``resolve_turn_agent`` decided: the record that runs (the published snapshot for
+    everyone but the owner), the permission its knowledge base is read under, whether it is
+    a project's harness, and the governed capabilities that replace the request's model,
+    tools and skills. The two project tasks and the full-context load are started, not
+    awaited, so they overlap the search and the agent build exactly as before the extraction.
+    """
+
+    assistant: Any = None
+    permission: Optional[str] = None
+    resolved_version: Any = None
+    project_id: Optional[str] = None
+    project_member_note: Optional[str] = None
+    project_files_note_task: Optional["asyncio.Task[Optional[str]]"] = None
+    project_memory_task: Optional["asyncio.Task[ProjectMemoryTurn]"] = None
+    model_override: Any = None
+    tools_override: Any = None
+    skills_override: Any = None
+    notice_event: Optional[AgentNoticeEvent] = None
+    kb_full_context_task: Optional["asyncio.Task[Optional[str]]"] = None
+
+
+async def resolve_turn_agent(
+    input_data: InvocationRequest,
+    current_user: User,
+    user_id: str,
+    *,
+    is_continuation: bool,
+    record_use: bool = True,
+) -> Union[StreamingResponse, ResolvedTurnAgent]:
+    """Resolve the Agent a turn runs, for this caller (route step 8, the ``rag`` stage's first half).
+
+    The one place an Agent's configuration is decided: the access check (or the reviewer's
+    scoped read), the version snapshot, the use bookkeeping, a project harness's gate and
+    its memory and file-status loads, the governed capabilities (D5) and the full-context
+    knowledge base. Binding validation runs before it and the knowledge-base search, prompt
+    composition and binding persistence after it, all in the route.
+
+    A handoff brief (agent-handoffs-and-consults.md §4.5.1) must build the same agent a
+    turn would, or it misses the source's prompt cache, and Phase 1's consults must apply
+    the same access rules; both call this rather than a copy. ``record_use=False`` skips
+    the share-interaction and last-used writes, for a call that is not the user using
+    the Agent. A turn that must not run gets its conversational refusal back instead, to
+    stream as is.
+    """
+    from apis.shared.assistants.kb_access import granted
+    from apis.shared.assistants.service import (
+        get_assistant_with_access_check,
+        mark_share_as_interacted,
+    )
+    from apis.shared.assistants.version_resolution import (
+        AgentVersionUnavailableError,
+        resolve_invocation_agent,
+        resolve_review_agent,
+    )
+
+    assistant = None
+    assistant_permission = None
+    # Version snapshots (§4): which Agent snapshot this turn resolved to, for the log line
+    # below. ``None`` means the live record ran — a plain chat turn with no Agent, an Agent
+    # with nothing published, or the owner running their own draft.
+    #
+    # ⚠️ Deliberately **not** in the agent cache key, despite what the spec's §4.2 says. The
+    # key is built from construction *values*, and everything a version changes about
+    # behavior already reaches it: instructions via ``system_prompt``, tool bindings via
+    # ``enabled_tools``, skills via ``skills_hash``/``agent_type``, the model via
+    # ``model_id``, and a memory binding via the ``memory_binding`` key element. So
+    # promoting a version already misses. Adding the number would buy no discrimination and
+    # would cost real safety: the resume path rebuilds its key from ``PausedTurnSnapshot``,
+    # so a new key element the snapshot did not carry orphans the paused agent and breaks
+    # OAuth-consent / tool-approval resumes (``service.py`` warns about exactly this).
+    resolved_version = None
+    turn_project_id: Optional[str] = None
+    project_member_note: Optional[str] = None
+    project_files_note_task = None
+    project_memory_task = None
+    agent_model_override = None
+    agent_tools_override = None
+    agent_skills_override = None
+    agent_notice_event: Optional[AgentNoticeEvent] = None
+    kb_full_context_task = None
+
+    # 2. Load assistant with access check
+    #
+    # ⚠️ The reviewer preview is the ONE path that does not go through the visibility
+    # gate, and it earns that by proving the scope first. A PRIVATE Agent can be sitting
+    # in the review queue — approval refuses one, but submission does not — and
+    # ``get_assistant_with_access_check`` refuses a non-owner outright on PRIVATE, so a
+    # reviewer could not test-drive exactly the submissions most worth testing.
+    #
+    # The scope is re-resolved here against the caller's own roles rather than trusted
+    # from the request, and a caller without it is refused rather than quietly demoted
+    # to an ordinary turn: a silent downgrade would run the published snapshot (or the
+    # author's draft) and report it to the reviewer as the version under review.
+    is_review_preview = bool(input_data.review_preview)
+    if is_review_preview:
+        import os
+
+        from apis.shared.auth import has_admin_scope
+        from apis.shared.assistants.service import (
+            _get_assistant_cloud_without_ownership_check,
+        )
+
+        if not await has_admin_scope(current_user, "admin.marketplace"):
+            logger.warning("review_preview requested without the marketplace scope")
+            raise HTTPException(
+                status_code=403,
+                detail="Reviewing an agent requires marketplace admin access.",
+            )
+        table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+        if not table_name:
+            # Explicit, because the alternative is a confusing failure several frames
+            # down inside boto3 rather than a message naming the missing variable.
+            raise RuntimeError(
+                "DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required"
+            )
+        assistant = await _get_assistant_cloud_without_ownership_check(
+            input_data.rag_assistant_id, table_name
+        )
+        # No permission was resolved, because this path deliberately bypassed the
+        # gate that resolves one. Left as None so the knowledge base read below
+        # fails closed (Requirement 25.1): `granted(...)` treats None as "grants
+        # nothing", and the marketplace scope is authority to *review a
+        # submission*, not evidence of a read grant on that owner's corpus.
+        #
+        # ⚠️ Consequence worth owning: a reviewer test-drives with an empty
+        # knowledge base, which is a degraded review of a RAG-backed Agent — the
+        # same class of problem develop's comment above warns about. Whether a
+        # marketplace reviewer should receive corpus read is a policy decision for
+        # the marketplace owner, not something to settle inside a merge conflict.
+        # Tracked rather than guessed; failing closed is the safe default meanwhile.
+        assistant_permission = None
+    else:
+        logger.info("Loading assistant with access check...")
+        # The permission is kept, not discarded: it is what the knowledge base
+        # retrieval below runs under (Requirement 25.1), so the grant that governs
+        # the corpus read is provably the same one that admitted this turn.
+        assistant, assistant_permission = await get_assistant_with_access_check(
+            assistant_id=input_data.rag_assistant_id,
+            user_id=user_id,
+            user_email=current_user.email,
+        )
+
+    if not assistant:
+        logger.warning(
+            "Assistant lookup returned None (review_preview=%s)", is_review_preview
+        )
+        # A project task while Projects are switched off: the harness refuses
+        # everyone, so say why in the conversation rather than as a bare 403.
+        from apis.shared.assistants.service import is_disabled_project_harness
+
+        if await is_disabled_project_harness(input_data.rag_assistant_id):
+            return _forbidden_turn(input_data, user_id, PROJECTS_DISABLED_MESSAGE)
+
+        # A deleted agent and one the caller may not use get the same answer, so
+        # the response never says whether an id exists. Which it was goes to the
+        # log only, where it helps whoever is debugging and tells a caller nothing.
+        from apis.shared.assistants.service import assistant_exists
+
+        exists = await assistant_exists(input_data.rag_assistant_id)
+        logger.warning("Agent unavailable for this turn (%s)", "no access" if exists else "not found")
+        return _forbidden_turn(input_data, user_id, AGENT_UNAVAILABLE_MESSAGE)
+
+    # Log assistant details for debugging
+    logger.info("Assistant loaded successfully!")
+    logger.info("Assistant details retrieved")
+    logger.info("Assistant name retrieved")
+    logger.info("Assistant owner retrieved")
+    logger.info("Assistant visibility retrieved")
+    logger.info("Assistant instructions retrieved")
+    logger.info("Assistant instructions length retrieved")
+    logger.info("Assistant vector index retrieved")
+
+    # 2a. Version snapshots (§4) — decide WHICH configuration this caller runs.
+    #
+    # This is the seam the whole epic was built toward: everything below resolves
+    # against ``assistant``, so swapping in the published snapshot here changes what
+    # runs without touching binding resolution, the system prompt, or the harness.
+    #
+    # Everyone but the owner runs the reviewed snapshot; the owner runs their own draft
+    # so they can iterate before resubmitting. An Agent with nothing published (never
+    # submitted, private, or in review) returns unchanged — that is the common case and
+    # it behaves exactly as it did before this feature.
+    #
+    # ⚠️ Ordered *before* the access check's side effects below on purpose: it is not an
+    # access decision and must not be read as one. The caller was already admitted.
+    try:
+        if is_review_preview:
+            # The submitted snapshot, not the published one and not the author's draft —
+            # the artifact the reviewer's decision is actually about. Shares its rule
+            # with the admin submission read, so the page and the test drive can never
+            # disagree about what is under review.
+            assistant, resolved_version = await resolve_review_agent(assistant)
+        else:
+            assistant, resolved_version = await resolve_invocation_agent(assistant, user_id)
+    except AgentVersionUnavailableError as unavailable:
+        # A published Agent whose snapshot is missing fails the turn rather than
+        # falling back to the draft — the fallback would serve unreviewed instructions
+        # to a pinned user at exactly the moment something is already broken.
+        logger.error(f"Published version unavailable: {unavailable}")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "This agent's published version could not be loaded. Please try again, "
+                "or contact an administrator if it persists."
+            ),
+        ) from unavailable
+
+    # Which configuration actually ran. Worth a line: "this agent behaved oddly" is not
+    # answerable without knowing whether the turn ran an approved snapshot or a draft.
+    logger.info(
+        "Agent configuration for this turn: %s",
+        f"published version {scrub_log(resolved_version)}" if resolved_version else "live record / draft",
+    )
+
+    # ⚠️ Both bookkeeping writes below are skipped for a reviewer preview, because a
+    # review is not use. ``mark_share_as_interacted`` would stamp a share record the
+    # reviewer does not have, and ``bump_last_used_at`` feeds the KB-sync inactivity
+    # pause — a reviewer poking a submission once would read as the Agent being live
+    # and wake sync policies that were correctly dormant. Persistence of the turn
+    # itself is already handled by the ``preview-`` session id the reviewer's client
+    # sends (``PREVIEW_SESSION_PREFIX``), which is what keeps the test drive out of the
+    # author's conversation history.
+    if record_use and not is_review_preview:
+        # Mark as viewed if this is a shared assistant (not owned)
+        if assistant.owner_id != user_id:
+            await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
+
+        # KB sync inactivity signal: any user's chat use counts. Throttled
+        # to one write/day inside bump_last_used_at (conditional update);
+        # the winning bump also wakes any inactivity-paused sync policies.
+        # Best-effort — a bookkeeping failure must never break a chat turn.
+        try:
+            from apis.shared.assistants.service import bump_last_used_at
+            from apis.shared.sync_policies.service import resume_inactive_policies
+
+            if await bump_last_used_at(input_data.rag_assistant_id):
+                await resume_inactive_policies(input_data.rag_assistant_id)
+        except Exception as bump_err:
+            logger.warning(
+                f"lastUsedAt bump failed for assistant "
+                f"{scrub_log(input_data.rag_assistant_id)}: {scrub_log(bump_err)}"
+            )
+
+    # 2a'. Shared Projects — a project's harness only runs while its project is
+    # active. Access (membership) was already settled by the check above.
+    from apis.shared.assistants.service import is_project_harness
+
+    runs_project_harness = is_project_harness(assistant)
+    if runs_project_harness:
+        refusal, turn_project = await _project_turn_gate(assistant.project_id)
+        if refusal:
+            return _forbidden_turn(input_data, user_id, refusal)
+        turn_project_id = assistant.project_id
+        # The role the access check above resolved from the project: no extra read.
+        project_member_note = _build_project_member_note(current_user, assistant_permission)
+        # Skipped where `final_message` is ignored (a resume or a continuation).
+        if project_file_readiness_enabled() and not is_continuation:
+            from apis.shared.assistants.kb_readiness import load_file_status_note
+
+            project_files_note_task = asyncio.create_task(
+                load_file_status_note(
+                    input_data.rag_assistant_id,
+                    access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+                )
+            )
+        # Shared Projects 2.4b: the project's memory spaces, read now and awaited at
+        # prompt assembly (5b), so the reads overlap binding resolution and the
+        # knowledge-base search instead of adding to the time to first token.
+        if memory_spaces_enabled():
+            from apis.inference_api.chat.project_memory import load_project_memory
+
+            project_memory_task = asyncio.create_task(
+                load_project_memory(turn_project_id, turn_project.shared_space_id, user_id)
+            )
+
+    # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
+    # for the INVOKING user (D5), before the expensive KB search. v1 blocks
+    # with a conversational message when the invoker lacks a required model.
+    # A project's harness degrades instead (shared-projects §9.6): a member missing
+    # one bound tool still gets to work, and is told what was left out.
+    if agents_enabled():
+        try:
+            agent_plan = await resolve_agent_invocation(
+                assistant, current_user, degrade=runs_project_harness
+            )
+            agent_model_override = agent_plan.model_override
+            agent_tools_override = agent_plan.tools
+            agent_skills_override = agent_plan.skills
+            if agent_plan.unavailable:
+                agent_notice_event = AgentNoticeEvent.from_unavailable(
+                    agent_plan.unavailable,
+                    session_id=input_data.session_id,
+                    agent_id=input_data.rag_assistant_id,
+                    project_id=turn_project_id,
+                )
+        except AgentBindingBlockedError as block:
+            return _forbidden_turn(input_data, user_id, block.message)
+
+    # Full-context mode. Started here, with the search, and awaited by the agent
+    # build, so its DynamoDB Query (and on a conversation's first turn, its
+    # downloads) overlaps everything between here and the build. Runs on a
+    # continuation too: the block is part of the system prompt, and dropping it
+    # would rebuild the agent under a different key mid-answer.
+    if assistant_kb_full_context_enabled():
+        from apis.shared.assistants.kb_full_context import load_full_kb_context
+
+        kb_full_context_task = asyncio.create_task(
+            load_full_kb_context(
+                input_data.rag_assistant_id,
+                access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+            )
+        )
+
+    return ResolvedTurnAgent(
+        assistant=assistant,
+        permission=assistant_permission,
+        resolved_version=resolved_version,
+        project_id=turn_project_id,
+        project_member_note=project_member_note,
+        project_files_note_task=project_files_note_task,
+        project_memory_task=project_memory_task,
+        model_override=agent_model_override,
+        tools_override=agent_tools_override,
+        skills_override=agent_skills_override,
+        notice_event=agent_notice_event,
+        kb_full_context_task=kb_full_context_task,
+    )
+
+
+def compose_turn_system_prompt(
+    input_data: InvocationRequest,
+    assistant: Any,
+    *,
+    system_prompt: Optional[str],
+    project_id: Optional[str],
+    personal_instructions: Optional[str],
+) -> Optional[str]:
+    """An Agent turn's system prompt: the base prompt, the Agent's instructions, the user's own.
+
+    Route steps 5 and 5a, split out so a handoff brief composes the byte-identical prompt a
+    turn on the same conversation would (agent-handoffs-and-consults.md §4.5.1): a single
+    differing byte here misses the source's prompt cache.
+    """
+    # 5. Append assistant's instructions to the base system prompt (don't replace)
+    # For preview sessions, prefer the system_prompt from the request (live form edits)
+    # over the saved assistant instructions, so users can test changes before saving.
+    logger.info("Checking assistant instructions...")
+    preview_instructions_override = input_data.system_prompt if is_preview_session(input_data.session_id) and input_data.system_prompt else None
+    effective_instructions = preview_instructions_override or assistant.instructions
+
+    if effective_instructions:
+        # Import here to avoid circular dependency
+        from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
+
+        # Build the base prompt with date. No surface here: BaseAgent appends the
+        # surface block after </user_instructions>, so adding it here sent it twice.
+        base_prompt_builder = SystemPromptBuilder()
+        base_prompt = base_prompt_builder.build(include_date=True)
+
+        # Append assistant instructions to the base prompt.
+        system_prompt = compose_agent_system_prompt(
+            base_prompt, effective_instructions, project_harness=bool(project_id)
+        )
+        if preview_instructions_override:
+            logger.info(
+                "Using live preview instructions override"
+            )
+        else:
+            logger.info(
+                "Appended assistant instructions to base system prompt"
+            )
+        logger.info("Final system prompt built")
+    else:
+        # No assistant instructions - use base prompt if no system_prompt provided
+        logger.warning("No instructions found on assistant!")
+        if not system_prompt:
+            from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
+
+            base_prompt_builder = SystemPromptBuilder()
+            system_prompt = base_prompt_builder.build(include_date=True)
+        if project_id:
+            # A new project has no instructions; its harness still needs the
+            # project guidance (memory, shared conversations, where tools are set).
+            system_prompt = compose_agent_system_prompt(system_prompt, "", project_harness=True)
+        logger.info(
+            "Assistant has no instructions - using fallback system prompt"
+        )
+
+    # 5a. The user's personal instructions, below the agent's, which win a conflict.
+    if personal_instructions:
+        system_prompt = compose_personal_instructions(
+            system_prompt,
+            personal_instructions,
+            over=_instructions_heading(bool(project_id)) if effective_instructions else None,
+        )
+
+    return system_prompt
+
+
+async def apply_turn_prompt_extras(
+    input_data: InvocationRequest,
+    user_id: str,
+    system_prompt: Optional[str],
+    personal_instructions: Optional[str],
+    *,
+    is_resume: bool,
+    is_continuation: bool,
+    current_user: Optional[User] = None,
+) -> Optional[str]:
+    """The last additions to a turn's system prompt, after the Agent block.
+
+    On a turn without an Agent: base → Role Instructions → Active Mode → Personal
+    Instructions (#13). With an Agent there is nothing to add here. Split out with
+    ``compose_turn_system_prompt`` so a handoff brief ends with the same prompt bytes a
+    turn would (agent-handoffs-and-consults.md §4.5.1).
+
+    Role instructions apply on continuations too, so a continuation rebuilds the
+    original turn's prompt and hits its cached agent; a resume replays
+    ``snapshot.system_prompt`` and needs none. A preview is an author testing an agent
+    and gets none of the user's own sections.
+    """
+    if input_data.rag_assistant_id:
+        return system_prompt
+
+    # The active Conversation Mode, if any. Gating rules + lookup live in
+    # `system_prompt_resolver.py` so they can be unit-tested independently of
+    # the route.
+    active_mode: Optional[Tuple[str, str]] = None
+    if should_resolve_custom_prompt(
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        is_preview=is_preview_session(input_data.session_id),
+        has_assistant=False,
+    ):
+        active_mode = await resolve_active_prompt_text(
+            session_id=input_data.session_id,
+            user_id=user_id,
+            request_prompt_id=input_data.selected_prompt_id,
+        )
+        if active_mode:
+            logger.info(f"Appending custom system prompt: {active_mode[0]!r}")
+
+    role_instructions = (
+        []
+        if is_resume or is_preview_session(input_data.session_id)
+        else await resolve_role_instructions(current_user)
+    )
+    return compose_plain_turn_prompt(
+        system_prompt,
+        role_instructions=role_instructions,
+        mode=active_mode,
+        personal=personal_instructions,
+    )
+
+
+class HandoffBriefResponse(StreamingResponse):
+    """A handoff brief's own stream (text or a fallback, then ``done``).
+
+    Distinct from every other ``StreamingResponse`` the turn path returns, so the brief's entry can
+    tell its own answer from a refusal the shared phases produced, which it discards unstreamed:
+    a refusal persists only when its generator runs, so nothing reaches the source.
+    """
+
+
+def _brief_fallback_response(handoff_id: str, kind: str, session_id: str, reason: str) -> HandoffBriefResponse:
+    """A brief that will not be written: one fallback frame and ``done``. The card stays the excerpt."""
+    from apis.shared.handoff.brief import brief_done_frame, brief_fallback_frame
+    from apis.shared.handoff.metrics import emit_handoff_metric
+
+    async def _frames() -> AsyncGenerator[str, None]:
+        emit_handoff_metric("HandoffBriefFallback", kind, session_id=session_id, detail=reason)
+        yield brief_fallback_frame(handoff_id, reason)
+        yield brief_done_frame(handoff_id, brief_hash=None, cache_status=None)
+
+    return HandoffBriefResponse(_frames(), media_type="text/event-stream", headers=_sse_headers(session_id))
+
+
+async def _handoff_target_description(agent_id: str, current_user: User) -> Optional[str]:
+    """The target Agent's description, for the brief's instruction. None when it can't be read.
+
+    Read with the caller's own access check: the handoff was created against it, and an Agent the
+    caller can no longer use gets no description rather than a leaked one.
+    """
+    from apis.shared.assistants.service import get_assistant_with_access_check
+
+    try:
+        agent, _permission = await get_assistant_with_access_check(
+            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+        )
+    except Exception:  # noqa: BLE001 - the description is optional
+        return None
+    return getattr(agent, "description", None) if agent is not None else None
+
+
+async def _handoff_brief_invocation(request: InvocationRequest, current_user: User):
+    """A ``handoff_brief`` invocation (agent-handoffs-and-consults.md §4.5.1).
+
+    Checks the flag and the handoff, then runs the turn path in brief mode, which resolves and
+    builds the source session's agent through the same phases a turn uses and returns the brief's
+    stream where a turn would start its own. Anything else that path returns is a turn that would
+    not have run (a refusal, a retired model, a quota block): discarded without streaming, so it
+    persists nothing, and answered with a fallback.
+    """
+    from apis.shared.feature_flags import handoff_brief_enabled
+    from apis.shared.handoff import get_handoff_store
+
+    handoff_id = request.handoff_brief.handoff_id
+    if not handoff_brief_enabled():
+        return _brief_fallback_response(handoff_id, "mention", request.session_id, "flag_off")
+    try:
+        handoff = await asyncio.to_thread(get_handoff_store().get, current_user.user_id, handoff_id)
+    except Exception:
+        logger.warning("handoff brief: reading the handoff failed", exc_info=True)
+        handoff = None
+    if handoff is None or handoff.session_id != request.session_id or handoff.effective_status() != "open":
+        kind = handoff.kind if handoff is not None else "mention"
+        return _brief_fallback_response(handoff_id, kind, request.session_id, "not_open")
+
+    try:
+        response = await _run_invocation(request, current_user, brief=handoff)
+    except HTTPException as exc:
+        reason = "busy" if exc.status_code == status.HTTP_409_CONFLICT else "refused"
+        return _brief_fallback_response(handoff_id, handoff.kind, request.session_id, reason)
+    if isinstance(response, HandoffBriefResponse):
+        return response
+    body = getattr(response, "body_iterator", None)
+    if body is not None and hasattr(body, "aclose"):
+        await body.aclose()
+    return _brief_fallback_response(handoff_id, handoff.kind, request.session_id, "refused")
+
+
 @router.post("/invocations")
 async def invocations(request: InvocationRequest, current_user: User = Depends(get_current_user_trusted)):
-    """The AgentCore Runtime invocation endpoint: one conversation turn.
+    """The AgentCore Runtime invocation endpoint: a conversation turn, or a handoff brief.
+
+    A ``handoff_brief`` request goes through ``_handoff_brief_invocation``; everything else is a
+    turn, ``_run_invocation``.
+    """
+    if request.handoff_brief is not None and not request.warm:
+        return await _handoff_brief_invocation(request, current_user)
+    return await _run_invocation(request, current_user)
+
+
+async def _run_invocation(
+    request: InvocationRequest,
+    current_user: User,
+    *,
+    brief: Optional["Handoff"] = None,
+):
+    """One conversation turn, or with ``brief`` the agent build for a handoff brief.
 
     Runs the sequence docs/specs/turn-path-ttft.md maps, in this order. The
     marks are the `turn_prelude` stage names; everything up to `stream_setup`
@@ -4094,6 +4646,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     input_data = request
     user_id = current_user.user_id
+    # A handoff brief (agent-handoffs-and-consults.md §4.5.1) runs this path to build the agent a
+    # turn here would, and skips every phase that writes, searches or answers: the attachment
+    # recovery, the session-state writes, the KB search, binding validation and persistence. It
+    # returns its own stream where a turn would start one.
+    is_brief = brief is not None
     auth_token = current_user.raw_token
 
     # Where the pre-stream time goes. Everything between here and the
@@ -4353,7 +4910,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # Attachments: recover the previous turn's unanswered uploads, fetch this
     # turn's from S3, dedupe, partition (inline / spreadsheet / deck /
     # oversized) and hold the inline set to one message's byte budget.
-    attachments = await _resolve_turn_attachments(
+    attachments = TurnAttachments() if is_brief else await _resolve_turn_attachments(
         input_data,
         user_id,
         session_meta,
@@ -4368,7 +4925,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     # Session state: the row pre-create, the four stale-marker clears and the
     # write-ahead attachment marker, all answered from `session_meta`.
-    is_new_session, interrupted_turn_reason = await _prepare_session_state(
+    # A brief must leave the session as it was: an interrupted-turn note in particular has to
+    # survive for the next real turn, and the stale-marker clears here would drop it.
+    is_new_session, interrupted_turn_reason = (False, None) if is_brief else await _prepare_session_state(
         input_data,
         user_id,
         session_meta,
@@ -4418,6 +4977,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     prelude.mark("preamble.quota")
 
     # If quota exceeded, stream the quota exceeded message instead of agent response
+    if quota_exceeded_event and is_brief:
+        return _brief_fallback_response(brief.handoff_id, brief.kind, input_data.session_id, "quota")
     if quota_exceeded_event:
         return _refuse_turn(
             input_data,
@@ -4496,20 +5057,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # memory tools and their cache-key element.
     project_memory_task: Optional["asyncio.Task[ProjectMemoryTurn]"] = None
     project_memory: Optional["ProjectMemoryTurn"] = None
-    # Version snapshots (§4): which Agent snapshot this turn resolved to, for the log line
-    # below. ``None`` means the live record ran — a plain chat turn with no Agent, an Agent
-    # with nothing published, or the owner running their own draft.
-    #
-    # ⚠️ Deliberately **not** in the agent cache key, despite what the spec's §4.2 says. The
-    # key is built from construction *values*, and everything a version changes about
-    # behavior already reaches it: instructions via ``system_prompt``, tool bindings via
-    # ``enabled_tools``, skills via ``skills_hash``/``agent_type``, the model via
-    # ``model_id``, and a memory binding via the ``memory_binding`` key element. So
-    # promoting a version already misses. Adding the number would buy no discrimination and
-    # would cost real safety: the resume path rebuilds its key from ``PausedTurnSnapshot``,
-    # so a new key element the snapshot did not carry orphans the paused agent and breaks
-    # OAuth-consent / tool-approval resumes (``service.py`` warns about exactly this).
-    resolved_version = None
 
     logger.info(
         "Invocation request - processing with assistant context"
@@ -4537,15 +5084,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if input_data.rag_assistant_id and not is_resume:
         # Local imports to avoid circular dependency
         from apis.shared.assistants.kb_access import granted
-        from apis.shared.assistants.service import (
-            get_assistant_with_access_check,
-            mark_share_as_interacted,
-        )
-        from apis.shared.assistants.version_resolution import (
-            AgentVersionUnavailableError,
-            resolve_invocation_agent,
-            resolve_review_agent,
-        )
         from apis.shared.sessions.metadata import (
             get_session_metadata,
             store_session_metadata,
@@ -4567,6 +5105,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         if (
             is_agent_mention
             and not is_continuation
+            and not is_brief
             and not is_preview_session(input_data.session_id)
         ):
             thread_is_empty = not await _session_has_messages(
@@ -4587,7 +5126,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # below is untouched either way: this relaxes *binding* semantics, never
         # authorization. Rule in ``agent_binding_policy`` so it is testable without
         # this stack.
-        if not is_continuation and binds_conversation(
+        if not is_continuation and not is_brief and binds_conversation(
             is_agent_mention=is_agent_mention,
             is_preview=is_preview_session(input_data.session_id),
             thread_is_empty=bool(thread_is_empty),
@@ -4632,242 +5171,38 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 % is_agent_mention
             )
 
-        # 2. Load assistant with access check
-        #
-        # ⚠️ The reviewer preview is the ONE path that does not go through the visibility
-        # gate, and it earns that by proving the scope first. A PRIVATE Agent can be sitting
-        # in the review queue — approval refuses one, but submission does not — and
-        # ``get_assistant_with_access_check`` refuses a non-owner outright on PRIVATE, so a
-        # reviewer could not test-drive exactly the submissions most worth testing.
-        #
-        # The scope is re-resolved here against the caller's own roles rather than trusted
-        # from the request, and a caller without it is refused rather than quietly demoted
-        # to an ordinary turn: a silent downgrade would run the published snapshot (or the
-        # author's draft) and report it to the reviewer as the version under review.
-        is_review_preview = bool(input_data.review_preview)
-        if is_review_preview:
-            import os
-
-            from apis.shared.auth import has_admin_scope
-            from apis.shared.assistants.service import (
-                _get_assistant_cloud_without_ownership_check,
-            )
-
-            if not await has_admin_scope(current_user, "admin.marketplace"):
-                logger.warning("review_preview requested without the marketplace scope")
-                raise HTTPException(
-                    status_code=403,
-                    detail="Reviewing an agent requires marketplace admin access.",
-                )
-            table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
-            if not table_name:
-                # Explicit, because the alternative is a confusing failure several frames
-                # down inside boto3 rather than a message naming the missing variable.
-                raise RuntimeError(
-                    "DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required"
-                )
-            assistant = await _get_assistant_cloud_without_ownership_check(
-                input_data.rag_assistant_id, table_name
-            )
-            # No permission was resolved, because this path deliberately bypassed the
-            # gate that resolves one. Left as None so the knowledge base read below
-            # fails closed (Requirement 25.1): `granted(...)` treats None as "grants
-            # nothing", and the marketplace scope is authority to *review a
-            # submission*, not evidence of a read grant on that owner's corpus.
-            #
-            # ⚠️ Consequence worth owning: a reviewer test-drives with an empty
-            # knowledge base, which is a degraded review of a RAG-backed Agent — the
-            # same class of problem develop's comment above warns about. Whether a
-            # marketplace reviewer should receive corpus read is a policy decision for
-            # the marketplace owner, not something to settle inside a merge conflict.
-            # Tracked rather than guessed; failing closed is the safe default meanwhile.
-            assistant_permission = None
-        else:
-            logger.info("Loading assistant with access check...")
-            # The permission is kept, not discarded: it is what the knowledge base
-            # retrieval below runs under (Requirement 25.1), so the grant that governs
-            # the corpus read is provably the same one that admitted this turn.
-            assistant, assistant_permission = await get_assistant_with_access_check(
-                assistant_id=input_data.rag_assistant_id,
-                user_id=user_id,
-                user_email=current_user.email,
-            )
-
-        if not assistant:
-            logger.warning(
-                "Assistant lookup returned None (review_preview=%s)", is_review_preview
-            )
-            # A project task while Projects are switched off: the harness refuses
-            # everyone, so say why in the conversation rather than as a bare 403.
-            from apis.shared.assistants.service import is_disabled_project_harness
-
-            if await is_disabled_project_harness(input_data.rag_assistant_id):
-                return _forbidden_turn(input_data, user_id, PROJECTS_DISABLED_MESSAGE)
-
-            # A deleted agent and one the caller may not use get the same answer, so
-            # the response never says whether an id exists. Which it was goes to the
-            # log only, where it helps whoever is debugging and tells a caller nothing.
-            from apis.shared.assistants.service import assistant_exists
-
-            exists = await assistant_exists(input_data.rag_assistant_id)
-            logger.warning("Agent unavailable for this turn (%s)", "no access" if exists else "not found")
-            return _forbidden_turn(input_data, user_id, AGENT_UNAVAILABLE_MESSAGE)
-
-        # Log assistant details for debugging
-        logger.info("Assistant loaded successfully!")
-        logger.info("Assistant details retrieved")
-        logger.info("Assistant name retrieved")
-        logger.info("Assistant owner retrieved")
-        logger.info("Assistant visibility retrieved")
-        logger.info("Assistant instructions retrieved")
-        logger.info("Assistant instructions length retrieved")
-        logger.info("Assistant vector index retrieved")
-
-        # 2a. Version snapshots (§4) — decide WHICH configuration this caller runs.
-        #
-        # This is the seam the whole epic was built toward: everything below resolves
-        # against ``assistant``, so swapping in the published snapshot here changes what
-        # runs without touching binding resolution, the system prompt, or the harness.
-        #
-        # Everyone but the owner runs the reviewed snapshot; the owner runs their own draft
-        # so they can iterate before resubmitting. An Agent with nothing published (never
-        # submitted, private, or in review) returns unchanged — that is the common case and
-        # it behaves exactly as it did before this feature.
-        #
-        # ⚠️ Ordered *before* the access check's side effects below on purpose: it is not an
-        # access decision and must not be read as one. The caller was already admitted.
-        try:
-            if is_review_preview:
-                # The submitted snapshot, not the published one and not the author's draft —
-                # the artifact the reviewer's decision is actually about. Shares its rule
-                # with the admin submission read, so the page and the test drive can never
-                # disagree about what is under review.
-                assistant, resolved_version = await resolve_review_agent(assistant)
-            else:
-                assistant, resolved_version = await resolve_invocation_agent(assistant, user_id)
-        except AgentVersionUnavailableError as unavailable:
-            # A published Agent whose snapshot is missing fails the turn rather than
-            # falling back to the draft — the fallback would serve unreviewed instructions
-            # to a pinned user at exactly the moment something is already broken.
-            logger.error(f"Published version unavailable: {unavailable}")
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "This agent's published version could not be loaded. Please try again, "
-                    "or contact an administrator if it persists."
-                ),
-            ) from unavailable
-
-        # Which configuration actually ran. Worth a line: "this agent behaved oddly" is not
-        # answerable without knowing whether the turn ran an approved snapshot or a draft.
-        logger.info(
-            "Agent configuration for this turn: %s",
-            f"published version {scrub_log(resolved_version)}" if resolved_version else "live record / draft",
+        # 2–2b. The Agent's configuration for this caller: access, the version snapshot,
+        # the project gate and the governed capabilities. One function, so a handoff
+        # brief and (later) a consult resolve an Agent exactly as a turn does.
+        resolved_agent = await resolve_turn_agent(
+            input_data,
+            current_user,
+            user_id,
+            # A brief, like a continuation, sends no message of its own, so the project
+            # file-status note it would carry is not loaded; and it is not the user using
+            # the Agent, so the share and last-used writes are skipped.
+            is_continuation=is_continuation or is_brief,
+            record_use=not is_brief,
         )
-
-        # ⚠️ Both bookkeeping writes below are skipped for a reviewer preview, because a
-        # review is not use. ``mark_share_as_interacted`` would stamp a share record the
-        # reviewer does not have, and ``bump_last_used_at`` feeds the KB-sync inactivity
-        # pause — a reviewer poking a submission once would read as the Agent being live
-        # and wake sync policies that were correctly dormant. Persistence of the turn
-        # itself is already handled by the ``preview-`` session id the reviewer's client
-        # sends (``PREVIEW_SESSION_PREFIX``), which is what keeps the test drive out of the
-        # author's conversation history.
-        if not is_review_preview:
-            # Mark as viewed if this is a shared assistant (not owned)
-            if assistant.owner_id != user_id:
-                await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
-
-            # KB sync inactivity signal: any user's chat use counts. Throttled
-            # to one write/day inside bump_last_used_at (conditional update);
-            # the winning bump also wakes any inactivity-paused sync policies.
-            # Best-effort — a bookkeeping failure must never break a chat turn.
-            try:
-                from apis.shared.assistants.service import bump_last_used_at
-                from apis.shared.sync_policies.service import resume_inactive_policies
-
-                if await bump_last_used_at(input_data.rag_assistant_id):
-                    await resume_inactive_policies(input_data.rag_assistant_id)
-            except Exception as bump_err:
-                logger.warning(
-                    f"lastUsedAt bump failed for assistant "
-                    f"{scrub_log(input_data.rag_assistant_id)}: {scrub_log(bump_err)}"
-                )
-
-        # 2a'. Shared Projects — a project's harness only runs while its project is
-        # active. Access (membership) was already settled by the check above.
-        from apis.shared.assistants.service import is_project_harness
-
-        runs_project_harness = is_project_harness(assistant)
-        if runs_project_harness:
-            refusal, turn_project = await _project_turn_gate(assistant.project_id)
-            if refusal:
-                return _forbidden_turn(input_data, user_id, refusal)
-            turn_project_id = assistant.project_id
-            # The role the access check above resolved from the project: no extra read.
-            project_member_note = _build_project_member_note(current_user, assistant_permission)
-            # Skipped where `final_message` is ignored (a resume or a continuation).
-            if project_file_readiness_enabled() and not is_resume and not is_continuation:
-                from apis.shared.assistants.kb_readiness import load_file_status_note
-
-                project_files_note_task = asyncio.create_task(
-                    load_file_status_note(
-                        input_data.rag_assistant_id,
-                        access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
-                    )
-                )
-            # Shared Projects 2.4b: the project's memory spaces, read now and awaited at
-            # prompt assembly (5b), so the reads overlap binding resolution and the
-            # knowledge-base search instead of adding to the time to first token.
-            if memory_spaces_enabled():
-                from apis.inference_api.chat.project_memory import load_project_memory
-
-                project_memory_task = asyncio.create_task(
-                    load_project_memory(turn_project_id, turn_project.shared_space_id, user_id)
-                )
-
-        # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
-        # for the INVOKING user (D5), before the expensive KB search. v1 blocks
-        # with a conversational message when the invoker lacks a required model.
-        # A project's harness degrades instead (shared-projects §9.6): a member missing
-        # one bound tool still gets to work, and is told what was left out.
-        if agents_enabled():
-            try:
-                agent_plan = await resolve_agent_invocation(
-                    assistant, current_user, degrade=runs_project_harness
-                )
-                agent_model_override = agent_plan.model_override
-                agent_tools_override = agent_plan.tools
-                agent_skills_override = agent_plan.skills
-                if agent_plan.unavailable:
-                    agent_notice_event = AgentNoticeEvent.from_unavailable(
-                        agent_plan.unavailable,
-                        session_id=input_data.session_id,
-                        agent_id=input_data.rag_assistant_id,
-                        project_id=turn_project_id,
-                    )
-            except AgentBindingBlockedError as block:
-                return _forbidden_turn(input_data, user_id, block.message)
-
-        # Full-context mode. Started here, with the search, and awaited by the agent
-        # build, so its DynamoDB Query (and on a conversation's first turn, its
-        # downloads) overlaps everything between here and the build. Runs on a
-        # continuation too: the block is part of the system prompt, and dropping it
-        # would rebuild the agent under a different key mid-answer.
-        if assistant_kb_full_context_enabled():
-            from apis.shared.assistants.kb_full_context import load_full_kb_context
-
-            kb_full_context_task = asyncio.create_task(
-                load_full_kb_context(
-                    input_data.rag_assistant_id,
-                    access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
-                )
-            )
+        if isinstance(resolved_agent, StreamingResponse):
+            return resolved_agent
+        assistant = resolved_agent.assistant
+        assistant_permission = resolved_agent.permission
+        turn_project_id = resolved_agent.project_id
+        project_member_note = resolved_agent.project_member_note
+        project_files_note_task = resolved_agent.project_files_note_task
+        project_memory_task = resolved_agent.project_memory_task
+        agent_model_override = resolved_agent.model_override
+        agent_tools_override = resolved_agent.tools_override
+        agent_skills_override = resolved_agent.skills_override
+        agent_notice_event = resolved_agent.notice_event
+        kb_full_context_task = resolved_agent.kb_full_context_task
 
         # Skipped on a continuation: the turn carries an empty message, so a
         # knowledge-base search would spend a query on "" and augment nothing. The
         # context the original turn retrieved is already in the history being continued.
-        if not is_continuation:
+        # Skipped on a brief too: its message is an instruction, not something to search for.
+        if not is_continuation and not is_brief:
             # 3–4. Search the assistant's knowledge base and augment the message.
             # Started here, awaited after the agent build: the build reads
             # neither the chunks nor the augmented message — only the stream
@@ -4886,58 +5221,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 context_chunks, augmented_message = await kb_search
                 kb_search = None
 
-        # 5. Append assistant's instructions to the base system prompt (don't replace)
-        # For preview sessions, prefer the system_prompt from the request (live form edits)
-        # over the saved assistant instructions, so users can test changes before saving.
-        logger.info("Checking assistant instructions...")
-        preview_instructions_override = input_data.system_prompt if is_preview_session(input_data.session_id) and input_data.system_prompt else None
-        effective_instructions = preview_instructions_override or assistant.instructions
-
-        if effective_instructions:
-            # Import here to avoid circular dependency
-            from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
-
-            # Build the base prompt with date. No surface here: BaseAgent appends the
-            # surface block after </user_instructions>, so adding it here sent it twice.
-            base_prompt_builder = SystemPromptBuilder()
-            base_prompt = base_prompt_builder.build(include_date=True)
-
-            # Append assistant instructions to the base prompt.
-            system_prompt = compose_agent_system_prompt(
-                base_prompt, effective_instructions, project_harness=bool(turn_project_id)
-            )
-            if preview_instructions_override:
-                logger.info(
-                    "Using live preview instructions override"
-                )
-            else:
-                logger.info(
-                    "Appended assistant instructions to base system prompt"
-                )
-            logger.info("Final system prompt built")
-        else:
-            # No assistant instructions - use base prompt if no system_prompt provided
-            logger.warning("No instructions found on assistant!")
-            if not system_prompt:
-                from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
-
-                base_prompt_builder = SystemPromptBuilder()
-                system_prompt = base_prompt_builder.build(include_date=True)
-            if turn_project_id:
-                # A new project has no instructions; its harness still needs the
-                # project guidance (memory, shared conversations, where tools are set).
-                system_prompt = compose_agent_system_prompt(system_prompt, "", project_harness=True)
-            logger.info(
-                "Assistant has no instructions - using fallback system prompt"
-            )
-
-        # 5a. The user's personal instructions, below the agent's, which win a conflict.
-        if personal_instructions:
-            system_prompt = compose_personal_instructions(
-                system_prompt,
-                personal_instructions,
-                over=_instructions_heading(bool(turn_project_id)) if effective_instructions else None,
-            )
+        # 5–5a. The Agent's instructions over the base prompt, then the user's own.
+        system_prompt = compose_turn_system_prompt(
+            input_data,
+            assistant,
+            system_prompt=system_prompt,
+            project_id=turn_project_id,
+            personal_instructions=personal_instructions,
+        )
 
         # 5b. A project harness's memory: the `project` and `mine` blocks, read by the
         # task started at 2a'. It replaces any Agent memory binding (the harness has no
@@ -4958,7 +5249,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # history was produced under other instructions. `thread_is_empty` is the
         # argument that makes a thread-starting mention bind, so it has to be passed
         # here too — dropping it is a silent one-turn Agent all over again.
-        if not is_continuation and binds_conversation(
+        if not is_continuation and not is_brief and binds_conversation(
             is_agent_mention=is_agent_mention,
             is_preview=is_preview_session(input_data.session_id),
             thread_is_empty=bool(thread_is_empty),
@@ -5027,41 +5318,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # Zero on a plain chat turn, which is what makes it worth separating.
     prelude.mark("rag")
 
-    # The active Conversation Mode, if any. Gating rules + lookup live in
-    # `system_prompt_resolver.py` so they can be unit-tested independently of
-    # the route. Composed below with the other plain-turn sections.
-    active_mode: Optional[Tuple[str, str]] = None
-    if should_resolve_custom_prompt(
+    # Without an Agent: role instructions, the active mode and personal instructions (#13).
+    system_prompt = await apply_turn_prompt_extras(
+        input_data,
+        user_id,
+        system_prompt,
+        personal_instructions,
         is_resume=is_resume,
         is_continuation=is_continuation,
-        is_preview=is_preview_session(input_data.session_id),
-        has_assistant=bool(input_data.rag_assistant_id),
-    ):
-        active_mode = await resolve_active_prompt_text(
-            session_id=input_data.session_id,
-            user_id=user_id,
-            request_prompt_id=input_data.selected_prompt_id,
-        )
-        if active_mode:
-            logger.info(f"Appending custom system prompt: {active_mode[0]!r}")
-
-    # A turn without an agent: base → Role Instructions → Active Mode → Personal
-    # Instructions (#13). Role instructions apply on continuations too, so a
-    # continuation rebuilds the original turn's prompt and hits its cached agent;
-    # a resume replays `snapshot.system_prompt` and needs none. A preview is an
-    # author testing an agent and gets none of the user's own sections.
-    if not input_data.rag_assistant_id:
-        role_instructions = (
-            []
-            if is_resume or is_preview_session(input_data.session_id)
-            else await resolve_role_instructions(current_user)
-        )
-        system_prompt = compose_plain_turn_prompt(
-            system_prompt,
-            role_instructions=role_instructions,
-            mode=active_mode,
-            personal=personal_instructions,
-        )
+        current_user=current_user,
+    )
 
     # Per-session single-flight guard (docs/specs/session-single-flight-guard.md,
     # follow-up to PR #653). A client abort doesn't propagate through the
@@ -5085,6 +5351,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         is_resume=is_resume,
         is_continuation=is_continuation,
         is_preview=is_preview_session(input_data.session_id),
+        user_email=current_user.email,
     )
 
     session_lease = None
@@ -5386,6 +5653,31 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     # by construction — the digest is in the key.
                     _record_client_tools_on(built_agent, input_data)
                 return built_agent
+
+            # A handoff brief stops here, with the agent a turn would build: the same phases above,
+            # the same `_build_main_agent`. It streams the brief from a side call over a copy of
+            # this agent's history and owns the lease from here on (§4.5.1).
+            if is_brief:
+                from apis.inference_api.chat.handoff_brief import stream_handoff_brief
+
+                return HandoffBriefResponse(
+                    stream_handoff_brief(
+                        handoff=brief,
+                        user_id=user_id,
+                        session_id=input_data.session_id,
+                        session_row=session_meta.row,
+                        build_agent=_build_main_agent,
+                        release_lease=lambda: _release_turn_lease(None, session_lease),
+                        lease=session_lease,
+                        agent_description=asyncio.create_task(
+                            _handoff_target_description(brief.agent_id, current_user)
+                        ),
+                        turn_agent_id=input_data.rag_assistant_id,
+                        turn_project_id=turn_project_id,
+                    ),
+                    media_type="text/event-stream",
+                    headers=_sse_headers(input_data.session_id),
+                )
 
             # Defer the build into the stream so it can be narrated.
             #

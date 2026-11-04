@@ -1,0 +1,147 @@
+[S1] Welcome back to Short Questions, the show where we take one small question and follow it much further than anyone reasonably should. I'm here with my co-host, as always, and today we are talking about birds.
+[S2] Specifically, how birds find their way. Because every autumn, billions of small animals leave home, fly across oceans and deserts, and then somehow come back to the same patch of woods in the spring.
+[S1] The same patch? Not just the same region?
+[S2] Often the same tree. There are songbirds that weigh about as much as a few coins, and researchers have caught the same individual, with the same little leg band, in the same garden, year after year.
+[S1] That seems impossible. I can't find my car in a parking garage.
+[S2] Which is a great place to start, actually, because the way you find your car and the way a bird finds its way across a continent have more in common than you would think.
+[S1] Go on.
+[S2] When you walk out of the store, you are doing two different things at once. You are figuring out which direction to face, and you are figuring out where you are relative to the car. Those sound like the same problem, but they are not.
+[S1] Direction and position.
+[S2] Exactly. Scientists call them the compass and the map. A compass tells you which way is north. It does not tell you where you are. A map tells you where you are, but it is useless if you don't know which way you are facing.
+[S1] And birds need both.
+[S2] Birds need both, and the surprising thing is that they seem to have several of each. Not one compass, but a whole drawer full of them, and they check them against each other.
+[S1] All right, give me the first compass.
+[S2] The first one is the sun. On a clear day, the sun gives you a direction, but only if you know what time it is, because the sun moves across the sky. So a bird using the sun has to correct for the time of day, using its own internal clock.
+[S1] How would anyone even test that?
+[S2] This is one of my favorite experiments. Researchers kept birds indoors under artificial lights, and they shifted the lights so that the birds' internal clocks were running several hours behind the real world. Then they let them out under the real sun.
+[S1] And the birds went the wrong way.
+[S2] They went the wrong way by almost exactly the angle you would predict. The sun moves about fifteen degrees across the sky every hour, and the birds were off by roughly that much for every hour of shift. Their compass was fine. Their watch was wrong.
+[S1] That is such a clean result. It is like proving someone uses a sundial by changing their wristwatch.
+[S2] Right. And it tells you something deeper, which is that the bird is not just reacting to the sun. It is doing a calculation. Sun position, plus time, gives direction.
+[S1] But plenty of birds migrate at night.
+[S2] Most of the small songbirds do, yes. They fly at night and they rest and eat during the day. So the second compass is the stars.
+[S1] Do they know the constellations?
+[S2] Not the way we do. This was worked out in planetariums, of all places. A researcher raised young birds under an artificial night sky, and he made the sky rotate around a different star than the real pole star.
+[S1] So he gave them a fake north.
+[S2] He gave them a fake north, and the birds learned it. When they were old enough to migrate, they oriented by the fake center of rotation. What they learn, while they are young, is not a picture of the sky. It is the point the sky turns around.
+[S1] That is clever, because the pattern changes over the seasons, but the center of rotation does not.
+[S2] And it means a bird does not need to inherit a star chart. It only needs to inherit a rule. Watch the sky turn, find the still point, and that is north.
+[S1] What happens on a cloudy night?
+[S2] That is where the third compass comes in, and it is the strange one. Birds can sense the earth's magnetic field.
+[S1] I have heard this, and I have always been a little suspicious of it.
+[S2] You should be suspicious. For a long time, so were scientists. But the evidence is now very strong. You can put a bird in a cage surrounded by electrical coils, and when you rotate the magnetic field around it, the bird changes the direction it tries to fly.
+[S1] Wait, how do you know which direction a caged bird is trying to fly?
+[S2] This is the funny part. When migratory birds are kept in a cage during the migration season, they get restless at night. They hop and flutter toward the direction they want to go. Researchers put them in a funnel shaped cage lined with paper, with an ink pad at the bottom, and in the morning they count the footprints.
+[S1] So the data is literally bird footprints on a piece of paper.
+[S2] Decades of migration science rests on inky footprints. And the footprints move when the magnetic field moves.
+[S1] All right, I believe that they can sense it. But how? There is no little needle inside a bird.
+[S2] There are a few ideas, and the honest answer is that it is still being worked out. The leading idea is genuinely strange. It involves a protein in the bird's eye, and a chemical reaction whose outcome depends very slightly on the direction of the magnetic field.
+[S1] In the eye?
+[S2] In the eye. The idea is that light hits this protein and creates a pair of molecules whose tiny magnetic properties are linked to each other. The earth's field nudges how that pair behaves, and that nudge changes the chemistry. If that is right, then a bird might literally see the magnetic field, perhaps as a faint pattern laid over everything else it sees.
+[S1] That sounds like science fiction.
+[S2] It does, and I want to be careful here, because it is not settled. But there are some supporting clues. The magnetic compass in many birds only works when there is some light, and it can be disrupted by certain kinds of weak radio noise, which would make sense if the mechanism were this delicate chemical reaction.
+[S1] Hold on. Radio noise can confuse birds?
+[S2] There was a study where birds in a city lab could not orient magnetically at all, and nobody could figure out why. Eventually the researchers lined the hut with grounded metal screening to block the background electrical noise from the city, and suddenly the birds could orient again.
+[S1] So the noise of the city was drowning out the compass.
+[S2] That is the interpretation. Which is a little sad, if you think about it.
+[S1] It is. All right, so we have the sun, the stars, and the magnetic field. That is three compasses. Is that all?
+[S2] There are hints of more. Some birds seem to use the pattern of polarized light in the sky at sunset, which you and I can't see but which forms a kind of band across the sky. Some research suggests that the polarized light at sunset might be used to calibrate the other compasses.
+[S1] Calibrate. So they are checking their compasses against each other.
+[S2] Yes, and this is the part I find most interesting. Every one of these compasses has a weakness. The sun needs a clock. The stars need clear skies. The magnetic field is not perfectly aligned with true north, and the difference changes depending on where you are on the planet.
+[S1] So a bird flying a long way would slowly drift off course if it only trusted one of them.
+[S2] Exactly. So it seems that birds cross check. One idea is that at sunset, they use the sky to reset their magnetic compass, the way a sailor might correct a compass against the stars.
+[S1] That is very sophisticated for an animal with a brain the size of a grape.
+[S2] Smaller than a grape for a lot of these birds. And that is really the theme of this whole topic. These are tiny animals doing navigation that we needed centuries of instruments to match.
+[S1] Okay, I want to go back to the distinction you made at the beginning. Everything so far has been about compasses. Direction. But you said you also need a map.
+[S2] Right, and the map is much more mysterious.
+[S1] Why is it harder?
+[S2] Think about it this way. If you blindfold me, drive me a few hundred miles in a random direction, and drop me in a field, a compass alone won't help me. I can point north perfectly well, but I don't know whether home is north of me or south of me.
+[S1] You would need to know where you had been taken.
+[S2] Or you would need some way of reading your position from the world around you. And birds can do this. Homing pigeons are the famous example. You can take them far from home, in a closed box, to a place they have never been, and many of them will fly straight home.
+[S1] They don't just wander until they find something familiar?
+[S2] Some do, but many of them turn toward home within minutes of release. Which means they worked out where they were, relative to home, from information available at that unfamiliar spot.
+[S1] What information?
+[S2] This is where the arguments start. One idea is that the magnetic field itself works as a map, not just a compass. The strength of the field and the angle at which it dips into the earth both change gradually across the planet. If a bird knows the values at home, and it can measure the values where it is, it could in principle work out roughly where it is.
+[S1] Like coordinates.
+[S2] Like a rough grid of coordinates. There is evidence for this in some species. Researchers have taken birds that were caught during migration and exposed them to a magnetic field that matched a location far away, without moving them at all. And the birds changed direction as if they had been physically moved.
+[S1] So you can teleport a bird just by changing the field around it.
+[S2] In a sense, yes. You can make it believe it has been teleported, and it corrects its course for a place it has never been.
+[S1] That is remarkable.
+[S2] There is a second idea, and it involves smell.
+[S1] Smell? Birds are not known for their sense of smell.
+[S2] That is what everyone assumed for a long time, and it turns out to be wrong, at least for some birds. Seabirds, in particular, have a very good sense of smell. And there is an old and much debated idea that pigeons build up an odor map of their surroundings, learning which smells come in on which winds.
+[S1] So if the wind from the east always smells like pine forest, and you are suddenly somewhere that smells strongly of pine forest, you might guess that you have been taken east.
+[S2] That is exactly the logic. And there are experiments where pigeons whose sense of smell was blocked had real trouble getting home from unfamiliar places, while their compass seemed fine.
+[S1] But you said it is debated.
+[S2] Fiercely. Some labs have found strong effects and others have found weak ones. The current view, roughly, is that different species and maybe even different populations lean on different cues. Seabirds crossing open ocean, where there are no landmarks, may lean heavily on smell. Others may lean on magnetic information. And all of them probably learn landmarks once they are close to home.
+[S1] What about very young birds? On their first trip, they have never been anywhere. They can't have a map yet.
+[S2] This is a beautiful part of the story. On their first migration, many young songbirds fly alone, at night, without their parents. They have never made the trip. And they still head in roughly the right direction, for roughly the right amount of time.
+[S1] So the direction is inherited.
+[S2] The direction and the timing appear to be inherited, yes. There is a classic experiment with a small warbler. Some populations of it migrate to the southwest, and some to the southeast, and when researchers crossbred birds from the two groups, the offspring tried to fly roughly south, right between the two.
+[S1] They averaged their parents.
+[S2] They averaged their parents. Which is about as clear a sign as you could ask for that the direction is written into the genes. The young bird is born with something like an instruction. Fly this way, for about this long.
+[S1] But that is a compass instruction, not a map.
+[S2] Right. And here is the clever part. There was a famous experiment where researchers caught migrating starlings in the Netherlands, carried them a long way to the south, and released them in Switzerland.
+[S1] So they moved them sideways, off their normal route.
+[S2] Off their normal route. The adults, who had made the trip before, corrected. They turned and flew toward their usual wintering grounds. The young birds, on their first migration, did not correct. They kept flying in their inherited direction, as if nothing had happened, and they ended up wintering somewhere new.
+[S1] So the young birds had a compass and an instruction, but no map, and the adults had all three.
+[S2] That is the interpretation. The map is learned. The compass and the basic route are inherited. And the first journey is how a young bird starts to build the map that it will use for the rest of its life.
+[S1] That gives me a strange feeling of sympathy for a first year songbird, flying over the sea at night, following an instinct it doesn't understand.
+[S2] It is a hard trip. Many of them don't make it. Migration is one of the most dangerous things these animals do.
+[S1] What kills them?
+[S2] Storms, exhaustion, predators, and more and more, things that we built. Lit up buildings are a real problem. Birds migrating at night are drawn toward bright lights, especially in fog or low cloud, and they circle them, or collide with glass.
+[S1] Is that related to the star compass?
+[S2] Very possibly. If you navigate by light in the night sky, a bright tower in the dark is confusing. There are cities that now turn off decorative lights in tall buildings during the peak nights of migration, and it measurably reduces the number of dead birds found at the base of those buildings in the morning.
+[S1] That is a nice, simple fix.
+[S2] It is one of the rare cases in conservation where the solution is to do less. Turn off the lights.
+[S1] Let me ask about the timing piece. You said young birds inherit how long to fly. How do they know when to stop?
+[S2] They seem to carry a kind of internal program. Birds kept indoors with no outside cues still become restless at the right time of year, and they stay restless for about as many weeks as their wild relatives spend migrating. When the program runs out, the restlessness stops.
+[S1] So it is like a timer. Fly in this direction until the timer runs out.
+[S2] Something like that. Researchers sometimes call it a vector navigation program. A direction, plus a duration. It is a crude strategy, but it gets a young bird into roughly the right part of the world, and from there it can learn the rest.
+[S1] And some of them even change direction partway.
+[S2] Yes, some species have a built in turn. They fly one way for the first part of the trip and then switch to a new heading, which takes them around a sea or a desert instead of straight across it. Young birds kept in cages will switch their restless direction at about the right point in the season, even though they have never been outside.
+[S1] So the bend in the route is inherited too.
+[S2] The bend is inherited. Which raises an obvious question. What happens when the world changes faster than the genes can?
+[S1] I was going to ask about climate.
+[S2] It is a real concern. Spring is arriving earlier in many places. The insects that young chicks depend on are hatching earlier. But a bird that spends the winter thousands of miles away has no way of knowing that spring has come early back home. It leaves on its internal schedule and sometimes arrives too late for the peak of food.
+[S1] Is there any sign that they can adapt?
+[S2] Some, yes. The blackcap is a small European songbird, and over the last several decades, a growing number of them have started wintering in Britain instead of flying all the way to Spain and Portugal. That is a new route, and it seems to be inherited. Birds that winter in Britain have offspring that also head toward Britain.
+[S1] Why would that be better?
+[S2] Partly because winters in Britain have become milder, and partly, it seems, because people in Britain put out a lot of bird feeders. And because Britain is closer to the breeding grounds, those birds can get back earlier in the spring and claim the best territories.
+[S1] So bird feeders in gardens may be changing the evolution of a species.
+[S2] It is very possible. Evolution is not only something that happened long ago. It is something that is happening in back gardens right now.
+[S1] I like that. Let's talk about the champions. Who has the most impressive migration?
+[S2] There are a lot of contenders, but two stand out to me. The first is the arctic tern, which flies from the Arctic to the Antarctic and back every year. Over a lifetime, a single tern may fly a distance comparable to going to the moon and back a few times.
+[S1] That is a lot of flying for a bird that is mostly feathers.
+[S2] The second is the bar tailed godwit, a shorebird. Some of them fly from Alaska to New Zealand in a single, nonstop flight. Over the open Pacific. For more than a week.
+[S1] Nonstop. No landing at all?
+[S2] No landing. They can't land on the water and take off again easily. They fly day and night, across open ocean, and arrive in New Zealand having lost a large share of their body weight.
+[S1] How do they prepare for something like that?
+[S2] Before departure, they eat enormously and get very fat. And then, remarkably, their digestive organs shrink. They reduce the size of their gut, because they won't be eating during the flight, and carrying a full sized gut would just be extra weight.
+[S1] They shrink their own organs to save weight.
+[S2] And then they rebuild them when they arrive. It is like an airplane that unbolts its kitchen before a long flight, and puts it back together when it lands.
+[S1] And it navigates the whole way across an ocean with no landmarks.
+[S2] Which brings us back to the compasses. Some godwits seem to time their departure to catch favorable winds, almost as if they can forecast the weather. They wait for the right storm system to give them a tailwind for the first part of the trip.
+[S1] So add meteorologist to the list of skills.
+[S2] Navigator, meteorologist, and endurance athlete, all in one small body.
+[S1] I want to ask something a bit philosophical before we wrap up. You've described all these mechanisms. The sun, the stars, the magnetic field, smell, landmarks, inherited instructions. Do we actually understand how it all fits together?
+[S2] Honestly, no. We understand a lot of the pieces, and we have good experiments showing each piece matters. But how a bird combines them in the moment, how it decides which compass to trust when they disagree, that is still an open question.
+[S1] It's a little humbling.
+[S2] It is very humbling. We have satellites and atomic clocks and global positioning, and a bird that fits in your hand is still doing something we can't fully explain.
+[S1] Let's go back to our listener's question, then, the one that started this. How do birds find their way?
+[S2] The short answer is that they use several compasses, the sun, the stars and the earth's magnetic field, and they check those compasses against each other. Young birds are born with a direction and a rough schedule. Over their first journeys, they build a map, possibly from magnetic patterns, smells and landmarks. And adults use that map to correct their course when something pushes them off it.
+[S1] And the long answer?
+[S2] The long answer is that we are still working on it, and every few years someone does an experiment with a funnel cage and an ink pad that changes the story.
+[S1] That's a good place to stop. Thank you for listening to Short Questions. If you have a small question you want us to take much too far, send it in.
+[S2] And if you live in a city, maybe ask your building to turn off the lights at night during migration season.
+[S1] See you next time.
+[S2] Next time, a question about why cats knock things off tables, which turns out to be just as complicated.
+[S1] I doubt that very much.
+[S2] You'll see.
+[S1] Before we go, one more thing that came up while we were preparing this episode. A few listeners wrote in last season asking whether pet birds can navigate home if they get lost.
+[S2] That is a good question, and the answer is mostly no. Parrots and canaries have been kept by people for so long, and are so far from their wild routes, that they don't seem to have the same homing ability. A lost parrot usually stays fairly close to where it got out.
+[S1] So if your parrot escapes, look in the neighborhood.
+[S2] Look in the neighborhood, put its cage outside, and listen. Parrots are loud. That is honestly your best navigation tool.
+[S1] That is very practical advice.
+[S2] We try to be useful at least once an episode.
+[S1] And on that note, thanks again for listening.

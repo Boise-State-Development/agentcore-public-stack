@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router } from '@angular/router';
 import { AnnouncementFormPage } from './announcement-form.page';
 import { AnnouncementsAdminService } from './services/announcements-admin.service';
-import { AppRolesService } from '../roles/services/app-roles.service';
+import { RoleOptionsService } from '../roles/services/role-options.service';
 import { Announcement } from './models/announcement.model';
 
 function makeAnnouncement(overrides: Partial<Announcement> = {}): Announcement {
@@ -53,7 +53,7 @@ describe('AnnouncementFormPage', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: AnnouncementsAdminService, useValue: service },
-        { provide: AppRolesService, useValue: { getRoles: () => [
+        { provide: RoleOptionsService, useValue: { getRoles: () => [
           { roleId: 'faculty', displayName: 'Faculty' },
           { roleId: 'student', displayName: 'Student' },
         ] } },

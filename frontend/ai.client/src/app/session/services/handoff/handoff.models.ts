@@ -82,6 +82,38 @@ export interface HandoffDraft {
   fileUploadIds?: string[];
   invokedSkillIds?: string[];
   folders?: FolderAttachmentData[];
+  /**
+   * The source conversation's bound Agent, if any: the brief is requested with the body a turn
+   * there would carry, so the Runtime builds the same agent and reads the source's prompt cache.
+   */
+  sourceAssistantId?: string;
+}
+
+/** Why no brief was written (`handoff_brief_fallback`); the card keeps the excerpt. */
+export type BriefFallbackReason =
+  | 'flag_off'
+  | 'not_open'
+  | 'busy'
+  | 'preempted'
+  | 'quota'
+  | 'refused'
+  | 'timeout'
+  | 'error'
+  | 'tool_use_only'
+  | 'short_source'
+  | 'history_ends_on_user';
+
+/**
+ * The brief the source's own model writes for the card (handoffs spec §4.5.1).
+ * `writing` until the stream ends; `written` puts it in the card; `fallback` keeps the excerpt.
+ */
+export interface HandoffBrief {
+  status: 'writing' | 'written' | 'fallback';
+  /** The text so far while writing; the whole brief once written. Empty on a fallback. */
+  text: string;
+  briefHash?: string;
+  cacheStatus?: string;
+  fallbackReason?: BriefFallbackReason;
 }
 
 /** The review sheet's state for one source conversation. */
@@ -95,4 +127,6 @@ export interface HandoffReview {
   /** The context card as it will be sent (editable). */
   card: string;
   cardRemoved: boolean;
+  /** Present when a brief was requested (`features.handoffBrief`). */
+  brief?: HandoffBrief;
 }

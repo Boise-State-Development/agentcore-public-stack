@@ -7,20 +7,22 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt } from '@ng-icons/heroicons/outline';
+import { heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt, heroBellAlert } from '@ng-icons/heroicons/outline';
 import { HttpErrorResponse } from '@angular/common/http';
 import { ModelService } from '../../../session/services/model/model.service';
 import { MAX_PERSONAL_INSTRUCTIONS, UserSettingsService } from '../../../services/user-settings.service';
 import { LocalSettingsService } from '../../../services/local-settings.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { isRetiring } from '../../../shared/utils/retirement';
+import { FEATURES } from '../../../services/features';
+import { HandoffNotificationService } from '../../../session/services/handoff/handoff-notification.service';
 
 @Component({
   selector: 'app-chat-preferences-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, RouterLink, SpinnerComponent],
   providers: [
-    provideIcons({ heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt }),
+    provideIcons({ heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt, heroBellAlert }),
   ],
   host: { class: 'block' },
   template: `
@@ -199,6 +201,35 @@ import { isRetiring } from '../../../shared/utils/retirement';
         </div>
       </div>
 
+      @if (features.handoffs) {
+        <!-- Browser notifications for handoffs (handoffs spec §4.3). The browser owns the
+             permission, so this asks for it and says where it stands; it can't revoke it. -->
+        <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
+          <div class="flex flex-wrap items-center justify-between gap-4 p-6">
+            <div class="flex items-start gap-3">
+              <div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-white/10">
+                <ng-icon name="heroBellAlert" class="size-4 text-gray-500 dark:text-gray-400" />
+              </div>
+              <div>
+                <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">Browser notifications</h3>
+                <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                  {{ notificationHelp() }}
+                </p>
+              </div>
+            </div>
+            @if (handoffNotifications.permission() === 'default') {
+              <button
+                type="button"
+                (click)="enableNotifications()"
+                class="rounded-2xl bg-primary-accessible px-3.5 py-1.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              >
+                Turn on
+              </button>
+            }
+          </div>
+        </div>
+      }
+
       <!-- Manage Conversations -->
       <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <a
@@ -247,6 +278,25 @@ export class ChatPreferencesSettingsPage {
   readonly modelService = inject(ModelService);
   private userSettingsService = inject(UserSettingsService);
   readonly localSettings = inject(LocalSettingsService);
+  protected readonly features = inject(FEATURES);
+  protected readonly handoffNotifications = inject(HandoffNotificationService);
+
+  protected readonly notificationHelp = computed(() => {
+    switch (this.handoffNotifications.permission()) {
+      case 'granted':
+        return 'On. When an agent you handed work to needs you or finishes while this tab is in the background, your browser tells you. To turn them off, change this site’s notification setting in your browser.';
+      case 'denied':
+        return 'Blocked in your browser. To get them, allow notifications for this site in your browser’s settings. Your notifications still appear under the bell.';
+      case 'unsupported':
+        return 'This browser can’t show them here. Your notifications still appear under the bell.';
+      default:
+        return 'Get a notification from your browser when an agent you handed work to needs you or finishes while this tab is in the background.';
+    }
+  });
+
+  protected enableNotifications(): void {
+    void this.handoffNotifications.requestPermission();
+  }
 
   readonly saving = signal(false);
   readonly saveError = signal<string | null>(null);

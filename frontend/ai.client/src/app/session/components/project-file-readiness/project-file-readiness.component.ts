@@ -61,7 +61,7 @@ const MAX_PAGES = 5;
             @if (failed() > 0) {
               {{ failed() }} couldn't be added.
             }
-            <a [routerLink]="filesLink()" class="font-medium text-primary-accessible underline underline-offset-2 hover:no-underline dark:text-primary-accessible-dark">View files</a>
+            <a [routerLink]="filesLink()" class="font-medium text-primary-accessible underline underline-offset-2 hover:no-underline dark:text-primary-50">View files</a>
           </p>
         </div>
       } @else if (justReady()) {
@@ -84,7 +84,7 @@ const MAX_PAGES = 5;
           <p class="min-w-0 flex-1">
             {{ failed() }} project {{ failed() === 1 ? "file couldn't" : "files couldn't" }} be added, so the assistant can't use
             {{ failed() === 1 ? 'it' : 'them' }}.
-            <a [routerLink]="filesLink()" class="font-medium text-primary-accessible underline underline-offset-2 hover:no-underline dark:text-primary-accessible-dark">Upload again from Files</a>
+            <a [routerLink]="filesLink()" class="font-medium text-primary-accessible underline underline-offset-2 hover:no-underline dark:text-primary-50">Upload again from Files</a>
           </p>
           <button
             type="button"

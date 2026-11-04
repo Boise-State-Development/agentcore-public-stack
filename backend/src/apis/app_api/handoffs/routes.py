@@ -3,6 +3,8 @@
     POST /sessions/{session_id}/handoffs                         render the excerpt, open a handoff
     GET  /sessions/{session_id}/handoffs/{handoff_id}            read one
     POST /sessions/{session_id}/handoffs/{handoff_id}/dismiss    cancel an open one
+    POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/read    mark its inbox entries read
+    POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/events  count a browser notification
 
 All 404 to a signed-in user while ``HANDOFFS_ENABLED`` is off (401 unauthenticated regardless).
 
@@ -19,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,6 +42,8 @@ from apis.shared.handoff import (
 )
 from apis.shared.handoff.metrics import emit_handoff_metric
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
+from apis.shared.handoff.notify import HANDOFF_NOTIFICATION_KINDS
+from apis.shared.notifications import NotificationService
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_compaction, get_session_metadata
 from apis.shared.sessions.rewind import parse_message_index
@@ -217,6 +221,81 @@ async def dismiss_handoff(
     if updated is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This handoff was already sent")
     emit_handoff_metric("HandoffCancelled", row.kind, session_id=session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+HandoffNotificationKind = Literal["handoff_needs_input", "handoff_done", "handoff_stopped"]
+
+
+class MarkHandoffNotificationsReadRequest(BaseModel):
+    kinds: List[HandoffNotificationKind] = Field(
+        default_factory=lambda: list(HANDOFF_NOTIFICATION_KINDS.values()), min_length=1, max_length=3
+    )
+
+
+class MarkHandoffNotificationsReadResponse(BaseModel):
+    marked: int
+
+
+_inbox: Optional[NotificationService] = None
+
+
+def get_inbox() -> NotificationService:
+    global _inbox
+    if _inbox is None:
+        _inbox = NotificationService()
+    return _inbox
+
+
+@router.post(
+    "/{session_id}/handoffs/{handoff_id}/notifications/read",
+    response_model=MarkHandoffNotificationsReadResponse,
+)
+async def mark_handoff_notifications_read(
+    session_id: str,
+    handoff_id: str,
+    body: MarkHandoffNotificationsReadRequest,
+    user: User = Depends(require_handoffs_user),
+    store: HandoffStore = Depends(get_handoff_store),
+    inbox: NotificationService = Depends(get_inbox),
+) -> MarkHandoffNotificationsReadResponse:
+    """Mark this handoff's unread inbox entries of ``kinds`` read (§4.3, PR-0.3b).
+
+    Read state follows the work, not the bell: the SPA calls this when the user opens the target,
+    and when a state change lands while they are looking at the source or the target. Only the
+    caller's own inbox is touched, and only for a handoff that is theirs from this conversation.
+    """
+    await _owned_row(store, user, session_id, handoff_id)
+    marked = await asyncio.to_thread(
+        inbox.mark_read_matching, user.email, kinds=body.kinds, payload={"handoffId": handoff_id}
+    )
+    return MarkHandoffNotificationsReadResponse(marked=marked)
+
+
+class HandoffNotificationEvent(BaseModel):
+    """A browser-side fact the server can't see (§4.7). ``outcome`` only for a permission ask."""
+
+    metric: Literal["HandoffNotified", "HandoffNotificationOpened", "HandoffBrowserPermission"]
+    channel: Optional[Literal["inbox", "browser"]] = None
+    outcome: Optional[Literal["granted", "denied", "dismissed"]] = None
+
+
+@router.post(
+    "/{session_id}/handoffs/{handoff_id}/notifications/events",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def record_handoff_notification_event(
+    session_id: str,
+    handoff_id: str,
+    body: HandoffNotificationEvent,
+    user: User = Depends(require_handoffs_user),
+) -> Response:
+    """Count a browser notification shown or opened, an inbox entry opened, or a permission answer.
+
+    A count and nothing else: no row is read or written, so a stray call costs one EMF line.
+    """
+    detail = body.outcome if body.metric == "HandoffBrowserPermission" else body.channel
+    emit_handoff_metric(body.metric, "mention", session_id=session_id, detail=detail)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

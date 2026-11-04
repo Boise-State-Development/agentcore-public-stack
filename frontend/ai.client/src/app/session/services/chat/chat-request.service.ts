@@ -444,6 +444,30 @@ export class ChatRequestService implements OnDestroy {
   }
 
   /**
+   * The body of a handoff brief on the **source** conversation (handoffs spec §4.5.1): exactly
+   * what a turn there would send (model, provider, tools, skills, binding or mode), plus
+   * `handoff_brief`. Identical matters: the Runtime resolves the agent as a turn does, and any
+   * difference rebuilds a different `toolConfig` or system prompt and misses the source's cache.
+   * The message is the handoff's request; the brief never persists it.
+   */
+  async buildHandoffBriefRequest(options: {
+    sourceSessionId: string;
+    handoffId: string;
+    request: string;
+    sourceAssistantId?: string;
+  }): Promise<Record<string, unknown>> {
+    await this.awaitSelectionSources();
+    const requestObject = this.buildChatRequestObject(
+      options.request,
+      options.sourceSessionId,
+      undefined,
+      options.sourceAssistantId,
+    );
+    requestObject['handoff_brief'] = { handoffId: options.handoffId };
+    return requestObject;
+  }
+
+  /**
    * "Continue" after a max_tokens truncation. Modeled on the OAuth/tool
    * resume flow, NOT on submitChatRequest: no user message is added (no
    * visible bubble, no new user turn) so the model resumes the truncated

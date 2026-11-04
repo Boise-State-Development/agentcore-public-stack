@@ -43,6 +43,12 @@ NotificationKind = Literal[
     "quota_request_info_requested",
     "quota_extension_granted",
     "quota_extension_revoked",
+    # Handoffs (agent-handoffs-and-consults §4.3, PR-0.3b), written by the Runtime after a
+    # target's turn: payload {handoffId, sourceSessionId, targetSessionId, agentId, agentName,
+    # sourceTitle}, never request or conversation text. Recipient and actor are the same user.
+    "handoff_needs_input",
+    "handoff_done",
+    "handoff_stopped",
 ]
 
 

@@ -6,7 +6,8 @@ import {
   computed,
 } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { HttpErrorResponse } from '@angular/common/http';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import { CuratedModel } from '../models/curated-models';
 import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 
@@ -20,7 +21,9 @@ export interface AddCuratedModelDialogData {
 /**
  * Result returned when the dialog closes.
  * - `string[]` — admin confirmed; these role IDs should be applied to the
- *   curated template before POSTing.
+ *   curated template before POSTing. Empty when there were no roles to pick
+ *   from (the role list failed to load, or none are enabled): the create
+ *   route accepts that, and roles granting every model (`*`) still reach it.
  * - `undefined` — admin cancelled.
  */
 export type AddCuratedModelDialogResult = string[] | undefined;
@@ -38,13 +41,21 @@ export type AddCuratedModelDialogResult = string[] | undefined;
     >
       @if (rolesResource.isLoading()) {
         <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading roles…</p>
+      } @else if (rolesForbidden()) {
+        <p class="text-sm/6 text-state-warning-600 dark:text-state-warning-400">
+          You don't have access to the role list, so this model will be added without
+          granting it to any role. Users whose role grants every model can use it now;
+          someone who manages roles can grant it to specific roles later.
+        </p>
       } @else if (rolesResource.error()) {
-        <p class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">
-          Failed to load roles. Please refresh the page.
+        <p class="text-sm/6 text-state-warning-600 dark:text-state-warning-400">
+          Roles couldn't be loaded, so this model will be added without granting it to
+          any role. You can grant it to roles later from the model's edit page.
         </p>
       } @else if (availableRoles().length === 0) {
         <p class="text-sm/6 text-state-warning-600 dark:text-state-warning-400">
-          No roles configured. Create roles in Admin &gt; Roles first.
+          No roles configured, so this model will be added without granting it to any
+          role. Create roles in Admin &gt; Roles to grant it.
         </p>
       } @else {
         <div class="mb-2 flex items-center justify-between text-xs/5">
@@ -121,13 +132,37 @@ export class AddCuratedModelDialogComponent {
   protected readonly dialogRef = inject(DialogRef<AddCuratedModelDialogResult>);
   protected readonly data = inject<AddCuratedModelDialogData>(DIALOG_DATA);
 
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
-  readonly rolesResource = this.appRolesService.rolesResource;
-  readonly availableRoles = computed(() => this.appRolesService.getEnabledRoles());
+  readonly rolesResource = this.roleOptionsService.rolesResource;
+  readonly availableRoles = computed(() => this.roleOptionsService.getEnabledRoles());
+
+  /**
+   * The picker list is open to every delegated admin, so a 403 here should not
+   * happen to anyone who can reach this dialog. If it does (say, an SPA ahead of
+   * its app-api), the create route may still accept them, so the dialog falls
+   * back to adding with no roles. Named apart from other failures so the copy
+   * can say why.
+   */
+  readonly rolesForbidden = computed(() => {
+    const error = this.rolesResource.error();
+    return error instanceof HttpErrorResponse && error.status === 403;
+  });
+
+  /**
+   * Nothing to choose from, so adding with no roles is the only option.
+   * The error check goes first: a resource in error throws from `value()`.
+   */
+  readonly noRolesToPick = computed(
+    () => !!this.rolesResource.error() || this.availableRoles().length === 0,
+  );
 
   readonly selectedRoleIds = signal<Set<string>>(new Set());
-  readonly canConfirm = computed(() => this.selectedRoleIds().size > 0);
+  readonly canConfirm = computed(
+    () =>
+      !this.rolesResource.isLoading() &&
+      (this.noRolesToPick() || this.selectedRoleIds().size > 0),
+  );
 
   isSelected(roleId: string): boolean {
     return this.selectedRoleIds().has(roleId);

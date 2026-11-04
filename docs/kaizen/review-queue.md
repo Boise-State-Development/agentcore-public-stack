@@ -5,6 +5,54 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-11-03] Opus 5.5: the drop-block recovery cannot engage for us, so a binding 400 still fails the turn on an enforcing account
+- **Source**: #1850 readout (strands-agents 1.62.0, harness-sdk#5171), then a live probe on dev the same evening
+- **Surface**: backend (`agents/main_agent/core/model_config.py` `_shape_thinking_value` / `to_bedrock_config`, the curated Opus 5.5 row); later `session/hooks/prefix_fingerprint.py` and the `C#` row writer
+- **Effort × Impact**: M × M (High on any account that enforces binding)
+- **Subtracts**: no — it closes a turn-failure path the 1.62 bump was assumed to have closed
+- **Unlocks**: compaction on every preserved-thinking model without a failed turn, on any account
+- **Notes**:
+  - **The retry can't fire for our requests.** Since 1.62.0, `BedrockModel._converse` retries a "block is bound to a different conversation" `ValidationException` with `drop_block`. But it builds the retry from `additionalModelRequestFields["thinking"]` (`_fields_with_drop_block` → `thinking_with_drop_block`), which returns `None` unless `thinking` is a dict. Our Opus 5.5 row declares only `max_tokens` + `effort`. Adaptive thinking is always on, and the curated row records that `thinking.type.disabled` 400s, so no `thinking` param is declared and none is sent. A binding 400 is therefore re-raised and fails the turn, exactly as before 1.62.
+  - **dev does not enforce binding today.** Measured 2026-11-03 on dev, Opus 5.5 `us.*`, strands 1.63.0, $2.62:
+    - A forced hard-ceiling cut summarized 8 turns and kept two assistant turns carrying signed `reasoningText` blocks: empty text, 788–1,192-char signatures, which Strands keeps for Claude (`_rejects_reasoning_block`).
+    - The next request replayed them behind the rewritten prefix and returned 200.
+    - The Runtime log group shows zero "bound to a different conversation", zero `drop_block` and zero `ValidationException`.
+    - Prod's account is unverified, and the error text says "enforcing accounts" reject.
+  - **Fix shape, to test first:** send an explicit adaptive `thinking` dict on Opus 5.5 (add `claude-opus-5-5` to `_BEDROCK_ADAPTIVE_THINKING_MARKERS` and declare it on the row), or set `block_binding: {prefix_mismatch_behavior: "drop_block"}` ourselves. Either changes `additionalModelRequestFields`, which is a one-time re-write of every live Opus 5.5 conversation's prefix: price it, and regenerate `tests/fixtures/bedrock_golden_requests.json` on purpose. Check prod read-only before deciding it's needed.
+  - **Then attribution:** a `drop_block` call re-writes the prefix with **unchanged** fingerprint hashes, because the hashes never cover `additionalModelRequestFields`. Read `_drop_stale_thinking_model_id` off the model after the call (never in a `Before*` hook, for TTFT) and write a `thinkingDropBlock` marker, subtracted like `agentSwitched`/`modelSwitched`. The model instance is per `(session, user)` (`_create_cache_key`), so the flag never crosses conversations.
+  - **Test-rig notes:**
+    - Adaptive thinking skips trivial prompts ("number only" arithmetic gave 3–29 output tokens and no reasoning blocks), so use multi-step prompts.
+    - The compaction ceiling is `min(window × 0.5, 100K)`, so a 1M window still compacts at 100K, with a 150K hard ceiling.
+    - After a cut the trigger stays disarmed until input ≤ ceiling or ≥ hard ceiling, so force the second cut past 150K.
+- **Status**: open (supersedes the earlier "attribute the drop-block re-write" framing, which assumed the retry could fire)
+
+### [2026-11-03] A compaction's own re-write is counted as `wastedUsd`
+- **Source**: the same dev probe (#1850 follow-up)
+- **Surface**: backend (`apis/shared/observability/prompt_cache.py` `classify_cache_status` / `compute_wasted_usd`, the `C#` row writer, `GET /admin/costs/sessions/{id}/calls`, the PromptCache EMF)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — removes a false waste signal from every compacting session's cost readout
+- **Unlocks**: a `wastedUsd` that means "avoidable", so the compaction-spiral and partial-miss signals stand out instead of being diluted by every ordinary cut
+- **Notes**: a cut costs one re-write of what survives, by design (`compaction_policy.py`: "Under Bedrock caching a cut costs one re-write of what *survives*"). But the first call after it reads only the tools+system segment and writes the rest, so `classify_cache_status` labels it `partial_miss` and prices it into `wastedUsd`. On the dev probe both post-cut calls landed there: $0.58 and $0.20, **30%** of the session's $2.62. There is no exemption, unlike `agentSwitched` / `modelSwitched`. Mark the call that first runs on a new compaction checkpoint (the `compaction` event's `newCheckpoint` is already known at the head of that turn) as `compactionRewrite` and subtract it the same way, keeping it out of `AvoidableMiss`. Keep the death-spiral case visible: a **forced** cut (`forced: true`, disarmed at the hard ceiling) that repeats is still waste, so exempt only the first call after each checkpoint, never a run of them.
+- **Status**: open
+
+### [2026-11-03] `document_extract`: record which structured-output mechanism answered, before the feature is promoted
+- **Source**: #1850 readout (strands-agents 1.63.0 `_native_output.py`)
+- **Surface**: backend (`apis/shared/extraction/extractor.py`, the `document_extraction` event's `schemaEnforced`)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — a guard on a contract the spec already states ("it is never silent")
+- **Unlocks**: native structured output (`outputConfig`) as a second enforced path on models that cannot force a tool, e.g. Opus 5.5
+- **Notes**: 1.63.0's `BedrockModel.structured_output` cascades forced → native → auto and swallows a mechanism's rejection to try the next. On the forced path our capacity errors still surface (they are not in Strands' forced-unsupported list), so `SchemaTooComplexError` survives. But where forced is skipped (`model_info` says `forcedToolChoice: false`, which is Opus 5.5) and native rejects the schema ("Schema is too complex", "Schemas contains too many"), Strands falls back to auto tool choice with only a `warnings.warn`, and our `schemaEnforced` would read `true` for a best-effort answer. Detect the mechanism (or the warning) and mark the run unenforced, or pin the extractor to the forced mechanism. `DOCUMENT_EXTRACT_ENABLED` is off everywhere, so no deployment is exposed yet. Fix before promotion
+- **Status**: open
+
+### [2026-11-03] Strategic read of strands-agents 1.62 + 1.63: what the new primitives let us build or delete
+- **Source**: #1850 (the bump read the diff for breakage, not for opportunity)
+- **Surface**: backend
+- **Effort × Impact**: L × M
+- **Subtracts**: possibly — candidates below
+- **Unlocks**: see candidates
+- **Notes**: candidates found in the wheel diff, none evaluated: `Model.model_info` / `model_info.json` as a second source for catalog limits and capabilities (with the caveat that its Sonnet 4.6 output limit is wrong, so never authoritative); native structured output as the extraction path on models that support it; request-wide Graph/Swarm limits (harness-sdk#5306) against the [2026-07-17] headless `Limits` item and handoffs §9.5; the public `strands.middleware` module against hooks we wrote as workarounds; `vended_tools` `read`/`write`/`edit`/`stop`; `InvocationContext` usage (request-wide, across sub-agents) against our per-call usage aggregation. Read the 1.62.0 and 1.63.0 release notes end to end, with both lenses
+- **Status**: open
+
 ### [2026-11-03] Take Strands 1.63.0 with a written readout, then curate Haiku 5.5
 - **Source**: research/2026-11-03.md
 - **Surface**: backend
@@ -12,6 +60,13 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes — the preserved-thinking probe item and the stale caching comment in `model_config.py`
 - **Unlocks**: Haiku 5.5 as the cheap default
 - **Status**: open
+- **Status 2026-11-03**: bump in review as #1850 (`feature/strands-1.63.0`). Readout: (a) #5645 would send `maxTokens` from Strands' `model_info.json`, which gives Sonnet 4.6 128K against a 64K card, so `to_bedrock_config` and the extractor opt out with `max_tokens=None`; (b) the cache predicate is unchanged for every id we run; (c) #4618 not shipped, `metrics.py` byte-identical. `model_info` re-resolves on every read (upstream `format_request` 22 → 102 µs), memoized in `CountTokensBedrockModel` (ours: 22 µs on both). Open: the Haiku 5.5 row, and our Opus 4.7 row's 64K output cap (card says 128K).
+- **Status 2026-11-03 (later)**: bump **shipped** in #1850 (merge `570fee9f`) and dev-validated on Runtime version 796.
+  - **Smoke matrix:** 12 PASS / 0 FAIL / 5 SKIP before and after, with every row the same status.
+  - **Cache:** `second_turn_cache` read 5,571 / wrote 3,097 tokens on both runs, so the prefix is identical on the real wire.
+  - **Timing:** server `turn_prelude` median 1,131 → 1,094 ms, and `agent_build.strands_agent` 6 → 6 ms.
+  - **Logs:** no Runtime errors after the update.
+  - **Still open:** the bump half of this entry is done. The Haiku 5.5 row is not, and see the [2026-11-03] Opus 5.5 drop-block entry above.
 
 ### [2026-11-03] Find out why Nightly Build & Test has failed on `main` for seven nights
 - **Source**: research/2026-11-03.md

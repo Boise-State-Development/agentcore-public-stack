@@ -236,30 +236,61 @@ def test_agent_and_preview_dispatches_get_no_role_instructions(monkeypatch):
     assert asyncio.run(chat_routes._plain_turn_prompt(preview, "u-1", current_user=USER)) is None
 
 
-def _enclosing_ifs(tree, target):
-    """The ``if`` tests enclosing ``target``, outermost first."""
-    found = []
-
-    def walk(node, stack):
-        if node is target:
-            found.extend(stack)
-            return True
-        for child in ast.iter_child_nodes(node):
-            pushed = stack + [ast.unparse(node.test)] if isinstance(node, ast.If) and child in node.body else stack
-            if walk(child, pushed):
-                return True
-        return False
-
-    walk(tree, [])
-    return found
-
-
-def test_the_main_turn_resolves_role_instructions_only_without_an_agent():
+def test_the_main_turn_passes_the_user_to_the_prompt_extras():
+    """`apply_turn_prompt_extras` resolves role instructions from the turn's user."""
     tree = ast.parse(ROUTES.read_text())
-    invocations = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "invocations")
-    calls = [n for n in ast.walk(invocations) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "resolve_role_instructions"]
+    invocations = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_run_invocation")
+    calls = [n for n in ast.walk(invocations) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "apply_turn_prompt_extras"]
     assert len(calls) == 1
-    assert "not input_data.rag_assistant_id" in _enclosing_ifs(invocations, calls[0])
+    assert {k.arg: ast.unparse(k.value) for k in calls[0].keywords}.get("current_user") == "current_user"
+
+
+def _extras(request, *, is_resume=False, is_continuation=False, personal=None):
+    request.selected_prompt_id = None
+    return asyncio.run(
+        chat_routes.apply_turn_prompt_extras(request, "u-1", None, personal, is_resume=is_resume, is_continuation=is_continuation, current_user=USER)
+    )
+
+
+def test_extras_compose_roles_mode_and_personal_on_a_plain_turn(monkeypatch):
+    async def roles(user):
+        assert user is USER
+        return [FACULTY]
+
+    async def mode(**_kwargs):
+        return ("Guided Learning", "Be socratic.")
+
+    monkeypatch.setattr(chat_routes, "resolve_role_instructions", roles)
+    monkeypatch.setattr(chat_routes, "resolve_active_prompt_text", mode)
+
+    assert _extras(_Request(), personal="Answer briefly.") == compose_plain_turn_prompt(
+        None, role_instructions=[FACULTY], mode=("Guided Learning", "Be socratic."), personal="Answer briefly."
+    )
+
+
+def test_extras_add_no_role_instructions_to_agent_resume_or_preview_turns(monkeypatch):
+    async def tripwire(_user):
+        raise AssertionError("role instructions resolved where they must not be")
+
+    async def no_mode(**_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_routes, "resolve_role_instructions", tripwire)
+    monkeypatch.setattr(chat_routes, "resolve_active_prompt_text", no_mode)
+
+    assert _extras(_Request(rag_assistant_id="ast-1")) is None
+    assert _extras(_Request(), is_resume=True) is None
+    assert _extras(_Request(session_id="preview-1")) is None
+
+
+def test_extras_keep_role_instructions_on_a_continuation(monkeypatch):
+    """A continuation must rebuild the original turn's prompt to hit its cached agent."""
+
+    async def roles(_user):
+        return [FACULTY]
+
+    monkeypatch.setattr(chat_routes, "resolve_role_instructions", roles)
+    assert "### Faculty" in _extras(_Request(), is_continuation=True)
 
 
 # ---- the terminal surface block ---------------------------------------------

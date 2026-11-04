@@ -137,6 +137,11 @@ def render_excerpt(
     )
 
 
+def count_turns(messages: Sequence[Mapping[str, Any]]) -> int:
+    """How many turns ``messages`` hold, counted the way the excerpt numbers them."""
+    return len(_turn_starts(messages)) if messages else 0
+
+
 def _turn_starts(messages: Sequence[Mapping[str, Any]]) -> List[int]:
     """Index of the first message of each turn. Messages before the first user message join turn 1."""
     starts: List[int] = []

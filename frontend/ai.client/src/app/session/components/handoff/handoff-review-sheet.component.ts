@@ -14,6 +14,10 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
  * the thread the context comes from stays readable above it, which is what the user is judging the
  * card against. Esc cancels. The request is editable as a sentence; the context card is collapsed
  * by default and can be previewed in full, edited as a document, or removed.
+ *
+ * With a brief (handoffs spec §4.5.1), the card shows "Writing a brief…" and then the brief as it
+ * streams; Send waits until it is written or has fallen back to the excerpt, so what the user
+ * reviewed is what goes.
  */
 @Component({
   selector: 'app-handoff-review-sheet',
@@ -71,7 +75,21 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
               <p class="text-sm/6 text-state-danger-700 dark:text-state-danger-300" role="alert">{{ r.error }}</p>
             }
             @default {
-              @if (r.cardRemoved) {
+              @if (r.brief?.status === 'writing') {
+                @if (!r.brief?.text) {
+                  <p class="flex items-center gap-2 text-sm/6 text-gray-600 dark:text-gray-400" role="status">
+                    <app-spinner size="sm" />
+                    Writing a brief…
+                  </p>
+                } @else {
+                  <p class="text-sm/6 text-gray-700 dark:text-gray-300" role="status">Writing a brief…</p>
+                  <!-- Scrollable, so focusable (axe scrollable-region-focusable). Not live: the status line says it's writing. -->
+                  <pre tabindex="0" role="region" aria-label="Brief so far" aria-busy="true" class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 font-mono text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-gray-800 dark:text-gray-200">{{ r.brief?.text }}</pre>
+                }
+                <button type="button" class="mt-2 text-sm/6 font-medium text-primary-accessible underline-offset-2 hover:underline" (click)="handoff.useExcerpt(sessionId())">
+                  Use the conversation excerpt instead
+                </button>
+              } @else if (r.cardRemoved) {
                 <p class="flex flex-wrap items-center gap-x-2 text-sm/6 text-gray-600 dark:text-gray-400">
                   No context from this conversation will be sent.
                   <button type="button" class="font-medium text-primary-accessible underline-offset-2 hover:underline" (click)="handoff.setCardRemoved(sessionId(), false)">
@@ -90,8 +108,12 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
                 >
                   <ng-icon name="heroChevronRight" class="size-4 shrink-0 transition-transform" [class.rotate-90]="cardOpen()" aria-hidden="true" />
                   <span>
-                    Context from this conversation
-                    @if (coverage(); as c) { · {{ c }} }
+                    @if (r.brief?.status === 'written') {
+                      Brief from this conversation
+                    } @else {
+                      Context from this conversation
+                      @if (coverage(); as c) { · {{ c }} }
+                    }
                     · ~{{ tokensLabel() }} tokens
                   </span>
                 </button>
@@ -124,7 +146,10 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
                   </div>
                 }
               }
-              @if (previewOpen() && !r.cardRemoved && r.card) {
+              @if (r.brief?.status === 'fallback' && !r.cardRemoved && r.card) {
+                <p class="mt-1 text-xs text-gray-600 dark:text-gray-400">{{ fallbackNote() }}</p>
+              }
+              @if (previewOpen() && !r.cardRemoved && r.card && r.brief?.status !== 'writing') {
                 <div [id]="previewId" class="mt-2">
                   <p class="text-xs font-medium text-gray-700 dark:text-gray-300">What {{ r.draft.agentName }} will receive</p>
                   <pre tabindex="0" role="region" [attr.aria-label]="'Full prompt ' + r.draft.agentName + ' will receive'" class="mt-1 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 font-mono text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-gray-800 dark:text-gray-200">{{ prompt() }}</pre>
@@ -211,13 +236,20 @@ export class HandoffReviewSheetComponent {
 
   protected readonly canSend = computed(() => {
     const r = this.review();
-    return !!r && r.phase === 'ready' && r.request.trim().length > 0;
+    return !!r && r.phase === 'ready' && r.brief?.status !== 'writing' && r.request.trim().length > 0;
   });
+
+  protected readonly fallbackNote = computed(() =>
+    this.review()?.brief?.fallbackReason === 'preempted'
+      ? 'The brief was stopped, so the conversation excerpt is shown instead.'
+      : 'A brief couldn’t be written, so the conversation excerpt is shown instead.',
+  );
 
   constructor() {
     // Move focus into the sheet when it opens, so Esc and the keyboard land here and a
     // screen reader hears the region's name.
     let focusedFor: string | undefined;
+    let lastBriefStatus: string | undefined;
     effect(() => {
       const r = this.review();
       const el = this.sheet()?.nativeElement;
@@ -226,6 +258,10 @@ export class HandoffReviewSheetComponent {
         focusedFor = key;
         el.focus();
       }
+      // A brief the user watched stream in stays open once written.
+      const briefStatus = r?.brief?.status;
+      if (briefStatus === 'written' && lastBriefStatus === 'writing') this.cardOpen.set(true);
+      lastBriefStatus = briefStatus;
       if (!r) {
         focusedFor = undefined;
         this.cardOpen.set(false);

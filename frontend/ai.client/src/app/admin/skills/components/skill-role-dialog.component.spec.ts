@@ -3,7 +3,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { TestBed } from '@angular/core/testing';
 import { expectNamedDialog, openInCdkDialog } from '../../../../testing/cdk-dialog';
 import { AdminSkillService } from '../services/admin-skill.service';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import { AdminSkill } from '../models/admin-skill.model';
 import {
   SkillRoleDialogComponent,
@@ -17,7 +17,7 @@ describe('SkillRoleDialogComponent', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: AdminSkillService, useValue: { getSkillRoles: vi.fn().mockResolvedValue([]) } },
-        { provide: AppRolesService, useValue: { fetchRoles: vi.fn().mockResolvedValue({ roles: [] }) } },
+        { provide: RoleOptionsService, useValue: { fetchRoles: vi.fn().mockResolvedValue({ roles: [] }) } },
       ],
     });
   });

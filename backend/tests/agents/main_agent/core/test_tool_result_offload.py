@@ -43,6 +43,12 @@ class _Agent:
         self.event_loop_metrics = SimpleNamespace(cycle_count=1)
         self.storage = None
         self.sandbox = None
+        #: ``(callback, event_type, order)`` for every ``add_hook`` call, the way
+        #: the plugin registers its tool-result callback since strands 1.63.0.
+        self.added_hooks = []
+
+    def add_hook(self, callback, event_type=None, order=None):
+        self.added_hooks.append((callback, event_type, order))
 
 
 def _event(text, tool_name="gmail_search", count_tokens=None):
@@ -66,7 +72,9 @@ def offloader(monkeypatch):
     plugin = build_tool_result_offloader(session_id="s1", user_id="u1", storage=storage)
     assert plugin is not None
     # Bind storage the way init_agent would.
-    plugin.init_agent(_Agent())
+    agent = _Agent()
+    plugin.init_agent(agent)
+    plugin.test_agent = agent
     return plugin, storage
 
 
@@ -277,45 +285,50 @@ class TestHookRegistration:
     """The plugin is only useful if Strands actually calls it.
 
     Every other test in this file invokes ``_handle_tool_result`` directly, so
-    all of them passed while the callback was never registered with an agent:
-    the mixin's undecorated override shadowed the base's ``@hook`` method by
-    name, ``_discovery._discover_methods`` resolved the name through the MRO,
-    found no ``_hook_event_types``, and dropped it. In prod that meant a
-    107k-token tool result reaching the prompt with the offloader loaded.
+    all of them passed while the callback was never registered with an agent.
+    Through strands 1.62 the base's method was a discovered ``@hook``, and the
+    mixin's undecorated override shadowed it by name: discovery found no
+    ``_hook_event_types`` and dropped it. In prod that meant a 107k-token tool
+    result reaching the prompt with the offloader loaded. Since 1.63.0
+    ``init_agent`` registers the callback explicitly, so these tests pin
+    exactly one registration, of our override, and none through discovery.
     """
 
-    def test_hook_is_discoverable(self, offloader):
+    def _tool_result_registrations(self, plugin):
+        return [h for h in plugin.test_agent.added_hooks if h[0].__name__ == "_handle_tool_result"]
+
+    def test_init_agent_registers_our_override_once(self, offloader):
+        from strands.hooks.events import AfterToolCallEvent
+
+        plugin, _ = offloader
+        registrations = self._tool_result_registrations(plugin)
+        assert len(registrations) == 1, (
+            "the tool-result callback is not registered by init_agent; if upstream "
+            "moved it back to @hook discovery, the override must carry the marker again"
+        )
+        callback, event_type, _order = registrations[0]
+        assert event_type is AfterToolCallEvent
+        assert callback.__func__ is tro._OffloaderMixin._handle_tool_result
+
+    def test_discovery_does_not_register_it_a_second_time(self, offloader):
         from strands.plugins._discovery import discover_hooks
 
         plugin, _ = offloader
         names = {h.__name__ for h in discover_hooks(plugin, "offload")}
-        assert "_handle_tool_result" in names, (
-            "the tool-result callback is not discoverable — an override without "
-            "@hook hides it and the offloader silently stops offloading"
-        )
-        # The eviction callback comes from the base untouched; if it ever goes
-        # missing too, discovery itself changed shape.
+        assert "_handle_tool_result" not in names, "registered twice: discovery and init_agent"
+        # The eviction callback is still a discovered hook on the base; if it
+        # goes missing, discovery itself changed shape.
         assert "_on_before_model_call" in names
 
-    def test_hook_is_bound_for_the_right_event(self, offloader):
-        from strands.hooks.events import AfterToolCallEvent
-        from strands.plugins._discovery import discover_hooks
-
-        plugin, _ = offloader
-        by_name = {h.__name__: h for h in discover_hooks(plugin, "offload")}
-        assert by_name["_handle_tool_result"]._hook_event_types == [AfterToolCallEvent]
-
     @pytest.mark.asyncio
-    async def test_discovered_callback_still_offloads(self, offloader):
-        """The discovered bound method is the real path, not just a marker."""
-        from strands.plugins._discovery import discover_hooks
-
+    async def test_registered_callback_still_offloads(self, offloader):
+        """The registered bound method is the real path, not just a marker."""
         plugin, storage = offloader
-        callback = next(h for h in discover_hooks(plugin, "offload") if h.__name__ == "_handle_tool_result")
+        callback = self._tool_result_registrations(plugin)[0][0]
 
         ev = _event("x" * 40_000, count_tokens=AsyncMock(return_value=10_000))
         before = ev.result
         await callback(ev)
 
-        assert ev.result is not before, "the discovered callback did not replace the oversized result"
+        assert ev.result is not before, "the registered callback did not replace the oversized result"
         assert storage.objects, "nothing was written to storage"

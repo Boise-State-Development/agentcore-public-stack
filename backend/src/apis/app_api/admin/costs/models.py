@@ -237,6 +237,9 @@ class SessionCallRow(BaseModel):
 
     timestamp: str
     message_id: Optional[int] = Field(None, alias="messageId")
+    call_kind: Optional[str] = Field(
+        None, alias="callKind", description="Set on a call that is not a turn, e.g. 'handoff_brief'; absent on turns"
+    )
     model_id: Optional[str] = Field(None, alias="modelId")
 
     input_tokens: int = Field(0, alias="inputTokens")

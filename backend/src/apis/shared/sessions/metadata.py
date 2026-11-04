@@ -120,27 +120,32 @@ def _coerce_cost_total(raw: Any) -> float:
 async def store_message_metadata(
     session_id: str,
     user_id: str,
-    message_id: int,
+    message_id: Optional[int],
     message_metadata: MessageMetadata
-) -> None:
+) -> Dict[str, Any]:
     """
     Store message metadata after streaming completes
 
     Args:
         session_id: Session identifier
         user_id: User identifier
-        message_id: Message number (1, 2, 3, ...)
+        message_id: Message number (1, 2, 3, ...), or None for a call that produced no
+            message (a handoff brief, which carries ``callKind`` instead)
         message_metadata: MessageMetadata object to store
 
     Note:
         This should be called AFTER the session manager flushes messages,
         ensuring the message file exists before we try to update it.
+
+    Returns:
+        The derived prompt-cache observability written on the row (``cacheStatus`` …),
+        or ``{}`` when it was skipped.
     """
     sessions_metadata_table = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
     if not sessions_metadata_table:
         raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
 
-    await _store_message_metadata_cloud(
+    return await _store_message_metadata_cloud(
         session_id=session_id,
         user_id=user_id,
         message_id=message_id,
@@ -234,10 +239,10 @@ def get_user_display_text(session_id: str, user_id: str, message_id: int) -> Opt
 async def _store_message_metadata_cloud(
     session_id: str,
     user_id: str,
-    message_id: int,
+    message_id: Optional[int],
     message_metadata: MessageMetadata,
     table_name: str
-) -> None:
+) -> Dict[str, Any]:
     """
     Store message metadata (cost record) in DynamoDB and update cost summary
 
@@ -320,7 +325,6 @@ async def _store_message_metadata_cloud(
 
             # Session reference (for linking back to session)
             "sessionId": session_id,
-            "messageId": message_id,
 
             # Attribution
             "userId": user_id,
@@ -336,6 +340,12 @@ async def _store_message_metadata_cloud(
             # wastedUsd) — {} when derivation was skipped or failed
             **_convert_floats_to_decimal(cache_observability),
         }
+
+        # A call that produced no message (a handoff brief, marked by ``callKind``) carries no
+        # messageId: readers join feedback and per-turn views on it, and the source's last
+        # turn's index would hand that answer's thumb to the brief (handoffs spec §4.5.1).
+        if message_id is not None:
+            item["messageId"] = message_id
 
         # Store in DynamoDB
         table.put_item(Item=item)
@@ -375,6 +385,8 @@ async def _store_message_metadata_cloud(
             timestamp=timestamp,
             message_metadata=message_metadata,
         )
+
+        return cache_observability
 
     except Exception as e:
         logger.error(f"Failed to store message metadata in DynamoDB: {e}", exc_info=True)
@@ -2223,12 +2235,17 @@ async def _bump_session_aggregates(
         if not sk:
             return
 
-        update_parts_set = ["lastContextTokens = :t"]
-        values: Dict[str, Any] = {":c": Decimal(str(cost_value)), ":t": int(input_tokens)}
-
-        if context_window:
-            update_parts_set.append("contextWindow = :w")
-            values[":w"] = int(context_window)
+        values: Dict[str, Any] = {":c": Decimal(str(cost_value))}
+        update_parts_set: List[str] = []
+        # A call that is not a turn (``callKind``, e.g. a handoff brief) reads the history plus
+        # its own instruction, so its input is not the conversation's context size. It adds to
+        # the cost and cache rollups, and leaves the context meter to the turns.
+        if not _call_kind(message_metadata):
+            update_parts_set.append("lastContextTokens = :t")
+            values[":t"] = int(input_tokens)
+            if context_window:
+                update_parts_set.append("contextWindow = :w")
+                values[":w"] = int(context_window)
 
         # Per-session cache-efficiency rollups (next to totalCost). Zero
         # deltas are added unconditionally so the attributes exist (as 0)
@@ -2290,9 +2307,9 @@ async def _bump_session_aggregates(
                 update_parts_add.append(f"{attr} :{attr}")
                 values[f":{attr}"] = value
 
-        update_expression = (
-            "ADD " + ", ".join(update_parts_add) + " SET " + ", ".join(update_parts_set)
-        )
+        update_expression = "ADD " + ", ".join(update_parts_add)
+        if update_parts_set:
+            update_expression += " SET " + ", ".join(update_parts_set)
 
         response = table.update_item(
             Key={"PK": f"USER#{user_id}", "SK": sk},
@@ -2309,6 +2326,12 @@ async def _bump_session_aggregates(
     except Exception as e:
         # Non-fatal — lazy backfill compensates on next read.
         logger.debug("bump_session_aggregates failed (will be backfilled on read): %s", e)
+
+
+def _call_kind(message_metadata: Any) -> Optional[str]:
+    """The ``callKind`` extra on a cost row's metadata: set on a call that is not a turn."""
+    extra = getattr(message_metadata, "model_extra", None)
+    return extra.get("callKind") if isinstance(extra, dict) else None
 
 
 #: Session-row counter per compaction event kind (see
@@ -2478,7 +2501,7 @@ async def _backfill_session_aggregates(
                 # match true context-window occupancy.
                 token_usage = rec_float.get("tokenUsage") or {}
                 ts = rec_float.get("timestamp")
-                if ts and (last_timestamp is None or ts > last_timestamp):
+                if ts and not rec_float.get("callKind") and (last_timestamp is None or ts > last_timestamp):
                     last_timestamp = ts
                     last_context_tokens = int(
                         (token_usage.get("inputTokens") or 0)
@@ -2749,6 +2772,9 @@ async def _get_all_message_metadata_cloud(session_id: str, user_id: str, table_n
             # Extract message_id as integer (DynamoDB returns Decimal, convert to int then str)
             # Must convert to int first to avoid "0.0" -> "0" mismatch
             message_id_raw = item_float.get("messageId")
+            if message_id_raw is None:
+                # A call that produced no message (a handoff brief): nothing to join it to.
+                continue
             message_id = str(int(message_id_raw)) if isinstance(message_id_raw, (int, float)) else str(message_id_raw)
 
             logger.debug(f"Processing cost record for message_id={message_id}, SK={item_float.get('SK')}")

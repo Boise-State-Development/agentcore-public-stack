@@ -77,7 +77,7 @@ import { ToastService, ToastType } from '../../services/toast/toast.service';
                   </p>
                 }
                 @if (toast.action; as action) {
-                  <div class="mt-3 flex">
+                  <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1">
                     <button
                       type="button"
                       (click)="runAction(toast.id, action.handler)"
@@ -85,6 +85,15 @@ import { ToastService, ToastType } from '../../services/toast/toast.service';
                     >
                       {{ action.label }}
                     </button>
+                    @if (toast.secondaryAction; as secondary) {
+                      <button
+                        type="button"
+                        (click)="runAction(toast.id, secondary.handler)"
+                        class="rounded-md text-sm text-gray-700 hover:underline focus:outline-2 focus:outline-offset-2 focus:outline-primary-accessible dark:text-gray-300 dark:focus:outline-primary-50"
+                      >
+                        {{ secondary.label }}
+                      </button>
+                    }
                   </div>
                 }
               </div>

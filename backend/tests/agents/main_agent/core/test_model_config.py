@@ -375,6 +375,88 @@ class TestToBedrockConfig:
         assert "thinking" in arf
 
 
+class TestThinkingBinding:
+    """5.5-generation models get `drop_block` so a compaction ahead of a
+    replayed thinking block never 400s on an enforcing account.
+
+    Strands' own retry needs a `thinking` dict on the request, and Haiku 5.5
+    thinks by default without one, so the binding is set up front. Probed on
+    dev 2026-11-03: the beta is required ("Extra inputs are not permitted"
+    without it), and `{type: "enabled"}` is rejected.
+    """
+
+    _BINDING = {"prefix_mismatch_behavior": "drop_block"}
+    _BETA = "thinking-binding-controls-2026-08-01"
+    _FGTS_BETA = "fine-grained-tool-streaming-2025-05-14"
+
+    @pytest.fixture(autouse=True)
+    def _mcp_apps_off(self, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "false")
+
+    def test_default_request_gets_adaptive_thinking_with_drop_block(self):
+        arf = ModelConfig(
+            model_id="us.anthropic.claude-haiku-5-5", inference_params={"effort": "medium"}
+        ).to_bedrock_config()["additional_request_fields"]
+
+        assert arf["thinking"] == {"type": "adaptive", "block_binding": self._BINDING}
+        assert arf["anthropic_beta"] == [self._BETA]
+        assert arf["output_config"] == {"effort": "medium"}
+
+    def test_global_profile_is_covered_too(self):
+        arf = ModelConfig(model_id="global.anthropic.claude-haiku-5-5").to_bedrock_config()[
+            "additional_request_fields"
+        ]
+        assert arf["thinking"]["block_binding"] == self._BINDING
+
+    def test_thinking_budget_shapes_adaptive_and_keeps_its_display(self):
+        arf = ModelConfig(
+            model_id="us.anthropic.claude-haiku-5-5", inference_params={"thinking": 4096}
+        ).to_bedrock_config()["additional_request_fields"]
+
+        assert arf["thinking"] == {
+            "type": "adaptive",
+            "display": "summarized",
+            "block_binding": self._BINDING,
+        }
+
+    def test_disabled_thinking_is_left_alone(self):
+        arf = ModelConfig(
+            model_id="us.anthropic.claude-haiku-5-5",
+            inference_params={"thinking": {"type": "disabled"}},
+        ).to_bedrock_config()["additional_request_fields"]
+
+        assert arf == {"thinking": {"type": "disabled"}}
+
+    def test_caller_set_binding_is_left_as_written(self):
+        own = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+        arf = ModelConfig(
+            model_id="us.anthropic.claude-haiku-5-5", inference_params={"thinking": own}
+        ).to_bedrock_config()["additional_request_fields"]
+
+        assert arf == {"thinking": own}
+
+    def test_merges_with_the_tool_streaming_beta(self, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "true")
+        arf = ModelConfig(model_id="us.anthropic.claude-haiku-5-5").to_bedrock_config()[
+            "additional_request_fields"
+        ]
+        assert arf["anthropic_beta"] == [self._BETA, self._FGTS_BETA]
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            # Has live conversations: adding it re-writes their prefixes, a
+            # priced decision tracked in the kaizen queue, not a side effect.
+            "us.anthropic.claude-opus-5-5",
+            "us.amazon.nova-micro-v1:0",
+        ],
+    )
+    def test_other_models_are_untouched(self, model_id):
+        result = ModelConfig(model_id=model_id).to_bedrock_config()
+        assert "additional_request_fields" not in result
+
+
 # ---------------------------------------------------------------------------
 # Req 1.8–1.9 — to_openai_config / to_gemini_config
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { AdminSkillService } from '../services/admin-skill.service';
 import { AdminSkill, SKILL_STATUSES } from '../models/admin-skill.model';
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import {
   SkillRoleDialogComponent,
   SkillRoleDialogData,
@@ -286,7 +286,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 export class SkillListPage {
   adminSkillService = inject(AdminSkillService);
   private dialog = inject(Dialog);
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
   readonly skillsResource = this.adminSkillService.skillsResource;
   readonly statuses = SKILL_STATUSES;
@@ -347,7 +347,7 @@ export class SkillListPage {
   }
 
   getRoleDisplayName(roleId: string): string {
-    return this.appRolesService.getRoleById(roleId)?.displayName ?? roleId;
+    return this.roleOptionsService.getRoleById(roleId)?.displayName ?? roleId;
   }
 
   getStatusClass(status: string): string {

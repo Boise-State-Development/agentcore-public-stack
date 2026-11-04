@@ -66,6 +66,27 @@ export interface AppRoleListResponse {
 }
 
 /**
+ * A role as a picker shows it: who it is, never what it grants.
+ *
+ * Served by `GET /admin/roles/picker-options` to any delegated admin, which is
+ * why it has no grant fields — the full {@link AppRole} is `system_admin`-only.
+ */
+export interface AppRoleOption {
+  roleId: string;
+  displayName: string;
+  description: string;
+  enabled: boolean;
+}
+
+/**
+ * Every role, highest priority first, then by id.
+ */
+export interface AppRoleOptionListResponse {
+  roles: AppRoleOption[];
+  total: number;
+}
+
+/**
  * Request model for creating a new AppRole.
  */
 export interface AppRoleCreateRequest {

@@ -64,6 +64,29 @@ def get_prefix_fingerprint(agent: Any, index: Optional[int] = None) -> Optional[
     return None
 
 
+def compute_prefix_fingerprint(tool_specs: Any, system_prompt: Any, messages: List[Any]) -> Dict[str, Any]:
+    """The three prefix hashes for one model call's request, plus its message count.
+
+    The hook's computation, callable without a hook: a handoff brief (agent-handoffs-and-consults.md
+    §4.5.1) calls the model directly, runs no hooks, and records the same hashes so its ``C#`` row
+    can prove it reused the source turn's cache.
+    """
+    # System prompt may be a plain string or structured content blocks
+    # (SystemContentBlock list, used to place cache points).
+    if isinstance(system_prompt, str) or system_prompt is None:
+        system_hash = fingerprint_text(system_prompt)
+    else:
+        system_hash = fingerprint_canonical_json(system_prompt)
+    return {
+        "toolConfigHash": fingerprint_canonical_json(tool_specs),
+        "systemPromptHash": system_hash,
+        # History *prefix*: everything except the newest message. For
+        # a cache hit this must equal the previous call's full history.
+        "historyHash": fingerprint_canonical_json(messages[:-1]),
+        "messageCount": len(messages),
+    }
+
+
 class PrefixFingerprintHook(HookProvider):
     """Compute toolConfig / system-prompt / history hashes per model call."""
 
@@ -74,25 +97,11 @@ class PrefixFingerprintHook(HookProvider):
         try:
             agent = event.agent
 
-            tool_specs = agent.tool_registry.get_all_tool_specs()
-            system_prompt = getattr(agent, "system_prompt", None)
-            messages = list(getattr(agent, "messages", None) or [])
-
-            # System prompt may be a plain string or structured content blocks
-            # (SystemContentBlock list, used to place cache points).
-            if isinstance(system_prompt, str) or system_prompt is None:
-                system_hash = fingerprint_text(system_prompt)
-            else:
-                system_hash = fingerprint_canonical_json(system_prompt)
-
-            fingerprint = {
-                "toolConfigHash": fingerprint_canonical_json(tool_specs),
-                "systemPromptHash": system_hash,
-                # History *prefix*: everything except the newest message. For
-                # a cache hit this must equal the previous call's full history.
-                "historyHash": fingerprint_canonical_json(messages[:-1]),
-                "messageCount": len(messages),
-            }
+            fingerprint = compute_prefix_fingerprint(
+                agent.tool_registry.get_all_tool_specs(),
+                getattr(agent, "system_prompt", None),
+                list(getattr(agent, "messages", None) or []),
+            )
 
             fingerprints = getattr(agent, _FINGERPRINTS_ATTR, None)
             if fingerprints is None:

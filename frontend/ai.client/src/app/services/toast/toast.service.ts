@@ -26,6 +26,7 @@ export interface ToastMessage {
   dismissible: boolean;
   timestamp: Date;
   action?: ToastAction;
+  secondaryAction?: ToastAction;
 }
 
 /**
@@ -38,6 +39,8 @@ export interface ToastOptions {
   dismissible?: boolean;
   /** Optional button rendered in the toast (e.g. "Refresh") */
   action?: ToastAction;
+  /** A second, quieter button after `action` (e.g. an offer that is not the toast's point) */
+  secondaryAction?: ToastAction;
 }
 
 const DEFAULT_DURATION = 5000;
@@ -151,7 +154,8 @@ export class ToastService {
       duration,
       dismissible,
       timestamp: new Date(),
-      action: options?.action
+      action: options?.action,
+      secondaryAction: options?.secondaryAction
     };
 
     this.toastsSignal.update(toasts => [...toasts, toast]);

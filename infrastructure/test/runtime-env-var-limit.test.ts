@@ -55,7 +55,7 @@ describe('AgentCore Runtime environment variable ceiling', () => {
         enabled: true,
         defaultQuotaHours: 0,
       },
-      handoffs: { enabled: true },
+      handoffs: { enabled: true, briefEnabled: true },
       sessionRewind: { enabled: true },
       sessionFork: { enabled: true },
       tokenExchange: {
