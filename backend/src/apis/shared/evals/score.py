@@ -40,6 +40,10 @@ _REFUSAL_RE = re.compile("|".join(REFUSAL_PATTERNS), re.IGNORECASE)
 
 def normalize(text: str) -> str:
     text = (text or "").translate(_QUOTES).lower()
+    # `{,}` is LaTeX's thousands separator: models that write math in KaTeX
+    # (Haiku 5.5 does) answer `39{,}168{,}090{,}127`, which renders as
+    # 39,168,090,127. Without this the comma strip below leaves `{}` behind.
+    text = text.replace("{,}", ",")
     text = text.replace(",", "")
     return re.sub(r"\s+", " ", text).strip()
 
