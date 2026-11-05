@@ -463,11 +463,17 @@ class UserRepository:
             or item.get("GSI2SK")  # EmailDomainIndex sort key
             or item.get("createdAt", "")
         )
+        # StatusLoginIndex does not project ``status``, but its partition key is the
+        # status, and keys are always projected. Without this every suspended or
+        # inactive row listed from that index read as "active".
+        status = item.get("status")
+        if not status and str(item.get("GSI3PK", "")).startswith("STATUS#"):
+            status = item["GSI3PK"].removeprefix("STATUS#")
         return UserListItem(
             user_id=item["userId"],
             email=item["email"],
             name=item.get("name", ""),
-            status=item.get("status", "active"),
+            status=status or "active",
             last_login_at=last_login,
             email_domain=item.get("emailDomain")
         )

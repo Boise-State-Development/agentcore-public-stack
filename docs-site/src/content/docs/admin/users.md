@@ -11,6 +11,31 @@ This page is a scaffolded placeholder — content to be written.
 
 Identity & Access group. Browse users and inspect their detail/sessions; backed by `admin/users` and the `/admin/users` pages.
 
+## Finding a user
+
+The **User Lookup** search box matches part of a name, an email or a user ID,
+ignoring case and accents, and starts a search once you stop typing (Enter
+searches at once). Results are ranked exact match first, then matches at the
+start of a name or email, then matches anywhere, then near misses, so a small
+typo such as `osacr filson` still finds Oscar Filson. Within each group the most
+recent sign-in comes first.
+
+- The **status** filter (all, active, inactive, suspended) and the **domain**
+  filter (shown when users come from more than one email domain) apply to the
+  search as well as to the plain list. Every row is labelled with its status.
+- **Load More** pages through every match, not just the first page of users.
+- Searching a whole email lists every profile for it. When more than one
+  profile shares an email, the one marked **Signs in** is the live account and
+  the others are leftovers from an earlier login setup.
+
+The search works on a copy of the user list held in each app-api task. It is
+re-read from the users table at most once a minute, and only while admins use
+the page. One read costs a fraction of a cent even with 100,000 users, and
+needs no extra AWS resources. A user who signed in for the first time a moment
+ago may take up to a minute to show up, except that searching their whole email
+always finds them. `ADMIN_USER_INDEX_MAX_ROWS` (default 100,000) caps how many
+profiles the copy holds.
+
 ## Direct access
 
 With direct user grants on (the default; `CDK_USER_GRANTS_ENABLED=false` and

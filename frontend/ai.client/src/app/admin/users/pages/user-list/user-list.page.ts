@@ -1,11 +1,15 @@
 import {
   Component,
   ChangeDetectionStrategy,
+  DestroyRef,
   inject,
   OnInit,
+  signal,
 } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
+import { Subject, debounceTime } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroMagnifyingGlass,
@@ -16,9 +20,18 @@ import {
   heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
 import { UserStateService } from '../../services/user-state.service';
-import { UserListItem, UserStatus } from '../../models';
+import { UserListItem, UserStatus, UserStatusFilter } from '../../models';
 import { parseIso } from '../../../../utils/date';
 import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
+
+/** Pause after the last keystroke before searching. */
+export const SEARCH_DEBOUNCE_MS = 300;
+
+const STATUS_LABELS: Record<UserStatus, string> = {
+  active: 'Active',
+  inactive: 'Inactive',
+  suspended: 'Suspended',
+};
 
 @Component({
   selector: 'app-user-list',
@@ -40,40 +53,81 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
 
     <!-- Search Bar -->
     <div class="mb-6">
+      <label for="user-search" class="sr-only">Search users by name or email</label>
       <div class="relative">
         <ng-icon
           name="heroMagnifyingGlass"
           class="absolute left-3 top-1/2 -translate-y-1/2 size-5 text-gray-400"
+          aria-hidden="true"
         />
         <input
-          type="email"
-          [(ngModel)]="searchEmail"
-          (keyup.enter)="search()"
-          placeholder="Search by email address..."
-          class="w-full pl-10 pr-10 py-2 bg-white border border-gray-300 rounded-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-800 dark:border-gray-500 dark:text-white dark:placeholder-gray-400"
+          id="user-search"
+          type="search"
+          autocomplete="off"
+          spellcheck="false"
+          [ngModel]="searchText()"
+          (ngModelChange)="onSearchInput($event)"
+          (keydown.enter)="searchNow()"
+          placeholder="Search by name or email..."
+          class="w-full pl-10 pr-16 py-2 bg-white border border-gray-300 rounded-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-800 dark:border-gray-500 dark:text-white dark:placeholder-gray-400 [&::-webkit-search-cancel-button]:hidden"
         />
-        @if (searchEmail) {
-          <button
-            (click)="clearSearch()"
-            class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-          >
-            <ng-icon name="heroXMark" class="size-5" />
-          </button>
-        }
+        <div class="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+          @if (state.loading() && (state.isSearching() || searchText())) {
+            <app-spinner size="sm" label="Searching" />
+          }
+          @if (searchText()) {
+            <button
+              type="button"
+              (click)="clearSearch()"
+              aria-label="Clear search"
+              class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-xs focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary-accessible"
+            >
+              <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
+            </button>
+          }
+        </div>
       </div>
     </div>
 
     <!-- Filters -->
-    <div class="flex gap-4 mb-6">
+    <div class="flex flex-wrap items-center gap-4 mb-6">
+      <label for="user-status-filter" class="sr-only">Status</label>
       <select
+        id="user-status-filter"
         [ngModel]="state.statusFilter()"
         (ngModelChange)="onStatusChange($event)"
         class="px-3 py-2 bg-white border border-gray-300 rounded-sm dark:bg-gray-800 dark:border-gray-500 dark:text-white"
       >
-        <option value="active">Active Users</option>
-        <option value="inactive">Inactive Users</option>
-        <option value="suspended">Suspended Users</option>
+        <option value="all">All statuses</option>
+        <option value="active">Active users</option>
+        <option value="inactive">Inactive users</option>
+        <option value="suspended">Suspended users</option>
       </select>
+
+      @if (state.domains().length > 1) {
+        <label for="user-domain-filter" class="sr-only">Email domain</label>
+        <select
+          id="user-domain-filter"
+          [ngModel]="state.domainFilter() ?? ''"
+          (ngModelChange)="onDomainChange($event)"
+          class="px-3 py-2 bg-white border border-gray-300 rounded-sm dark:bg-gray-800 dark:border-gray-500 dark:text-white"
+        >
+          <option value="">All domains</option>
+          @for (domain of state.domains(); track domain) {
+            <option [value]="domain">{{ domain }}</option>
+          }
+        </select>
+      }
+
+      @if (state.totalCount() !== null && !state.hasError()) {
+        <p class="text-sm/6 text-gray-600 dark:text-gray-400" aria-live="polite">
+          @if (state.showingResults()) {
+            {{ state.totalCount() }} {{ state.totalCount() === 1 ? 'match' : 'matches' }}
+          } @else {
+            {{ state.totalCount() }} {{ state.totalCount() === 1 ? 'user' : 'users' }}
+          }
+        </p>
+      }
     </div>
 
     <!-- Error State -->
@@ -117,7 +171,11 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
     }
 
     <!-- User List -->
-    <div class="space-y-2">
+    <div
+      class="space-y-2 transition-opacity motion-reduce:transition-none"
+      [class.opacity-60]="state.loading() && state.users().length > 0"
+      [attr.aria-busy]="state.loading()"
+    >
       @for (user of state.users(); track user.userId; let first = $first) {
         <div
           (click)="viewUser(user)"
@@ -137,7 +195,7 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">
               <span class="font-medium truncate">{{ user.email }}</span>
-              @if (state.emailMatchCount() > 1) {
+              @if (isDuplicateRow(user)) {
                 <span
                   class="px-2 py-0.5 text-xs rounded-xs shrink-0"
                   [class]="first ? 'bg-state-success-100 text-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-400' : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'"
@@ -145,19 +203,17 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
                   {{ first ? 'Signs in' : 'Duplicate' }}
                 </span>
               }
-              @if (user.status !== 'active') {
-                <span
-                  class="px-2 py-0.5 text-xs rounded-xs shrink-0"
-                  [class]="getStatusClass(user.status)"
-                >
-                  {{ user.status }}
-                </span>
-              }
+              <span
+                class="px-2 py-0.5 text-xs rounded-xs shrink-0"
+                [class]="getStatusClass(user.status)"
+              >
+                {{ statusLabel(user.status) }}
+              </span>
             </div>
             <div class="text-sm/6 text-gray-500 dark:text-gray-400">
               {{ user.name || 'No name' }} &middot; Last login:
               {{ formatDate(user.lastLoginAt) }}
-              @if (state.emailMatchCount() > 1) {
+              @if (isDuplicateRow(user)) {
                 &middot; ID: <span class="font-mono">{{ user.userId }}</span>
               }
             </div>
@@ -183,11 +239,21 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
     </div>
 
     <!-- Empty State -->
-    @if (state.users().length === 0 && !state.loading()) {
-      <div class="text-center py-12 text-gray-500">
-        <ng-icon name="heroUser" class="size-12 mx-auto mb-4 text-gray-300" />
-        <p class="text-lg/7">No users found</p>
-        <p class="text-sm/6">Try adjusting your search or filters</p>
+    @if (state.users().length === 0 && !state.loading() && !state.hasError()) {
+      <div class="text-center py-12 text-gray-500 dark:text-gray-400" role="status">
+        <ng-icon name="heroUser" class="size-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" aria-hidden="true" />
+        @if (state.showingResults()) {
+          <p class="text-lg/7">No users match “{{ state.resultQuery() }}”</p>
+          <p class="text-sm/6">
+            Check the spelling or try part of a name or email.
+            @if (state.statusFilter() !== 'all' || state.domainFilter()) {
+              The status and domain filters also apply.
+            }
+          </p>
+        } @else {
+          <p class="text-lg/7">No users found</p>
+          <p class="text-sm/6">Try adjusting your filters</p>
+        }
       </div>
     }
 
@@ -195,11 +261,13 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
     @if (state.hasMore()) {
       <div class="mt-6 text-center">
         <button
+          type="button"
           (click)="loadMore()"
           [disabled]="state.loading()"
-          class="px-4 py-2 text-primary-accessible hover:underline disabled:opacity-50 dark:text-primary-accessible-dark"
+          class="inline-flex items-center gap-2 px-4 py-2 text-primary-accessible hover:underline disabled:opacity-50 dark:text-primary-accessible-dark"
         >
           @if (state.loading()) {
+            <app-spinner size="sm" label="Loading more users" />
             Loading...
           } @else {
             Load More
@@ -212,28 +280,51 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
 export class UserListPage implements OnInit {
   state = inject(UserStateService);
   private router = inject(Router);
+  private destroyRef = inject(DestroyRef);
 
-  searchEmail = '';
+  /** What is typed in the box; the list follows it after a short pause, or at once on Enter. */
+  searchText = signal(this.state.searchQuery());
+  private searchInput$ = new Subject<string>();
 
   ngOnInit(): void {
+    this.searchInput$
+      .pipe(debounceTime(SEARCH_DEBOUNCE_MS), takeUntilDestroyed(this.destroyRef))
+      .subscribe((text) => {
+        if (text.trim() !== this.state.searchQuery()) {
+          this.state.search(text);
+        }
+      });
+
     this.state.loadUsers(true);
+    this.state.loadDomains();
   }
 
-  search(): void {
-    if (this.searchEmail.trim()) {
-      this.state.searchByEmail(this.searchEmail.trim());
-    } else {
-      this.state.loadUsers(true);
-    }
+  onSearchInput(text: string): void {
+    this.searchText.set(text ?? '');
+    this.searchInput$.next(text ?? '');
+  }
+
+  /** Enter searches without waiting for the debounce. */
+  searchNow(): void {
+    this.state.search(this.searchText());
   }
 
   clearSearch(): void {
-    this.searchEmail = '';
+    this.searchText.set('');
     this.state.clearSearch();
   }
 
-  onStatusChange(status: UserStatus): void {
+  onStatusChange(status: UserStatusFilter): void {
     this.state.setStatusFilter(status);
+  }
+
+  onDomainChange(domain: string): void {
+    this.state.setDomainFilter(domain || null);
+  }
+
+  /** A row among several profiles sharing the searched email exactly. */
+  isDuplicateRow(user: UserListItem): boolean {
+    return this.state.emailMatchCount() > 1 && user.email.toLowerCase() === this.state.exactEmail();
   }
 
   viewUser(user: UserListItem): void {
@@ -265,6 +356,10 @@ export class UserListPage implements OnInit {
     } else {
       return date.toLocaleDateString();
     }
+  }
+
+  statusLabel(status: UserStatus): string {
+    return STATUS_LABELS[status] ?? status;
   }
 
   getStatusClass(status: UserStatus): string {
