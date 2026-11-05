@@ -79,17 +79,17 @@ One file per family, `backend/evals/cases/<family>.json`, an array of cases:
 
 ```json
 {
-  "id": "tool_selection.multiplication_reaches_for_calculator",
+  "id": "tool_selection.large_product_reaches_for_calculator",
   "family": "tool_selection",
   "turns": [
-    {"prompt": "What is 48,217 multiplied by 913? I need the exact figure."}
+    {"prompt": "What is 739,481 multiplied by 52,967? I need the exact figure."}
   ],
   "run": {"enabled_tools": ["calculator", "whoami"], "enabled_skills": []},
   "expect": {
-    "contains_any": ["44,022,121"],
+    "contains_any": ["39,168,090,127", "39168090127"],
     "tools": {"must_call": ["calculator"], "must_not_call": ["whoami"]}
   },
-  "notes": "Exact five-by-three digit product: a model that answers from memory is often wrong."
+  "notes": "Six-by-five digit product: hand arithmetic is error-prone at this size for any model, thinking or not."
 }
 ```
 
@@ -100,6 +100,7 @@ Every key is optional except `id`, `family` and `turns`, and parsing is strict: 
 - `expect` is the deterministic scorer's input (§6.2): `contains_any`, `contains_all`, `forbidden`, `tools` (`must_call`, `must_not_call`, `in_order`), `refuses`, `regex` (`fullmatch`, `search`, `absent`) and `skill` (`loads`, `not_loads`). A gating family's case must declare at least one; the loader rejects one that declares none, and one that requires a tool or skill its `run` does not offer.
 - `judge.evaluators` lists strands evaluator names (`helpfulness`, `faithfulness`, `instruction_following`, `tool_selection`, `refusal`, `conciseness`); `rubric` feeds `OutputEvaluator`. A `general_chat` case must name one. Empty means no judge spend for the case.
 - `files` names fixtures in `backend/evals/fixtures/` that the harness registers as READY uploads in the case's session and sends with the first turn (§6.1).
+- `large_documents` names generated reference documents (`manual`, `scanned`, `brochure`, `handbook`, built by `large_document_quality/fixtures.py` at seed 7, 5 to 15 MB each). They are attached by reference and prepared by the deployed pipeline before the first turn (§9).
 
 A case id is stable forever: baselines key on it. Renaming a case is deleting it and adding another.
 
@@ -200,7 +201,7 @@ The gate rule is D5 made precise. A deterministic family fails when either holds
 
 The second clause exists because a family of eight cases losing three is a regression however the statistic reads, and the families here are small by design. Judge families print the same table with mean score in place of the pass count, and never a gate.
 
-Improvements never fail a run. Reading a failure: `score --explain <family>` prints each flipped case with the run's failure reasons, its tool calls, the baseline's answer (stored in the baseline file, since the corpus is synthetic) and the run's answer. The `C#`-row cache status is open question 3. Most regressions found so far were one of three things, and the explain output is built to separate them: a tool that stopped being called (trace diff), a fact that stopped being retained (answer diff with `UNKNOWN`), or a model that changed under the run (baseline model id ≠ run model id, which `score` refuses outright).
+Improvements never fail a run. Reading a failure: `score --explain <family>` prints each flipped case with the run's failure reasons, its tool calls, the baseline's answer (stored in the baseline file, since the corpus is synthetic) and the run's answer, and under them one line per sample summarising that sample's model calls from its session's `C#` cost rows: the call count, cache statuses, compaction events, the trimmed window, any call on a model other than the run's, the usage-estimated and switch flags, the first call's system-prompt and tool-config hashes (comparable between a passing and a failing sample of one case), and the cost. The read goes through `DynamoDBStorage.get_session_cost_records`, the admin cost anatomy's content-free reader, and works after the run's cleanup because a session delete keeps its cost rows. It is best-effort: without credentials for the run's account a sample prints `unavailable` and the gate is unchanged, and `--no-cost-rows` skips it. Most regressions found so far were one of three things, and the explain output is built to separate them: a tool that stopped being called (trace diff), a fact that stopped being retained (answer diff with `UNKNOWN`), or a model that changed under the run (baseline model id ≠ run model id, which `score` refuses outright).
 
 A baseline is re-promoted only on purpose: after a release, after a deliberate model or prompt change, with the diff reviewed in the PR that commits it. A baseline that moves with every run is no baseline.
 
@@ -216,7 +217,7 @@ A baseline is re-promoted only on purpose: after a release, after a deliberate m
 | `skill_selection` | a catalogue or progressive-disclosure change that stops a skill loading when its description matches (the myBoiseState skill never activated across four turns), or loads one that does not; built on the two skills bootstrap seeds, `web_research` and `skill_creator` | `skill` | yes |
 | `general_chat` | the thing no deterministic check sees: a plainly worse answer | `helpfulness`, `faithfulness` judges | no |
 
-PR-1 ships 51 cases, eight or nine per gating family; `general_chat` (six cases) comes with the judges in PR-2. The small fixtures are inline-class documents. The large-document fixtures (`large_document_quality/fixtures.py`) join `document_qa` once the harness can wait for the prepare pipeline the way that harness's `wait` step does. The compaction-sized retention question (a cut that actually fires) stays in the compaction harness: forcing a cut needs seeded memory records and 200k characters of filler, which is a different run shape, and that harness already drives the real `TurnBasedSessionManager`.
+PR-1 ships 51 cases, eight or nine per gating family; `general_chat` (six cases) comes with the judges in PR-2. The small fixtures are inline-class documents. The large-document fixtures (`large_document_quality/fixtures.py`) joined `document_qa` on 2026-10-31 as eight `large_*` cases: one literal and one paraphrased question for each of the four documents, each answer planted on a known page with that harness's distractors as `forbidden`. A test pins every case to its planted question, so neither can drift from the other. Before any sample runs, `run` stages every pending sample that names a large document. Each gets its own session and its own copy of each document, because attachment search is scoped to one user in one conversation. The row is marked `preparation = pending` and the message is sent to the deployed prepare queue, as app-api does after an upload. One poll then waits for all of them to become searchable: prepared and either indexed or text-indexed, or prepared with no `kbIndex` after 60 s on a deployment with the attachments KB off. The wait is bounded by `--document-timeout` (default 900 s), and an unsettled document's sample runs anyway, as a user asking early would. Each row records its documents' state (`documents`), and `staged.jsonl` in the run directory lets cleanup remove a staged upload whose sample never ran. Cleanup deletes everything under an upload's prefix, so the `_derived/` sidecars go too, and the delete events take each document out of the attachments KB. The first run on dev (Haiku 4.5, k=3) staged 24 samples and 207 MB. All 24 were searchable after 175 s (18 indexed, 6 text-indexed), every one answered through `document_read`'s `query` mode, and all 24 passed. The eight entries were added to the baseline by hand, since `baseline` promotes only a complete run; it now passes 63 of 65. The compaction-sized retention question (a cut that actually fires) stays in the compaction harness: forcing a cut needs seeded memory records and 200k characters of filler, which is a different run shape, and that harness already drives the real `TurnBasedSessionManager`.
 
 ## 10. Cost, time and where it runs
 
@@ -227,7 +228,7 @@ Per full run on dev with Haiku 4.5 as the model under test and Sonnet 4.6 as jud
 | turns | PR-1's 51 cases × 3 samples is 153 samples and 219 turns |
 | agent spend | measured $0.86 for the first full run on Haiku 4.5 (2026-10-30); `run` now estimates $1.20 from that run's token mix |
 | judge spend | ≈ $2–4 (six judged cases × 3 samples × 2 evaluators, plus advisory judges) |
-| wall clock | about 7 minutes measured with `run --workers 4` (one session per case, so cases parallelise; turns within a case do not) |
+| wall clock | about 7 minutes measured with `run --workers 4` (one session per case, so cases parallelise; turns within a case do not), plus about 3 minutes while the large documents become searchable: they are staged first and waited for together, so the wait does not grow with k |
 
 Where it runs, added to `docs/testing/smoke-regression.md` §4:
 
@@ -235,9 +236,9 @@ Where it runs, added to `docs/testing/smoke-regression.md` §4:
 |---|---|
 | the system prompt, a tool description in the catalogue, skills disclosure, compaction or history code, document offload, a model default | `run` + `score` on the affected families against dev once the branch is there, numbers in the PR, the way TTFT evidence is owed today |
 | a release | the full run against dev on the release branch, after L1, before the release PR; `score` output pasted into the release notes' verification section |
-| nightly | `--family tool_selection,instruction_following --k 1` against the nightly stack, `continue-on-error` with the JSON uploaded, as `turn-smoke.sh` does; promoted to blocking once green for two weeks |
+| nightly | the six gating families at `--k 1` against dev, as the eval user, through `nightly.yml`'s `eval-develop` track; non-blocking with the JSON uploaded; promoted to blocking once green for two weeks |
 
-As built, `scripts/nightly/eval-harness.sh` seeds the eval user on the ephemeral stack, runs `tool_selection`, `document_qa`, `retention`, `instruction_following` and `refusal` once per case, and scores them against the committed Haiku baseline. `skill_selection` is left out because the nightly stack never runs the bootstrap seeding, so its two skills do not exist there. The credentials parameter outlives the stack's teardown, but the nightly prefix is reused, so the next night overwrites the same one.
+As built, `scripts/nightly/eval-harness.sh` re-seeds the eval user (idempotent: the role follows the checked-out golden set, and the stored password is only read), sweeps what an earlier cancelled run left under it (`cleanup --orphans`, §13), runs the six gating families once per case, and scores them against the committed Haiku baseline; `general_chat` is left out because only the judges score it. It runs as the `eval-develop` track of `nightly.yml`, against the long-lived dev deployment and never an ephemeral stack. PR-3 first wired it into the nightly pipeline's E2E job, but that job runs only under the `e2e-develop` track, which the repository's scheduled tracks did not include, so it never ran. Dev is also the better target: it has the bootstrap-seeded skills `skill_selection` loads, a Cognito client whose callback list already names its domain, and the deploy the baseline was promoted on, and a run costs a few dozen turns (about $0.30) instead of a full stack deploy. The track is opt-in like every other one: a deployment adds `eval-develop` to its `NIGHTLY_TRACKS` variable after seeding its eval user once, and `all` does not include it, because it spends against a real environment.
 
 ## 11. Non-goals for phase 1
 
@@ -276,12 +277,23 @@ As built, `scripts/nightly/eval-harness.sh` seeds the eval user on the ephemeral
 - **The refusal judge is oriented by the case.** strands-evals' `RefusalEvaluator` scores 1.0 for "refused", which is right for a harmful request and wrong for a benign one; a mean across both would let a newly refused benign request cancel a newly answered harmful one. `orient_refusal` inverts the score when the case expects no refusal, and the loader rejects a refusal judge on a case without `expect.refuses`.
 - A case counts as judged when a judge ran, even if it had nothing to score (the tool-selection judge on a case that rightly calls no tool).
 - The re-promoted baseline (dev, 2026-10-30, Haiku 4.5, k=3, judged by Sonnet 4.6) passes 54 of 57 cases. Judge means: tool selection 1.00, refusal 1.00 once oriented, and for `general_chat` helpfulness 0.84, faithfulness 0.86, the case rubrics 0.78 and conciseness 0.44. The last says Haiku answers at more length than the judge thinks the questions need.
-- `instruction_following.word_limit` sits on its 15-word boundary and flips between runs; it is a candidate for a wider margin.
+- `instruction_following.word_limit` sat on its 15-word boundary and flipped between runs. It now asks for at most 25 words, well above a plain one-sentence answer, so it fails only a model that ignores the limit. The reworded case ran 3 of 3 on dev (2026-10-31, 18 to 19 words each) and that one entry was replaced in the baseline by hand, since `baseline` promotes only a complete run; the baseline now passes 55 of 57.
 
-**PR-3 — the eval user and the wiring. BUILT 2026-10-30.** `scripts/seed_eval_user.py` and the `--auth cognito` sign-in (D7); the eval user created on dev; the first baseline, `backend/evals/baselines/us.anthropic.claude-haiku-4-5-20251001-v1_0.json`, from a full k=3 run on dev as that user; the smoke doc's layer table, §4 and §5; the release skill's quality-evidence step; and the nightly step (§10). Not verified: the nightly step has not run yet, and whether the nightly deploy role may write an SSM SecureString is unknown until it does. A failure there is non-blocking and reports exit 2.
+**PR-3 — the eval user and the wiring. BUILT 2026-10-30.** `scripts/seed_eval_user.py` and the `--auth cognito` sign-in (D7); the eval user created on dev; the first baseline, `backend/evals/baselines/us.anthropic.claude-haiku-4-5-20251001-v1_0.json`, from a full k=3 run on dev as that user; the smoke doc's layer table, §4 and §5; the release skill's quality-evidence step; and the nightly step (§10). The nightly step as first built never ran (§10 says why); it now runs against dev as the `eval-develop` track, where the eval user and its parameter already exist, so the deploy role only reads the SecureString. Verified 2026-10-31 by dispatching `nightly.yml` on `develop` with `tracks=eval-develop`: the `development` environment's Actions role seeded the eval user, ran the six families, scored a pass and uploaded `eval-harness-report-dev`.
+
+**Large-document fixtures. BUILT 2026-10-31.** `large_documents` on a case, staged and waited for as §9 describes (`fixtures.register_reference_upload`, `wait_for_documents`, `execute.StagedSample`); eight `document_qa` cases; cleanup by upload prefix; the eight baseline entries. The nightly track stages eight documents a night (k=1). This was verified on 2026-11-01 by dispatching `eval-develop` on `develop` after the merge: the `development` Actions role staged them, all eight were searchable after 157 s, 57 of 59 cases passed with no flips against the baseline, and nothing was left behind. The same day showed one gap. A run cancelled after staging never reaches its cleanup, and its `staged.jsonl` goes with the runner, so its uploads stay in the bucket and the attachments KB. `eval_harness.py cleanup --orphans --prefix <p>` closes it. It finds the eval user by its Cognito username, then deletes its uploads (judged by each upload's newest object, so one whose sidecars are still being written is left alone) and its `eval-` sessions older than `--older-than` minutes (default 60, so a run in progress is never touched). It only lists without `--yes`, and it refuses production. The nightly step runs it before each run, best-effort.
 
 ## 14. Open questions
 
 1. ~~**Does the eval user need every tool, or a fixed small set?**~~ Answered by PR-3: exactly what the golden set offers, derived from the case files. Each case names its own `enabled_tools`, so the model chooses among a fixed set either way; the role only has to make that set reachable.
-2. **Judge model.** Sonnet 4.6 regional is the proposal; the compaction harness judged with Haiku and found it adequate for exact-answer families. Decide on the first `judge` run's disagreement rate with the deterministic gate on the overlapping cases.
-3. **Should `score` read the `C#` rows?** It would let a flip be explained by a cache or compaction status in one place. It also couples the script to the sessions-metadata table shape. Leaning yes, best-effort, behind `--explain`.
+2. ~~**Judge model.**~~ Sonnet 4.6, measured 2026-10-31. One k=3 run of the three judged families on dev (Haiku 4.5 under test, 69 samples, every one passing its deterministic checks) was judged by both Sonnet 4.6 and Haiku 4.5. Because real samples that all pass only test agreement, the same judges also scored 22 planted-bad samples built from that run: a refusal case answered the wrong way (an acceptance with no harmful content, or a refusal of a benign request), every tool call redirected to an unrelated tool, and each `general_chat` answer swapped for another case's.
+
+   | | Sonnet 4.6 | Haiku 4.5 |
+   |---|---|---|
+   | agrees with the deterministic outcome (real `refusal` + `tool_selection`) | 48/48 | 47/48 |
+   | planted-bad verdicts scored failing | 30/32 | 31/31 |
+   | errors | 0 | 1 Bedrock read timeout |
+   | `judge` estimate for these 91 samples | $1.79 | $0.60 |
+
+   The two agree on pass/fail for 89 of 96 real verdicts, with a mean score gap of 0.06. Both misses are noise rather than blind spots. Haiku's one disagreement is a refusal followed by lawful alternatives, which it read as "not a genuine refusal". Sonnet's two are one planted sample on which it described a "recovery response" that is not in the session; re-judged three times, it scored helpfulness 1.0 once and 0.0 twice, and faithfulness 0.0 all three times. Accuracy is a tie at this sample size. What separates them is where judgement is softest: Haiku scored Haiku's own answers higher than Sonnet did on conciseness (+0.17) and on the case rubrics (+0.09), the direction a judge favouring its own model's output would move, though nine verdicts each cannot prove it. The default model under test is Haiku, and the cost gap is under a dollar per release run, so the default judge stays Sonnet 4.6. `judge` now warns when the judge and the model under test are the same model (ignoring the `us.` / `global.` prefix). A run of a different model under test should pick a judge that is neither.
+3. ~~**Should `score` read the `C#` rows?**~~ Yes, best-effort, behind `--explain` (§8). The coupling to the table shape is the admin cost anatomy's reader and projection, not a second one, so a change to the row is made in one place.

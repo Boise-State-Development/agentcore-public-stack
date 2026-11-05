@@ -9,7 +9,7 @@ the chat path's ``QuotaChecker.check_quota``, not to a status read).
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -74,3 +74,48 @@ class UserQuotaStatusResponse(BaseModel):
         description="Human-readable note about when the quota resets",
     )
     has_active_override: bool = Field(False, alias="hasActiveOverride")
+
+    # Quota extensions (docs/specs/quota-requests-and-extensions.md §7.4).
+    # ``monthlyLimit`` above is the *effective* limit — the denominator the
+    # bar and percentage run on — and these split it: ``baseLimit`` is the
+    # tier (or override) and each extension sits on top. ``effectiveLimit`` is
+    # None under an uncapped standing extension.
+    base_limit: Optional[float] = Field(None, alias="baseLimit")
+    effective_limit: Optional[float] = Field(None, alias="effectiveLimit")
+    extensions: List["QuotaStatusExtension"] = Field(default_factory=list)
+    charged: Optional["QuotaStatusCharged"] = None
+    # Populated only while QUOTA_REQUESTS_ENABLED is on.
+    open_request: Optional["QuotaStatusOpenRequest"] = Field(None, alias="openRequest")
+
+
+class QuotaStatusExtension(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
+
+    amount: Optional[float] = Field(None, description="Per period; None = uncapped standing")
+    valid_until: str = Field(..., alias="validUntil")
+    funding_mode: str = Field(..., alias="fundingMode")
+    standing: bool = False
+    funding_label: Optional[str] = Field(None, alias="fundingLabel")
+
+
+class QuotaStatusCharged(BaseModel):
+    """The funding-notice numbers, so the Usage page can draw the charged band."""
+
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
+
+    label: str
+    this_period: float = Field(..., alias="thisPeriod")
+    cap: Optional[float] = None
+
+
+class QuotaStatusOpenRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
+
+    request_id: str = Field(..., alias="requestId")
+    status: str
+    requested_amount: float = Field(..., alias="requestedAmount")
+    created_at: str = Field(..., alias="createdAt")
+    admin_note: Optional[str] = Field(None, alias="adminNote")
+
+
+UserQuotaStatusResponse.model_rebuild()

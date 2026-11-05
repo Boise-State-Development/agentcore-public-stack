@@ -1,8 +1,10 @@
-"""OAuth consent gate for external MCP tools.
+"""OAuth consent gate for OAuth-gated tools.
 
 Fires on every `BeforeToolCallEvent`. If the tool about to run is backed by
-an MCP server that requires user-federated OAuth (per the tool catalog),
-the hook ensures we have an access token in the in-process cache. If we
+a user-federated OAuth connector — an MCP server that requires one (per the
+tool catalog), or a first-party tool bound to one at build time
+(`agents.local_tools.oauth_binding`) — the hook ensures we have an access
+token in the in-process cache. If we
 don't, it calls `event.interrupt(...)` to pause the agent mid-turn and
 hand the authorization URL back to the caller.
 
@@ -10,7 +12,8 @@ When the user completes consent in the popup and the frontend resumes the
 turn, the hook fires a second time and `event.interrupt(...)` returns the
 user's response (instead of raising). At that point AgentCore Identity has
 the new token in its vault, so we re-fetch and warm the cache; the
-`OAuthBearerAuth` token provider then injects it on the next MCP request.
+`OAuthBearerAuth` token provider then injects it on the next MCP request,
+and a first-party tool reads it from the cache when it runs.
 
 The hook never aborts the turn on its own — `cancel_tool` is reserved for
 genuine refusal (e.g. consent declined). If the user closes the popup we

@@ -22,7 +22,10 @@ Subcommands:
             Advisory: no family gates on a judge.
   score     Compare --out with baselines/<model>.json. Exit 1 if a gating family
             regressed, 2 if the comparison cannot be made. --explain FAMILY
-            prints every flipped case with both answers. No AWS.
+            prints every flipped case with both answers and, best-effort,
+            each sample's model calls from its session's C# cost rows (cache
+            and compaction status, prompt hashes); that read is the only AWS
+            call, and --no-cost-rows skips it.
   baseline  Promote --out to baselines/<model>.json. Refuses unless every case
             in the golden set ran at the run's full k. No AWS.
   cleanup   Delete the sessions and fixture uploads recorded in --out.
@@ -33,11 +36,11 @@ Usage (from backend/):
     # As the eval user (seeded once per environment by scripts/seed_eval_user.py):
     AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-1 \
         --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
-        --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 --yes
+        --model-id us.anthropic.claude-haiku-5-5 --yes
     # As any other owner of an active headless grant:
     AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-1 \\
         --user-id <cognito-sub> --prefix dev-boisestateai-v2 \\
-        --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0            # estimate only
+        --model-id us.anthropic.claude-haiku-5-5            # estimate only
     AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-1 ... --yes
     uv run python scripts/eval_harness.py score --out /tmp/eval-1
     uv run python scripts/eval_harness.py score --out /tmp/eval-1 --explain tool_selection
@@ -79,6 +82,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from apis.shared.evals.cases import FAMILIES, CaseError, EvalCase, load_cases, required_grants  # noqa: E402
+from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
     ReportError,
     any_gate_failed,
@@ -104,6 +108,12 @@ BASELINES_DIR = BACKEND_DIR / "evals" / "baselines"
 RESULTS_FILE = "results.jsonl"
 META_FILE = "meta.json"
 JUDGEMENTS_FILE = "judgements.jsonl"
+#: Sessions created, and large documents uploaded, before their samples ran.
+#: Cleanup reads it too, so a run stopped between staging and running leaves nothing behind.
+STAGED_FILE = "staged.jsonl"
+#: The seed the large-document quality readouts used, so the documents are the
+#: ones those readouts measured (``large_document_quality/fixtures.py``).
+LARGE_DOCUMENT_SEED = 7
 #: A judge call carries the scrubbed session plus the evaluator's own prompt.
 #: Sized from strands-evals' built-in prompts; refine from the first run.
 EST_JUDGE_INPUT_TOKENS = 2_500
@@ -113,6 +123,7 @@ EST_JUDGE_OUTPUT_TOKENS = 300
 #: estimate. The catalog (curated-models.ts) is the source of truth.
 RATES: Dict[str, Tuple[float, float]] = {
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": (1.10, 5.50),
+    "us.anthropic.claude-haiku-5-5": (0.11, 0.55),
     "us.anthropic.claude-sonnet-4-6": (3.30, 16.50),
     "us.anthropic.claude-sonnet-5": (2.20, 11.00),
 }
@@ -378,6 +389,12 @@ async def cmd_run(args: argparse.Namespace) -> int:
         data, mime_type = load_fixture(fixtures_dir, filename)
         return await register_upload(args.user_id, session_id, filename, mime_type, data)
 
+    try:
+        staged = await _stage_large_documents(out, todo, args)
+    except FixtureError as exc:
+        print(f"could not stage large documents: {exc}", file=sys.stderr)
+        return 2
+
     results_path = out / RESULTS_FILE
     queue: asyncio.Queue = asyncio.Queue()
     for item in todo:
@@ -399,6 +416,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
                     run_turn=run_turn,
                     register_fixture=register_fixture,
                     fixtures_dir=fixtures_dir,
+                    staged=staged.get((case.id, sample)),
                 )
             except (OAuthRequiredError, HeadlessAuthError, FixtureError) as exc:
                 fatal.append(f"{type(exc).__name__}: {exc}")
@@ -413,7 +431,9 @@ async def cmd_run(args: argparse.Namespace) -> int:
     await asyncio.gather(*(worker() for _ in range(max(1, args.workers))))
 
     if not args.keep:
-        await _cleanup(new_rows, args.user_id)
+        unrun = _unrun_staged(out, read_rows(results_path))
+        await _cleanup(new_rows + unrun, args.user_id)
+        _forget_staged(out, unrun)
 
     if fatal:
         print(f"\nrun stopped: {fatal[0]}", file=sys.stderr)
@@ -436,6 +456,106 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if tokens:
         print("tokens this invocation: " + ", ".join(f"{k}={v:,}" for k, v in sorted(tokens.items())))
     return 0
+
+
+# --------------------------------------------------------------------------- large documents
+
+
+def _unrun_staged(out: Path, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Staged sessions whose sample never wrote a row, shaped like rows for ``_cleanup``."""
+    ran = {row.get("session_id") for row in rows}
+    return [entry for entry in read_rows(out / STAGED_FILE) if entry["session_id"] not in ran]
+
+
+def _forget_staged(out: Path, deleted: Sequence[Dict[str, Any]]) -> None:
+    """Drop cleaned-up entries from ``staged.jsonl``, so a resumed run stages those samples afresh
+    instead of reusing uploads that no longer exist."""
+    if not deleted:
+        return
+    gone = {entry["session_id"] for entry in deleted}
+    keep = [entry for entry in read_rows(out / STAGED_FILE) if entry["session_id"] not in gone]
+    (out / STAGED_FILE).write_text("".join(json.dumps(entry) + "\n" for entry in keep), encoding="utf-8")
+
+
+def _echo_documents(states: Dict[str, Dict[str, Any]]) -> None:
+    counts = Counter(
+        "ready to ask" if s["settled"] else (s["preparation"] if s["preparation"] != "ready" else "indexing")
+        for s in states.values()
+    )
+    waited = max((s["waitedSeconds"] for s in states.values()), default=0)
+    print(f"  documents after {waited}s: " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())), flush=True)
+
+
+async def _stage_large_documents(
+    out: Path, todo: Sequence[Tuple[EvalCase, int]], args: argparse.Namespace
+) -> Dict[Tuple[str, int], Any]:
+    """Upload every large document the pending samples name, then wait for all of them at once.
+
+    Each sample gets its own session and its own copy of each document,
+    because attachment search is scoped to one user in one conversation. A
+    staged sample from an earlier, interrupted invocation is reused rather
+    than uploaded again.
+    """
+    from apis.shared.evals.execute import StagedSample, new_session_id
+    from apis.shared.evals.fixtures import FixtureError, register_reference_upload, wait_for_documents
+
+    wanted = [(case, sample) for case, sample in todo if case.large_documents]
+    if not wanted:
+        return {}
+    if not os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL"):
+        import boto3
+
+        try:
+            os.environ["LARGE_DOCUMENT_PREPARE_QUEUE_URL"] = boto3.client("sqs", region_name=args.region).get_queue_url(
+                QueueName=f"{args.prefix}-large-document-prepare"
+            )["QueueUrl"]
+        except Exception as exc:  # noqa: BLE001 — reported as a setup error
+            raise FixtureError(f"no large-document prepare queue for {args.prefix}: {exc}") from exc
+
+    from large_document_quality.fixtures import build_all
+
+    names = sorted({name for case, _ in wanted for name in case.large_documents})
+    documents = {fixture.name: fixture for fixture in build_all(LARGE_DOCUMENT_SEED, names)}
+    staged_path = out / STAGED_FILE
+    earlier = {(e["case_id"], int(e["sample"])): e for e in read_rows(staged_path)}
+
+    async def stage(case: EvalCase, sample: int) -> Dict[str, Any]:
+        if (case.id, sample) in earlier:
+            return earlier[(case.id, sample)]
+        session_id = new_session_id()
+        upload_ids = []
+        for name in case.large_documents:
+            doc = documents[name]
+            upload_ids.append(
+                await register_reference_upload(args.user_id, session_id, doc.filename, doc.mime_type, doc.data)
+            )
+        entry = {"case_id": case.id, "sample": sample, "session_id": session_id,
+                 "upload_ids": upload_ids, "documents": list(case.large_documents)}
+        with staged_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+        return entry
+
+    megabytes = sum(len(documents[n].data) for c, _ in wanted for n in c.large_documents) / 1e6
+    print(f"staging {len(wanted)} samples with large documents ({megabytes:.0f} MB to upload)", flush=True)
+    entries = await asyncio.gather(*(stage(case, sample) for case, sample in wanted))
+    states = await wait_for_documents(
+        args.user_id,
+        [u for e in entries for u in e["upload_ids"]],
+        timeout=args.document_timeout,
+        echo=_echo_documents,
+    )
+    unsettled = sum(1 for s in states.values() if not s["settled"])
+    if unsettled:
+        print(f"  {unsettled} document(s) not searchable after {args.document_timeout:.0f}s; "
+              "their samples run anyway, as a user asking early would", flush=True)
+    return {
+        (e["case_id"], int(e["sample"])): StagedSample(
+            session_id=e["session_id"],
+            upload_ids=tuple(e["upload_ids"]),
+            documents=tuple({"name": n, **states[u]} for n, u in zip(e["documents"], e["upload_ids"])),
+        )
+        for e in entries
+    }
 
 
 # --------------------------------------------------------------------------- cleanup
@@ -466,6 +586,8 @@ async def _cleanup(rows: Sequence[Dict[str, Any]], user_id: str) -> Tuple[int, i
 async def cmd_cleanup(args: argparse.Namespace) -> int:
     from smoke_turns import resolve_runtime_env
 
+    if args.orphans:
+        return await _sweep_orphans(args)
     out = Path(args.out)
     try:
         meta = _read_meta(out)
@@ -473,7 +595,102 @@ async def cmd_cleanup(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     resolve_runtime_env(meta["prefix"], meta.get("region") or args.region)
-    await _cleanup(read_rows(out / RESULTS_FILE), meta["user_id"])
+    rows = read_rows(out / RESULTS_FILE)
+    unrun = _unrun_staged(out, rows)
+    await _cleanup(rows + unrun, meta["user_id"])
+    _forget_staged(out, unrun)
+    return 0
+
+
+def _parse_iso(value: str) -> datetime:
+    """An ISO timestamp as an aware datetime (``Z`` or an offset); naive values are UTC."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+async def _sweep_orphans(args: argparse.Namespace) -> int:
+    """Delete what runs left behind under the eval user: uploads and ``eval-`` sessions older than ``--older-than``.
+
+    A run cleans up after itself, except when it is killed: a cancelled CI job
+    never reaches its cleanup, and its ``staged.jsonl`` goes with the runner,
+    so the large documents it staged stay in the bucket and the attachments KB.
+    The eval user is the harness's own account (spec D7), so everything under
+    it belongs to some run; the age cutoff keeps the sweep off a run still in
+    progress. Lists only, unless ``--yes``.
+    """
+    from datetime import timedelta
+
+    from seed_eval_user import eval_user_id
+    from smoke_turns import _looks_like_prod, resolve_runtime_env
+
+    from apis.app_api.sessions.services.session_service import SessionService
+    from apis.shared.evals.execute import EVAL_SESSION_PREFIX
+    from apis.shared.evals.fixtures import delete_objects_under, delete_upload, stale_uploads
+    from apis.shared.sessions.metadata import list_user_sessions
+
+    if not args.prefix:
+        print("--orphans needs --prefix", file=sys.stderr)
+        return 2
+    if _looks_like_prod(None, args.prefix):
+        print("refusing: this looks like production (spec D8)", file=sys.stderr)
+        return 2
+    user_id = eval_user_id(args.prefix, args.region)
+    if not user_id:
+        print(f"no eval user on {args.prefix}; nothing to sweep")
+        return 0
+    resolve_runtime_env(args.prefix, args.region)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=args.older_than)
+
+    import boto3
+
+    bucket = os.environ["S3_USER_FILES_BUCKET_NAME"]
+    listing = [
+        obj
+        for page in boto3.client("s3", region_name=args.region).get_paginator("list_objects_v2").paginate(
+            Bucket=bucket, Prefix=f"user-files/{user_id}/"
+        )
+        for obj in page.get("Contents", [])
+    ]
+    uploads = stale_uploads(listing, user_id, cutoff)
+
+    sessions = []
+    token = None
+    while True:
+        page, token = await list_user_sessions(user_id, limit=100, next_token=token)
+        sessions.extend(
+            m.session_id for m in page
+            if m.session_id.startswith(EVAL_SESSION_PREFIX) and _parse_iso(m.last_message_at) < cutoff
+        )
+        if not token:
+            break
+
+    print(f"eval user on {args.prefix}: {len(uploads)} upload(s) and {len(sessions)} session(s) "
+          f"older than {args.older_than:g} min")
+    if not args.yes:
+        for session_id, upload_id in uploads:
+            print(f"  upload  {session_id}/{upload_id}")
+        for session_id in sessions:
+            print(f"  session {session_id}")
+        print("dry run: pass --yes to delete")
+        return 0
+
+    removed = 0
+    for session_id, upload_id in uploads:
+        try:
+            if not await delete_upload(user_id, upload_id):
+                # No row left (an earlier, partial cleanup): the objects are all that remain.
+                await delete_objects_under(bucket, f"user-files/{user_id}/{session_id}/{upload_id}/")
+            removed += 1
+        except Exception as exc:  # noqa: BLE001 — a sweep reports, never aborts
+            logger.warning("could not delete upload %s: %s", upload_id, exc)
+    service = SessionService()
+    ended = 0
+    for session_id in sessions:
+        try:
+            ended += 1 if await service.delete_session(user_id=user_id, session_id=session_id) else 0
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not delete session %s: %s", session_id, exc)
+    print(f"swept {removed} upload(s) and {ended} session(s)")
     return 0
 
 
@@ -491,7 +708,7 @@ def _judge_calls(case: EvalCase, row: Dict[str, Any]) -> int:
 async def cmd_judge(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
-        _read_meta(out)
+        meta = _read_meta(out)
         cases = {c.id: c for c in load_cases(Path(args.cases_dir), families=args.family)}
     except (ReportError, CaseError) as exc:
         print(str(exc), file=sys.stderr)
@@ -513,6 +730,12 @@ async def cmd_judge(args: argparse.Namespace) -> int:
     rate_in, rate_out = RATES[rate_model]
     dollars = calls * (EST_JUDGE_INPUT_TOKENS * rate_in + EST_JUDGE_OUTPUT_TOKENS * rate_out) / 1_000_000
     print(f"{len(todo)} samples to judge with {args.judge_model}: ~{calls} judge calls, ≈ ${dollars:.2f}")
+    if same_base_model(args.judge_model, str(meta.get("model_id") or "")):
+        print(
+            f"warning: {args.judge_model} would judge its own answers; a judge tends to favour its own model "
+            "(docs/specs/eval-harness.md §14, question 2), so pick a different --judge-model",
+            file=sys.stderr,
+        )
     if not todo:
         print("nothing to judge")
         return 0
@@ -553,6 +776,38 @@ async def cmd_judge(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _family_calls(
+    meta: Dict[str, Any], rows: Sequence[Dict[str, Any]], family: str
+) -> Optional[Dict[str, Sequence[Dict[str, Any]]]]:
+    """The ``C#`` rows of every session in ``family``, best-effort (spec §14 q3).
+
+    Reads the deployment's sessions-metadata table, so it needs credentials
+    for the run's account; without them every sample prints "unavailable"
+    and ``score``'s result is unchanged.
+    """
+    prefix, region = meta.get("prefix"), meta.get("region")
+    if not prefix:
+        print("cost rows: the run's meta.json names no prefix; skipped", file=sys.stderr)
+        return None
+    from apis.shared.config.runtime_environment import derived_environment_manifest
+    from apis.shared.evals.calls import fetch_session_calls
+    from apis.shared.storage.dynamodb_storage import DynamoDBStorage
+
+    table = next(v for v in derived_environment_manifest() if v.name == "DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    os.environ["DYNAMODB_SESSIONS_METADATA_TABLE_NAME"] = table.derive(prefix, None) or ""
+    if region:
+        os.environ.setdefault("AWS_DEFAULT_REGION", region)
+    session_ids = [str(r.get("session_id")) for r in rows if r.get("family") == family and r.get("session_id")]
+    try:
+        storage = DynamoDBStorage()
+    except Exception as exc:  # noqa: BLE001 — a diagnostic never fails score
+        print(f"cost rows: unavailable ({exc})", file=sys.stderr)
+        return {}
+    found = await fetch_session_calls(session_ids, storage)
+    print(f"cost rows: read {len(found)} of {len(set(session_ids))} sessions in {family}", file=sys.stderr)
+    return found
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
@@ -580,8 +835,9 @@ def cmd_score(args: argparse.Namespace) -> int:
             print("\nLLM judges (advisory, mean score 0-1, paired cases only):\n")
             print(format_judge_table(judge_comparisons))
     if args.explain:
+        calls = None if args.no_cost_rows else asyncio.run(_family_calls(meta, rows, args.explain))
         print()
-        print(explain_family(args.explain, baseline, rows))
+        print(explain_family(args.explain, baseline, rows, calls_by_session=calls))
     if args.json:
         Path(args.json).write_text(
             json.dumps(
@@ -671,11 +927,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--workers", type=int, default=4, help="cases run concurrently; turns within a case never are")
     s.add_argument("--timeout", type=float, default=300.0, help="per-turn stream budget in seconds")
     s.add_argument("--keep", action="store_true", help="do not delete the sessions and uploads this run created")
+    s.add_argument("--document-timeout", type=float, default=900.0,
+                   help="seconds to wait for staged large documents to become searchable (default 900)")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
 
     s = sub.add_parser("judge", help="(spends) score a run's samples with the LLM judges their cases name")
     s.add_argument("--out", required=True)
-    s.add_argument("--judge-model", default="us.anthropic.claude-sonnet-4-6", help="Bedrock model id for every judge")
+    s.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL, help="Bedrock model id for every judge")
     s.add_argument("--family", type=families, help="comma-separated families (default: every judged case)")
     s.add_argument("--workers", type=int, default=4, help="samples judged concurrently")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
@@ -683,7 +941,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s = sub.add_parser("score", help="compare a run with its model's baseline; exit 1 on a gating regression")
     s.add_argument("--out", required=True)
     s.add_argument("--baseline", help="baseline file (default: baselines/<model>.json)")
-    s.add_argument("--explain", help="print every flipped case in this family")
+    s.add_argument("--explain", help="print every flipped case in this family, with its samples' model calls")
+    s.add_argument("--no-cost-rows", action="store_true",
+                   help="with --explain, skip reading the samples' C# cost rows (no AWS)")
     s.add_argument("--json", help="also write the comparison as JSON to this path")
 
     s = sub.add_parser("baseline", help="promote a complete run to baselines/<model>.json")
@@ -691,10 +951,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--baseline", help="write here instead of baselines/<model>.json")
 
     s = sub.add_parser("cleanup", help="delete the sessions and fixture uploads a run recorded")
-    s.add_argument("--out", required=True)
+    s.add_argument("--out", help="the run directory whose sessions and uploads to delete")
     s.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"))
+    s.add_argument("--orphans", action="store_true",
+                   help="instead of --out: sweep the eval user's leftover uploads and eval- sessions on --prefix")
+    s.add_argument("--prefix", help="with --orphans: the deployment to sweep")
+    s.add_argument("--older-than", type=float, default=60.0,
+                   help="with --orphans: only what is older than this many minutes (default 60)")
+    s.add_argument("--yes", action="store_true", help="with --orphans: delete; without it, list only")
 
     args = p.parse_args(argv)
+    if args.command == "cleanup" and not (args.out or args.orphans):
+        p.error("cleanup needs --out (one run) or --orphans (a sweep)")
     if getattr(args, "k", 1) < 1:
         p.error("--k must be at least 1")
     if args.command == "run":

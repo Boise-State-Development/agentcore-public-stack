@@ -14,6 +14,9 @@ import {
   heroArrowTrendingUp,
   heroArrowTrendingDown,
   heroUserCircle,
+  heroServerStack,
+  heroExclamationTriangle,
+  heroInboxArrowDown,
 } from '@ng-icons/heroicons/outline';
 
 export type SummaryCardIcon =
@@ -21,11 +24,15 @@ export type SummaryCardIcon =
   | 'heroChartBar'
   | 'heroUsers'
   | 'heroBolt'
-  | 'heroUserCircle';
+  | 'heroUserCircle'
+  // AWS Limits summary (admin/aws-limits).
+  | 'heroServerStack'
+  | 'heroExclamationTriangle'
+  | 'heroInboxArrowDown';
 
 /**
  * Summary card component for displaying a metric with title, value, optional trend, and icon.
- * Used in the admin cost dashboard for displaying key metrics.
+ * Used in the admin cost dashboard and the AWS Limits page for displaying key metrics.
  */
 @Component({
   selector: 'app-system-summary-card',
@@ -39,6 +46,9 @@ export type SummaryCardIcon =
       heroArrowTrendingUp,
       heroArrowTrendingDown,
       heroUserCircle,
+      heroServerStack,
+      heroExclamationTriangle,
+      heroInboxArrowDown,
     }),
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -100,6 +110,9 @@ export type SummaryCardIcon =
           </span>
         </div>
       }
+
+      <!-- Optional action under the figure (AWS Limits: "View all"). -->
+      <ng-content />
     </div>
   `,
 })
@@ -129,6 +142,12 @@ export class SystemSummaryCardComponent {
         return 'bg-accent-4-100 dark:bg-accent-4-900/30';
       case 'heroUserCircle':
         return 'bg-accent-7-100 dark:bg-accent-7-900/30';
+      case 'heroServerStack':
+        return 'bg-accent-2-100 dark:bg-accent-2-900/30';
+      case 'heroExclamationTriangle':
+        return 'bg-accent-5-100 dark:bg-accent-5-900/30';
+      case 'heroInboxArrowDown':
+        return 'bg-accent-6-100 dark:bg-accent-6-900/30';
       default:
         return 'bg-gray-100 dark:bg-gray-900/30';
     }
@@ -147,6 +166,12 @@ export class SystemSummaryCardComponent {
         return 'text-accent-4-700 dark:text-accent-4-300';
       case 'heroUserCircle':
         return 'text-accent-7-700 dark:text-accent-7-300';
+      case 'heroServerStack':
+        return 'text-accent-2-700 dark:text-accent-2-300';
+      case 'heroExclamationTriangle':
+        return 'text-accent-5-700 dark:text-accent-5-300';
+      case 'heroInboxArrowDown':
+        return 'text-accent-6-700 dark:text-accent-6-300';
       default:
         return 'text-gray-600 dark:text-gray-400';
     }

@@ -175,7 +175,6 @@ export class AlbConstruct extends Construct {
         },
       ],
       removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: !config.retainDataOnDelete,
     });
 
     this.alb.logAccessLogs(this.accessLogBucket);

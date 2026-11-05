@@ -182,8 +182,15 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     sessionPrewarm: {
       enabled: false,
     },
+    quotaRequests: {
+      enabled: false,
+    },
+    awsLimits: {
+      enabled: false,
+    },
     handoffs: {
       enabled: false,
+      briefEnabled: false,
     },
     sessionRewind: {
       enabled: false,
@@ -224,6 +231,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     assistantKbFullContext: {
       enabled: false,
     },
+    meetingTasks: {
+      enabled: false,
+    },
     largeDocumentAttachments: {
       enabled: false,
     },
@@ -237,6 +247,12 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       enabled: false,
     },
     sourceProvenance: {
+      enabled: false,
+    },
+    webSearchDefaultMaxResults: {
+      enabled: false,
+    },
+    projectFileReadiness: {
       enabled: false,
     },
     documentExtract: {

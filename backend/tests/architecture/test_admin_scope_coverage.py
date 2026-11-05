@@ -38,12 +38,21 @@ NON_DELEGABLE_MODULES = {
     "user_grants/routes.py",
 }
 
+# Modules guarded by `require_any_admin_scope`: reads every delegated admin surface
+# shares and that let no scope's holder act outside it. Kept to a named set so a new
+# one is a reviewed decision, not a convenient escape from picking a scope.
+ANY_SCOPE_MODULES = {
+    "roles/picker.py",  # role id/name list for the per-domain role pickers
+}
+
 # Scope claimed by each router module. `roles/agent_pins.py` is the one place
 # the directory-boundary heuristic doesn't hold: it mounts under the /roles
 # prefix but is marketplace functionality, guarded by require_marketplace_admin.
 EXPECTED_MODULE_SCOPES = {
     "routes.py": "admin.models",
     "quota/routes.py": "admin.quota",
+    "quota_requests/routes.py": "admin.quota_requests",
+    "aws_limits/routes.py": "admin.aws_limits",
     "costs/routes.py": "admin.costs",
     "feedback/routes.py": "admin.costs",  # eval-sampling queue sits beside the cost rows
     "users/routes.py": "admin.users",
@@ -91,7 +100,7 @@ def _rel(path: pathlib.Path) -> str:
 def test_every_router_module_is_accounted_for() -> None:
     """A new admin router package must be classified, not silently ungoverned."""
     found = {_rel(p) for p in _admin_route_modules()}
-    known = set(EXPECTED_MODULE_SCOPES) | NON_DELEGABLE_MODULES | {
+    known = set(EXPECTED_MODULE_SCOPES) | NON_DELEGABLE_MODULES | ANY_SCOPE_MODULES | {
         "roles/agent_pins.py",  # inherits admin.marketplace via the wrapper
     }
 
@@ -134,6 +143,25 @@ def test_non_delegable_module_uses_require_admin(module: str) -> None:
     assert "require_admin" in stripped, f"{module} must keep bare require_admin"
     assert not _SCOPE_DECL.findall(source), (
         f"{module} is non-delegable and must not declare an admin scope"
+    )
+
+
+@pytest.mark.parametrize("module", sorted(ANY_SCOPE_MODULES))
+def test_any_scope_module_is_read_only_and_uses_the_any_scope_guard(module: str) -> None:
+    """An any-scope module is open to every delegated admin, so it may only read."""
+    source = (ADMIN_SRC / module).read_text()
+    stripped = source.replace("require_any_admin_scope", "")
+
+    assert "require_any_admin_scope" in source
+    assert "require_admin" not in stripped, (
+        f"{module} is any-scope; a route needing full admin belongs in a "
+        "non-delegable module"
+    )
+    assert not _SCOPE_DECL.findall(source), (
+        f"{module} must not also declare a single scope"
+    )
+    assert not re.search(r"@router\.(post|put|patch|delete)\(", source), (
+        f"{module} is reachable by every delegated admin and must not write"
     )
 
 
@@ -219,6 +247,7 @@ def test_every_mounted_admin_route_has_a_scope_dependency() -> None:
         governed = (
             "resolve_user_permissions" in blob
             or "has_admin_scope" in blob
+            or "has_any_admin_scope" in blob
             or "require_marketplace_admin" in blob
             or "agent_marketplace_enabled" in blob
         )

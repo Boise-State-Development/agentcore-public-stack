@@ -137,6 +137,32 @@ export class AgentCoreGatewayConstruct extends Construct {
       }),
     );
 
+    // Built-in connector targets (AgentCore Web Search). An admin registers the
+    // target through the tool catalog (`connector_id` on MCPGatewayConfig);
+    // the Gateway then authorizes each search with this role against the
+    // connector's service-owned ARN (account field is the literal `aws`), so
+    // the grant must exist before any target does. It costs nothing and opens
+    // nothing on its own: with no connector target on the Gateway, no agent
+    // can reach the action. Web Search bills $7 per 1,000 queries once a
+    // target exists and a role is granted the catalog tool.
+    // Ref: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-add-target-api-target-config.html#gateway-add-target-api-connector-web-search-service-role
+    this.gatewayRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'ConnectorWebSearch',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock-agentcore:InvokeWebSearch'],
+        resources: [`arn:aws:bedrock-agentcore:${stack.region}:aws:tool/web-search.v1`],
+      }),
+    );
+    this.gatewayRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'ConnectorInvokeGateway',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock-agentcore:InvokeGateway'],
+        resources: [`arn:aws:bedrock-agentcore:${stack.region}:${stack.account}:gateway/*`],
+      }),
+    );
+
     // Inbound authorizer. AgentCore takes exactly one type per Gateway, so this
     // is an either/or — not additive.
     //

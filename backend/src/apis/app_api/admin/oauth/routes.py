@@ -9,10 +9,12 @@ the callback URL that the admin must register with the vendor.
 import asyncio
 import logging
 import os
+import re
 from functools import lru_cache
 from typing import Optional
 
 import boto3
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apis.app_api.export_targets.registry import registry as export_target_registry
@@ -64,6 +66,36 @@ _ORPHAN_METRIC_NAME = "ProviderOrphaned"
 def _cloudwatch_client():
     region = os.environ.get("AWS_REGION", "us-west-2")
     return boto3.client("cloudwatch", region_name=region)
+
+
+# AgentCore error codes that mean "your configuration was rejected". Only
+# these have their message echoed to the (admin-only) caller; any other
+# ClientError keeps the global handler's generic 502.
+_VALIDATION_ERROR_CODES = frozenset({"ValidationException", "InvalidParameterValue"})
+_MAX_REJECTION_REASON_CHARS = 300
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _agentcore_rejection(err: ClientError) -> HTTPException | None:
+    """Turn an AgentCore validation rejection into a 400 naming the reason.
+
+    The global handler hides the vendor message because most routes are
+    user-facing. This route is admin-only and the admin typed the config
+    (tenant issuer, endpoints), so "TokenEndpoint is not a valid URL" is
+    what they need to fix it. Returns None for any non-validation code so
+    the caller re-raises and the generic handler applies.
+    """
+    error = err.response.get("Error", {})
+    if error.get("Code") not in _VALIDATION_ERROR_CODES:
+        return None
+    reason = _CONTROL_CHARS.sub(" ", str(error.get("Message") or "")).strip()
+    if len(reason) > _MAX_REJECTION_REASON_CHARS:
+        reason = reason[:_MAX_REJECTION_REASON_CHARS].rstrip() + "..."
+    logger.warning("AgentCore rejected provider configuration: %s", reason)
+    detail = "AgentCore rejected the configuration"
+    if reason:
+        detail = f"{detail}: {reason}"
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
 async def _rollback_orphaned_provider(
@@ -149,7 +181,9 @@ async def list_providers(
 ):
     """List all OAuth providers. Admin only."""
     logger.info("Admin listing OAuth providers")
-    providers = await provider_repo.list_providers(enabled_only=enabled_only)
+    # fresh: the config cache is per task, so a cached read could miss the
+    # write this admin just made on another task. Admin list is low-traffic.
+    providers = await provider_repo.list_providers(enabled_only=enabled_only, fresh=True)
     return OAuthProviderListResponse(
         providers=[OAuthProviderResponse.from_provider(p) for p in providers],
         total=len(providers),
@@ -214,6 +248,7 @@ async def create_provider(
             client_secret=provider_data.client_secret,
             discovery_url=provider_data.oauth_discovery_url,
             authorization_server_metadata=provider_data.authorization_server_metadata,
+            tenant_id=provider_data.tenant_id,
         )
     except CredentialProviderConflictError:
         # We already verified the DB has no record for this provider_id
@@ -238,6 +273,11 @@ async def create_provider(
         )
     except InvalidCustomProviderConfigError as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
+    except ClientError as err:
+        rejection = _agentcore_rejection(err)
+        if rejection is None:
+            raise
+        raise rejection from err
 
     try:
         provider = _build_provider_from_create(provider_data, credential_info)
@@ -300,15 +340,28 @@ async def update_provider(
         and updates.authorization_server_metadata
         != existing.authorization_server_metadata
     )
+    # Same rule for the Entra tenant: the edit form round-trips it, so only
+    # a different value (`""` clearing a set tenant counts) is a change.
+    if updates.tenant_id and existing.provider_type != OAuthProviderType.MICROSOFT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "tenant_id is only valid for microsoft providers; "
+                f"'{provider_id}' is {existing.provider_type.value}"
+            ),
+        )
+    changing_tenant = updates.tenant_id is not None and (
+        updates.tenant_id or None
+    ) != existing.tenant_id
 
     credential_info: CredentialProviderInfo | None = None
-    if rotating_credentials or changing_discovery:
+    if rotating_credentials or changing_discovery or changing_tenant:
         if not rotating_credentials:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "Discovery config can only be updated together with a "
-                    "credential rotation (client_id + client_secret)."
+                    "Discovery config and tenant ID can only be updated together "
+                    "with a credential rotation (client_id + client_secret)."
                 ),
             )
         discovery_url = (
@@ -321,6 +374,11 @@ async def update_provider(
             if updates.authorization_server_metadata is not None
             else existing.authorization_server_metadata
         )
+        tenant_id = (
+            (updates.tenant_id or None)
+            if updates.tenant_id is not None
+            else existing.tenant_id
+        )
         try:
             credential_info = registrar.update_credential_provider(
                 provider_id=provider_id,
@@ -329,6 +387,7 @@ async def update_provider(
                 client_secret=updates.client_secret,
                 discovery_url=discovery_url,
                 authorization_server_metadata=authorization_server_metadata,
+                tenant_id=tenant_id,
                 fallback_arn=existing.credential_provider_arn,
             )
         except CredentialProviderNotFoundError:
@@ -343,6 +402,11 @@ async def update_provider(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)
             )
+        except ClientError as err:
+            rejection = _agentcore_rejection(err)
+            if rejection is None:
+                raise
+            raise rejection from err
 
     provider = await provider_repo.apply_metadata_update(provider_id, updates)
     if provider is None:
@@ -466,6 +530,7 @@ def _build_provider_from_create(
         callback_url=credential_info.callback_url,
         oauth_discovery_url=data.oauth_discovery_url,
         authorization_server_metadata=data.authorization_server_metadata,
+        tenant_id=data.tenant_id,
         # `{}` from the form means "explicitly no extras" — store as None
         # so absent/empty are indistinguishable in DynamoDB and `from_*`
         # lookups round-trip identically.

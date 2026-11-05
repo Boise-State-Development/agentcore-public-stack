@@ -36,6 +36,8 @@ import { ErrorService } from '../../../services/error/error.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { HttpErrorResponse } from '@angular/common/http';
+import { HandoffRelayService, ResumeOutcome } from '../handoff/handoff-relay.service';
+import { RelayedPromptKind } from '../handoff/handoff.models';
 
 /**
  * How long a send will wait for the tool/skill lists before giving up and
@@ -82,21 +84,24 @@ export class ChatRequestService implements OnDestroy {
   private router = inject(Router);
   private readonly binding = inject(ConversationBindingService);
   private readonly incognitoChat = inject(IncognitoChatService);
+  private readonly handoffRelay = inject(HandoffRelayService);
   // TODO: Inject proper logging service
 
   constructor() {
-    this.oauthConsentService.setResumeHandler((interruptIds, context) =>
-      this.resumeFromOAuthConsent(interruptIds, context?.sessionId),
-    );
-    this.toolApprovalService.setResumeHandler((interruptId, decision, context) =>
-      this.resumeFromToolApproval(interruptId, decision, context?.sessionId),
-    );
-    this.userQuestionService.setResumeHandler((interruptId, response, context) =>
-      this.resumeFromUserQuestion(interruptId, response, context?.sessionId),
-    );
-    this.browserLoginService.setResumeHandler((interruptId, response, context) =>
-      this.resumeFromBrowserLogin(interruptId, response, context?.sessionId),
-    );
+    // The handlers settle once the resume has; how it ended is reported to
+    // HandoffRelayService on the way, not to the service that asked.
+    this.oauthConsentService.setResumeHandler(async (interruptIds, context) => {
+      await this.resumeFromOAuthConsent(interruptIds, context?.sessionId);
+    });
+    this.toolApprovalService.setResumeHandler(async (interruptId, decision, context) => {
+      await this.resumeFromToolApproval(interruptId, decision, context?.sessionId);
+    });
+    this.userQuestionService.setResumeHandler(async (interruptId, response, context) => {
+      await this.resumeFromUserQuestion(interruptId, response, context?.sessionId);
+    });
+    this.browserLoginService.setResumeHandler(async (interruptId, response, context) => {
+      await this.resumeFromBrowserLogin(interruptId, response, context?.sessionId);
+    });
   }
 
   /**
@@ -368,6 +373,106 @@ export class ChatRequestService implements OnDestroy {
   }
 
   /**
+   * Start a handoff's target conversation **in the background**
+   * (docs/specs/agent-handoffs-and-consults.md §4.2, step 3).
+   *
+   * The same turn a mid-thread `@`-mention used to send into a new conversation,
+   * built by the same `buildChatRequestObject`, so the Agent runs exactly as
+   * before. Three differences, all so the user stays in the thread they were in:
+   *  - No `setViewedSession` and no navigation. The target streams as a second
+   *    session; the chat stack is keyed by session, so it never touches the
+   *    viewed thread, and `setChatLoading` marks it unread when it finishes.
+   *  - A fresh id, never the page's prewarmed one (`claimNewConversationId`),
+   *    which belongs to the next conversation the user starts from the home page.
+   *  - No conversation-mode claim (`bindToSession`): the user didn't pick a mode
+   *    for the target, the Agent's bindings decide.
+   *
+   * It is registered in the session list at once, so it appears at the top of the
+   * sidenav with the streaming dot. `handoff_context` carries the card as sent;
+   * the server re-caps it, accepts the handoff once and prepends it wrapped.
+   */
+  async submitHandoffRequest(options: {
+    targetSessionId: string;
+    agentId: string;
+    message: string;
+    handoffId: string;
+    /** The context card as sent; absent when the user removed it. */
+    contextText?: string;
+    fileUploadIds?: string[];
+    invokedSkillIds?: string[];
+    folders?: FolderAttachmentData[];
+  }): Promise<void> {
+    const { targetSessionId, agentId, message, handoffId, contextText, fileUploadIds, invokedSkillIds, folders } =
+      options;
+
+    this.startTurnTiming(targetSessionId, true);
+    this.sessionPrewarm.noteTurn(targetSessionId);
+
+    const user = this.userService.getUser();
+    this.sessionService.addSessionToCache(targetSessionId, user?.user_id || 'anonymous');
+    this.chatStateService.setChatLoading(targetSessionId, true);
+
+    const fileAttachments = this.getFileAttachments(fileUploadIds);
+    const userMessage = this.messageMapService.addUserMessage(targetSessionId, message, fileAttachments, folders);
+    this.messageMapService.startStreaming(targetSessionId);
+
+    try {
+      await this.awaitSelectionSources();
+      const requestObject = this.buildChatRequestObject(
+        message,
+        targetSessionId,
+        fileUploadIds,
+        agentId,
+        undefined,
+        invokedSkillIds,
+        (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
+      );
+      requestObject['handoff_context'] =
+        contextText === undefined ? { handoffId } : { handoffId, text: contextText };
+      this.turnTiming.describe(targetSessionId, {
+        modelId: this.modelService.getSelectedModel()?.modelId ?? null,
+        hasAgent: true,
+        hasFiles: Boolean(fileUploadIds?.length),
+      });
+      await this.chatHttpService.sendChatRequest(requestObject);
+    } catch (error) {
+      this.turnTiming.abandon(targetSessionId);
+      this.chatStateService.setChatLoading(targetSessionId, false);
+      this.messageMapService.endStreaming(targetSessionId);
+      if (error instanceof StreamNotStartedError) {
+        this.markNotSent(targetSessionId, userMessage.id, error.reason, () =>
+          this.submitHandoffRequest(options),
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The body of a handoff brief on the **source** conversation (handoffs spec §4.5.1): exactly
+   * what a turn there would send (model, provider, tools, skills, binding or mode), plus
+   * `handoff_brief`. Identical matters: the Runtime resolves the agent as a turn does, and any
+   * difference rebuilds a different `toolConfig` or system prompt and misses the source's cache.
+   * The message is the handoff's request; the brief never persists it.
+   */
+  async buildHandoffBriefRequest(options: {
+    sourceSessionId: string;
+    handoffId: string;
+    request: string;
+    sourceAssistantId?: string;
+  }): Promise<Record<string, unknown>> {
+    await this.awaitSelectionSources();
+    const requestObject = this.buildChatRequestObject(
+      options.request,
+      options.sourceSessionId,
+      undefined,
+      options.sourceAssistantId,
+    );
+    requestObject['handoff_brief'] = { handoffId: options.handoffId };
+    return requestObject;
+  }
+
+  /**
    * "Continue" after a max_tokens truncation. Modeled on the OAuth/tool
    * resume flow, NOT on submitChatRequest: no user message is added (no
    * visible bubble, no new user turn) so the model resumes the truncated
@@ -609,28 +714,128 @@ export class ChatRequestService implements OnDestroy {
    * no model / tools / prompt context is sent or required. Triggered by
    * OAuthConsentService after the user completes a consent popup.
    */
-  private async resumeFromOAuthConsent(
-    interruptIds: string[],
-    sessionId?: string,
-  ): Promise<void> {
+  private resumeFromOAuthConsent(interruptIds: string[], sessionId?: string): Promise<ResumeOutcome> {
     if (interruptIds.length === 0 || !sessionId) {
-      return;
+      return Promise.resolve('failed');
     }
+    return this.resumePausedTurn(
+      sessionId,
+      'oauth',
+      // The token is already in AgentCore Identity's vault by the time we
+      // resume; the response payload itself doesn't carry a secret — it's
+      // just the signal that consent completed.
+      interruptIds.map((interruptId) => ({ interruptId, response: 'consented' })),
+      {
+        title: 'Authorization expired',
+        message: 'The agent paused too long ago to resume this turn automatically. Please send your message again.',
+      },
+    );
+  }
 
-    // A resume turn has NO new user message and the resumed stream does not
-    // replay the interrupted `tool_use` block (Strands emits only the
-    // `tool_result` + the final assistant text). Continuation streaming pins
-    // the existing messages — including the assistant message holding the
-    // paused tool card — as a stable prefix and appends the resume after
-    // them, instead of the normal sync which truncates back to the last user
-    // message and would discard the tool card. It also resets the parser
-    // (with the correct starting count) so the resumed stream is a fresh
-    // batch; without that the parser stays Completed from the prior `done`
-    // and ignores everything.
-    //
-    // Loading is keyed to the resumed session — the user may have navigated
-    // to a different conversation before completing the consent popup, and
-    // the resume must not hijack that conversation's composer.
+  /**
+   * Resume the paused agent turn after the user approves or declines a
+   * flagged MCP tool call. The hook on the backend reads the response
+   * string ("approved" / "declined") and either lets the tool proceed or
+   * cancels it.
+   */
+  private resumeFromToolApproval(
+    interruptId: string,
+    decision: ToolApprovalDecision,
+    sessionId?: string,
+  ): Promise<ResumeOutcome> {
+    if (!sessionId) {
+      return Promise.resolve('failed');
+    }
+    return this.resumePausedTurn(sessionId, 'tool_approval', [{ interruptId, response: decision }], {
+      title: 'Approval expired',
+      message: 'The agent paused too long ago to resume this turn automatically. Please send your message again.',
+    });
+  }
+
+  /**
+   * Resume the paused agent turn after the user answers (or skips) the
+   * clarifying questions.
+   *
+   * The response is a structured object rather than a decision string. It
+   * must never be null — the backend's `ToolContext.interrupt` only treats a
+   * non-null response as an answer, so a null would re-raise the same
+   * interrupt forever. `UserQuestionService` guarantees an object (Skip
+   * sends `{ skipped: true }`).
+   */
+  private resumeFromUserQuestion(
+    interruptId: string,
+    response: UserQuestionResponse,
+    sessionId?: string,
+  ): Promise<ResumeOutcome> {
+    if (!sessionId) {
+      return Promise.resolve('failed');
+    }
+    return this.resumePausedTurn(sessionId, 'user_question', [{ interruptId, response }], {
+      title: 'Question expired',
+      message: 'The agent paused too long ago to resume this turn automatically. Please send your message again.',
+    });
+  }
+
+  /**
+   * Resume a turn the user paused to sign in to a site the agent could not
+   * reach (`docs/specs/authenticated-web-assessment.md`).
+   *
+   * Same `interrupt_responses` envelope and non-null-response requirement as
+   * {@link resumeFromUserQuestion}, since both are tool-raised Strands
+   * interrupts. The response is `{ completed: true }` or `{ skipped: true }`;
+   * `BrowserLoginService` guarantees an object, because a null would re-raise
+   * the interrupt forever.
+   *
+   * The expired case is worth its own message: unlike a stale question, a
+   * lapsed sign-in means the backend already released the browser and let the
+   * session become reapable, so "send it again" is genuinely the only way
+   * forward — there is no authenticated session left to hand back.
+   */
+  private resumeFromBrowserLogin(
+    interruptId: string,
+    response: BrowserLoginResponse,
+    sessionId?: string,
+  ): Promise<ResumeOutcome> {
+    if (!sessionId) {
+      return Promise.resolve('failed');
+    }
+    return this.resumePausedTurn(sessionId, 'browser_login', [{ interruptId, response }], {
+      title: 'Sign-in expired',
+      message:
+        'The browser session ended before the sign-in finished. Please send your message again to start a new one.',
+    });
+  }
+
+  /**
+   * The one resume path every interrupt kind shares.
+   *
+   * A resume turn has NO new user message and the resumed stream does not
+   * replay the interrupted `tool_use` block (Strands emits only the
+   * `tool_result` + the final assistant text). Continuation streaming pins
+   * the existing messages — including the assistant message holding the
+   * paused tool card — as a stable prefix and appends the resume after
+   * them, instead of the normal sync which truncates back to the last user
+   * message and would discard the tool card. It also resets the parser
+   * (with the correct starting count) so the resumed stream is a fresh
+   * batch; without that the parser stays Completed from the prior `done`
+   * and ignores everything.
+   *
+   * Everything is keyed to the resumed session, never the viewed one: the
+   * user may have navigated elsewhere before completing a consent popup, or
+   * be answering a handoff target's prompt from its source thread (handoffs
+   * spec §4.3, relayed prompts), and the resume must not hijack the
+   * conversation they are looking at. A handoff target's resume is reported
+   * to `HandoffRelayService`, which turns a lost first-answer race into
+   * "Already answered" instead of an error.
+   */
+  private async resumePausedTurn(
+    sessionId: string,
+    kind: RelayedPromptKind,
+    interruptResponses: { interruptId: string; response: unknown }[],
+    expired: { title: string; message: string },
+  ): Promise<ResumeOutcome> {
+    const relayed = this.handoffRelay.beginResume(sessionId, kind);
+
     this.messageMapService.beginContinuationStreaming(sessionId);
     this.chatStateService.setChatLoading(sessionId, true);
 
@@ -640,24 +845,21 @@ export class ChatRequestService implements OnDestroy {
       // sending an empty string keeps the request valid without
       // re-augmenting or re-charging quota.
       message: '',
-      interrupt_responses: interruptIds.map((interruptId) => ({
-        interruptId,
-        // The token is already in AgentCore Identity's vault by the time
-        // we resume; the response payload itself doesn't carry a secret —
-        // it's just the signal that consent completed.
-        response: 'consented',
-      })),
+      interrupt_responses: interruptResponses,
     };
 
     this.attachCarriedSteering(resumeRequest, sessionId);
 
+    let outcome: ResumeOutcome;
     try {
-      await this.chatHttpService.sendChatRequest(resumeRequest);
+      await (relayed
+        ? this.chatHttpService.sendChatRequest(resumeRequest, { quietConflict: true })
+        : this.chatHttpService.sendChatRequest(resumeRequest));
       // The live parser could not attach the resumed `tool_result` to the
       // paused tool card (its `tool_use` block is in the pinned prefix, not
       // in the fresh parser). Reconcile from persisted memory so the card
       // flips from "Running…" to its completed result.
-      await this.reconcileAfterResume(sessionId);
+      outcome = await this.reconcileAfterResume(sessionId);
     } catch (error) {
       this.chatStateService.setChatLoading(sessionId, false);
       this.messageMapService.endStreaming(sessionId);
@@ -666,172 +868,18 @@ export class ChatRequestService implements OnDestroy {
       // missing/expired, or the agent's `_interrupt_state` doesn't recognize
       // the submitted ids. Either way the user needs to retry the prompt.
       if (this.isExpiredInterruptError(error)) {
-        this.errorService.addError(
-          'Authorization expired',
-          'The agent paused too long ago to resume this turn automatically. Please send your message again.',
-        );
-        return;
+        this.errorService.addError(expired.title, expired.message);
+        outcome = 'expired';
+      } else if (relayed && error instanceof StreamNotStartedError && error.httpStatus === 409) {
+        // The turn is already running again: the other surface answered first.
+        outcome = 'conflict';
+      } else {
+        if (relayed) this.handoffRelay.endResume(relayed, 'failed');
+        throw error;
       }
-      throw error;
     }
-  }
-
-  /**
-   * Resume the paused agent turn after the user approves or declines a
-   * flagged MCP tool call. The hook on the backend reads the response
-   * string ("approved" / "declined") and either lets the tool proceed or
-   * cancels it.
-   */
-  private async resumeFromToolApproval(
-    interruptId: string,
-    decision: ToolApprovalDecision,
-    sessionId?: string,
-  ): Promise<void> {
-    if (!sessionId) {
-      return;
-    }
-
-    // Same shape as the OAuth resume: no new user message and the resumed
-    // stream carries only the `tool_result` + final text, not the paused
-    // `tool_use` block. Pin the existing messages (with the tool card) as a
-    // prefix and append the resume after them. Loading keyed to the resumed
-    // session (see resumeFromOAuthConsent).
-    this.messageMapService.beginContinuationStreaming(sessionId);
-    this.chatStateService.setChatLoading(sessionId, true);
-
-    const resumeRequest: Record<string, unknown> = {
-      session_id: sessionId,
-      message: '',
-      interrupt_responses: [
-        {
-          interruptId,
-          response: decision,
-        },
-      ],
-    };
-
-    this.attachCarriedSteering(resumeRequest, sessionId);
-
-    try {
-      await this.chatHttpService.sendChatRequest(resumeRequest);
-      // Reconcile from persisted memory so the approved/declined tool card
-      // shows its result (the live parser can't attach it — see above).
-      await this.reconcileAfterResume(sessionId);
-    } catch (error) {
-      this.chatStateService.setChatLoading(sessionId, false);
-      this.messageMapService.endStreaming(sessionId);
-
-      if (this.isExpiredInterruptError(error)) {
-        this.errorService.addError(
-          'Approval expired',
-          'The agent paused too long ago to resume this turn automatically. Please send your message again.',
-        );
-        return;
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Resume the paused agent turn after the user answers (or skips) the
-   * clarifying questions.
-   *
-   * Identical in shape to `resumeFromToolApproval`; the only difference is the
-   * response payload, which is a structured object rather than a decision
-   * string. It must never be null — the backend's `ToolContext.interrupt`
-   * only treats a non-null response as an answer, so a null would re-raise the
-   * same interrupt forever. `UserQuestionService` guarantees an object (Skip
-   * sends `{ skipped: true }`).
-   */
-  private async resumeFromUserQuestion(
-    interruptId: string,
-    response: UserQuestionResponse,
-    sessionId?: string,
-  ): Promise<void> {
-    if (!sessionId) {
-      return;
-    }
-
-    this.messageMapService.beginContinuationStreaming(sessionId);
-    this.chatStateService.setChatLoading(sessionId, true);
-
-    const resumeRequest: Record<string, unknown> = {
-      session_id: sessionId,
-      message: '',
-      interrupt_responses: [{ interruptId, response }],
-    };
-
-    this.attachCarriedSteering(resumeRequest, sessionId);
-
-    try {
-      await this.chatHttpService.sendChatRequest(resumeRequest);
-      await this.reconcileAfterResume(sessionId);
-    } catch (error) {
-      this.chatStateService.setChatLoading(sessionId, false);
-      this.messageMapService.endStreaming(sessionId);
-
-      if (this.isExpiredInterruptError(error)) {
-        this.errorService.addError(
-          'Question expired',
-          'The agent paused too long ago to resume this turn automatically. Please send your message again.',
-        );
-        return;
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Resume a turn the user paused to sign in to a site the agent could not
-   * reach (`docs/specs/authenticated-web-assessment.md`).
-   *
-   * Identical in shape to {@link resumeFromUserQuestion} — same
-   * `interrupt_responses` envelope, same non-null-response requirement, since
-   * both are tool-raised Strands interrupts. The response is
-   * `{ completed: true }` or `{ skipped: true }`; `BrowserLoginService`
-   * guarantees an object, because a null would re-raise the interrupt forever.
-   *
-   * The expired case is worth its own message: unlike a stale question, a
-   * lapsed sign-in means the backend already released the browser and let the
-   * session become reapable, so "send it again" is genuinely the only way
-   * forward — there is no authenticated session left to hand back.
-   */
-  private async resumeFromBrowserLogin(
-    interruptId: string,
-    response: BrowserLoginResponse,
-    sessionId?: string,
-  ): Promise<void> {
-    if (!sessionId) {
-      return;
-    }
-
-    this.messageMapService.beginContinuationStreaming(sessionId);
-    this.chatStateService.setChatLoading(sessionId, true);
-
-    const resumeRequest: Record<string, unknown> = {
-      session_id: sessionId,
-      message: '',
-      interrupt_responses: [{ interruptId, response }],
-    };
-
-    this.attachCarriedSteering(resumeRequest, sessionId);
-
-    try {
-      await this.chatHttpService.sendChatRequest(resumeRequest);
-      await this.reconcileAfterResume(sessionId);
-    } catch (error) {
-      this.chatStateService.setChatLoading(sessionId, false);
-      this.messageMapService.endStreaming(sessionId);
-
-      if (this.isExpiredInterruptError(error)) {
-        this.errorService.addError(
-          'Sign-in expired',
-          'The browser session ended before the sign-in finished. Please send your message again to start a new one.',
-        );
-        return;
-      }
-      throw error;
-    }
+    if (relayed) this.handoffRelay.endResume(relayed, outcome);
+    return outcome;
   }
 
   /**
@@ -851,18 +899,25 @@ export class ChatRequestService implements OnDestroy {
    * table for this surface, and the alternative (persisting interrupt state for
    * sessions defined by not being persisted) would undo the point of the
    * `preview-` prefix.
+   *
+   * Returns how the resume ended. A refusal the resume guard streamed
+   * (`resume_unavailable`) is `expired` when the snapshot outlived its TTL,
+   * and otherwise `conflict`: the pause was already answered, superseded, or
+   * never held these ids.
    */
-  private async reconcileAfterResume(sessionId: string): Promise<void> {
+  private async reconcileAfterResume(sessionId: string): Promise<ResumeOutcome> {
     // Checked first so the mark is always consumed. A refused resume streams
     // an unpersisted explanation; a reload would replace it with history that
     // has none.
-    if (this.chatStateService.takeResumeUnavailable(sessionId)) {
-      return;
+    const refusal = this.chatStateService.takeResumeRefusal(sessionId);
+    if (refusal !== null) {
+      return refusal === 'expired' ? 'expired' : 'conflict';
     }
     if (isPreviewSession(sessionId)) {
-      return;
+      return 'resumed';
     }
     await this.messageMapService.reloadMessagesForSession(sessionId);
+    return 'resumed';
   }
 
   /**

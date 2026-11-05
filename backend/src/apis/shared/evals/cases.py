@@ -97,6 +97,14 @@ class RunConfig:
     enabled_skills: Optional[Tuple[str, ...]] = None
 
 
+#: The generated reference documents a case may attach (``large_documents``).
+#: Built deterministically by ``scripts/large_document_quality/fixtures.py``
+#: (``BUILDERS``; a test pins the two lists together), each over the 4 MB
+#: inline limit, so a turn reaches them through ``document_read`` the way it
+#: reaches a user's large upload.
+LARGE_DOCUMENTS: Tuple[str, ...] = ("manual", "scanned", "brochure", "handbook")
+
+
 @dataclass(frozen=True)
 class JudgeSpec:
     evaluators: Tuple[str, ...] = ()
@@ -113,6 +121,9 @@ class EvalCase:
     judge: JudgeSpec
     files: Tuple[str, ...]
     notes: str
+    #: Generated reference documents (``LARGE_DOCUMENTS``), attached by reference
+    #: and prepared by the deployed pipeline before the first turn.
+    large_documents: Tuple[str, ...] = ()
 
     @property
     def gating(self) -> bool:
@@ -207,7 +218,7 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     """One case from its JSON object; raises :class:`CaseError` on anything doubtful."""
     case_id = raw.get("id") if isinstance(raw, Mapping) else None
     where = f"{family}:{case_id or '?'}"
-    _check_keys(raw, ("id", "family", "turns", "run", "expect", "judge", "files", "notes"), where)
+    _check_keys(raw, ("id", "family", "turns", "run", "expect", "judge", "files", "large_documents", "notes"), where)
 
     if not isinstance(case_id, str) or not _ID_RE.match(case_id):
         raise CaseError(f"{where}: id must look like '<family>.<snake_case_name>'")
@@ -265,6 +276,10 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     notes = raw.get("notes") or ""
     if not isinstance(notes, str):
         raise CaseError(f"{where}.notes: expected text")
+    large_documents = _str_tuple(raw.get("large_documents"), f"{where}.large_documents")
+    unknown_documents = sorted(set(large_documents) - set(LARGE_DOCUMENTS))
+    if unknown_documents:
+        raise CaseError(f"{where}.large_documents: unknown {unknown_documents} (known: {', '.join(LARGE_DOCUMENTS)})")
 
     return EvalCase(
         id=case_id,
@@ -275,6 +290,7 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         judge=judge,
         files=_str_tuple(raw.get("files"), f"{where}.files"),
         notes=notes,
+        large_documents=large_documents,
     )
 
 

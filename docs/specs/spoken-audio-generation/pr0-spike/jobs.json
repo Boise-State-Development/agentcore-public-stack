@@ -1,0 +1,30 @@
+[
+ {
+  "name": "bakeoff",
+  "script": "/home/ubuntu/pr0/scripts/bakeoff.txt"
+ },
+ {
+  "name": "narrator",
+  "script": "/home/ubuntu/pr0/scripts/narrator.txt"
+ },
+ {
+  "name": "panel",
+  "script": "/home/ubuntu/pr0/scripts/panel.txt"
+ },
+ {
+  "name": "long05",
+  "script": "/home/ubuntu/pr0/scripts/long05.txt"
+ },
+ {
+  "name": "long10",
+  "script": "/home/ubuntu/pr0/scripts/long10.txt"
+ },
+ {
+  "name": "long15",
+  "script": "/home/ubuntu/pr0/scripts/long15.txt"
+ },
+ {
+  "name": "long18",
+  "script": "/home/ubuntu/pr0/scripts/long18.txt"
+ }
+]

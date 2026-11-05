@@ -19,10 +19,12 @@ import { FileUploadService } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { IncognitoChatService } from '../incognito';
+import { HandoffRelayService } from '../handoff/handoff-relay.service';
 
 describe('ChatRequestService', () => {
   let service: ChatRequestService;
   let mockChatHttpService: any;
+  let mockRelay: { beginResume: ReturnType<typeof vi.fn>; endResume: ReturnType<typeof vi.fn> };
   let mockRouter: any;
   let mockModelService: any;
   let mockToolService: any;
@@ -34,6 +36,8 @@ describe('ChatRequestService', () => {
 
   beforeEach(() => {
     TestBed.resetTestingModule();
+    mockRelay = { beginResume: vi.fn().mockReturnValue(null), endResume: vi.fn() };
+
     mockChatHttpService = {
       sendChatRequest: vi.fn().mockResolvedValue(undefined),
     };
@@ -67,7 +71,8 @@ describe('ChatRequestService', () => {
         ChatRequestService,
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
-        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null), takeResumeUnavailable: vi.fn().mockReturnValue(false) } },
+        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null), takeResumeRefusal: vi.fn().mockReturnValue(null) } },
+        { provide: HandoffRelayService, useValue: mockRelay },
         { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined), markSendFailed: vi.fn(), removeTrailingMessage: vi.fn().mockReturnValue(true) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
         // Turn timing and prewarm off: the tests that need them turn them on.
@@ -620,13 +625,13 @@ describe('ChatRequestService', () => {
     it('keeps a refused resume\'s streamed explanation instead of reloading over it', async () => {
       const messageMap = TestBed.inject(MessageMapService) as any;
       const chatState = TestBed.inject(ChatStateService) as any;
-      chatState.takeResumeUnavailable.mockReturnValue(true);
+      chatState.takeResumeRefusal.mockReturnValue('expired');
 
       await oauthResumeHandler!(['int-1'], { sessionId: 'session1' });
 
       // The refusal is streamed but never persisted, so a reload would
       // replace it with history that has no explanation at all.
-      expect(chatState.takeResumeUnavailable).toHaveBeenCalledWith('session1');
+      expect(chatState.takeResumeRefusal).toHaveBeenCalledWith('session1');
       expect(messageMap.reloadMessagesForSession).not.toHaveBeenCalled();
     });
 
@@ -638,6 +643,61 @@ describe('ChatRequestService', () => {
     it('is a no-op without a session id', async () => {
       await oauthResumeHandler!(['int-1'], {});
       expect(mockChatHttpService.sendChatRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Relayed prompts (handoffs spec §4.3, PR-0.3c): a handoff target's resume is
+   * reported to HandoffRelayService, which turns a lost first-answer race into
+   * "Already answered". These pin what it is told, driven by the resume
+   * guard's own refusal (the streamed `resume_unavailable` reason) and the 409
+   * a turn the other surface already resumed answers with.
+   */
+  describe('resuming a handoff target', () => {
+    const handle = { targetSessionId: 'tgt', kind: 'tool_approval', surface: 'source', sourceSessionId: 'src', handoffId: 'h1', agentName: 'Rubric Builder' };
+
+    beforeEach(() => mockRelay.beginResume.mockReturnValue(handle));
+
+    it('reports a resumed turn, and the answer goes only to the target', async () => {
+      await approvalResumeHandler!('int-9', 'approved', { sessionId: 'tgt' });
+
+      expect(mockRelay.beginResume).toHaveBeenCalledWith('tgt', 'tool_approval');
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ session_id: 'tgt', interrupt_responses: [{ interruptId: 'int-9', response: 'approved' }] }),
+        { quietConflict: true },
+      );
+      expect(mockRelay.endResume).toHaveBeenCalledWith(handle, 'resumed');
+    });
+
+    it.each([
+      ['missing', 'conflict'],
+      ['unknown_interrupt', 'conflict'],
+      ['expired', 'expired'],
+    ])('reads the resume guard refusal %s as %s', async (reason, outcome) => {
+      const chatState = TestBed.inject(ChatStateService) as any;
+      chatState.takeResumeRefusal.mockReturnValue(reason);
+
+      await approvalResumeHandler!('int-9', 'approved', { sessionId: 'tgt' });
+
+      expect(mockRelay.endResume).toHaveBeenCalledWith(handle, outcome);
+    });
+
+    it('reads a 409 (the other surface already resumed it) as a conflict, not an error', async () => {
+      mockChatHttpService.sendChatRequest.mockRejectedValueOnce(new StreamNotStartedError('busy', 409));
+
+      await expect(approvalResumeHandler!('int-9', 'approved', { sessionId: 'tgt' })).resolves.toBeUndefined();
+
+      expect(mockRelay.endResume).toHaveBeenCalledWith(handle, 'conflict');
+    });
+
+    it('leaves an ordinary resume exactly as it was', async () => {
+      mockRelay.beginResume.mockReturnValue(null);
+      mockChatHttpService.sendChatRequest.mockRejectedValueOnce(new StreamNotStartedError('busy', 409));
+
+      await approvalResumeHandler!('int-9', 'approved', { sessionId: 'session1' }).catch(() => undefined);
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(expect.objectContaining({ session_id: 'session1' }));
+      expect(mockRelay.endResume).not.toHaveBeenCalled();
     });
   });
 

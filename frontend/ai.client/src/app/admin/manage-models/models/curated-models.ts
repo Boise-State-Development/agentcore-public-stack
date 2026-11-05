@@ -298,6 +298,56 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     },
   },
   {
+    key: 'claude-haiku-5-5',
+    tagline: "Anthropic's fastest, most efficient 5.5 model — high-volume work with effort control.",
+    capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...claude4xDefaults(),
+      // `us.` because dev's SCP denies every `global.*` profile. Prod has no
+      // SCP: `global.anthropic.claude-haiku-5-5` at $0.10 / $0.50 is cheaper.
+      modelId: 'us.anthropic.claude-haiku-5-5',
+      // **Load-bearing pricing, not the window.** The card says 1M tokens, but
+      // a prompt over 100,000 tokens is billed on the "Long Context" row, 5x on
+      // every bucket, and `CuratedModel` holds one flat rate per bucket (the
+      // same reason the GPT-5.6 rows pin 272K). Compaction reads this value:
+      // it cuts at 50K, aims for 12.5K, and forces a cut at 70K, so a turn
+      // never reaches the step. Raising it past ~142K would let the hard
+      // ceiling (0.7x the window) cross 100K.
+      maxInputTokens: 100_000,
+      modelName: 'Claude Haiku 5.5',
+      shortDescription: 'Fast and low-cost, with effort control',
+      maxOutputTokens: 128_000,
+      // Regional (CRIS): $0.11 / $0.55, cache write $0.1375 (1.25x), read
+      // $0.011 (0.1x). The Price List API (`AmazonBedrockFoundationModels`,
+      // us-west-2, 2026-11-03) and the card agree. Its tokenizer counts ~30%
+      // more tokens than Haiku 4.5's for the same text, so the saving against
+      // Haiku 4.5 is ~7.7x on the same conversation, not 10x.
+      ...ratesWithDerivedCache(0.11, 0.55),
+      knowledgeCutoffDate: '2026-06-01',
+      // Probed on dev 2026-11-03 against `us.anthropic.claude-haiku-5-5`:
+      // `temperature` and `top_p` 400 ("deprecated for this model"), and
+      // `thinking.type.enabled` 400s. Adaptive thinking is on by default, and
+      // the backend sends it with the preserved-thinking `drop_block` binding
+      // on every request (`_apply_thinking_binding` in model_config.py), so
+      // no `thinking` param is declared. `effort: max` is valid only while
+      // thinking is on, and it always is here. CountTokens is unsupported on
+      // bedrock-runtime, so context attribution records nothing for this id.
+      // The cache minimum measured between 475 (no write) and 772 tokens
+      // (written); the card says 512.
+      supportedParams: {
+        params: {
+          max_tokens: { supported: true, min: 1, max: 128_000, default: 32_000 },
+          effort: {
+            supported: true,
+            allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
+            default: 'medium',
+          },
+        },
+      },
+    },
+  },
+  {
     key: 'claude-haiku-4-5',
     tagline: "Anthropic's fastest model — great for high-throughput tasks.",
     capabilities: ['Extended thinking', 'Vision', 'Prompt caching'],

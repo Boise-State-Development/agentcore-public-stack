@@ -38,7 +38,8 @@ whether to label this document ``provisioning``.
 
 It also never blocks. The AWS ``CreateKnowledgeBase`` call is 47–124 s to
 ``ACTIVE`` and takes minutes end to end; all this does is three conditional
-DynamoDB writes and hand the job to the dispatcher's queue.
+DynamoDB writes, hand the job to the dispatcher's queue, and async-invoke the
+worker so the job starts now rather than at the next 15-minute tick.
 """
 
 from __future__ import annotations
@@ -62,6 +63,10 @@ logger = logging.getLogger(__name__)
 #: side of the boundary. Both halves must agree on this string — the trigger writes
 #: it, the consumer defers on it, the provisioner clears it.
 STATUS_PROVISIONING = _STATUS_PROVISIONING
+
+#: The migration worker's function name, set on app-api by
+#: ``app-api-service-construct.ts``. The same name the dispatcher reads.
+ENV_WORKER_FUNCTION = "KB_MIGRATION_WORKER_FUNCTION_NAME"
 
 
 def is_provisioning_managed(record: Optional[Dict[str, Any]]) -> bool:
@@ -273,3 +278,66 @@ async def _enqueue(assistant_id: str, *, generation: int) -> None:
         logger.info(
             f"kb {assistant_id}: provisioning job already queued by a concurrent request"
         )
+        return
+
+    await _start_worker_now(assistant_id, generation=generation)
+
+
+async def _start_worker_now(assistant_id: str, *, generation: int) -> None:
+    """Hand the job to the migration worker now instead of at the next tick.
+
+    The dispatcher's schedule is ``rate(15 minutes)``, so a job that is merely
+    queued waits 0–15 minutes before anything runs it, against a build that then
+    takes seconds to two minutes. On prod (2026-11-03) a Shared Project's 11 files
+    sat at "Setting up" for 12 minutes waiting for the tick, then were all ready
+    two minutes after it.
+
+    Best-effort, and safe to race the tick: the worker reads the state from the
+    record rather than from this payload, and its lease turns a second concurrent
+    worker into a no-op. Any failure here leaves the job queued for the tick, which
+    is exactly where it was before this existed. A missing function name (an image
+    shipped ahead of the infrastructure that sets it) is that same fallback.
+    """
+    import asyncio
+    import os
+
+    from apis.shared.kb_backend import records as r
+
+    function_name = os.environ.get(ENV_WORKER_FUNCTION)
+    if not function_name:
+        logger.info(
+            f"kb {assistant_id}: {ENV_WORKER_FUNCTION} is not set; provisioning "
+            f"waits for the next dispatcher tick"
+        )
+        return
+
+    # The dispatcher's payload, field for field, so the worker cannot tell the two
+    # starts apart.
+    payload = {
+        "assistantId": assistant_id,
+        "appKbId": assistant_id,
+        "migrationState": r.BORN_MANAGED,
+        "migrationGeneration": generation,
+    }
+    try:
+        await asyncio.to_thread(_invoke_worker, function_name, payload)
+    except Exception as exc:  # noqa: BLE001 — the tick is the fallback
+        logger.warning(
+            f"kb {assistant_id}: could not start provisioning now; it waits for the "
+            f"next dispatcher tick: {exc}"
+        )
+        return
+    logger.info(f"kb {assistant_id}: provisioning started without waiting for the tick")
+
+
+def _invoke_worker(function_name: str, payload: Dict[str, Any]) -> None:
+    """Async-invoke the migration worker, as the dispatcher does."""
+    import json
+
+    import boto3
+
+    boto3.client("lambda").invoke(
+        FunctionName=function_name,
+        InvocationType="Event",
+        Payload=json.dumps(payload).encode("utf-8"),
+    )

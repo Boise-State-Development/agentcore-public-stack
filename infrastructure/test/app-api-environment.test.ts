@@ -87,12 +87,28 @@ describe('buildAppApiEnvironment — session prewarm', () => {
   });
 });
 
+describe('buildAppApiEnvironment — quota requests', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.QUOTA_REQUESTS_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ quotaRequests: { enabled: true } }), stubParams());
+    expect(on.QUOTA_REQUESTS_ENABLED).toBe('true');
+  });
+
+  it('forwards the AWS Limits flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).AWS_LIMITS_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ awsLimits: { enabled: true } }), stubParams());
+    expect(on.AWS_LIMITS_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — handoffs', () => {
   it('forwards the flag, off by default', () => {
     const off = buildAppApiEnvironment(createMockConfig(), stubParams());
     expect(off.HANDOFFS_ENABLED).toBe('false');
 
-    const on = buildAppApiEnvironment(createMockConfig({ handoffs: { enabled: true } }), stubParams());
+    const on = buildAppApiEnvironment(createMockConfig({ handoffs: { enabled: true, briefEnabled: false } }), stubParams());
     expect(on.HANDOFFS_ENABLED).toBe('true');
   });
 });

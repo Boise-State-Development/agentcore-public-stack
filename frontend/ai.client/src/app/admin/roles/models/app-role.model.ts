@@ -50,6 +50,11 @@ export interface AppRole {
   updatedAt: string;
   /** User ID who created the role */
   createdBy: string;
+  /**
+   * Free-text instruction added to the system prompt of plain chats (no agent)
+   * for every user holding this role. Not inherited. `null` or absent: none.
+   */
+  systemInstruction?: string | null;
 }
 
 /**
@@ -57,6 +62,27 @@ export interface AppRole {
  */
 export interface AppRoleListResponse {
   roles: AppRole[];
+  total: number;
+}
+
+/**
+ * A role as a picker shows it: who it is, never what it grants.
+ *
+ * Served by `GET /admin/roles/picker-options` to any delegated admin, which is
+ * why it has no grant fields — the full {@link AppRole} is `system_admin`-only.
+ */
+export interface AppRoleOption {
+  roleId: string;
+  displayName: string;
+  description: string;
+  enabled: boolean;
+}
+
+/**
+ * Every role, highest priority first, then by id.
+ */
+export interface AppRoleOptionListResponse {
+  roles: AppRoleOption[];
   total: number;
 }
 
@@ -84,6 +110,8 @@ export interface AppRoleCreateRequest {
   priority?: number;
   /** Whether this role is active */
   enabled?: boolean;
+  /** System instruction (max 8,000 chars). Empty or `null` clears it. */
+  systemInstruction?: string | null;
 }
 
 /**
@@ -109,6 +137,8 @@ export interface AppRoleUpdateRequest {
   priority?: number;
   /** Whether this role is active */
   enabled?: boolean;
+  /** System instruction (max 8,000 chars). Empty or `null` clears it. */
+  systemInstruction?: string | null;
 }
 
 /**
@@ -125,4 +155,8 @@ export interface AppRoleFormData {
   grantedAdminScopes: string[];
   priority: number;
   enabled: boolean;
+  systemInstruction: string;
 }
+
+/** Per-role cap on `systemInstruction`; the server enforces the same limit. */
+export const MAX_ROLE_SYSTEM_INSTRUCTION_CHARS = 8000;

@@ -36,6 +36,19 @@ NotificationKind = Literal[
     # createdBy}. ``reason`` is a run_block_reason code, a worker pause reason, or
     # "paused_by_editor" / "deleted" when someone else stopped it.
     "project_schedule_paused",
+    # Quota requests and extensions (quota-requests spec §11.1). Not project
+    # events: projectId is unset and the payload carries the ids.
+    "quota_request_submitted",
+    "quota_request_decided",
+    "quota_request_info_requested",
+    "quota_extension_granted",
+    "quota_extension_revoked",
+    # Handoffs (agent-handoffs-and-consults §4.3, PR-0.3b), written by the Runtime after a
+    # target's turn: payload {handoffId, sourceSessionId, targetSessionId, agentId, agentName,
+    # sourceTitle}, never request or conversation text. Recipient and actor are the same user.
+    "handoff_needs_input",
+    "handoff_done",
+    "handoff_stopped",
 ]
 
 

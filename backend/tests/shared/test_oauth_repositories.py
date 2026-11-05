@@ -88,3 +88,38 @@ class TestOAuthProviderRepository:
         assert await repo.get_provider("x") is None
         assert await repo.list_providers() == []
         assert await repo.delete_provider("x") is False
+
+
+class TestCrossTaskStaleness:
+    """The config cache is per ECS task; admin reads must not depend on it."""
+
+    @pytest.mark.asyncio
+    async def test_write_on_one_task_visible_to_admin_read_on_another(
+        self, oauth_provider_repository
+    ):
+        from apis.shared.caching import config_cache
+        from apis.shared.caching.config_cache import ConfigListCache
+
+        repo = oauth_provider_repository
+        saved = config_cache._cache
+        try:
+            # Task B warms its own cache with the pre-write list.
+            task_b = ConfigListCache()
+            config_cache._cache = task_b
+            await repo.put_provider(_make_provider("p1", display_name="Old"))
+            assert [p.display_name for p in await repo.list_providers()] == ["Old"]
+
+            # Task A handles the write; its invalidation never reaches task B.
+            config_cache._cache = ConfigListCache()
+            await repo.put_provider(_make_provider("p1", display_name="New"))
+            await repo.put_provider(_make_provider("p2", display_name="Other"))
+
+            config_cache._cache = task_b
+            stale = await repo.list_providers()
+            assert [p.display_name for p in stale] == ["Old"]  # the bug, cached path
+            fresh = await repo.list_providers(fresh=True)
+            assert [p.display_name for p in fresh] == ["New", "Other"]
+            fresh_enabled = await repo.list_providers(enabled_only=True, fresh=True)
+            assert len(fresh_enabled) == 2
+        finally:
+            config_cache._cache = saved

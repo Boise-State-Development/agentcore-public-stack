@@ -45,7 +45,7 @@ import {
 import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import { ManagedModelsService } from './services/managed-models.service';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
-import { AppRolesService } from '../roles/services/app-roles.service';
+import { RoleOptionsService } from '../roles/services/role-options.service';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 import {
   DeleteModelDialogComponent,
@@ -286,7 +286,7 @@ export class ModelFormPage implements OnInit {
   private route = inject(ActivatedRoute);
   private managedModelsService = inject(ManagedModelsService);
   private prefillService = inject(CuratedModelPrefillService);
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
   private dialog = inject(Dialog);
 
   // Available options for multi-select fields
@@ -337,8 +337,8 @@ export class ModelFormPage implements OnInit {
   private mantleModelIdsLoaded = false;
 
   // AppRoles from the API (reactive resource)
-  readonly rolesResource = this.appRolesService.rolesResource;
-  readonly availableAppRoles = computed(() => this.appRolesService.getEnabledRoles());
+  readonly rolesResource = this.roleOptionsService.rolesResource;
+  readonly availableAppRoles = computed(() => this.roleOptionsService.getEnabledRoles());
 
   /**
    * Roles that already reach this model without a direct grant — they hold a

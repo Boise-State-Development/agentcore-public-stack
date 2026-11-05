@@ -9,13 +9,14 @@
  */
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
+import { provideMarkdown } from 'ngx-markdown';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RoleFormPage } from './role-form.page';
 import { AppRolesService } from '../services/app-roles.service';
 import { AdminToolService } from '../../tools/services/admin-tool.service';
 import { ManagedModelsService } from '../../manage-models/services/managed-models.service';
-import { AppRole } from '../models/app-role.model';
+import { AppRole, MAX_ROLE_SYSTEM_INSTRUCTION_CHARS } from '../models/app-role.model';
 import { AdminScopeListResponse } from '../../admin-scope.model';
 
 function role(overrides: Partial<AppRole> = {}): AppRole {
@@ -84,6 +85,7 @@ describe('RoleFormPage — grant pickers', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([{ path: 'admin/roles', children: [] }]),
+        provideMarkdown(),
         { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap({ id }) } } },
         { provide: AppRolesService, useValue: service },
         {
@@ -248,6 +250,119 @@ describe('RoleFormPage — grant pickers', () => {
       grantedAdminScopes: ['admin.users', 'admin.costs'],
       priority: 10,
       enabled: true,
+      systemInstruction: null,
     });
+  });
+});
+
+describe('RoleFormPage — system instruction', () => {
+  let fixture: ComponentFixture<RoleFormPage>;
+  let el: HTMLElement;
+  let service: {
+    getEnabledRoles: ReturnType<typeof vi.fn>;
+    fetchAdminScopes: ReturnType<typeof vi.fn>;
+    fetchRole: ReturnType<typeof vi.fn>;
+    updateRole: ReturnType<typeof vi.fn>;
+    createRole: ReturnType<typeof vi.fn>;
+  };
+
+  async function mount(id: string, loaded: AppRole = role()): Promise<void> {
+    service = {
+      getEnabledRoles: vi.fn(() => ROLES),
+      fetchAdminScopes: vi.fn().mockResolvedValue(SCOPES),
+      fetchRole: vi.fn().mockResolvedValue(loaded),
+      updateRole: vi.fn().mockResolvedValue(loaded),
+      createRole: vi.fn().mockResolvedValue(loaded),
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([{ path: 'admin/roles', children: [] }]),
+        provideMarkdown(),
+        { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap({ id }) } } },
+        { provide: AppRolesService, useValue: service },
+        { provide: AdminToolService, useValue: { toolsResource: { isLoading: () => false }, getTools: () => [] } },
+        {
+          provide: ManagedModelsService,
+          useValue: { modelsResource: { isLoading: () => false }, getManagedModels: () => [] },
+        },
+      ],
+    });
+    fixture = TestBed.createComponent(RoleFormPage);
+    el = fixture.nativeElement;
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  function type(text: string): void {
+    const textarea = el.querySelector<HTMLTextAreaElement>('#systemInstruction')!;
+    textarea.value = text;
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  function submitButton(): HTMLButtonElement {
+    return el.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  }
+
+  it('loads the role’s instruction into the editor', async () => {
+    await mount('analyst', role({ systemInstruction: 'Cite sources.' }));
+    expect(el.querySelector<HTMLTextAreaElement>('#systemInstruction')!.value).toBe('Cite sources.');
+    expect(fixture.componentInstance.instructionLength()).toBe(13);
+  });
+
+  it('counts characters and estimates tokens as the admin types', async () => {
+    await mount('new');
+    type('x'.repeat(10));
+    const page = fixture.componentInstance;
+    expect(page.instructionLength()).toBe(10);
+    expect(page.instructionTokens()).toBe(3);
+    expect(el.querySelector('#system-instruction-count')!.textContent).toContain('10 / 8,000 characters');
+  });
+
+  it('disables save over the limit and says so', async () => {
+    await mount('analyst');
+    type('x'.repeat(MAX_ROLE_SYSTEM_INSTRUCTION_CHARS));
+    expect(fixture.componentInstance.instructionOverLimit()).toBe(false);
+    expect(submitButton().disabled).toBe(false);
+
+    type('x'.repeat(MAX_ROLE_SYSTEM_INSTRUCTION_CHARS + 1));
+    expect(fixture.componentInstance.instructionOverLimit()).toBe(true);
+    expect(submitButton().disabled).toBe(true);
+    expect(el.querySelector('#system-instruction-count')!.textContent).toContain('shorten it to save');
+  });
+
+  it('previews the text as markdown', async () => {
+    await mount('new');
+    type('**Be brief.**');
+    expect(fixture.componentInstance.instructionPreview()).toBe('**Be brief.**');
+  });
+
+  it('sends the trimmed instruction on update, and null to clear it', async () => {
+    await mount('analyst', role({ systemInstruction: 'Old.' }));
+    type('  Cite sources.  ');
+    await fixture.componentInstance.onSubmit();
+    expect(service.updateRole.mock.calls[0][1].systemInstruction).toBe('Cite sources.');
+
+    type('   ');
+    await fixture.componentInstance.onSubmit();
+    expect(service.updateRole.mock.calls[1][1].systemInstruction).toBeNull();
+  });
+
+  it('sends it on create', async () => {
+    await mount('new');
+    const form = fixture.componentInstance.roleForm;
+    form.patchValue({ roleId: 'faculty', displayName: 'Faculty' });
+    type('Cite sources.');
+    await fixture.componentInstance.onSubmit();
+    expect(service.createRole.mock.calls[0][0].systemInstruction).toBe('Cite sources.');
+  });
+
+  it('hides the editor for system_admin, which the server never lets carry one', async () => {
+    await mount('system_admin', role({ roleId: 'system_admin', isSystemRole: true }));
+    expect(el.querySelector('#systemInstruction')).toBeNull();
+    expect(el.textContent).toContain('can\'t carry a system instruction');
   });
 });

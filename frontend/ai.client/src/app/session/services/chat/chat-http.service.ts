@@ -1,4 +1,4 @@
-import { DestroyRef, inject, Injectable } from '@angular/core';
+import { DestroyRef, inject, Injectable, Injector } from '@angular/core';
 import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
 import { SessionAffinityService } from '../session/session-affinity.service';
 import { StreamParserService } from './stream-parser.service';
@@ -13,6 +13,8 @@ import { ErrorService } from '../../../services/error/error.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { TurnTimingService } from './turn-timing.service';
 import { browserFrameHeight } from '../../../services/browser-login/browser-frame-height';
+import { QuotaStatusService } from '../../../services/quota/quota-status.service';
+import { HandoffBriefService } from '../handoff/handoff-brief.service';
 
 /**
  * Title fallback polling. A stream that outruns title generation closes a few
@@ -195,13 +197,31 @@ export class ChatHttpService {
   private bffSession = inject(BffSessionService);
   private errorService = inject(ErrorService);
   private destroyRef = inject(DestroyRef);
+  private injector = inject(Injector);
+  private handoffBrief = inject(HandoffBriefService);
 
   constructor() {
     this.registerPageLifecycleAttribution();
   }
 
-  async sendChatRequest(requestObject: any): Promise<void> {
+  /**
+   * `quietConflict`: a 409 is the caller's to explain, so no "Already responding" notice. A relayed
+   * prompt answered after the other surface already resumed the turn (handoffs spec §4.3) reads it
+   * as "Already answered".
+   */
+  async sendChatRequest(requestObject: any, options: { quietConflict?: boolean } = {}): Promise<void> {
     const sessionId = requestObject.session_id as string;
+
+    // A handoff brief holds this conversation's lease (handoffs spec §4.5.1). The user's own
+    // turn wins it: stop the brief and wait for its stream to close before sending, or the send
+    // would 409 as "Already responding" for a turn that isn't one. Nothing to wait on, and no
+    // latency added, when no brief is in flight. A send that a newer one superseded meanwhile
+    // leaves the session to it.
+    if (this.handoffBrief.isRunning(sessionId)) {
+      const ownStreamId = this.streamParserService.getCurrentStreamId(sessionId);
+      await this.handoffBrief.preempt(sessionId);
+      if (this.streamParserService.getCurrentStreamId(sessionId) !== ownStreamId) return;
+    }
 
     // Fresh controller per request, keyed by session. Creating it aborts any
     // in-flight stream for the SAME session (double-submit guard) without
@@ -230,6 +250,7 @@ export class ChatHttpService {
       // left behind here makes every completed turn in this tab eligible for
       // a `navigated_away` marker on the next refresh / tab close.
       this.chatStateService.releaseAbortController(sessionId, abortController);
+      this.reloadQuotaStatus();
     };
 
     try {
@@ -397,7 +418,9 @@ export class ChatHttpService {
             // response is still generating. Show a soft, dismissible notice with
             // the server's explanation rather than a "Chat Request Failed" toast.
             if (err instanceof AlreadyStreamingError) {
-              this.errorService.addError('Already responding', err.message, undefined, undefined);
+              if (!options.quietConflict) {
+                this.errorService.addError('Already responding', err.message, undefined, undefined);
+              }
               throw err;
             }
 
@@ -503,6 +526,18 @@ export class ChatHttpService {
     this.chatStateService.abortRequest(sessionId);
     this.messageMapService.endStreaming(sessionId);
     this.chatStateService.setChatLoading(sessionId, false);
+    this.reloadQuotaStatus();
+  }
+
+  /**
+   * Re-read the caller's quota status once a turn ends. A turn moves the
+   * spend, and the limit, an open request or a fund's charge may have changed
+   * while it ran; the composer's quota tab and the request dialog read this
+   * status, which otherwise dates from page load. One GET per turn, off the
+   * turn path (quota-requests spec §10.3).
+   */
+  private reloadQuotaStatus(): void {
+    this.injector.get(QuotaStatusService).reload();
   }
 
   /**

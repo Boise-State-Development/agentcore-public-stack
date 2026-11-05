@@ -1010,6 +1010,22 @@ from .quota.routes import router as quota_router
 
 router.include_router(quota_router)
 
+# ========== Include Quota Requests Subrouter ==========
+# Its own delegable scope (admin.quota_requests), so the request queue can be
+# delegated without the tier editor. Mounted always; every handler 404s while
+# QUOTA_REQUESTS_ENABLED is off (checked after the scope dependency).
+from .quota_requests.routes import router as quota_requests_router
+
+router.include_router(quota_requests_router)
+
+# ========== Include AWS Limits Subrouter ==========
+# Service Quotas monitoring and increase requests (GitHub issue #12), scope
+# admin.aws_limits. Mounted always; every handler 404s while
+# AWS_LIMITS_ENABLED is off (checked after the scope dependency).
+from .aws_limits.routes import router as aws_limits_router
+
+router.include_router(aws_limits_router)
+
 # ========== Include Cost Dashboard Subrouter ==========
 from .costs.routes import router as costs_router
 
@@ -1024,6 +1040,14 @@ router.include_router(feedback_admin_router)
 from .users.routes import router as users_router
 
 router.include_router(users_router)
+
+# ========== Include Role Picker Subrouter ==========
+# ⚠️ Must be included BEFORE the roles CRUD router below: its `/roles/{role_id}` is a
+# single-segment catch-all and would answer `GET /roles/picker-options` as a lookup of a
+# role by that id (system_admin-only, so a delegated admin would get a 403 again).
+from .roles.picker import router as role_picker_router
+
+router.include_router(role_picker_router)
 
 # ========== Include Roles Admin Subrouter ==========
 from .roles.routes import router as roles_router

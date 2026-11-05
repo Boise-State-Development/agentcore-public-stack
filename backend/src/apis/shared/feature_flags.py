@@ -787,6 +787,28 @@ def platform_self_service_enabled() -> bool:
     return os.environ.get("PLATFORM_SELF_SERVICE_ENABLED", "false").strip().lower() == "true"
 
 
+def meeting_tasks_enabled() -> bool:
+    """Whether the meeting-transcripts-to-GitHub-issues tool families are built.
+
+    Covers the Google Calendar (``google_calendar_meetings``), Zoom
+    (``zoom_meeting_transcripts``) and GitHub (``github_issues_local``) tools built
+    per request by ``_build_meeting_tools`` in the inference API
+    (``agents/local_tools/meeting_tasks.py``,
+    ``docs/specs/meeting-transcripts-to-github-issues.md``). **Opt-in while the
+    feature is in development**: only ``"true"`` (case-insensitive) enables it;
+    unset, empty or anything else is off. AgentCore Runtime only; CDK sets it
+    there, and only while on. No SPA switch: the tools surface through the
+    existing tool picker and connector consent flow.
+
+    It ANDs with RBAC: each family's catalog row is seeded
+    ``enabledByDefault: false`` and not public, so on by default would still
+    grant nobody anything until a role is granted the tool and an admin binds
+    the row to a connector. Off, the tools are never built, so their specs
+    never reach ``toolConfig`` and no catalog read is made for them.
+    """
+    return os.environ.get("MEETING_TASKS_ENABLED", "").strip().lower() == "true"
+
+
 def projects_enabled() -> bool:
     """Whether Shared Projects exist in this environment.
 
@@ -843,6 +865,24 @@ def handoffs_enabled() -> bool:
     a new conversation, which is a product choice a deployment may keep.
     """
     return os.environ.get("HANDOFFS_ENABLED", "").strip().lower() == "true"
+
+
+def handoff_brief_enabled() -> bool:
+    """Whether a handoff's context card is a brief the source's own model writes.
+
+    ``docs/specs/agent-handoffs-and-consults.md`` §4.5.1. While on, the Runtime
+    answers a ``handoff_brief`` invocation by re-sending the source
+    conversation's last request plus one instruction, so the history reads from
+    the source's prompt cache; while off, that invocation answers with a
+    ``flag_off`` fallback and the card stays the PR-0.1 excerpt. Meaningless
+    without ``HANDOFFS_ENABLED``, so both must be on. **Opt-in while in
+    development**: only ``"true"`` enables it. CDK writes it to the Runtime only
+    while on, so the default spends none of the V2 environment budget.
+
+    A **feature switch** once finished: it spends model tokens on every handoff,
+    which a deployment may decline.
+    """
+    return handoffs_enabled() and os.environ.get("HANDOFF_BRIEF_ENABLED", "").strip().lower() == "true"
 
 
 def session_rewind_enabled() -> bool:
@@ -905,6 +945,51 @@ def session_prewarm_enabled() -> bool:
     any work, so the app-api route is the whole gate.
     """
     return os.environ.get("SESSION_PREWARM_ENABLED", "").strip().lower() == "true"
+
+
+def quota_requests_enabled() -> bool:
+    """Whether users can request more quota and admins can grant extensions.
+
+    ``docs/specs/quota-requests-and-extensions.md``. Gates app-api's
+    ``/quota/*`` user routes and the ``/admin/quota-requests`` and
+    ``/admin/quota-extensions`` admin routes, which 404 after authentication
+    while off. **Opt-in while the feature is in development** (CLAUDE.md
+    "Feature flags"): only ``"true"`` (case-insensitive) enables it, so an
+    unset GitHub variable (``""``) is off. CDK sets it on app-api from
+    ``config.quotaRequests.enabled``. The SPA's matching switch will be
+    ``features.quotaRequests``.
+
+    **app-api only.** The Runtime gets no variable: quota resolution reads
+    extensions wherever it runs, exactly as direct user grants are read, so
+    turning this off stops new extensions without revoking existing ones and
+    spends none of the Runtime's V2 environment budget.
+
+    A **feature switch** once finished: whether users may ask for more is a
+    product and budget choice a deployment may reasonably not want.
+    """
+    return os.environ.get("QUOTA_REQUESTS_ENABLED", "").strip().lower() == "true"
+
+
+def aws_limits_enabled() -> bool:
+    """Whether the AWS Limits admin page (Service Quotas monitoring) is served.
+
+    GitHub issue #12. Gates app-api's ``/admin/aws-limits`` routes, which 404
+    after authentication while off. The page lists the account's applied AWS
+    quotas for the services this stack uses, with usage where AWS publishes a
+    usage metric, and lets an admin request an increase through Service Quotas.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it, so an unset GitHub variable
+    (``""``) is off. CDK sets it on app-api from ``config.awsLimits.enabled``,
+    and grants the Service Quotas permissions only while it is on. The SPA's
+    matching switch is ``features.awsLimits``.
+
+    **app-api only.** The Runtime never reads quotas, so it gets no variable.
+
+    A **feature switch** once finished: whether app admins may raise AWS
+    account quotas from the app is a deployment's choice.
+    """
+    return os.environ.get("AWS_LIMITS_ENABLED", "").strip().lower() == "true"
 
 
 def user_grants_enabled() -> bool:
@@ -1180,6 +1265,62 @@ def source_provenance_enabled() -> bool:
     invisible, so there is nothing for a rollout hedge to protect.
     """
     return os.environ.get("SOURCE_PROVENANCE_ENABLED", "").strip().lower() == "true"
+
+
+def web_search_default_max_results_enabled() -> bool:
+    """Whether an AgentCore Web Search call that names no ``maxResults`` asks
+    for 5 results instead of the connector's 10.
+
+    On, ``WebSearchDefaultsHook`` fills in ``maxResults=5`` at
+    ``BeforeToolCallEvent`` for any ``<target>___WebSearch`` call whose input
+    leaves it out. A count the model chose passes through. Each result is about
+    535 tokens, so an unqualified search drops from ~5.3k tokens of tool result
+    to ~2.6k (``docs/specs/web-search-default-comparison-findings.md``). Nothing
+    reaches the system prompt or ``toolConfig``, and the model's request in
+    history stays as it wrote it: the hook hands Strands a copy.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.webSearchDefaultMaxResults.enabled``. No SPA switch: there is
+    nothing to show.
+
+    A **feature switch**, not a rollout switch, and therefore permanent: how
+    many results an unqualified search buys is a product choice between
+    context spent and breadth of answer, which a deployment may reasonably
+    make the other way.
+    """
+    return (
+        os.environ.get("WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED", "").strip().lower()
+        == "true"
+    )
+
+
+def project_file_readiness_enabled() -> bool:
+    """Whether a project turn tells the model which project files are not ready.
+
+    On, a Shared Project harness turn whose files include any that are still
+    being prepared (``provisioning`` → ``embedding``) or that ``failed`` gets a
+    short ``<project_files_status>`` note in the user message
+    (``apis.shared.assistants.kb_readiness``). Without it the model sees nothing
+    for those files, because retrieval and full-context both skip a document
+    until it is ``complete``, and answers as though the project had no such
+    file. A turn whose files are all ready is byte-for-byte unchanged. The note
+    rides the persisted user message like ``<project_member>``, never the
+    system prompt or ``toolConfig``, so no cached prefix moves.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.projectFileReadiness.enabled``. The SPA's matching switch,
+    ``features.projectFileReadiness``, shows the readiness strip above a
+    project chat's composer.
+
+    A **feature switch** once finished: what the assistant says about files it
+    cannot read yet, and whether the chat shows their progress, is a product
+    choice a deployment may make the other way.
+    """
+    return os.environ.get("PROJECT_FILE_READINESS_ENABLED", "").strip().lower() == "true"
 
 
 def document_extract_enabled() -> bool:

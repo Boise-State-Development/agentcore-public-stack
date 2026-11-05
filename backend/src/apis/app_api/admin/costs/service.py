@@ -1067,6 +1067,7 @@ class AdminCostService:
             calls.append(SessionCallRow(
                 timestamp=record.get("timestamp", ""),
                 message_id=record.get("messageId"),
+                call_kind=record.get("callKind"),
                 model_id=model_info.get("modelId"),
                 input_tokens=int(token_usage.get("inputTokens") or 0),
                 output_tokens=int(token_usage.get("outputTokens") or 0),

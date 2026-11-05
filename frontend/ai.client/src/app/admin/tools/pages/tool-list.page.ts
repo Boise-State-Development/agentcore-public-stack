@@ -98,7 +98,7 @@ export function gatewayFailureReasonsFor(health: GatewayHealth | undefined): str
 export function isTransientGatewayStatus(status: string): boolean {
   return TRANSIENT_GATEWAY_STATUSES.includes(status.toUpperCase());
 }
-import { AppRolesService } from '../../roles/services/app-roles.service';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
 import { ToolCapabilities } from '../../../services/tool-capability/tool-capability.service';
 import { ToolRoleDialogComponent, ToolRoleDialogData, ToolRoleDialogResult } from '../components/tool-role-dialog.component';
 import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult } from '../components/delete-tool-dialog.component';
@@ -523,7 +523,16 @@ export function capabilityRefreshSummary(
                               }
                             </dt>
                             <dd class="mt-0.5 space-y-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
-                              <p class="break-all font-mono text-xs/5">{{ tool.mcpGatewayConfig.endpointUrl }}</p>
+                              @if (tool.mcpGatewayConfig.connectorId) {
+                                <p class="font-mono text-xs/5">
+                                  AgentCore connector: {{ tool.mcpGatewayConfig.connectorId }}
+                                  @if (tool.mcpGatewayConfig.connectorVersion) {
+                                    v{{ tool.mcpGatewayConfig.connectorVersion }}
+                                  }
+                                </p>
+                              } @else {
+                                <p class="break-all font-mono text-xs/5">{{ tool.mcpGatewayConfig.endpointUrl }}</p>
+                              }
                               <p class="text-xs/5 text-gray-500 dark:text-gray-400">
                                 target: {{ tool.mcpGatewayConfig.targetName }} ·
                                 outbound: {{ tool.mcpGatewayConfig.credentialType }} ·
@@ -552,7 +561,7 @@ export function capabilityRefreshSummary(
 export class ToolListPage {
   adminToolService = inject(AdminToolService);
   private dialog = inject(Dialog);
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
   readonly toolsResource = this.adminToolService.toolsResource;
   readonly categories = TOOL_CATEGORIES;
@@ -665,7 +674,7 @@ export class ToolListPage {
    * Falls back to the role ID if not found.
    */
   getRoleDisplayName(roleId: string): string {
-    const role = this.appRolesService.getRoleById(roleId);
+    const role = this.roleOptionsService.getRoleById(roleId);
     return role?.displayName ?? roleId;
   }
 

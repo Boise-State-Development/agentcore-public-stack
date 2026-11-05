@@ -741,6 +741,54 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Web Search result default — in development, so only "true" enables
+  // ============================================================
+
+  describe('Project file readiness feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_PROJECT_FILE_READINESS_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_PROJECT_FILE_READINESS_ENABLED;
+      expect(loadConfig(app).projectFileReadiness.enabled).toBe(false);
+      process.env.CDK_PROJECT_FILE_READINESS_ENABLED = '';
+      expect(loadConfig(app).projectFileReadiness.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_PROJECT_FILE_READINESS_ENABLED = 'True';
+      expect(loadConfig(app).projectFileReadiness.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_PROJECT_FILE_READINESS_ENABLED = value;
+        expect(loadConfig(app).projectFileReadiness.enabled).toBe(false);
+      }
+    });
+  });
+
+  describe('Web Search default maxResults feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED;
+      expect(loadConfig(app).webSearchDefaultMaxResults.enabled).toBe(false);
+      process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED = '';
+      expect(loadConfig(app).webSearchDefaultMaxResults.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED = 'True';
+      expect(loadConfig(app).webSearchDefaultMaxResults.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED = value;
+        expect(loadConfig(app).webSearchDefaultMaxResults.enabled).toBe(false);
+      }
+    });
+  });
+
+  // ============================================================
   // Structured extraction — in development, so only "true" enables
   // ============================================================
 
@@ -876,6 +924,66 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Quota requests feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Quota requests feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_QUOTA_REQUESTS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_QUOTA_REQUESTS_ENABLED is unset', () => {
+      delete process.env.CDK_QUOTA_REQUESTS_ENABLED;
+      expect(loadConfig(app).quotaRequests.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_QUOTA_REQUESTS_ENABLED = '';
+      expect(loadConfig(app).quotaRequests.enabled).toBe(false);
+    });
+
+    test('CDK_QUOTA_REQUESTS_ENABLED="true" turns it on', () => {
+      process.env.CDK_QUOTA_REQUESTS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).quotaRequests.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_QUOTA_REQUESTS_ENABLED = 'yes';
+      expect(loadConfig(app).quotaRequests.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // AWS Limits feature flag — opt-in while in development
+  // ============================================================
+
+  describe('AWS Limits feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_AWS_LIMITS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_AWS_LIMITS_ENABLED is unset', () => {
+      delete process.env.CDK_AWS_LIMITS_ENABLED;
+      expect(loadConfig(app).awsLimits.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_AWS_LIMITS_ENABLED = '';
+      expect(loadConfig(app).awsLimits.enabled).toBe(false);
+    });
+
+    test('CDK_AWS_LIMITS_ENABLED="true" turns it on', () => {
+      process.env.CDK_AWS_LIMITS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).awsLimits.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_AWS_LIMITS_ENABLED = 'yes';
+      expect(loadConfig(app).awsLimits.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Handoffs feature flag — opt-in while in development
   // ============================================================
 
@@ -902,6 +1010,27 @@ describe('RAG Ingestion Configuration', () => {
     test('anything but "true" leaves it off', () => {
       process.env.CDK_HANDOFFS_ENABLED = 'yes';
       expect(loadConfig(app).handoffs.enabled).toBe(false);
+    });
+  });
+
+  describe('Handoff brief feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_HANDOFF_BRIEF_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_HANDOFF_BRIEF_ENABLED is unset', () => {
+      delete process.env.CDK_HANDOFF_BRIEF_ENABLED;
+      expect(loadConfig(app).handoffs.briefEnabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_HANDOFF_BRIEF_ENABLED = '';
+      expect(loadConfig(app).handoffs.briefEnabled).toBe(false);
+    });
+
+    test('CDK_HANDOFF_BRIEF_ENABLED="true" turns it on', () => {
+      process.env.CDK_HANDOFF_BRIEF_ENABLED = ' TRUE ';
+      expect(loadConfig(app).handoffs.briefEnabled).toBe(true);
     });
   });
 

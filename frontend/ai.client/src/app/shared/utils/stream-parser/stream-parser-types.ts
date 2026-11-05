@@ -73,6 +73,23 @@ export interface QuotaSessionNoticeEvent {
 }
 
 /**
+ * The user's spend has passed the central allowance onto a fund
+ * (quota-requests spec §8.2). Emitted at the head of every turn while the
+ * overage lands on a `chargeback` extension; dismissal is client-side per period.
+ */
+export interface QuotaFundingNoticeEvent {
+  type: 'quota_funding_notice';
+  /** The fund being charged, as a person reads it. */
+  label: string;
+  chargedThisPeriod: number;
+  /** Per-period cap; absent when uncapped. */
+  cap?: number;
+  remainingUnderCap?: number;
+  standing?: boolean;
+  message: string;
+}
+
+/**
  * Quota exceeded event from the stream
  */
 export interface QuotaExceededEvent {
@@ -666,6 +683,7 @@ export type StreamEventType =
   | 'reasoning'
   | 'quota_warning'
   | 'quota_session_notice'
+  | 'quota_funding_notice'
   | 'quota_exceeded'
   | 'stream_error'
   | 'citation'
@@ -697,6 +715,7 @@ export type StreamEventData =
   | ReasoningEvent
   | QuotaWarningEvent
   | QuotaSessionNoticeEvent
+  | QuotaFundingNoticeEvent
   | QuotaExceededEvent
   | StreamErrorEvent
   | ConversationalStreamErrorEvent

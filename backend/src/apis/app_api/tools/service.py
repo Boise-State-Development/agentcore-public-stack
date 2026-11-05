@@ -629,6 +629,13 @@ class ToolCatalogService:
             return False
 
         existing_cfg = existing.mcp_gateway_config
+        if existing_cfg and existing_cfg.is_connector != new_config.is_connector:
+            # UpdateGatewayTarget can't turn an mcpServer target into a
+            # connector (or back) in place; refuse before AWS half-applies it.
+            raise ValueError(
+                "Cannot switch a Gateway target between an external MCP server "
+                "and a built-in connector via update; delete and recreate the tool."
+            )
         target_id = existing_cfg.target_id if existing_cfg else None
         gateway = self._get_gateway_target_service()
         if target_id:

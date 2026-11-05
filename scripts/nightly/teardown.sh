@@ -196,43 +196,19 @@ delete_vector_buckets() {
     log_success "All S3 Vector Buckets deleted"
 }
 
-# Destroy the PlatformStack (single-stack architecture)
-destroy_stacks() {
-    # Single-stack architecture: every resource for a nightly deployment
-    # lives in ${CDK_PROJECT_PREFIX}-PlatformStack. Delete it via
-    # `aws cloudformation delete-stack` (not `cdk destroy`) so teardown
-    # works without a CDK synth and deletes by the real CFN stack name —
-    # `cdk destroy <name>` silently no-ops when the name isn't in the
-    # current synth. Legacy multi-stack deployments are handled by
-    # scripts/teardown/destroy.sh, not here.
-    local stack_name="${CDK_PROJECT_PREFIX}-PlatformStack"
-
-    log_info "Destroying ${stack_name} via CloudFormation..."
-
-    if ! aws cloudformation describe-stacks \
+# Logical IDs of the resources the stack's latest delete attempt left behind.
+failed_resources() {
+    local stack_name="$1"
+    aws cloudformation list-stack-resources \
         --stack-name "${stack_name}" \
         --region "${CDK_AWS_REGION}" \
-        --query 'Stacks[0].StackName' --output text >/dev/null 2>&1; then
-        log_warn "Stack ${stack_name} does not exist, skipping"
-        return 0
-    fi
+        --query 'StackResourceSummaries[?ResourceStatus==`DELETE_FAILED`].LogicalResourceId' \
+        --output text 2>/dev/null | tr '\t' '\n' | sed '/^$/d' || true
+}
 
-    if ! aws cloudformation delete-stack \
-        --stack-name "${stack_name}" \
-        --region "${CDK_AWS_REGION}"; then
-        log_error "delete-stack API call failed for ${stack_name}"
-        return 1
-    fi
-
-    log_info "Waiting for ${stack_name} to reach DELETE_COMPLETE..."
-    if aws cloudformation wait stack-delete-complete \
-        --stack-name "${stack_name}" \
-        --region "${CDK_AWS_REGION}"; then
-        log_success "${stack_name} destroyed"
-        return 0
-    fi
-
-    # DELETE_FAILED (or wait timeout) — surface why so the run is debuggable.
+# Print why a delete failed, so the run is debuggable.
+report_delete_failure() {
+    local stack_name="$1"
     log_error "Failed to delete ${stack_name}. Current status:"
     aws cloudformation describe-stacks \
         --stack-name "${stack_name}" \
@@ -245,7 +221,151 @@ destroy_stacks() {
         --region "${CDK_AWS_REGION}" \
         --query 'StackEvents[?ResourceStatus==`DELETE_FAILED`].[LogicalResourceId,ResourceType,ResourceStatusReason]' \
         --output table 2>&1 || true
+}
+
+# One delete-stack call plus its wait. A delete-stack on a DELETE_FAILED stack
+# retries only the resources that failed, so this is also the retry.
+delete_stack_once() {
+    local stack_name="$1"
+    shift
+    if ! aws cloudformation delete-stack \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}" "$@"; then
+        log_error "delete-stack API call failed for ${stack_name}"
+        return 1
+    fi
+    log_info "Waiting for ${stack_name} to reach DELETE_COMPLETE..."
+    aws cloudformation wait stack-delete-complete \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}"
+}
+
+# Delete a resource CloudFormation was told to retain, through Cloud Control so
+# one call covers every resource type. Its names are fixed per prefix, so a
+# retained table or bucket left in place would fail the next nightly's create.
+delete_retained_resource() {
+    local resource_type="$1"
+    local physical_id="$2"
+    log_info "Deleting retained ${resource_type} ${physical_id} via Cloud Control..."
+    local token
+    if ! token=$(aws cloudcontrol delete-resource \
+        --type-name "${resource_type}" \
+        --identifier "${physical_id}" \
+        --region "${CDK_AWS_REGION}" \
+        --query 'ProgressEvent.RequestToken' --output text 2>&1); then
+        log_warn "Cloud Control refused ${physical_id}: ${token}"
+        return 1
+    fi
+    local status=""
+    for _ in $(seq 1 60); do
+        status=$(aws cloudcontrol get-resource-request-status \
+            --request-token "${token}" \
+            --region "${CDK_AWS_REGION}" \
+            --query 'ProgressEvent.OperationStatus' --output text 2>/dev/null || echo "UNKNOWN")
+        case "${status}" in
+            SUCCESS) log_success "Deleted retained ${physical_id}"; return 0 ;;
+            FAILED|CANCEL_COMPLETE) break ;;
+        esac
+        sleep 10
+    done
+    log_warn "Retained ${physical_id} not deleted (status ${status})"
     return 1
+}
+
+# Destroy the PlatformStack (single-stack architecture)
+destroy_stacks() {
+    # Single-stack architecture: every resource for a nightly deployment
+    # lives in ${CDK_PROJECT_PREFIX}-PlatformStack. Delete it via
+    # `aws cloudformation delete-stack` (not `cdk destroy`) so teardown
+    # works without a CDK synth and deletes by the real CFN stack name —
+    # `cdk destroy <name>` silently no-ops when the name isn't in the
+    # current synth. Legacy multi-stack deployments are handled by
+    # scripts/teardown/destroy.sh, not here.
+    #
+    # A stack left in DELETE_FAILED blocks the next nightly's deploy, so a
+    # failure is retried, then the stuck resources are retained (which always
+    # completes the stack delete) and deleted directly. Seen 2026-11-01: a
+    # DynamoDB 500 on one table's delete left the stack DELETE_FAILED, and the
+    # 2026-11-02 nightly could not deploy.
+    local stack_name="${CDK_PROJECT_PREFIX}-PlatformStack"
+    local attempts="${TEARDOWN_DELETE_ATTEMPTS:-3}"
+
+    log_info "Destroying ${stack_name} via CloudFormation..."
+
+    if ! aws cloudformation describe-stacks \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}" \
+        --query 'Stacks[0].StackName' --output text >/dev/null 2>&1; then
+        log_warn "Stack ${stack_name} does not exist, skipping"
+        return 0
+    fi
+
+    local attempt
+    for attempt in $(seq 1 "${attempts}"); do
+        if delete_stack_once "${stack_name}"; then
+            log_success "${stack_name} destroyed"
+            return 0
+        fi
+        report_delete_failure "${stack_name}"
+        if [ "${attempt}" -lt "${attempts}" ]; then
+            log_warn "Delete attempt ${attempt}/${attempts} failed; retrying in 30s"
+            sleep 30
+        fi
+    done
+
+    # Still DELETE_FAILED: record what is stuck, retain it so the stack goes
+    # away, then delete each retained resource directly.
+    local logical_ids
+    logical_ids=$(failed_resources "${stack_name}")
+    if [ -z "${logical_ids}" ]; then
+        log_error "${stack_name} did not delete and names no failed resource to retain"
+        return 1
+    fi
+
+    local retained=()
+    local logical_id
+    while IFS= read -r logical_id; do
+        local row
+        row=$(aws cloudformation describe-stack-resource \
+            --stack-name "${stack_name}" \
+            --logical-resource-id "${logical_id}" \
+            --region "${CDK_AWS_REGION}" \
+            --query 'StackResourceDetail.[ResourceType,PhysicalResourceId]' \
+            --output text 2>/dev/null || true)
+        retained+=("${logical_id}"$'\t'"${row}")
+    done <<< "${logical_ids}"
+
+    log_warn "Retaining ${#retained[@]} stuck resource(s) to finish the stack delete"
+    # shellcheck disable=SC2086 # one argument per logical id
+    if ! delete_stack_once "${stack_name}" --retain-resources $(echo ${logical_ids}); then
+        report_delete_failure "${stack_name}"
+        return 1
+    fi
+    log_success "${stack_name} destroyed (with ${#retained[@]} resource(s) retained)"
+
+    local leftover=0
+    local entry
+    {
+        echo "### Nightly teardown retained resources"
+        echo
+        echo "| Logical id | Type | Physical id | Deleted |"
+        echo "|---|---|---|---|"
+    } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+    for entry in "${retained[@]}"; do
+        local lid rtype pid deleted="yes"
+        IFS=$'\t' read -r lid rtype pid <<< "${entry}"
+        if [ -z "${pid}" ] || [ "${pid}" = "None" ] || ! delete_retained_resource "${rtype}" "${pid}"; then
+            deleted="**no**"
+            leftover=$((leftover + 1))
+        fi
+        echo "| ${lid} | ${rtype} | ${pid} | ${deleted} |" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+    done
+
+    if [ "${leftover}" -gt 0 ]; then
+        log_error "${leftover} retained resource(s) still exist; the next nightly's create may collide with them"
+        return 1
+    fi
+    return 0
 }
 
 main() {

@@ -31,7 +31,12 @@ from typing import Any, Dict, Optional
 import boto3
 from botocore.exceptions import ClientError
 
-from .models import OAuthProviderType
+from .models import (
+    TENANT_METADATA_KEYS,
+    TENANT_PROVIDER_TYPES,
+    OAuthProviderType,
+    missing_tenant_metadata_keys,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +57,24 @@ _VENDOR_BY_TYPE: Dict[OAuthProviderType, str] = {
     OAuthProviderType.SLACK: "SlackOauth2",
     OAuthProviderType.SALESFORCE: "SalesforceOauth2",
     OAuthProviderType.ZOOM: "ZoomOauth2",
+    OAuthProviderType.ATLASSIAN: "AtlassianOauth2",
+    OAuthProviderType.LINKEDIN: "LinkedinOauth2",
+    OAuthProviderType.X: "XOauth2",
+    OAuthProviderType.FACEBOOK: "FacebookOauth2",
+    OAuthProviderType.YANDEX: "YandexOauth2",
+    OAuthProviderType.REDDIT: "RedditOauth2",
+    OAuthProviderType.TWITCH: "TwitchOauth2",
+    OAuthProviderType.SPOTIFY: "SpotifyOauth2",
+    OAuthProviderType.DROPBOX: "DropboxOauth2",
+    OAuthProviderType.NOTION: "NotionOauth2",
+    OAuthProviderType.HUBSPOT: "HubspotOauth2",
+    OAuthProviderType.OKTA: "OktaOauth2",
+    OAuthProviderType.AUTH0: "Auth0Oauth2",
+    OAuthProviderType.COGNITO: "CognitoOauth2",
+    OAuthProviderType.CYBERARK: "CyberArkOauth2",
+    OAuthProviderType.FUSIONAUTH: "FusionAuthOauth2",
+    OAuthProviderType.ONELOGIN: "OneLoginOauth2",
+    OAuthProviderType.PING: "PingOneOauth2",
     OAuthProviderType.CANVAS: "CustomOauth2",
     OAuthProviderType.CUSTOM: "CustomOauth2",
 }
@@ -67,6 +90,27 @@ _CONFIG_KEY_BY_TYPE: Dict[OAuthProviderType, str] = {
     # string still discriminates the actual provider; the shared config
     # key just carries the credentials.
     OAuthProviderType.ZOOM: "includedOauth2ProviderConfig",
+    # Atlassian and LinkedIn have dedicated config structs in the API model
+    # (the vendor enum strings follow the service model, which differs in
+    # casing from the docs pages: `AtlassianOauth2` / `LinkedinOauth2`).
+    OAuthProviderType.ATLASSIAN: "atlassianOauth2ProviderConfig",
+    OAuthProviderType.LINKEDIN: "linkedinOauth2ProviderConfig",
+    OAuthProviderType.X: "includedOauth2ProviderConfig",
+    OAuthProviderType.FACEBOOK: "includedOauth2ProviderConfig",
+    OAuthProviderType.YANDEX: "includedOauth2ProviderConfig",
+    OAuthProviderType.REDDIT: "includedOauth2ProviderConfig",
+    OAuthProviderType.TWITCH: "includedOauth2ProviderConfig",
+    OAuthProviderType.SPOTIFY: "includedOauth2ProviderConfig",
+    OAuthProviderType.DROPBOX: "includedOauth2ProviderConfig",
+    OAuthProviderType.NOTION: "includedOauth2ProviderConfig",
+    OAuthProviderType.HUBSPOT: "includedOauth2ProviderConfig",
+    OAuthProviderType.OKTA: "includedOauth2ProviderConfig",
+    OAuthProviderType.AUTH0: "includedOauth2ProviderConfig",
+    OAuthProviderType.COGNITO: "includedOauth2ProviderConfig",
+    OAuthProviderType.CYBERARK: "includedOauth2ProviderConfig",
+    OAuthProviderType.FUSIONAUTH: "includedOauth2ProviderConfig",
+    OAuthProviderType.ONELOGIN: "includedOauth2ProviderConfig",
+    OAuthProviderType.PING: "includedOauth2ProviderConfig",
     OAuthProviderType.CANVAS: "customOauth2ProviderConfig",
     OAuthProviderType.CUSTOM: "customOauth2ProviderConfig",
 }
@@ -129,6 +173,7 @@ class AgentCoreRegistrar:
         client_secret: str,
         discovery_url: Optional[str] = None,
         authorization_server_metadata: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[str] = None,
     ) -> CredentialProviderInfo:
         """Register a new OAuth2 credential provider in AgentCore Identity.
 
@@ -146,6 +191,7 @@ class AgentCoreRegistrar:
             client_secret=client_secret,
             discovery_url=discovery_url,
             authorization_server_metadata=authorization_server_metadata,
+            tenant_id=tenant_id,
         )
 
         try:
@@ -176,6 +222,7 @@ class AgentCoreRegistrar:
         client_secret: str,
         discovery_url: Optional[str] = None,
         authorization_server_metadata: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[str] = None,
         fallback_arn: Optional[str] = None,
     ) -> CredentialProviderInfo:
         """Replace the AgentCore provider's full config.
@@ -204,6 +251,7 @@ class AgentCoreRegistrar:
             client_secret=client_secret,
             discovery_url=discovery_url,
             authorization_server_metadata=authorization_server_metadata,
+            tenant_id=tenant_id,
         )
 
         try:
@@ -267,6 +315,7 @@ class AgentCoreRegistrar:
         client_secret: str,
         discovery_url: Optional[str],
         authorization_server_metadata: Optional[Dict[str, Any]],
+        tenant_id: Optional[str] = None,
     ) -> tuple[str, Dict[str, Any]]:
         """Return `(vendor, oauth2ProviderConfigInput)` for AgentCore."""
         try:
@@ -285,11 +334,33 @@ class AgentCoreRegistrar:
                 discovery_url=discovery_url,
                 authorization_server_metadata=authorization_server_metadata,
             )
+        elif provider_type in TENANT_PROVIDER_TYPES:
+            if discovery_url:
+                raise InvalidCustomProviderConfigError(
+                    f"{vendor} takes its tenant endpoints in "
+                    "authorization_server_metadata, not a discovery URL"
+                )
+            missing = missing_tenant_metadata_keys(authorization_server_metadata)
+            if missing:
+                raise InvalidCustomProviderConfigError(
+                    f"{vendor} requires authorization_server_metadata with: "
+                    f"{', '.join(missing)}"
+                )
+            for key in TENANT_METADATA_KEYS:
+                vendor_config[key] = authorization_server_metadata[key].strip()
         elif discovery_url or authorization_server_metadata:
             raise ValueError(
                 f"Discovery config is only valid for CustomOauth2; "
                 f"provider_type={provider_type} ignores it"
             )
+
+        if tenant_id:
+            if config_key != "microsoftOauth2ProviderConfig":
+                raise ValueError(
+                    f"tenant_id is only valid for Microsoft; "
+                    f"provider_type={provider_type} ignores it"
+                )
+            vendor_config["tenantId"] = tenant_id
 
         return vendor, {config_key: vendor_config}
 

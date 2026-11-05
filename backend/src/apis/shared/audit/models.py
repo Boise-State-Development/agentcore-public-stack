@@ -104,6 +104,26 @@ class AuditAction:
     USER_GRANT_UPDATED = "user_grant.updated"
     USER_GRANT_DELETED = "user_grant.deleted"
 
+    # Quota requests and extensions (docs/specs/quota-requests-and-extensions.md
+    # §11.2), targets ``quota_request`` / ``quota_extension`` keyed by id. A
+    # user's own submission is not an admin mutation; the request row is its
+    # record. ``mutation_denied`` is a refused self-decision.
+    QUOTA_REQUEST_APPROVED = "quota_request.approved"
+    QUOTA_REQUEST_DENIED = "quota_request.denied"
+    QUOTA_REQUEST_INFO_REQUESTED = "quota_request.info_requested"
+    QUOTA_REQUEST_MUTATION_DENIED = "quota_request.mutation_denied"
+    QUOTA_EXTENSION_CREATED = "quota_extension.created"
+    QUOTA_EXTENSION_REVOKED = "quota_extension.revoked"
+    # A closed chargeback period recalculated (§9.4), target ``quota_period``
+    # keyed by ``YYYY-MM``, with the per-fund totals before and after.
+    QUOTA_PERIOD_RECLOSED = "quota_period.reclosed"
+
+    # AWS Limits (GitHub issue #12), target ``aws_limit_request`` keyed by the
+    # Service Quotas request id. AWS records the app-api task role as the
+    # requester, so this record is the only trace of which admin asked; the
+    # increase history joins on it.
+    AWS_LIMIT_INCREASE_REQUESTED = "aws_limit.increase_requested"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -118,6 +138,10 @@ class AuditOutcome:
 TARGET_APP_ROLE = "app_role"
 TARGET_PROJECT = "project"
 TARGET_USER_GRANT = "user_grant"
+TARGET_QUOTA_REQUEST = "quota_request"
+TARGET_QUOTA_EXTENSION = "quota_extension"
+TARGET_QUOTA_PERIOD = "quota_period"
+TARGET_AWS_LIMIT_REQUEST = "aws_limit_request"
 
 
 @dataclass

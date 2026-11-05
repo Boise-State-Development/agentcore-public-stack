@@ -66,6 +66,16 @@ service layer — mirroring how `validate_jwt_role_mappings` already guards
 `PROTECTED_ROLE_IDS` (`role_constraints.py:24`) so the rule holds for the REST
 API, scripts, and future automation alike.
 
+**One read is carved out, and only one.** Every delegated surface with a "which
+roles can use this?" picker (models, tools, skills, connectors, quota tiers,
+announcements, default pins) needs role *names*, and the full `GET /admin/roles/`
+returns each role's grants and `grantedAdminScopes`. `GET /admin/roles/picker-options`
+(`admin/roles/picker.py`) serves `roleId`, `displayName`, `description` and
+`enabled` to anyone holding any delegable scope (`require_any_admin_scope`), and
+never writes; picker choices still save through each domain's write-through under
+that domain's scope (I3). The module is its own `ANY_SCOPE_MODULES` class in the
+route-coverage test, which also refuses a write route in it.
+
 ### I2 — Granting a scope is itself a `system_admin`-only act
 
 This falls out of I1 for free, and it is the main reason to put scopes **on the

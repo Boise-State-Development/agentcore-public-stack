@@ -5,9 +5,11 @@
  * distinct so the UI can surface Canvas-specific guidance if we add a
  * preset later. Today it is treated like `custom`.
  *
- * `slack`, `salesforce`, and `zoom` are first-class AgentCore Identity
- * vendors — endpoints + provider defaults are pre-configured by AgentCore,
- * so admins only supply credentials and scopes (no discovery URL).
+ * Every type other than `canvas` and `custom` is a first-class AgentCore
+ * Identity vendor — endpoints + provider defaults are pre-configured by
+ * AgentCore, so admins only supply credentials and scopes (no discovery URL).
+ * The tenant-hosted ones (`TENANT_CONNECTOR_TYPES`) also need the tenant's
+ * issuer and endpoints, which the form collects as `authorizationServerMetadata`.
  */
 export type ConnectorType =
   | 'google'
@@ -16,6 +18,24 @@ export type ConnectorType =
   | 'slack'
   | 'salesforce'
   | 'zoom'
+  | 'atlassian'
+  | 'linkedin'
+  | 'x'
+  | 'facebook'
+  | 'yandex'
+  | 'reddit'
+  | 'twitch'
+  | 'spotify'
+  | 'dropbox'
+  | 'notion'
+  | 'hubspot'
+  | 'okta'
+  | 'auth0'
+  | 'cognito'
+  | 'cyberark'
+  | 'fusionauth'
+  | 'onelogin'
+  | 'ping'
   | 'canvas'
   | 'custom';
 
@@ -44,6 +64,11 @@ export interface Connector {
   /** Custom/Canvas only — OIDC discovery URL or explicit server metadata. */
   oauthDiscoveryUrl?: string | null;
   authorizationServerMetadata?: Record<string, unknown> | null;
+  /**
+   * Microsoft only — the Entra directory (tenant) ID or verified domain that
+   * consent is sent to. Needed for a single-tenant app registration.
+   */
+  tenantId?: string | null;
   /**
    * Vendor-specific OAuth params merged into AgentCore Identity's
    * `customParameters` at request time. Examples: Google `hd=mycorp.com`
@@ -100,6 +125,8 @@ export interface ConnectorCreateRequest {
   iconData?: string;
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
+  /** Microsoft only; omit to use AgentCore's vendor default. */
+  tenantId?: string;
   customParameters?: Record<string, string>;
   /** File-source adapter key; omit when the connector is not a file source. */
   fileSourceAdapterId?: string;
@@ -126,6 +153,11 @@ export interface ConnectorUpdateRequest {
   iconData?: string;
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
+  /**
+   * Microsoft only. `""` clears the tenant; `undefined` leaves it alone. A
+   * real change must ride a credential rotation, like a discovery change.
+   */
+  tenantId?: string;
   customParameters?: Record<string, string>;
   /**
    * `""` clears the file-source mapping (the connector stops being a file
@@ -211,8 +243,42 @@ export interface ConnectorFormData {
  * are vendor-relevant examples shown when the field is empty (e.g. after
  * the admin clears one to type their own).
  */
+/** How the picker groups presets. */
+export type ConnectorPresetCategory = 'workspace' | 'social' | 'identity' | 'custom';
+
+export interface ConnectorPresetGroup {
+  category: ConnectorPresetCategory;
+  label: string;
+  description: string;
+}
+
+/** Picker sections, in display order. */
+export const CONNECTOR_PRESET_GROUPS: readonly ConnectorPresetGroup[] = [
+  {
+    category: 'workspace',
+    label: 'Workspace and developer tools',
+    description: 'Productivity suites, collaboration and engineering platforms.',
+  },
+  {
+    category: 'social',
+    label: 'Social and media',
+    description: 'Consumer networks and media services.',
+  },
+  {
+    category: 'identity',
+    label: 'Identity providers',
+    description: 'These run in your own tenant, so you will enter your issuer and endpoints.',
+  },
+  {
+    category: 'custom',
+    label: 'Anything else',
+    description: 'Any OpenID Connect provider with a discovery URL.',
+  },
+];
+
 export interface ConnectorPreset {
   type: ConnectorType;
+  category: ConnectorPresetCategory;
   displayName: string;
   defaultScopes: string[];
   defaultCustomParameters?: Record<string, string>;
@@ -226,6 +292,7 @@ export interface ConnectorPreset {
 export const CONNECTOR_PRESETS: ConnectorPreset[] = [
   {
     type: 'google',
+    category: 'workspace',
     displayName: 'Google',
     // No defaults — Google connectors are too multi-purpose to pre-pick
     // (Calendar / Gmail / Drive / Docs all need different scopes, and the
@@ -240,6 +307,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
   },
   {
     type: 'microsoft',
+    category: 'workspace',
     displayName: 'Microsoft',
     defaultScopes: ['openid', 'email', 'profile', 'offline_access'],
     iconName: 'heroCloud',
@@ -249,6 +317,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
   },
   {
     type: 'github',
+    category: 'workspace',
     displayName: 'GitHub',
     defaultScopes: ['read:user', 'user:email'],
     iconName: 'heroCodeBracket',
@@ -256,6 +325,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
   },
   {
     type: 'slack',
+    category: 'workspace',
     displayName: 'Slack',
     defaultScopes: ['chat:write', 'channels:read', 'users:read'],
     iconName: 'heroChatBubbleLeftRight',
@@ -265,6 +335,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
   },
   {
     type: 'salesforce',
+    category: 'workspace',
     displayName: 'Salesforce',
     defaultScopes: ['api', 'refresh_token', 'offline_access', 'id', 'openid'],
     iconName: 'heroCloud',
@@ -274,6 +345,7 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
   },
   {
     type: 'zoom',
+    category: 'workspace',
     displayName: 'Zoom',
     defaultScopes: ['user:read:user', 'meeting:read:meeting'],
     iconName: 'heroVideoCamera',
@@ -281,7 +353,153 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
       'user:read:user, meeting:read:meeting, recording:read:recording',
   },
   {
+    type: 'atlassian',
+    category: 'workspace',
+    displayName: 'Atlassian',
+    defaultScopes: ['read:me', 'offline_access'],
+    iconName: 'heroCloud',
+    scopesPlaceholder: 'read:me, offline_access, read:jira-work, write:jira-work, read:confluence-content.all',
+  },
+  {
+    type: 'linkedin',
+    category: 'social',
+    displayName: 'LinkedIn',
+    defaultScopes: ['openid', 'profile', 'email'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'openid, profile, email, w_member_social',
+  },
+  {
+    type: 'x',
+    category: 'social',
+    displayName: 'X',
+    defaultScopes: ['users.read', 'tweet.read', 'offline.access'],
+    iconName: 'heroChatBubbleLeftRight',
+    scopesPlaceholder: 'users.read, tweet.read, tweet.write, offline.access',
+  },
+  {
+    type: 'facebook',
+    category: 'social',
+    displayName: 'Facebook',
+    defaultScopes: ['public_profile', 'email'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'public_profile, email',
+  },
+  {
+    type: 'yandex',
+    category: 'social',
+    displayName: 'Yandex',
+    defaultScopes: [],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'login:info, login:email',
+  },
+  {
+    type: 'reddit',
+    category: 'social',
+    displayName: 'Reddit',
+    defaultScopes: ['identity'],
+    iconName: 'heroChatBubbleLeftRight',
+    scopesPlaceholder: 'identity, read, history',
+  },
+  {
+    type: 'twitch',
+    category: 'social',
+    displayName: 'Twitch',
+    defaultScopes: ['user:read:email'],
+    iconName: 'heroVideoCamera',
+    scopesPlaceholder: 'user:read:email, channel:read:subscriptions',
+  },
+  {
+    type: 'spotify',
+    category: 'social',
+    displayName: 'Spotify',
+    defaultScopes: ['user-read-email'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'user-read-email, playlist-read-private, user-library-read',
+  },
+  {
+    type: 'dropbox',
+    category: 'workspace',
+    displayName: 'Dropbox',
+    defaultScopes: ['account_info.read', 'files.metadata.read'],
+    iconName: 'heroCloud',
+    scopesPlaceholder: 'account_info.read, files.metadata.read, files.content.read',
+  },
+  {
+    type: 'notion',
+    category: 'workspace',
+    displayName: 'Notion',
+    defaultScopes: [],
+    iconName: 'heroCloud',
+    scopesPlaceholder: 'Usually left empty: Notion grants access per integration',
+  },
+  {
+    type: 'hubspot',
+    category: 'workspace',
+    displayName: 'HubSpot',
+    defaultScopes: ['oauth', 'crm.objects.contacts.read'],
+    iconName: 'heroCloud',
+    scopesPlaceholder: 'oauth, crm.objects.contacts.read, crm.objects.deals.read',
+    hint: 'HubSpot requires the `oauth` scope.',
+  },
+  {
+    type: 'okta',
+    category: 'identity',
+    displayName: 'Okta',
+    defaultScopes: ['openid', 'email', 'profile'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'openid, email, profile, offline_access',
+  },
+  {
+    type: 'auth0',
+    category: 'identity',
+    displayName: 'Auth0',
+    defaultScopes: ['openid', 'email', 'profile'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'openid, email, profile, offline_access',
+  },
+  {
+    type: 'cognito',
+    category: 'identity',
+    displayName: 'Amazon Cognito',
+    defaultScopes: ['openid', 'email', 'profile'],
+    iconName: 'heroCloud',
+    scopesPlaceholder: 'openid, email, profile, offline_access',
+  },
+  {
+    type: 'cyberark',
+    category: 'identity',
+    displayName: 'CyberArk',
+    defaultScopes: ['openid', 'email', 'profile'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'openid, email, profile, offline_access',
+  },
+  {
+    type: 'fusionauth',
+    category: 'identity',
+    displayName: 'FusionAuth',
+    defaultScopes: ['openid', 'email', 'profile'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'openid, email, profile, offline_access',
+  },
+  {
+    type: 'onelogin',
+    category: 'identity',
+    displayName: 'OneLogin',
+    defaultScopes: ['openid', 'email', 'profile'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'openid, email, profile, offline_access',
+  },
+  {
+    type: 'ping',
+    category: 'identity',
+    displayName: 'PingOne',
+    defaultScopes: ['openid', 'email', 'profile'],
+    iconName: 'heroLink',
+    scopesPlaceholder: 'openid, email, profile, offline_access',
+  },
+  {
     type: 'custom',
+    category: 'custom',
     displayName: 'Custom (OIDC)',
     defaultScopes: [],
     iconName: 'heroLink',
@@ -289,6 +507,12 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
     hint: 'Requires an OpenID Connect discovery URL',
   },
 ];
+
+/** Human label for a provider type: the preset's name, 'Canvas LMS' for canvas. */
+export function getConnectorTypeLabel(type: ConnectorType): string {
+  if (type === 'canvas') return 'Canvas LMS';
+  return getConnectorPreset(type)?.displayName ?? 'Custom';
+}
 
 export function getConnectorPreset(type: ConnectorType): ConnectorPreset | undefined {
   return CONNECTOR_PRESETS.find(preset => preset.type === type);
@@ -299,4 +523,34 @@ export function getConnectorPreset(type: ConnectorType): ConnectorPreset | undef
  */
 export function requiresDiscovery(type: ConnectorType): boolean {
   return type === 'custom' || type === 'canvas';
+}
+
+/**
+ * Built-in vendors that live in the customer's own tenant. AgentCore ships
+ * the vendor but needs the tenant's issuer and authorization/token endpoints,
+ * which are sent as `authorizationServerMetadata`.
+ */
+export const TENANT_CONNECTOR_TYPES: readonly ConnectorType[] = [
+  'okta',
+  'auth0',
+  'cognito',
+  'cyberark',
+  'fusionauth',
+  'onelogin',
+  'ping',
+];
+
+/** Issuer example shown per tenant vendor. */
+export const TENANT_ISSUER_PLACEHOLDERS: Partial<Record<ConnectorType, string>> = {
+  okta: 'https://your-tenant.okta.com/oauth2/your-authorization-server',
+  auth0: 'https://your-tenant.auth0.com',
+  cognito: 'https://cognito-idp.us-east-1.amazonaws.com/your-user-pool-id',
+  cyberark: 'https://your-tenant-id.id.cyberark.cloud/__idaptive_cybr_user_oidc',
+  fusionauth: 'https://your-tenant-token-issuer',
+  onelogin: 'https://your-tenant.onelogin.com/oidc/2',
+  ping: 'https://auth.pingone.com/your-env-id/as',
+};
+
+export function requiresTenantEndpoints(type: ConnectorType): boolean {
+  return TENANT_CONNECTOR_TYPES.includes(type);
 }

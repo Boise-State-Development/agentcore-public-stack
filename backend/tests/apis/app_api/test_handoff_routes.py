@@ -147,6 +147,8 @@ def test_create_returns_the_card_and_the_exact_prompt(make_client, store):
     assert data["contextBlock"] == wrap_handoff_context(excerpt, "Course planning")
     assert data["prompt"] == build_handoff_message(data["contextBlock"], "draft a rubric for this")
     assert data["request"] == "draft a rubric for this"
+    assert data["sourceTitle"] == "Course planning"
+    assert data["sourceMessageIndex"] == 3
     assert data["excerptHash"] == context_hash(excerpt)
     assert data["turnsCovered"] == {"first": 1, "last": 2, "of": 2, "omitted": 0}
     assert data["excerptTokens"] > 0
@@ -158,6 +160,15 @@ def test_create_returns_the_card_and_the_exact_prompt(make_client, store):
     assert row.target_session_id is None
     assert row.excerpt_hash == data["excerptHash"]
 
+
+def test_create_anchors_to_the_last_messages_id_after_a_rewind(make_client, world):
+    """A rewind hides messages without renumbering, so the anchor is an id's index, not a count."""
+    world.messages = [*CONVERSATION[:2], _message(6, "user", "start over: plan BIO 102"), _message(7, "assistant", "Plan.")]
+
+    resp = _create(make_client())
+
+    assert resp.status_code == 201
+    assert resp.json()["sourceMessageIndex"] == 7
 
 def test_create_uses_the_compaction_summary(make_client, world):
     world.compaction = (2, "We planned BIO 101 week by week.")
@@ -280,3 +291,155 @@ def test_authentication_runs_before_the_flag(monkeypatch, store, world):
     resp = TestClient(app).post("/sessions/src/handoffs", json={"agentId": "rubric", "request": "x"})
 
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------- notifications (PR-0.3b)
+
+
+class _Inbox:
+    def __init__(self) -> None:
+        self.calls: List[tuple] = []
+
+    def mark_read_matching(self, email: str, *, kinds, payload):
+        self.calls.append((email, list(kinds), payload))
+        return 2
+
+
+@pytest.fixture()
+def inbox_client(make_client):
+    inbox = _Inbox()
+
+    def build(user: User = ALICE) -> TestClient:
+        client = make_client(user)
+        client.app.dependency_overrides[routes.get_inbox] = lambda: inbox
+        return client
+
+    return build, inbox
+
+
+def test_mark_read_marks_the_callers_entries_for_that_handoff(inbox_client):
+    build, inbox = inbox_client
+    client = build()
+    handoff_id = _create(client).json()["handoffId"]
+
+    resp = client.post(f"/sessions/src/handoffs/{handoff_id}/notifications/read", json={"kinds": ["handoff_done"]})
+
+    assert resp.status_code == 200 and resp.json() == {"marked": 2}
+    assert inbox.calls == [("alice@example.edu", ["handoff_done"], {"handoffId": handoff_id})]
+
+
+def test_mark_read_defaults_to_every_handoff_kind(inbox_client):
+    build, inbox = inbox_client
+    client = build()
+    handoff_id = _create(client).json()["handoffId"]
+
+    client.post(f"/sessions/src/handoffs/{handoff_id}/notifications/read", json={})
+
+    assert sorted(inbox.calls[0][1]) == ["handoff_done", "handoff_needs_input", "handoff_stopped"]
+
+
+def test_mark_read_refuses_another_kind_another_user_and_the_wrong_conversation(inbox_client):
+    build, inbox = inbox_client
+    client = build()
+    handoff_id = _create(client).json()["handoffId"]
+    url = f"/sessions/src/handoffs/{handoff_id}/notifications/read"
+
+    assert client.post(url, json={"kinds": ["project_invited"]}).status_code == 422
+    assert build(BOB).post(url, json={}).status_code == 404
+    assert client.post(f"/sessions/other/handoffs/{handoff_id}/notifications/read", json={}).status_code == 404
+    assert inbox.calls == []
+
+
+def test_notification_events_are_counted_and_validated(make_client, monkeypatch):
+    emitted: List[tuple] = []
+    monkeypatch.setattr(routes, "emit_handoff_metric", lambda name, kind, **kw: emitted.append((name, kw["detail"])))
+    client = make_client()
+    url = "/sessions/src/handoffs/h1/notifications/events"
+
+    assert client.post(url, json={"metric": "HandoffNotified", "channel": "browser"}).status_code == 204
+    assert client.post(url, json={"metric": "HandoffBrowserPermission", "outcome": "granted"}).status_code == 204
+    assert client.post(url, json={"metric": "Anything"}).status_code == 422
+
+    assert emitted == [("HandoffNotified", "browser"), ("HandoffBrowserPermission", "granted")]
+
+
+def test_get_relays_a_waiting_handoffs_prompts_from_its_target(make_client, store, table, monkeypatch):
+    monkeypatch.setenv("DYNAMODB_SESSIONS_METADATA_TABLE_NAME", TABLE)
+    client = make_client()
+    handoff_id = _create(client).json()["handoffId"]
+    store.accept("alice", handoff_id, target_session_id="tgt", context_edited=False, context_removed=False)
+    table.put_item(
+        Item={
+            "PK": "USER#alice",
+            "SK": "S#ACTIVE#tgt",
+            "GSI_PK": "SESSION#tgt",
+            "GSI_SK": "META",
+            "userId": "alice",
+            "pendingInterrupts": [{"interruptId": "i1", "kind": "oauth", "providerId": "canvas", "createdAt": "t"}],
+            "pausedTurn": {"expiresAt": "2999-01-01T00:00:00+00:00"},
+        }
+    )
+
+    running = client.get(f"/sessions/src/handoffs/{handoff_id}").json()
+    store.transition("alice", handoff_id, "needs_input", waitingOn={"kind": "oauth_consent", "name": "canvas"})
+    waiting = client.get(f"/sessions/src/handoffs/{handoff_id}").json()
+
+    assert "relayedPrompts" not in running
+    assert waiting["relayedPrompts"] == [{"interruptId": "i1", "kind": "oauth", "providerId": "canvas"}]
+
+
+def test_relayed_prompt_events_are_counted_by_kind_and_surface(make_client, store, monkeypatch):
+    emitted: List[tuple] = []
+    monkeypatch.setattr(
+        routes,
+        "emit_handoff_metric",
+        lambda name, kind, **kw: name.startswith("Relayed") and emitted.append((name, kw["detail"], kw.get("surface"))),
+    )
+    client = make_client()
+    handoff_id = _create(client).json()["handoffId"]
+    store.accept("alice", handoff_id, target_session_id="tgt", context_edited=False, context_removed=False)
+    url = f"/sessions/src/handoffs/{handoff_id}/notifications/events"
+
+    assert client.post(url, json={"metric": "RelayedPromptShown", "interruptKind": "oauth"}).status_code == 204
+    assert client.post(
+        url, json={"metric": "RelayedPromptAnswered", "interruptKind": "tool_approval", "surface": "source"}
+    ).status_code == 204
+    assert client.post(url, json={"metric": "RelayedPromptConflict", "interruptKind": "user_question"}).status_code == 204
+    # An answer in the target counts only while the handoff waits: once done, the target is the user's own.
+    assert client.post(
+        url, json={"metric": "RelayedPromptAnswered", "interruptKind": "oauth", "surface": "target"}
+    ).status_code == 204
+    store.transition("alice", handoff_id, "needs_input", waitingOn={"kind": "oauth_consent", "name": "canvas"})
+    assert client.post(
+        url, json={"metric": "RelayedPromptAnswered", "interruptKind": "oauth", "surface": "target"}
+    ).status_code == 204
+    assert client.post(url, json={"metric": "RelayedPromptShown"}).status_code == 422
+    assert client.post(url, json={"metric": "RelayedPromptAnswered", "interruptKind": "oauth"}).status_code == 422
+
+    assert emitted == [
+        ("RelayedPromptShown", "oauth", None),
+        ("RelayedPromptAnswered", "tool_approval", "source"),
+        ("RelayedPromptConflict", "user_question", None),
+        ("RelayedPromptAnswered", "oauth", "target"),
+    ]
+
+
+def test_an_answer_counted_from_the_target_must_be_the_callers_handoff(make_client, monkeypatch):
+    monkeypatch.setattr(routes, "emit_handoff_metric", lambda *a, **kw: None)
+    client = make_client()
+    handoff_id = _create(client).json()["handoffId"]
+    body = {"metric": "RelayedPromptAnswered", "interruptKind": "oauth", "surface": "target"}
+
+    assert make_client(BOB).post(f"/sessions/src/handoffs/{handoff_id}/notifications/events", json=body).status_code == 404
+
+
+def test_notification_routes_404_while_the_flag_is_off(inbox_client, monkeypatch):
+    build, _ = inbox_client
+    client = build()
+    handoff_id = _create(client).json()["handoffId"]
+    monkeypatch.setenv("HANDOFFS_ENABLED", "false")
+
+    assert client.post(f"/sessions/src/handoffs/{handoff_id}/notifications/read", json={}).status_code == 404
+    assert client.post(
+        f"/sessions/src/handoffs/{handoff_id}/notifications/events", json={"metric": "HandoffNotified"}
+    ).status_code == 404

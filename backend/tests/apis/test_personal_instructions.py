@@ -130,17 +130,29 @@ def test_an_app_dispatch_builds_the_same_prompt_as_the_turn(monkeypatch):
 
     monkeypatch.setattr(chat_routes, "_load_user_settings", settings)
 
+    async def no_roles(_user):
+        return []
+
+    monkeypatch.setattr(chat_routes, "resolve_role_instructions", no_roles)
+
     class Plain:
+        session_id = "conv-1"
         rag_assistant_id = None
         system_prompt = None
 
     class WithAgent:
+        session_id = "conv-1"
         rag_assistant_id = "ast-1"
         system_prompt = "the request's prompt"
 
+    class PreviewWithAgent(WithAgent):
+        session_id = "preview-abc"
+
     dispatched = asyncio.run(chat_routes._plain_turn_prompt(Plain(), "u-1"))
     assert dispatched == personal_plain_prompt(None, "Answer briefly.")
-    assert asyncio.run(chat_routes._plain_turn_prompt(WithAgent(), "u-1")) == "the request's prompt"
+    # A client prompt counts only in a preview (#13), on the dispatch as on the turn.
+    assert asyncio.run(chat_routes._plain_turn_prompt(WithAgent(), "u-1")) is None
+    assert asyncio.run(chat_routes._plain_turn_prompt(PreviewWithAgent(), "u-1")) == "the request's prompt"
 
 
 def test_the_default_model_lookup_reuses_the_turns_settings_read(monkeypatch):

@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
+from apis.shared.evals.calls import summarize_calls
 from apis.shared.evals.cases import FAMILIES, JUDGED_FAMILIES, EvalCase
 from apis.shared.evals.score import FamilyComparison, compare_family, majority
 
@@ -219,13 +220,23 @@ def explain_family(
     rows: Sequence[Mapping[str, Any]],
     *,
     max_chars: int = 400,
+    calls_by_session: Optional[Mapping[str, Sequence[Mapping[str, Any]]]] = None,
 ) -> str:
-    """Each case whose outcome flipped, with both answers and the run's failures and tool calls."""
+    """Each case whose outcome flipped, with both answers and the run's failures and tool calls.
+
+    With ``calls_by_session`` (``{session_id: C# rows}``, see ``evals.calls``)
+    each flipped case also lists its samples' model calls; a session missing
+    from the map prints as unavailable.
+    """
     run_outcomes = case_outcomes(r for r in rows if r.get("family") == family)
     base_cases = baseline.get("cases") or {}
     tools_by_case: Dict[str, List[str]] = {}
+    samples_by_case: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
     for row in rows:
-        if row.get("family") == family and str(row["case_id"]) not in tools_by_case:
+        if row.get("family") != family:
+            continue
+        samples_by_case[str(row["case_id"])].append(row)
+        if str(row["case_id"]) not in tools_by_case:
             tools_by_case[str(row["case_id"])] = [str(c.get("name")) for c in row.get("tool_calls") or []]
 
     blocks = []
@@ -235,17 +246,24 @@ def explain_family(
         if base is None or bool(base.get("passed")) == run.passed:
             continue
         direction = "LOST" if base.get("passed") else "GAINED"
-        blocks.append(
-            "\n".join(
-                [
-                    f"{direction}  {case_id}  ({run.passes}/{run.samples} samples passed)",
-                    f"  failures: {'; '.join(run.failures) or '—'}",
-                    f"  tools:    {', '.join(tools_by_case.get(case_id) or []) or '—'}",
-                    f"  baseline: {str(base.get('answer') or '')[:max_chars]!r}",
-                    f"  run:      {run.answer[:max_chars]!r}",
-                ]
-            )
-        )
+        lines = [
+            f"{direction}  {case_id}  ({run.passes}/{run.samples} samples passed)",
+            f"  failures: {'; '.join(run.failures) or '—'}",
+            f"  tools:    {', '.join(tools_by_case.get(case_id) or []) or '—'}",
+            f"  baseline: {str(base.get('answer') or '')[:max_chars]!r}",
+            f"  run:      {run.answer[:max_chars]!r}",
+        ]
+        if calls_by_session is not None:
+            lines.append("  calls:")
+            for sample in sorted(samples_by_case[case_id], key=lambda r: int(r.get("sample") or 0)):
+                session_id = str(sample.get("session_id") or "")
+                outcome = "pass" if sample.get("passed") else "FAIL"
+                if session_id in calls_by_session:
+                    detail = summarize_calls(calls_by_session[session_id], model_id=sample.get("model_id")).line()
+                else:
+                    detail = "unavailable"
+                lines.append(f"    [{sample.get('sample')}] {outcome}  {detail}")
+        blocks.append("\n".join(lines))
     return "\n\n".join(blocks) or f"no flipped cases in {family}"
 
 

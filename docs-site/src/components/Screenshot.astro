@@ -1,0 +1,41 @@
+---
+// Product screenshot in the same frosted app-window frame as
+// ScreenshotPlaceholder, so a placeholder can be swapped for a real capture
+// without changing the page's layout. Images live in src/assets/screenshots/
+// and go through astro:assets, so each is served as responsive WebP.
+//
+// Props:
+//   src    — an imported image (required)
+//   alt    — what the screenshot shows (required)
+//   title  — text in the window title bar
+//   kind   — "app" (traffic-light dots) | "browser" (dots + address pill)
+//   eager  — load immediately (use for the above-the-fold hero only)
+import { Image } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+
+interface Props {
+	src: ImageMetadata;
+	alt: string;
+	title?: string;
+	kind?: 'app' | 'browser';
+	eager?: boolean;
+}
+
+const { src, alt, title = '', kind = 'browser', eager = false } = Astro.props;
+---
+
+<figure class="shot">
+	<div class="shot-bar">
+		<span class="shot-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+		{kind === 'browser' ? <span class="shot-address">{title}</span> : <span class="shot-title">{title}</span>}
+	</div>
+	<div class="shot-body shot-body--image">
+		<Image
+			src={src}
+			alt={alt}
+			widths={[800, 1200, 1600]}
+			sizes="(min-width: 62rem) 62rem, 100vw"
+			loading={eager ? 'eager' : 'lazy'}
+		/>
+	</div>
+</figure>

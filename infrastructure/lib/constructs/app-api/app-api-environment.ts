@@ -383,6 +383,12 @@ export function buildAppApiEnvironment(
     // Session prewarm (opt-in while in development): gates POST /chat/prewarm.
     // app-api only; the Runtime's warm action is a no-op behind this route.
     SESSION_PREWARM_ENABLED: config.sessionPrewarm.enabled ? 'true' : 'false',
+    // Quota requests (opt-in while in development): gates /quota/* and the
+    // admin request queue. app-api only; extensions resolve everywhere.
+    QUOTA_REQUESTS_ENABLED: config.quotaRequests.enabled ? 'true' : 'false',
+    // AWS Limits (opt-in while in development): gates /admin/aws-limits.
+    // app-api only; the Runtime never reads Service Quotas.
+    AWS_LIMITS_ENABLED: config.awsLimits.enabled ? 'true' : 'false',
     // Handoffs (opt-in while in development): gates /sessions/{id}/handoffs.
     HANDOFFS_ENABLED: config.handoffs.enabled ? 'true' : 'false',
     // Conversation rewind (opt-in while in development): gates

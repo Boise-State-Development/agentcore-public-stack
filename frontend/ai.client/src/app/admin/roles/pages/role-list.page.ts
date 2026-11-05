@@ -179,7 +179,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                   }
 
                   <!-- Role Details Grid -->
-                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5 text-sm">
                     <!-- JWT Mappings -->
                     <div>
                       <span class="font-medium text-gray-700 dark:text-gray-300">JWT Roles:</span>
@@ -249,6 +249,23 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                           }
                         } @else {
                           <span class="text-gray-400 dark:text-gray-500">None</span>
+                        }
+                      </div>
+                    </div>
+
+                    <!-- System Instruction -->
+                    <div>
+                      <span class="font-medium text-gray-700 dark:text-gray-300">Instruction:</span>
+                      <div class="mt-1">
+                        @if (instructionBadge(role); as badge) {
+                          <span
+                            class="px-1.5 py-0.5 text-xs rounded-xs bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-200"
+                            [title]="badge.title"
+                          >
+                            {{ badge.label }}
+                          </span>
+                        } @else {
+                          <span class="text-gray-400 dark:text-gray-500">Platform default</span>
                         }
                       </div>
                     </div>
@@ -438,6 +455,22 @@ export class RoleListPage {
     return {
       label: count === 1 ? 'Admin Access' : `Admin Access · ${count}`,
       title: `Delegated admin areas: ${names}`,
+    };
+  }
+
+  /**
+   * Whether the role adds a system instruction to plain chats, and how long it
+   * is. `null` means the role adds nothing and its users get the platform prompt.
+   */
+  instructionBadge(role: AppRole): { label: string; title: string } | null {
+    const length = role.systemInstruction?.trim().length ?? 0;
+    if (length === 0) {
+      return null;
+    }
+    const chars = `${length.toLocaleString('en-US')} ${length === 1 ? 'char' : 'chars'}`;
+    return {
+      label: `Instruction · ${chars}`,
+      title: `Adds a ${chars} instruction to plain chats for users with this role.`,
     };
   }
 

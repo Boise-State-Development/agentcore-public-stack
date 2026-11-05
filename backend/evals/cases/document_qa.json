@@ -228,5 +228,204 @@
       "facilities_policy.md"
     ],
     "notes": "Hallucination guard: the policy has no booking price, and the two dollar figures it does have must not be offered as one."
+  },
+  {
+    "id": "document_qa.large_manual_notice_period",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached staff policy manual: how much advance notice do I have to give if I quit? Reply with just the notice period."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "34 calendar days",
+        "34 days"
+      ],
+      "forbidden": [
+        "12 calendar days"
+      ]
+    },
+    "large_documents": [
+      "manual"
+    ],
+    "notes": "300-page text PDF, paraphrase (the manual says 'an employee who resigns', page 37). 12 calendar days is the contractors' notice period, planted on page 212. Question text-notice in large_document_quality."
+  },
+  {
+    "id": "document_qa.large_manual_per_diem",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached staff policy manual: what is the per-diem meal allowance for travel within the region? Reply with just the amount."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "47.50"
+      ],
+      "forbidden": [
+        "63.20"
+      ]
+    },
+    "large_documents": [
+      "manual"
+    ],
+    "notes": "300-page text PDF, literal wording (page 88), so a pattern search finds it. 63.20 is the interstate allowance (page 119). Question text-perdiem."
+  },
+  {
+    "id": "document_qa.large_scanned_abutment_cost",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached inspection report: how much is it going to cost to fix the north abutment? Reply with just the amount."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "418,600",
+        "418600"
+      ],
+      "forbidden": [
+        "96,300"
+      ]
+    },
+    "large_documents": [
+      "scanned"
+    ],
+    "notes": "40-page scanned PDF with no text layer (page 29): only OCR, or the attachments KB's image extraction, can reach it. 96,300 is the south wingwall (page 11). Question scan-abutment."
+  },
+  {
+    "id": "document_qa.large_scanned_survey_reference",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached inspection report: what is the survey reference number? Reply with just the reference."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "HV-SR-5512"
+      ]
+    },
+    "large_documents": [
+      "scanned"
+    ],
+    "notes": "Scanned PDF, literal wording (page 3); the text layer is empty, so literal wording does not help a pattern search here. Question scan-reference."
+  },
+  {
+    "id": "document_qa.large_brochure_silver_price",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached leisure centre guide: how much does the Silver membership cost each month? Reply with just the price, written like $10."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "$61"
+      ],
+      "forbidden": [
+        "$39",
+        "$88",
+        "$124"
+      ]
+    },
+    "large_documents": [
+      "brochure"
+    ],
+    "notes": "24-page brochure whose table is drawn out of reading order, so extracted text separates each tier from its price (page 5). The other three prices are the other tiers. Question layout-silver."
+  },
+  {
+    "id": "document_qa.large_brochure_studio_rate",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached leisure centre guide: what is the hourly rate to hire Studio B? Reply with just the price, written like $10."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "$27"
+      ],
+      "forbidden": [
+        "$19",
+        "$42"
+      ]
+    },
+    "large_documents": [
+      "brochure"
+    ],
+    "notes": "Brochure, literal wording (page 20); $19 and $42 are Studios A and C. Question layout-studio."
+  },
+  {
+    "id": "document_qa.large_handbook_borrow_limit",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached member handbook: what's the maximum number of things I can have checked out at the same time? Reply with just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "17"
+      ],
+      "forbidden": [
+        "40"
+      ]
+    },
+    "large_documents": [
+      "handbook"
+    ],
+    "notes": "15 MB Word handbook (mostly one embedded image), paraphrase. 40 is the visiting-scholars limit planted elsewhere. Question docx-borrow."
+  },
+  {
+    "id": "document_qa.large_handbook_fines_age",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the attached member handbook: up to what age are overdue fines waived? Reply with just the age."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "12"
+      ]
+    },
+    "large_documents": [
+      "handbook"
+    ],
+    "notes": "Word handbook, literal wording. Question docx-fines."
   }
 ]

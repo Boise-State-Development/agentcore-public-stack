@@ -659,6 +659,46 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "system": True,
         "hidden": False,
     },
+    # --- Meeting transcripts → GitHub issues ---
+    # docs/specs/meeting-transcripts-to-github-issues.md. One row per vendor so
+    # RBAC and the connector binding are per vendor; each id provisions its
+    # whole family at runtime (see MEETING_TASKS_TOOL_IDS and
+    # _build_meeting_tools in apis/inference_api/chat/routes.py). Off by
+    # default and not public: these call external accounts on the user's
+    # behalf, and `github_issues_local` writes. An admin must also set each row's
+    # "Required OAuth provider" (requiresOauthProvider) to the matching
+    # connector — it is deployment data, so the seeder leaves it unset — and
+    # the Runtime must have MEETING_TASKS_ENABLED=true.
+    {
+        "toolId": "google_calendar_meetings",
+        "displayName": "Google Calendar Meetings",
+        "description": "Find the user's calendar events in a date window, with the Zoom meeting id parsed from each event's conference link.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "zoom_meeting_transcripts",
+        "displayName": "Zoom Meeting Transcripts",
+        "description": "List the user's Zoom cloud recordings and read a recording's transcript as speaker-attributed text.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "github_issues_local",
+        "displayName": "GitHub Project Tasks (direct API)",
+        "description": "Find the user's GitHub Projects boards and repositories, and add action items to a board as issues with their fields set. Confirmation-gated write.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
 ]
 
 

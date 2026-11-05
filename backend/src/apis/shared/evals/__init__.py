@@ -19,4 +19,5 @@ script.
 * ``scrub``          strip what would unblind a judge before it reads a session
 * ``judges``         the judge seam (the strands-evals adapter is phase 1 PR-2)
 * ``fixtures``       register a synthetic file as a READY upload for a turn
+* ``calls``          a sample's model calls from its session's ``C#`` rows, for ``score --explain``
 """

@@ -234,6 +234,7 @@ from apis.app_api.sessions.search_routes import router as session_search_router
 from apis.app_api.admin.routes import router as admin_router
 from apis.app_api.models.routes import router as models_router
 from apis.app_api.costs.routes import router as costs_router
+from apis.app_api.quota.routes import router as quota_requests_router
 from apis.app_api.chat.routes import router as chat_router
 from apis.app_api.chat.converse_routes import router as converse_router
 from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
@@ -296,6 +297,7 @@ app.include_router(users_router)
 app.include_router(user_settings_router)
 app.include_router(models_router)
 app.include_router(costs_router)
+app.include_router(quota_requests_router)  # /quota/* quota requests; 404s while QUOTA_REQUESTS_ENABLED is off
 app.include_router(chat_router)  # Application-specific chat endpoints
 app.include_router(converse_router)  # API-key authenticated /chat/api-converse (Bedrock Converse)
 app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Phase 4, dormant until SPA cutover)

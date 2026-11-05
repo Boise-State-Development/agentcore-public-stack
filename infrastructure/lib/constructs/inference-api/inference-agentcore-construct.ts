@@ -404,6 +404,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Assistant KB full-context mode (in development, default off). Spread in
         // only while on: the code reads unset as off. Runtime only.
         ...(config.assistantKbFullContext.enabled ? { ASSISTANT_KB_FULL_CONTEXT_ENABLED: 'true' } : {}),
+        // Meeting transcripts → GitHub issues tool families (in development,
+        // default off). Spread in only while on: the code reads unset as off.
+        // Runtime only; the tools are built on the invocation path.
+        ...(config.meetingTasks.enabled ? { MEETING_TASKS_ENABLED: 'true' } : {}),
         // Folder attachments (default on): a turn's folder_attachment_ids are
         // resolved and rendered as manifests. Spread in only while off, like
         // skill authoring; app-api carries its own copy.
@@ -417,10 +421,24 @@ export class InferenceAgentCoreConstruct extends Construct {
         // runs the check and emits `source_provenance`. Written only while ON,
         // so the default costs nothing against the V2 payload budget.
         ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Web Search result default: a `___WebSearch` call that names no
+        // maxResults asks for 5. Written only while ON, so the default costs
+        // nothing against the V2 payload budget.
+        ...(config.webSearchDefaultMaxResults.enabled
+          ? { WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: 'true' }
+          : {}),
+        // Project file readiness: a project turn names the files the model cannot
+        // see yet. Written only while ON, so the default costs nothing against
+        // the V2 payload budget.
+        ...(config.projectFileReadiness.enabled ? { PROJECT_FILE_READINESS_ENABLED: 'true' } : {}),
         // Handoffs (in development): the Runtime accepts `handoff_context` on a
         // target's first turn and keeps the source's HANDOFF# row current. Written
         // only while ON, so the default costs nothing against the V2 payload budget.
         ...(config.handoffs.enabled ? { HANDOFFS_ENABLED: 'true' } : {}),
+        // The handoff brief (in development): the source's own model writes the
+        // context card from its prompt cache. Meaningless without handoffs, so
+        // written only while both are ON; the default costs nothing.
+        ...(config.handoffs.enabled && config.handoffs.briefEnabled ? { HANDOFF_BRIEF_ENABLED: 'true' } : {}),
         // Conversation rewind (in development): the Runtime filters rewound
         // messages at restore and cuts a warm agent's list in place. Written
         // only while ON, so the default costs nothing against the V2 payload budget.

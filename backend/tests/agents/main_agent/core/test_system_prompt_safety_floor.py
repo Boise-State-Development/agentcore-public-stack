@@ -170,16 +170,21 @@ def test_the_platform_text_fits_in_its_headroom() -> None:
     """Fails when the default prompt grows toward the room reserved for it.
 
     Everything besides the author's instructions shares PLATFORM_PROMPT_HEADROOM: the
-    default prompt and date, the user's personal instructions, and slack for headings and a
-    prompt template. A bound memory block no longer does (Shared Projects 2.2 sends it after
-    the wrapper). Outgrowing it would silently truncate the end of the block again, so raise
-    the headroom rather than weakening this.
+    default prompt and date, the user's personal instructions, the combined Role
+    Instructions of a plain turn (#13), a Conversation Mode, and slack for headings. A
+    bound memory block no longer does (Shared Projects 2.2 sends it after the wrapper).
+    Outgrowing it would silently truncate the end of the block again, so raise the
+    headroom rather than weakening this.
     """
     from agents.main_agent.core.system_prompt_builder import PLATFORM_PROMPT_HEADROOM
+    from apis.inference_api.chat.role_instructions import MAX_ROLE_INSTRUCTIONS_CHARS
+    from apis.shared.system_prompts.models import MAX_PROMPT_TEXT_LENGTH
     from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS
 
     platform = len(SystemPromptBuilder().build(include_date=True))
-    reserved = MAX_PERSONAL_INSTRUCTIONS_CHARS + 16 * 1024
+    reserved = (
+        MAX_PERSONAL_INSTRUCTIONS_CHARS + MAX_ROLE_INSTRUCTIONS_CHARS + MAX_PROMPT_TEXT_LENGTH + 16 * 1024
+    )
     assert platform + reserved <= PLATFORM_PROMPT_HEADROOM
 
 

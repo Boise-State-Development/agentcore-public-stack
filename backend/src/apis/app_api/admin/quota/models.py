@@ -6,6 +6,7 @@ from agents.main_agent.quota.models import (
     QuotaTier,
     QuotaAssignment,
     QuotaAssignmentType,
+    QuotaExtension,
 )
 
 
@@ -111,6 +112,13 @@ class UserQuotaInfo(BaseModel):
     quota_limit: Optional[float] = Field(None, alias="quotaLimit")
     percentage_used: float = Field(..., alias="percentageUsed")
     remaining: Optional[float] = None
+
+    # Quota extensions stacked on the tier (quota-requests spec §10.2), so the
+    # inspector explains a limit that no longer matches the tier. quotaLimit
+    # above is the effective limit; None under an uncapped standing extension.
+    base_limit: Optional[float] = Field(None, alias="baseLimit")
+    effective_limit: Optional[float] = Field(None, alias="effectiveLimit")
+    extensions: List[QuotaExtension] = Field(default_factory=list)
 
     # Recent events
     recent_blocks: int = Field(default=0, alias="recentBlocks", description="Blocks in last 24h")

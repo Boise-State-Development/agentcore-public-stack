@@ -20,16 +20,22 @@ def emit_handoff_metric(
     *,
     session_id: Optional[str] = None,
     detail: Optional[str] = None,
+    surface: Optional[str] = None,
 ) -> None:
     """One count of ``name`` (``HandoffCreated``, ``HandoffCancelled`` …), with ``kind`` as a property.
 
     ``detail`` rides as a property too: the interrupt kind on ``HandoffNeedsInput``, the reason on
-    ``HandoffStopped``. Properties, not dimensions, like every other caller of ``emit_emf_metrics``.
+    ``HandoffStopped``, the interrupt kind on the ``RelayedPrompt*`` counts. ``surface`` is where a
+    relayed prompt was answered (``source`` / ``target``). Properties, not dimensions, like every
+    other caller of ``emit_emf_metrics``.
     """
+    properties = {"handoffKind": kind, "sessionId": session_id, "handoffDetail": detail}
+    if surface is not None:
+        properties["relaySurface"] = surface
     emit_emf_metrics(
         _NAMESPACE,
         metrics={name: 1},
-        properties={"handoffKind": kind, "sessionId": session_id, "handoffDetail": detail},
+        properties=properties,
         units={name: "Count"},
     )
 

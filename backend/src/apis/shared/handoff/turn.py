@@ -15,6 +15,11 @@ seen into ``needs_input`` (with ``waitingOn``), ``done`` (with the latest tool s
 ``statusLine``) or ``stopped`` (with a reason), and writes it in the background. A later turn finds
 its handoff from ``spawnedFrom`` on the B1 snapshot, so it costs no read.
 
+**A state change that needs the user goes to their inbox too** (§4.3, PR-0.3b): one
+``handoff_needs_input`` / ``handoff_done`` / ``handoff_stopped`` entry, written in the same background
+step right after the row moved, so a tab closed mid-turn still leaves a ``handoff_stopped`` for the
+next visit. A Stop the user pressed writes none.
+
 **Nothing here may add time before the first token** (CLAUDE.md, TTFT budget). The constructor does
 no IO. Acceptance (a read and a conditional write) starts as a task at the head of the stream, so
 it runs in a worker thread while the agent is built. A handoff's target is always a brand-new
@@ -40,6 +45,7 @@ from apis.shared.handoff.context import normalize_context_text, context_hash, wr
 from apis.shared.handoff.excerpt import CHARS_PER_TOKEN, HANDOFF_EXCERPT_MAX_TOKENS, clip_middle
 from apis.shared.handoff.metrics import emit_handoff_metric
 from apis.shared.handoff.models import Handoff, HandoffStatus, WaitingOn
+from apis.shared.handoff.notify import notify_handoff_state
 from apis.shared.handoff.store import HandoffStore, get_handoff_store
 
 logger = logging.getLogger(__name__)
@@ -150,6 +156,8 @@ class HandoffTurn:
     session_id: str
     agent_id: Optional[str]
     request: Optional[HandoffContextRequest] = None
+    #: The inbox's key. ``None`` (a token without an email claim) skips the inbox, never the row.
+    user_email: Optional[str] = None
     linked_handoff_id: Optional[str] = None
     store: HandoffStore = field(default_factory=get_handoff_store)
     observer: HandoffTurnObserver = field(default_factory=HandoffTurnObserver)
@@ -167,6 +175,7 @@ class HandoffTurn:
         is_resume: bool,
         is_continuation: bool,
         is_preview: bool = False,
+        user_email: Optional[str] = None,
         store: Optional[HandoffStore] = None,
     ) -> Optional["HandoffTurn"]:
         """Decide, with no IO, whether this turn takes a handoff or reports on one.
@@ -200,6 +209,7 @@ class HandoffTurn:
             agent_id=agent_id,
             request=request,
             linked_handoff_id=linked,
+            user_email=user_email or None,
         )
         if store is not None:
             turn.store = store
@@ -258,7 +268,9 @@ class HandoffTurn:
             return None, ""
         text = cap_context_text(request.text or "")
         removed = not text
-        edited = not removed and context_hash(text) != row.excerpt_hash
+        # The card the SPA offered: the brief when one was written for this handoff, else the excerpt.
+        offered_hash = row.brief_hash or row.excerpt_hash
+        edited = not removed and context_hash(text) != offered_hash
         accepted = self.store.accept(
             self.user_id,
             request.handoff_id,
@@ -315,6 +327,13 @@ class HandoffTurn:
             }[outcome.status]
             detail = outcome.waiting_on.kind if outcome.waiting_on else outcome.stopped_reason
             emit_handoff_metric(metric, updated.kind, session_id=updated.session_id, detail=detail)
+            notify_handoff_state(
+                updated,
+                outcome.status,
+                recipient_email=self.user_email,
+                target_session_id=self.session_id,
+                stopped_reason=outcome.stopped_reason,
+            )
         if updated is None or outcome.status == "done":
             # Done, or a row that can no longer move (frozen, or gone with its source): stop
             # following this conversation's turns.

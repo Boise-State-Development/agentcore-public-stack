@@ -1966,6 +1966,30 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.warning(f"apply_rewind skipped: {e}", exc_info=True)
             return None
 
+    def rewound_copy(self, messages: List[Dict], row: Optional[Dict]) -> List[Dict]:
+        """A deep copy of ``messages`` cut to any rewind the next turn's head would apply.
+
+        For a call that reads the history without being a turn (a handoff brief,
+        agent-handoffs-and-consults.md §4.5.1): ``apply_rewind`` cuts the live list only
+        at the head of the next turn, so between a rewind and that turn the live list
+        still holds what the user hid. The copy is cut the same way; the live list,
+        this manager's rewind epoch and the stashed row are left for the next turn.
+        ``row`` is the session's metadata row, read by the caller this request.
+        """
+        copied = copy.deepcopy(messages)
+        from apis.shared.feature_flags import session_rewind_enabled
+
+        if not session_rewind_enabled() or not row:
+            return copied
+        try:
+            state = RewindState.from_row(row)
+            applied = self._live_conversation.rewind_epoch
+            if state.epoch > applied:
+                self._cut_live_list(copied, state, applied)
+        except Exception as e:  # noqa: BLE001 - a failed cut must not fail the caller
+            logger.warning(f"rewound_copy: rewind not applied to the copy: {e}")
+        return copied
+
     def _cut_live_list(self, messages: List[Dict], state: RewindState, applied_epoch: int) -> Optional[int]:
         """Slice ``messages`` in place to the rewinds after ``applied_epoch``.
 

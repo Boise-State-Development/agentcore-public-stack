@@ -228,6 +228,11 @@ export class AppApiServiceConstruct extends Construct {
     // Read by apis/shared/projects/memory_maintenance.py; the invoke grant is
     // in app-api-iam-grants.ts.
     environment['MEMORY_MAINTENANCE_FUNCTION_NAME'] = props.refs.memoryMaintenanceWorker.functionName;
+    // Born-managed KB provisioning: the first upload into a new agent or project
+    // starts the worker now instead of waiting for the 15-minute dispatcher tick.
+    // Read by apis/app_api/kb_upgrade/born_managed.py; the invoke grant is in
+    // app-api-iam-grants.ts.
+    environment['KB_MIGRATION_WORKER_FUNCTION_NAME'] = props.refs.kbMigrationWorker.functionName;
 
     // Fine-tuning env vars. Names verified against
     // backend/src/apis/app_api/fine_tuning/* to match the exact env

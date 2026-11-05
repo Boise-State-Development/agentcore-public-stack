@@ -39,6 +39,7 @@ import type {
   SourceLocator,
   QuotaWarningEvent,
   QuotaSessionNoticeEvent,
+  QuotaFundingNoticeEvent,
   QuotaExceededEvent,
   StreamErrorEvent,
   ConversationalStreamErrorEvent,
@@ -92,6 +93,7 @@ export interface StreamParserCallbacks {
   // Quota events
   onQuotaWarning?: (data: QuotaWarningEvent) => void;
   onQuotaSessionNotice?: (data: QuotaSessionNoticeEvent) => void;
+  onQuotaFundingNotice?: (data: QuotaFundingNoticeEvent) => void;
   onQuotaExceeded?: (data: QuotaExceededEvent) => void;
 
   // OAuth consent required (external MCP tool needs user authorization)
@@ -377,6 +379,27 @@ export function validateQuotaSessionNoticeEvent(
     event.sessionId.length > 0 &&
     typeof event.sessionCost === 'number' &&
     typeof event.quotaLimit === 'number'
+  );
+}
+
+/**
+ * Validate QuotaFundingNoticeEvent structure
+ */
+export function validateQuotaFundingNoticeEvent(
+  data: unknown,
+): data is QuotaFundingNoticeEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<QuotaFundingNoticeEvent>;
+
+  return (
+    event.type === 'quota_funding_notice' &&
+    typeof event.label === 'string' &&
+    typeof event.chargedThisPeriod === 'number' &&
+    typeof event.message === 'string' &&
+    (event.cap === undefined || typeof event.cap === 'number')
   );
 }
 
@@ -1042,6 +1065,12 @@ export function processStreamEvent(
       case 'quota_session_notice':
         if (validateQuotaSessionNoticeEvent(data)) {
           callbacks.onQuotaSessionNotice?.(data);
+        }
+        break;
+
+      case 'quota_funding_notice':
+        if (validateQuotaFundingNoticeEvent(data)) {
+          callbacks.onQuotaFundingNotice?.(data);
         }
         break;
 

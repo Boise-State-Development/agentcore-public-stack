@@ -189,6 +189,20 @@ def _ssm_value(ssm, name: str, default: Optional[str] = None) -> str:
         return default
 
 
+def eval_user_id(prefix: str, region: str) -> Optional[str]:
+    """The seeded eval user's ``sub`` on ``prefix``, or ``None`` when it has not been seeded."""
+    import boto3
+
+    ssm = boto3.client("ssm", region_name=region)
+    idp = boto3.client("cognito-idp", region_name=region)
+    pool_id = _ssm_value(ssm, f"/{prefix}/auth/cognito/user-pool-id")
+    try:
+        attrs = idp.admin_get_user(UserPoolId=pool_id, Username=USERNAME)["UserAttributes"]
+    except idp.exceptions.UserNotFoundException:
+        return None
+    return next((a["Value"] for a in attrs if a["Name"] == "sub"), None)
+
+
 async def main_async(args: argparse.Namespace) -> int:
     grants = grants_from_golden_set()
     role = build_role(tools=grants["tools"], skills=grants["skills"], models=args.models.split(","))

@@ -4195,7 +4195,7 @@ class StreamCoordinator:
         self,
         session_id: str,
         user_id: str,
-        message_id: int,
+        message_id: Optional[int],
         accumulated_metadata: Dict[str, Any],
         stream_start_time: float,
         stream_end_time: float,
@@ -4209,7 +4209,9 @@ class StreamCoordinator:
         context_ledger: Optional[Dict[str, Any]] = None,
         turn_duration_ms: Optional[int] = None,
         include_context_breakdown: bool = False,
-    ) -> None:
+        call_kind: Optional[str] = None,
+        prefix_fingerprint: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Store message-level metadata (token usage, latency, model info, citations)
 
@@ -4227,6 +4229,14 @@ class StreamCoordinator:
                 look up the matching prompt-cache prefix fingerprint stashed
                 by PrefixFingerprintHook. None → latest fingerprint (single-
                 call paths like interrupted-turn persistence).
+            call_kind: Set for a call that is not a turn (``"handoff_brief"``):
+                recorded as ``callKind``, and the row is written with no
+                ``messageId`` when ``message_id`` is None.
+            prefix_fingerprint: This call's fingerprint, for a caller that ran no
+                hooks (the brief computes it over the request it sent).
+
+        Returns the row's derived cache observability (``cacheStatus`` …), or None
+        when no row was written.
         """
         try:
             from apis.shared.sessions.models import Attribution, LatencyMetrics, MessageMetadata, ModelInfo, TokenUsage
@@ -4400,10 +4410,12 @@ class StreamCoordinator:
                 # (extra field via extra="allow"; persisted on the cost row
                 # so cache misses are diagnosable component-by-component).
                 strands_agent = getattr(agent, "agent", None) if agent is not None else None
-                if strands_agent is not None:
+                if prefix_fingerprint is None and strands_agent is not None:
                     prefix_fingerprint = get_prefix_fingerprint(strands_agent, call_index)
-                    if prefix_fingerprint:
-                        metadata_kwargs["prefixFingerprints"] = prefix_fingerprint
+                if prefix_fingerprint:
+                    metadata_kwargs["prefixFingerprints"] = prefix_fingerprint
+                if call_kind:
+                    metadata_kwargs["callKind"] = call_kind
 
                 # Which Agent ran this turn (#756), as another extra field. An
                 # `@`-mention swaps the Agent for one turn, which genuinely re-writes
@@ -4426,7 +4438,8 @@ class StreamCoordinator:
                 # history was seeded from the parent's live list (a cache hit is
                 # possible) or restored from the stored copy (it is not), so the
                 # spec's warm/cold claim is a row query. Consumed once.
-                fork_marker = getattr(turn_session_manager, "_pending_fork_marker", None)
+                # A call that is not a turn leaves it for the fork's first real call.
+                fork_marker = None if call_kind else getattr(turn_session_manager, "_pending_fork_marker", None)
                 if isinstance(fork_marker, dict) and fork_marker:
                     metadata_kwargs.update(fork_marker)
                     turn_session_manager._pending_fork_marker = None
@@ -4512,8 +4525,11 @@ class StreamCoordinator:
 
                 message_metadata = MessageMetadata(**metadata_kwargs)
 
-                # Store metadata
-                await store_message_metadata(session_id=session_id, user_id=user_id, message_id=message_id, message_metadata=message_metadata)
+                # Store metadata. The derived cache observability comes back for a
+                # caller that records it elsewhere too (a handoff brief's HANDOFF# row).
+                return await store_message_metadata(
+                    session_id=session_id, user_id=user_id, message_id=message_id, message_metadata=message_metadata
+                )
 
         except Exception as e:
             # Log but don't raise - metadata storage failures shouldn't break streaming

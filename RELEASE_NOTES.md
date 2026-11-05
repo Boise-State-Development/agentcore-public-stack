@@ -1,3 +1,162 @@
+# Release Notes — v1.33.0
+
+**Release Date:** November 4, 2026
+**Previous Release:** v1.32.0 (October 30, 2026)
+
+---
+
+## Highlights
+
+This release adds ways to ask for more, hand work off, and see the limits you run against. Users can **request more quota** and admins can grant additive extensions and report chargeback, **handoffs** gain a review sheet, a model-written brief, relayed prompts and notifications, an admin **AWS Limits** page shows the account's Service Quotas with usage and increase requests, and a new **meeting-transcripts-to-GitHub-issues** tool family turns Zoom and Calendar meetings into Project board items. Roles can carry **system instructions**, Claude Haiku 5.5 is curated, AgentCore Web Search can be added as a Gateway connector, and a Shared Project now says which of its files the model cannot see yet. Every new feature ships behind an in-development flag that is **off by default**; six backend flags and four SPA fields are added (see Feature flags). **Nothing is required to deploy this release**, but read the Deployment notes: app-api's DynamoDB grants are rewritten, and no GSI changes.
+
+---
+
+## Quota requests, extensions and chargeback (in development, off by default)
+
+A user who hits their limit can ask for more from the composer's quota tab, the blocked state or Settings → Usage, and an admin answers from a new queue (`docs/specs/quota-requests-and-extensions.md`; #1813–#1816, #1821, #1829, #1831).
+
+### Backend
+- `QUOTA_REQUESTS_ENABLED` gates `/quota/*` for users and `/admin/quota-requests` and `/admin/quota-extensions` for admins; all of it 404s after authentication while off.
+- **Extensions stack on the resolved tier** instead of replacing it, so a grant adds to whatever the user's role or override already gives them. Resolution reads extensions wherever it runs, as direct user grants are read, so **the Runtime gets no variable** and turning the flag off stops new grants without revoking existing ones.
+- A request is **claimed before it is granted**, so a lost race leaves no extension; a fund is charged what enforcement charged even when the base changed mid-month; an approved request whose extension was later revoked says so.
+- **Chargeback report** with a lazily closed ledger, so a period's totals do not change after the fact.
+- `quota-status` is read fresh, so a decision shows at once.
+
+### Frontend
+- Request dialog, requests list and granted extensions in the composer's quota tab and Settings → Usage; one quota tab above the composer at a time; the composer reloads its status as turns end and decisions land; the notification bell shows decisions. Admin screens for requests, extensions and the chargeback report.
+
+## Handoffs: review sheet, brief, relayed prompts, notifications (in development, off by default)
+
+Phase 0 of `docs/specs/agent-handoffs-and-consults.md` gets its SPA and its second flag (#1748, #1849, #1854, #1856, #1859, #1862, #1863, #1847).
+
+- **Review sheet and background send.** A mid-thread `@`-mention opens a sheet showing the context card, then starts the Agent's conversation in the background while the user stays put. The handoff row in the thread is anchored by message id, not message count.
+- **A brief written from the prompt cache** (`HANDOFF_BRIEF_ENABLED`, needs `HANDOFFS_ENABLED`). The Runtime re-sends the source conversation's last request plus one instruction, so the history reads from the source's prompt cache rather than being re-written, and streams the brief into the sheet. Nothing it produces is persisted; the excerpt stays as the fallback. A cancelled brief is metered as an estimate, and a pending rewind and the session lease are respected.
+- **Relayed prompts** appear in the source thread, and **inbox entries and browser notifications** announce handoff state changes (with the app icon; a replaced notification alerts again). The notification service loads on demand from the bell, and the bell no longer under-counts when a handoff entry is read in view.
+- `resolve_turn_agent` and the prompt-composition phases are extracted from the inference route, in line with `docs/specs/turn-path-ttft.md`.
+
+## AWS Limits admin page (in development, off by default)
+
+An admin page under Usage & Spend lists the account's applied Service Quotas for the services this stack uses, with usage and increase requests (GitHub issue #12; #1842, #1866, #1875).
+
+- Curated catalog grouped by stack component; Bedrock quotas filtered to the managed model catalog with a show-all toggle; 7-day peak usage and Bedrock model usage from `AWS/Bedrock` metrics; one `GetMetricData` call per group, a 10-minute per-task cache and per-group error isolation. Starts on **Adjustable only** with a **Hide unused** toggle.
+- Increase requests are validated against the catalog, adjustability and the applied value, mapped from AWS errors to HTTP, and audited as `aws_limit.increase_requested`; history is joined to the audit log and shown in a modal.
+- **IAM grants (Service Quotas reads, `GetMetricData`, `RequestServiceQuotaIncrease` conditioned to monitored services, Service Quotas service-linked-role creation) exist only while `CDK_AWS_LIMITS_ENABLED` is on.**
+- **Known gap before turning it on in production:** `POST /admin/aws-limits/requests` uses the `admin.aws_limits` scope for dev testing. A `TODO(aws-limits)` in `app_api/admin/aws_limits/routes.py` marks the switch to `system_admin` that is still to do.
+
+## Meeting transcripts to GitHub issues (in development, off by default)
+
+Three tool families let an agent find a meeting, read its transcript and put the action items on a board (`docs/specs/meeting-transcripts-to-github-issues.md`; #1822, #1836, #1840).
+
+- `google_calendar_meetings` (events in a window, Zoom meeting id parsed from the conference link), `zoom_meeting_transcripts` (cloud recordings and speaker-attributed transcripts) and `github_issues_local` (Projects boards and repositories; adds action items as issues with fields set, **confirmation-gated write**, boards as well as repositories).
+- Seeded `enabledByDefault: false` and not public, so enabling the flag still grants nobody anything: a role must be granted each tool and an admin must bind each row's "Required OAuth provider" to a connector.
+- The admin tool form offers the OAuth connector picker for built-in tools, and Microsoft connectors take an Entra tenant ID (#1830).
+
+## Smaller additions
+
+- **Role system instructions** (#1864, issue #13). `AppRole.system_instruction` (8,000 characters, audited, not available on `system_admin`) is resolved into the cached `UserEffectivePermissions` and composed into plain chats as base → role instructions → active mode → personal instructions, personal winning and saying so. The role section is capped at 16,000 characters (whole roles dropped lowest priority first). The admin role editor gets the textarea with a count, token estimate and markdown preview. **A client-sent `system_prompt` on `/chat/stream` is now ignored (and logged) outside `preview-` sessions**; `/chat/api-converse` is unchanged. Not flag-gated; blank means no change, though a role that gains instructions changes the system prompt and so re-writes the prompt cache once for its members.
+- **Project file readiness** (in development; #1838, #1839, #1841). A strip above a project chat's composer ("Preparing 3 of 11 project files…", "All 11 files ready", a note on failed files), and each project turn names the files the model cannot see yet; `project_files` reports a not-ready file as a result instead of a failed call.
+- **AgentCore Web Search as a Gateway connector** (#1819, #1811, #1818). Admins add the AWS-operated web-search connector from the tool form, next to external MCP servers; Gateway tools are recognized by catalog protocol, not only the `gateway_` prefix. A separate flag, `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`, defaults an unqualified search to 5 results instead of 10, about 2.6k tokens of tool result instead of 5.3k (`docs/specs/web-search-default-comparison-findings.md`); a count the model chose passes through. `backend/scripts/compare_web_search.py` compares it with Brave side by side.
+- **Claude Haiku 5.5 is curated**, capped below its 100K price step, with the preserved-thinking `drop_block` binding sent (#1853). The eval baseline moves to Haiku 5.5, the dev default.
+- **Every AgentCore built-in OAuth vendor** is offered in the connector picker (18 more, including Atlassian, Notion, Okta and HubSpot), and the admin pages are restyled; admins are told why AgentCore rejected a connector config; the admin connector list is read uncached so it is never stale across tasks (#1867, #1871, #1872).
+- **Delegated admins**: a models admin can add a curated model, and a read-only role list feeds role pickers (#1857, #1858).
+- **Sidebar drag and drop**: each session list gets its own drop-list ids, so dragging works with Agents pinned (#1823).
+- **Evaluation harness**: large-document cases prepared by the deployed pipeline, `score --explain` shows each flipped sample's model calls, LLM judge model kept as Sonnet with a warning on a self-judging run, orphaned eval runs swept, a nightly track against dev, and a re-promoted Haiku 5.5 baseline (#1810, #1812, #1820, #1865).
+- **Spoken-audio generation is specced**, with spike results and the renderer moved to AWS Batch (docs only; #1832, #1834, #1835, #1851, #1869).
+
+## 🐛 Bug fixes
+
+- **A new Agent's or Project's files sat at "Setting up" for up to 15 minutes** before the knowledge-base build started, because the first upload queued it for a dispatcher that ticks every 15 minutes (a Shared Project's 11 files waited 12 minutes in production). The upload now invokes the migration worker directly (#1837)
+- **Reading a project file that was not ready failed the tool call**; it is now reported to the model as a result, and the readiness strip says "1 of 2 ready" when one failed, keeps polling until a file is ready, and passes AA contrast in dark mode (#1838–#1841)
+- **A quota decision did not show at once**; `quota-status` is now read fresh, and a revoked extension on an approved request is labelled as such (#1816)
+- **The nightly teardown left stuck stacks behind**: a failed stack delete is retried, then what is stuck is retained and deleted (#1844). `destroy.sh` empties buckets itself instead of relying on CDK auto-delete, and `managed-kb.sh` defines `log_success` (#1808)
+- **A cancelled handoff brief went unmetered**; it is now recorded as an estimate (#1856)
+- **The notification bell under-counted** when a handoff entry was read in view (#1862)
+
+## 🔒 Security
+
+- **Dependabot alerts patched** (`pyasn1` 0.6.5, `@hono/node-server` 2.1.3) and the unused `authlib` dependency removed (#1848)
+
+## ⚡ Performance
+
+- **The handoff brief reads the source's prompt cache**, so its input is billed at the cache-read rate rather than as a fresh prompt (#1849)
+
+## ⚠️ Breaking changes
+
+- **A client-supplied `system_prompt` on `/chat/stream` is ignored outside `preview-` sessions** (#1864). The web app never sent one outside preview.
+- **The local GitHub tool family id is `github_issues_local`** (renamed from its earlier name before it shipped enabled; #1836). Only a deployment that bound the earlier id in development is affected.
+
+## 🏗️ Infrastructure
+
+- **app-api's DynamoDB grants are scoped by table-name prefix** and the Runtime's are compacted (#1806, `deployment-table-grants.ts`). A prefix grant covers every table the stack owns without listing each ARN, which trims the app-api role policy and the stack's resource count. **During the platform deploy the role's policy is replaced, which can return `AccessDenied` for roughly 30–40 seconds** while IAM propagates; a table added after this release is covered without a policy change.
+- Four SSM parameters nothing read are dropped.
+- **Teardown empties buckets in `destroy.sh`** rather than through CDK auto-delete (#1808).
+- Conditional resources: `CDK_AWS_LIMITS_ENABLED` adds Service Quotas IAM only while on. `CDK_QUOTA_REQUESTS_ENABLED`, `CDK_HANDOFF_BRIEF_ENABLED`, `CDK_MEETING_TASKS_ENABLED`, `CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED` and `CDK_PROJECT_FILE_READINESS_ENABLED` add no resources; the Runtime-side copies are written only while on, so they spend none of the V2 environment budget.
+- **No GSI changes** (`check-gsi-update-limit.mjs` passes against `main`).
+
+## 🔧 CI/CD
+
+- The nightly eval runs against dev as its own track; the nightly stack delete retries (#1844); `platform.yml` forwards the six new `CDK_*_ENABLED` variables.
+- Device-grant claim-race tests serialize moto writes (flake fix).
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend | `strands-agents` (and `[bidi]`) | 1.61.1 | 1.63.0 |
+| Backend | `aws-opentelemetry-distro` | 0.19.0 | 0.22.0 |
+| Backend | `pyasn1` | 0.6.4 | 0.6.5 |
+| Backend | `authlib` | 1.7.1 | removed (unused) |
+| Frontend (override) | `@hono/node-server` | >=1.19.13 | >=2.1.3 |
+
+Strands 1.63.0 is pinned together with a byte-for-byte test of the formatted Bedrock request and a readout of its `maxTokens`, `model_info` and offloader changes (#1850).
+
+## 🧪 Test coverage
+
+About 22,000 lines of new or changed tests and specs across quota requests, handoffs, AWS Limits, the meeting tools, the eval harness and the infrastructure grant tests.
+
+## 📚 Docs
+
+- Docs-site rebuilt for a public-sector audience: landing page and introduction, real product screenshots with a `Screenshot` frame component, pages for agents, voice, API keys, MCP Apps, knowledge bases and admin, a November 2026 roadmap, an AWS Limits page. The README is rewritten and the platform architecture diagram redrawn (#1860, #1861, #1870).
+- Specs: quota requests, handoff brief from the prompt cache, meeting transcripts to GitHub issues, spoken audio, the resource-budget reduction plan, Web Search findings, and a measurement of rewind's long-term-memory residue (#1855).
+- Kaizen research and review prep for 2026-11-03 (#1833, #1843, #1852).
+
+## 🚩 Feature flags
+
+All six are **in development**: only `"true"` enables, and an unset GitHub variable (`""`) is off. Each is on in `environment.development.ts` where it has an SPA half, and off in `environment.ts` and `environment.production.ts`. Flags whose Kind says "feature switch" stay permanent once finished.
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| `QUOTA_REQUESTS_ENABLED` / `CDK_QUOTA_REQUESTS_ENABLED` / SPA `features.quotaRequests` | **OFF** (in development) | app-api only; the Runtime reads extensions without a switch | Feature switch | Users ask for more quota and admins grant additive extensions, with a chargeback report |
+| `HANDOFF_BRIEF_ENABLED` / `CDK_HANDOFF_BRIEF_ENABLED` / SPA `features.handoffBrief` | **OFF** (in development); needs `HANDOFFS_ENABLED` | AgentCore Runtime (written only while on) and the SPA | Feature switch (spends model tokens per handoff) | A handoff's context card is a brief the source's own model writes from its prompt cache |
+| `AWS_LIMITS_ENABLED` / `CDK_AWS_LIMITS_ENABLED` / SPA `features.awsLimits` | **OFF** (in development) | app-api only; Service Quotas IAM exists only while on | Feature switch | Admin page of the account's Service Quotas with usage and increase requests |
+| `MEETING_TASKS_ENABLED` / `CDK_MEETING_TASKS_ENABLED` (no SPA field) | **OFF** (in development) | AgentCore Runtime only, written only while on | Feature switch | Builds the Google Calendar, Zoom and GitHub meeting tool families; still needs RBAC grants and connector bindings |
+| `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED` / `CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED` (no SPA field) | **OFF** (in development) | AgentCore Runtime only, written only while on | Feature switch | An unqualified AgentCore Web Search asks for 5 results instead of 10 |
+| `PROJECT_FILE_READINESS_ENABLED` / `CDK_PROJECT_FILE_READINESS_ENABLED` / SPA `features.projectFileReadiness` | **OFF** (in development) | AgentCore Runtime (written only while on) and the SPA | Feature switch | A project chat shows which files are still being prepared and tells the model the same |
+
+`features.handoffs` (backend `HANDOFFS_ENABLED` already existed) is new on the SPA side: on in dev, off locally and in production.
+
+**Default changes:** none. **Retired:** none. **Still opt-in, on in our prod** (#1798): `sessionRewind` and `sessionFork` (promote to default-on after two weeks in production; neither flipped since 1.32.0), `sessionPrewarm` (waits on the Runtime V2 readout of what turnless warms cost), `attachmentKb` (a $5/GB-month cost decision each deployment makes). None of the new flags is on in our prod.
+
+## 🛠️ Manual steps
+
+### Re-seed: three new built-in tool rows
+
+Run the `bootstrap-data-seeding` workflow (or `scripts/stack-bootstrap/seed.sh`) so `google_calendar_meetings`, `zoom_meeting_transcripts` and `github_issues_local` exist in the tool catalog. They are inserted `enabledByDefault: false` and not public, and the upsert does not touch other rows. **Only needed to try the meeting tools**; they do nothing until `MEETING_TASKS_ENABLED` is on, a role is granted them and an admin binds each to a connector.
+
+### Backfills
+
+None. No new `backfill_*.py`.
+
+### Environment variables to set
+
+None required. To try a feature, set the matching `CDK_*_ENABLED=true` on a GitHub environment and run `platform.yml`: `CDK_QUOTA_REQUESTS_ENABLED`, `CDK_HANDOFFS_ENABLED` plus `CDK_HANDOFF_BRIEF_ENABLED`, `CDK_AWS_LIMITS_ENABLED`, `CDK_MEETING_TASKS_ENABLED`, `CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`, `CDK_PROJECT_FILE_READINESS_ENABLED`. Set the SPA side by turning on the matching `features.*` field in that environment's file and redeploying the frontend.
+
+## 🚀 Deployment notes
+
+Standard order: `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`. Expect a brief (~30–40 s) window of DynamoDB `AccessDenied` on app-api while the rewritten role policy propagates during the platform deploy (Infrastructure). `strands-agents` 1.63.0 is covered by a byte-for-byte test of the formatted Bedrock request, so the prompt-cache prefix is expected to be unchanged. A role that gains system instructions changes its members' system prompt and re-writes the cache once. See Feature flags and Manual steps for everything optional.
+
+---
+
 # Release Notes — v1.32.0
 
 **Release Date:** October 30, 2026

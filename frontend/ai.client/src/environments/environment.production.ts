@@ -27,7 +27,12 @@ export const environment = {
         folderSync: true,
         sourceProvenance: false,
         documentExtract: false,
+        handoffs: false,
+        handoffBrief: false,
         sessionRewind: true,
         sessionFork: true,
+        quotaRequests: false,
+        projectFileReadiness: false,
+        awsLimits: false,
     } satisfies FeatureFlags,
 };

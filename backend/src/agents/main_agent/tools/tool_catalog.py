@@ -125,6 +125,34 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         hidden=False,
     ),
 
+    # --- Meeting transcripts → GitHub issues ---
+    # One row per vendor; each provisions its whole family per request (see
+    # agents/local_tools/meeting_tasks.py and _build_meeting_tools in
+    # apis/inference_api/chat/routes.py). An admin binds each row to a user
+    # OAuth connector via "Required OAuth provider"; the runtime tool objects
+    # are closure-bound to the invoking user and that connector.
+    "google_calendar_meetings": ToolMetadata(
+        tool_id="google_calendar_meetings",
+        name="Google Calendar Meetings",
+        description="Find the user's calendar events in a date window, with the Zoom meeting id parsed from each event's conference link.",
+        category=ToolCategory.UTILITIES,
+        icon="calendar-days",
+    ),
+    "zoom_meeting_transcripts": ToolMetadata(
+        tool_id="zoom_meeting_transcripts",
+        name="Zoom Meeting Transcripts",
+        description="List the user's Zoom cloud recordings and read a recording's transcript as speaker-attributed text.",
+        category=ToolCategory.UTILITIES,
+        icon="video-camera",
+    ),
+    "github_issues_local": ToolMetadata(
+        tool_id="github_issues_local",
+        name="GitHub Project Tasks (direct API)",
+        description="Find the user's GitHub Projects boards and repositories, and add action items to a board as issues with their fields set. Confirmation-gated write.",
+        category=ToolCategory.UTILITIES,
+        icon="code-bracket-square",
+    ),
+
     # --- Built-in Tools (Utilities) ---
     "calculator": ToolMetadata(
         tool_id="calculator",

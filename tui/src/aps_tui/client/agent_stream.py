@@ -218,8 +218,10 @@ class AgentStreamClient:
                 payload["provider"] = self._config.provider
         if self._config.max_tokens:
             payload["max_tokens"] = self._config.max_tokens
-        if self._config.system_prompt:
-            payload["system_prompt"] = self._config.system_prompt
+        # No `system_prompt` here: the server ignores it on `/chat/stream` outside an
+        # Agent Designer preview, so a plain turn keeps the platform prompt and the
+        # user's role instructions. The setting applies to API-key mode only
+        # (`/chat/api-converse`, see `ApiConverseClient`).
         if self._config.temperature is not None:
             payload["temperature"] = self._config.temperature
         if inference_params:

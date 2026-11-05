@@ -10,8 +10,8 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroUserGroup } from '@ng-icons/heroicons/outline';
 import { AdminToolService } from '../services/admin-tool.service';
 import { AdminTool, ToolRoleAssignment } from '../models/admin-tool.model';
-import { AppRolesService } from '../../roles/services/app-roles.service';
-import { AppRole } from '../../roles/models/app-role.model';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
+import { AppRoleOption } from '../../roles/models/app-role.model';
 import { DialogDescriptionDirective } from '../../../components/dialog/dialog-description.directive';
 import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 
@@ -125,11 +125,11 @@ export class ToolRoleDialogComponent implements OnInit {
   protected readonly data = inject<ToolRoleDialogData>(DIALOG_DATA);
 
   private adminToolService = inject(AdminToolService);
-  private appRolesService = inject(AppRolesService);
+  private roleOptionsService = inject(RoleOptionsService);
 
   loading = signal(true);
   saving = signal(false);
-  allRoles = signal<AppRole[]>([]);
+  allRoles = signal<AppRoleOption[]>([]);
   currentAssignments = signal<Map<string, ToolRoleAssignment>>(new Map());
   selectedRoleIds = signal<Set<string>>(new Set());
 
@@ -138,7 +138,7 @@ export class ToolRoleDialogComponent implements OnInit {
     try {
       // Load all roles and current assignments in parallel
       const [rolesResponse, assignments] = await Promise.all([
-        this.appRolesService.fetchRoles(),
+        this.roleOptionsService.fetchRoles(),
         this.adminToolService.getToolRoles(this.data.tool.toolId),
       ]);
 

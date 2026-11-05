@@ -16,7 +16,11 @@ from apis.shared.oauth.agentcore_registrar import (
     CredentialProviderNotFoundError,
     InvalidCustomProviderConfigError,
 )
-from apis.shared.oauth.models import OAuthProviderType
+from apis.shared.oauth.agentcore_registrar import (
+    _CONFIG_KEY_BY_TYPE,
+    _VENDOR_BY_TYPE,
+)
+from apis.shared.oauth.models import TENANT_PROVIDER_TYPES, OAuthProviderType
 
 
 def _client_error(code: str) -> ClientError:
@@ -202,6 +206,62 @@ class TestCreateCredentialProvider:
                 client_secret="sec",
             )
 
+    def test_microsoft_sends_tenant_id(self, registrar, boto_client):
+        boto_client.create_oauth2_credential_provider.return_value = _create_response()
+
+        registrar.create_credential_provider(
+            provider_id="azure-devops",
+            provider_type=OAuthProviderType.MICROSOFT,
+            client_id="cid",
+            client_secret="sec",
+            tenant_id="11111111-2222-3333-4444-555555555555",
+        )
+
+        call = boto_client.create_oauth2_credential_provider.call_args.kwargs
+        assert call["oauth2ProviderConfigInput"] == {
+            "microsoftOauth2ProviderConfig": {
+                "clientId": "cid",
+                "clientSecret": "sec",
+                "tenantId": "11111111-2222-3333-4444-555555555555",
+            }
+        }
+
+    def test_microsoft_without_tenant_omits_the_key(self, registrar, boto_client):
+        """No tenant leaves AgentCore's vendor default — never an empty string."""
+        boto_client.create_oauth2_credential_provider.return_value = _create_response()
+
+        registrar.create_credential_provider(
+            provider_id="p",
+            provider_type=OAuthProviderType.MICROSOFT,
+            client_id="cid",
+            client_secret="sec",
+        )
+
+        config = boto_client.create_oauth2_credential_provider.call_args.kwargs[
+            "oauth2ProviderConfigInput"
+        ]["microsoftOauth2ProviderConfig"]
+        assert "tenantId" not in config
+
+    @pytest.mark.parametrize(
+        "provider_type",
+        [OAuthProviderType.GOOGLE, OAuthProviderType.GITHUB, OAuthProviderType.CUSTOM],
+    )
+    def test_non_microsoft_rejects_tenant_id(self, registrar, boto_client, provider_type):
+        with pytest.raises(ValueError, match="tenant_id"):
+            registrar.create_credential_provider(
+                provider_id="p",
+                provider_type=provider_type,
+                client_id="cid",
+                client_secret="sec",
+                discovery_url=(
+                    "https://idp.example.edu/.well-known/openid-configuration"
+                    if provider_type == OAuthProviderType.CUSTOM
+                    else None
+                ),
+                tenant_id="contoso.onmicrosoft.com",
+            )
+        boto_client.create_oauth2_credential_provider.assert_not_called()
+
     def test_surfaces_client_id_when_echoed(self, registrar, boto_client):
         boto_client.create_oauth2_credential_provider.return_value = _create_response(
             config_output={"googleOauth2ProviderConfig": {"clientId": "cid"}},
@@ -234,6 +294,22 @@ class TestUpdateCredentialProvider:
             "clientId": "new-cid",
             "clientSecret": "new-sec",
         }
+
+    def test_resends_microsoft_tenant_id(self, registrar, boto_client):
+        boto_client.update_oauth2_credential_provider.return_value = _create_response()
+
+        registrar.update_credential_provider(
+            provider_id="p",
+            provider_type=OAuthProviderType.MICROSOFT,
+            client_id="new-cid",
+            client_secret="new-sec",
+            tenant_id="contoso.onmicrosoft.com",
+        )
+
+        call = boto_client.update_oauth2_credential_provider.call_args.kwargs
+        assert call["oauth2ProviderConfigInput"]["microsoftOauth2ProviderConfig"][
+            "tenantId"
+        ] == "contoso.onmicrosoft.com"
 
     def test_not_found_maps_to_domain_error(self, registrar, boto_client):
         boto_client.update_oauth2_credential_provider.side_effect = _client_error(
@@ -401,3 +477,128 @@ class TestResponseParsing:
             client_secret="csec",
         )
         assert info.callback_url == ""
+
+
+_TENANT_METADATA = {
+    "issuer": "https://tenant.example.com",
+    "authorizationEndpoint": "https://tenant.example.com/authorize",
+    "tokenEndpoint": "https://tenant.example.com/token",
+}
+
+
+class TestDeliveredVendorCoverage:
+    """Pin our maps to the service model, not to the docs prose.
+
+    AgentCore's docs spell some vendors differently from the API
+    (`AtlassianOAuth2` / `LinkedInOAuth2` in the pages, `AtlassianOauth2` /
+    `LinkedinOauth2` in the model). The model is what the API validates.
+    """
+
+    @staticmethod
+    def _service_model():
+        import boto3
+
+        return boto3.client(
+            "bedrock-agentcore-control", region_name="us-east-1"
+        ).meta.service_model
+
+    def test_every_type_has_both_mappings(self):
+        assert set(_VENDOR_BY_TYPE) == set(OAuthProviderType)
+        assert set(_CONFIG_KEY_BY_TYPE) == set(OAuthProviderType)
+
+    def test_vendors_and_config_keys_exist_in_service_model(self):
+        model = self._service_model()
+        vendors = set(model.shape_for("CredentialProviderVendorType").enum)
+        config_keys = set(model.shape_for("Oauth2ProviderConfigInput").members)
+        for provider_type in OAuthProviderType:
+            assert _VENDOR_BY_TYPE[provider_type] in vendors, provider_type
+            assert _CONFIG_KEY_BY_TYPE[provider_type] in config_keys, provider_type
+
+    def test_every_built_in_vendor_is_exposed(self):
+        # CustomOauth2 is our custom/canvas path; every other vendor the API
+        # delivers must be selectable by an admin.
+        vendors = set(
+            self._service_model().shape_for("CredentialProviderVendorType").enum
+        )
+        assert vendors - {"CustomOauth2"} <= set(_VENDOR_BY_TYPE.values())
+
+
+class TestDeliveredVendorCreate:
+    @pytest.mark.parametrize(
+        "provider_type,vendor,config_key",
+        [
+            (OAuthProviderType.ATLASSIAN, "AtlassianOauth2", "atlassianOauth2ProviderConfig"),
+            (OAuthProviderType.LINKEDIN, "LinkedinOauth2", "linkedinOauth2ProviderConfig"),
+            (OAuthProviderType.X, "XOauth2", "includedOauth2ProviderConfig"),
+            (OAuthProviderType.DROPBOX, "DropboxOauth2", "includedOauth2ProviderConfig"),
+            (OAuthProviderType.NOTION, "NotionOauth2", "includedOauth2ProviderConfig"),
+            (OAuthProviderType.HUBSPOT, "HubspotOauth2", "includedOauth2ProviderConfig"),
+        ],
+    )
+    def test_credentials_only_vendors(
+        self, registrar, boto_client, provider_type, vendor, config_key
+    ):
+        boto_client.create_oauth2_credential_provider.return_value = _create_response()
+
+        registrar.create_credential_provider(
+            provider_id="p",
+            provider_type=provider_type,
+            client_id="cid",
+            client_secret="sec",
+        )
+
+        call = boto_client.create_oauth2_credential_provider.call_args.kwargs
+        assert call["credentialProviderVendor"] == vendor
+        assert call["oauth2ProviderConfigInput"] == {
+            config_key: {"clientId": "cid", "clientSecret": "sec"}
+        }
+
+    @pytest.mark.parametrize("provider_type", sorted(TENANT_PROVIDER_TYPES, key=str))
+    def test_tenant_vendors_forward_endpoints(
+        self, registrar, boto_client, provider_type
+    ):
+        boto_client.create_oauth2_credential_provider.return_value = _create_response()
+
+        registrar.create_credential_provider(
+            provider_id="p",
+            provider_type=provider_type,
+            client_id="cid",
+            client_secret="sec",
+            authorization_server_metadata=_TENANT_METADATA,
+        )
+
+        call = boto_client.create_oauth2_credential_provider.call_args.kwargs
+        config = call["oauth2ProviderConfigInput"]["includedOauth2ProviderConfig"]
+        assert config == {"clientId": "cid", "clientSecret": "sec", **_TENANT_METADATA}
+
+    def test_tenant_vendor_requires_every_endpoint(self, registrar):
+        with pytest.raises(InvalidCustomProviderConfigError, match="tokenEndpoint"):
+            registrar.create_credential_provider(
+                provider_id="p",
+                provider_type=OAuthProviderType.OKTA,
+                client_id="cid",
+                client_secret="sec",
+                authorization_server_metadata={
+                    k: v for k, v in _TENANT_METADATA.items() if k != "tokenEndpoint"
+                },
+            )
+
+    def test_tenant_vendor_rejects_discovery_url(self, registrar):
+        with pytest.raises(InvalidCustomProviderConfigError, match="not a discovery URL"):
+            registrar.create_credential_provider(
+                provider_id="p",
+                provider_type=OAuthProviderType.AUTH0,
+                client_id="cid",
+                client_secret="sec",
+                discovery_url="https://tenant.example.com/.well-known/openid-configuration",
+            )
+
+    def test_credentials_only_vendor_still_rejects_metadata(self, registrar):
+        with pytest.raises(ValueError, match="only valid for CustomOauth2"):
+            registrar.create_credential_provider(
+                provider_id="p",
+                provider_type=OAuthProviderType.NOTION,
+                client_id="cid",
+                client_secret="sec",
+                authorization_server_metadata=_TENANT_METADATA,
+            )

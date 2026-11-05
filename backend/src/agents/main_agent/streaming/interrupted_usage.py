@@ -61,6 +61,7 @@ METHOD_PRIOR_CALL = "prior_call_prefix"   # split from the last call that report
 METHOD_FIRST_WRITE = "assumed_first_write"
 METHOD_UNCACHED = "no_cache_points"
 METHOD_BELOW_MINIMUM = "below_cache_minimum"  # cachePoints sent, prompt too short to cache
+METHOD_PRIOR_PROMPT = "prior_call_prompt"     # the last call's billed prompt + what was added since
 
 #: Smallest prefix Bedrock will cache, per Claude model, from the Bedrock user
 #: guide's explicit-caching table (re-read 2026-10-22). Below it a cachePoint
@@ -168,6 +169,26 @@ def last_reported_cached_prefix(messages: Any) -> Optional[int]:
         except (TypeError, ValueError):
             return None
         return cached or None
+    return None
+
+
+def _last_reported_usage(messages: Any) -> Optional[Dict[str, int]]:
+    """``metadata.usage`` of the newest assistant message carrying one, as ints, or ``None``."""
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        usage = (message.get("metadata") or {}).get("usage")
+        if not isinstance(usage, dict):
+            continue
+        try:
+            return {
+                key: int(usage.get(key) or 0)
+                for key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheWriteInputTokens")
+            }
+        except (TypeError, ValueError):
+            return None
     return None
 
 
@@ -308,6 +329,72 @@ async def build_interrupted_call_usage(
     }
     logger.info(
         "Estimated usage for the interrupted call: input=%d read=%d write=%d output=%d "
+        "(cache split: %s, output: %s)",
+        usage["inputTokens"], usage["cacheReadInputTokens"],
+        usage["cacheWriteInputTokens"], output_tokens, cache_method, output_method,
+    )
+    return {"usage": usage, "usageEstimate": estimate}
+
+
+async def build_side_call_usage(
+    *,
+    strands_agent: Any,
+    wrapper: Any,
+    history: Any,
+    appended_text: str,
+    partial_text: str,
+) -> Optional[Dict[str, Any]]:
+    """Usage + estimate labels for a cancelled side call, or ``None``.
+
+    For a call that re-sends a conversation's last request plus one appended user message (the
+    handoff brief, ``docs/specs/agent-handoffs-and-consults.md`` §4.5.1) and was cancelled before
+    the provider reported usage: a send in the source preempted it, or it ran out of time.
+    ``get_projected_input_tokens`` cannot size it, because its snapshot and projection describe
+    the agent's own next call over its live list, not a copy with a message appended.
+
+    The prompt is rebuilt from facts the history carries. The newest assistant message with usage
+    is the last call the provider reported: its billed prompt, plus its own output (now part of
+    the history), plus the appended message, is what this call sent. The cache split is
+    ``attribute_input_tokens`` over that, with the last call's cache entry as the prefix it reads.
+
+    ``None`` when no message in ``history`` reports usage (a conversation restored into a fresh
+    container): there is no honest size then, and no row is the right answer, as for a turn.
+    """
+    prior = _last_reported_usage(history)
+    if prior is None:
+        return None
+    prior_prompt = prior["inputTokens"] + prior["cacheReadInputTokens"] + prior["cacheWriteInputTokens"]
+    if prior_prompt <= 0:
+        return None
+    appended_tokens, _ = await _count_output_tokens(strands_agent, appended_text or "")
+    total = prior_prompt + prior["outputTokens"] + appended_tokens
+
+    buckets, cache_method = attribute_input_tokens(
+        total,
+        cache_points_sent=_cache_points_sent(wrapper),
+        prior_cached_prefix=(prior["cacheReadInputTokens"] + prior["cacheWriteInputTokens"]) or None,
+        min_cacheable_tokens=min_cacheable_prefix_tokens(_serving_model_id(wrapper)),
+    )
+    output_tokens, output_method = await _count_output_tokens(strands_agent, partial_text or "")
+
+    usage = {
+        **buckets,
+        "outputTokens": output_tokens,
+        "totalTokens": (
+            buckets["inputTokens"]
+            + buckets["cacheReadInputTokens"]
+            + buckets["cacheWriteInputTokens"]
+            + output_tokens
+        ),
+    }
+    estimate = {
+        "reason": "interrupted",
+        "inputTokens": METHOD_PRIOR_PROMPT,
+        "outputTokens": output_method,
+        "cacheSplit": cache_method,
+    }
+    logger.info(
+        "Estimated usage for the cancelled side call: input=%d read=%d write=%d output=%d "
         "(cache split: %s, output: %s)",
         usage["inputTokens"], usage["cacheReadInputTokens"],
         usage["cacheWriteInputTokens"], output_tokens, cache_method, output_method,

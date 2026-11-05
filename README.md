@@ -1,156 +1,195 @@
 <div align="center">
 
-<!-- IMAGE PLACEHOLDER: Animated GIF or hero banner showing the AgentCore chat interface in action — a user asking a question, the agent streaming a response, and a tool being invoked (e.g., Code Interpreter generating a chart). Dimensions: ~800x400px, optimized for GitHub rendering. -->
+<!-- IMAGE PLACEHOLDER: Animated GIF or hero banner showing the chat interface in action — a user asking a question, the agent streaming a response, and a tool rendering (e.g., a chart or an artifact opening in the side panel). ~800x400px, optimized for GitHub. -->
 <!-- Example: ![AgentCore Demo](docs/images/hero-demo.gif) -->
 
-<h1><img src="frontend/ai.client/public/img/logo-light.png" alt="AgentCore Logo" height="50" align="center" /> AgentCore Public Stack</h1>
+<img src="frontend/ai.client/public/img/logo-dark.png" alt="AgentCore Logo" height="96" />
 
-**An open-source, production-ready Generative AI platform for institutions**
-*Built by Boise State University, designed for everyone.*
+<h1>AgentCore Public Stack</h1>
 
-[![Release](https://img.shields.io/badge/Release-v1.32.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+**The open-source AI platform for universities and state & local government.**
+*Chat, agents, tools, knowledge and governance, deployed into an AWS account you control. Built by Boise State University, designed for every public institution.*
+
+[![Release](https://img.shields.io/badge/Release-v1.33.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
 [![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
+[![Docs](https://img.shields.io/badge/Docs-boise--state--development.github.io-0ea5e9?style=flat&logo=readthedocs&logoColor=white)](https://boise-state-development.github.io/agentcore-public-stack/)
 
-![Python](https://img.shields.io/badge/Python-3.13+-3776AB?style=flat&logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
 ![Angular](https://img.shields.io/badge/Angular-v21-DD0031?style=flat&logo=angular&logoColor=white)
 ![AWS](https://img.shields.io/badge/AWS-Bedrock_AgentCore-FF9900?style=flat&logo=amazonwebservices&logoColor=white)
+![Strands](https://img.shields.io/badge/Strands_Agents-SDK-232F3E?style=flat)
 ![Tailwind](https://img.shields.io/badge/Tailwind_CSS-v4.2-06B6D4?style=flat&logo=tailwindcss&logoColor=white)
 ![License](https://img.shields.io/badge/License-PolyForm_Noncommercial-blue?style=flat)
 
-[Features](#-key-features) · [Architecture](#-architecture) · [Admin Dashboard](#-admin-dashboard) · [Deployment](#-deployment) · [Release Notes](RELEASE_NOTES.md) · [Contributing](#-contributing)
+[Why](#-why-institutions-choose-this) · [Who It's For](#-built-for-the-public-sector) · [Features](#-what-you-get) · [Quotas](#-quotas-budgets-everyone-can-see) · [Admin Console](#-the-admin-console) · [Roadmap](#-roadmap) · [Architecture](#-architecture) · [Deploy](#-deployment) · [Docs](https://boise-state-development.github.io/agentcore-public-stack/)
 
 </div>
 
 ---
 
-> 🚀 **Ready to deploy?** Fork the repo and follow the [**GitHub Actions Quick Start**](.github/README-ACTIONS.md) to deploy to your AWS environment in under an hour.
+> 🚀 **Ready to deploy?** Fork the repo and follow the [**GitHub Actions Quick Start**](.github/README-ACTIONS.md) to stand up your own platform in your AWS account in under an hour. No license to buy, no vendor to call.
 
 ---
 
-<!-- IMAGE PLACEHOLDER: Screenshot of the chat interface showing a multi-turn conversation with the AI assistant. The screenshot should show: (1) a user message with an uploaded image or document, (2) the assistant streaming a response with rich markdown formatting, and (3) a tool invocation panel (e.g., Code Interpreter or web search). Dimensions: ~900x500px. -->
+<!-- IMAGE PLACEHOLDER: Screenshot of the chat interface showing a multi-turn conversation: (1) a user message with an uploaded PDF, (2) the assistant streaming a response with citations, (3) a generated chart or Word document opening in the artifacts side panel. ~900x500px. -->
 <!-- Example: ![Chat Interface](docs/images/chat-interface.png) -->
 
 ## 🤔 What Is This?
 
-AgentCore Public Stack is the working codebase behind [boisestate.ai](https://boisestate.ai), a full-stack AI assistant platform serving students, faculty, and staff at Boise State University. It combines **AWS Bedrock AgentCore** and **Strands Agents** into a turnkey system that any institution can fork, deploy, and make their own — without writing a single line of agent code.
+AgentCore Public Stack is the working codebase behind [boisestate.ai](https://boisestate.ai), the AI platform that serves students, faculty and staff at Boise State University. It packages **AWS Bedrock AgentCore** and **Strands Agents** into a complete, production-ready product: a polished chat experience, custom agents and skills, shared team workspaces, document intelligence, voice, a terminal client, and a full admin console for identity, access, quotas and cost.
 
-The platform ships with a modern chat interface, a full admin dashboard, multi-model support, tool and MCP server management, quota enforcement, cost tracking, and role-based access control — all configurable through the UI.
+Fork it, deploy it, brand it, and hand your whole organization an AI platform you own, without writing agent code. Everything is configured through the UI; the model, tool and policy decisions stay yours.
 
 ---
 
-## 🎯 Why Boise State Built This
+## 🎯 Why Institutions Choose This
 
-Most institutions face the same AI dilemma: vendor-hosted per-seat subscriptions don't scale, and building from scratch is too expensive.
+Universities and public agencies share the same AI dilemma: per-seat subscriptions do not scale to a campus or a workforce, the data has to stay under institutional control, and the vendor landscape changes every quarter. This platform was built to answer exactly that.
 
-| The Problem | Our Answer |
+| The problem | Our answer |
 |-------------|------------|
-| 💸 **Per-seat pricing doesn't scale** | Consumption-based billing — pay only for tokens used, not seats purchased |
-| 🔐 **Student data leaves your control** | All data stays inside your AWS account. Bedrock model interactions are never shared with vendors |
-| 🔒 **Vendor lock-in limits flexibility** | Swap models freely — Claude, Llama, Mistral, GPT, Gemini — no contracts, no lock-in |
-| 🧩 **Fragmented tool ecosystems** | One platform with MCP servers connecting Canvas, Google Workspace, PeopleSoft, and more |
-| ⚖️ **Inequitable access** | Every student gets the same models and tools — no premium tiers required |
+| 💸 **Per-seat pricing doesn't scale to 30,000 people** | Consumption billing through the AWS account and agreement you already have. Pay for tokens used, not seats purchased |
+| 🔐 **Student, employee and resident data must stay under your control** | Every conversation, document and knowledge base lives inside your AWS account. Models are used for inference only and never train on your data |
+| 🔒 **Betting the institution on one vendor** | Swap models without a redeploy. Claude, Nova, Llama, Mistral, GPT, Gemini and more, curated by your admins and governed by role |
+| 🧩 **Dozens of systems, none of them talking to the AI** | Connect Canvas, Google Workspace, PeopleSoft, GitHub, records systems and any internal API through MCP servers, registered from the admin console |
+| ⚖️ **Inequitable access** | Everyone gets the same models and tools. Premium capability is a role grant, not a price tier |
+| 📋 **Accountability** | Role-based access from your identity provider, delegated admin scopes, an audit log of every admin change, and cost attribution down to the individual model call |
 
-At 30,000 users, commercial subscriptions would cost upwards of **$7.2M per year**. This platform delivers the same (and more) capabilities at a fraction of the cost.
+At 30,000 users, commercial subscriptions would cost upwards of **$7.2M per year**. This platform delivers the same capabilities, and more, for the cost of the AWS resources you actually use.
 
----
-
-## ✨ Key Features
-
-### 🔄 Model Flexibility
-
-Add, swap, or disable AI models without redeploying. The platform supports **any model available through AWS Bedrock** — Claude, Llama, Mistral, and more — as well as **external providers** like OpenAI and Google Gemini via API. Administrators configure models through the dashboard, set per-model pricing, and control which roles have access. When a better model launches, add it in minutes.
-
-### 💰 Cost-Effectiveness
-
-Every interaction is tracked at the token level. Automatic **prompt caching** reduces repeated input costs. **Turn-based message buffering** cuts memory API calls by 75%. Quota tiers let administrators set spending limits by role, department, or individual — with soft warnings before hard stops. Real-time cost analytics surface exactly where budget is going.
-
-### 🛡️ Security and Data Privacy
-
-Your data never leaves your AWS account. The platform uses **OIDC authentication** (Entra ID, Cognito, Google) with PKCE, **role-based access control** at every layer, and **SigV4-signed requests** for all MCP tool communication. There are no external data pipelines, no third-party analytics, and no model training on your interactions.
-
-### 🔌 Independent MCP and Tool Deployment
-
-Connect institutional systems through **MCP (Model Context Protocol) servers** — no code changes, no redeployment. Register an MCP server URL in the admin dashboard and its tools are automatically discovered, assigned to roles, and made available to users. Deploy MCP servers on your own schedule, on your own infrastructure, completely independent of the core platform.
-
-**Example integrations:**
-- 📚 **Canvas LMS** — Course materials, grades, assignments
-- 📁 **Google Workspace** — Drive search, Docs, Calendar
-- 🎓 **PeopleSoft** — Student records, registration
-- 🔍 **Library Systems** — Research databases, catalog search
-- 🔧 **Any custom API** — Wrap it in an MCP server and plug it in
-
-### 🖼️ Multimodal Capabilities
-
-Users can upload images (PNG, JPEG, GIF, WebP) and documents (PDF, CSV, DOCX) directly into conversations. The agent can generate charts and diagrams. More features to come.
-
-<!-- IMAGE PLACEHOLDER: Side-by-side screenshot showing multimodal capabilities — on the left, a user uploading a PDF document and asking the agent to summarize it; on the right, the agent using Code Interpreter to generate a matplotlib chart from uploaded CSV data. Dimensions: ~900x400px. -->
-<!-- Example: ![Multimodal Capabilities](docs/images/multimodal-demo.png) -->
-
-### 🧪 Fine-Tuning
-
-Train and run inference on open-source models directly from the platform. Users with admin-granted access can upload datasets, launch **SageMaker training jobs** on models like BERT, RoBERTa, GPT-2, and more, then run **batch inference** on trained models — all with real-time progress tracking, quota enforcement, and automatic 30-day artifact retention. No ML infrastructure setup required.
-
-### 🔑 API Keys
-
-Enable programmatic access to the platform's AI models via REST API. Users generate personal API keys from the Settings page and use them to call the `/chat/api-converse` endpoint — the same models, quotas, and RBAC permissions as the web UI, accessible from any language or tool.
-
-**How it works:**
-
-- **One key per user** — creating a new key automatically revokes the previous one
-- **90-day expiration** — keys expire automatically; create a new one to renew
-- **Secure by design** — keys are SHA-256 hashed at rest; the raw key is shown only once at creation
-- **Rate limited** — 60 requests per minute per key
-- **Streaming support** — both SSE streaming and standard JSON responses
-
-**Authentication:** Include the key in the `X-API-Key` header with each request. The platform resolves the user, checks quotas, enforces RBAC model access, and tracks costs — identical to browser-based usage.
-
-**Built-in code examples:** The API Keys settings page includes a code generator with cURL, Python, and JavaScript examples, a model selector, and configurable parameters (temperature, max tokens, system prompt) so users can start integrating immediately.
-
-### 💻 Terminal Client
-
-`aps-tui` brings the same assistant to the shell: the agent, your models, tools, projects, skills, conversation modes and saved conversations, streamed into a terminal UI. Every feature is a slash command (`/model`, `/tools`, `/project`, `/skills`, `/attach`…) with a completion menu on `/`, so there is nothing to memorise. It signs in through your browser and holds a real platform session, so the same roles, quotas and MCP connections apply as in the web app.
-
-What the terminal adds: **local tools**. With your approval, shown command by command, the agent can read and write files, list directories and run commands on your machine, and it sees your working directory and git state when that helps. The client is one Python wheel attached to each [GitHub Release](../../releases/latest); install it with [uv](https://docs.astral.sh/uv/) and point it at your deployment:
-
-```bash
-uv tool install https://github.com/<org>/<repo>/releases/download/v<version>/aps_tui-<version>-py3-none-any.whl
-aps-tui
-```
-
-First launch walks you through the address of your deployment and signing in. See [tui/README.md](tui/README.md) for the full command list.
-
-### 🎙️ Voice Mode
-
-Have natural, real-time spoken conversations with the assistant. Voice Mode streams audio bidirectionally over WebSockets to an AgentCore-hosted voice agent, using **Amazon Nova Sonic** for low-latency speech-to-speech interaction. Users can speak their questions and hear responses aloud — no typing required — while the same RBAC, quotas, and model access rules as the chat interface apply.
-
-### 🧠 Memory and Context
-
-A two-tier memory system combines **short-term session history** with **long-term user preferences**. The agent remembers coding style preferences, language choices, and learned facts across sessions — personalization without compromising privacy.
+> *"Keep your harness separate from the model."* Even the platform vendors now coach enterprises to keep their AI stack swappable. We think the only harness that is truly separate from the model is one you can read, fork and run yourself.
 
 ---
 
-## 📊 Admin Dashboard
+## 🏛️ Built for the Public Sector
 
-The admin dashboard gives institutional administrators full control over the platform through a web interface — no code or CLI required.
+The platform is general-purpose, but it was shaped by the needs of a public university and the agencies it works alongside.
 
-<!-- IMAGE PLACEHOLDER: Screenshot of the admin dashboard landing page showing the cost analytics overview — a line chart of daily spending, a breakdown by model (pie or bar chart), top users table, and the sidebar navigation with all admin sections visible. Dimensions: ~900x500px. -->
-<!-- Example: ![Admin Dashboard](docs/images/admin-dashboard.png) -->
+### For universities
 
-| Feature | Description |
-|---------|-------------|
-| 📈 **Cost Analytics** | Real-time dashboards showing token usage and costs by user, model, and time period. Identify spending trends, view top users, and export reports for budget planning. |
-| 🤖 **Model Management** | Add, configure, enable, or disable AI models from any supported provider. Set per-model pricing, control access by role, and adjust availability instantly. |
-| 🧰 **Tool Catalog** | Browse, enable, and configure all available tools — local, built-in, and MCP-sourced. Sync tools from registered MCP servers and control availability per role. |
-| 🔗 **MCP Server Registration** | Register external MCP servers by URL. Tools are auto-discovered from the server manifest, assigned RBAC permissions, and made available to users — no redeployment needed. |
-| 🔑 **OAuth Provider Management** | Configure third-party OAuth integrations (Google, Microsoft, GitHub, custom) so MCP tools can authenticate on behalf of users against external services. |
-| 👥 **Role Management** | Create application roles with granular permissions over models, tools, and quotas. Map roles to JWT claims from your identity provider for automatic assignment. |
-| 🏛️ **Auth Provider Configuration** | Configure OIDC authentication providers including issuer URLs, client credentials, claim mappings, and login page branding — all from the UI. |
-| 👤 **User Management** | Search and browse users, view individual cost breakdowns, quota status, and role assignments. Apply per-user overrides when needed. |
-| 📏 **Quota Tiers** | Define quota tiers with monthly and daily cost limits, soft warning thresholds, and hard stops. Assign tiers to roles, email domains, or individual users. |
-| ⚡ **Quota Overrides** | Grant temporary exceptions — unlimited access for a research sprint, elevated limits for a class project — with automatic expiration dates. |
-| 🔎 **Quota Inspector** | Debug quota resolution for any user. See which tier resolved, current usage against limits, and recent enforcement events (warnings, blocks, resets). |
-| 📋 **Quota Events** | Monitor all quota enforcement activity in real time. Filter by event type, export to CSV, and audit enforcement decisions. |
-| 🧪 **Fine-Tuning Access** | Grant or revoke fine-tuning access per user. Set monthly compute-hour quotas and monitor usage across training and inference jobs. |
+- **Course and program assistants.** Faculty compose an Agent from instructions, a knowledge base of course materials and the tools it needs, then share it with a class. Every student gets the same assistant, under the same guardrails.
+- **Research teams.** A Shared Project gives a lab or an office a workspace with its own instructions, files, members and conversations. Our [contract-negotiation walkthrough](docs-site/src/content/docs/user-guide/projects/example-contract-negotiation.md) shows a research office, compliance and legal working one agreement together.
+- **Campus systems, in the conversation.** Canvas, Google Drive, the library catalog and your SIS become tools the agent can use on the student's or employee's behalf, with OAuth consent asked for in the conversation and granted once.
+- **Fair access and clear budgets.** Quota tiers by role, department or person, with warnings before a hard stop. Cost analytics show which departments, courses and models are spending what, and chargeback to a grant or department fund is on the way.
+
+### For state and local government
+
+- **Constituent and staff assistants over your own documents.** Ground answers in ordinances, policy manuals, benefits guides and procedure documents from your own knowledge bases, synced on a schedule as the source documents change.
+- **Document work at scale.** Upload documents up to 50 MB, whole Drive folders, and Word files with tracked changes. The agent reads, summarizes, compares, redlines and produces Word, Excel and PowerPoint output.
+- **Verifiable answers.** Source provenance verification checks whether a cited passage really is in the document and whether the asserted value actually appears in it, and marks the ones it cannot confirm. Structured extraction runs a typed field set across a batch of documents and carries that provenance on every value. Both are in development, off by default.
+- **Procurement and governance that fit how agencies buy.** No new per-seat contract. SSO through your existing identity provider (Entra ID, Cognito, Google or any OIDC issuer). Roles mapped from identity claims. An audit log of admin changes. Delegated admin so each office owns its own surface. Per-department budgets today, with chargeback to a cost center in the works.
+
+---
+
+## ✨ What You Get
+
+### 💬 A conversation surface that ships finished
+
+Token-by-token streaming with tool calls, interactive tool UIs and errors all riding the same stream. **Artifacts** (documents, charts, pages, Markdown with math) open in a docked side panel with versioned history and safe sharing. **Voice mode** streams speech both ways through Amazon Nova Sonic. Long conversations **compact themselves** instead of falling over, and the UI shows it happening.
+
+The details people notice: pin conversations, search every conversation with `Cmd/Ctrl+K` (titles, prompts and, with the index on, anything said), rewind to any message, fork a conversation from any point, steer a running turn without waiting for it to finish, and let the agent ask you a structured clarifying question when it genuinely needs one. Conversations last a year, with an archive behind them.
+
+### 🤖 Agents, skills and a marketplace
+
+**Agents** bundle instructions, a model, tools, skills, knowledge bases and memory into something shareable. The **Agent Designer** composes them from the primitives your role allows. Publish to the **Agent Marketplace** with reach controls, pin the ones you use, duplicate one to make it your own, and roll back to any published version. Pull another agent into a conversation with an `@`-mention. Share an agent with viewers and editors so ownership is an access gate, not a silo.
+
+**Skills** are portable, versioned instruction bundles with reference files and bound tools. Users author their own, trigger them with `/` commands, and the agent itself can write and refine a skill with the user's approval on each step.
+
+### 👥 Shared Projects
+
+A project is a shared workspace: a name, a set of people with owner, editor and viewer roles, and one assistant everyone works with. Its instructions, model, tools, pinned skills and files belong to the project, so a change one editor makes applies to every member's next turn. Files come from upload, the web or a Google Drive folder, and a project saved from a Drive folder can **stay in sync** with it. Shared and personal project memory, scheduled runs and outputs round it out.
+
+### 📄 Document intelligence
+
+- **Large documents** up to 50 MB, prepared once and read by reference, so a turn never re-pays for the whole file.
+- **Folder attachments** from Google Drive, delivered as a manifest the agent navigates.
+- **Word tracked changes** reach the model as deletions and insertions, and the agent can **redline** a document back.
+- **Spreadsheets** are listed and analyzed in place. **Word, Excel and PowerPoint** documents, charts and validated diagrams are produced as artifacts.
+- **Per-agent knowledge bases** on Bedrock, with scheduled re-indexing and a full-context mode for small knowledge bases (in development).
+
+### 🧠 Memory you can see and control
+
+Short-term session history plus long-term memory across conversations, with three modes (**On**, **Read only**, **Off**) and **incognito chats** that use memory without adding to it. **Memory Spaces**, shareable Markdown "second brains" an agent loads as context, are in development and off by default.
+
+### 🔌 Every integration, one registry
+
+Direct tools, AWS SDK calls, MCP servers behind AgentCore Gateway, external MCP servers and remote A2A agents, all in one governed tool catalog. Register an MCP server URL in the admin console and its tools are discovered, assigned to roles and available to users with no redeploy. **MCP Apps** let a tool render its own interactive UI inline in the chat, animating as the model types its arguments. OAuth consent is asked for mid-conversation and the turn resumes after sign-in.
+
+**Web and browser.** The agent browses the web with page cards and screenshots, and when a site needs the user to sign in, it hands the browser to the user in a docked live view and takes it back when they are done, never seeing the credentials.
+
+**Example integrations:** 📚 Canvas LMS · 📁 Google Workspace · 🎓 PeopleSoft · 🐙 GitHub · 🔍 Library systems · 🔧 Any API, wrapped in an MCP server
+
+### 🖥️ Three ways in: browser, terminal, API
+
+- **Web app.** The Angular SPA, with light and dark themes and your branding.
+- **Terminal client.** `aps-tui` brings the same assistant, models, tools, projects, agents and skills to the shell, every feature a slash command. It adds **local tools**: with your approval, command by command, the agent reads and writes files and runs commands on your machine. One Python wheel per [release](https://github.com/Boise-State-Development/agentcore-public-stack/releases/latest), installed with [uv](https://docs.astral.sh/uv/):
+
+  ```bash
+  uv tool install https://github.com/<org>/<repo>/releases/download/v<version>/aps_tui-<version>-py3-none-any.whl
+  aps-tui
+  ```
+
+- **API keys.** Personal keys call the same models under the same quotas and RBAC from any language, streaming or not, with a built-in code generator for cURL, Python and JavaScript.
+
+### 📏 Quotas: budgets everyone can see
+
+Consumption billing only works for an institution if spend is predictable per person and visible before it becomes a problem. Quotas are enforced in dollars, on every conversational surface (web, terminal and API keys), and resolved in milliseconds from a cache so they never slow a conversation down.
+
+| | How it works |
+|---|---|
+| **Tiers** | A tier sets a monthly cost limit and an optional daily one. Each tier chooses what happens at the limit: **block** the next turn or **warn** and keep going |
+| **Assignment** | Tiers attach to a role, an identity-provider claim, an email domain or an individual, with priorities to settle overlaps. A new student or employee lands in the right tier on first sign-in, with no admin action |
+| **Warnings before the wall** | Early warnings at the percentages you choose, a soft-limit warning (80% by default) and a **per-conversation notice** when one chat alone has consumed a notable share of the month, which is how runaway sessions get caught. All of them arrive in the conversation, not in an email the user will not read |
+| **A blocked turn is a message, not an error** | When a limit is reached, the assistant explains what happened and when the quota resets. Nothing crashes and nothing is lost |
+| **Overrides** | Grant a custom or unlimited limit to a person between two dates, with a reason: a research sprint, a capstone, a pilot. It expires on its own |
+| **Users see their own numbers** | A usage page shows spend against the limit for this period and past ones, and the agent itself can answer "how much do I have left?" |
+| **Admins see everything** | A quota inspector explains exactly which tier resolved for any user and why. An event log records every warning, block and reset, filterable and exportable to CSV |
+
+### 💰 Cost effectiveness as an engineering discipline
+
+Every model call is metered to the token and attributed to a user, a session, an agent and a model, so cost analytics roll up by department, course or project as naturally as by person. **Prompt caching** is treated as a contract: cache status and prefix fingerprints land on every call, so the change that burned money has a name. **Automatic compaction**, bounded tool results and offloaded documents keep context lean without stripping what the model needs. An **evaluation harness** scores a golden set against a committed baseline on every release.
+
+**Coming next: quota requests and chargeback.** A user who hits a limit will request more from inside the conversation. An administrator grants a timed extension, funded centrally or charged back to a funding source your deployment defines (a cost center, a grant, a department code), and closed months roll up into a chargeback report by fund, organization, user and approver. Power users who should never have to ask get a standing allocation against their fund. The backend and user-facing half have landed on the development branch; the admin surface and the report are in progress.
+
+### 🧪 Fine-tuning
+
+Users with admin-granted access upload datasets, launch **SageMaker training jobs** on open models, and run batch inference on the result, with progress tracking, compute-hour quotas and automatic artifact retention. No ML infrastructure to set up.
+
+---
+
+## 📊 The Admin Console
+
+Everything an institution needs to run the platform lives in a web console. No CLI, no redeploy.
+
+<!-- IMAGE PLACEHOLDER: Screenshot of the admin console landing page: cost analytics overview with daily spend, breakdown by model, top users, and the admin navigation groups (Usage & Spend, AI Configuration, Identity & Access, Customization) visible. ~900x500px. -->
+<!-- Example: ![Admin Console](docs/images/admin-dashboard.png) -->
+
+| Area | What you control |
+|------|------------------|
+| 📈 **Usage & Spend** | Cost analytics by user, model, agent and time period, with per-session and per-call drill-down and prompt-cache status on every call. Quota tiers and assignments, timed overrides, a per-user quota inspector and an exportable log of every enforcement event. Response feedback and evaluation samples |
+| 🤖 **Models** | Curate the catalog from Bedrock, OpenAI and Gemini. Set pricing, context windows and defaults. Retire a model and route its conversations to a successor. Grant access by role |
+| 🧰 **Tools & Skills** | Enable, scope and assign built-in, Gateway and external MCP tools per role, down to individual tools within a server. Manage the skill catalog and bind tools to skills. Pin always-on tools for every user |
+| 🔗 **Connectors** | Register external MCP servers and the OAuth providers (Google, Microsoft, GitHub, custom) that tools authenticate through on the user's behalf |
+| 🏪 **Marketplace** | Review and approve published agents, manage listings, publishers, categories, the storefront and default pins |
+| 👥 **Identity & Access** | Configure OIDC providers and login branding. Create roles with granular grants over models, tools, skills and quotas, mapped from identity-provider claims with inheritance. Grant a single user directly. Delegate each admin surface to the people who own it. Browse users and their spend |
+| 📜 **Audit Log** | A durable, queryable record of who changed what across the admin surfaces, with before and after values |
+| 🎨 **Customization** | Conversation modes (system prompts users can pick), agent templates, feature announcements and custom links in the user menu |
+| 🧪 **Fine-Tuning** | Grant access per user and set monthly compute-hour quotas |
+
+---
+
+## 🗺️ Roadmap
+
+Chat is the home base. The roadmap is about everything that runs beyond the chat window: shared agents, portable skills, scheduled work and a governed registry of what your organization has built. The full, living version is on the [docs site](https://boise-state-development.github.io/agentcore-public-stack/roadmap/).
+
+| Status | What |
+|--------|------|
+| ✅ **Live** | Streaming chat, artifacts, voice, terminal client, API keys · Agents, Agent Designer, marketplace, version snapshots, `@`-mentions, collaborative editing · Skills, slash commands, agent-authored skills · Shared Projects with folder sync, project memory and schedules · Long-term memory modes and incognito chats · Large documents, folder attachments, Word tracked changes, Office output · MCP, MCP Apps, Gateway targets, mid-conversation OAuth, browser takeover · RBAC from your IdP, delegated admin scopes, direct user grants, audit log · Quotas, cost analytics, prompt-cache observability · Conversation search, pin, rewind, fork, steering, compaction · Evaluation harness |
+| 🔨 **Building** | **Quota requests and chargeback**: users request more from inside the conversation, admins grant timed extensions funded centrally or charged to a cost center, grant or department fund, and closed months roll up into a chargeback report · **Agent handoffs and consults**: one agent hands a conversation to another with a reviewed excerpt, and the result is delivered back · **Source provenance verification** and **structured extraction** for document-heavy work · **Memory Spaces**, shareable Markdown context any agent can load · **Spoken audio generation** for long-form content · **Full-context mode** for small knowledge bases |
+| ➡️ **Next** | **Headless agent entrypoint**: run the same governed agents on a schedule, from a webhook or from another system, without a chat session attached · **Quota cooldown windows** and a platform-wide spend ceiling · **Tool search at scale**, so the full catalog stays available while the agent's context stays small · **Export as an agent tool**, filing results into connected systems mid-conversation |
+| 🔭 **Exploring** | **A2A server surface**, exposing your agents to other platforms with their own AgentCards · **Capability registry**, a governed catalog of every agent, skill and tool the organization has built · **Native companion apps** sharing the platform's sign-in |
+
+Have a direction in mind? [Open an issue](https://github.com/Boise-State-Development/agentcore-public-stack/issues).
 
 ---
 
@@ -158,113 +197,64 @@ The admin dashboard gives institutional administrators full control over the pla
 
 Every request, browser or API key, enters through one CloudFront distribution. Static assets come from S3; everything under `/api/*` is proxied to the App API, which is the only caller of the agent runtime. The load balancer accepts connections from CloudFront only.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│      Browser (Angular v21 SPA) · Terminal client (aps-tui) · API keys       │
-└─────────────────────────────────────┬───────────────────────────────────────┘
-                                      │ HTTPS
-                                      v
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         CloudFront (SPA distribution)                       │
-│      /*  → S3 (SPA bundle, Origin Access Control)                           │
-│  /api/*  → ALB, prefix stripped, uncached; cookies, CSRF, SSE pass through  │
-└─────────────────────────────────────┬───────────────────────────────────────┘
-                                      │ ALB ingress: CloudFront origin-facing
-                                      v  ranges only
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                     App API (FastAPI on ECS Fargate) · BFF                  │
-│   Cookie sessions · API keys · RBAC · Quotas · Costs · Admin · Files        │
-│   POST /chat/stream (SSE proxy)        POST /chat/api-converse (API keys)   │
-└──────────────┬─────────────────────────────────┬────────────────────────────┘
-               │ /invocations (SSE)              │ DynamoDB · S3 · Cognito
-               v                                 v
-┌──────────────────────────────────┐   ┌──────────────────────────────────────┐
-│  AgentCore Runtime (AWS managed) │   │  App state: sessions, users, roles,  │
-│  Inference API + Strands Agent   │   │  quotas, costs, files, knowledge     │
-└───────┬───────────┬──────────┬───┘   └──────────────────────────────────────┘
-        │           │          │
-        v           v          v
-┌────────────┐ ┌────────────┐ ┌───────────────────────┐ ┌───────────────────┐
-│ Amazon     │ │ Built-in & │ │ AgentCore services    │ │ MCP servers       │
-│ Bedrock    │ │ local tools│ │ Memory · Code Interp. │ │ Gateway targets & │
-│ (+ external│ │ docs, files│ │ Browser · Gateway     │ │ registered remote │
-│ providers) │ │ charts, web│ │                       │ │ MCP servers       │
-└────────────┘ └────────────┘ └───────────────────────┘ └───────────────────┘
-```
+![Platform architecture](docs/architecture/agentcore-platform-architecture.svg)
 
-Artifacts and the MCP Apps sandbox are served from their own CloudFront distributions on separate origins. See the [architecture overview](docs-site/src/content/docs/getting-started/architecture-overview.md) for the full reference diagram.
-
-<!-- IMAGE PLACEHOLDER: A polished, designed version of the architecture diagram above — using a tool like Excalidraw, draw.io, or Figma. Use color-coded boxes, clean arrows, and icons for each layer. This would replace or complement the ASCII diagram for a more professional look. Dimensions: ~900x500px. -->
-<!-- Example: ![Architecture Diagram](docs/images/architecture-diagram.png) -->
+Artifacts and the MCP Apps sandbox are served from their own CloudFront distributions on separate origins, so generated content is contained by the browser's origin model. See the [architecture overview](docs-site/src/content/docs/getting-started/architecture-overview.md) for the full reference.
 
 ## 🛠️ Technology Stack
 
 | Layer | Technologies |
 |-------|-------------|
-| **Frontend** | Angular v21, TypeScript, Tailwind CSS v4.2+ |
-| **Backend** | Python 3.13+, FastAPI |
-| **Terminal Client** | Python 3.11+, Textual, httpx; distributed as a wheel on each GitHub Release |
-| **Agent Framework** | Strands Agents SDK |
-| **Cloud Services** | AWS Bedrock AgentCore (Runtime, Memory, Gateway, Code Interpreter, Browser), Amazon SageMaker |
-| **Infrastructure** | AWS CDK (TypeScript), ECS Fargate, CloudFront, DynamoDB |
-| **Authentication** | OIDC (Entra ID, Cognito, Google) with PKCE |
-| **CI/CD** | GitHub Actions with full CDK deployment automation |
+| **Frontend** | Angular v21, TypeScript, Tailwind CSS v4.2 |
+| **Backend** | Python 3.11+, FastAPI |
+| **Terminal Client** | Python, Textual, httpx; distributed as a wheel on each GitHub Release |
+| **Agent Framework** | Strands Agents SDK (Bedrock by default; any Strands model provider) |
+| **Cloud Services** | AWS Bedrock AgentCore (Runtime, Memory, Gateway, Code Interpreter, Browser), Bedrock Knowledge Bases, Amazon SageMaker |
+| **Infrastructure** | AWS CDK (TypeScript), ECS Fargate, CloudFront, DynamoDB, S3 |
+| **Authentication** | OIDC (Entra ID, Cognito, Google) with PKCE; httpOnly cookie sessions; device flow for the terminal |
+| **CI/CD** | GitHub Actions with full CDK deployment automation, nightly checks and a release gate |
 
 ---
 
 ## 🚀 Deployment
 
-The fastest path to production is the **GitHub Actions pipeline**. The platform uses a **single-stack architecture** — one CDK stack (`PlatformStack`) provisions all AWS infrastructure, and application code is shipped separately via AWS APIs (ECR push → ECS service update / Lambda code update / AgentCore Runtime update).
+The fastest path to production is the **GitHub Actions pipeline**. One CDK stack (`PlatformStack`) provisions all AWS infrastructure; application code ships separately through AWS APIs (ECR push, then an ECS service update, Lambda code update or AgentCore Runtime update). Infrastructure deploys only when infrastructure changes. Day-to-day code changes deploy in about two minutes.
 
-**[GitHub Actions Quick Start](.github/README-ACTIONS.md)** | **[Step-by-Step Deployment Guide](.github/docs/deploy/step-01-prerequisites.md)**
+**[GitHub Actions Quick Start](.github/README-ACTIONS.md)** · **[Step-by-Step Deployment Guide](.github/docs/deploy/step-01-prerequisites.md)** · **[Deployment docs](https://boise-state-development.github.io/agentcore-public-stack/deployment/overview/)**
 
-### What Gets Deployed
+### What gets deployed
 
-**Infrastructure (via `platform.yml` — CDK deploy):**
+**Infrastructure (`platform.yml`, CDK):**
 
 | Component | AWS Service | Purpose |
 |-----------|-------------|---------|
-| Networking | VPC, ALB, Security Groups | Isolated network with load balancing |
-| Compute | ECS Fargate, AgentCore Runtime | App API container + AI agent runtime |
-| Data | DynamoDB (~24 tables), S3 (6 buckets) | All application state and file storage |
+| Networking | VPC, ALB, Security Groups | Isolated network; ALB reachable from CloudFront only |
+| Compute | ECS Fargate, AgentCore Runtime | App API container and the AI agent runtime |
+| Data | DynamoDB, S3 | All application state, files, artifacts and knowledge |
 | Identity | Cognito, Secrets Manager, KMS | Authentication, secrets, encryption |
-| Edge | CloudFront (SPA + artifacts + MCP sandbox) | Global CDN for all web surfaces |
-| AI Services | AgentCore Memory, Code Interpreter, Browser, Gateway | Agent tools and context |
+| Edge | CloudFront (SPA, artifacts, MCP sandbox) | Global delivery for every web surface |
+| AI Services | AgentCore Memory, Code Interpreter, Browser, Gateway; Bedrock Knowledge Bases | Agent context, tools and retrieval |
 | ML | SageMaker IAM roles | Fine-tuning job execution |
 
-**Application code (via `backend.yml` — AWS API calls):**
+**Application code (`backend.yml`, AWS APIs):**
 
-| Service | Deploy Method | Trigger |
-|---------|--------------|---------|
-| App API | ECR push → ECS service update | Backend code changes |
-| Inference API | ECR push → AgentCore Runtime update | Backend code changes |
-| RAG Ingestion | ECR push → Lambda update-function-code | Backend code changes |
-| Artifact Render | Zip → Lambda update-function-code | Backend code changes |
+| Service | Deploy method |
+|---------|---------------|
+| App API | ECR push, ECS service update |
+| Inference API | ECR push, AgentCore Runtime update |
+| RAG Ingestion | ECR push, Lambda code update |
+| Artifact Render | Zip, Lambda code update |
 
-**Frontend (via `frontend-deploy.yml`):**
+**Frontend (`frontend-deploy.yml`):** S3 sync and CloudFront invalidation.
 
-| Component | Deploy Method |
-|-----------|--------------|
-| Angular SPA | S3 sync + CloudFront invalidation |
+**Terminal client (`release.yml`):** built and attached to the GitHub Release for each version. Users install the wheel and point it at your deployment.
 
-**Terminal client (via `release.yml`):** built and attached to the GitHub Release for each version. Nothing to deploy; users install the wheel and point it at your deployment's URL.
+New features ship **off by default** behind feature flags and are turned on per environment, so a deployment never inherits half-finished work by upgrading. See [Feature flags](docs-site/src/content/docs/configuration/feature-flags.md).
 
-CDK deploys only run when infrastructure changes (new tables, IAM grants, etc.) — which is rare. Day-to-day code changes deploy in ~2 minutes via the backend workflow.
-
-<!-- IMAGE PLACEHOLDER: Screenshot of the GitHub Actions tab showing all deployment workflows with green checkmarks — Infrastructure, App API, Inference API, Frontend, Gateway, RAG Ingestion, and Bootstrap Data pipelines all passing. Dimensions: ~800x400px. -->
+<!-- IMAGE PLACEHOLDER: Screenshot of the GitHub Actions tab showing the platform, backend, frontend and release workflows passing. ~800x400px. -->
 <!-- Example: ![Deployment Pipelines](docs/images/github-actions.png) -->
 
-<!-- ### 💻 Local Development
-
-```bash
-# Full setup (one-time)
-./setup.sh
-
-# Start all services
-./start.sh
-``` -->
-
-See [backend/README.md](backend/README.md) for detailed backend setup. Authentication is handled by Cognito's first-boot flow — the first user to access the application creates the admin account directly.
+See [backend/README.md](backend/README.md) for local backend setup. Authentication is handled by Cognito's first-boot flow: the first user to access the application creates the admin account directly.
 
 ---
 
@@ -275,41 +265,28 @@ agentcore-public-stack/
 ├── backend/
 │   └── src/
 │       ├── agents/main_agent/       # Agent core: factory, tools, memory, streaming
-│       └── apis/
-│           ├── app_api/             # Application API (port 8000)
-│           ├── inference_api/       # AgentCore Runtime API (port 8001)
-│           └── shared/              # Auth, RBAC, shared utilities
+│       ├── apis/
+│       │   ├── app_api/             # Application API (port 8000)
+│       │   ├── inference_api/       # AgentCore Runtime API (port 8001)
+│       │   └── shared/              # Auth, RBAC, quotas, costs, files, projects, skills…
+│       └── lambdas/                 # One folder per Lambda (RAG, KB sync, prepare, scheduled runs…)
 ├── tui/                             # Terminal client (aps-tui); talks to the App API only
 ├── frontend/ai.client/              # Angular SPA
 │   └── src/app/
-│       ├── auth/                    # OIDC authentication
 │       ├── session/                 # Chat UI
-│       ├── admin/                   # Admin dashboard
-│       ├── fine-tuning/             # SageMaker fine-tuning UI
-│       └── services/               # State management
+│       ├── agents/ projects/        # Agents, marketplace, Shared Projects
+│       ├── customize/ memory-spaces/ schedules/
+│       ├── admin/                   # Admin console
+│       └── services/                # Signal-based state
 ├── infrastructure/                  # AWS CDK (single PlatformStack)
-│   ├── bin/infrastructure.ts        # CDK app entry point
 │   └── lib/
-│       ├── platform-stack.ts        # The one stack — all infrastructure
+│       ├── platform-stack.ts        # The one stack
 │       ├── config.ts                # Configuration loader & validator
-│       └── constructs/              # Reusable CDK constructs, grouped by domain
-│           ├── network/             # VPC, ALB, ECS cluster
-│           ├── identity/            # Cognito, secrets, KMS, OAuth
-│           ├── data/                # DynamoDB tables, file uploads
-│           ├── rag/                 # RAG documents, vectors
-│           ├── artifacts/           # Artifact rendering pipeline
-│           ├── mcp-sandbox/         # MCP Apps sandbox proxy
-│           ├── agentcore/           # Memory, Code Interpreter, Browser, Gateway
-│           ├── inference-api/       # AgentCore Runtime
-│           ├── app-api/             # Fargate service
-│           ├── fine-tuning/         # SageMaker IAM
-│           ├── spa/                 # SPA CloudFront distribution
-│           └── zones/               # Route53, ALB DNS
+│       └── constructs/              # CDK constructs grouped by domain
+├── docs/                            # Specs, one-pagers, testing, kaizen research
+├── docs-site/                       # Published documentation (Astro Starlight)
 └── .github/
-    ├── workflows/                   # CI/CD pipelines
-    │   ├── platform.yml             # Infrastructure deploy (CDK)
-    │   ├── backend.yml              # Code deploy (ECR + AWS APIs)
-    │   └── frontend-deploy.yml      # SPA deploy (S3 + CloudFront)
+    ├── workflows/                   # platform.yml · backend.yml · frontend-deploy.yml · release.yml
     └── docs/deploy/                 # Deployment guides
 ```
 
@@ -317,27 +294,27 @@ agentcore-public-stack/
 
 ## 📋 Release Notes
 
-See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full changelog, including new features, bug fixes, platform upgrades, and deployment notes for each release.
+See [RELEASE_NOTES.md](RELEASE_NOTES.md) for every release: new features, fixes, platform upgrades, breaking changes and the manual steps a deployment needs.
 
-**Current release:** v1.32.0
+**Current release:** v1.33.0
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please open an issue to discuss proposed changes before submitting a pull request.
+Contributions are welcome. Please open an issue to discuss a proposed change before submitting a pull request. Branch from `develop`; see the [contributing guide](docs-site/src/content/docs/development/contributing.md).
 
 ---
 
 ## 📄 License
 
 This project is licensed under the **PolyForm Noncommercial License 1.0.0**.
-You may use, modify, and distribute this software for noncommercial purposes only.
+You may use, modify and distribute this software for noncommercial purposes, which includes use by universities, colleges, government agencies and other noncommercial institutions.
 Commercial use, including use in a product or service that generates revenue,
-is prohibited without a separate commercial license.
+requires a separate commercial license.
 
 See the [LICENSE](LICENSE) file for the full license text.
-For commercial licensing inquiries, please contact: [techtransfer@boisestate.edu](mailto:techtransfer@boisestate.edu)
+For commercial licensing inquiries, contact [techtransfer@boisestate.edu](mailto:techtransfer@boisestate.edu).
 
 ---
 
@@ -345,6 +322,6 @@ For commercial licensing inquiries, please contact: [techtransfer@boisestate.edu
 
 **Built at Boise State University**
 
-[Report a Bug](https://github.com/Boise-State-Development/agentcore-public-stack/issues) · [Request a Feature](https://github.com/Boise-State-Development/agentcore-public-stack/issues) · [Deployment Guide](.github/README-ACTIONS.md)
+[Documentation](https://boise-state-development.github.io/agentcore-public-stack/) · [Report a Bug](https://github.com/Boise-State-Development/agentcore-public-stack/issues) · [Request a Feature](https://github.com/Boise-State-Development/agentcore-public-stack/issues) · [Deployment Guide](.github/README-ACTIONS.md)
 
 </div>

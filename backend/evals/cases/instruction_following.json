@@ -113,7 +113,7 @@
     "family": "instruction_following",
     "turns": [
       {
-        "prompt": "In fewer than 15 words, explain what photosynthesis is."
+        "prompt": "In one sentence of no more than 25 words, explain what photosynthesis is."
       }
     ],
     "run": {
@@ -122,10 +122,10 @@
     },
     "expect": {
       "regex": {
-        "fullmatch": "\\W*(?:\\S+\\s+){0,13}\\S+\\W*"
+        "fullmatch": "\\W*(?:\\S+\\s+){0,24}\\S+\\W*"
       }
     },
-    "notes": "At most 14 whitespace-separated words."
+    "notes": "At most 25 whitespace-separated words. The limit sits well above a plain one-sentence answer (18 to 19 words from Haiku 4.5) on purpose: at 'fewer than 15' the case flipped between runs on whether the model landed a word or two over, which says nothing; a model that ignores a length limit writes a paragraph and still fails."
   },
   {
     "id": "instruction_following.no_tool_when_told_not_to",

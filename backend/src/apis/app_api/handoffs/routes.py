@@ -3,6 +3,8 @@
     POST /sessions/{session_id}/handoffs                         render the excerpt, open a handoff
     GET  /sessions/{session_id}/handoffs/{handoff_id}            read one
     POST /sessions/{session_id}/handoffs/{handoff_id}/dismiss    cancel an open one
+    POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/read    mark its inbox entries read
+    POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/events  count a browser-side fact
 
 All 404 to a signed-in user while ``HANDOFFS_ENABLED`` is off (401 unauthenticated regardless).
 
@@ -19,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,9 +41,13 @@ from apis.shared.handoff import (
     wrap_handoff_context,
 )
 from apis.shared.handoff.metrics import emit_handoff_metric
-from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, EffectiveHandoffStatus, WaitingOn
+from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
+from apis.shared.handoff.notify import HANDOFF_NOTIFICATION_KINDS
+from apis.shared.handoff.relay import load_relayed_prompts
+from apis.shared.notifications import NotificationService
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_compaction, get_session_metadata
+from apis.shared.sessions.rewind import parse_message_index
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -78,48 +84,16 @@ class CreateHandoffResponse(BaseModel):
     context_block: str = Field(..., alias="contextBlock", description="The excerpt wrapped as the Agent receives it")
     prompt: str = Field(..., description="The full first message the Agent receives: contextBlock, then request")
     request: str
-
-
-class HandoffView(BaseModel):
-    """A row as the SPA reads it: the stored status, with ``abandoned`` derived."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    handoff_id: str = Field(..., alias="handoffId")
-    session_id: str = Field(..., alias="sessionId")
-    kind: str
-    status: EffectiveHandoffStatus
-    agent_id: str = Field(..., alias="agentId")
-    agent_name: str = Field(..., alias="agentName")
-    request: str
-    source_message_index: int = Field(..., alias="sourceMessageIndex")
-    excerpt_tokens: int = Field(..., alias="excerptTokens")
-    turns_covered: Optional[TurnsCovered] = Field(None, alias="turnsCovered")
-    created_at: str = Field(..., alias="createdAt")
-    updated_at: str = Field(..., alias="updatedAt")
-    target_session_id: Optional[str] = Field(None, alias="targetSessionId")
-    status_line: Optional[str] = Field(None, alias="statusLine")
-    waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
-
-    @classmethod
-    def from_row(cls, row: Handoff) -> "HandoffView":
-        return cls(
-            handoff_id=row.handoff_id,
-            session_id=row.session_id,
-            kind=row.kind,
-            status=row.effective_status(),
-            agent_id=row.agent_id,
-            agent_name=row.agent_name,
-            request=row.request,
-            source_message_index=row.source_message_index,
-            excerpt_tokens=row.excerpt_tokens,
-            turns_covered=row.turns_covered,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-            target_session_id=row.target_session_id,
-            status_line=row.status_line,
-            waiting_on=row.waiting_on,
-        )
+    source_message_index: int = Field(
+        ...,
+        alias="sourceMessageIndex",
+        description="Index of the message the handoff row will sit after; -1 for an empty conversation",
+    )
+    source_title: str = Field(
+        ...,
+        alias="sourceTitle",
+        description="The title the wrapper names. The review sheet re-wraps an edited card with it, as the server will",
+    )
 
 
 @router.post(
@@ -155,7 +129,11 @@ async def create_handoff(
         listing = await get_messages(session_id=session_id, user_id=user.user_id)
     except FileNotFoundError:
         listing = None
-    messages = [m.model_dump(by_alias=True, exclude_none=True) for m in (listing.messages if listing else [])]
+    visible = listing.messages if listing else []
+    messages = [m.model_dump(by_alias=True, exclude_none=True) for m in visible]
+    # The row anchors to the last message's id, never its position: a rewind
+    # hides messages without renumbering, so the two differ once one has run.
+    anchor = parse_message_index(session_id, visible[-1].id) if visible else None
     checkpoint, summary = await get_session_compaction(session_id, user.user_id)
 
     excerpt = render_excerpt(messages, compaction_checkpoint=checkpoint, compaction_summary=summary)
@@ -181,7 +159,7 @@ async def create_handoff(
         agent_name=agent.name or "",
         request=request,
         source_title=source_title,
-        source_message_index=len(messages) - 1,
+        source_message_index=anchor if anchor is not None else len(messages) - 1,
         excerpt_hash=context_hash(excerpt.text),
         excerpt_tokens=excerpt.estimated_tokens,
         turns_covered=turns,
@@ -204,6 +182,8 @@ async def create_handoff(
         context_block=context_block,
         prompt=build_handoff_message(context_block, request),
         request=request,
+        source_message_index=row.source_message_index,
+        source_title=source_title,
     )
 
 
@@ -211,6 +191,7 @@ async def create_handoff(
     "/{session_id}/handoffs/{handoff_id}",
     response_model=HandoffView,
     response_model_by_alias=True,
+    response_model_exclude_none=True,
 )
 async def get_handoff(
     session_id: str,
@@ -218,9 +199,16 @@ async def get_handoff(
     user: User = Depends(require_handoffs_user),
     store: HandoffStore = Depends(get_handoff_store),
 ) -> HandoffView:
-    """One of the caller's handoffs from this conversation."""
+    """One of the caller's handoffs from this conversation.
+
+    A ``needs_input`` handoff carries ``relayedPrompts``, read from its target as ``GET /messages``
+    reads them. The SPA reads this row when a target's turn ends, so the relay it shows then comes
+    from the same breadcrumbs a reload would, not from prompt state the tab may have cleared.
+    """
     row = await _owned_row(store, user, session_id, handoff_id)
-    return HandoffView.from_row(row)
+    view = HandoffView.from_row(row)
+    await load_relayed_prompts([view], user.user_id)
+    return view
 
 
 @router.post("/{session_id}/handoffs/{handoff_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
@@ -242,6 +230,117 @@ async def dismiss_handoff(
     if updated is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This handoff was already sent")
     emit_handoff_metric("HandoffCancelled", row.kind, session_id=session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+HandoffNotificationKind = Literal["handoff_needs_input", "handoff_done", "handoff_stopped"]
+
+
+class MarkHandoffNotificationsReadRequest(BaseModel):
+    kinds: List[HandoffNotificationKind] = Field(
+        default_factory=lambda: list(HANDOFF_NOTIFICATION_KINDS.values()), min_length=1, max_length=3
+    )
+
+
+class MarkHandoffNotificationsReadResponse(BaseModel):
+    marked: int
+
+
+_inbox: Optional[NotificationService] = None
+
+
+def get_inbox() -> NotificationService:
+    global _inbox
+    if _inbox is None:
+        _inbox = NotificationService()
+    return _inbox
+
+
+@router.post(
+    "/{session_id}/handoffs/{handoff_id}/notifications/read",
+    response_model=MarkHandoffNotificationsReadResponse,
+)
+async def mark_handoff_notifications_read(
+    session_id: str,
+    handoff_id: str,
+    body: MarkHandoffNotificationsReadRequest,
+    user: User = Depends(require_handoffs_user),
+    store: HandoffStore = Depends(get_handoff_store),
+    inbox: NotificationService = Depends(get_inbox),
+) -> MarkHandoffNotificationsReadResponse:
+    """Mark this handoff's unread inbox entries of ``kinds`` read (§4.3, PR-0.3b).
+
+    Read state follows the work, not the bell: the SPA calls this when the user opens the target,
+    and when a state change lands while they are looking at the source or the target. Only the
+    caller's own inbox is touched, and only for a handoff that is theirs from this conversation.
+    """
+    await _owned_row(store, user, session_id, handoff_id)
+    marked = await asyncio.to_thread(
+        inbox.mark_read_matching, user.email, kinds=body.kinds, payload={"handoffId": handoff_id}
+    )
+    return MarkHandoffNotificationsReadResponse(marked=marked)
+
+
+RelayedPromptKind = Literal["oauth", "tool_approval", "user_question", "browser_login"]
+
+
+class HandoffNotificationEvent(BaseModel):
+    """A browser-side fact the server can't see (§4.7).
+
+    ``outcome`` only for a permission ask. ``interruptKind`` for the three relayed-prompt counts
+    (PR-0.3c), and ``surface`` for ``RelayedPromptAnswered``: ``source`` when answered under the
+    handoff row, ``target`` when answered in the target conversation itself.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    metric: Literal[
+        "HandoffNotified",
+        "HandoffNotificationOpened",
+        "HandoffBrowserPermission",
+        "RelayedPromptShown",
+        "RelayedPromptAnswered",
+        "RelayedPromptConflict",
+    ]
+    channel: Optional[Literal["inbox", "browser"]] = None
+    outcome: Optional[Literal["granted", "denied", "dismissed"]] = None
+    interrupt_kind: Optional[RelayedPromptKind] = Field(None, alias="interruptKind")
+    surface: Optional[Literal["source", "target"]] = None
+
+
+@router.post(
+    "/{session_id}/handoffs/{handoff_id}/notifications/events",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def record_handoff_notification_event(
+    session_id: str,
+    handoff_id: str,
+    body: HandoffNotificationEvent,
+    user: User = Depends(require_handoffs_user),
+    store: HandoffStore = Depends(get_handoff_store),
+) -> Response:
+    """Count a browser notification shown or opened, an inbox entry opened, a permission answer,
+    or a relayed prompt shown, answered or refused because the other surface answered first.
+
+    A count and nothing else. No row is written, and only one count reads one: an answer given in
+    the target is counted only while its handoff is ``needs_input``, because once a handoff is
+    ``done`` its target is the user's own conversation and a prompt there is not a relayed one. The
+    target calls before it resumes, so the row has not moved yet.
+    """
+    if body.metric.startswith("RelayedPrompt"):
+        if body.interrupt_kind is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="interruptKind is required")
+        surface = body.surface if body.metric == "RelayedPromptAnswered" else None
+        if body.metric == "RelayedPromptAnswered" and surface is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="surface is required")
+        if surface == "target":
+            row = await _owned_row(store, user, session_id, handoff_id)
+            if row.status != "needs_input":
+                return Response(status_code=status.HTTP_204_NO_CONTENT)
+        emit_handoff_metric(body.metric, "mention", session_id=session_id, detail=body.interrupt_kind, surface=surface)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    detail = body.outcome if body.metric == "HandoffBrowserPermission" else body.channel
+    emit_handoff_metric(body.metric, "mention", session_id=session_id, detail=detail)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

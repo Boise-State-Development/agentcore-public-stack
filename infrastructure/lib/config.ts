@@ -90,6 +90,8 @@ export interface AppConfig {
   handoffs: HandoffsConfig;
   sessionRewind: SessionRewindConfig;
   sessionFork: SessionForkConfig;
+  quotaRequests: QuotaRequestsConfig;
+  awsLimits: AwsLimitsConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -101,12 +103,15 @@ export interface AppConfig {
   skillAuthoring: SkillAuthoringConfig;
   wordTrackedChanges: WordTrackedChangesConfig;
   assistantKbFullContext: AssistantKbFullContextConfig;
+  meetingTasks: MeetingTasksConfig;
   largeDocumentAttachments: LargeDocumentAttachmentsConfig;
   attachmentKb: AttachmentKbConfig;
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
   sourceProvenance: SourceProvenanceConfig;
   documentExtract: DocumentExtractConfig;
+  webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
+  projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -475,6 +480,38 @@ export interface SessionPrewarmConfig {
 }
 
 /**
+ * Quota requests and extensions (docs/specs/quota-requests-and-extensions.md).
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_QUOTA_REQUESTS_ENABLED=true (or a `quotaRequests.enabled: true` cdk.json
+ * context). Sets QUOTA_REQUESTS_ENABLED on **app-api only**, which serves the
+ * `/quota/*` request routes and `/admin/quota-requests` + `/admin/quota-extensions`.
+ * The Runtime needs no copy: quota resolution reads extensions wherever it runs,
+ * so turning this off stops new grants without revoking existing ones, and it
+ * spends none of the Runtime's environment-variable budget. No new resources:
+ * requests, extensions and the policy live in the existing user-quotas table.
+ */
+export interface QuotaRequestsConfig {
+  enabled: boolean;
+}
+
+/**
+ * AWS Limits admin page (GitHub issue #12): the account's Service Quotas for
+ * the services this stack uses, with usage and increase requests.
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_AWS_LIMITS_ENABLED=true (or an `awsLimits.enabled: true` cdk.json
+ * context). Sets AWS_LIMITS_ENABLED on **app-api only**, which serves
+ * `/admin/aws-limits`, and only while on grants the App API task role the
+ * Service Quotas reads, cloudwatch:GetMetricData and ListMetrics, the AgentCore
+ * memory/gateway/target lists, RequestServiceQuotaIncrease
+ * (conditioned to the monitored services) and creation of the Service Quotas
+ * service-linked role. The Runtime needs no copy. No new resources: increase
+ * submissions are audited in the existing audit-log table.
+ */
+export interface AwsLimitsConfig {
+  enabled: boolean;
+}
+
+/**
  * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0). **Opt-in while
  * the feature is in development**: off unless CDK_HANDOFFS_ENABLED=true (or a
  * `handoffs.enabled: true` cdk.json context). Sets HANDOFFS_ENABLED on **app-api**,
@@ -486,6 +523,14 @@ export interface SessionPrewarmConfig {
  */
 export interface HandoffsConfig {
   enabled: boolean;
+  /**
+   * The model-written brief for a handoff's context card (spec §4.5.1). **Opt-in
+   * while in development**: off unless CDK_HANDOFF_BRIEF_ENABLED=true (or a
+   * `handoffs.briefEnabled: true` cdk.json context). Sets HANDOFF_BRIEF_ENABLED on
+   * the **AgentCore Runtime** only, and only while both it and `enabled` are on,
+   * so the default spends none of the V2 environment budget. No new resources.
+   */
+  briefEnabled: boolean;
 }
 
 /**
@@ -742,6 +787,24 @@ export interface AssistantKbFullContextConfig {
 }
 
 /**
+ * Meeting transcripts → GitHub issues
+ * (backend/src/agents/local_tools/meeting_tasks.py,
+ * docs/specs/meeting-transcripts-to-github-issues.md): the Google Calendar,
+ * Zoom and GitHub tool families, built per request for users whose roles are
+ * granted the `google_calendar_meetings` / `zoom_meeting_transcripts` /
+ * `github_issues_local` catalog tools, each calling the vendor API with the user's
+ * own OAuth token from the connector an admin bound to the row. **Opt-in while
+ * in development**: off unless CDK_MEETING_TASKS_ENABLED=true (or a
+ * `meetingTasks.enabled: true` cdk.json context). While on, sets
+ * MEETING_TASKS_ENABLED on the AgentCore Runtime; while off, the variable is
+ * absent. No IAM: the tokens come from the AgentCore Identity vault the Runtime
+ * already reads for OAuth-gated MCP tools. No SPA switch.
+ */
+export interface MeetingTasksConfig {
+  enabled: boolean;
+}
+
+/**
  * Large document attachments (docs/specs/large-document-attachments.md): a
  * pdf, docx, txt, md or html attachment over the 4 MB inline limit is attached
  * by reference and read through `document_read` from sidecars a preparation
@@ -823,6 +886,41 @@ export interface FolderSyncConfig {
  * SessionLookupIndex GSI.
  */
 export interface SourceProvenanceConfig {
+  enabled: boolean;
+}
+
+/**
+ * AgentCore Web Search result default
+ * (docs/specs/web-search-default-comparison-findings.md). On, a Web Search call
+ * (`<target>___WebSearch`) whose input names no `maxResults` asks for 5 results
+ * instead of the connector's 10, which halves the ~5.3k tokens an unqualified
+ * search puts into the conversation. A count the model chose passes through.
+ * **Opt-in while in development**: off unless
+ * CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED=true (or a
+ * `webSearchDefaultMaxResults.enabled: true` cdk.json context). A feature
+ * switch, and therefore permanent: results per search is a product choice
+ * between context spent and breadth. Sets WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
+ * on the AgentCore Runtime only, and **only while on**, so the default spends
+ * none of the V2 payload budget. No resources, and nothing reaches the prompt.
+ */
+export interface WebSearchDefaultMaxResultsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Project file readiness. On, a Shared Project turn whose files include any that
+ * are still being prepared or that failed gets a short `<project_files_status>`
+ * note in the user message naming them, so the model says it cannot use them
+ * instead of answering as though they did not exist; a turn whose files are all
+ * ready is unchanged. The SPA half (`features.projectFileReadiness`) shows their
+ * progress above the project chat's composer. **Opt-in while in development**:
+ * off unless CDK_PROJECT_FILE_READINESS_ENABLED=true (or a
+ * `projectFileReadiness.enabled: true` cdk.json context). A feature switch once
+ * finished. Sets PROJECT_FILE_READINESS_ENABLED on the AgentCore Runtime only,
+ * and **only while on**, so the default spends none of the V2 payload budget. No
+ * resources, and nothing reaches the system prompt or `toolConfig`.
+ */
+export interface ProjectFileReadinessConfig {
   enabled: boolean;
 }
 
@@ -1613,6 +1711,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_HANDOFFS_ENABLED
         ? process.env.CDK_HANDOFFS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('handoffs')?.enabled ?? false,
+      briefEnabled: process.env.CDK_HANDOFF_BRIEF_ENABLED
+        ? process.env.CDK_HANDOFF_BRIEF_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('handoffs')?.briefEnabled ?? false,
     },
     sessionRewind: {
       // Opt-in while in development, same parsing as sessionPrewarm above.
@@ -1625,6 +1726,18 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SESSION_FORK_ENABLED
         ? process.env.CDK_SESSION_FORK_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sessionFork')?.enabled ?? false,
+    },
+    quotaRequests: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_QUOTA_REQUESTS_ENABLED
+        ? process.env.CDK_QUOTA_REQUESTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('quotaRequests')?.enabled ?? false,
+    },
+    awsLimits: {
+      // Opt-in while in development, same parsing as quotaRequests above.
+      enabled: process.env.CDK_AWS_LIMITS_ENABLED
+        ? process.env.CDK_AWS_LIMITS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('awsLimits')?.enabled ?? false,
     },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.
@@ -1699,6 +1812,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('assistantKbFullContext')?.enabled ?? false,
     },
+    meetingTasks: {
+      // Opt-in while in development, same parsing as assistantKbFullContext.
+      enabled: process.env.CDK_MEETING_TASKS_ENABLED
+        ? process.env.CDK_MEETING_TASKS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('meetingTasks')?.enabled ?? false,
+    },
     largeDocumentAttachments: {
       // Default ON with a kill switch, same parsing as skillAuthoring above.
       enabled: largeDocumentAttachmentsEnabled,
@@ -1729,6 +1848,20 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SOURCE_PROVENANCE_ENABLED
         ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
+    },
+    webSearchDefaultMaxResults: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
+        ? process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('webSearchDefaultMaxResults')?.enabled ?? false,
+    },
+    projectFileReadiness: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_PROJECT_FILE_READINESS_ENABLED
+        ? process.env.CDK_PROJECT_FILE_READINESS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('projectFileReadiness')?.enabled ?? false,
     },
     documentExtract: {
       // In development: only "true" enables, and an unset GitHub variable
@@ -2641,6 +2774,13 @@ export function getTruncatedResourceName(config: AppConfig, maxLength: number, .
  * Get the removal policy based on retention configuration
  * @param config The application configuration
  * @returns RETAIN when retainDataOnDelete is true, DESTROY when false
+ *
+ * Buckets deliberately do not set `autoDeleteObjects` alongside DESTROY. That
+ * option costs one `Custom::S3AutoDeleteObjects` per bucket plus a provider
+ * Lambda and role (about 15 resources against PlatformStack's 500), so
+ * `scripts/teardown/destroy.sh` empties the stack's DESTROY buckets before it
+ * deletes the stack instead. A bare `cdk destroy` therefore stops on "bucket not
+ * empty" (docs/specs/platform-stack-resource-budget.md §4).
  */
 export function getRemovalPolicy(config: AppConfig): cdk.RemovalPolicy {
   return config.retainDataOnDelete 
@@ -2649,12 +2789,13 @@ export function getRemovalPolicy(config: AppConfig): cdk.RemovalPolicy {
 }
 
 /**
- * Get the autoDeleteObjects setting for S3 buckets based on retention configuration
- * @param config The application configuration
- * @returns false when retainDataOnDelete is true, true when false
+ * The `Project` tag every resource in the stack carries: the project prefix,
+ * unless the `tags` context sets `Project` itself. IAM conditions on
+ * `aws:ResourceTag/Project` (the deployment-scoped DynamoDB grants) read this,
+ * so they always compare against the value `applyStandardTags` actually wrote.
  */
-export function getAutoDeleteObjects(config: AppConfig): boolean {
-  return !config.retainDataOnDelete;
+export function getProjectTag(config: AppConfig): string {
+  return config.tags?.Project ?? config.projectPrefix;
 }
 
 /**
@@ -2662,10 +2803,11 @@ export function getAutoDeleteObjects(config: AppConfig): boolean {
  */
 export function applyStandardTags(stack: cdk.Stack, config: AppConfig): void {
   // Inject Project tag dynamically from projectPrefix (can't interpolate in context)
-  cdk.Tags.of(stack).add('Project', config.projectPrefix);
+  cdk.Tags.of(stack).add('Project', getProjectTag(config));
   // Add Version tag from appVersion (flows from VERSION file via CI/CD)
   cdk.Tags.of(stack).add('Version', config.appVersion);
   Object.entries(config.tags).forEach(([key, value]) => {
+    if (key === 'Project') return;
     cdk.Tags.of(stack).add(key, value);
   });
 }

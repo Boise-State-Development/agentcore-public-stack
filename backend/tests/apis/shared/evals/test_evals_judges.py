@@ -19,6 +19,7 @@ from apis.shared.evals.judges import (
     StrandsEvalsJudge,
     judge_row,
     last_turn,
+    same_base_model,
     summarize_outputs,
 )
 from apis.shared.evals.report import ReportError, build_baseline, compare_judges, judge_means
@@ -121,6 +122,14 @@ def test_summarize_averages_tool_level_outputs_and_flags_nothing_to_judge():
     assert verdict.score == 0.5 and verdict.passed is False and verdict.metadata == {"outputs": 2}
     empty = summarize_outputs("tool_selection", [])
     assert empty.score is None and empty.error == "nothing to judge"
+
+
+def test_same_base_model_ignores_the_inference_profile_prefix():
+    haiku = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert same_base_model(haiku, "global.anthropic.claude-haiku-4-5-20251001-v1:0")
+    assert same_base_model(haiku, "anthropic.claude-haiku-4-5-20251001-v1:0")
+    assert not same_base_model(haiku, "us.anthropic.claude-sonnet-4-6")
+    assert not same_base_model("", "")
 
 
 def test_last_turn_reads_the_final_agent_span():

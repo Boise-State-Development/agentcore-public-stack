@@ -2,7 +2,20 @@
 
 from dataclasses import dataclass, field
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+#: Per-role cap on ``system_instruction``. Matches a Conversation Mode's
+#: ``MAX_PROMPT_TEXT_LENGTH``; the combined role section a turn carries has its
+#: own cap (``inference_api/chat/role_instructions.py``).
+MAX_ROLE_SYSTEM_INSTRUCTION_CHARS = 8000
+
+
+def _blank_instruction_to_none(value: Optional[str]) -> Optional[str]:
+    """An empty or whitespace-only instruction is stored as ``None`` (cleared)."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 @dataclass
@@ -88,6 +101,12 @@ class AppRole:
     updated_at: str = ""
     created_by: Optional[str] = None
 
+    # Free-text instruction added to the system prompt of a plain chat turn
+    # (no agent attached) for every user who holds this role. Not inherited
+    # through ``inherits_from``: a role's instruction is its own, like
+    # ``quota_tier``. ``None`` means the role adds nothing.
+    system_instruction: Optional[str] = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for DynamoDB storage."""
         return {
@@ -107,6 +126,7 @@ class AppRole:
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
             "createdBy": self.created_by,
+            "systemInstruction": self.system_instruction,
         }
 
     @classmethod
@@ -130,7 +150,21 @@ class AppRole:
             created_at=data.get("createdAt", ""),
             updated_at=data.get("updatedAt", ""),
             created_by=data.get("createdBy"),
+            # Rows written before the field existed load as None.
+            system_instruction=data.get("systemInstruction") or None,
         )
+
+
+@dataclass(frozen=True)
+class RoleInstruction:
+    """One matched role's system instruction, as it reaches a plain chat turn."""
+
+    role_id: str
+    display_name: str
+    text: str
+
+    def to_dict(self) -> dict:
+        return {"roleId": self.role_id, "displayName": self.display_name, "text": self.text}
 
 
 @dataclass
@@ -159,6 +193,10 @@ class UserEffectivePermissions:
     direct_tools: List[str] = field(default_factory=list)
     direct_models: List[str] = field(default_factory=list)
     direct_skills: List[str] = field(default_factory=list)
+    # Every matched role's system instruction, in prompt order: priority
+    # descending, then role_id. Travels in this cached object so a plain turn
+    # reads it with no extra DynamoDB call.
+    role_instructions: List[RoleInstruction] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -174,6 +212,7 @@ class UserEffectivePermissions:
             "directTools": self.direct_tools,
             "directModels": self.direct_models,
             "directSkills": self.direct_skills,
+            "roleInstructions": [r.to_dict() for r in self.role_instructions],
         }
 
 
@@ -292,8 +331,16 @@ class AppRoleCreate(BaseModel):
     )
     priority: int = Field(0, ge=0, le=999)
     enabled: bool = True
+    system_instruction: Optional[str] = Field(
+        None, max_length=MAX_ROLE_SYSTEM_INSTRUCTION_CHARS, alias="systemInstruction"
+    )
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("system_instruction")
+    @classmethod
+    def _clear_blank_instruction(cls, value: Optional[str]) -> Optional[str]:
+        return _blank_instruction_to_none(value)
 
 
 class AppRoleUpdate(BaseModel):
@@ -313,8 +360,17 @@ class AppRoleUpdate(BaseModel):
     )
     priority: Optional[int] = Field(None, ge=0, le=999)
     enabled: Optional[bool] = None
+    # Sent as null, "" or whitespace to clear. Omitted leaves it unchanged.
+    system_instruction: Optional[str] = Field(
+        None, max_length=MAX_ROLE_SYSTEM_INSTRUCTION_CHARS, alias="systemInstruction"
+    )
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("system_instruction")
+    @classmethod
+    def _clear_blank_instruction(cls, value: Optional[str]) -> Optional[str]:
+        return _blank_instruction_to_none(value)
 
 
 class EffectivePermissionsResponse(BaseModel):
@@ -352,6 +408,7 @@ class AppRoleResponse(BaseModel):
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
     created_by: Optional[str] = Field(None, alias="createdBy")
+    system_instruction: Optional[str] = Field(None, alias="systemInstruction")
 
     model_config = {"populate_by_name": True}
 
@@ -381,6 +438,7 @@ class AppRoleResponse(BaseModel):
             created_at=role.created_at,
             updated_at=role.updated_at,
             created_by=role.created_by,
+            system_instruction=role.system_instruction,
         )
 
 
@@ -388,6 +446,39 @@ class AppRoleListResponse(BaseModel):
     """Response model for listing roles."""
 
     roles: List[AppRoleResponse]
+    total: int
+
+
+class AppRoleOptionResponse(BaseModel):
+    """One role as a picker shows it: who it is, never what it grants.
+
+    Served to every delegated admin (``GET /admin/roles/picker-options``), so it must
+    stay this narrow. A grant list here would let, say, a Tools admin read which models
+    and admin scopes each role holds — role administration's view, which is
+    ``system_admin``-only (``admin.roles`` is non-delegable).
+    """
+
+    role_id: str = Field(..., alias="roleId")
+    display_name: str = Field(..., alias="displayName")
+    description: str
+    enabled: bool
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def from_app_role(cls, role: AppRole) -> "AppRoleOptionResponse":
+        return cls(
+            role_id=role.role_id,
+            display_name=role.display_name,
+            description=role.description,
+            enabled=role.enabled,
+        )
+
+
+class AppRoleOptionListResponse(BaseModel):
+    """Every role, ordered highest priority first, then by id."""
+
+    roles: List[AppRoleOptionResponse]
     total: int
 
 

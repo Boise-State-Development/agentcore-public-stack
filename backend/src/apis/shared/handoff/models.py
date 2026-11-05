@@ -20,9 +20,11 @@ the row stops following it.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Dict, FrozenSet, Literal, Optional
+from typing import Dict, FrozenSet, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from apis.shared.sessions.models import PendingInterrupt
 
 HandoffKind = Literal["mention", "suggested", "send_back"]
 WaitingKind = Literal["oauth_consent", "tool_approval", "user_question", "browser_login"]
@@ -66,6 +68,40 @@ class WaitingOn(BaseModel):
     name: str = ""
 
 
+class RelayedPrompt(BaseModel):
+    """One prompt a paused target is waiting on, as its source thread relays it (§4.3, PR-0.3c).
+
+    A subset of the target's ``PendingInterrupt`` breadcrumb, in its wire names, so the SPA renders
+    it with the prompt it already has for that kind. Left out: the triggering message id (a target
+    message the source never shows) and a browser sign-in's session ref (the live view is the
+    target's screen; the relay only links there).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    interrupt_id: str = Field(..., alias="interruptId")
+    kind: Literal["oauth", "tool_approval", "user_question", "browser_login"]
+    provider_id: Optional[str] = Field(None, alias="providerId")
+    tool_use_id: Optional[str] = Field(None, alias="toolUseId")
+    tool_name: Optional[str] = Field(None, alias="toolName")
+    tool_input: Optional[str] = Field(None, alias="toolInput", description="JSON-encoded, as on the breadcrumb")
+    message: Optional[str] = None
+    questions: Optional[str] = Field(None, description="JSON-encoded, as on the breadcrumb")
+
+    @classmethod
+    def from_interrupt(cls, interrupt: PendingInterrupt) -> "RelayedPrompt":
+        return cls(
+            interrupt_id=interrupt.interrupt_id,
+            kind=interrupt.kind,
+            provider_id=interrupt.provider_id,
+            tool_use_id=interrupt.tool_use_id,
+            tool_name=interrupt.tool_name,
+            tool_input=interrupt.tool_input,
+            message=interrupt.message,
+            questions=interrupt.questions,
+        )
+
+
 class TurnsCovered(BaseModel):
     """The source turns an excerpt covers, counted over the whole conversation."""
 
@@ -96,6 +132,13 @@ class Handoff(BaseModel):
     )
     excerpt_hash: Optional[str] = Field(None, alias="excerptHash")
     excerpt_tokens: int = Field(0, alias="excerptTokens")
+    brief_hash: Optional[str] = Field(
+        None, alias="briefHash", description="Hash of the model-written brief, when one was written (spec §4.5.1)"
+    )
+    brief_tokens: Optional[int] = Field(None, alias="briefTokens")
+    brief_cache_status: Optional[str] = Field(
+        None, alias="briefCacheStatus", description="The brief call's cacheStatus on the source: hit, partial_miss or miss"
+    )
     turns_covered: Optional[TurnsCovered] = Field(None, alias="turnsCovered")
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
@@ -121,14 +164,69 @@ class Handoff(BaseModel):
         return self.status
 
 
+class HandoffView(BaseModel):
+    """A row as the SPA reads it: the stored status with ``abandoned`` derived, and no storage-only fields.
+
+    Shared by app-api's ``GET /sessions/{id}/handoffs/{handoffId}`` and the ``handoffs`` replay on
+    ``GET /sessions/{id}/messages``, so the SPA parses one shape.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    handoff_id: str = Field(..., alias="handoffId")
+    session_id: str = Field(..., alias="sessionId")
+    kind: str
+    status: EffectiveHandoffStatus
+    agent_id: str = Field(..., alias="agentId")
+    agent_name: str = Field(..., alias="agentName")
+    request: str
+    source_message_index: int = Field(..., alias="sourceMessageIndex")
+    excerpt_tokens: int = Field(..., alias="excerptTokens")
+    turns_covered: Optional[TurnsCovered] = Field(None, alias="turnsCovered")
+    created_at: str = Field(..., alias="createdAt")
+    updated_at: str = Field(..., alias="updatedAt")
+    target_session_id: Optional[str] = Field(None, alias="targetSessionId")
+    status_line: Optional[str] = Field(None, alias="statusLine")
+    waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
+    stopped_reason: Optional[str] = Field(None, alias="stoppedReason")
+    relayed_prompts: Optional[List[RelayedPrompt]] = Field(
+        None,
+        alias="relayedPrompts",
+        description="A needs_input handoff's prompts, read from its target's breadcrumbs (apis.shared.handoff.relay)",
+    )
+
+    @classmethod
+    def from_row(cls, row: Handoff) -> "HandoffView":
+        return cls(
+            handoff_id=row.handoff_id,
+            session_id=row.session_id,
+            kind=row.kind,
+            status=row.effective_status(),
+            agent_id=row.agent_id,
+            agent_name=row.agent_name,
+            request=row.request,
+            source_message_index=row.source_message_index,
+            excerpt_tokens=row.excerpt_tokens,
+            turns_covered=row.turns_covered,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            target_session_id=row.target_session_id,
+            status_line=row.status_line,
+            waiting_on=row.waiting_on,
+            stopped_reason=row.stopped_reason,
+        )
+
+
 __all__ = [
     "ABANDON_AFTER",
     "EffectiveHandoffStatus",
     "HANDOFF_DISPLAY_MAX_CHARS",
     "HANDOFF_REQUEST_MAX_CHARS",
     "Handoff",
+    "HandoffView",
     "HandoffKind",
     "HandoffStatus",
+    "RelayedPrompt",
     "TRANSITIONS",
     "TurnsCovered",
     "WaitingKind",

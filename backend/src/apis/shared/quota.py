@@ -162,6 +162,30 @@ class QuotaSessionNoticeEvent(BaseModel):
         return f"event: quota_session_notice\ndata: {json.dumps(self.model_dump(by_alias=True, exclude_none=True))}\n\n"
 
 
+class QuotaFundingNoticeEvent(BaseModel):
+    """SSE event: the user's spend has passed the central allowance onto a fund.
+
+    Emitted at the head of the stream beside ``quota_warning`` on every turn
+    while the overage lands on a ``chargeback`` extension (quota-requests spec
+    §8.2); dismissal is client-side per period, the ``quota_warning`` contract.
+    SSE only, never the prompt.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = "quota_funding_notice"
+    label: str = Field(..., description="The fund being charged, as a person reads it")
+    charged_this_period: float = Field(..., alias="chargedThisPeriod")
+    cap: Optional[float] = Field(None, description="Per-period cap; absent when uncapped")
+    remaining_under_cap: Optional[float] = Field(None, alias="remainingUnderCap")
+    standing: bool = False
+    message: str
+
+    def to_sse_format(self) -> str:
+        """Convert to SSE event format"""
+        import json
+        return f"event: quota_funding_notice\ndata: {json.dumps(self.model_dump(by_alias=True, exclude_none=True))}\n\n"
+
+
 class QuotaExceededEvent(BaseModel):
     """SSE event for quota exceeded (hard limit reached).
 
@@ -242,11 +266,14 @@ def build_quota_session_notice_event(
     """
     if not result.session_id or result.session_cost is None:
         return None
-    if not result.quota_limit:
+    # Under an uncapped standing extension there is no effective limit; the
+    # notice is scaled to the base limit, the only denominator there is.
+    denominator = result.quota_limit or result.base_limit
+    if not denominator:
         return None
 
     session_cost = float(result.session_cost)
-    limit = float(result.quota_limit)
+    limit = float(denominator)
     share = float(result.session_percentage_of_limit or 0.0)
     # Almost every tier is monthly (and the incident's was), but a daily tier
     # must not be told its budget is a month's.
@@ -262,6 +289,32 @@ def build_quota_session_notice_event(
             f"This conversation has used ${session_cost:.2f} of your "
             f"${limit:.2f} {period_word} quota."
         ),
+    )
+
+
+def build_quota_funding_notice_event(
+    result: QuotaCheckResult,
+) -> Optional[QuotaFundingNoticeEvent]:
+    """Project the checker's funding notice onto its SSE event, if there is one."""
+    notice = result.funding_notice
+    if notice is None:
+        return None
+    charged = float(notice.charged_this_period)
+    period_word = "today" if result.tier and result.tier.period_type == "daily" else "this month"
+    if notice.cap is not None:
+        cap = float(notice.cap)
+        message = f"Included quota used · charging {notice.label} · ${charged:.2f} {period_word} of ${cap:.2f}"
+    else:
+        message = f"Included quota used · charging {notice.label} · ${charged:.2f} {period_word}"
+    return QuotaFundingNoticeEvent(
+        label=notice.label,
+        chargedThisPeriod=charged,
+        cap=float(notice.cap) if notice.cap is not None else None,
+        remainingUnderCap=(
+            float(notice.remaining_under_cap) if notice.remaining_under_cap is not None else None
+        ),
+        standing=notice.standing,
+        message=message,
     )
 
 
@@ -305,7 +358,7 @@ def build_quota_exceeded_event(result: QuotaCheckResult) -> QuotaExceededEvent:
 
 **What's Next?**
 - {reset_info}
-- If you need additional capacity, please contact your administrator.
+- Your administrator can extend your quota.
 
 I'm here to help once your quota resets!"""
 

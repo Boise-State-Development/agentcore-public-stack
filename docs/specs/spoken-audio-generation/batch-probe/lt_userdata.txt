@@ -1,0 +1,16 @@
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==SPIKE=="
+
+--==SPIKE==
+Content-Type: text/x-shellscript; charset="us-ascii"
+
+#!/bin/bash
+# Safety net, then local NVMe at /scratch and the weights volume (if any) at /weights.
+shutdown -h +120
+mkdir -p /scratch /weights
+DEV=$(lsblk -dpno NAME,MODEL | awk '/Instance Storage/{print $1; exit}')
+if [ -n "$DEV" ]; then mkfs.xfs -q -f "$DEV" && mount "$DEV" /scratch; fi
+W=$(blkid -L weights || true)
+if [ -n "$W" ]; then mount -o ro "$W" /weights; fi
+date -u +%Y-%m-%dT%H:%M:%S.%3NZ > /var/log/spike-userdata-done
+--==SPIKE==--

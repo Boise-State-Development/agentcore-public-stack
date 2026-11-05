@@ -71,6 +71,21 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         description="Manage quota tiers, assignments, overrides, and quota events.",
     ),
     AdminScope(
+        id="admin.quota_requests",
+        label="Quota Requests",
+        group=GROUP_USAGE,
+        description="Decide quota requests and manage quota extensions.",
+    ),
+    AdminScope(
+        id="admin.aws_limits",
+        label="AWS Limits",
+        group=GROUP_USAGE,
+        description=(
+            "View the AWS account's service quotas for this stack and request "
+            "AWS limit increases."
+        ),
+    ),
+    AdminScope(
         id="admin.fine_tuning",
         label="Fine-Tuning",
         group=GROUP_USAGE,

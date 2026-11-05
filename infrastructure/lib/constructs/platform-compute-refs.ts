@@ -130,6 +130,9 @@ export interface PlatformComputeRefs {
   projectsTable: dynamodb.ITable;
   /** Memory maintenance worker (2.6): app-api async-invokes it to start a run. */
   memoryMaintenanceWorker: lambda.IFunction;
+  /** Managed-KB migration worker: app-api async-invokes it to start a born-managed
+   *  knowledge base's provisioning on the first upload, ahead of the dispatcher tick. */
+  kbMigrationWorker: lambda.IFunction;
 
   // ── Fine-tuning
   fineTuningJobsTable: dynamodb.ITable;

@@ -11,6 +11,7 @@ Uses the shared ``aws`` fixture (``tests/shared/conftest.py``) for mock_aws.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 import boto3
@@ -53,6 +54,18 @@ def table(aws):
 @pytest.fixture
 def repository(table) -> DeviceGrantRepository:
     return DeviceGrantRepository(table_name=TABLE_NAME)
+
+
+def serialize_writes(repository: DeviceGrantRepository) -> None:
+    """Make the moto table's ``update_item`` atomic, as DynamoDB's is per item."""
+    lock = threading.Lock()
+    real_update_item = repository._table.update_item
+
+    def update_item(**kwargs):
+        with lock:
+            return real_update_item(**kwargs)
+
+    repository._table.update_item = update_item
 
 
 def make_grant(**overrides: object) -> DeviceGrant:
@@ -342,6 +355,12 @@ class TestClaim:
         grant = make_grant()
         await repository.create(grant)
         await repository.approve(grant.device_code_hash, session_id="sess-001", user_id="user-1")
+        # moto's update_item evaluates the condition and applies the update as
+        # two unlocked steps, so concurrent threads can all see `approved` and
+        # all win — which DynamoDB's per-item atomicity never allows (see
+        # test_concurrent_approvals_are_decided_by_the_writes_condition). The
+        # lock stands in for that atomicity; the condition still picks the winner.
+        serialize_writes(repository)
 
         results = await asyncio.gather(*(repository.claim(grant.device_code_hash) for _ in range(8)))
 

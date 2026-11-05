@@ -48,6 +48,10 @@ TTL is short (60s) rather than the 5-10 minutes ``AppRoleCache`` uses for
 authorization data: an admin edit should not appear to "not take" for minutes.
 Bounding it to a minute keeps the burst win (a classroom arrives inside a few
 seconds) while keeping admin feedback close to immediate.
+
+A minute is still too long for an admin console reading its own write back, and
+cross-task invalidation is not available, so admin list reads bypass the cache
+(``list_providers(fresh=True)``) instead of relying on the TTL.
 """
 
 from __future__ import annotations

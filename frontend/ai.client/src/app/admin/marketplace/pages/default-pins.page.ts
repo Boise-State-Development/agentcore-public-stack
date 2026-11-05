@@ -18,8 +18,8 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { firstValueFrom } from 'rxjs';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
-import { AppRolesService } from '../../roles/services/app-roles.service';
-import { AppRole } from '../../roles/models/app-role.model';
+import { RoleOptionsService } from '../../roles/services/role-options.service';
+import { AppRoleOption } from '../../roles/models/app-role.model';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import {
   AdminListingRow,
@@ -437,13 +437,13 @@ interface StagedPin {
 })
 export class MarketplaceDefaultPinsPage implements OnInit {
   private service = inject(AdminMarketplaceService);
-  private rolesService = inject(AppRolesService);
+  private rolesService = inject(RoleOptionsService);
   private dialog = inject(Dialog);
 
   readonly maxPins = MAX_ROLE_PINS;
   readonly lockWarnThreshold = LOCK_WARN_THRESHOLD;
 
-  readonly roles = signal<AppRole[]>([]);
+  readonly roles = signal<AppRoleOption[]>([]);
   readonly roleId = signal('');
   readonly roleLabel = signal('');
   readonly fallbackOnly = signal(false);
@@ -501,10 +501,9 @@ export class MarketplaceDefaultPinsPage implements OnInit {
         this.rolesService.fetchRoles(),
         this.service.loadListings(),
       ]);
-      // Highest priority first, matching how the shelf orders seeds from several roles.
-      const roles = [...(roleList.roles ?? [])].sort(
-        (a, b) => b.priority - a.priority || a.roleId.localeCompare(b.roleId),
-      );
+      // Already highest priority first (then by id), matching how the shelf orders
+      // seeds from several roles; the server sorts so priority never leaves it.
+      const roles = roleList.roles ?? [];
       this.roles.set(roles);
       this.listings.set(listings);
       if (roles.length && !this.roleId()) {

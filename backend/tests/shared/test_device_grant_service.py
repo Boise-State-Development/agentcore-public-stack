@@ -9,6 +9,7 @@ claim decides the winner — so stubbing the repository would test nothing.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 import boto3
@@ -66,6 +67,18 @@ def codec() -> CookieCodec:
     )
     c._cipher = AESGCM(b"\x01" * 32)
     return c
+
+
+def serialize_writes(repository: DeviceGrantRepository) -> None:
+    """Make the moto table's ``update_item`` atomic, as DynamoDB's is per item."""
+    lock = threading.Lock()
+    real_update_item = repository._table.update_item
+
+    def update_item(**kwargs):
+        with lock:
+            return real_update_item(**kwargs)
+
+    repository._table.update_item = update_item
 
 
 @pytest.fixture
@@ -498,7 +511,7 @@ class TestPollClaim:
         assert second.error == "invalid_grant"
 
     @pytest.mark.asyncio
-    async def test_concurrent_polls_hand_over_exactly_one_session(self, service, seeded_session) -> None:
+    async def test_concurrent_polls_hand_over_exactly_one_session(self, service, grants, seeded_session) -> None:
         """The headline property. Two CLIs sharing one session would tumble
         each other's Cognito refresh, which the per-session lock exists to
         prevent — so it must never happen in the first place.
@@ -509,6 +522,10 @@ class TestPollClaim:
         handed over, which is the invariant under test.
         """
         auth, _ = await _authorize_and_approve(service, seeded_session)
+        # Same moto gap as the approval race: its update_item is not atomic
+        # across threads, so the claim's condition could pass for several
+        # callers. The lock stands in for DynamoDB's per-item atomicity.
+        serialize_writes(grants)
 
         results = await asyncio.gather(*(service.poll(device_code=auth.device_code) for _ in range(8)))
 
