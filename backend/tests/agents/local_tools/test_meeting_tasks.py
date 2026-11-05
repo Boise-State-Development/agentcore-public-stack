@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from agents.local_tools import meeting_tasks as mt
-from agents.local_tools.oauth_binding import bind_oauth_provider, oauth_provider_for
+from agents.local_tools.oauth_binding import bind_oauth_provider, bound_connector_id
 from agents.main_agent.integrations import oauth_token_cache
 from apis.shared.oauth.auth_failure import looks_like_auth_failure
 from apis.shared.tools.injected import MEETING_TASKS_TOOL_IDS
@@ -128,7 +128,7 @@ class TestContract:
             USER,
             {"google_calendar_meetings": "g", "zoom_meeting_transcripts": "z", "github_issues_local": None},
         )
-        bound = {t.tool_name: oauth_provider_for(t) for t in tools}
+        bound = {t.tool_name: bound_connector_id(t) for t in tools}
         assert bound == {
             "list_calendar_meetings": "g",
             "list_zoom_recordings": "z",
@@ -153,9 +153,9 @@ class TestContract:
         class Obj:
             pass
 
-        assert oauth_provider_for(Obj()) is None
-        assert oauth_provider_for(bind_oauth_provider(Obj(), "x")) == "x"
-        assert oauth_provider_for(bind_oauth_provider(Obj(), "")) is None
+        assert bound_connector_id(Obj()) is None
+        assert bound_connector_id(bind_oauth_provider(Obj(), "x")) == "x"
+        assert bound_connector_id(bind_oauth_provider(Obj(), "")) is None
 
     @pytest.mark.asyncio
     async def test_unbound_family_explains_the_missing_connector(self):

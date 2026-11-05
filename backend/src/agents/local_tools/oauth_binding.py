@@ -6,7 +6,7 @@ tool that calls a vendor REST API on the user's behalf — Zoom, Google
 Calendar, GitHub — has no client to key on, so it carries the provider id
 itself: the factory that builds it calls :func:`bind_oauth_provider`, and
 ``BaseAgent._build_oauth_consent_hook`` reads it back with
-:func:`oauth_provider_for`.
+:func:`bound_connector_id`.
 
 That is the whole contract. With the id on the tool object, the consent hook
 treats the tool exactly like an OAuth-gated MCP tool: it warms the token
@@ -41,6 +41,6 @@ def bind_oauth_provider(tool_obj: Any, provider_id: Optional[str]) -> Any:
     return tool_obj
 
 
-def oauth_provider_for(tool_obj: Any) -> Optional[str]:
+def bound_connector_id(tool_obj: Any) -> Optional[str]:
     """The connector id a local tool was bound to, or None for any other tool."""
     return getattr(tool_obj, _ATTR, None)
