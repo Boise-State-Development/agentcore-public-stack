@@ -7,6 +7,9 @@
 
 export type UserStatus = 'active' | 'inactive' | 'suspended';
 
+/** A status filter: one status, or every status. */
+export type UserStatusFilter = UserStatus | 'all';
+
 // ========== User List Item ==========
 
 export interface UserListItem {
@@ -88,14 +91,15 @@ export interface UserDetailResponse {
 // ========== Request Options ==========
 
 export interface UserListRequestOptions {
-  status?: UserStatus;
+  status?: UserStatusFilter;
   domain?: string;
   limit?: number;
   cursor?: string;
 }
 
-export interface UserSearchOptions {
-  email: string;
+/** `GET /admin/users/search`: part of a name, email or user id, plus the list filters. */
+export interface UserSearchOptions extends UserListRequestOptions {
+  q: string;
 }
  
 

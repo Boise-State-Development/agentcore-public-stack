@@ -41,15 +41,23 @@ describe('UserHttpService', () => {
     req.flush(mockResponse);
   });
 
-  it('should search by email', () => {
-    const mockResponse = { users: [{ id: 'user1', email: 'test@example.com' }], total: 1 };
+  it('searches with a query, the list filters and a cursor', () => {
+    const mockResponse = { users: [{ userId: 'user1', email: 'test@example.com' }], totalCount: 1 };
 
-    service.searchByEmail('test@example.com').subscribe(response => {
-      expect(response).toEqual(mockResponse);
-    });
+    service
+      .searchUsers({ q: 'oscar', status: 'all', domain: 'example.com', limit: 25, cursor: 'c1' })
+      .subscribe((response) => {
+        expect(response).toEqual(mockResponse);
+      });
 
-    const req = httpMock.expectOne(r => r.url.includes('/admin/users/search') && r.params.get('email') === 'test@example.com');
+    const req = httpMock.expectOne((r) => r.url.endsWith('/admin/users/search'));
     expect(req.request.method).toBe('GET');
+    expect(req.request.params.get('q')).toBe('oscar');
+    expect(req.request.params.get('status')).toBe('all');
+    expect(req.request.params.get('domain')).toBe('example.com');
+    expect(req.request.params.get('limit')).toBe('25');
+    expect(req.request.params.get('cursor')).toBe('c1');
+    expect(req.request.params.has('email')).toBe(false);
     req.flush(mockResponse);
   });
 

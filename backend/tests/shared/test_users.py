@@ -101,6 +101,11 @@ class TestUserRepositoryEnabled:
         assert len(items) == 1
         assert items[0].user_id == "u1"
 
+    def test_list_item_status_comes_from_status_index_key(self, user_repository):
+        """StatusLoginIndex projects no ``status``; its partition key carries it."""
+        item = {"userId": "u2", "email": "u2@example.com", "GSI3PK": "STATUS#suspended", "GSI3SK": "2026-01-01T00:00:00Z"}
+        assert user_repository._item_to_list_item(item).status == UserStatus.SUSPENDED
+
 
 class TestUserRepositoryDisabled:
     @pytest.fixture()
