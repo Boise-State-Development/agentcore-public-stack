@@ -51,6 +51,23 @@ describe('ErrorService', () => {
       expect(result.code).toBe(ErrorCode.FORBIDDEN);
     });
 
+    it('never includes the request URL in the technical details', () => {
+      const url = 'https://host/api/tools/secret_tool/capabilities';
+      const withDetail = service.handleHttpError({
+        status: 403, error: { detail: 'Access denied' }, message: `Http failure response for ${url}`, url,
+      } as never);
+      const withoutDetail = service.handleHttpError({
+        status: 500, error: null, message: 'boom', url,
+      } as never);
+
+      for (const result of [withDetail, withoutDetail]) {
+        expect(result.detail).toContain('Status:');
+        expect(result.detail).not.toContain('URL:');
+        expect(result.detail).not.toContain('secret_tool');
+        expect(result.detail).not.toContain('https://host');
+      }
+    });
+
     it('should handle 404 Not Found', () => {
       const error = { status: 404, error: { detail: 'Resource not found' }, message: 'Not Found' };
       

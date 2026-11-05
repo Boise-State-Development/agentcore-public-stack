@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
-import { HttpRequest, HttpResponse, HttpErrorResponse, HttpHandlerFn } from '@angular/common/http';
-import { errorInterceptor } from './error.interceptor';
+import { HttpContext, HttpRequest, HttpResponse, HttpErrorResponse, HttpHandlerFn } from '@angular/common/http';
+import { errorInterceptor, SUPPRESS_ERROR_TOAST } from './error.interceptor';
 import { ErrorService } from '../services/error/error.service';
 import { SessionService } from './session.service';
 import { of, throwError } from 'rxjs';
@@ -190,6 +190,44 @@ describe('errorInterceptor', () => {
         errorInterceptor(req, nextFn).subscribe({
           next: (response) => {
             expect(errorService.handleHttpError).not.toHaveBeenCalled();
+            resolve();
+          },
+        });
+      });
+    });
+  });
+
+  it('does not toast a 403 when the request sets SUPPRESS_ERROR_TOAST, but still propagates it', async () => {
+    const url = 'http://localhost:8000/tools/some_tool/capabilities';
+    const error = new HttpErrorResponse({ status: 403, url });
+    const nextFn: HttpHandlerFn = vi.fn().mockReturnValue(throwError(() => error));
+    const req = new HttpRequest('GET', url, {
+      context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true),
+    });
+
+    await new Promise<void>((resolve) => {
+      TestBed.runInInjectionContext(() => {
+        errorInterceptor(req, nextFn).subscribe({
+          error: (e) => {
+            expect(e).toBe(error);
+            expect(errorService.handleHttpError).not.toHaveBeenCalled();
+            resolve();
+          },
+        });
+      });
+    });
+  });
+
+  it('still toasts a 403 on a request that does not opt out', async () => {
+    const url = 'http://localhost:8000/tools/preferences';
+    const error = new HttpErrorResponse({ status: 403, url });
+    const nextFn: HttpHandlerFn = vi.fn().mockReturnValue(throwError(() => error));
+
+    await new Promise<void>((resolve) => {
+      TestBed.runInInjectionContext(() => {
+        errorInterceptor(new HttpRequest('PUT', url, {}), nextFn).subscribe({
+          error: () => {
+            expect(errorService.handleHttpError).toHaveBeenCalledWith(error);
             resolve();
           },
         });
