@@ -4,6 +4,62 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.33.0] - 2026-11-04
+
+Ask for more quota, hand work off with a model-written brief, see the account's AWS limits, and turn meetings into GitHub Project items. Every new feature is behind an in-development flag, off by default. Roles gain system instructions, Haiku 5.5 is curated, and app-api's DynamoDB grants are prefix-scoped. No GSI changes; no backfills.
+
+### 🚀 Added
+
+- **Quota requests, extensions and chargeback** (in development: `QUOTA_REQUESTS_ENABLED` / `CDK_QUOTA_REQUESTS_ENABLED`, `features.quotaRequests`). Users request more quota from the composer, the blocked state or Settings → Usage; admins grant additive extensions that stack on the resolved tier, and a chargeback report closes its ledger lazily. app-api only (#1813, #1815, #1821, #1829, #1831)
+- **Handoffs, SPA and brief** (in development: `HANDOFFS_ENABLED`, `features.handoffs`; `HANDOFF_BRIEF_ENABLED` / `CDK_HANDOFF_BRIEF_ENABLED`, `features.handoffBrief`). Review sheet, background send and handoff row; a brief the source's own model writes from its prompt cache; relayed prompts; inbox entries and browser notifications (#1748, #1849, #1854, #1859, #1863)
+- **AWS Limits admin page** (in development: `AWS_LIMITS_ENABLED` / `CDK_AWS_LIMITS_ENABLED`, `features.awsLimits`). Service Quotas with usage, 7-day peaks, Bedrock model usage and increase requests; Service Quotas IAM exists only while on (#1842, #1866, #1875)
+- **Meeting transcripts to GitHub issues** (in development: `MEETING_TASKS_ENABLED` / `CDK_MEETING_TASKS_ENABLED`, Runtime only). Tool families `google_calendar_meetings`, `zoom_meeting_transcripts`, `github_issues_local`, seeded off and not public (#1822, #1836, #1840)
+- **Project file readiness** (in development: `PROJECT_FILE_READINESS_ENABLED` / `CDK_PROJECT_FILE_READINESS_ENABLED`, `features.projectFileReadiness`). A strip above a project composer and a per-turn note naming files the model cannot see yet (#1838, #1839)
+- **AgentCore Web Search as a Gateway connector**, and a default of 5 results behind `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED` / `CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED` (in development, Runtime only) (#1819, #1817)
+- **Role system instructions.** `AppRole.system_instruction` (8,000 chars) composed into plain chats between the base prompt and the active mode; admin role editor field (#1864)
+- **Claude Haiku 5.5 curated**, with the preserved-thinking `drop_block` binding (#1853)
+- Connector picker offers all 24 AgentCore OAuth vendors; Entra tenant ID on Microsoft connectors; the OAuth connector picker on built-in tools (#1867, #1830)
+- Delegated admins: a models admin can add a curated model; a read-only role list feeds role pickers (#1857, #1858)
+- Eval harness: large-document cases, judge model controls, orphan sweep, nightly track against dev, Haiku 5.5 baseline (#1810, #1812, #1820, #1865)
+
+### ✨ Improved
+
+- Handoff brief input is billed at the prompt-cache read rate (#1849)
+- AWS Limits starts on Adjustable only with a Hide unused toggle (#1875)
+- `resolve_turn_agent` and the prompt-composition phases extracted from the inference route (#1847)
+
+### 🐛 Fixed
+
+- A new Agent's or Project's files no longer wait up to 15 minutes at "Setting up"; the first upload invokes the migration worker directly (#1837)
+- Reading a project file that is not ready returns a result instead of failing the call; the readiness strip counts failures, keeps polling and passes AA contrast in dark mode (#1839, #1841)
+- A quota decision shows at once; a revoked extension on an approved request is labelled (#1816)
+- A cancelled handoff brief is metered as an estimate (#1856); the notification bell no longer under-counts (#1862)
+- Admins are told why AgentCore rejected a connector config; the connector list is no longer stale across tasks (#1871, #1872)
+- Sidebar session lists get their own drop-list ids, so dragging works with pinned Agents (#1823)
+- Nightly teardown retries a failed stack delete; `destroy.sh` empties buckets itself; `log_success` defined in `managed-kb.sh` (#1844, #1808)
+
+### ⚠️ Changed
+
+- A client-supplied `system_prompt` on `/chat/stream` is ignored outside `preview-` sessions (#1864)
+- The local GitHub tool family id is `github_issues_local` (#1836)
+
+### 🔒 Security
+
+- Dependabot alerts patched (`pyasn1`, `@hono/node-server`); unused `authlib` removed (#1848)
+
+### 🏗️ Infrastructure
+
+- app-api's DynamoDB grants are scoped by table-name prefix and the Runtime's are compacted; expect ~30–40 s of `AccessDenied` on the role while the policy propagates (#1806)
+- Four SSM parameters nothing read are dropped
+
+### 📦 Dependencies
+
+- `strands-agents` 1.61.1 → 1.63.0 (#1850); `aws-opentelemetry-distro` 0.19.0 → 0.22.0; `pyasn1` 0.6.4 → 0.6.5
+
+### 📚 Docs
+
+- Docs-site and README rewritten for a public-sector audience; new specs for quota requests, the handoff brief, meeting tasks, spoken audio, and rewind's long-term-memory residue (#1855, #1860, #1861)
+
 ## [1.32.0] - 2026-10-30
 
 The terminal client becomes a first-class way in: `aps-tui` signs in with the same session as the browser (device authorization), holds a real conversation with the agent, reaches projects, Agents, skills and saved conversations, and can run tools on the user's own machine with their approval. Conversations can be rewound to an earlier message or forked from one (in development, default off; on in our dev and prod environments). Every skill bound on a Shared Project now runs for every member, and the agent can list and read a project's Files by name. Agents can be duplicated and pinned to the sidebar. Two production app-api task deaths are fixed at the root (a PDFium crash and a 3.5-minute event-loop block), with a faster health check and a new event-loop lag alarm around them. An evaluation harness drives a golden set through dev and scores it against a committed baseline. **Three things need attention:** the load balancer now accepts traffic only from CloudFront (`CDK_ALB_RESTRICT_TO_CLOUDFRONT`, default on), one backfill (`backfill_project_skill_adders.py`) must be run on each environment with projects, and the bootstrap seed should be re-run so the `web_research` skill picks up its new description. New flags: `SESSION_REWIND_ENABLED` and `SESSION_FORK_ENABLED` (default off; set on in `development` and `production`). No GSI changes.

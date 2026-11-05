@@ -10,7 +10,7 @@
 **The open-source AI platform for universities and state & local government.**
 *Chat, agents, tools, knowledge and governance, deployed into an AWS account you control. Built by Boise State University, designed for every public institution.*
 
-[![Release](https://img.shields.io/badge/Release-v1.32.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+[![Release](https://img.shields.io/badge/Release-v1.33.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
 [![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
 [![Docs](https://img.shields.io/badge/Docs-boise--state--development.github.io-0ea5e9?style=flat&logo=readthedocs&logoColor=white)](https://boise-state-development.github.io/agentcore-public-stack/)
 
@@ -296,7 +296,7 @@ agentcore-public-stack/
 
 See [RELEASE_NOTES.md](RELEASE_NOTES.md) for every release: new features, fixes, platform upgrades, breaking changes and the manual steps a deployment needs.
 
-**Current release:** v1.32.0
+**Current release:** v1.33.0
 
 ---
 
