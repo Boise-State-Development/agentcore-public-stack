@@ -728,7 +728,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.deploy_ref || needs.resolve-tracks.outputs.e2e_ref || needs.resolve-tracks.outputs.eval_ref || 'develop' }}
+          ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.deploy_ref || needs.resolve-tracks.outputs.e2e_ref || 'develop' }}
 
       - name: Generate nightly summary
         env:
