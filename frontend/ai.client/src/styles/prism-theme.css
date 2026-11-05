@@ -1,0 +1,104 @@
+/*
+ * Prism syntax colors, light and dark.
+ *
+ * Replaces the stock okaidia stylesheet, which is dark-only. Only token
+ * colors live here: the block's background, padding and font size belong to
+ * the `.message-block pre` rules in styles.css, so the code surface matches
+ * the rest of the markdown in either theme. Dark follows `html.dark`, the
+ * same switch ThemeService drives for everything else.
+ */
+
+code[class*="language-"],
+pre[class*="language-"] {
+    color: var(--color-gray-800);
+    text-shadow: none;
+    white-space: pre;
+    word-spacing: normal;
+    word-break: normal;
+    word-wrap: normal;
+    tab-size: 4;
+    hyphens: none;
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata { color: var(--color-gray-500); font-style: italic; }
+
+.token.punctuation { color: var(--color-gray-600); }
+
+.token.property,
+.token.tag,
+.token.constant,
+.token.symbol,
+.token.deleted { color: var(--color-red-700); }
+
+.token.boolean,
+.token.number { color: var(--color-orange-700); }
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted { color: var(--color-green-700); }
+
+.token.operator,
+.token.entity,
+.token.url { color: var(--color-gray-600); }
+
+.token.atrule,
+.token.attr-value,
+.token.keyword { color: var(--color-blue-700); }
+
+.token.function,
+.token.class-name { color: var(--color-purple-700); }
+
+.token.regex,
+.token.important,
+.token.variable { color: var(--color-amber-700); }
+
+.token.important,
+.token.bold { font-weight: 600; }
+
+.token.italic { font-style: italic; }
+
+html.dark code[class*="language-"],
+html.dark pre[class*="language-"] { color: var(--color-gray-100); }
+
+html.dark .token.comment,
+html.dark .token.prolog,
+html.dark .token.doctype,
+html.dark .token.cdata { color: var(--color-gray-400); }
+
+html.dark .token.punctuation,
+html.dark .token.operator,
+html.dark .token.entity,
+html.dark .token.url { color: var(--color-gray-300); }
+
+html.dark .token.property,
+html.dark .token.tag,
+html.dark .token.constant,
+html.dark .token.symbol,
+html.dark .token.deleted { color: var(--color-red-400); }
+
+html.dark .token.boolean,
+html.dark .token.number { color: var(--color-orange-300); }
+
+html.dark .token.selector,
+html.dark .token.attr-name,
+html.dark .token.string,
+html.dark .token.char,
+html.dark .token.builtin,
+html.dark .token.inserted { color: var(--color-green-400); }
+
+html.dark .token.atrule,
+html.dark .token.attr-value,
+html.dark .token.keyword { color: var(--color-blue-400); }
+
+html.dark .token.function,
+html.dark .token.class-name { color: var(--color-purple-300); }
+
+html.dark .token.regex,
+html.dark .token.important,
+html.dark .token.variable { color: var(--color-amber-300); }

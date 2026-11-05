@@ -5,6 +5,7 @@
    same theme this global sheet emits. See styles/theme.css header. */
 @import './styles/theme.css';
 @import '@ctrl/ngx-emoji-mart/picker';
+@import './styles/prism-theme.css';
 
 @font-face {
     font-family: 'InterVariable';
