@@ -1,7 +1,16 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import { ConfigService } from '../config.service';
+
+/**
+ * Both requests are handled by their callers (a `failed` entry, an inline
+ * prompt error), so the global toast would only duplicate that. For a tool the
+ * user cannot reach it would also surface an "Access Denied" on a page they are
+ * allowed to open.
+ */
+const QUIET = { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) };
 
 /**
  * One argument an MCP prompt accepts.
@@ -150,7 +159,7 @@ export class ToolCapabilityService {
     this.entries.update((current) => ({ ...current, [toolId]: { state: 'loading' } }));
     try {
       const value = normalize(
-        await firstValueFrom(this.http.get<ToolCapabilities>(this.url(toolId))),
+        await firstValueFrom(this.http.get<ToolCapabilities>(this.url(toolId), QUIET)),
       );
       this.entries.update((current) => ({
         ...current,
@@ -177,7 +186,7 @@ export class ToolCapabilityService {
       `${this.config.appApiUrl()}/tools/${encodeURIComponent(toolId)}` +
       `/prompts/${encodeURIComponent(promptName)}`;
     return firstValueFrom(
-      this.http.post<ResolvedPrompt>(url, { arguments: args }),
+      this.http.post<ResolvedPrompt>(url, { arguments: args }, QUIET),
     );
   }
 

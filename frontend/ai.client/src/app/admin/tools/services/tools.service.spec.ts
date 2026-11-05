@@ -4,6 +4,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { ToolsService } from './tools.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { ConfigService } from '../../../services/config.service';
 describe('ToolsService', () => {
   let service: ToolsService;
@@ -48,5 +49,23 @@ describe('ToolsService', () => {
     const result = service.getToolsByCategory();
     expect(result.get('search')).toHaveLength(2);
     expect(result.get('analysis')).toHaveLength(1);
+  });
+
+  it('fetches the catalog and my-permissions without a global error toast', async () => {
+    const catalog = service.fetchCatalog();
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne('http://localhost:8000/tools/catalog');
+      expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+      req.flush({ tools: [], total: 0 });
+    });
+    await catalog;
+
+    const perms = service.fetchMyPermissions();
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne('http://localhost:8000/tools/my-permissions');
+      expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+      req.flush({});
+    });
+    await perms;
   });
 });
