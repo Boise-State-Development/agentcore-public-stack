@@ -103,6 +103,18 @@
                 <ng-icon name="heroArrowUpOnSquare" class="size-4" aria-hidden="true" />
                 <span>Share</span>
               </button>
+              @if (canPinCurrent()) {
+                <button
+                  cdkMenuItem
+                  type="button"
+                  (click)="onTogglePinClick($event)"
+                  class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitem"
+                >
+                  <ng-icon [name]="isCurrentPinned() ? 'appPinOff' : 'appPin'" class="size-4" aria-hidden="true" />
+                  <span>{{ isCurrentPinned() ? 'Unpin' : 'Pin' }}</span>
+                </button>
+              }
               <button
                 cdkMenuItem
                 type="button"

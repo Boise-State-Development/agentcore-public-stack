@@ -15,11 +15,12 @@ import { UserService } from '../../auth/user.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../confirmation-dialog';
+import { appPin, appPinOff } from '../sidenav/components/session-list/pin-icons';
 
 @Component({
   selector: 'app-topnav',
   imports: [NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
-  providers: [provideIcons({ heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen })],
+  providers: [provideIcons({ heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, appPin, appPinOff })],
   templateUrl: './topnav.html',
   styleUrl: './topnav.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -219,6 +220,48 @@ export class Topnav {
       void this.sessionService.markSessionUnread(session);
       this.chatStateService.markSessionUnread(session.sessionId);
     }
+  }
+
+  /** The active session is pinned (optimistic pins included, so the label flips at once). */
+  protected readonly isCurrentPinned = computed(() =>
+    this.sessionService.pinnedSessionIds().has(this.currentSession().sessionId),
+  );
+
+  /**
+   * Same rule as the sidebar's `canPin`: project tasks already list under their
+   * project, so they can't be pinned. Checked whatever the Projects flag, as the
+   * sidebar does. The list row covers a new conversation whose preferences
+   * haven't reached `currentSession` yet.
+   */
+  protected readonly canPinCurrent = computed(() => {
+    const session = this.currentSession();
+    if (session.preferences?.projectId) return false;
+    const listed = this.sessionService.mergedSessionsResource().sessions.find(s => s.sessionId === session.sessionId);
+    return !listed?.preferences?.projectId;
+  });
+
+  /**
+   * Pins or unpins the active session. The sidebar row moves right away
+   * (optimistic); a failed request moves it back and shows a toast.
+   */
+  protected onTogglePinClick(event: Event): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const sessionId = this.currentSession().sessionId;
+    const pin = !this.isCurrentPinned();
+
+    // Deferred past the CDK menu's close: a signal write inside the menu-item
+    // click can be swallowed by the overlay teardown's change-detection pass
+    // (zoneless), as the sidebar's menu found (SessionList.onToggleReadClick).
+    queueMicrotask(() => {
+      this.sessionService.setSessionPinned(sessionId, pin).catch(error => {
+        console.error('Failed to update pin:', error);
+        this.toastService.error(
+          pin ? 'Failed to pin' : 'Failed to unpin',
+          'There was an error updating the conversation. Please try again.'
+        );
+      });
+    });
   }
 
   /**

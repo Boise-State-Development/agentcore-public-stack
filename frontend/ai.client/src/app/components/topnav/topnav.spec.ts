@@ -24,6 +24,9 @@ describe('Topnav', () => {
       markSessionRead: vi.fn(),
       markSessionUnread: vi.fn(),
       refreshSessions: vi.fn(),
+      pinnedSessionIds: signal(new Set<string>()),
+      setSessionPinned: vi.fn().mockResolvedValue(undefined),
+      mergedSessionsResource: signal({ sessions: [] as any[] }),
     };
     loadingSessionIds = new Set<string>();
     mockChatStateService = {
@@ -124,5 +127,63 @@ describe('Topnav', () => {
       expect(mockSessionService.refreshSessions).toHaveBeenCalled();
       expect(mockSessionService.markSessionUnread).not.toHaveBeenCalled();
     });
+  });
+});
+
+// Pin/Unpin in the header menu mirrors the sidebar row menu's item.
+describe('Topnav pin toggle', () => {
+  const flush = () => new Promise<void>(resolve => queueMicrotask(resolve));
+  let sessionService: any;
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    sessionService = {
+      currentSession: signal<any>({ sessionId: 'sess-1', title: 'T' }),
+      sessionMetadataResource: { isLoading: signal(false) },
+      pinnedSessionIds: signal(new Set<string>()),
+      setSessionPinned: vi.fn().mockResolvedValue(undefined),
+      mergedSessionsResource: signal({ sessions: [] as any[] }),
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: Router, useValue: { navigate: vi.fn() } },
+        { provide: SessionService, useValue: sessionService },
+        { provide: ChatStateService, useValue: { isSessionLoading: () => false } },
+        { provide: SidenavService, useValue: { open: vi.fn() } },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function create() {
+    const { Topnav } = await import('./topnav');
+    return TestBed.runInInjectionContext(() => new Topnav()) as any;
+  }
+
+  it('pins an unpinned conversation and unpins a pinned one', async () => {
+    const component = await create();
+    component.onTogglePinClick(new Event('click'));
+    await flush();
+    expect(sessionService.setSessionPinned).toHaveBeenLastCalledWith('sess-1', true);
+
+    sessionService.pinnedSessionIds.set(new Set(['sess-1']));
+    expect(component.isCurrentPinned()).toBe(true);
+    component.onTogglePinClick(new Event('click'));
+    await flush();
+    expect(sessionService.setSessionPinned).toHaveBeenLastCalledWith('sess-1', false);
+  });
+
+  it('hides Pin for a project task, as the sidebar does', async () => {
+    const component = await create();
+    expect(component.canPinCurrent()).toBe(true);
+
+    sessionService.currentSession.set({ sessionId: 'sess-1', title: 'T', preferences: { projectId: 'p1' } });
+    expect(component.canPinCurrent()).toBe(false);
+
+    // A new task whose preferences have only reached the list row so far.
+    sessionService.currentSession.set({ sessionId: 'sess-1', title: 'T' });
+    sessionService.mergedSessionsResource.set({ sessions: [{ sessionId: 'sess-1', preferences: { projectId: 'p1' } }] });
+    expect(component.canPinCurrent()).toBe(false);
   });
 });
