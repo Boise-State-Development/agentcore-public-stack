@@ -270,14 +270,14 @@ class TestRouteBuilder:
     @pytest.mark.asyncio
     async def test_builds_enabled_families_bound_to_their_row_connectors(self, monkeypatch, caplog):
         monkeypatch.setenv("MEETING_TASKS_ENABLED", "true")
-        from agents.local_tools.oauth_binding import oauth_provider_for
+        from agents.local_tools.oauth_binding import bound_connector_id
         from apis.inference_api.chat.routes import _build_meeting_tools
 
         rows = [_row("zoom_meeting_transcripts", provider="zoom-conn"), _row("github_issues_local")]
         with _patch_catalog(rows), caplog.at_level("WARNING", logger="apis.inference_api.chat.routes"):
             tools = await _build_meeting_tools(["zoom_meeting_transcripts", "github_issues_local", "calculator"], USER)
 
-        assert [(t.tool_name, oauth_provider_for(t)) for t in tools] == [
+        assert [(t.tool_name, bound_connector_id(t)) for t in tools] == [
             ("list_zoom_recordings", "zoom-conn"),
             ("get_zoom_transcript", "zoom-conn"),
             ("list_github_projects", None),
