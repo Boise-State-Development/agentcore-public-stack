@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+from agents.main_agent.session.compaction_policy import CompactionPolicy  # noqa: E402
 from compaction_quality.arms import default_arms, history_tokens, plant_availability, simulate  # noqa: E402
 from compaction_quality.ask import build_request, estimate_cost  # noqa: E402
 from compaction_quality.corpus import CorpusConfig, build_transcript, message_text  # noqa: E402
@@ -98,6 +99,19 @@ class TestArms:
         run = simulate(transcript, arms["legacy"], pace="warm", overhead_tokens=40_000)
         assert run.live_offset == 0
         assert len(run.history) == len(transcript.messages)
+
+    @pytest.mark.parametrize("name, ceiling, floor", [
+        ("idle_50_20", 50_000, 20_000), ("idle_75_25", 75_000, 25_000), ("idle_50_30", 50_000, 30_000),
+    ])
+    def test_idle_cut_arms_resolve_to_their_ceiling_and_floor(self, arms, name, ceiling, floor):
+        policy = CompactionPolicy.resolve(arms[name].config, 200_000)
+        assert (policy.ceiling, policy.floor) == (ceiling, floor)
+
+    def test_idle_cut_cuts_earlier_than_production(self, transcript, arms):
+        prod = simulate(transcript, arms["model_relative"], pace="cold")
+        idle = simulate(transcript, arms["idle_50_20"], pace="cold")
+        assert idle.cuts > prod.cuts
+        assert idle.probe_input_tokens < prod.probe_input_tokens
 
     def test_restore_pace_is_deterministic(self, transcript, arms):
         a = simulate(transcript, arms["model_relative"], overhead_tokens=40_000)

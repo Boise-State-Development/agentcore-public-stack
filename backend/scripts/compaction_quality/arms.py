@@ -55,6 +55,13 @@ HAIKU_4_5 = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 NOVA_2_LITE = "us.amazon.nova-2-lite-v1:0"
 NOVA_MICRO = "us.amazon.nova-micro-v1:0"
 
+# (arm, ceiling, floor) in tokens, the cost replay's surviving candidates.
+IDLE_CUTS = (
+    ("idle_50_20", 50_000, 20_000),
+    ("idle_75_25", 75_000, 25_000),
+    ("idle_50_30", 50_000, 30_000),
+)
+
 
 @dataclass(frozen=True)
 class Arm:
@@ -113,6 +120,16 @@ def default_arms(*, summary_model_enabled: bool = False) -> Dict[str, Arm]:
             "floor_50", CompactionConfig(floor_ratio=0.5, **base),
             "Tuning arm: production policy with a shallower cut (floor = half the ceiling).",
         ),
+        # Idle-time compaction candidates (scoping/2026-11-04-idle-compaction-cost-replay.md §5):
+        # production's cut, triggered at a lower ceiling. Run them on the ``cold`` pace, where
+        # every gap is past the TTL, so the cut lands when the cache has already expired.
+        **{
+            name: Arm(
+                name, CompactionConfig(ceiling_cap_tokens=ceiling, floor_ratio=floor / ceiling, **base),
+                f"Idle-cut candidate: ceiling {ceiling // 1000}k, floor {floor // 1000}k.",
+            )
+            for name, ceiling, floor in IDLE_CUTS
+        },
     }
 
 
