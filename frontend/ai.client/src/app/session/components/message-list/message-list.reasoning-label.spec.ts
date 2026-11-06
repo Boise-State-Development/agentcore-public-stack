@@ -38,6 +38,12 @@ describe('MessageListComponent — reasoning label', () => {
     { id: 'a1', role: 'assistant', content },
   ];
 
+  /**
+   * Deliberately NO `detectChanges`, as in `message-list.turn-recap.spec.ts`:
+   * the label is a computed over signals and needs no render, and rendering
+   * an assistant message pulls ngx-markdown into a KaTeX dependency whose
+   * async render rejects after teardown, which fails the CI run.
+   */
   function label(messages: Message[], phase?: AgentStatusEvent['phase']): string | null {
     fixture = TestBed.createComponent(MessageListComponent);
     fixture.componentRef.setInput('messages', messages);
@@ -51,7 +57,6 @@ describe('MessageListComponent — reasoning label', () => {
         cycle: 1,
       } as AgentStatusEvent);
     }
-    fixture.detectChanges();
     return (
       fixture.componentInstance as unknown as { loaderStatus: () => string | null }
     ).loaderStatus();
