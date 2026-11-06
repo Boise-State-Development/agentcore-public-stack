@@ -33,14 +33,13 @@ from apis.shared.sessions.search_text import first_prompt_value, normalize_searc
 AWS_KB_ID = "KBTESTCONV1"
 
 
+def _recent_iso() -> str:
+    """A turn time an hour ago. A fixed date ages past the retention window."""
+    then = datetime.now(timezone.utc) - timedelta(hours=1)
+    return then.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 # ── fakes ────────────────────────────────────────────────────────────────────
-def _days_ago(days: int) -> str:
-    """An index timestamp relative to now. The fixture's default used to be a
-    fixed date, and the retention test (30 days) went red the morning that
-    date fell out of the window, on every branch at once."""
-    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-
 @dataclass
 class Doc:
     session_id: str
@@ -48,7 +47,7 @@ class Doc:
     user_id: str
     text: str
     score: float = 0.5
-    created_at: str = field(default_factory=lambda: _days_ago(1))
+    created_at: str = field(default_factory=_recent_iso)
     project_id: Optional[str] = None
 
     @property
@@ -348,7 +347,7 @@ def test_deleted_rows_are_dropped_and_archived_rows_are_marked(tables, runtime):
 
 def test_turns_past_retention_are_dropped(tables, runtime, monkeypatch):
     monkeypatch.setenv("CONVERSATION_RETENTION_DAYS", "30")
-    old = _days_ago(45)
+    old = (datetime.now(timezone.utc) - timedelta(days=45)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     _session(tables, "user-a", "s1", "Chat")
     runtime.docs = [
         Doc("s1", 0, "user-a", "budget, long ago", score=0.9, created_at=old),

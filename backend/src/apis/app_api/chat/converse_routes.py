@@ -54,6 +54,8 @@ from apis.shared.sessions.models import (
 )
 
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
+from apis.shared.models.cache_points import bedrock_cache_points_supported
+from apis.shared.models.models import ManagedModel
 from apis.shared.models.retirement import resolve_effective_model, retired_model_message
 from apis.shared.models.mantle import (
     MantleApiMode,
@@ -297,6 +299,51 @@ def _build_converse_params(request: ConverseRequest) -> dict:
     return params
 
 
+_CACHE_POINT = {"cachePoint": {"type": "default"}}
+
+
+def _caches_prompt(model_id: str, record: Optional[ManagedModel]) -> bool:
+    """Whether a Bedrock Converse request for ``model_id`` gets cachePoints.
+
+    The decision the agent path makes for the same model: the catalog row's
+    ``supportsCaching`` (no row means on, as there), then the shared
+    model-family predicate, since a cachePoint sent to a model that cannot
+    cache fails the call with AccessDeniedException.
+    """
+    if record is not None and not record.supports_caching:
+        return False
+    return bedrock_cache_points_supported(model_id)
+
+
+def _with_cache_points(params: dict) -> dict:
+    """``params`` with Bedrock cachePoints added, leaving the input untouched.
+
+    - **After the system prompt**, so callers that send the same system
+      prompt with different messages read it instead of paying for it again.
+    - **After the last message, on a request of two or more messages.** A
+      client-held conversation's next request starts with this request's
+      whole message list, so it reads everything this one sent. A
+      single-message request is nearly always a one-shot. Replayed over 30
+      days of production calls, a point there paid the 1.25x write premium
+      and was rarely read.
+
+    Bedrock ignores a point below the model's minimum cacheable length and
+    charges nothing for it. ``_prefix_fingerprints`` hashes the params
+    without points, so they still match a request to its predecessor.
+    """
+    cached = dict(params)
+    if cached.get("system"):
+        cached["system"] = [*cached["system"], _CACHE_POINT]
+    messages = cached["messages"]
+    if len(messages) > 1:
+        last = messages[-1]
+        cached["messages"] = [
+            *messages[:-1],
+            {**last, "content": [*last["content"], _CACHE_POINT]},
+        ]
+    return cached
+
+
 def _extract_reasoning_and_text(content_blocks: list) -> tuple[str, str | None]:
     """Extract text and optional reasoning from Bedrock response content blocks.
 
@@ -393,6 +440,7 @@ async def _stream_converse(
     user_id: str,
     key_id: str,
     release_slot: Callable[[], None] = _no_slot,
+    cache_prompt: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Call Bedrock converse_stream and yield SSE events.
 
@@ -404,8 +452,11 @@ async def _stream_converse(
 
     ``release_slot`` returns the in-flight slot the route acquired; it runs
     in ``finally`` so a disconnect or a mid-stream error frees it too.
+    ``cache_prompt`` adds cachePoints (``_with_cache_points``).
     """
     params = _build_converse_params(request)
+    if cache_prompt:
+        params = _with_cache_points(params)
 
     def _open_stream():
         # The client build runs here as well: a fresh boto3 client per
@@ -760,6 +811,11 @@ async def api_converse(
         # so a legacy row that predates it can't silently downgrade the model
         # to an uncached Chat Completions call.
         api_mode = MantleApiMode.RESPONSES
+    # Read only by the Bedrock Converse paths; the OpenAI surfaces cache
+    # server-side or not at all, and take no cachePoint.
+    cache_prompt = _caches_prompt(
+        request.model_id, effective.record if effective is not None else None
+    )
 
     # 2.9 In-flight cap for the Bedrock Converse paths. Those run boto3 on a
     # bounded worker pool (``bedrock_offload``), and a call the pool cannot
@@ -793,7 +849,7 @@ async def api_converse(
         else:
             generator = _stream_converse(
                 request, user_id=validated_key.user_id, key_id=validated_key.key_id,
-                release_slot=release_slot,
+                release_slot=release_slot, cache_prompt=cache_prompt,
             )
         return StreamingResponse(
             generator,
@@ -812,6 +868,8 @@ async def api_converse(
         )
 
     params = _build_converse_params(request)
+    if cache_prompt:
+        params = _with_cache_points(params)
 
     def _converse():
         # Client build and the blocking call both run on the worker pool.
