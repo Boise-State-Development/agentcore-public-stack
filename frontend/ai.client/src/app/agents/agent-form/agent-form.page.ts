@@ -44,6 +44,7 @@ import {
   BindableItem,
   BindableServerTool,
   ModelParamSpec,
+  ResponseStrictness,
   SupportedParams,
 } from '../models/agent.model';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
@@ -317,6 +318,25 @@ export class AgentFormPage implements OnInit, OnDestroy {
   /** #111: mirrors the showCitations control so the template can grey out and
    *  explain the dependent "Allow document downloads" toggle. */
   readonly liveShowCitations = signal(true);
+  /** #112: mirrors the responseStrictness control so the helper text follows the selection. */
+  readonly liveResponseStrictness = signal<ResponseStrictness>('balanced');
+  readonly strictnessOptions: { value: ResponseStrictness; label: string; help: string }[] = [
+    {
+      value: 'strict',
+      label: 'Only use documents',
+      help: "Answers only from its documents. If they don't cover a question, it says so instead of using general knowledge, web search or other tools.",
+    },
+    {
+      value: 'balanced',
+      label: 'Prefer documents',
+      help: "Uses its documents first, and may use general knowledge when they don't cover a question.",
+    },
+    {
+      value: 'flexible',
+      label: 'Use documents as context',
+      help: 'Uses its documents as context alongside general knowledge and its tools.',
+    },
+  ];
 
   /** Model/params/bindings resolve from the SAVED record, so the preview needs a
    * save to reflect changes to them. Persona/instructions preview live. `form.dirty`
@@ -348,6 +368,8 @@ export class AgentFormPage implements OnInit, OnDestroy {
       // as today. The author opts out per-agent.
       showCitations: [true],
       allowDocumentDownload: [true],
+      // #112: 'balanced' is today's behavior.
+      responseStrictness: ['balanced'],
     });
 
     // #111 dependency: downloads are only meaningful when citations are shown. When the
@@ -397,6 +419,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.liveFormEmoji.set(this.form.get('emoji')?.value || '');
     this.liveFormStarters.set(this.starters.value || []);
     this.liveShowCitations.set(this.form.get('showCitations')?.value !== false);
+    this.liveResponseStrictness.set(this.form.get('responseStrictness')?.value ?? 'balanced');
   }
 
   /**
@@ -567,6 +590,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
       // #111: absent (legacy agent or template draft) ⇒ default on.
       showCitations: agent.showCitations ?? true,
       allowDocumentDownload: agent.allowDocumentDownload ?? true,
+      responseStrictness: agent.responseStrictness ?? 'balanced',
     });
     // Reflect the citations→downloads dependency for the freshly loaded values.
     this.syncDownloadToggleEnabled(agent.showCitations ?? true);
@@ -990,6 +1014,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
       // downloads control is dropped from form.value, so derive it explicitly).
       showCitations: v.showCitations !== false,
       allowDocumentDownload: v.showCitations !== false ? v.allowDocumentDownload !== false : false,
+      responseStrictness: v.responseStrictness ?? 'balanced',
     };
 
     this.saving.set(true);

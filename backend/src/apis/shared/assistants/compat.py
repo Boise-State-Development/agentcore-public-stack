@@ -97,4 +97,5 @@ def to_agent_view(assistant: Assistant) -> dict:
         # None) so the SPA can render the download affordance from the read shape alone.
         "showCitations": assistant.show_citations,
         "allowDocumentDownload": assistant.allow_document_download,
+        "responseStrictness": assistant.response_strictness,
     }

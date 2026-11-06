@@ -4378,6 +4378,43 @@ async def resolve_turn_agent(
     )
 
 
+RESPONSE_STRICTNESS_HEADING = "### Knowledge Base Grounding"
+
+# balanced is intentionally absent: it is today's behavior and must add no bytes,
+# so every existing Agent's cached prompt prefix is unchanged.
+RESPONSE_STRICTNESS_GUIDANCE = {
+    "strict": (
+        "Answer only from this agent's knowledge base: the documents in the "
+        "<knowledge_base> block, or the excerpts retrieved with the user's message. "
+        "Do not add facts from your general knowledge, and do not use web search, "
+        "browsing or other tools to find information the knowledge base does not contain. "
+        "If the knowledge base material you have been given does not answer the question, "
+        "say that you could not find it in this agent's documents. Do not guess or fill "
+        "the gap. Where it helps, say what the documents do cover or how the user could "
+        "rephrase. You may still greet the user, ask a clarifying question, and summarize, "
+        "compare, reword or calculate from what the documents say."
+    ),
+    "flexible": (
+        "Treat this agent's knowledge base as helpful context, not a limit. Combine it "
+        "with your general knowledge, and your tools where you have them, to give the "
+        "most complete answer. Where the documents and general knowledge disagree, "
+        "follow the documents and say that they differ."
+    ),
+}
+
+
+def apply_response_strictness(instructions: str, strictness: Optional[str]) -> str:
+    """The Agent's instructions with its knowledge-base grounding rule appended (#112).
+
+    Unknown values and "balanced" return ``instructions`` unchanged.
+    """
+    guidance = RESPONSE_STRICTNESS_GUIDANCE.get(strictness or "balanced")
+    if not guidance:
+        return instructions
+    block = f"{RESPONSE_STRICTNESS_HEADING}\n\n{guidance}"
+    return f"{instructions}\n\n{block}" if instructions else block
+
+
 def compose_turn_system_prompt(
     input_data: InvocationRequest,
     assistant: Any,
@@ -4398,6 +4435,10 @@ def compose_turn_system_prompt(
     logger.info("Checking assistant instructions...")
     preview_instructions_override = input_data.system_prompt if is_preview_session(input_data.session_id) and input_data.system_prompt else None
     effective_instructions = preview_instructions_override or assistant.instructions
+    if not project_id:  # project harnesses have no strictness setting (#112)
+        effective_instructions = apply_response_strictness(
+            effective_instructions or "", getattr(assistant, "response_strictness", "balanced")
+        )
 
     if effective_instructions:
         # Import here to avoid circular dependency

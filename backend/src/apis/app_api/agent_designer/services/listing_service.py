@@ -55,7 +55,7 @@ from apis.shared.assistants.version_repository import (
     set_version_index,
 )
 from apis.shared.assistants.version_resolution import resolve_review_agent
-from apis.shared.assistants.versions import snapshot_of
+from apis.shared.assistants.versions import BEHAVIOR_SNAPSHOT_FIELDS, snapshot_of
 from apis.shared.assistants.models import (
     AdminEdit,
     AdminListingPatchRequest,
@@ -1129,7 +1129,7 @@ async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
             field=wire_field_name(field),
             before=wire_value(before),
             after=wire_value(after),
-            behavior=field in ("instructions", "bindings", "model_settings"),
+            behavior=field in BEHAVIOR_SNAPSHOT_FIELDS,
         )
         for field, before, after in changed_fields(published, pending)
     ]

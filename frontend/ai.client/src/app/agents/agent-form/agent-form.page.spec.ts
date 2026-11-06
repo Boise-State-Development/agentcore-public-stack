@@ -195,6 +195,54 @@ describe('AgentFormPage — invalid submit feedback', () => {
     expect(mockToast.error).not.toHaveBeenCalled();
   });
 
+  describe('response strictness (#112)', () => {
+    function radio(value: string): HTMLInputElement {
+      const radios: HTMLInputElement[] = Array.from(
+        fixture.nativeElement.querySelectorAll('input[type="radio"]'),
+      );
+      // The accessor consumes [value], so the DOM value stays "on"; options render in this order.
+      return radios[['strict', 'balanced', 'flexible'].indexOf(value)];
+    }
+
+    it('defaults a new agent to balanced', () => {
+      expect(component.form.get('responseStrictness')?.value).toBe('balanced');
+      expect(radio('balanced').checked).toBe(true);
+    });
+
+    it('selects the stored value when an agent with strict is loaded', () => {
+      (component as unknown as { applyAgentToForm(agent: unknown): void }).applyAgentToForm({
+        agentId: 'agt-1',
+        name: 'A',
+        description: 'd',
+        instructions: 'i',
+        responseStrictness: 'strict',
+      });
+      fixture.detectChanges();
+
+      expect(component.form.get('responseStrictness')?.value).toBe('strict');
+      expect(radio('strict').checked).toBe(true);
+    });
+
+    it('shows the helper text for the selected option and sends it on save', async () => {
+      radio('strict').click();
+      radio('strict').dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+      expect(fixture.nativeElement.textContent).toContain('Answers only from its documents');
+
+      component.form.patchValue({
+        name: 'Research Assistant',
+        description: 'A short summary of the agent',
+        instructions: 'You are a helpful assistant that answers questions.',
+      });
+      component.selectedModelId.set('anthropic.claude-opus-4-8');
+      await component.onSubmit();
+
+      expect(mockAgentService.createAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ responseStrictness: 'strict' }),
+      );
+    });
+  });
+
   it('is done loading once the palettes resolve', () => {
     expect(component.loading()).toBe(false);
     expect(fixture.nativeElement.querySelector('form')).toBeTruthy();

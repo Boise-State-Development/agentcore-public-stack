@@ -53,6 +53,16 @@ SNAPSHOT_FIELDS: Tuple[str, ...] = (
     "starters",
     "model_settings",
     "bindings",
+    "response_strictness",
+)
+
+# Snapshot fields that change what the Agent *does*. The review diff, the listing edit
+# history and the project settings history all flag these as behavior changes (#112).
+BEHAVIOR_SNAPSHOT_FIELDS: Tuple[str, ...] = (
+    "instructions",
+    "bindings",
+    "model_settings",
+    "response_strictness",
 )
 
 # Snapshot fields that live on the ``listing`` block rather than on the Agent itself.
@@ -71,6 +81,7 @@ DIFF_FIELD_ORDER: Tuple[str, ...] = (
     "instructions",
     "bindings",
     "model_settings",
+    "response_strictness",
     "name",
     "description",
     "tagline",
@@ -141,6 +152,7 @@ def snapshot_of(
         starters=assistant.starters,
         model_settings=assistant.model_settings,
         bindings=assistant.bindings,
+        response_strictness=assistant.response_strictness,
         category=listing.category if listing else None,
         publisher_id=listing.publisher_id if listing else None,
     )

@@ -132,3 +132,61 @@ class TestCitationDownloadFlags:
         view = to_agent_view(got)
         assert view["showCitations"] is True
         assert view["allowDocumentDownload"] is False
+
+
+class TestResponseStrictness:
+    """Issue #112 — responseStrictness persistence + defaults."""
+
+    @pytest.fixture(autouse=True)
+    def _set_env(self, monkeypatch):
+        monkeypatch.setenv("S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME", "test-index")
+
+    @pytest.mark.asyncio
+    async def test_default_is_balanced(self, assistants_table):
+        from apis.shared.assistants.service import create_assistant, get_assistant
+
+        created = await create_assistant(
+            owner_id="u1", owner_name="Alice", name="Plain", description="d", instructions="i"
+        )
+        assert (await get_assistant(created.assistant_id, "u1")).response_strictness == "balanced"
+
+    @pytest.mark.asyncio
+    async def test_create_roundtrips_and_view_projects_it(self, assistants_table):
+        from apis.shared.assistants.compat import to_agent_view
+        from apis.shared.assistants.service import create_assistant, get_assistant
+
+        created = await create_assistant(
+            owner_id="u1", owner_name="Alice", name="Bot", description="d", instructions="i",
+            response_strictness="strict",
+        )
+        got = await get_assistant(created.assistant_id, "u1")
+        assert got.response_strictness == "strict"
+        assert to_agent_view(got)["responseStrictness"] == "strict"
+
+    @pytest.mark.asyncio
+    async def test_update_none_leaves_unchanged_and_value_changes_it(self, assistants_table):
+        from apis.shared.assistants.service import create_assistant, get_assistant, update_assistant
+
+        created = await create_assistant(
+            owner_id="u1", owner_name="Alice", name="Bot", description="d", instructions="i",
+            response_strictness="strict",
+        )
+        await update_assistant(assistant_id=created.assistant_id, owner_id="u1", name="Renamed")
+        assert (await get_assistant(created.assistant_id, "u1")).response_strictness == "strict"
+
+        await update_assistant(
+            assistant_id=created.assistant_id, owner_id="u1", response_strictness="flexible"
+        )
+        assert (await get_assistant(created.assistant_id, "u1")).response_strictness == "flexible"
+
+    def test_request_models_reject_an_invalid_value(self):
+        from pydantic import ValidationError
+
+        from apis.shared.assistants.models import CreateAssistantRequest, UpdateAssistantRequest
+
+        with pytest.raises(ValidationError):
+            CreateAssistantRequest(
+                name="n", description="d", instructions="i", responseStrictness="loose"
+            )
+        with pytest.raises(ValidationError):
+            UpdateAssistantRequest(responseStrictness="loose")

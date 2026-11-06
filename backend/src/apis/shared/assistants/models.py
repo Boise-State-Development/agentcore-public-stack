@@ -10,6 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 KNOWN_BINDING_KINDS = ("knowledge_base", "tool", "skill")
 BindingKind = Literal["knowledge_base", "tool", "skill"]
 
+# How strictly an Agent grounds answers in its knowledge base (#112). ``balanced`` is
+# today's behavior and adds nothing to the prompt.
+ResponseStrictness = Literal["strict", "balanced", "flexible"]
+
 # Agent Marketplace Phase 1 (D2): the listing lifecycle. The transition table and the
 # sparse-index key derivation live in ``assistants.listing`` — this is only the wire type.
 # ``withdrawal_requested`` is a *live* state: the author has asked to pull the listing and an
@@ -318,6 +322,11 @@ class AgentVersion(BaseModel):
     bindings: Optional[List[AgentBinding]] = Field(
         None, description="Uniform primitive bindings (D3) as reviewed; absent ≠ empty (see class docstring)"
     )
+    response_strictness: Optional[ResponseStrictness] = Field(
+        None,
+        alias="responseStrictness",
+        description="Knowledge-base grounding mode (#112) as reviewed; None means the version predates the field",
+    )
     category: Optional[str] = Field(
         None, description="Category id the reviewer approved this into; absent when the Agent carried no listing"
     )
@@ -410,6 +419,12 @@ class Assistant(BaseModel):
         description="Whether source documents may be downloaded from citations (#111); only meaningful when showCitations is True",
     )
 
+    response_strictness: ResponseStrictness = Field(
+        "balanced",
+        alias="responseStrictness",
+        description="How strictly answers stay within the knowledge base (#112)",
+    )
+
     # Agent Marketplace Phase 1: additive, optional, absent on every existing row. There
     # is no backfill — an absent ``listing`` IS the D3 default and means "never submitted".
     tagline: Optional[str] = Field(
@@ -462,6 +477,9 @@ class CreateAssistantRequest(BaseModel):
     allow_document_download: bool = Field(
         True, alias="allowDocumentDownload", description="Allow source-document download from citations (#111)"
     )
+    response_strictness: ResponseStrictness = Field(
+        "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
+    )
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -485,6 +503,9 @@ class UpdateAssistantRequest(BaseModel):
     # through PATCH /admin/agents/{id}/listing, which records the edit (D13).
     tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle (D4)")
     # Configurable citations & document download (#111); None = leave the stored value unchanged.
+    response_strictness: Optional[ResponseStrictness] = Field(
+        None, alias="responseStrictness", description="Knowledge-base grounding mode (#112); None = unchanged"
+    )
     show_citations: Optional[bool] = Field(None, alias="showCitations", description="Stream/persist source citations (#111)")
     allow_document_download: Optional[bool] = Field(
         None, alias="allowDocumentDownload", description="Allow source-document download from citations (#111)"
@@ -514,6 +535,9 @@ class AssistantResponse(BaseModel):
 
     # Configurable citations & document download (#111). Always present (default True) so
     # the SPA can render the download affordance without waiting for a 403.
+    response_strictness: ResponseStrictness = Field(
+        "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
+    )
     show_citations: bool = Field(True, alias="showCitations", description="Whether source citations are shown (#111)")
     allow_document_download: bool = Field(
         True, alias="allowDocumentDownload", description="Whether source documents may be downloaded from citations (#111)"
@@ -687,6 +711,9 @@ class AgentResponse(BaseModel):
     # Configurable citations & document download (#111). Carried on the agent surface so
     # the citation card can hide its download button without probing for a 403. Defaults
     # True, so a legacy agent's payload reads exactly as before.
+    response_strictness: ResponseStrictness = Field(
+        "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
+    )
     show_citations: bool = Field(True, alias="showCitations", description="Whether source citations are shown (#111)")
     allow_document_download: bool = Field(
         True, alias="allowDocumentDownload", description="Whether source documents may be downloaded from citations (#111)"
@@ -797,7 +824,16 @@ class BindableListResponse(BaseModel):
 # may edit everything the store *renders*; an admin may never edit what the agent *does*
 # — that would make the reviewer responsible for behavior they did not write and cannot
 # test, and would silently break an Agent its author still maintains.
-BEHAVIOR_FIELDS = ("instructions", "bindings", "modelConfig", "model_settings", "starters", "visibility")
+BEHAVIOR_FIELDS = (
+    "instructions",
+    "bindings",
+    "modelConfig",
+    "model_settings",
+    "starters",
+    "visibility",
+    "responseStrictness",
+    "response_strictness",
+)
 
 # Presentation fields an admin may edit on someone else's listing (D13).
 ADMIN_EDITABLE_FIELDS = ("name", "tagline", "iconKey", "category", "publisherId")

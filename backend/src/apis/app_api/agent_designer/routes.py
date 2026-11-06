@@ -249,6 +249,7 @@ async def create_agent_endpoint(
             model_settings=request.model_settings,
             show_citations=request.show_citations,
             allow_document_download=request.allow_document_download,
+            response_strictness=request.response_strictness,
         )
         return _agent_response(assistant, permission="owner")
     except Exception as e:
@@ -553,6 +554,7 @@ async def update_agent_endpoint(
             model_settings=request.model_settings,
             show_citations=request.show_citations,
             allow_document_download=request.allow_document_download,
+            response_strictness=request.response_strictness,
         )
         if not updated:
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
