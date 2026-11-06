@@ -125,6 +125,12 @@ A project turn also gets the `project_files` tool, which lists the project's
 Files and reads one by name. Retrieval answers "what does the playbook say
 about X"; it cannot answer "grade submission 7", which needs a file.
 
+An Agent's **Response strictness** setting is a rule in the system prompt, not
+part of retrieval. It applies the same way to retrieved passages, to
+full-context mode and to turns where the search finds nothing. The default,
+**Prefer documents**, adds no text. See
+[Agents](/agentcore-public-stack/features/agents/#response-strictness).
+
 ### Full-context mode for small knowledge bases
 
 Retrieval hands the model the few passages closest to the wording of the

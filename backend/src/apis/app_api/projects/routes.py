@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from apis.app_api.agent_designer.services.binding_validation import BindingValidationError
 from apis.shared.assistants.models import AgentBinding, VersionFieldChange
+from apis.shared.assistants.versions import BEHAVIOR_SNAPSHOT_FIELDS
 from apis.shared.assistants.version_diff import wire_field_name, wire_value
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
@@ -412,7 +413,7 @@ async def get_settings_version(
                 field=wire_field_name(f),
                 before=_wire_change(f, before),
                 after=_wire_change(f, after),
-                behavior=f in ("instructions", "bindings", "model_settings"),
+                behavior=f in BEHAVIOR_SNAPSHOT_FIELDS,
             )
             for f, before, after in changes
         ],

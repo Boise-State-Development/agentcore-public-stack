@@ -111,6 +111,7 @@ export class ReviewDiffComponent {
     instructions: 'Instructions',
     bindings: 'Tools & skills',
     modelConfig: 'Model',
+    responseStrictness: 'Response strictness',
     name: 'Name',
     description: 'Description',
     tagline: 'Tagline',

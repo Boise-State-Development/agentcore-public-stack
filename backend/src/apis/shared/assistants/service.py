@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-from .models import AgentBinding, AgentModelConfig, Assistant
+from .models import AgentBinding, AgentModelConfig, Assistant, ResponseStrictness
 from .serialization import from_ddb, to_ddb_safe
 from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 from apis.shared.timestamps import to_iso, utc_now_iso
@@ -96,6 +96,7 @@ async def create_assistant(
     tagline: Optional[str] = None,
     show_citations: bool = True,
     allow_document_download: bool = True,
+    response_strictness: ResponseStrictness = "balanced",
     project_id: Optional[str] = None,
 ) -> Assistant:
     """
@@ -147,6 +148,7 @@ async def create_assistant(
         tagline=tagline,
         show_citations=show_citations,
         allow_document_download=allow_document_download,
+        response_strictness=response_strictness,
         kind="project" if project_id else None,
         project_id=project_id,
     )
@@ -561,6 +563,7 @@ async def update_assistant(
     tagline: Optional[str] = None,
     show_citations: Optional[bool] = None,
     allow_document_download: Optional[bool] = None,
+    response_strictness: Optional[ResponseStrictness] = None,
 ) -> Optional[Assistant]:
     """
     Update assistant fields (deep merge)
@@ -622,6 +625,9 @@ async def update_assistant(
         updates["show_citations"] = show_citations
     if allow_document_download is not None:
         updates["allow_document_download"] = allow_document_download
+    # #112: None leaves the stored value untouched.
+    if response_strictness is not None:
+        updates["response_strictness"] = response_strictness
 
     # Always update the updated_at timestamp
     updates["updated_at"] = _get_current_timestamp()
