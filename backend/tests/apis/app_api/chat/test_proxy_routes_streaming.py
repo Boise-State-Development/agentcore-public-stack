@@ -329,3 +329,51 @@ async def test_frames_survive_repeated_keepalive_timeouts(
     missing = [i for i in range(n_chunks) if b'{"i": %d}' % i not in body]
     assert not missing, f"relay dropped chunk(s) {missing} on the keepalive tick"
     assert b"event: done" in body
+
+
+@pytest.mark.asyncio
+async def test_upstream_drop_mid_turn_is_counted_and_still_drops_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Runtime stream that breaks mid-turn is the only trace an idle cut
+    leaves (AgentCore or this proxy's own read timeout), so it is counted with
+    how long the stream had been silent. The browser still sees the drop."""
+    silence = 0.3
+
+    async def breaks_after_silence():
+        yield b'event: message_start\ndata: {"role": "assistant"}\n\n'
+        await asyncio.sleep(silence)
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=breaks_after_silence(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        proxy_routes,
+        "_build_upstream_client",
+        lambda: httpx.AsyncClient(transport=transport),
+    )
+    drops: list[dict] = []
+    monkeypatch.setattr(
+        proxy_routes, "emit_chat_stream_upstream_dropped", lambda **kw: drops.append(kw)
+    )
+
+    app = _build_app()
+    with _UvicornInThread(app) as server:
+        async with httpx.AsyncClient(base_url=server.url, timeout=10.0) as client:
+            async with client.stream(
+                "POST", "/chat/stream", json={"message": "hi", "session_id": "s-1"}
+            ) as response:
+                with pytest.raises(httpx.HTTPError):
+                    async for _ in response.aiter_bytes():
+                        pass
+
+    [drop] = drops
+    assert drop["reason"] == "RemoteProtocolError"
+    assert drop["session_id"] == "s-1"
+    assert drop["silent_seconds"] >= silence - 0.05

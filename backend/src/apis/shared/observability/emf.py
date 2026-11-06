@@ -226,6 +226,71 @@ def emit_unmetered_model_call(
     )
 
 
+# Turn-health counts sit with the turn's other time-limit signals, so they read
+# beside the latency percentiles rather than among the cache numbers.
+_TURN_LATENCY_NAMESPACE = "AgentCoreStack/TurnLatency"
+
+
+def emit_model_read_timeout(
+    model_id: Optional[str],
+    phase: str,
+    read_timeout_seconds: Optional[int],
+    session_id: Optional[str] = None,
+) -> None:
+    """Emit one ``ModelReadTimeout`` record for a turn a model read timeout ended.
+
+    The model sent nothing for ``RETRY_READ_TIMEOUT`` seconds, so the turn
+    failed with no usage recorded: Bedrock bills the input and any thinking,
+    and the session row says $0. Prod ran ~5 a day at the old 120s timeout
+    with nothing watching. ``phase`` is ``before_stream`` (the response never
+    opened) or ``mid_stream`` (it opened, then went silent, as when a model
+    thinks without streaming).
+
+    Not behind ``PROMPT_CACHE_OBSERVABILITY_ENABLED``: it fires only on
+    failed turns. Best-effort: never raises.
+    """
+    emit_emf_metrics(
+        _TURN_LATENCY_NAMESPACE,
+        metrics={"ModelReadTimeout": 1},
+        properties={
+            "modelId": model_id,
+            "readTimeoutPhase": phase,
+            "readTimeoutSeconds": read_timeout_seconds,
+            "sessionId": session_id,
+        },
+        units={"ModelReadTimeout": "Count"},
+    )
+
+
+def emit_chat_stream_upstream_dropped(
+    reason: str,
+    silent_seconds: float,
+    session_id: Optional[str] = None,
+) -> None:
+    """Emit one ``ChatStreamUpstreamDropped`` record when app-api loses a turn's Runtime stream.
+
+    The Runtime-to-app-api hop broke mid-turn: app-api's own read timeout, or
+    the connection closed under it. The browser sees a dropped connection and
+    the turn is marked ``connection_lost``, with no explained error.
+    ``silent_seconds`` is how long the stream had been quiet when it broke,
+    which separates an idle cut (an AgentCore or proxy limit on a silent
+    stream) from a Runtime that died while streaming. ``reason`` is the httpx
+    exception class name.
+
+    Best-effort: never raises.
+    """
+    emit_emf_metrics(
+        _TURN_LATENCY_NAMESPACE,
+        metrics={"ChatStreamUpstreamDropped": 1},
+        properties={
+            "dropReason": reason,
+            "silentSeconds": round(silent_seconds, 1),
+            "sessionId": session_id,
+        },
+        units={"ChatStreamUpstreamDropped": "Count"},
+    )
+
+
 def emit_session_cache_rollup(
     session_id: str,
     partial_miss_usd: float,

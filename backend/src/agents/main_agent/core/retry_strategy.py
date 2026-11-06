@@ -24,7 +24,8 @@ botocore and the OpenAI client each retry on their own (3 and 3 attempts by
 default), and those retries compounded with this layer's: up to 12 calls per
 model invocation on Bedrock. The factory now holds both to a single attempt,
 so this strategy covers what they used to (throttles, 5xx, connection resets
-and timeouts) and the total is one knob: ``sdk_max_attempts``. Gemini's
+and connect timeouts) and the total is one knob: ``sdk_max_attempts``. Read
+timeouts are the exception; see ``is_transient_bedrock_fault``. Gemini's
 client never retries unless configured.
 
 WHY A FAILURE AFTER VISIBLE OUTPUT IS NEVER RETRIED
@@ -41,7 +42,7 @@ from typing import Optional
 
 import openai
 from botocore.exceptions import ClientError, ConnectionError as BotoConnectionError
-from botocore.exceptions import EventStreamError, HTTPClientError
+from botocore.exceptions import EventStreamError, HTTPClientError, ReadTimeoutError
 from google.genai import errors as genai_errors
 from strands import ModelRetryStrategy
 
@@ -109,8 +110,16 @@ def bedrock_error_code(exception: BaseException) -> Optional[str]:
 def is_transient_bedrock_fault(exception: BaseException) -> bool:
     """Whether a botocore error is one its own standard retry mode would retry.
 
-    A modeled transient code, a 5xx, or a connection failure / timeout.
+    A modeled transient code, a 5xx, or a connection failure / connect
+    timeout. A read timeout is excluded: ``RETRY_READ_TIMEOUT`` is the whole
+    silence budget for a call, so one retry would wait it out again, past
+    app-api's proxy read timeout, and the user would lose the connection
+    instead of getting the explained timeout error. The mid-stream form
+    (urllib3's ``ReadTimeoutError``) is not a botocore error and never
+    matched here.
     """
+    if isinstance(exception, ReadTimeoutError):
+        return False
     if isinstance(exception, (BotoConnectionError, HTTPClientError)):
         return True
     if bedrock_error_code(exception) in RETRYABLE_BEDROCK_ERROR_CODES:
