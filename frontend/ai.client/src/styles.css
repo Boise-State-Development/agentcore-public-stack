@@ -332,6 +332,55 @@ html.dark .message-block {
     }
 }
 
+/*
+ * The "still working" sweep on a collapsed headline in the message list: the
+ * tool rail while its calls run, and the reasoning block while the model
+ * thinks. Global for the same reason as `.sidenav-body-enter`: the two sit
+ * one above the other in the same turn and must pulse identically, and a
+ * per-component copy compiles to separately-named keyframes that drift.
+ */
+@keyframes text-shimmer {
+    0% {
+        background-position: 200% center;
+    }
+
+    100% {
+        background-position: -200% center;
+    }
+}
+
+.text-shimmer {
+    --shimmer-base: var(--color-gray-400);
+    --shimmer-highlight: var(--color-gray-300);
+
+    background: linear-gradient(90deg,
+            var(--shimmer-base) 25%,
+            var(--shimmer-highlight) 50%,
+            var(--shimmer-base) 75%);
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: text-shimmer 2s ease-in-out infinite;
+}
+
+html.dark .text-shimmer {
+    --shimmer-base: var(--color-gray-500);
+    --shimmer-highlight: var(--color-gray-400);
+}
+
+/* Child spans take the sweep instead of their own text colour. */
+.text-shimmer span {
+    color: inherit;
+    -webkit-text-fill-color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .text-shimmer {
+        animation: none;
+    }
+}
+
 /* Ensure body has proper background for dark mode */
 body {
     background-color: var(--color-gray-50);
