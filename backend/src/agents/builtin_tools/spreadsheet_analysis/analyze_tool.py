@@ -4,6 +4,7 @@ Factory function creates a context-bound tool that downloads tabular files
 from S3, pushes them to Code Interpreter, and executes Python code for analysis.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -482,6 +483,21 @@ def _get_code_interpreter_id() -> Optional[str]:
         return None
 
 
+async def _invoke(client: Any, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Call a Code Interpreter method without blocking the event loop.
+
+    ``client.invoke`` is synchronous boto3 and its response ``stream`` is
+    read lazily, so the stream is drained inside the worker thread too: the
+    returned dict carries a plain list that the caller can iterate on the loop.
+    """
+
+    def _call() -> Dict[str, Any]:
+        resp = client.invoke(method, params)
+        return {**resp, "stream": list(resp.get("stream", []))}
+
+    return await asyncio.to_thread(_call)
+
+
 def make_analyze_tool(
     assistant_id: Optional[str],
     session_id: str,
@@ -610,7 +626,7 @@ def make_analyze_tool(
 
         # 3. Download from S3
         try:
-            file_bytes = _download_file(file_info)
+            file_bytes = await _download_file(file_info)
         except Exception as e:
             return {"content": [{"text": f"❌ Failed to download file: {e}"}], "status": "error"}
 
@@ -622,7 +638,7 @@ def make_analyze_tool(
         code_interpreter = CodeInterpreter(region)
 
         try:
-            code_interpreter.start(identifier=ci_id)
+            await asyncio.to_thread(code_interpreter.start, identifier=ci_id)
 
             if is_xlsx:
                 # Push XLSX as base64, decode in sandbox, then convert every
@@ -638,7 +654,7 @@ def make_analyze_tool(
                 # use <stem>.<sanitized_sheet>.csv per sheet.
                 primary_csv_filename = f"{stem}.csv"
 
-                code_interpreter.invoke("writeFiles", {"content": [
+                await _invoke(code_interpreter, "writeFiles", {"content": [
                     {"path": "_encoded.b64", "text": b64_content},
                 ]})
                 # Bootstrap: iterate every sheet (capped), write a CSV per
@@ -741,7 +757,7 @@ for rec in sheet_records:
 print({_SHEETS_MARKER!r})
 wb.close()
 """
-                resp = code_interpreter.invoke("executeCode", {"code": bootstrap_code, "language": "python", "clearContext": False})
+                resp = await _invoke(code_interpreter, "executeCode", {"code": bootstrap_code, "language": "python", "clearContext": False})
                 bootstrap_stdout = ""
                 for event in resp.get("stream", []):
                     result = event.get("result", {})
@@ -776,12 +792,12 @@ wb.close()
                     csv_text = file_bytes.decode("utf-8")
                 except UnicodeDecodeError:
                     csv_text = file_bytes.decode("utf-8", errors="replace")
-                code_interpreter.invoke("writeFiles", {"content": [{"path": csv_filename, "text": csv_text}]})
+                await _invoke(code_interpreter, "writeFiles", {"content": [{"path": csv_filename, "text": csv_text}]})
 
             # 5. Probe schema — separate exec so its output is isolated from user code.
             schema_preview = ""
             try:
-                preview_resp = code_interpreter.invoke("executeCode", {
+                preview_resp = await _invoke(code_interpreter, "executeCode", {
                     "code": _build_preview_code(csv_filename),
                     "language": "python",
                     "clearContext": False,
@@ -797,7 +813,7 @@ wb.close()
                 logger.warning(f"Schema preview failed for {csv_filename}: {e}")
 
             # 6. Execute user code
-            response = code_interpreter.invoke("executeCode", {
+            response = await _invoke(code_interpreter, "executeCode", {
                 "code": python_code,
                 "language": "python",
                 "clearContext": False,
@@ -857,7 +873,7 @@ wb.close()
 
             if output_filename and output_filename.endswith(".png"):
                 try:
-                    dl_response = code_interpreter.invoke("readFiles", {"paths": [output_filename]})
+                    dl_response = await _invoke(code_interpreter, "readFiles", {"paths": [output_filename]})
                     file_content = None
                     for event in dl_response.get("stream", []):
                         result = event.get("result", {})
@@ -890,7 +906,7 @@ wb.close()
 
         finally:
             try:
-                code_interpreter.stop()
+                await asyncio.to_thread(code_interpreter.stop)
             except Exception:
                 pass
 
@@ -941,10 +957,14 @@ async def _find_file(filename: str, assistant_id: Optional[str], session_id: str
     return None
 
 
-def _download_file(file_info: Dict[str, Any]) -> bytes:
-    """Download file bytes from S3."""
+async def _download_file(file_info: Dict[str, Any]) -> bytes:
+    """Download file bytes from S3.
+
+    The synchronous ``get_object`` + ``.read()`` runs in a worker thread so
+    the event loop stays free while a (up to 25 MB) object streams in. Same
+    pattern as ``_get_kb_files`` (#260 / #259).
+    """
     region = os.environ.get("AWS_REGION", "us-west-2")
-    s3 = boto3.client("s3", region_name=region)
 
     if file_info["source"] == "knowledge_base":
         bucket = os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
@@ -955,5 +975,9 @@ def _download_file(file_info: Dict[str, Any]) -> bytes:
         if not bucket:
             raise ValueError("S3 bucket not found in file metadata")
 
-    response = s3.get_object(Bucket=bucket, Key=file_info["s3_key"])
-    return response["Body"].read()
+    def _get() -> bytes:
+        s3 = boto3.client("s3", region_name=region)
+        response = s3.get_object(Bucket=bucket, Key=file_info["s3_key"])
+        return response["Body"].read()
+
+    return await asyncio.to_thread(_get)
