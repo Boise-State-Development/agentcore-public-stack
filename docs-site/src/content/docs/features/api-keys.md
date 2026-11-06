@@ -131,6 +131,23 @@ grants as the web app:
   the API and the web app is one total.
 - **Retired models:** a retired model with no successor returns `410`.
 
+## Prompt caching
+
+On Claude models the platform caches your prompt for five minutes, so you pay
+less for text you send again. Answers are the same either way.
+
+- **The system prompt** is cached on every call. Calls that reuse one
+  `system_prompt` with different messages read it from the cache.
+- **A conversation** is cached once a request carries two or more messages.
+  Send the next turn as the previous `messages` plus the assistant's reply and
+  your new message, unchanged and in order, and the whole earlier part reads
+  from the cache.
+
+`usage` then reports `cacheReadInputTokens` (read at a tenth of the input rate)
+and `cacheWriteInputTokens` (written at 1.25 times it) beside `inputTokens`.
+Text below the model's minimum cacheable length (about 1,000 to 4,000 tokens)
+is not cached and costs the normal rate.
+
 ## Errors
 
 | Status | Meaning |

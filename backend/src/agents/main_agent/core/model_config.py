@@ -16,6 +16,7 @@ from apis.shared.models.mantle import (
     MANTLE_CHAT_PARAM_MAP as _MANTLE_CHAT_PARAM_MAP,
     MANTLE_RESPONSES_PARAM_MAP as _MANTLE_RESPONSES_PARAM_MAP,
 )
+from apis.shared.models.cache_points import bedrock_cache_points_supported as _cache_points_supported_for
 
 logger = logging.getLogger(__name__)
 
@@ -425,11 +426,10 @@ class ModelConfig:
         ``system_prompt_content`` verbatim and
         ``_apply_system_cache_ttl`` only ever rewrites a TTL, never removes a
         point, so a point placed on a model that cannot cache reaches Bedrock
-        and the call fails with **AccessDeniedException** — "You invoked an
-        unsupported model or your request did not allow prompt caching."
-        Measured live in us-west-2 (2026-09-11) on llama3-3-70b,
-        mistral-large-2407 and deepseek-r1; the identical request without the
-        point succeeds on all three.
+        and the call fails with **AccessDeniedException**. The model-family
+        test and that measurement live in
+        ``apis.shared.models.cache_points``, which the api-converse route
+        reads too.
 
         It is also passed as ``tools_ttl``, where since strands-agents 1.55.0
         it is belt-and-braces rather than load-bearing:
@@ -448,7 +448,6 @@ class ModelConfig:
         re-measure with ``scripts/probe_bedrock_cache_point_support.py`` first
         and widen the tools point in the same change.
         """
-        model_lower = self.model_id.lower()
         return (
             self.caching_enabled
             # Redundant with the family test below rather than an independent
@@ -456,7 +455,7 @@ class ModelConfig:
             # id regardless of the configured provider. Kept as documentation of
             # the surface this gates — the Converse path, not Mantle/Responses.
             and self.get_provider() == ModelProvider.BEDROCK
-            and ("claude" in model_lower or "anthropic" in model_lower)
+            and _cache_points_supported_for(self.model_id)
         )
 
     def to_bedrock_config(self) -> Dict[str, Any]:
