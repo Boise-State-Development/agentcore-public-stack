@@ -21,8 +21,8 @@ Lifecycle
   fires from a ``finally`` (completion, exception, stream closed, interrupt).
   The stream coordinator calls it again from its own ``finally``. Both are
   idempotent and a call carrying a stale token is a no-op.
-* The remote session timeout (``ANALYZE_SANDBOX_TIMEOUT_SECONDS``) is the last
-  line of defense when in-process teardown never runs.
+* The remote session timeout (``ANALYZE_SANDBOX_TIMEOUT_SECONDS``, default
+  900 s) is the last line of defense when in-process teardown never runs.
 
 Isolation
 ---------
@@ -53,7 +53,7 @@ from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMEOUT_SECONDS = 300
+_DEFAULT_TIMEOUT_SECONDS = 900
 _MIN_TIMEOUT_SECONDS = 60
 
 PoolKey = Tuple[str, str]
@@ -62,9 +62,13 @@ PoolKey = Tuple[str, str]
 def sandbox_timeout_seconds() -> int:
     """Remote session timeout for pooled sandboxes.
 
-    Short on purpose: an orphaned session (process killed, disconnect teardown
-    missed) expires on its own instead of lingering for the SDK's 900 s
-    default. Invalid or tiny values fall back to the default / minimum.
+    Defaults to 900 s, the SDK default every per-call sandbox already gets.
+    AWS documents this as the time after which the session terminates, not an
+    idle timeout, so it caps all the analysis a turn does in the sandbox,
+    including a slow first call on a large workbook. A shorter value would
+    only shorten how long a leaked session (process killed before the turn's
+    teardown) lives, and teardown normally stops the session explicitly.
+    Invalid values fall back to the default; tiny ones to the minimum.
     """
     raw = os.environ.get("ANALYZE_SANDBOX_TIMEOUT_SECONDS", "").strip()
     if not raw:
