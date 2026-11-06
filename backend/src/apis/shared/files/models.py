@@ -54,6 +54,7 @@ ALLOWED_EXTENSIONS = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".md": "text/markdown",
+    ".sql": "text/plain",
     # Images
     ".png": "image/png",
     ".jpg": "image/jpeg",

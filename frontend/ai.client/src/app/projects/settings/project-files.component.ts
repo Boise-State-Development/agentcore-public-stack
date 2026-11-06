@@ -66,7 +66,7 @@ import { projectErrorMessage } from '../services/projects.service';
 
 /** The agent document pipeline's per-file limit (the knowledge-base section's too). */
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const ACCEPT = '.pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx';
+const ACCEPT = '.pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.sql';
 const POLL_START_MS = 1000;
 const POLL_MAX_MS = 10000;
 /**
