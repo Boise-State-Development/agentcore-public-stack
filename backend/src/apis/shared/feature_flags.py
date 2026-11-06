@@ -1377,3 +1377,20 @@ def document_extract_model_id() -> str:
     a default that looks like it works is how one ships.
     """
     return os.environ.get("DOCUMENT_EXTRACT_MODEL_ID", "").strip()
+
+
+def analyze_sandbox_reuse_enabled() -> bool:
+    """Whether ``analyze_spreadsheet`` reuses one Code Interpreter sandbox per turn.
+
+    With this on, the sandbox (and the files already staged in it) lives for
+    the rest of the agent turn, so a second call on the same file skips the S3
+    download, the session start, the upload, the XLSX bootstrap and the schema
+    probe (#259). Off, every call starts and stops its own sandbox, exactly as
+    before. The event-loop fix (blocking S3 and Code Interpreter calls run in
+    worker threads) is not behind this flag.
+
+    **Default ON with a kill switch** (house style, a *rollout switch*: the
+    change is meant to be invisible): unset or empty resolves to enabled; only
+    the literal ``"false"`` (case-insensitive) disables.
+    """
+    return os.environ.get("ANALYZE_SANDBOX_REUSE_ENABLED", "").strip().lower() != "false"

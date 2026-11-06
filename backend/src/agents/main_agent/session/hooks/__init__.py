@@ -1,6 +1,7 @@
 """Hooks for Main Agent"""
 
 from agents.main_agent.session.hooks.agent_status import AgentStatusHook
+from agents.main_agent.session.hooks.analyze_sandbox import AnalyzeSandboxHook
 from agents.main_agent.session.hooks.context_attribution import ContextAttributionHook
 from agents.main_agent.session.hooks.context_ledger import ContextLedgerHook
 from agents.main_agent.session.hooks.display_text import DisplayTextHook
@@ -16,6 +17,7 @@ from agents.main_agent.session.hooks.web_search_defaults import WebSearchDefault
 
 __all__ = [
     "AgentStatusHook",
+    "AnalyzeSandboxHook",
     "ContextAttributionHook",
     "ContextLedgerHook",
     "DisplayTextHook",
