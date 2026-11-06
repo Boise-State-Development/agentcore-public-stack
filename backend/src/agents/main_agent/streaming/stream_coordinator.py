@@ -48,6 +48,14 @@ _FIRST_MODEL_OUTPUT_TYPES = frozenset(
     {"content_block_start", "content_block_delta", "reasoning", "tool_use"}
 )
 
+#: How a turn ended, recorded as ``outcome`` on each of its ``C#`` cost rows
+#: (release-ledger spec §5.1). ``completed``: the success path; ``paused``:
+#: the success path, stopped on an interrupt waiting for the user; ``error``:
+#: a failure arm (an agent error, a coordinator exception, a max_tokens
+#: truncation); ``stopped``: the cooperative Stop arm; ``interrupted``: torn
+#: down by the connection closing.
+TURN_OUTCOMES = frozenset({"completed", "paused", "error", "stopped", "interrupted"})
+
 
 def _turn_clock_call(turn_clock: Any, method: str, *args: Any) -> None:
     """Call a method on the turn's clock if one was passed. Never raises.
@@ -751,6 +759,10 @@ class StreamCoordinator:
                     # and the append_message hook persists it to AgentCore
                     # Memory. It is no longer "in flight", so an interruption
                     # from here on must not re-persist its text.
+                    # Whether this call said anything is kept on its slot first:
+                    # a turn whose final call streamed no text is an empty
+                    # answer (`emptyAnswer` on the cost row, release-ledger D6).
+                    call_streamed_text = any(t.strip() for t in assistant_text_acc)
                     assistant_text_acc.clear()
                     # Bedrock opens an EMPTY response with no `messageStart`:
                     # the call streams only `messageStop` + `metadata`. With no
@@ -769,6 +781,7 @@ class StreamCoordinator:
                         )
                     if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
                         per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
+                        per_message_metadata[current_assistant_message_index]["has_text"] = call_streamed_text
                         logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
 
                 # Track individual metadata events (per assistant message)
@@ -1617,6 +1630,7 @@ class StreamCoordinator:
             message_ids_to_store = assistant_message_ids if assistant_message_ids else ([message_id] if message_id is not None else [])
 
             if message_ids_to_store:
+                turn_outcome, empty_answer = self._completed_turn_outcome(agent, per_message_metadata)
                 await self._store_turn_call_metadata(
                     session_id=session_id,
                     user_id=user_id,
@@ -1631,6 +1645,8 @@ class StreamCoordinator:
                     citations=citations,
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
+                    outcome=turn_outcome,
+                    empty_answer=empty_answer,
                 )
 
             # displayText backstop. `DisplayTextHook` normally wrote this at
@@ -1929,6 +1945,28 @@ class StreamCoordinator:
                 discard_provenance(user_id, session_id)
             except Exception:  # noqa: BLE001
                 logger.debug("source provenance discard failed", exc_info=True)
+
+    @staticmethod
+    def _completed_turn_outcome(
+        agent: Any, per_message_metadata: List[Dict[str, Any]]
+    ) -> Tuple[str, bool]:
+        """``(outcome, empty_answer)`` for a turn that reached the success path.
+
+        A turn that paused for the user (OAuth consent, an approval, a
+        question, a browser sign-in) is ``paused``, never an empty answer: its
+        last call ends on the tool use the user is now answering, which is the
+        normal shape of a pause. Any other turn is ``completed``, and an empty
+        answer when its final model call streamed no text — the failure the
+        eval harness found on dev 2026-10-30, a turn whose last visible words
+        were a tool preamble ("Now let me verify:") and whose final call said
+        nothing. Read off facts already in memory, after the stream.
+        """
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if interrupt_state is not None and getattr(interrupt_state, "activated", False) is True:
+            return "paused", False
+        final_call = per_message_metadata[-1] if per_message_metadata else None
+        empty = final_call is not None and not final_call.get("has_text")
+        return "completed", empty
 
     @staticmethod
     def _new_call_slot(call_index: int) -> Dict[str, Any]:
@@ -2280,6 +2318,11 @@ class StreamCoordinator:
                             # The breakdown describes the call in flight, so
                             # only a row for that call may carry it.
                             attach_context_breakdown=metered[-1] == in_flight_idx,
+                            # A Stop the coordinator saw is `stopped`; a turn
+                            # torn down by the connection closing is
+                            # `interrupted` (that includes a Stop whose signal
+                            # lost the race with the disconnect).
+                            outcome="stopped" if reason == "user_stopped" else "interrupted",
                         )
                     logger.info(
                         "📊 Metered interrupted turn for session %s: %d model call(s) (in flight: %s)",
@@ -3955,6 +3998,8 @@ class StreamCoordinator:
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
         attach_context_breakdown: bool = True,
+        outcome: Optional[str] = None,
+        empty_answer: bool = False,
     ) -> None:
         """Write one cost row per model call of this turn, in call order.
 
@@ -3968,6 +4013,11 @@ class StreamCoordinator:
         ``attach_context_breakdown`` is off for a failed turn: the breakdown
         describes the turn's last *attempted* call, which on a failure may be
         the one that never answered rather than the last row written.
+
+        ``outcome`` is how the turn ended (:data:`TURN_OUTCOMES`) and goes on
+        every row of the turn, so a filter on any one call sees it;
+        ``empty_answer`` is a fact about the turn's final call and goes on the
+        last row only, which is the one row per turn a count reads.
         """
         # Content-free tool census, read (not drained) per call so each
         # cost row carries the tools that call requested. None when the
@@ -4054,6 +4104,8 @@ class StreamCoordinator:
                     include_context_breakdown=attach_context_breakdown and is_last,
                     turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
                     turn_project_id=turn_project_id,
+                    turn_outcome=outcome,
+                    empty_answer=empty_answer and is_last,
                     tool_calls=(
                         tool_census_hook.tally_for_call(hook_index)
                         if tool_census_hook is not None else None
@@ -4159,6 +4211,7 @@ class StreamCoordinator:
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
                 attach_context_breakdown=False,
+                outcome="error",
             )
             logger.info(
                 "📊 Metered failed turn for session %s: %d of %d model call(s) reported usage",
@@ -4238,6 +4291,8 @@ class StreamCoordinator:
         include_context_breakdown: bool = False,
         call_kind: Optional[str] = None,
         prefix_fingerprint: Optional[Dict[str, Any]] = None,
+        turn_outcome: Optional[str] = None,
+        empty_answer: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Store message-level metadata (token usage, latency, model info, citations)
@@ -4261,6 +4316,12 @@ class StreamCoordinator:
                 ``messageId`` when ``message_id`` is None.
             prefix_fingerprint: This call's fingerprint, for a caller that ran no
                 hooks (the brief computes it over the request it sent).
+            turn_outcome: How the turn this call belongs to ended, recorded as
+                ``outcome`` (one of :data:`TURN_OUTCOMES`); None for a call
+                that is not a turn's, which then carries no ``outcome``.
+            empty_answer: Recorded as ``emptyAnswer: true`` — the turn
+                completed and its final call streamed no text. Set by the
+                caller on the turn's last row only.
 
         Returns the row's derived cache observability (``cacheStatus`` …), or None
         when no row was written.
@@ -4443,6 +4504,13 @@ class StreamCoordinator:
                     metadata_kwargs["prefixFingerprints"] = prefix_fingerprint
                 if call_kind:
                     metadata_kwargs["callKind"] = call_kind
+                # How the turn ended (release-ledger spec §5.1): a closed
+                # vocabulary, no content. `emptyAnswer` is written only when
+                # true, so its absence is the normal case and costs nothing.
+                if turn_outcome in TURN_OUTCOMES:
+                    metadata_kwargs["outcome"] = turn_outcome
+                if empty_answer:
+                    metadata_kwargs["emptyAnswer"] = True
 
                 # Which Agent ran this turn (#756), as another extra field. An
                 # `@`-mention swaps the Agent for one turn, which genuinely re-writes

@@ -176,6 +176,12 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     # content hash (docs/specs/release-ledger.md D1). No content.
     "appVersion",
     "build",
+    # How the call's turn ended (completed / paused / error / stopped /
+    # interrupted) and, on a completed turn's last row, `emptyAnswer: true`
+    # when its final call streamed no text (release-ledger spec §5.1). A
+    # closed vocabulary and a boolean, no content.
+    "outcome",
+    "emptyAnswer",
     # Set on a call that is not a turn (a handoff brief): a closed vocabulary,
     # no content. Absent on every turn's rows.
     "callKind",

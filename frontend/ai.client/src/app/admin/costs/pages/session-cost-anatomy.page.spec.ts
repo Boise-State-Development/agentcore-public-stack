@@ -261,6 +261,34 @@ describe('SessionCostAnatomyPage', () => {
       expect(page.compactionEventsLine()).toBe('3 applied · 1 forced · summary 2.3K');
     });
 
+    it('ranks tools by result payload, with means, and leaves unmeasured weight null', async () => {
+      const profile = vi.fn().mockReturnValue(
+        of({
+          ...MOCK_PROFILE,
+          dataCoverage: { ...MOCK_PROFILE.dataCoverage, toolCensus: true },
+          toolCensus: {
+            calculator: { calls: 5, errors: 0 },
+            search: { calls: 2, errors: 0, resultChars: 800, inputChars: 40, durationMs: 300, timedCalls: 2 },
+            browse_web: { calls: 3, errors: 1, resultChars: 18_000, inputChars: 90, durationMs: 9_000, timedCalls: 2 },
+          },
+        }),
+      );
+      const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY)), profile).componentInstance;
+      await vi.waitFor(() => expect(page.profileResource.hasValue()).toBe(true));
+      const rows = page.toolWeightRows();
+      expect(rows.map((r) => r.name)).toEqual(['browse_web', 'search', 'calculator']);
+      expect(rows[0]).toMatchObject({ perCallChars: 6_000, meanMs: 4_500, errors: 1 });
+      expect(rows[2]).toMatchObject({ resultChars: null, perCallChars: null, meanMs: null });
+      expect(page.formatDuration(4_500)).toBe('4.5s');
+      expect(page.formatDuration(150)).toBe('150ms');
+    });
+
+    it('has no tool rows when the census is empty', async () => {
+      const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY))).componentInstance;
+      await vi.waitFor(() => expect(page.profileResource.hasValue()).toBe(true));
+      expect(page.toolWeightRows()).toEqual([]);
+    });
+
     it('describes one compaction event from its numbers only', () => {
       const page = setup(vi.fn().mockReturnValue(of(MOCK_ANATOMY))).componentInstance;
       expect(
