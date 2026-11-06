@@ -409,11 +409,44 @@ export class MessageListComponent {
       return this.preparingSettled() ? 'Getting ready' : 'Thinking';
     }
 
+    // The model's reasoning summary is streaming right above this line, so
+    // "Waiting for the model" would contradict what the user can read. Like
+    // `hasStreamedText`, this is first-hand from the content stream.
+    if (this.isReasoningNow()) {
+      return 'Reasoning';
+    }
+
     if (phase === 'thinking' && !this.hasStreamedText()) {
       return 'Waiting for the model';
     }
 
     return 'Thinking';
+  });
+
+  /**
+   * Whether the model is mid-reasoning right now: the newest assistant
+   * message ends in a reasoning block with text whose span is still open.
+   *
+   * The LAST block, not any block: once the model moves on to a tool call or
+   * the answer, a new block starts and this goes false, so the label never
+   * claims reasoning while the model is writing tool arguments. The duration
+   * is the stream parser's own "span closed" mark. Only models that stream a
+   * reasoning summary (adaptive Claude with `display: "summarized"`) ever set
+   * this; every other model keeps the labels below.
+   */
+  private readonly isReasoningNow = computed<boolean>(() => {
+    const messages = this.messages();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message.role !== 'assistant') continue;
+      const last = message.content[message.content.length - 1];
+      return (
+        last?.type === 'reasoningContent' &&
+        !!last.reasoningContent?.reasoningText?.text?.trim() &&
+        typeof last.reasoningDurationMs !== 'number'
+      );
+    }
+    return false;
   });
 
   /**

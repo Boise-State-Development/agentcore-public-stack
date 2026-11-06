@@ -12,6 +12,25 @@ import { ContentBlock, ReasoningContentData } from '../../../../services/models/
 let nextPanelId = 0;
 
 /**
+ * The last sentence in streamed `text` known to be finished, or null.
+ *
+ * A boundary is `.`, `!` or `?` followed by whitespace, or a line break, so
+ * "2.8405" and "1.2%" stay whole. Whatever follows the last boundary is
+ * still arriving, even if it ends in a full stop (that may be "2." before
+ * "8405"), so it is never the answer. Takes the raw text: trimmed, a
+ * finished final sentence would lose the whitespace that marks it finished.
+ */
+function latestCompleteSentence(text: string): string | null {
+  const parts = text.split(/(?<=[.!?])\s+|\n+/);
+  parts.pop();
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const sentence = parts[i].trim();
+    if (sentence) return sentence;
+  }
+  return null;
+}
+
+/**
  * The model's reasoning, drawn as a sibling of the tool rail rather than a
  * card of its own: the same chevron headline, the same muted type, the same
  * sweep while it is still going, and the same bordered, scrolling box when
@@ -220,11 +239,20 @@ export class ReasoningContentComponent {
     return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   });
 
-  /** Get a preview of the reasoning text (first 80 chars) */
+  /**
+   * The one line beside the headline.
+   *
+   * While the model is thinking it is the latest COMPLETE sentence, so the
+   * line says what the model is on now rather than how it started, and moves
+   * a sentence at a time instead of flickering word by word as deltas land.
+   * Until a sentence completes it is the opening, as is a finished or
+   * reloaded block, where the opening is the better summary of the whole.
+   */
   previewText = computed(() => {
     const text = this.reasoningText();
-    if (text.length <= 80) return text;
-    return text.substring(0, 80) + '...';
+    const raw = this.reasoningData()?.reasoningText?.text ?? '';
+    const line = (this.isThinking() && latestCompleteSentence(raw)) || text;
+    return line.length <= 80 ? line : line.substring(0, 80) + '...';
   });
 
   /** Toggle expanded state */

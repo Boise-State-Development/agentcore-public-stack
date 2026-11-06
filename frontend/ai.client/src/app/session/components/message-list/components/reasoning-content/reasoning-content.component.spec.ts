@@ -128,3 +128,56 @@ describe('ReasoningContentComponent — tool-rail styling', () => {
     expect((second.nativeElement as HTMLElement).querySelector('.collapsible-content')!.id).not.toBe(first);
   });
 });
+
+describe('ReasoningContentComponent — preview line', () => {
+  let fixture: ComponentFixture<ReasoningContentComponent>;
+
+  const preview = (text: string, opts: { streaming?: boolean; durationMs?: number } = {}): string => {
+    fixture.componentRef.setInput('contentBlock', {
+      type: 'reasoningContent',
+      reasoningContent: { reasoningText: { text } },
+      ...(opts.durationMs === undefined ? {} : { reasoningDurationMs: opts.durationMs }),
+    } as ContentBlock);
+    fixture.componentRef.setInput('isStreaming', opts.streaming ?? false);
+    fixture.detectChanges();
+    return (fixture.componentInstance as unknown as { previewText: () => string }).previewText();
+  };
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [ReasoningContentComponent],
+    }).compileComponents();
+    fixture = TestBed.createComponent(ReasoningContentComponent);
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('follows the latest finished sentence while the model thinks', () => {
+    expect(preview('Start with small cases. Then check f(3). Now the gene', { streaming: true }))
+      .toBe('Then check f(3).');
+  });
+
+  it('keeps a decimal whole rather than splitting at its point', () => {
+    expect(preview('The ratio is 2.8405 per column. Compar', { streaming: true }))
+      .toBe('The ratio is 2.8405 per column.');
+  });
+
+  it('does not take a trailing full stop as finished until more arrives', () => {
+    // "2." may be the start of "2.8405".
+    expect(preview('First idea. The true value is 2.', { streaming: true })).toBe('First idea.');
+  });
+
+  it('shows the opening until any sentence has finished', () => {
+    expect(preview('Thinking about tilings', { streaming: true })).toBe('Thinking about tilings');
+  });
+
+  it('goes back to the opening once the model has stopped', () => {
+    expect(preview('First idea. Second idea. ', { streaming: true, durationMs: 3_000 }))
+      .toBe('First idea. Second idea.');
+  });
+
+  it('shows the opening on a reloaded block', () => {
+    expect(preview('First idea. Second idea. ')).toBe('First idea. Second idea.');
+  });
+});
