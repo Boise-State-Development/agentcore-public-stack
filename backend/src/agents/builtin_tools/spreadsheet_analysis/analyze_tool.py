@@ -916,8 +916,14 @@ async def _stage_file(
     filename: str,
     file_info: Dict[str, Any],
     is_xlsx: bool,
+    chart_path: Optional[str] = None,
 ) -> tuple[Optional[StagedFile], Optional[Dict[str, Any]]]:
     """Download ``file_info``, push it into the sandbox and probe its schema.
+
+    For a pooled sandbox the probe exec also records the staged CSVs' size and
+    mtime (what a later call checks before reusing them) and deletes
+    ``chart_path``, so staging costs no round trip beyond the pre-#259
+    sequence. A per-call sandbox runs the probe unchanged.
 
     Returns ``(staged, None)`` on success or ``(None, error_result)``.
     """
@@ -992,9 +998,13 @@ async def _stage_file(
 
     # Probe schema — separate exec so its output is isolated from user code.
     schema_preview = ""
+    observed: Optional[Dict[str, Optional[tuple[int, int]]]] = None
+    probe_code = _build_preview_code(csv_filename)
+    if entry.pooled:
+        probe_code += _build_stat_code(paths, chart_path)
     try:
         preview_resp = await entry.invoke("executeCode", {
-            "code": _build_preview_code(csv_filename),
+            "code": probe_code,
             "language": "python",
             "clearContext": False,
         })
@@ -1005,11 +1015,14 @@ async def _stage_file(
                 continue
             preview_stdout += result.get("structuredContent", {}).get("stdout", "")
         schema_preview, _ = _extract_schema_preview(preview_stdout)
+        if entry.pooled:
+            observed = _parse_stat_output(preview_stdout)
     except Exception as e:
         if sandbox_pool.is_session_gone(e):
             raise
         logger.warning(f"Schema preview failed for {csv_filename}: {e}")
 
+    files = {p: v for p, v in (observed or {}).items() if v}
     return StagedFile(
         source=str(file_info.get("source", "")),
         s3_key=str(file_info.get("s3_key", "")),
@@ -1018,7 +1031,8 @@ async def _stage_file(
         csv_filename=csv_filename,
         multi_sheet_note=multi_sheet_note,
         schema_preview=schema_preview,
-        paths=paths,
+        paths=list(files) if files else paths,
+        files=files,
     ), None
 
 
@@ -1065,18 +1079,19 @@ async def _analyze_in_sandbox(
 
     if staged is None:
         staged, error = await _stage_file(
-            entry, ci_id=ci_id, filename=filename, file_info=file_info, is_xlsx=is_xlsx
+            entry,
+            ci_id=ci_id,
+            filename=filename,
+            file_info=file_info,
+            is_xlsx=is_xlsx,
+            chart_path=chart_path,
         )
         if error is not None or staged is None:
             return error or _error("❌ Failed to stage the file in the sandbox.")
-        if entry.pooled:
-            # Remember what staging produced, and clear any stale chart before
-            # the user's code runs.
-            observed = await _stat_files(entry, staged.paths, chart_path)
-            if observed is not None and observed.get(staged.csv_filename):
-                staged.files = {p: v for p, v in observed.items() if v}
-                staged.paths = list(staged.files)
-                entry.staged[stage_key] = staged
+        # Cache only when the probe saw the primary CSV; otherwise the next
+        # call stages it again.
+        if entry.pooled and staged.csv_filename in staged.files:
+            entry.staged[stage_key] = staged
 
     if entry.pooled:
         sandbox_pool.log_outcome(outcome, session_id, filename)

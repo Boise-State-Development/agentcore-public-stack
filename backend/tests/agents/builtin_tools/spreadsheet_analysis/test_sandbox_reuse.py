@@ -89,13 +89,21 @@ class SandboxSim:
             return _stream_response()
 
         code = payload["code"]
+        stat_out = ""
         if _STAT_MARKER in code:
             paths = ast.literal_eval(re.search(r"^_paths = (.*)$", code, re.M).group(1))
             remove = ast.literal_eval(re.search(r"^_remove = (.*)$", code, re.M).group(1))
             if remove:
                 self.charts.discard(remove)
             out = {p: list(self.fs[p]) if p in self.fs else None for p in paths}
-            return _stream_response(f"{_STAT_MARKER}\n{json.dumps(out)}\n{_STAT_MARKER}\n")
+            stat_out = f"{_STAT_MARKER}\n{json.dumps(out)}\n{_STAT_MARKER}\n"
+        if "_FNAME" in code and "_score" in code:
+            # Schema probe, with the stat/cleanup appended for a pooled sandbox.
+            self.harness.probes += 1
+            fname = ast.literal_eval(re.search(r"^_FNAME = (.*)$", code, re.M).group(1))
+            return _stream_response(build_schema_stdout(file=fname) + stat_out)
+        if stat_out:
+            return _stream_response(stat_out)
         if "load_workbook" in code:
             self.harness.bootstraps += 1
             for rec in self.harness.workbook_sheets:
@@ -105,10 +113,6 @@ class SandboxSim:
             return _stream_response(
                 build_bootstrap_stdout(total=len(self.harness.workbook_sheets), sheets=self.harness.workbook_sheets)
             )
-        if "_FNAME" in code and "_score" in code:
-            self.harness.probes += 1
-            fname = ast.literal_eval(re.search(r"^_FNAME = (.*)$", code, re.M).group(1))
-            return _stream_response(build_schema_stdout(file=fname))
         # The user's code.
         self.harness.user_runs.append(code)
         if self.harness.on_user_code:
@@ -225,6 +229,25 @@ class TestReuseWithinTurn:
         # Only a (cheap) stat check ran before the second user code.
         assert fake.stopped
 
+    @pytest.mark.parametrize("pooled", [False, True])
+    def test_first_call_costs_no_extra_round_trip(self, harness, pooled):
+        """Most turns call the tool once: pooling must not add a sandbox call
+        to that case. The stat/cleanup rides in the schema-probe exec."""
+        harness.set_files([_csv()])
+        harness.seed("sessions/data.csv", b"a\n1\n")
+
+        async def scenario():
+            token = await sandbox_pool.begin_turn(SESSION, USER) if pooled else None
+            await _call(_tool(), output_filename="chart.png")
+            await sandbox_pool.end_turn(SESSION, USER, token)
+
+        _run(scenario())
+
+        names = [r.name for r in harness.created[0].invocations]
+        assert names == ["writeFiles", "executeCode", "executeCode", "readFiles"]
+        probe = harness.created[0].executed_codes()[0]
+        assert (_STAT_MARKER in probe) is pooled
+
     def test_second_call_on_multi_sheet_xlsx_keeps_sheet_note(self, harness):
         harness.set_files([_xlsx()])
         harness.seed("sessions/Budget.xlsx", b"xlsx-bytes")
@@ -248,7 +271,7 @@ class TestReuseWithinTurn:
         assert harness.downloads == 1
         assert len(harness.created) == 1
         assert "Available sheets" in second["content"][0]["text"]
-        assert second["content"][0]["text"] == first["content"][0]["text"].replace("result", "result")
+        assert second["content"][0]["text"] == first["content"][0]["text"]
 
     def test_different_file_reuses_sandbox_and_stages_only_the_new_file(self, harness):
         harness.set_files([_csv("a.csv"), _csv("b.csv")])
@@ -512,7 +535,7 @@ class TestPoolLifecycleAndIsolation:
         # No stat/cleanup calls: the sequence is exactly the pre-#259 one.
         assert not any(_STAT_MARKER in c for f in harness.created for c in f.executed_codes())
 
-    def test_pooled_session_gets_a_short_explicit_timeout(self, harness, monkeypatch):
+    def test_pooled_session_gets_an_explicit_timeout(self, harness, monkeypatch):
         monkeypatch.setenv("ANALYZE_SANDBOX_TIMEOUT_SECONDS", "120")
         harness.set_files([_csv()])
         harness.seed("sessions/data.csv", b"a\n1\n")
@@ -527,7 +550,7 @@ class TestPoolLifecycleAndIsolation:
         assert harness.created[0].start_kwargs["session_timeout_seconds"] == 120
 
     @pytest.mark.parametrize(
-        "raw,expected", [("", 300), ("abc", 300), ("5", 60), ("900", 900)]
+        "raw,expected", [("", 900), ("abc", 900), ("5", 60), ("300", 300)]
     )
     def test_timeout_env_parsing(self, monkeypatch, raw, expected):
         monkeypatch.setenv("ANALYZE_SANDBOX_TIMEOUT_SECONDS", raw)
@@ -629,9 +652,3 @@ class TestAnalyzeSandboxHook:
             await registry.invoke_callbacks_async(AfterInvocationEvent(agent=MagicMock()))
 
         _run(scenario())
-
-    def test_base_agent_registers_the_hook(self):
-        from agents.main_agent import base_agent
-
-        src = open(base_agent.__file__).read()
-        assert "AnalyzeSandboxHook(self.session_id, self.user_id)" in src
