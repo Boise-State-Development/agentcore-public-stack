@@ -766,3 +766,102 @@ async def test_a_stop_after_an_empty_call_meters_both_finished_calls(monkeypatch
     rows = recorded.cost_rows
     assert [row["messageId"] for row in rows] == [5, 7]
     assert [_row_usage(row)["outputTokens"] for row in rows] == [100, 2]
+
+
+# ---------------------------------------------------------------------------
+# Turn outcome on the cost row (release-ledger spec §5.1): every row of a turn
+# says how the turn ended, and the last row of a completed turn whose final
+# call streamed no text says `emptyAnswer` — the eval-harness failure of
+# 2026-10-30, a turn whose last visible words were a tool preamble.
+# ---------------------------------------------------------------------------
+
+
+def _final_answer(text: str) -> List[Dict[str, Any]]:
+    return [
+        {"event": {"messageStart": {"role": "assistant"}}},
+        {"event": {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": text}}}},
+        {"event": {"messageStop": {"stopReason": "end_turn"}}},
+        {"event": {"metadata": {"usage": dict(CALL_USAGE), "metrics": {"latencyMs": 100}}}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_completed_turn_marks_every_row_completed_and_none_empty(monkeypatch):
+    recorded = await _run([*_completed_call("looking"), *_final_answer("Here it is.")], monkeypatch)
+
+    rows = recorded.cost_rows
+    assert [row["outcome"] for row in rows] == ["completed", "completed"]
+    assert not any("emptyAnswer" in row for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_final_call_said_nothing_is_an_empty_answer_on_its_last_row(monkeypatch):
+    """The eval shape: "Now let me verify:" before a tool, then a final call
+    with no text. The preamble is not an answer."""
+    recorded = await _run(
+        [*_completed_call("Now let me verify:"), *_completed_call("Checking"), *_empty_call()],
+        monkeypatch,
+    )
+
+    rows = recorded.cost_rows
+    assert [row["outcome"] for row in rows] == ["completed"] * 3
+    assert [row.get("emptyAnswer") for row in rows] == [None, None, True]
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_text_is_still_an_empty_answer(monkeypatch):
+    recorded = await _run([*_completed_call("one"), *_final_answer("  \n ")], monkeypatch)
+
+    assert [row.get("emptyAnswer") for row in recorded.cost_rows] == [None, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param([_RAISE], id="exception-out-of-agent-stream"),
+        pytest.param([_FORCE_STOP], id="strands-force-stop"),
+    ],
+)
+async def test_a_failed_turn_marks_its_rows_error_and_never_empty(failure, monkeypatch):
+    recorded = await _run(_three_calls_then(failure), monkeypatch)
+
+    rows = recorded.cost_rows
+    assert [row["outcome"] for row in rows] == ["error"] * 3
+    assert not any("emptyAnswer" in row for row in rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "interruption, expect, outcome",
+    [
+        pytest.param(_STOP, None, "stopped", id="user-stop"),
+        pytest.param(_DISCONNECT, asyncio.CancelledError, "interrupted", id="disconnect"),
+    ],
+)
+async def test_an_interrupted_turn_names_how_it_was_cut(interruption, expect, outcome, monkeypatch):
+    recorded = await _run(
+        _three_calls_then([interruption]),
+        monkeypatch,
+        projected_input_tokens=PROJECTED_TOKENS,
+        expect=expect,
+    )
+
+    rows = recorded.cost_rows
+    assert [row["outcome"] for row in rows] == [outcome] * 4
+    assert not any("emptyAnswer" in row for row in rows)
+
+
+def test_a_paused_turn_is_paused_and_never_an_empty_answer():
+    """A pause ends on the tool use the user is answering, so its last call
+    has no text by design; that is not an empty answer."""
+    paused = SimpleNamespace(_interrupt_state=SimpleNamespace(activated=True))
+    slots = [{"has_text": False}]
+    assert StreamCoordinator._completed_turn_outcome(paused, slots) == ("paused", False)
+
+    running = SimpleNamespace(_interrupt_state=SimpleNamespace(activated=False))
+    assert StreamCoordinator._completed_turn_outcome(running, slots) == ("completed", True)
+    assert StreamCoordinator._completed_turn_outcome(running, [{"has_text": True}]) == ("completed", False)
+    # A MagicMock-ish truthy attribute is not a pause: only a real True counts.
+    odd = SimpleNamespace(_interrupt_state=SimpleNamespace(activated=MagicMock()))
+    assert StreamCoordinator._completed_turn_outcome(odd, [{"has_text": True}]) == ("completed", False)

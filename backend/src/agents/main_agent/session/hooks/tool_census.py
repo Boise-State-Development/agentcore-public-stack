@@ -4,14 +4,35 @@ The admin cost console can say what a conversation *cost* down to the model
 call, but until now nothing recorded what the user was *doing* in it — which
 tools ran, how often, how often they failed. That signal lives only inside
 message content, which the console must never read. This hook counts it out
-of band: tool name → ``{calls, errors}``, attributed to the model call whose
-output requested the tools, and the stream coordinator writes the tally onto
-that call's ``C#`` cost row as ``toolCalls`` (the same way ``turnAgentId``
-and ``prefixFingerprints`` ride that row).
+of band: tool name → ``{calls, errors, resultChars, inputChars,
+durationMs}``, attributed to the model call whose output requested the tools,
+and the stream coordinator writes the tally onto that call's ``C#`` cost row
+as ``toolCalls`` (the same way ``turnAgentId`` and ``prefixFingerprints`` ride
+that row).
 
 Tool names are catalog ids and MCP tool names — structural, not content.
-Nothing here reads a tool's input, and nothing of its result beyond
-``status`` and the MCP App awaiting-submission check; none of it is recorded.
+
+**Weight, never contents** (release-ledger spec D4). Counting calls says which
+tools ran; it does not say which tools filled the context. So each call also
+adds:
+
+- ``resultChars``: the summed ``len()`` of the result's ``text`` blocks and of
+  its ``json`` blocks serialised, plus a fixed :data:`IMAGE_BLOCK_CHARS` per
+  ``image`` block so an image is not invisible. Other block kinds (a
+  ``document``, a ``video``) count zero; no tool on the platform returns one
+  today, and counting their raw bytes as characters would overstate them.
+- ``inputChars``: the length of the tool input serialised, i.e. what the model
+  wrote to call the tool, which also sits in the history from then on.
+- ``durationMs``: Strands' own measured execution time
+  (``AfterToolCallEvent.duration``, the figure ``AgentStatusHook`` shows on the
+  tool row), summed. Present only when at least one call reported it, and
+  ``timedCalls`` says how many did, so a mean is never taken over calls that
+  had no timing.
+
+Only lengths are kept: the strings are measured where they already sit in
+memory and nothing of them is copied or recorded. Beyond those lengths,
+nothing of the result is read except ``status`` and the MCP App
+awaiting-submission check.
 
 Attribution uses the same cycle counter ``AgentStatusHook`` uses: ``cycle``
 increments on every ``BeforeModelCallEvent``, and a tool that runs during
@@ -26,7 +47,10 @@ never anything a later turn could inherit (CLAUDE.md: never cache session
 state on an agent instance).
 
 Costs nothing against the model: it runs on hook events the loop already
-crosses and writes to an in-process dict. Gated by
+crosses and writes to an in-process dict. All the measuring is at
+``AfterToolCallEvent``, after the tool has run; the ``Before*`` callbacks only
+reset and count, so nothing new sits in front of a first token (CLAUDE.md
+TTFT budget). Gated by
 ``COST_DIAGNOSTICS_ENABLED`` (default on, ``=false`` kill switch); while off
 every callback returns immediately and ``tally_for_call`` is always ``None``,
 so the row simply has no ``toolCalls`` and the profile reads "not tracked".
@@ -35,6 +59,7 @@ so the row simply has no ``toolCalls`` and the profile reads "not tracked".
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from typing import Any, Dict, Optional
 
@@ -46,6 +71,7 @@ from strands.hooks import (
     HookRegistry,
 )
 
+from agents.main_agent.session.hooks.agent_status import _duration_ms
 from agents.main_agent.session.hooks.mcp_app_awaiting import (
     call_awaits_user_submission,
 )
@@ -57,6 +83,52 @@ logger = logging.getLogger(__name__)
 #: that requests more than this many *distinct* tools is not a shape the
 #: platform produces; the cap only guards the row size.
 _MAX_TOOLS_PER_CALL = 64
+
+#: What one ``image`` block in a tool result counts toward ``resultChars``.
+#: An image's token cost depends on its pixels, not on any string, so it gets
+#: a fixed stand-in (release-ledger spec D4) rather than zero.
+IMAGE_BLOCK_CHARS = 1_500
+
+
+def _serialised_len(value: Any) -> int:
+    """Length of ``value`` as JSON, the way it reaches the model; 0 if it
+    cannot be serialised (a census never raises on a strange payload)."""
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        return len(value)
+    try:
+        return len(json.dumps(value, default=str, ensure_ascii=False))
+    except Exception:  # noqa: BLE001 - weight is best-effort
+        return 0
+
+
+def _result_chars(event: Any) -> int:
+    """Characters a tool result put into the context: text, JSON, and a fixed
+    figure per image. Lengths only; nothing is kept."""
+    result = getattr(event, "result", None)
+    content = result.get("content") if isinstance(result, dict) else None
+    if not isinstance(content, list):
+        return 0
+    total = 0
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        text = block.get("text")
+        if isinstance(text, str):
+            total += len(text)
+        if "json" in block:
+            total += _serialised_len(block.get("json"))
+        if "image" in block:
+            total += IMAGE_BLOCK_CHARS
+    return total
+
+
+def _input_chars(event: Any) -> int:
+    tool_use = getattr(event, "tool_use", None)
+    if not isinstance(tool_use, dict):
+        return 0
+    return _serialised_len(tool_use.get("input"))
 
 
 def _tool_name(event: Any) -> Optional[str]:
@@ -80,7 +152,8 @@ def _call_failed(event: Any) -> bool:
 
 
 class ToolCensusHook(HookProvider):
-    """Per-turn, per-model-call tool tally: ``{cycle: {tool: {calls, errors}}}``."""
+    """Per-turn, per-model-call tool tally:
+    ``{cycle: {tool: {calls, errors, resultChars, inputChars[, durationMs, timedCalls]}}}``."""
 
     def __init__(self) -> None:
         self._cycle = 0
@@ -126,9 +199,20 @@ class ToolCensusHook(HookProvider):
             if slot is None:
                 if len(per_call) >= _MAX_TOOLS_PER_CALL:
                     return
-                slot = per_call[name] = {"calls": 0, "errors": 0}
+                slot = per_call[name] = {
+                    "calls": 0,
+                    "errors": 0,
+                    "resultChars": 0,
+                    "inputChars": 0,
+                }
             slot["calls"] += 1
             if _call_failed(event):
                 slot["errors"] += 1
+            slot["resultChars"] += _result_chars(event)
+            slot["inputChars"] += _input_chars(event)
+            duration_ms = _duration_ms(getattr(event, "duration", None))
+            if duration_ms is not None:
+                slot["durationMs"] = slot.get("durationMs", 0) + duration_ms
+                slot["timedCalls"] = slot.get("timedCalls", 0) + 1
         except Exception as e:  # noqa: BLE001 - a census must never break a turn
             logger.debug("Tool census skipped a call: %s", e)

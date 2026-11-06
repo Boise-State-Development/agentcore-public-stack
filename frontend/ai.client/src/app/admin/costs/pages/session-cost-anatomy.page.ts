@@ -47,6 +47,17 @@ import {
   severityChipClass,
 } from './session-profile.util';
 
+/** One row of the "Tools by payload" table: the census entry plus its means. */
+interface ToolWeightRow {
+  name: string;
+  calls: number;
+  errors: number;
+  resultChars: number | null;
+  inputChars: number | null;
+  perCallChars: number | null;
+  meanMs: number | null;
+}
+
 /**
  * Admin drill-down: per-model-call cost anatomy for one session.
  *
@@ -346,6 +357,54 @@ import {
             />
           </div>
         </section>
+
+        <!-- ── Tool weight (release-ledger D4) ── -->
+        @if (toolWeightRows().length > 0) {
+          <section class="mb-6" aria-labelledby="tool-weight-heading">
+            <div class="overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+              <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+                <h2 id="tool-weight-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white">Tools by payload</h2>
+                <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  What each tool's results put into the context, measured in characters at intake. Tokens are an estimate (characters ÷ 4); "—" means the calls predate the measure.
+                </p>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                  <thead>
+                    <tr class="text-left text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                      <th scope="col" class="px-3 py-3 sm:pl-4">Tool</th>
+                      <th scope="col" class="px-3 py-3 text-right">Calls</th>
+                      <th scope="col" class="px-3 py-3 text-right">Errors</th>
+                      <th scope="col" class="px-3 py-3 text-right">Result chars</th>
+                      <th scope="col" class="px-3 py-3 text-right">≈ Tokens</th>
+                      <th scope="col" class="px-3 py-3 text-right">Per call</th>
+                      <th scope="col" class="px-3 py-3 text-right">Input chars</th>
+                      <th scope="col" class="px-3 py-3 text-right sm:pr-4">Mean time</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                    @for (tool of toolWeightRows(); track tool.name) {
+                      <tr class="text-sm/6 text-gray-700 dark:text-gray-300">
+                        <td class="max-w-64 truncate px-3 py-2 font-mono text-xs/5 sm:pl-4" [title]="tool.name">{{ tool.name }}</td>
+                        <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">{{ tool.calls }}</td>
+                        <td
+                          class="whitespace-nowrap px-3 py-2 text-right tabular-nums"
+                          [class.text-state-danger-600]="tool.errors > 0"
+                          [class.dark:text-state-danger-400]="tool.errors > 0"
+                        >{{ tool.errors }}</td>
+                        <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">{{ tool.resultChars != null ? tool.resultChars.toLocaleString() : '—' }}</td>
+                        <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">{{ tool.resultChars != null ? formatTokens(tool.resultChars / 4) : '—' }}</td>
+                        <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">{{ tool.perCallChars != null ? tool.perCallChars.toLocaleString() : '—' }}</td>
+                        <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">{{ tool.inputChars != null ? tool.inputChars.toLocaleString() : '—' }}</td>
+                        <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums sm:pr-4">{{ tool.meanMs != null ? formatDuration(tool.meanMs) : '—' }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        }
       } @else if (profileResource.error() && !profileNotFound()) {
         <div
           class="mb-6 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-800 dark:border-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-200"
@@ -648,6 +707,25 @@ import {
                           </div>
                           <div>
                             <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              Turn Outcome
+                            </dt>
+                            <dd class="mt-0.5 font-mono text-xs/5 text-gray-700 dark:text-gray-300">
+                              {{ row.call.outcome ?? '—' }}
+                              @if (row.call.emptyAnswer) {
+                                <span class="text-state-danger-600 dark:text-state-danger-400">(empty answer)</span>
+                              }
+                            </dd>
+                          </div>
+                          <div>
+                            <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              Build
+                            </dt>
+                            <dd class="mt-0.5 font-mono text-xs/5 text-gray-700 dark:text-gray-300">
+                              {{ row.call.appVersion ?? '—' }}{{ row.call.build ? ' · ' + row.call.build : '' }}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
                               Message Count
                             </dt>
                             <dd class="mt-0.5 font-mono text-xs/5 text-gray-700 dark:text-gray-300">
@@ -780,6 +858,33 @@ export class SessionCostAnatomyPage {
   );
 
   /** "13 × gpt-5.4" or "9 × claude-haiku-4-5, 4 × gpt-5.4" — models by call count, desc. */
+  /**
+   * The session's tool census, heaviest result payload first (release-ledger
+   * D4). Tools whose calls all predate the measure sort last, by calls.
+   */
+  readonly toolWeightRows = computed<ToolWeightRow[]>(() => {
+    const census = this.profileResource.value()?.toolCensus ?? {};
+    return Object.entries(census)
+      .map(([name, entry]) => {
+        const resultChars = entry.resultChars ?? null;
+        const timed = entry.timedCalls ?? 0;
+        return {
+          name,
+          calls: entry.calls,
+          errors: entry.errors,
+          resultChars,
+          inputChars: entry.inputChars ?? null,
+          perCallChars: resultChars != null && entry.calls > 0 ? Math.round(resultChars / entry.calls) : null,
+          meanMs: entry.durationMs != null && timed > 0 ? Math.round(entry.durationMs / timed) : null,
+        };
+      })
+      .sort((a, b) => (b.resultChars ?? -1) - (a.resultChars ?? -1) || b.calls - a.calls || a.name.localeCompare(b.name));
+  });
+
+  formatDuration(ms: number): string {
+    return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+  }
+
   readonly modelMixLine = computed(() => {
     if (!this.profileResource.hasValue()) return '';
     const mix = this.profileResource.value().modelMix;

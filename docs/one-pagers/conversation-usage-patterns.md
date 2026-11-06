@@ -85,7 +85,7 @@ What this run settled:
 Gaps where the classifier has to estimate. Each is a content-free field on the `C#` cost row or the session row:
 
 - **User-turn boundary on each call.** Turns are inferred from 60-second gaps today; `messageCount` deltas are noisy around compaction.
-- **Tool-result tokens per tool.** The census has calls and errors but not size, so tool-result growth is inferred from context deltas.
+- ~~**Tool-result tokens per tool.**~~ **Collected from 2026-11-06** (release ledger PR-2): each census entry on a `C#` row now carries `resultChars` (text and JSON characters, plus a fixed 1,500 per image), `inputChars` and `durationMs`, so tool-result growth is a stored length per tool, not a context delta. Tokens are `resultChars / 4`, labelled an estimate. Rows written before then have no size; a 30-day scan is fully covered from 2026-12-06. The spec cost of each tool's schema is the committed `backend/evals/tool_spec_tokens.json`.
 - **Artifact size per write.** The artifact's bytes per version, to price superseded copies and patch-edit savings without using output tokens as a proxy.
 - **Pasted characters on the user message.** A count only, to replace the paste heuristic.
 - **Warm vs restored agent per turn.** This decides whether tool-result aging already happened on that turn.

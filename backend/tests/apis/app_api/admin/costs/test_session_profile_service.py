@@ -156,6 +156,33 @@ async def test_tool_census_aggregates_per_call_entries_and_sets_coverage():
 
 
 @pytest.mark.asyncio
+async def test_tool_census_sums_weight_and_leaves_unmeasured_weight_none():
+    """Release-ledger D4: payload per tool reaches the anatomy, and a row
+    written before the measure shipped reads as "not measured", not zero."""
+    records = [
+        _call(0, tool_calls={"browse_web": {"calls": 1, "errors": 0}}),  # pre-PR-2 row
+        _call(1, tool_calls={"browse_web": {
+            "calls": 2, "errors": 0, "resultChars": 9_000, "inputChars": 80,
+            "durationMs": 3_000, "timedCalls": 2,
+        }}),
+        _call(2, tool_calls={
+            "browse_web": {"calls": 1, "errors": 1, "resultChars": 500, "inputChars": 40},
+            "calculator": {"calls": 1, "errors": 0},
+        }),
+    ]
+    p = await _service(_row(), records).get_session_profile("s1")
+    browse = p.tool_census["browse_web"]
+    assert browse.calls == 4
+    assert browse.result_chars == 9_500
+    assert browse.input_chars == 120
+    assert browse.duration_ms == 3_000 and browse.timed_calls == 2
+    calc = p.tool_census["calculator"]
+    assert calc.result_chars is None and calc.duration_ms is None
+    dumped = p.model_dump(by_alias=True)["toolCensus"]["browse_web"]
+    assert dumped["resultChars"] == 9_500 and dumped["timedCalls"] == 2
+
+
+@pytest.mark.asyncio
 async def test_coverage_flags_are_honest_when_nothing_optional_was_recorded():
     p = await _service(_row(), [_call(0)]).get_session_profile("s1")
     assert p.data_coverage.tool_census is False
