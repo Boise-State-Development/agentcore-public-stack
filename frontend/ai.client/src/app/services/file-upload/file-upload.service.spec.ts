@@ -318,6 +318,38 @@ describe('FileUploadService', () => {
           const badFile = new File(['x'], 'test.exe', { type: 'application/exe' });
           expect(service.uploadFile('session1', badFile)).rejects.toThrow(InvalidFileTypeError);
         });
+
+        it('should PUT to S3 with the same Content-Type it presigned with', async () => {
+          // S3 signs the URL with the presigned type and returns 403 on a mismatch.
+          const headers: Record<string, string> = {};
+          class FakeXhr {
+            upload = { onprogress: null };
+            status = 200;
+            statusText = 'OK';
+            onload: (() => void) | null = null;
+            onerror: (() => void) | null = null;
+            open() {}
+            setRequestHeader(name: string, value: string) { headers[name] = value; }
+            send() { setTimeout(() => this.onload?.()); }
+          }
+          vi.stubGlobal('XMLHttpRequest', FakeXhr);
+          try {
+            const file = new File(['SELECT 1;'], 'query.sql', { type: 'application/sql' });
+            const upload = service.uploadFile('session1', file);
+
+            const presign = await vi.waitFor(() => httpMock.expectOne(r => r.url.endsWith('/presign')));
+            expect(presign.request.body.mimeType).toBe('text/plain');
+            presign.flush({ uploadId: 'u1', presignedUrl: 'https://s3.example/put', expiresAt: '' });
+
+            const complete = await vi.waitFor(() => httpMock.expectOne(r => r.url.includes('/u1/complete')));
+            complete.flush({});
+            await upload;
+
+            expect(headers['Content-Type']).toBe('text/plain');
+          } finally {
+            vi.unstubAllGlobals();
+          }
+        });
       });
 
       describe('uploadFiles', () => {

@@ -697,7 +697,10 @@ export class FileUploadService {
         };
 
         xhr.open('PUT', presignedUrl);
-        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        // Must match the type sent to presign: S3 signs the URL with it and
+        // rejects (403) a PUT whose Content-Type differs. Browsers label some
+        // files (.sql, often .md) with a type presign resolved away.
+        xhr.setRequestHeader('Content-Type', resolveMimeType(file));
         xhr.send(file);
       });
     } catch (err) {
