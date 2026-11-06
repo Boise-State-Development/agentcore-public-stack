@@ -1,8 +1,8 @@
 """Health check endpoint"""
 
-import os
-
 from fastapi import APIRouter
+
+from apis.shared.build_info import health_fields
 
 router = APIRouter(tags=["health"])
 
@@ -12,5 +12,5 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "agent-core",
-        "version": os.environ.get("APP_VERSION", "unknown")
+        **health_fields(),
     }

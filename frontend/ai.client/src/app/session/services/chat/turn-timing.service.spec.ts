@@ -5,6 +5,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { DOCUMENT } from '@angular/common';
 import { PLATFORM_ID } from '@angular/core';
 import { TurnTimingService } from './turn-timing.service';
+import { VERSION } from '../../../../version';
 import { ConfigService } from '../../../services/config.service';
 import { FEATURES } from '../../../services/features';
 import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
@@ -54,6 +55,7 @@ describe('TurnTimingService', () => {
       hasAgent: true,
       hasFiles: false,
       visible: true,
+      spaVersion: VERSION,
     });
     expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
     req.flush(null, { status: 204, statusText: 'No Content' });

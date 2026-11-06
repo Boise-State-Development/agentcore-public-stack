@@ -77,6 +77,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from apis.shared.build_info import build_stamp
+
 logger = logging.getLogger(__name__)
 
 # Its own namespace, not the prompt-cache one: these are milliseconds, they
@@ -272,6 +274,7 @@ class TurnPrelude:
                 "streamKind": stream_kind,
                 "totalMs": total_ms,
                 "stages": {name: int(ms) for name, ms in self._marks},
+                **build_stamp(),
             }
             groups = self._groups()
             if groups:
@@ -342,6 +345,7 @@ class TurnPrelude:
                 "firstTokenMs": first_token_ms,
                 "preludeTotalMs": prelude_total_ms,
                 "stages": {name: int(ms) for name, ms in marks},
+                **build_stamp(),
             }
             groups = _group_marks(marks)
             if groups:

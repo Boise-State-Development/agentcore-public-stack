@@ -38,6 +38,18 @@ class TestStoreMessageMetadata:
         assert cost_items[0]["GSI_PK"] == "SESSION#s1"
 
     @pytest.mark.asyncio
+    async def test_cost_record_names_the_build_that_wrote_it(self, sessions_metadata_table, monkeypatch):
+        """release-ledger spec D1: every C# row carries appVersion and build."""
+        import apis.shared.sessions.metadata as module
+        from apis.shared.sessions.metadata import store_message_metadata
+
+        monkeypatch.setattr(module, "build_stamp", lambda: {"appVersion": "1.33.0", "build": "8f676bb2e1a4c0d2"})
+        await store_message_metadata(session_id="s1", user_id="u1", message_id=1, message_metadata=_make_message_metadata())
+        (row,) = [i for i in sessions_metadata_table.scan()["Items"] if i["SK"].startswith("C#")]
+        assert row["appVersion"] == "1.33.0"
+        assert row["build"] == "8f676bb2e1a4c0d2"
+
+    @pytest.mark.asyncio
     async def test_store_multiple_cost_records(self, sessions_metadata_table):
         from apis.shared.sessions.metadata import store_message_metadata
         for i in range(3):

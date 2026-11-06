@@ -38,11 +38,13 @@ SOURCE_DIRS=()
 ECR_REPO=""
 PLATFORM=""
 MANIFESTS=()
+DOCKER_BUILD_ARGS=()
 
 usage() {
     cat <<EOF >&2
 Usage: $0 --service NAME --dockerfile PATH --ecr-repository URI \\
           [--source-dir DIR]... [--manifest PATH]... [--platform PLAT]
+          [--build-arg KEY=VALUE]...
 EOF
     exit 1
 }
@@ -55,6 +57,10 @@ while [[ $# -gt 0 ]]; do
         --manifest)       MANIFESTS+=("$2"); shift 2 ;;
         --ecr-repository) ECR_REPO="$2"; shift 2 ;;
         --platform)       PLATFORM="$2"; shift 2 ;;
+        # Passed straight to `docker build`. NOT part of the content hash:
+        # a build arg that should change the tag belongs in a --manifest
+        # (build-one.sh lists VERSION there for that reason).
+        --build-arg)      DOCKER_BUILD_ARGS+=("$2"); shift 2 ;;
         -h|--help)        usage ;;
         *)                echo "Unknown arg: $1" >&2; usage ;;
     esac
@@ -140,6 +146,11 @@ BUILD_ARGS=( -f "$DOCKERFILE" -t "$ECR_REPO:$TAG" )
 if [[ -n "$PLATFORM" ]]; then
     BUILD_ARGS+=( --platform "$PLATFORM" )
 fi
+# `__CONTENT_HASH__` stands for the tag this script has just computed, so a
+# caller can bake the image's own tag into it (APP_BUILD) without knowing it.
+for kv in "${DOCKER_BUILD_ARGS[@]}"; do
+    BUILD_ARGS+=( --build-arg "${kv//__CONTENT_HASH__/$TAG}" )
+done
 
 # One bounded retry, and only for a registry 429 (Docker Hub's pull-rate
 # limit or ECR Public's data limit, both "toomanyrequests"). Any other

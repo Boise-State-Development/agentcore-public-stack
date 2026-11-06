@@ -284,6 +284,25 @@ def _done_samples(rows: Sequence[Dict[str, Any]]) -> Set[Tuple[str, int]]:
     return {(str(r["case_id"]), int(r["sample"])) for r in rows}
 
 
+def _target_build(base_url: Optional[str], invocations_url: Optional[str]) -> Dict[str, str]:
+    """The target's ``appVersion`` and ``build``, from app-api's ``/health`` or the
+    Runtime's ``/ping`` (release-ledger spec §5.1). Best effort: {} when neither answers."""
+    import urllib.request
+
+    for url in (f"{base_url.rstrip('/')}/health" if base_url else None,
+                f"{invocations_url.rstrip('/')}/ping" if invocations_url else None):
+        if not url:
+            continue
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response:  # noqa: S310 — our own target
+                body = json.loads(response.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001 — metadata only, never blocks a run
+            continue
+        if isinstance(body, dict) and body.get("version"):
+            return {"appVersion": str(body["version"]), "build": str(body.get("build") or "unknown")}
+    return {}
+
+
 def _prepare_meta(out: Path, args: argparse.Namespace, families: List[str]) -> Dict[str, Any]:
     """Create meta.json, or check a resumed run is the same run."""
     path = out / META_FILE
@@ -370,6 +389,9 @@ async def cmd_run(args: argparse.Namespace) -> int:
         return 2
     if "imageTags" not in meta and not args.invocations_url:
         meta["imageTags"] = _image_tags(args.prefix, args.region)
+        (out / META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    if "appVersion" not in meta:
+        meta.update(_target_build(args.base_url, args.invocations_url))
         (out / META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
     auth = CachedBearerAuth(CognitoRefreshBearerAuth())
@@ -844,7 +866,7 @@ def cmd_score(args: argparse.Namespace) -> int:
                 {
                     "modelId": meta["model_id"],
                     "k": meta["k"],
-                    "run": {key: meta.get(key) for key in ("startedAt", "target", "gitCommit", "imageTags")},
+                    "run": {key: meta.get(key) for key in ("startedAt", "target", "gitCommit", "imageTags", "appVersion", "build")},
                     "baselinePromotedAt": baseline.get("promotedAt"),
                     "families": [c.to_dict() for c in comparisons],
                     "judges": [

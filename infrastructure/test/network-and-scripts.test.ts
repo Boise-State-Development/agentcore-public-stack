@@ -499,6 +499,34 @@ describe('Build scripts', () => {
     expect(content).toContain('build-and-push-if-changed.sh');
   });
 
+  // docs/specs/release-ledger.md D2: the version and the image's own tag are
+  // baked into every image, and VERSION is a hash input so a version-only
+  // bump still rebuilds.
+  it('build-one.sh bakes APP_VERSION and APP_BUILD and hashes VERSION', () => {
+    const content = fs.readFileSync(path.join(SCRIPTS, 'build-one.sh'), 'utf-8');
+    expect(content).toContain('--manifest "VERSION"');
+    expect(content).toContain('--build-arg "APP_VERSION=');
+    expect(content).toContain('--build-arg "APP_BUILD=__CONTENT_HASH__"');
+  });
+
+  it('build-and-push-if-changed.sh substitutes the computed tag into build args', () => {
+    const content = fs.readFileSync(path.join(SCRIPTS, 'build-and-push-if-changed.sh'), 'utf-8');
+    expect(content).toContain('--build-arg)');
+    expect(content).toContain('${kv//__CONTENT_HASH__/$TAG}');
+  });
+
+  it('every backend Dockerfile declares APP_VERSION and APP_BUILD', () => {
+    const backend = path.resolve(__dirname, '..', '..', 'backend');
+    const dockerfiles = fs.readdirSync(backend).filter((f) => f.startsWith('Dockerfile.'));
+    expect(dockerfiles.length).toBeGreaterThan(0);
+    for (const name of dockerfiles) {
+      const content = fs.readFileSync(path.join(backend, name), 'utf-8');
+      for (const line of ['ARG APP_VERSION=unknown', 'ARG APP_BUILD=unknown', 'ENV APP_BUILD=${APP_BUILD}']) {
+        expect(content.includes(line) ? name : `${name} lacks ${line}`).toBe(name);
+      }
+    }
+  });
+
   it('build-one.sh handles all three services', () => {
     const content = fs.readFileSync(path.join(SCRIPTS, 'build-one.sh'), 'utf-8');
     expect(content).toContain('app-api)');

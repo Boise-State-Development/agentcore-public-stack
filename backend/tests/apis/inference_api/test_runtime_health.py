@@ -242,6 +242,7 @@ class TestPingPayload:
         assert payload["status"] in (STATUS_HEALTHY, STATUS_HEALTHY_BUSY)
         assert isinstance(payload["time_of_last_update"], int)
         assert "version" in payload
+        assert "build" in payload  # release-ledger spec D2: the image's own tag
 
 
 def _build_app(tracker_probe: list) -> Starlette:

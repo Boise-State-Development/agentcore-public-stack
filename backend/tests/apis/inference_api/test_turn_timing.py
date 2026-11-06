@@ -101,6 +101,18 @@ class TestStartedAt:
 
 
 class TestPayload:
+    def test_names_the_build_that_served_the_turn(self, monkeypatch):
+        """release-ledger spec §5.1: the log line can be sliced by version."""
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.build_stamp",
+            lambda: {"appVersion": "1.33.0", "build": "8f676bb2e1a4c0d2"},
+        )
+        prelude = TurnPrelude()
+        prelude.mark("preamble.quota")
+        payload = _emitted(prelude)
+        assert payload["appVersion"] == "1.33.0"
+        assert payload["build"] == "8f676bb2e1a4c0d2"
+
     def test_carries_the_session_and_the_caller_s_extras(self):
         prelude = TurnPrelude()
         prelude.mark("preamble")
@@ -121,7 +133,7 @@ class TestPayload:
 
         payload = _emitted(prelude)
 
-        assert set(payload) == {"sessionId", "streamKind", "totalMs", "stages"}
+        assert set(payload) == {"sessionId", "streamKind", "totalMs", "stages", "appVersion", "build"}
 
     def test_a_flat_prelude_carries_no_groups_key(self):
         """A group of one is noise — the number is already in `stages`."""

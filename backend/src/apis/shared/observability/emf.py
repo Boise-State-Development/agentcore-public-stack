@@ -19,6 +19,8 @@ import sys
 import time
 from typing import Optional
 
+from apis.shared.build_info import build_stamp
+
 _EMF_NAMESPACE = os.environ.get("EMF_NAMESPACE", "AgentCoreStack/PromptCache")
 
 # Dedicated raw-JSON stdout logger. propagate=False keeps the app-level
@@ -125,6 +127,9 @@ def emit_prompt_cache_metrics(
             record["sessionId"] = session_id
         if cache_status:
             record["cacheStatus"] = cache_status
+        # Properties, never dimensions: the release ledger slices by them in
+        # Logs Insights (docs/specs/release-ledger.md D1).
+        record.update(build_stamp())
         _emf_logger.info(json.dumps(record, separators=(",", ":")))
     except Exception as e:  # noqa: BLE001 - metrics must never break a request
         logger.debug("EMF emission skipped: %s", e)
@@ -171,6 +176,10 @@ def emit_emf_metrics(
             },
         }
         record.update({name: value for name, value in metrics.items()})
+        # Which build emitted the record, on every namespace, so a latency or
+        # cost percentile can be read per version without a dimension. A
+        # caller's own property of the same name wins.
+        record.update(build_stamp())
         for key, value in (properties or {}).items():
             if value is not None:
                 record[key] = value

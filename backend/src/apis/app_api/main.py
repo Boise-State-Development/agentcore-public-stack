@@ -16,6 +16,9 @@ import os
 env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
 
+# After the .env load so a local run can name its version there.
+from apis.shared.build_info import APP_VERSION  # noqa: E402
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -96,6 +99,13 @@ async def lifespan(app: FastAPI):
 
     reconcile_task = asyncio.create_task(run_reconcile_loop())
 
+    # One conditional put per build, so the release ledger knows when this
+    # build went live here (docs/specs/release-ledger.md §5.2). Off the
+    # startup path: a thread, after the app is serving.
+    from apis.shared.costs.deploy_marker import record_deploy_marker
+
+    asyncio.get_running_loop().run_in_executor(None, record_deploy_marker, "app-api")
+
     # Event-loop lag watchdog: one uvicorn worker means synchronous work on the
     # loop stalls every request on this task, /health included. This measures
     # the stall (EventLoopLagMs, alarmed in CDK) so a hang is a number and a
@@ -118,7 +128,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app with lifespan
 app = FastAPI(
     title="Agent Core Public Stack - API",
-    version=os.environ.get("APP_VERSION", "unknown"),
+    version=APP_VERSION,
     description="Agent execution and tool orchestration service",
     lifespan=lifespan
 )

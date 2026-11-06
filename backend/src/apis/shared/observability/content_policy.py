@@ -172,6 +172,10 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "forkedFrom",
     "forkSeeded",
     "turnAgentId",
+    # Which build of inference-api wrote the row: a version string and a
+    # content hash (docs/specs/release-ledger.md D1). No content.
+    "appVersion",
+    "build",
     # Set on a call that is not a turn (a handoff brief): a closed vocabulary,
     # no content. Absent on every turn's rows.
     "callKind",
