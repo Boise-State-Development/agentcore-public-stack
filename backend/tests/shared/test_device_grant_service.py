@@ -70,15 +70,30 @@ def codec() -> CookieCodec:
 
 
 def serialize_writes(repository: DeviceGrantRepository) -> None:
-    """Make the moto table's ``update_item`` atomic, as DynamoDB's is per item."""
+    """Make the moto table's writes atomic, as DynamoDB's are.
+
+    moto mutates its in-memory tables with no lock. ``update_item`` evaluates
+    its condition and applies the update as two steps, and
+    ``transact_write_items`` deep-copies every table it touches so it can roll
+    back, so a write on another thread mid-copy raises ``RuntimeError:
+    dictionary changed size during iteration``. One lock across both calls
+    stands in for DynamoDB's atomicity; conditions still decide every outcome.
+    """
     lock = threading.Lock()
     real_update_item = repository._table.update_item
+    client = repository._dynamodb.meta.client
+    real_transact_write_items = client.transact_write_items
 
     def update_item(**kwargs):
         with lock:
             return real_update_item(**kwargs)
 
+    def transact_write_items(**kwargs):
+        with lock:
+            return real_transact_write_items(**kwargs)
+
     repository._table.update_item = update_item
+    client.transact_write_items = transact_write_items
 
 
 @pytest.fixture
@@ -215,8 +230,13 @@ class TestAuthorize:
         assert found.device_code_hash == hash_device_code(auth.device_code)
 
     @pytest.mark.asyncio
-    async def test_concurrent_authorizes_all_succeed(self, service) -> None:
+    async def test_concurrent_authorizes_all_succeed(self, service, grants) -> None:
         """Distinct codes, so the create transaction never contends."""
+        # Each authorize is a transact_write_items on its own thread, and moto
+        # deep-copies the table inside it, so an unlocked insert alongside can
+        # fail the copy. DynamoDB has no such failure; the lock removes moto's.
+        serialize_writes(grants)
+
         results = await asyncio.gather(*(service.authorize() for _ in range(10)))
         assert len({r.device_code for r in results}) == 10
         assert len({r.user_code for r in results}) == 10
