@@ -507,7 +507,7 @@
         <div class="mt-4 inline-flex flex-wrap rounded-lg border border-gray-300 p-0.5 dark:border-gray-600">
           @for (opt of strictnessOptions; track opt.value) {
             <label
-              class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-gray-700 has-checked:bg-primary-600 has-checked:text-white has-focus-visible:ring-2 has-focus-visible:ring-primary-500 dark:text-gray-300"
+              class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-gray-700 has-checked:bg-primary-600 has-checked:text-white has-focus-visible:ring-2 has-focus-visible:ring-primary-500 dark:text-gray-300 dark:has-checked:text-white"
             >
               <input type="radio" formControlName="responseStrictness" [value]="opt.value" class="sr-only" />
               {{ opt.label }}

@@ -322,10 +322,13 @@ class AgentVersion(BaseModel):
     bindings: Optional[List[AgentBinding]] = Field(
         None, description="Uniform primitive bindings (D3) as reviewed; absent ≠ empty (see class docstring)"
     )
-    response_strictness: Optional[ResponseStrictness] = Field(
-        None,
+    response_strictness: ResponseStrictness = Field(
+        "balanced",
         alias="responseStrictness",
-        description="Knowledge-base grounding mode (#112) as reviewed; None means the version predates the field",
+        description=(
+            "Knowledge-base grounding mode (#112) as reviewed. A version cut before the "
+            "field existed reads as ``balanced``, which is what every Agent ran then."
+        ),
     )
     category: Optional[str] = Field(
         None, description="Category id the reviewer approved this into; absent when the Agent carried no listing"
@@ -503,12 +506,12 @@ class UpdateAssistantRequest(BaseModel):
     # through PATCH /admin/agents/{id}/listing, which records the edit (D13).
     tagline: Optional[str] = Field(None, max_length=80, description="Shelf subtitle (D4)")
     # Configurable citations & document download (#111); None = leave the stored value unchanged.
-    response_strictness: Optional[ResponseStrictness] = Field(
-        None, alias="responseStrictness", description="Knowledge-base grounding mode (#112); None = unchanged"
-    )
     show_citations: Optional[bool] = Field(None, alias="showCitations", description="Stream/persist source citations (#111)")
     allow_document_download: Optional[bool] = Field(
         None, alias="allowDocumentDownload", description="Allow source-document download from citations (#111)"
+    )
+    response_strictness: Optional[ResponseStrictness] = Field(
+        None, alias="responseStrictness", description="Knowledge-base grounding mode (#112); None = unchanged"
     )
 
 
@@ -535,12 +538,12 @@ class AssistantResponse(BaseModel):
 
     # Configurable citations & document download (#111). Always present (default True) so
     # the SPA can render the download affordance without waiting for a 403.
-    response_strictness: ResponseStrictness = Field(
-        "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
-    )
     show_citations: bool = Field(True, alias="showCitations", description="Whether source citations are shown (#111)")
     allow_document_download: bool = Field(
         True, alias="allowDocumentDownload", description="Whether source documents may be downloaded from citations (#111)"
+    )
+    response_strictness: ResponseStrictness = Field(
+        "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
     )
 
     # Share metadata (only present for shared assistants)
@@ -711,12 +714,12 @@ class AgentResponse(BaseModel):
     # Configurable citations & document download (#111). Carried on the agent surface so
     # the citation card can hide its download button without probing for a 403. Defaults
     # True, so a legacy agent's payload reads exactly as before.
-    response_strictness: ResponseStrictness = Field(
-        "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
-    )
     show_citations: bool = Field(True, alias="showCitations", description="Whether source citations are shown (#111)")
     allow_document_download: bool = Field(
         True, alias="allowDocumentDownload", description="Whether source documents may be downloaded from citations (#111)"
+    )
+    response_strictness: ResponseStrictness = Field(
+        "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
     )
 
     # Marketplace Phase 1. All three are ``None`` on an agent that has never been

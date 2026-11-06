@@ -238,7 +238,8 @@ def test_strictness_snapshot_and_apply_round_trip():
     assert apply_version(live, snap).response_strictness == "strict"
 
 
-def test_a_version_without_strictness_leaves_the_live_value():
+def test_a_version_without_strictness_runs_as_balanced():
+    """A version approved before #112 was approved as balanced; the live value must not leak through."""
     from apis.shared.assistants.models import Assistant
     from apis.shared.assistants.versions import apply_version
 
@@ -249,7 +250,16 @@ def test_a_version_without_strictness_leaves_the_live_value():
         responseStrictness="strict",
     )
     old = AgentVersion(agentId="ast-001", name="n", description="d", instructions="i")
-    assert apply_version(live, old).response_strictness == "strict"
+    assert apply_version(live, old).response_strictness == "balanced"
+
+
+def test_an_unchanged_resubmission_of_a_legacy_version_reports_no_strictness_change():
+    legacy = version()
+    legacy_dump = legacy.model_dump(by_alias=True)
+    legacy_dump.pop("responseStrictness")
+    legacy = AgentVersion(**legacy_dump)
+    assert changed_fields(legacy, version()) == []
+    assert behavior_changed(legacy, version()) is False
 
 
 def test_the_listing_edit_model_rejects_strictness():

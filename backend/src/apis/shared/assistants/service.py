@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-from .models import AgentBinding, AgentModelConfig, Assistant
+from .models import AgentBinding, AgentModelConfig, Assistant, ResponseStrictness
 from .serialization import from_ddb, to_ddb_safe
 from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 from apis.shared.timestamps import to_iso, utc_now_iso
@@ -96,7 +96,7 @@ async def create_assistant(
     tagline: Optional[str] = None,
     show_citations: bool = True,
     allow_document_download: bool = True,
-    response_strictness: str = "balanced",
+    response_strictness: ResponseStrictness = "balanced",
     project_id: Optional[str] = None,
 ) -> Assistant:
     """
@@ -563,7 +563,7 @@ async def update_assistant(
     tagline: Optional[str] = None,
     show_citations: Optional[bool] = None,
     allow_document_download: Optional[bool] = None,
-    response_strictness: Optional[str] = None,
+    response_strictness: Optional[ResponseStrictness] = None,
 ) -> Optional[Assistant]:
     """
     Update assistant fields (deep merge)
