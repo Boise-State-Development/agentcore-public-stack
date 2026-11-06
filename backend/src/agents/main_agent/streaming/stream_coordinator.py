@@ -32,7 +32,9 @@ from apis.shared.errors import (
     ErrorCode,
     StreamErrorEvent,
     build_conversational_error_event,
+    model_read_timeout_phase,
 )
+from apis.shared.observability.emf import emit_model_read_timeout
 
 from .history_count import HistoryCount, count_created_before
 from .stream_processor import process_agent_stream
@@ -107,6 +109,28 @@ def _memory_extraction_of(main_agent_wrapper: Any) -> bool:
     """
     manager = getattr(main_agent_wrapper, "session_manager", None)
     return getattr(manager, "memory_extraction", True) is not False
+
+
+def _record_model_read_timeout(
+    error_text: str, main_agent_wrapper: Any, session_id: Optional[str]
+) -> None:
+    """Count a turn a model read timeout ended (``ModelReadTimeout``, alarmed).
+
+    Called from the in-loop ``error`` arm, where both a force-stop and an
+    exception raised inside the agent stream arrive. Nothing else records it:
+    the turn reports no usage, so it writes no ``C#`` row.
+    """
+    phase = model_read_timeout_phase(error_text.lower())
+    if phase is None:
+        return
+    model_config = getattr(main_agent_wrapper, "model_config", None)
+    retry_config = getattr(model_config, "retry_config", None)
+    emit_model_read_timeout(
+        model_id=getattr(model_config, "model_id", None),
+        phase=phase,
+        read_timeout_seconds=getattr(retry_config, "read_timeout", None),
+        session_id=session_id,
+    )
 
 
 def reset_cancellation_state(agent: Any, session_manager: Any) -> None:
@@ -1165,6 +1189,9 @@ class StreamCoordinator:
                     error_message = error_data.get("error", "An error occurred")
                     error_detail = error_data.get("detail", "")
                     error_code_str = error_data.get("code", "stream_error")
+                    _record_model_read_timeout(
+                        f"{error_message} {error_detail or ''}", main_agent_wrapper, session_id
+                    )
 
                     # Map string code to ErrorCode enum
                     try:

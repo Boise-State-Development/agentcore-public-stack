@@ -288,7 +288,15 @@ class RetryConfig:
     """
     # Transport timeouts (botocore). Retries happen only in the SDK layer.
     connect_timeout: int = 5            # Seconds to wait for connection
-    read_timeout: int = 120             # Seconds to wait for response
+    # Longest gap between bytes from Bedrock. Opus 5.5 and the other models
+    # whose thinking display defaults to "omitted" send nothing while they
+    # think, so this is the longest a model may reason silently. 600s matches
+    # Claude Code's default API timeout. Must stay below app-api's proxy read
+    # timeout (`_PROXY_READ_TIMEOUT_SECONDS`, 660s), or the proxy drops the
+    # stream first and the user gets a lost connection instead of an
+    # explained error (`test_read_timeout_budget.py`). Never retried, for the
+    # same reason (`retry_strategy.is_transient_bedrock_fault`).
+    read_timeout: int = 600
 
     # SDK layer (agent event loop) — the only retry layer
     # Backoff sequence with defaults: 2s, 4s, 8s (3 retries before giving up)
@@ -303,7 +311,7 @@ class RetryConfig:
 
         Environment variables (all optional, defaults shown):
             RETRY_CONNECT_TIMEOUT=5
-            RETRY_READ_TIMEOUT=120
+            RETRY_READ_TIMEOUT=600
             RETRY_SDK_MAX_ATTEMPTS=4
             RETRY_SDK_INITIAL_DELAY=2.0
             RETRY_SDK_MAX_DELAY=16.0

@@ -1191,6 +1191,15 @@ export const OBSERVABILITY_DEFAULT_P99_LATENCY_MS = 120_000;
 export const OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD = 10;
 
 /**
+ * Chat turns per hour whose Runtime stream broke under app-api mid-turn
+ * (`ChatStreamUpstreamDropped`), above which to alarm. Not zero: production
+ * ran about 3 a day (47 in 14 days to 2026-11-06, at most 10 in a day), mostly
+ * the Runtime closing the connection. Above that baseline, a burst means
+ * something new is cutting streams, such as an idle limit on a silent turn.
+ */
+export const OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD = 5;
+
+/**
  * Concurrent AgentCore Runtime sessions (`ActiveSessionCount`, Maximum) above
  * which to alarm.
  *
@@ -1298,6 +1307,8 @@ export interface ObservabilityConfig {
   /** AgentCore Runtime p99 Latency floor, in ms. */
   agentCoreLatencyMs: number;
   agentCoreErrorThreshold: number;
+  /** Chat Runtime streams dropped mid-turn per hour above which to alarm. */
+  chatStreamDropThreshold: number;
   /**
    * Concurrent AgentCore Runtime sessions above which to alarm. A cost signal
    * (Runtime bills memory for session lifetime), not a quota one.
@@ -2097,6 +2108,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreErrorThreshold'))
         ?? scope.node.tryGetContext('observability')?.agentCoreErrorThreshold
         ?? OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      chatStreamDropThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.chatStreamDropThreshold'))
+        ?? scope.node.tryGetContext('observability')?.chatStreamDropThreshold
+        ?? OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD,
       agentCoreActiveSessionThreshold:
         parseIntEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD)
         ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreActiveSessionThreshold'))

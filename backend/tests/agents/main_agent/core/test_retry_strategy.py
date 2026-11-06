@@ -269,11 +269,24 @@ class TestBedrockTransportFaults:
         [
             EndpointConnectionError(endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com"),
             ConnectTimeoutError(endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com"),
-            ReadTimeoutError(endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com"),
         ],
     )
-    def test_connection_failures_and_timeouts_are_retryable(self, error):
+    def test_connection_failures_and_connect_timeouts_are_retryable(self, error):
         assert TransientModelRetryStrategy().is_retryable(error) is True
+
+    def test_read_timeout_before_the_stream_is_not_retried(self):
+        """RETRY_READ_TIMEOUT is the call's whole silence budget: a retry would
+        wait it out again, past app-api's proxy read timeout."""
+        error = ReadTimeoutError(endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com")
+        assert TransientModelRetryStrategy().is_retryable(error) is False
+
+    def test_read_timeout_mid_stream_is_not_retried(self):
+        """botocore's EventStream iterates the raw urllib3 stream, so a silent
+        open stream raises urllib3's error, not botocore's."""
+        from urllib3.exceptions import ReadTimeoutError as Urllib3ReadTimeoutError
+
+        error = Urllib3ReadTimeoutError(None, "/model/x/converse-stream", "Read timed out.")
+        assert TransientModelRetryStrategy().is_retryable(error) is False
 
     @pytest.mark.parametrize("status", [500, 502, 503, 504])
     def test_unmodeled_5xx_is_retryable(self, status):

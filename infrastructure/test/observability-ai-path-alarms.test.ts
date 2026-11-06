@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 
+import { OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD } from '../lib/config';
 import { PlatformStack } from '../lib/platform-stack';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
 
@@ -110,6 +111,31 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
     });
   });
 
+  describe('chat turn time limits', () => {
+    // These are our own EMF metrics. The metric name must match the backend
+    // emitter exactly, or the alarm sits in INSUFFICIENT_DATA forever and reads
+    // as healthy (see .kiro/steering/observability.md §0).
+    it('alarms on any model read timeout, hourly', () => {
+      const alarm = byName('model-read-timeouts');
+      expect(alarm.Properties.Namespace).toBe('AgentCoreStack/TurnLatency');
+      expect(alarm.Properties.MetricName).toBe('ModelReadTimeout');
+      expect(alarm.Properties.Statistic).toBe('Sum');
+      expect(alarm.Properties.Period).toBe(3600);
+      expect(alarm.Properties.Threshold).toBe(0);
+      expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
+    });
+
+    it('alarms on a burst of upstream stream drops above the baseline', () => {
+      const alarm = byName('chat-stream-upstream-drops');
+      expect(alarm.Properties.Namespace).toBe('AgentCoreStack/TurnLatency');
+      expect(alarm.Properties.MetricName).toBe('ChatStreamUpstreamDropped');
+      expect(alarm.Properties.Statistic).toBe('Sum');
+      expect(alarm.Properties.Period).toBe(3600);
+      expect(alarm.Properties.Threshold).toBe(OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD);
+      expect(alarm.Properties.TreatMissingData).toBe('notBreaching');
+    });
+  });
+
   describe('AgentCore Memory', () => {
     it('alarms on hot-path system errors and throttles', () => {
       for (const name of [
@@ -214,6 +240,7 @@ describe('AI-path alarms (Bedrock, Memory, Gateway, Code Interpreter)', () => {
   it('all AI-path alarms are routed to the alarm topic', () => {
     for (const name of [
       'bedrock-invocation-throttles', 'bedrock-invocation-server-errors',
+      'model-read-timeouts', 'chat-stream-upstream-drops',
       'bedrock-tpm-quota-usage-global-anthropic-claude-sonnet-5',
       'bedrock-tpm-quota-usage-us-anthropic-claude-sonnet-4-20250514-v1-0',
       'agentcore-memory-system-errors',

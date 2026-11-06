@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { loadConfig, buildCorsOrigins, AppConfig, MEMORY_SENSITIVE_PATTERNS_MAX_CHARS,
   OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
   OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD,
   OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
   OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
   OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
@@ -87,6 +88,7 @@ const OBSERVABILITY_ENV_KEYS = [
   'CDK_OBSERVABILITY_ALB_P99_LATENCY_MS',
   'CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS',
   'CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD',
+  'CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD',
   'CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD',
   'CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD',
   'CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT',
@@ -2455,6 +2457,7 @@ describe('Observability Configuration', () => {
       const obs = loadConfig(app).observability;
       expect(obs.albTarget5xxThreshold).toBe(OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD);
       expect(obs.agentCoreErrorThreshold).toBe(OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD);
+      expect(obs.chatStreamDropThreshold).toBe(OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD);
       expect(obs.agentCoreActiveSessionThreshold).toBe(
         OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
       );
@@ -2553,6 +2556,7 @@ describe('Observability Configuration', () => {
       process.env.CDK_OBSERVABILITY_ALB_P99_LATENCY_MS = '2000';
       process.env.CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS = '3000';
       process.env.CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD = '4';
+      process.env.CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD = '12';
       process.env.CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD = '250';
       process.env.CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD = '5';
       process.env.CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT = '60';
@@ -2566,6 +2570,7 @@ describe('Observability Configuration', () => {
       expect(obs.albP99LatencyMs).toBe(2000);
       expect(obs.agentCoreLatencyMs).toBe(3000);
       expect(obs.agentCoreErrorThreshold).toBe(4);
+      expect(obs.chatStreamDropThreshold).toBe(12);
       expect(obs.agentCoreActiveSessionThreshold).toBe(250);
       expect(obs.lambdaErrorThreshold).toBe(5);
       expect(obs.lambdaDurationPercentOfTimeout).toBe(60);
@@ -2602,6 +2607,7 @@ describe('Observability Configuration', () => {
       app.node.setContext('observability.albP99LatencyMs', '12');
       app.node.setContext('observability.agentCoreLatencyMs', '13');
       app.node.setContext('observability.agentCoreErrorThreshold', '14');
+      app.node.setContext('observability.chatStreamDropThreshold', '24');
       app.node.setContext('observability.agentCoreActiveSessionThreshold', '140');
       app.node.setContext('observability.lambdaErrorThreshold', '15');
       app.node.setContext('observability.lambdaDurationPercentOfTimeout', '16');
@@ -2624,6 +2630,7 @@ describe('Observability Configuration', () => {
         albP99LatencyMs: 12,
         agentCoreLatencyMs: 13,
         agentCoreErrorThreshold: 14,
+        chatStreamDropThreshold: 24,
         agentCoreActiveSessionThreshold: 140,
         lambdaErrorThreshold: 15,
         lambdaDurationPercentOfTimeout: 16,

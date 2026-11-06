@@ -678,7 +678,7 @@ class TestRetryConfigDefaults:
         assert retry_config.connect_timeout == 5
 
     def test_default_read_timeout(self, retry_config: RetryConfig):
-        assert retry_config.read_timeout == 120
+        assert retry_config.read_timeout == 600
 
 
 # ---------------------------------------------------------------------------
