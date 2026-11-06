@@ -61,6 +61,7 @@ def _get_mime_type_from_extension(filename: str) -> Optional[str]:
         ".txt": "text/plain",
         ".rtf": "text/rtf",
         ".md": "text/markdown",
+        ".sql": "text/plain",
         ".csv": "text/csv",
         ".html": "text/html",
         ".htm": "text/html",
@@ -78,6 +79,11 @@ def _detect_mime_type(content_type: Optional[str], filename: str) -> str:
     """
     Detect MIME type from S3 ContentType or file extension
     """
+    # Browsers report .sql as application/sql, application/x-sql or nothing, none of
+    # which Docling knows. SQL is plain text, so the extension wins for these files.
+    if os.path.splitext(filename)[1].lower() == ".sql":
+        return "text/plain"
+
     # First, try S3 ContentType (most reliable)
     if content_type:
         return content_type
