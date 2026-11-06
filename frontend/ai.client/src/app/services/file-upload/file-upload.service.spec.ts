@@ -541,6 +541,9 @@ describe('FileUploadService', () => {
             ['log.txt', 'text/plain'],
             ['notes.md', 'text/markdown'],
             ['page.html', 'text/html'],
+            // Browsers report .sql as application/sql, application/x-sql or nothing.
+            ['query.sql', 'application/sql'],
+            ['query.sql', ''],
             // The browser reported nothing; the extension decides, as presign will.
             ['scan.pdf', ''],
           ];
@@ -598,6 +601,8 @@ describe('FileUploadService', () => {
         it('falls back to the extension when the provider reports a vague type', () => {
           expect(isAttachableSourceFile({ name: 'notes.md', mimeType: 'application/octet-stream', sizeBytes: 10 }, FLAG_OFF)).toBe(true);
           expect(resolveMimeTypeFor('notes.md', 'application/octet-stream')).toBe('text/markdown');
+          expect(resolveMimeTypeFor('query.sql', 'application/sql')).toBe('text/plain');
+          expect(resolveMimeTypeFor('query.sql', '')).toBe('text/plain');
         });
 
         it('applies the class cap, which the large-document flag raises for documents', () => {

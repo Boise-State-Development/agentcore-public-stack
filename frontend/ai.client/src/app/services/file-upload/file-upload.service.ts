@@ -41,7 +41,7 @@ export const ALLOWED_MIME_TYPES: Record<string, string> = {
  */
 export const ALLOWED_EXTENSIONS = [
   // Documents
-  '.pdf', '.docx', '.txt', '.html', '.csv', '.xls', '.xlsx', '.pptx', '.md',
+  '.pdf', '.docx', '.txt', '.html', '.csv', '.xls', '.xlsx', '.pptx', '.md', '.sql',
   // Images
   '.png', '.jpg', '.jpeg', '.gif', '.webp'
 ];
@@ -408,6 +408,7 @@ const EXTENSION_TO_MIME_TYPE: Record<string, string> = {
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.md': 'text/markdown',
+  '.sql': 'text/plain',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
