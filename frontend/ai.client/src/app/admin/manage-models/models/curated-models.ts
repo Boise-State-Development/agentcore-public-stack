@@ -192,8 +192,12 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       // Measured against `us.anthropic.claude-opus-5-5` 2026-09-25: temperature
       // and top_p both 400 ("deprecated for this model"), and
       // `thinking.type.disabled` 400s — adaptive thinking is always on, so no
-      // `thinking` param is declared. The effort enum is the endpoint's own
-      // 400 on a bogus level; `medium` is the card's published default.
+      // `thinking` param is declared. The backend sends the thinking dict
+      // itself (summarized display + the drop_block binding,
+      // `_apply_thinking_binding` in model_config.py), because a catalog row
+      // already saved in a deployment never picks up a change here. The
+      // effort enum is the endpoint's own 400 on a bogus level; `medium` is
+      // the card's published default.
       supportedParams: {
         params: {
           max_tokens: { supported: true, min: 1, max: 128_000, default: 32_000 },

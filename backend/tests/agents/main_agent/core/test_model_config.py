@@ -377,12 +377,15 @@ class TestToBedrockConfig:
 
 class TestThinkingBinding:
     """5.5-generation models get `drop_block` so a compaction ahead of a
-    replayed thinking block never 400s on an enforcing account.
+    replayed thinking block never 400s on an enforcing account, and
+    `display: "summarized"` so a long think streams instead of going silent
+    past the read timeout.
 
-    Strands' own retry needs a `thinking` dict on the request, and Haiku 5.5
-    thinks by default without one, so the binding is set up front. Probed on
-    dev 2026-11-03: the beta is required ("Extra inputs are not permitted"
-    without it), and `{type: "enabled"}` is rejected.
+    Strands' own retry needs a `thinking` dict on the request, and these
+    models think by default without one, so the binding is set up front.
+    Probed on dev (Haiku 5.5 2026-11-03, Opus 5.5 2026-11-06): the beta is
+    required ("Extra inputs are not permitted" without it), and
+    `{type: "enabled"}` is rejected.
     """
 
     _BINDING = {"prefix_mismatch_behavior": "drop_block"}
@@ -393,20 +396,47 @@ class TestThinkingBinding:
     def _mcp_apps_off(self, monkeypatch):
         monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "false")
 
-    def test_default_request_gets_adaptive_thinking_with_drop_block(self):
+    @pytest.mark.parametrize(
+        "model_id", ["us.anthropic.claude-haiku-5-5", "us.anthropic.claude-opus-5-5"]
+    )
+    def test_default_request_gets_summarized_adaptive_thinking_with_drop_block(self, model_id):
         arf = ModelConfig(
-            model_id="us.anthropic.claude-haiku-5-5", inference_params={"effort": "medium"}
+            model_id=model_id, inference_params={"effort": "medium"}
         ).to_bedrock_config()["additional_request_fields"]
 
-        assert arf["thinking"] == {"type": "adaptive", "block_binding": self._BINDING}
+        assert arf["thinking"] == {
+            "type": "adaptive",
+            "display": "summarized",
+            "block_binding": self._BINDING,
+        }
         assert arf["anthropic_beta"] == [self._BETA]
         assert arf["output_config"] == {"effort": "medium"}
 
-    def test_global_profile_is_covered_too(self):
-        arf = ModelConfig(model_id="global.anthropic.claude-haiku-5-5").to_bedrock_config()[
-            "additional_request_fields"
-        ]
+    @pytest.mark.parametrize(
+        "model_id", ["global.anthropic.claude-haiku-5-5", "global.anthropic.claude-opus-5-5"]
+    )
+    def test_global_profile_is_covered_too(self, model_id):
+        arf = ModelConfig(model_id=model_id).to_bedrock_config()["additional_request_fields"]
         assert arf["thinking"]["block_binding"] == self._BINDING
+
+    def test_caller_set_display_is_kept(self):
+        arf = ModelConfig(
+            model_id="us.anthropic.claude-opus-5-5",
+            inference_params={"thinking": {"type": "adaptive", "display": "omitted"}},
+        ).to_bedrock_config()["additional_request_fields"]
+
+        assert arf["thinking"] == {
+            "type": "adaptive",
+            "display": "omitted",
+            "block_binding": self._BINDING,
+        }
+
+    def test_opus_thinking_budget_shapes_adaptive(self):
+        arf = ModelConfig(
+            model_id="us.anthropic.claude-opus-5-5", inference_params={"thinking": 4096}
+        ).to_bedrock_config()["additional_request_fields"]
+
+        assert arf["thinking"]["type"] == "adaptive"
 
     def test_thinking_budget_shapes_adaptive_and_keeps_its_display(self):
         arf = ModelConfig(
@@ -446,9 +476,7 @@ class TestThinkingBinding:
         "model_id",
         [
             "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            # Has live conversations: adding it re-writes their prefixes, a
-            # priced decision tracked in the kaizen queue, not a side effect.
-            "us.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-opus-4-7",
             "us.amazon.nova-micro-v1:0",
         ],
     )
