@@ -39,16 +39,24 @@ _FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
 # default without one, so nothing would retry and the turn would fail. We
 # therefore set the binding on every request up front.
 #
-# Only models with no live conversations are listed. Adding one that has
-# them changes `additionalModelRequestFields` and re-writes every such
-# conversation's cached prefix once, so price it first. Opus 5.5 is in that
-# position: docs/kaizen/review-queue.md, [2026-11-03] Opus 5.5 drop-block entry.
+# The same dict also sets `display: "summarized"`. Both models default to
+# "omitted", which sends no bytes while they reason: on dev an Opus 5.5 think
+# was silent for 30.6 s and a Haiku 5.5 one for 45 s. A long think on a large
+# document outlasts the per-read timeout ("Agent force-stopped … Read timed
+# out" in prod). Summarized, the longest gap in a 48 s turn was 7.1 s.
 #
-# Probed on dev for Haiku 5.5 (2026-11-03): accepted with the beta, and
-# "thinking.adaptive.block_binding: Extra inputs are not permitted" without it.
+# Neither field re-writes a cached prefix. Measured on dev 2026-11-06 for
+# both models, with signed reasoning already in the history: moving from no
+# `thinking` dict to this one, and back, read all ~50K cached tokens and
+# wrote none. Replay is unchanged too: the turn after a summarized block
+# bills the same input with the summary blanked, so it adds nothing per turn.
+#
+# Probed on dev (Haiku 5.5 2026-11-03, Opus 5.5 2026-11-06): accepted with the
+# beta, and "thinking.adaptive.block_binding: Extra inputs are not permitted"
+# without it.
 _THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 _THINKING_BINDING_DROP_BLOCK = {"prefix_mismatch_behavior": "drop_block"}
-_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5",)
+_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5", "claude-opus-5-5")
 
 
 class ModelProvider(str, Enum):
@@ -161,6 +169,9 @@ _BEDROCK_ADAPTIVE_THINKING_MARKERS = (
     # Probed 2026-11-03: `{type: "enabled", budget_tokens}` 400s with
     # "thinking.type.enabled is not supported for this model".
     "claude-haiku-5-5",
+    # Adaptive is always on; no curated row declares `thinking`, so this only
+    # shapes an admin-set budget the way Haiku 5.5's is shaped.
+    "claude-opus-5-5",
 )
 
 
@@ -171,13 +182,15 @@ def _bedrock_uses_adaptive_thinking(model_id: Optional[str]) -> bool:
 
 
 def _apply_thinking_binding(config: Dict[str, Any], model_id: Optional[str]) -> None:
-    """Ask a listed 5.5-generation model to drop stale replayed thinking blocks.
+    """Ask a listed 5.5-generation model to drop stale replayed thinking blocks
+    and to stream its reasoning.
 
     These models think by default, so a request that names no ``thinking``
-    gets ``{type: "adaptive"}`` (what they would do anyway, display left at
-    its default) plus the ``drop_block`` binding and its beta. A thinking
-    config that is disabled, not adaptive, or already carries a
-    ``block_binding`` is left as written. See ``_BEDROCK_THINKING_BINDING_MARKERS``.
+    gets ``{type: "adaptive"}`` (what they would do anyway) with ``display:
+    "summarized"`` unless the config names a display, plus the ``drop_block``
+    binding and its beta. A thinking config that is disabled, not adaptive,
+    or already carries a ``block_binding`` is left as written. See
+    ``_BEDROCK_THINKING_BINDING_MARKERS``.
     """
     mid = (model_id or "").lower()
     if not any(marker in mid for marker in _BEDROCK_THINKING_BINDING_MARKERS):
@@ -186,7 +199,10 @@ def _apply_thinking_binding(config: Dict[str, Any], model_id: Optional[str]) -> 
     thinking = arf.get("thinking", {"type": "adaptive"})
     if not isinstance(thinking, dict) or thinking.get("type") != "adaptive" or "block_binding" in thinking:
         return
-    arf["thinking"] = {**thinking, "block_binding": dict(_THINKING_BINDING_DROP_BLOCK)}
+    shaped = dict(thinking)
+    shaped.setdefault("display", "summarized")
+    shaped["block_binding"] = dict(_THINKING_BINDING_DROP_BLOCK)
+    arf["thinking"] = shaped
     betas = list(arf.get("anthropic_beta") or [])
     if _THINKING_BINDING_BETA not in betas:
         betas.append(_THINKING_BINDING_BETA)

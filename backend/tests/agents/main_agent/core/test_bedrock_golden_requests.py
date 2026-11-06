@@ -39,10 +39,13 @@ CASES = [
     ("sonnet46-no-max-tokens", "us.anthropic.claude-sonnet-4-6", {}, False, "", "true"),
     ("sonnet46-1h-static-prefix", "us.anthropic.claude-sonnet-4-6", {"max_tokens": 8192}, False, "1h", "true"),
     ("sonnet46-mcp-apps-off", "us.anthropic.claude-sonnet-4-6", {"max_tokens": 8192}, False, "", "false"),
+    # The curated row's params: no `thinking` declared, so the summarized
+    # adaptive dict, the drop_block binding and its beta all come from
+    # model_config._apply_thinking_binding.
     (
         "opus55-thinking",
         "global.anthropic.claude-opus-5-5",
-        {"max_tokens": 32000, "thinking": {"type": "adaptive"}},
+        {"max_tokens": 32000, "effort": "medium"},
         True,
         "",
         "true",
@@ -56,8 +59,8 @@ CASES = [
         "true",
     ),
     ("nova-micro", "us.amazon.nova-micro-v1:0", {"max_tokens": 512}, False, "", "true"),
-    # Thinks by default and carries the drop_block binding + its beta on every
-    # request (model_config._apply_thinking_binding).
+    # Thinks by default and carries summarized display, the drop_block
+    # binding and its beta on every request (model_config._apply_thinking_binding).
     (
         "haiku55-thinking",
         "us.anthropic.claude-haiku-5-5",

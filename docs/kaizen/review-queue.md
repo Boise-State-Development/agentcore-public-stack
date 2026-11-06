@@ -25,6 +25,10 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
     - The compaction ceiling is `min(window × 0.5, 100K)`, so a 1M window still compacts at 100K, with a 150K hard ceiling.
     - After a cut the trigger stays disarmed until input ≤ ceiling or ≥ hard ceiling, so force the second cut past 150K.
 - **Status**: open (supersedes the earlier "attribute the drop-block re-write" framing, which assumed the retry could fire)
+- **Status 2026-11-06**: the fix half **shipped** in branch `fix/opus-55-summarized-thinking-drop-block`. Opus 5.5 and Haiku 5.5 now send `thinking: {type: adaptive, display: summarized, block_binding: {prefix_mismatch_behavior: drop_block}}` plus the binding beta on every request (`_apply_thinking_binding`), so the drop-block path is set up front and no longer depends on Strands' retry.
+  - **The feared re-write does not happen.** On dev, with signed `omitted` reasoning already in the history, going from no `thinking` dict to this one, and back, read every cached token and wrote none. Opus 5.5 read 51,361 and Haiku 5.5 read 49,936. Bedrock's cache key does not cover these fields while the thinking type stays adaptive. The measured cost of the rollout is $0.
+  - **Summarized display also closes the silent-think timeout** (the "Agent force-stopped … Read timed out" turns). Opus 5.5's longest stream gap fell from 30.6 s to 7.1 s; Haiku 5.5 was silent for 45 s before. A replayed summary is not billed, since blanking its text gives the same next-turn input.
+  - **Still open:** the attribution half (`thinkingDropBlock` on the `C#` row). It only matters once an enforcing account actually drops a block.
 
 ### [2026-11-03] A compaction's own re-write is counted as `wastedUsd`
 - **Source**: the same dev probe (#1850 follow-up)
