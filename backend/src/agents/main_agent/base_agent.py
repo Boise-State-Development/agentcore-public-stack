@@ -14,6 +14,7 @@ from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactor
 from agents.main_agent.session import SessionFactory
 from agents.main_agent.session.hooks import (
     AgentStatusHook,
+    AnalyzeSandboxHook,
     ContextLedgerHook,
     ToolCensusHook,
     DisplayTextHook,
@@ -426,6 +427,15 @@ class BaseAgent(ABC):
         # of the stable split, so an Agent rebuilt for this session (cache
         # bypass, @-mention, memory binding) adopts it instead of re-counting.
         hooks.append(ContextAttributionHook(session_id=self.session_id))
+
+        # Scopes the analyze_spreadsheet Code Interpreter sandbox to this turn
+        # (#259): BeforeInvocation registers the turn token that lets the tool
+        # reuse one sandbox across its calls, AfterInvocation stops it. Held on
+        # the wrapper so the stream coordinator can release it from its own
+        # `finally` too. Inert unless the tool is used or
+        # ANALYZE_SANDBOX_REUSE_ENABLED=false.
+        self.analyze_sandbox_hook = AnalyzeSandboxHook(self.session_id, self.user_id)
+        hooks.append(self.analyze_sandbox_hook)
 
         # Live narration of what the agent is doing (model call / tool call
         # boundaries) plus Strands-measured per-tool durations. Held on the

@@ -13,7 +13,9 @@ from typing import Any, Dict, Optional
 import boto3
 from strands import tool
 
+from . import sandbox_pool
 from .list_spreadsheets_tool import _get_kb_files, _get_session_files
+from .sandbox_pool import SandboxEntry, StagedFile
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,7 @@ if ANALYZE_WARN_FILE_SIZE_BYTES >= ANALYZE_MAX_FILE_SIZE_BYTES:
 
 _SCHEMA_MARKER = "[__SCHEMA__]"
 _SHEETS_MARKER = "[__SHEETS__]"
+_STAT_MARKER = "[__STAT__]"
 
 
 def _sanitize_sheet_name(name: str) -> str:
@@ -483,21 +486,6 @@ def _get_code_interpreter_id() -> Optional[str]:
         return None
 
 
-async def _invoke(client: Any, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Call a Code Interpreter method without blocking the event loop.
-
-    ``client.invoke`` is synchronous boto3 and its response ``stream`` is
-    read lazily, so the stream is drained inside the worker thread too: the
-    returned dict carries a plain list that the caller can iterate on the loop.
-    """
-
-    def _call() -> Dict[str, Any]:
-        resp = client.invoke(method, params)
-        return {**resp, "stream": list(resp.get("stream", []))}
-
-    return await asyncio.to_thread(_call)
-
-
 def make_analyze_tool(
     assistant_id: Optional[str],
     session_id: str,
@@ -584,8 +572,6 @@ def make_analyze_tool(
             Analysis results as text (with a schema footer), and optionally
             a chart image.
         """
-        from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
-
         # 1. Validate Code Interpreter is available
         ci_id = _get_code_interpreter_id()
         if not ci_id:
@@ -624,44 +610,134 @@ def make_analyze_tool(
             else ""
         )
 
-        # 3. Download from S3
-        try:
-            file_bytes = await _download_file(file_info)
-        except Exception as e:
-            return {"content": [{"text": f"❌ Failed to download file: {e}"}], "status": "error"}
-
-        # 4. Push file to Code Interpreter
         content_type = file_info.get("content_type", "")
         is_xlsx = "spreadsheetml" in content_type or filename.lower().endswith(".xlsx")
 
-        region = os.getenv("AWS_REGION", "us-west-2")
-        code_interpreter = CodeInterpreter(region)
+        # 3. Run in this turn's sandbox when one is registered (#259), else in
+        # a private per-call sandbox that is stopped before returning. A
+        # sandbox whose remote session expired is replaced once and the whole
+        # call is retried on the fresh one.
+        retried = False
+        for _ in range(3):
+            entry = sandbox_pool.acquire(session_id, user_id) or sandbox_pool.new_transient_entry(
+                session_id, user_id
+            )
+            try:
+                async with entry.lock:
+                    if entry.closed:
+                        # Released or evicted while this call waited for the lock.
+                        continue
+                    result = await _analyze_in_sandbox(
+                        entry,
+                        ci_id=ci_id,
+                        session_id=session_id,
+                        filename=filename,
+                        file_info=file_info,
+                        is_xlsx=is_xlsx,
+                        soft_warning=soft_warning,
+                        python_code=python_code,
+                        output_filename=output_filename,
+                    )
+                    entry.calls += 1
+                    return result
+            except Exception as e:
+                if entry.pooled and not retried and entry.calls > 0 and sandbox_pool.is_session_gone(e):
+                    retried = True
+                    sandbox_pool.log_outcome("stale", session_id, filename)
+                    await sandbox_pool.evict(entry)
+                    continue
+                raise
+            finally:
+                if not entry.pooled:
+                    await entry.stop()
 
-        try:
-            await asyncio.to_thread(code_interpreter.start, identifier=ci_id)
+        return {
+            "content": [{"text": "❌ The analysis sandbox is unavailable. Retry the request."}],
+            "status": "error",
+        }
 
-            if is_xlsx:
-                # Push XLSX as base64, decode in sandbox, then convert every
-                # sheet to its own CSV (subject to defensive caps below).
-                # Model gets a full sheet inventory in the schema footer so
-                # cross-sheet aggregation works in a single analyze call.
-                import base64
-                b64_content = base64.b64encode(file_bytes).decode("ascii")
-                stem = os.path.splitext(filename)[0]
-                # Back-compat alias: single-sheet workbooks still expose
-                # <stem>.csv so the one-file, one-sheet fast path keeps
-                # its existing filename contract. Multi-sheet workbooks
-                # use <stem>.<sanitized_sheet>.csv per sheet.
-                primary_csv_filename = f"{stem}.csv"
+    return analyze_spreadsheet
 
-                await _invoke(code_interpreter, "writeFiles", {"content": [
-                    {"path": "_encoded.b64", "text": b64_content},
-                ]})
-                # Bootstrap: iterate every sheet (capped), write a CSV per
-                # sheet, emit an inventory the outer tool can parse. Uses
-                # read_only + values_only to avoid loading full styles/
-                # formulas into memory — important for large workbooks.
-                bootstrap_code = f"""
+
+async def _find_file(filename: str, assistant_id: Optional[str], session_id: str) -> Optional[Dict[str, Any]]:
+    """Find a file by name in accessible sources. Returns file info or None.
+
+    Matches are tolerant to XLSX ↔ CSV aliasing: if the model asks for
+    ``foo.csv`` but only ``foo.xlsx`` exists (because the sandbox converts
+    XLSX → CSV and the model copied the sandbox name into the ``filename``
+    param on retry), we treat them as the same file. Prevents the common
+    round-trip loop where analyze_spreadsheet rejects a reasonable guess
+    and forces the model to call list_spreadsheets (#206).
+
+    Both sides are compared with surrounding whitespace stripped. A stored
+    name can carry a leading or trailing space (Drive-synced documents do),
+    ``list_spreadsheets`` shows it verbatim, and the model trims it when it
+    calls ``analyze_spreadsheet``. Only matching is normalized: the returned
+    record keeps its stored name and S3 key.
+    """
+    candidates: list[Dict[str, Any]] = []
+    if assistant_id:
+        candidates.extend(await _get_kb_files(assistant_id))
+    candidates.extend(await _get_session_files(session_id))
+
+    target_lower = filename.strip().lower()
+    target_stem, _ = os.path.splitext(target_lower)
+
+    # First pass: exact match (case-insensitive, whitespace-trimmed).
+    for f in candidates:
+        if f["filename"].strip().lower() == target_lower:
+            return f
+
+    # Second pass: same stem, tabular extension. Covers foo.csv -> foo.xlsx
+    # and foo.xlsx -> foo.csv. Only applies to tabular files so we don't
+    # accidentally alias foo.pdf to foo.docx.
+    from apis.shared.files.models import is_tabular_file
+
+    if target_stem and any(target_lower.endswith(ext) for ext in (".csv", ".xls", ".xlsx")):
+        for f in candidates:
+            cand_lower = f["filename"].strip().lower()
+            cand_stem, _ = os.path.splitext(cand_lower)
+            if cand_stem == target_stem and is_tabular_file(cand_lower, f.get("content_type", "")):
+                return f
+
+    return None
+
+
+async def _download_file(file_info: Dict[str, Any]) -> bytes:
+    """Download file bytes from S3.
+
+    The synchronous ``get_object`` + ``.read()`` runs in a worker thread so
+    the event loop stays free while a (up to 25 MB) object streams in. Same
+    pattern as ``_get_kb_files`` (#260 / #259).
+    """
+    region = os.environ.get("AWS_REGION", "us-west-2")
+
+    if file_info["source"] == "knowledge_base":
+        bucket = os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
+        if not bucket:
+            raise ValueError("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME not configured")
+    else:
+        bucket = file_info.get("s3_bucket")
+        if not bucket:
+            raise ValueError("S3 bucket not found in file metadata")
+
+    def _get() -> bytes:
+        s3 = boto3.client("s3", region_name=region)
+        response = s3.get_object(Bucket=bucket, Key=file_info["s3_key"])
+        return response["Body"].read()
+
+    return await asyncio.to_thread(_get)
+
+
+def _build_bootstrap_code(stem: str, primary_csv_filename: str) -> str:
+    """Python run in the sandbox to convert every sheet of an XLSX to a CSV.
+
+    Iterates every sheet (capped), writes a CSV per sheet and emits an
+    inventory the outer tool can parse. Uses read_only + values_only to avoid
+    loading full styles/formulas into memory, which matters for large
+    workbooks.
+    """
+    return f"""
 import base64, io, csv, re
 from openpyxl import load_workbook
 
@@ -757,227 +833,346 @@ for rec in sheet_records:
 print({_SHEETS_MARKER!r})
 wb.close()
 """
-                resp = await _invoke(code_interpreter, "executeCode", {"code": bootstrap_code, "language": "python", "clearContext": False})
-                bootstrap_stdout = ""
-                for event in resp.get("stream", []):
-                    result = event.get("result", {})
-                    if result.get("isError", False):
-                        error_msg = _clean_stderr(result.get("structuredContent", {}).get("stderr", ""))
-                        return {"content": [{"text": f"❌ Failed to convert XLSX in sandbox:\n```\n{error_msg}\n```"}], "status": "error"}
-                    bootstrap_stdout += result.get("structuredContent", {}).get("stdout", "")
 
-                sheet_inventory = _parse_sheet_inventory(bootstrap_stdout)
-                if not sheet_inventory["sheets"]:
-                    return {
-                        "content": [{"text": "❌ XLSX bootstrap produced no readable sheets."}],
-                        "status": "error",
-                    }
 
-                # csv_filename is the canonical name the rest of the code
-                # path uses to probe schema and emit "load:" hints. For
-                # single-sheet or the primary alias on multi-sheet, that's
-                # <stem>.csv. For multi-sheet with no primary alias (write
-                # failure), fall back to the first converted sheet's path.
-                csv_filename = (
-                    primary_csv_filename
-                    if sheet_inventory["has_primary_alias"] or len(sheet_inventory["sheets"]) == 1
-                    else sheet_inventory["sheets"][0]["path"]
+def _build_stat_code(paths: list[str], remove_path: Optional[str]) -> str:
+    """Python that reports ``(size, mtime_ns)`` for ``paths`` (``null`` if absent).
+
+    Also deletes ``remove_path`` (the requested chart file) so a reused
+    sandbox can never hand back a PNG left over from an earlier call.
+    """
+    return f"""
+import os, json
+_paths = {list(paths)!r}
+_remove = {remove_path!r}
+if _remove:
+    try:
+        os.remove(_remove)
+    except OSError:
+        pass
+_out = {{}}
+for _p in _paths:
+    try:
+        _st = os.stat(_p)
+        _out[_p] = [_st.st_size, _st.st_mtime_ns]
+    except OSError:
+        _out[_p] = None
+print({_STAT_MARKER!r})
+print(json.dumps(_out))
+print({_STAT_MARKER!r})
+"""
+
+
+def _parse_stat_output(stdout: str) -> Optional[Dict[str, Optional[tuple[int, int]]]]:
+    """Parse :func:`_build_stat_code` output; ``None`` when it is unusable."""
+    import json
+
+    parts = stdout.split(_STAT_MARKER)
+    if len(parts) < 3:
+        return None
+    try:
+        raw = json.loads(parts[1].strip())
+        return {
+            str(path): (int(v[0]), int(v[1])) if v else None
+            for path, v in raw.items()
+        }
+    except (ValueError, TypeError, IndexError, AttributeError):
+        return None
+
+
+async def _stat_files(
+    entry: SandboxEntry, paths: list[str], remove_path: Optional[str]
+) -> Optional[Dict[str, Optional[tuple[int, int]]]]:
+    """Stat ``paths`` in the sandbox (and delete ``remove_path``)."""
+    resp = await entry.invoke("executeCode", {
+        "code": _build_stat_code(paths, remove_path),
+        "language": "python",
+        "clearContext": False,
+    })
+    stdout = ""
+    for event in resp.get("stream", []):
+        result = event.get("result", {})
+        if result.get("isError", False):
+            return None
+        stdout += result.get("structuredContent", {}).get("stdout", "")
+    return _parse_stat_output(stdout)
+
+
+def _error(text: str) -> Dict[str, Any]:
+    return {"content": [{"text": text}], "status": "error"}
+
+
+def _csv_name_for(filename: str, is_xlsx: bool) -> str:
+    """The primary CSV path a source file is exposed under in the sandbox."""
+    if is_xlsx or not filename.lower().endswith(".csv"):
+        return os.path.splitext(filename)[0] + ".csv"
+    return filename
+
+
+async def _stage_file(
+    entry: SandboxEntry,
+    *,
+    ci_id: str,
+    filename: str,
+    file_info: Dict[str, Any],
+    is_xlsx: bool,
+) -> tuple[Optional[StagedFile], Optional[Dict[str, Any]]]:
+    """Download ``file_info``, push it into the sandbox and probe its schema.
+
+    Returns ``(staged, None)`` on success or ``(None, error_result)``.
+    """
+    try:
+        file_bytes = await _download_file(file_info)
+    except Exception as e:
+        return None, _error(f"❌ Failed to download file: {e}")
+
+    # Only start the remote session once the download has succeeded: a failed
+    # download never costs a sandbox. (A no-op for a reused, started entry.)
+    await entry.start(ci_id)
+
+    paths: list[str]
+    if is_xlsx:
+        # Push XLSX as base64, decode in sandbox, then convert every sheet to
+        # its own CSV (subject to the defensive caps). The model gets a full
+        # sheet inventory in the schema footer so cross-sheet aggregation
+        # works in a single analyze call.
+        import base64
+
+        b64_content = base64.b64encode(file_bytes).decode("ascii")
+        stem = os.path.splitext(filename)[0]
+        # Back-compat alias: single-sheet workbooks still expose <stem>.csv so
+        # the one-file, one-sheet fast path keeps its existing filename
+        # contract. Multi-sheet workbooks use <stem>.<sanitized_sheet>.csv.
+        primary_csv_filename = f"{stem}.csv"
+
+        await entry.invoke("writeFiles", {"content": [
+            {"path": "_encoded.b64", "text": b64_content},
+        ]})
+        resp = await entry.invoke("executeCode", {
+            "code": _build_bootstrap_code(stem, primary_csv_filename),
+            "language": "python",
+            "clearContext": False,
+        })
+        bootstrap_stdout = ""
+        for event in resp.get("stream", []):
+            result = event.get("result", {})
+            if result.get("isError", False):
+                error_msg = _clean_stderr(result.get("structuredContent", {}).get("stderr", ""))
+                return None, _error(f"❌ Failed to convert XLSX in sandbox:\n```\n{error_msg}\n```")
+            bootstrap_stdout += result.get("structuredContent", {}).get("stdout", "")
+
+        sheet_inventory = _parse_sheet_inventory(bootstrap_stdout)
+        if not sheet_inventory["sheets"]:
+            return None, _error("❌ XLSX bootstrap produced no readable sheets.")
+
+        # csv_filename is the canonical name the rest of the code path uses to
+        # probe schema and emit "load:" hints. For single-sheet or the primary
+        # alias on multi-sheet, that's <stem>.csv. For multi-sheet with no
+        # primary alias (write failure), fall back to the first converted
+        # sheet's path.
+        csv_filename = (
+            primary_csv_filename
+            if sheet_inventory["has_primary_alias"] or len(sheet_inventory["sheets"]) == 1
+            else sheet_inventory["sheets"][0]["path"]
+        )
+        multi_sheet_note = _format_sheet_note(sheet_inventory)
+        paths = [s["path"] for s in sheet_inventory["sheets"]]
+        if sheet_inventory["has_primary_alias"] and primary_csv_filename not in paths:
+            paths.append(primary_csv_filename)
+    else:
+        # CSV — push directly as text
+        csv_filename = _csv_name_for(filename, is_xlsx)
+        multi_sheet_note = ""
+        try:
+            csv_text = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            csv_text = file_bytes.decode("utf-8", errors="replace")
+        await entry.invoke("writeFiles", {"content": [{"path": csv_filename, "text": csv_text}]})
+        paths = [csv_filename]
+
+    # Probe schema — separate exec so its output is isolated from user code.
+    schema_preview = ""
+    try:
+        preview_resp = await entry.invoke("executeCode", {
+            "code": _build_preview_code(csv_filename),
+            "language": "python",
+            "clearContext": False,
+        })
+        preview_stdout = ""
+        for event in preview_resp.get("stream", []):
+            result = event.get("result", {})
+            if result.get("isError", False):
+                continue
+            preview_stdout += result.get("structuredContent", {}).get("stdout", "")
+        schema_preview, _ = _extract_schema_preview(preview_stdout)
+    except Exception as e:
+        if sandbox_pool.is_session_gone(e):
+            raise
+        logger.warning(f"Schema preview failed for {csv_filename}: {e}")
+
+    return StagedFile(
+        source=str(file_info.get("source", "")),
+        s3_key=str(file_info.get("s3_key", "")),
+        size_bytes=int(file_info.get("size_bytes") or 0),
+        is_xlsx=is_xlsx,
+        csv_filename=csv_filename,
+        multi_sheet_note=multi_sheet_note,
+        schema_preview=schema_preview,
+        paths=paths,
+    ), None
+
+
+async def _analyze_in_sandbox(
+    entry: SandboxEntry,
+    *,
+    ci_id: str,
+    session_id: str,
+    filename: str,
+    file_info: Dict[str, Any],
+    is_xlsx: bool,
+    soft_warning: str,
+    python_code: str,
+    output_filename: Optional[str],
+) -> Dict[str, Any]:
+    """Stage ``filename`` in ``entry`` (unless already there) and run the code.
+
+    The caller holds ``entry.lock``.
+    """
+    chart_path = output_filename if output_filename and output_filename.endswith(".png") else None
+    # Staged files are keyed by the primary CSV path they are exposed under.
+    stage_key = _csv_name_for(filename, is_xlsx)
+    source = str(file_info.get("source", ""))
+    s3_key = str(file_info.get("s3_key", ""))
+    source_size = int(file_info.get("size_bytes") or 0)
+
+    staged: Optional[StagedFile] = None
+    outcome = "miss"
+    if entry.pooled:
+        known = entry.staged.get(stage_key)
+        if known is not None:
+            outcome = "restage"
+            if known.is_xlsx == is_xlsx and known.same_source(source, s3_key, source_size):
+                # The user's code may have rewritten or deleted the CSVs
+                # (e.g. ``df.to_csv('Budget.csv')``): trust them only if the
+                # size and mtime still match what staging observed.
+                observed = await _stat_files(entry, known.paths, chart_path)
+                if observed is not None and all(
+                    observed.get(p) == known.files.get(p) for p in known.paths
+                ):
+                    staged, outcome = known, "hit"
+            if staged is None:
+                entry.staged.pop(stage_key, None)
+
+    if staged is None:
+        staged, error = await _stage_file(
+            entry, ci_id=ci_id, filename=filename, file_info=file_info, is_xlsx=is_xlsx
+        )
+        if error is not None or staged is None:
+            return error or _error("❌ Failed to stage the file in the sandbox.")
+        if entry.pooled:
+            # Remember what staging produced, and clear any stale chart before
+            # the user's code runs.
+            observed = await _stat_files(entry, staged.paths, chart_path)
+            if observed is not None and observed.get(staged.csv_filename):
+                staged.files = {p: v for p, v in observed.items() if v}
+                staged.paths = list(staged.files)
+                entry.staged[stage_key] = staged
+
+    if entry.pooled:
+        sandbox_pool.log_outcome(outcome, session_id, filename)
+
+    csv_filename = staged.csv_filename
+    schema_preview = staged.schema_preview
+    multi_sheet_note = staged.multi_sheet_note
+
+    # 6. Execute user code
+    response = await entry.invoke("executeCode", {
+        "code": python_code,
+        "language": "python",
+        "clearContext": False,
+    })
+
+    execution_output = ""
+    for event in response.get("stream", []):
+        result = event.get("result", {})
+        if result.get("isError", False):
+            error_msg = _clean_stderr(result.get("structuredContent", {}).get("stderr", ""))
+            error_text = f"❌ Code execution failed:\n```\n{error_msg}\n```"
+
+            # Targeted hint for the most common wrong-filename error:
+            # the model wrote `pd.read_csv('FY_27_Ledger.xlsx', ...)`
+            # but in the sandbox the file lives as `FY_27_Ledger.csv`
+            # (see docstring: XLSX sources are pre-converted). Naming
+            # this out explicitly is much more effective than relying
+            # on the model to infer it from the schema footer.
+            if (
+                is_xlsx
+                and "FileNotFoundError" in error_msg
+                and filename in error_msg
+            ):
+                error_text += (
+                    f"\n\n**Hint:** In the sandbox, the XLSX source "
+                    f"`{filename}` is loaded as `{csv_filename}`. "
+                    f"Retry with `pd.read_csv('{csv_filename}', "
+                    f"low_memory=False)`."
                 )
-                multi_sheet_note = _format_sheet_note(sheet_inventory)
-            else:
-                # CSV — push directly as text
-                csv_filename = filename if filename.lower().endswith(".csv") else os.path.splitext(filename)[0] + ".csv"
-                multi_sheet_note = ""
-                try:
-                    csv_text = file_bytes.decode("utf-8")
-                except UnicodeDecodeError:
-                    csv_text = file_bytes.decode("utf-8", errors="replace")
-                await _invoke(code_interpreter, "writeFiles", {"content": [{"path": csv_filename, "text": csv_text}]})
 
-            # 5. Probe schema — separate exec so its output is isolated from user code.
-            schema_preview = ""
-            try:
-                preview_resp = await _invoke(code_interpreter, "executeCode", {
-                    "code": _build_preview_code(csv_filename),
-                    "language": "python",
-                    "clearContext": False,
-                })
-                preview_stdout = ""
-                for event in preview_resp.get("stream", []):
-                    result = event.get("result", {})
-                    if result.get("isError", False):
-                        continue
-                    preview_stdout += result.get("structuredContent", {}).get("stdout", "")
-                schema_preview, _ = _extract_schema_preview(preview_stdout)
-            except Exception as e:
-                logger.warning(f"Schema preview failed for {csv_filename}: {e}")
-
-            # 6. Execute user code
-            response = await _invoke(code_interpreter, "executeCode", {
-                "code": python_code,
-                "language": "python",
-                "clearContext": False,
-            })
-
-            execution_output = ""
-            for event in response.get("stream", []):
-                result = event.get("result", {})
-                if result.get("isError", False):
-                    error_msg = _clean_stderr(result.get("structuredContent", {}).get("stderr", ""))
-                    error_text = f"❌ Code execution failed:\n```\n{error_msg}\n```"
-
-                    # Targeted hint for the most common wrong-filename error:
-                    # the model wrote `pd.read_csv('FY_27_Ledger.xlsx', ...)`
-                    # but in the sandbox the file lives as `FY_27_Ledger.csv`
-                    # (see docstring: XLSX sources are pre-converted). Naming
-                    # this out explicitly is much more effective than relying
-                    # on the model to infer it from the schema footer.
-                    if (
-                        is_xlsx
-                        and "FileNotFoundError" in error_msg
-                        and filename in error_msg
-                    ):
-                        error_text += (
-                            f"\n\n**Hint:** In the sandbox, the XLSX source "
-                            f"`{filename}` is loaded as `{csv_filename}`. "
-                            f"Retry with `pd.read_csv('{csv_filename}', "
-                            f"low_memory=False)`."
-                        )
-
-                    if schema_preview:
-                        # Drop the first_row dump on errors — the load line +
-                        # column list is enough for the retry, first_row is
-                        # ~1K tokens of bloat on a path that's already costing
-                        # a round-trip.
-                        trimmed_schema = _strip_first_row(schema_preview)
-                        error_text += f"\n\nDataset info (use the `load:` line verbatim):\n```\n{trimmed_schema}\n```"
-                    else:
-                        error_text += f"\n\nTry: `pd.read_csv('{csv_filename}', low_memory=False)`"
-                    if multi_sheet_note:
-                        error_text += f"\n\n{multi_sheet_note}"
-                    if soft_warning:
-                        error_text += f"\n\n{soft_warning}"
-                    return {"content": [{"text": error_text}], "status": "error"}
-                stdout = result.get("structuredContent", {}).get("stdout", "")
-                if stdout:
-                    execution_output += stdout
-
-            # 7. Download chart if requested
-            success_text = _truncate_output(execution_output) or "✅ Code executed successfully (no output)."
             if schema_preview:
-                success_text = f"{success_text}\n\n---\nDataset: {schema_preview.splitlines()[0] if schema_preview else ''}"
+                # Drop the first_row dump on errors — the load line +
+                # column list is enough for the retry, first_row is
+                # ~1K tokens of bloat on a path that's already costing
+                # a round-trip.
+                trimmed_schema = _strip_first_row(schema_preview)
+                error_text += f"\n\nDataset info (use the `load:` line verbatim):\n```\n{trimmed_schema}\n```"
+            else:
+                error_text += f"\n\nTry: `pd.read_csv('{csv_filename}', low_memory=False)`"
             if multi_sheet_note:
-                success_text = f"{success_text}\n{multi_sheet_note}"
+                error_text += f"\n\n{multi_sheet_note}"
             if soft_warning:
-                success_text = f"{success_text}\n\n{soft_warning}"
+                error_text += f"\n\n{soft_warning}"
+            return {"content": [{"text": error_text}], "status": "error"}
+        stdout = result.get("structuredContent", {}).get("stdout", "")
+        if stdout:
+            execution_output += stdout
 
-            if output_filename and output_filename.endswith(".png"):
-                try:
-                    dl_response = await _invoke(code_interpreter, "readFiles", {"paths": [output_filename]})
-                    file_content = None
-                    for event in dl_response.get("stream", []):
-                        result = event.get("result", {})
-                        if "content" in result:
-                            for block in result["content"]:
-                                if "data" in block:
-                                    file_content = block["data"]
-                                elif "resource" in block and "blob" in block["resource"]:
-                                    file_content = block["resource"]["blob"]
-                                if file_content:
-                                    break
+    # 7. Download chart if requested
+    success_text = _truncate_output(execution_output) or "✅ Code executed successfully (no output)."
+    if schema_preview:
+        success_text = f"{success_text}\n\n---\nDataset: {schema_preview.splitlines()[0] if schema_preview else ''}"
+    if multi_sheet_note:
+        success_text = f"{success_text}\n{multi_sheet_note}"
+    if soft_warning:
+        success_text = f"{success_text}\n\n{soft_warning}"
+
+    if output_filename and output_filename.endswith(".png"):
+        try:
+            dl_response = await entry.invoke("readFiles", {"paths": [output_filename]})
+            file_content = None
+            for event in dl_response.get("stream", []):
+                result = event.get("result", {})
+                if "content" in result:
+                    for block in result["content"]:
+                        if "data" in block:
+                            file_content = block["data"]
+                        elif "resource" in block and "blob" in block["resource"]:
+                            file_content = block["resource"]["blob"]
                         if file_content:
                             break
+                if file_content:
+                    break
 
-                    if file_content:
-                        return {
-                            "content": [
-                                {"text": success_text},
-                                {"image": {"format": "png", "source": {"bytes": file_content}}},
-                            ],
-                            "status": "success",
-                        }
-                except Exception as e:
-                    logger.warning(f"Failed to download chart {output_filename}: {e}")
+            if file_content:
+                return {
+                    "content": [
+                        {"text": success_text},
+                        {"image": {"format": "png", "source": {"bytes": file_content}}},
+                    ],
+                    "status": "success",
+                }
+        except Exception as e:
+            logger.warning(f"Failed to download chart {output_filename}: {e}")
 
-            return {
-                "content": [{"text": success_text}],
-                "status": "success",
-            }
-
-        finally:
-            try:
-                await asyncio.to_thread(code_interpreter.stop)
-            except Exception:
-                pass
-
-    return analyze_spreadsheet
-
-
-async def _find_file(filename: str, assistant_id: Optional[str], session_id: str) -> Optional[Dict[str, Any]]:
-    """Find a file by name in accessible sources. Returns file info or None.
-
-    Matches are tolerant to XLSX ↔ CSV aliasing: if the model asks for
-    ``foo.csv`` but only ``foo.xlsx`` exists (because the sandbox converts
-    XLSX → CSV and the model copied the sandbox name into the ``filename``
-    param on retry), we treat them as the same file. Prevents the common
-    round-trip loop where analyze_spreadsheet rejects a reasonable guess
-    and forces the model to call list_spreadsheets (#206).
-
-    Both sides are compared with surrounding whitespace stripped. A stored
-    name can carry a leading or trailing space (Drive-synced documents do),
-    ``list_spreadsheets`` shows it verbatim, and the model trims it when it
-    calls ``analyze_spreadsheet``. Only matching is normalized: the returned
-    record keeps its stored name and S3 key.
-    """
-    candidates: list[Dict[str, Any]] = []
-    if assistant_id:
-        candidates.extend(await _get_kb_files(assistant_id))
-    candidates.extend(await _get_session_files(session_id))
-
-    target_lower = filename.strip().lower()
-    target_stem, _ = os.path.splitext(target_lower)
-
-    # First pass: exact match (case-insensitive, whitespace-trimmed).
-    for f in candidates:
-        if f["filename"].strip().lower() == target_lower:
-            return f
-
-    # Second pass: same stem, tabular extension. Covers foo.csv -> foo.xlsx
-    # and foo.xlsx -> foo.csv. Only applies to tabular files so we don't
-    # accidentally alias foo.pdf to foo.docx.
-    from apis.shared.files.models import is_tabular_file
-
-    if target_stem and any(target_lower.endswith(ext) for ext in (".csv", ".xls", ".xlsx")):
-        for f in candidates:
-            cand_lower = f["filename"].strip().lower()
-            cand_stem, _ = os.path.splitext(cand_lower)
-            if cand_stem == target_stem and is_tabular_file(cand_lower, f.get("content_type", "")):
-                return f
-
-    return None
-
-
-async def _download_file(file_info: Dict[str, Any]) -> bytes:
-    """Download file bytes from S3.
-
-    The synchronous ``get_object`` + ``.read()`` runs in a worker thread so
-    the event loop stays free while a (up to 25 MB) object streams in. Same
-    pattern as ``_get_kb_files`` (#260 / #259).
-    """
-    region = os.environ.get("AWS_REGION", "us-west-2")
-
-    if file_info["source"] == "knowledge_base":
-        bucket = os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
-        if not bucket:
-            raise ValueError("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME not configured")
-    else:
-        bucket = file_info.get("s3_bucket")
-        if not bucket:
-            raise ValueError("S3 bucket not found in file metadata")
-
-    def _get() -> bytes:
-        s3 = boto3.client("s3", region_name=region)
-        response = s3.get_object(Bucket=bucket, Key=file_info["s3_key"])
-        return response["Body"].read()
-
-    return await asyncio.to_thread(_get)
+    return {
+        "content": [{"text": success_text}],
+        "status": "success",
+    }
