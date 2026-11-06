@@ -75,6 +75,15 @@ def test_records_a_warmed_first_turn(emitted) -> None:
     assert record["properties"]["hasAgent"] is True
 
 
+def test_records_the_bundle_s_version_beside_the_server_s(emitted) -> None:
+    """The SPA's `spaVersion` and app-api's own `appVersion` stamp differ for a
+    while during a deploy; a client-side regression belongs to the bundle."""
+    _post(TestClient(_app(_user())), spaVersion="1.33.0")
+    (record,) = emitted
+    assert record["properties"]["spaVersion"] == "1.33.0"
+    assert "appVersion" not in record["properties"]  # the emitter adds the server's
+
+
 def test_a_cold_first_turn_and_a_follow_up_use_their_own_names() -> None:
     cold = routes.TurnTimingReport(firstTokenMs=3900, turnKind="first")
     follow = routes.TurnTimingReport(firstTokenMs=1400, turnKind="followup", warmAgeMs=10)
@@ -103,6 +112,7 @@ def test_records_no_identity(emitted) -> None:
         {"turnKind": "resume"},
         {"modelId": "x" * 201},
         {"warmAgeMs": -5},
+        {"spaVersion": "v" * 41},
     ],
 )
 def test_rejects_implausible_reports(body: Dict[str, Any], emitted) -> None:

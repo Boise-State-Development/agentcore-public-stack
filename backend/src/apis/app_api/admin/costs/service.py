@@ -1086,6 +1086,8 @@ class AdminCostService:
                     else None
                 ),
                 turn_agent_id=record.get("turnAgentId"),
+                app_version=record.get("appVersion"),
+                build=record.get("build"),
                 agent_switched=agent_switched,
                 model_switched=model_switched,
                 prefix_fingerprints=(

@@ -271,6 +271,11 @@ class SessionCallRow(BaseModel):
     # is indistinguishable from a nondeterministic-ordering regression, since both
     # flip `toolConfigHash` and `systemPromptHash` together.
     turn_agent_id: Optional[str] = Field(None, alias="turnAgentId")
+    # Which build of inference-api served this call (release-ledger spec D1):
+    # the VERSION file and the image's content-hash tag. Absent on rows
+    # written before the stamp shipped.
+    app_version: Optional[str] = Field(None, alias="appVersion")
+    build: Optional[str] = Field(None)
     agent_switched: bool = Field(
         False,
         alias="agentSwitched",

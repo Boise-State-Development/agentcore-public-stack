@@ -86,9 +86,13 @@ RUN useradd -m -u 1000 -s /bin/bash bedrock_agentcore
 # Switch to non-root user
 USER bedrock_agentcore
 
-# Version injection (defaults to "unknown" if not provided via --build-arg)
+# Version injection (defaults to "unknown" if not provided via --build-arg).
+# APP_BUILD is the image's own content-hash tag; scripts/build/build-one.sh
+# passes both. Baked, not a Runtime variable: docs/specs/release-ledger.md D2.
 ARG APP_VERSION=unknown
+ARG APP_BUILD=unknown
 ENV APP_VERSION=${APP_VERSION}
+ENV APP_BUILD=${APP_BUILD}
 
 # Runtime environment contract (docs/specs/agentcore-runtime-v2.md §7). This
 # image derives the resource-name variables listed in

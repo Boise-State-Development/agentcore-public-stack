@@ -75,9 +75,10 @@ and cannot leak the counter on disconnect or error.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from typing import Any, Awaitable, Callable, MutableMapping
+
+from apis.shared.build_info import health_fields
 
 STATUS_HEALTHY = "Healthy"
 STATUS_HEALTHY_BUSY = "HealthyBusy"
@@ -172,7 +173,7 @@ def ping_payload() -> dict[str, Any]:
     return {
         "status": status,
         "time_of_last_update": time_of_last_update,
-        "version": os.environ.get("APP_VERSION", "unknown"),
+        **health_fields(),
     }
 
 

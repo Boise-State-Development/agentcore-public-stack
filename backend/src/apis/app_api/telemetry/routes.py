@@ -65,6 +65,10 @@ class TurnTimingReport(BaseModel):
     # Whether the tab was visible when the first token arrived: a background
     # tab's user was not watching, and its timers may have been throttled.
     visible: bool = True
+    # The SPA bundle's version (`src/version.ts`), distinct from app-api's own
+    # `appVersion` stamp on the record: during a deploy the two differ for a
+    # while, and a client-side regression belongs to the bundle that shipped it.
+    spa_version: Optional[str] = Field(default=None, alias="spaVersion", max_length=40)
 
 
 class _ReportLimiter:
@@ -130,6 +134,7 @@ async def report_turn_timing(
             "hasAgent": report.has_agent,
             "hasFiles": report.has_files,
             "visible": report.visible,
+            "spaVersion": report.spa_version,
         },
         units={name: "Milliseconds" for name in metrics},
     )

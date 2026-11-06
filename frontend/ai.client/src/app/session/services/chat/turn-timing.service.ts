@@ -4,6 +4,7 @@ import { Injectable, PLATFORM_ID, inject } from '@angular/core';
 import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { ConfigService } from '../../../services/config.service';
 import { FEATURES } from '../../../services/features';
+import { VERSION } from '../../../../version';
 
 /** What the dashboard splits a turn by. Never message content or identity. */
 export interface TurnTimingContext {
@@ -86,6 +87,8 @@ export class TurnTimingService {
           hasAgent: turn.context.hasAgent ?? false,
           hasFiles: turn.context.hasFiles ?? false,
           visible: this.document.visibilityState === 'visible',
+          // The bundle that measured it (docs/specs/release-ledger.md D1).
+          spaVersion: VERSION,
         },
         { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) },
       )

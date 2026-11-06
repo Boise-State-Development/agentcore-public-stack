@@ -31,6 +31,7 @@ import base64
 from dataclasses import dataclass
 
 from apis.shared.aws_clients import get_dynamodb_table
+from apis.shared.build_info import build_stamp
 from typing import Iterable, List, Literal, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
@@ -332,6 +333,11 @@ async def _store_message_metadata_cloud(
 
             # TTL - only cost records have this attribute
             "ttl": ttl,
+
+            # Which build of the service produced this call: `appVersion` and
+            # `build` (docs/specs/release-ledger.md D1). Before the metadata so
+            # a caller that knows better (the backfill) can override them.
+            **build_stamp(),
 
             # Cost and usage metadata
             **metadata_decimal,
