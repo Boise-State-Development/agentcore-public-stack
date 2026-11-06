@@ -98,6 +98,8 @@ import { parseIso } from '../utils/date';
 @Component({
   selector: 'app-knowledge-base-section',
   templateUrl: './knowledge-base-section.component.html',
+  // Block, so a parent's space-y gap (a margin on this element) takes effect.
+  host: { class: 'block' },
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, SyncPolicyControlComponent, SpinnerComponent],
   providers: [

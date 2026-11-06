@@ -66,7 +66,7 @@ class StubPreviewComponent {
   openFull = output<void>();
 }
 
-@Component({ selector: 'app-knowledge-base-section', template: '' })
+@Component({ selector: 'app-knowledge-base-section', template: '<ng-content />' })
 class StubKnowledgeBaseComponent {
   entityId = input<string | null>(null);
   userPermission = input('owner');
