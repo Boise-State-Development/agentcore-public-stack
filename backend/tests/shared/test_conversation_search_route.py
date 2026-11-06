@@ -33,6 +33,12 @@ from apis.shared.sessions.search_text import first_prompt_value, normalize_searc
 AWS_KB_ID = "KBTESTCONV1"
 
 
+def _recent_iso() -> str:
+    """A turn time an hour ago. A fixed date ages past the retention window."""
+    then = datetime.now(timezone.utc) - timedelta(hours=1)
+    return then.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 # ── fakes ────────────────────────────────────────────────────────────────────
 @dataclass
 class Doc:
@@ -41,7 +47,7 @@ class Doc:
     user_id: str
     text: str
     score: float = 0.5
-    created_at: str = "2026-10-07T17:09:45.716Z"
+    created_at: str = field(default_factory=_recent_iso)
     project_id: Optional[str] = None
 
     @property

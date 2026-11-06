@@ -1,6 +1,6 @@
 # Conversation usage patterns
 
-**Status:** collecting data. Levers are identified and priced but deliberately parked: build on a few more runs of evidence before spending engineering time at the margins.
+**Status:** two runs in (2026-10-09, 2026-11-06). Run 2 ruled out a 1-hour history TTL and priced two lossless levers (api-converse caching, now built; deferring floor-missing warm cuts); see "Run 2" below.
 **Baseline:** production, 30 days ending 2026-10-09: $2,287 across 7,503 conversations and 64,436 model calls.
 **Tooling:** the `/usage-patterns-dashboard` skill (`.claude/skills/usage-patterns-dashboard/`) reproduces every number here and refreshes a dashboard with run-over-run history. The rules are in `scripts/build_datasets.py` and are described in `references/taxonomy.md`.
 
@@ -60,6 +60,25 @@ Thirty-day estimates against the baseline. They overlap a little, so they are no
 - **Browsing sub-agent:** ~$28. The cost is loop length (results are already capped at 8K chars), and a sub-agent adds latency and summary loss.
 - **1-hour static-prefix TTL:** about break-even on this data. The flag is not wired into CDK.
 - **Lower compaction threshold:** costs context.
+
+## Run 2 (30 days ending 2026-11-06)
+
+$3,440 across 8,343 conversations and 79,970 calls: up 50% on flat users (1,845), so cost per conversation rose from $0.30 to $0.41. Opus 5.5 is 21% of spend ($707). Calls on premium models are 24% of spend, up from 15%. Over-100K conversations are 56% of spend, up from 48%. Idle re-writes are $1,067 (31%). Batch items more than doubled ($126 → $297) and document study nearly did ($189 → $372). The discovery queue grew to 121 conversations ($213), but no five share a signature.
+
+What this run settled:
+
+1. **A 1-hour TTL on the history cachePoint loses money.** Replayed per call: all points at 1h saves $494 of re-writes but adds $865 of 2× write premium, net −$371. 1h on turn-opening calls only nets −$230. Bedrock needs non-increasing TTLs, so a 1h message point forces 1h on tools and system too. The 5-minute cliff stays human pace; the lever is still smaller contexts, not longer TTLs.
+2. **Idle re-writes are still mostly below the ceiling.** Of $817 in `miss_ttl_expired` writes, $114 is tokens above 100K and $44 above 150K. Compacting harder still isn't the lever.
+3. **Warm cuts that miss the floor lose money.** 1,001 applied cuts were priced: each re-write against the reads and idle re-writes it saved before the next cut. All cuts together: +$95. Cuts that missed the floor and applied on a warm cache: −$63 (removing under 25% of the context: −$44; 25–50%: −$19). They are warm because a `forced` cut bypasses deferred apply. In the worst conversations the protected tail retains 80–160K, every turn crosses the 150K hard ceiling, and consecutive calls a minute apart each re-write 140–200K.
+4. **api-converse is the cleanest lossless lever.** 40.7M uncached input tokens against 0.84M cache reads, because `_build_converse_params` sent no cachePoint. A first estimate of $55 assumed every call extends the one before; replaying the 1,017 calls that carry `messagesHash`/`extendsMessagesHashes` (72% of Claude api-converse input spend, recorded since 2026-10-16) against real predecessors gives less. A last-message point on every request nets $16 (the write premium on one-shot calls eats much of it); on multi-message requests only, $21; a system point adds at most $14. Extrapolated: **~$30–40 a month**, with outputs unchanged. Built as system point always + last-message point on 2+ messages.
+5. `update_artifact`-only calls: $70 of output (median 4.3K tokens, p90 11.9K), up from $58.
+
+| Lever (run 2) | Est. 30-day | Quality |
+|---|---|---|
+| cachePoint on api-converse (after the system prompt; after the last message on 2+ messages) | ~$30–40 | Unchanged: caching never changes outputs |
+| Defer a floor-missing cut to the next cold call unless the real window or a pricing cap needs it now | ~$60 | Keeps more context, never less |
+| Bound the protected tail by tokens: offload the tail's big tool results so cuts reach the floor | the 400+ floor-missing cuts; not yet priced | Neutral if offloaded content stays one tool call away |
+| Stub superseded artifact bodies + patch edits (from run 1, scaled) | ~$120 + part of $70 | Neutral with `read_artifact` |
 
 ## Data to collect next
 
