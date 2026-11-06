@@ -131,6 +131,12 @@ class SandboxEntry:
         self.pooled = pooled
         #: Serializes calls on this sandbox: Strands can run two tool calls
         #: from one model response concurrently.
+        #:
+        #: Known trade-off (accepted in #259 review): two analyze_spreadsheet
+        #: calls in one model response used to run in two parallel sandboxes;
+        #: now the second waits for the first, even on a different file. If
+        #: users report slow multi-file analysis, give calls on files not yet
+        #: staged here their own per-call sandbox instead of waiting.
         self.lock = asyncio.Lock()
         self.staged: Dict[str, StagedFile] = {}
         self.closed = False
