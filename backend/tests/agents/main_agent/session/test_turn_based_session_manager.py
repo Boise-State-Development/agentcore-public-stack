@@ -776,11 +776,11 @@ class TestUpdateAfterTurn:
         mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]  # 5 user message indices
         mgr._all_messages_for_summary = messages
 
-        await mgr.update_after_turn(2000)  # above 1000 threshold
+        await mgr.update_after_turn(1600)  # above 1000 threshold
 
         # With 5 turns and protected_turns=3, checkpoint should be at turn 2 start (index 4)
         assert mgr.compaction_state.checkpoint == 4
-        assert mgr.compaction_state.last_input_tokens == 2000
+        assert mgr.compaction_state.last_input_tokens == 1600
 
     @pytest.mark.asyncio
     async def test_not_enough_turns_keeps_all(self, make_session_manager, compaction_config):
@@ -788,10 +788,13 @@ class TestUpdateAfterTurn:
         mgr.compaction_state = CompactionState()
         mgr._save_compaction_state = MagicMock()
 
-        # Only 3 turns = protected_turns, so no compaction possible
+        # Only 3 turns = protected_turns: over the ceiling (1000) but under the
+        # hard ceiling (1500), so no compaction. At the hard ceiling a young
+        # conversation is cut (test_compaction_policy.TestYoungConversation).
         mgr._valid_cutoff_indices = [0, 2, 4]
+        mgr._all_messages_for_summary = make_conversation(3)
 
-        await mgr.update_after_turn(2000)
+        await mgr.update_after_turn(1200)
         assert mgr.compaction_state.checkpoint == 0
 
     @pytest.mark.asyncio
@@ -889,14 +892,14 @@ class TestUpdateAfterTurn:
         mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]  # 5 turns
         mgr._all_messages_for_summary = make_conversation(5)
 
-        result = await mgr.update_after_turn(2000)
+        result = await mgr.update_after_turn(1600)
 
         # checkpoint advances 0 -> 4. summarized_turns counts cutoffs in (0, 4]: {2, 4} = 2.
         assert result is not None
         assert result.previous_checkpoint == 0
         assert result.new_checkpoint == 4
         assert result.summarized_turns == 2
-        assert result.input_tokens == 2000
+        assert result.input_tokens == 1600
         assert mgr.compaction_state.total_summarized_turns == 2
 
     @pytest.mark.asyncio
@@ -916,7 +919,7 @@ class TestUpdateAfterTurn:
         # First compaction: 5 turns, checkpoint advances 0 -> 4 (2 turns rolled up)
         mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]
         mgr._all_messages_for_summary = make_conversation(5)
-        first = await mgr.update_after_turn(2000)
+        first = await mgr.update_after_turn(1600)
         assert first is not None
         assert first.summarized_turns == 2
         assert mgr.compaction_state.total_summarized_turns == 2
@@ -924,7 +927,7 @@ class TestUpdateAfterTurn:
         # Second compaction: session grew to 7 turns, checkpoint advances 4 -> 8 (2 more turns)
         mgr._valid_cutoff_indices = [0, 2, 4, 6, 8, 10, 12]
         mgr._all_messages_for_summary = make_conversation(7)
-        second = await mgr.update_after_turn(2500)
+        second = await mgr.update_after_turn(2000)
         assert second is not None
         assert second.previous_checkpoint == 4
         assert second.new_checkpoint == 8
@@ -1145,7 +1148,7 @@ class TestUpdateAfterTurn:
         mgr._valid_cutoff_indices = [0, 2, 4, 6, 8, 10, 12]
         mgr._all_messages_for_summary = make_conversation(7)
 
-        result = await mgr.update_after_turn(2500)
+        result = await mgr.update_after_turn(2000)
 
         assert result is not None
         assert result.previous_checkpoint == 4
@@ -1506,7 +1509,7 @@ class TestCompactionLifecycle:
 
         # Simulate above-threshold turn
         mgr._save_compaction_state = MagicMock()
-        await mgr.update_after_turn(2000)
+        await mgr.update_after_turn(1600)
 
         # 5 cutoffs, protected=3 → checkpoint at [-3] = index 4
         assert mgr.compaction_state.checkpoint == 4

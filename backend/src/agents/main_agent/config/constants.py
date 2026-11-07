@@ -54,6 +54,14 @@ class EnvVars:
     # when the prefix re-write is free (cache expired, model/agent switched)
     # or unavoidable (hard ceiling). "false" applies cuts immediately (PR-1/2).
     COMPACTION_DEFERRED_APPLY_ENABLED = "AGENTCORE_MEMORY_COMPACTION_DEFERRED_APPLY_ENABLED"
+    # Token bound on the protected tail (thresholds spec §3.2): when the last
+    # ``protected_turns`` turns alone exceed the ceiling, the protection
+    # shrinks to the newest whole turns that fit it (never below the newest
+    # turn), and a conversation no older than the protected turns can be cut
+    # once it reaches the hard ceiling. Rollout switch: "false" restores the
+    # whole-tail protection. Retires after one prod release + 2 weeks unflipped
+    # with the ``compaction_tail_bounded`` readout recorded.
+    COMPACTION_TAIL_TOKEN_BOUND_ENABLED = "AGENTCORE_MEMORY_COMPACTION_TAIL_TOKEN_BOUND_ENABLED"
     # Tool-result offload at intake (thresholds spec §3.6 / PR-4): oversized
     # tool results are stored in S3 (user-files bucket, per-session prefix) and
     # replaced in context by a bounded preview + retrieval references before
@@ -191,6 +199,7 @@ class Defaults:
     # `temperature` only, so a Claude override works too.
     COMPACTION_SUMMARY_MODEL_ID = "us.amazon.nova-2-lite-v1:0"
     COMPACTION_DEFERRED_APPLY_ENABLED = True
+    COMPACTION_TAIL_TOKEN_BOUND_ENABLED = True
     # Tool-result offload gate. 4k is well under the 25k compaction floor, so a
     # protected tail of a few big results can no longer hold a session above
     # the ceiling on its own; the 1k preview keeps the part of a result models
