@@ -39,6 +39,14 @@ Design notes
 * Tool results carrying a native ``document`` block are exempt from the
   tool-result offloader (``core/tool_result_offload.py``): offloading the
   slice the model just asked for would defeat the read.
+* **A round's page reads share one byte budget**
+  (``DOCUMENT_READ_MAX_BATCH_BYTES``, 7.0 MB raw). Strands writes every
+  result of a tool round into one user message, which is one AgentCore
+  Memory event; past the event quota ``CreateEvent`` returns 413 and the
+  turn is force-stopped. Parallel calls take their share in turn under a
+  per-round lock (``_PageReadBudget``), each slicing to what is left, so a
+  round's PDFs can never add up past it. The lock serializes a round's page
+  reads, which costs little: PDFium is already serialized process-wide.
 * **Search mode** (``query``; ``docs/specs/large-document-attachments.md``
   §4F) exists only on a deployment with the attachments KB
   (``ATTACHMENT_KB_ENABLED`` on the Runtime), so the spec is constant per
@@ -48,13 +56,16 @@ Design notes
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from strands import tool
+from strands.types.tools import ToolContext
 
 from apis.shared.files.document_read import (
     DOCUMENT_READ_HARD_MAX_PAGES,
+    DOCUMENT_READ_MAX_BATCH_BYTES,
     DOCUMENT_READ_MAX_PAGES,
     DocumentReadResult,
     list_session_documents,
@@ -85,11 +96,22 @@ def _success(result: DocumentReadResult) -> Dict[str, Any]:
     return {"content": content, "status": "success"}
 
 
+def _byte_budget_outcome(result: DocumentReadResult) -> Optional[str]:
+    """``"trimmed"`` or ``"text"`` when the round's byte budget shaped this read."""
+    if result.payload.get("page_images_omitted") == "byte_budget":
+        return "text"
+    if result.payload.get("truncated_to_byte_budget"):
+        return "trimmed"
+    return None
+
+
 def record_document_read(result: DocumentReadResult) -> None:
     """One content-free EMF record per successful read. Never raises."""
+    budget = _byte_budget_outcome(result)
     logger.info(
-        "document_read: mode=%s format=%s pages=%d bytes=%d hits=%d",
+        "document_read: mode=%s format=%s pages=%d bytes=%d hits=%d%s",
         result.mode, result.format, result.pages_returned, result.bytes_returned, result.hits,
+        f" byte_budget={budget}" if budget else "",
     )
     try:
         from apis.shared.observability.prompt_cache import prompt_cache_observability_enabled
@@ -103,16 +125,62 @@ def record_document_read(result: DocumentReadResult) -> None:
                 "DocumentRead": 1,
                 "DocumentReadPages": int(result.pages_returned),
                 "DocumentReadBytes": int(result.bytes_returned),
+                **({"DocumentReadByteBudgetLimited": 1} if budget else {}),
             },
             properties={
                 "mode": result.mode,
                 "format": result.format,
                 **({"hit_count": int(result.hits)} if result.mode == "query" else {}),
+                **({"byte_budget": budget} if budget else {}),
             },
             units={"DocumentReadPages": "Count", "DocumentReadBytes": "Bytes"},
         )
     except Exception as e:  # noqa: BLE001
         logger.debug("document_read EMF skipped: %s", e)
+
+
+def _round_key(tool_context: Optional[ToolContext]) -> Optional[Tuple[str, ...]]:
+    """The tool round this call belongs to: the ``toolUseId``s of the
+    assistant message that requested it. Strands appends that message before
+    running its tools and the results only after all of them finish, so every
+    call of one round sees the same last message. ``None`` when there is no
+    context (a direct call), which gives the call a budget of its own."""
+    if tool_context is None:
+        return None
+    try:
+        own = tool_context.tool_use["toolUseId"]
+        last = tool_context.agent.messages[-1]
+        ids = tuple(
+            block["toolUse"]["toolUseId"]
+            for block in last.get("content", [])
+            if isinstance(block, dict) and "toolUse" in block
+        )
+    except Exception:  # noqa: BLE001 - an unexpected shape falls back to a per-call budget
+        return None
+    return ids if own in ids else (own,)
+
+
+class _PageReadBudget:
+    """Native-PDF bytes the page reads of the current tool round have returned.
+
+    One per tool instance (an agent's tools are bound to one session). Rounds
+    run one after another, so only the current round is kept; the lock is
+    created inside the running loop, on the round's first page read.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self._key: Optional[Tuple[str, ...]] = None
+        self._lock: Optional[asyncio.Lock] = None
+        self.used = 0
+
+    def enter(self, key: Optional[Tuple[str, ...]]) -> asyncio.Lock:
+        if key is None or key != self._key or self._lock is None:
+            self._key, self._lock, self.used = key, asyncio.Lock(), 0
+        return self._lock
+
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
 
 
 def make_document_read_tool(
@@ -144,6 +212,28 @@ def make_document_read_tool(
 
         searchable = attachment_kb_enabled()
 
+    budget = _PageReadBudget(DOCUMENT_READ_MAX_BATCH_BYTES)
+
+    async def _read(upload_id: str, page_range: str, pattern: str, max_pages: int, offset: int,
+                    tool_context: Optional[ToolContext]) -> DocumentReadResult:
+        kwargs = dict(
+            page_range=page_range or None,
+            pattern=pattern or None,
+            max_pages=max_pages,
+            offset=offset,
+            text_only=text_only,
+        )
+        # Only a page range can return a native PDF, so only it takes a share.
+        if not page_range or pattern or text_only or budget.limit <= 0:
+            return await read_document(user_id, session_id, upload_id, **kwargs)
+        async with budget.enter(_round_key(tool_context)):
+            result = await read_document(
+                user_id, session_id, upload_id, max_document_bytes=max(1, budget.remaining()), **kwargs
+            )
+            if result.document_block is not None:
+                budget.used += result.bytes_returned
+            return result
+
     async def _run(
         upload_id: str,
         page_range: str,
@@ -151,6 +241,7 @@ def make_document_read_tool(
         query: str,
         max_pages: int,
         offset: int,
+        tool_context: Optional[ToolContext] = None,
     ) -> Any:
         try:
             if query and query.strip():
@@ -164,16 +255,7 @@ def make_document_read_tool(
                 )
                 result = DocumentReadResult(mode="list", payload=listing)
             else:
-                result = await read_document(
-                    user_id,
-                    session_id,
-                    upload_id,
-                    page_range=page_range or None,
-                    pattern=pattern or None,
-                    max_pages=max_pages,
-                    offset=offset,
-                    text_only=text_only,
-                )
+                result = await _read(upload_id, page_range, pattern, max_pages, offset, tool_context)
         except WorkspaceStorageNotConfiguredError:
             return _error(_NO_STORAGE_MESSAGE)
         except WorkspaceError as exc:
@@ -188,13 +270,14 @@ def make_document_read_tool(
     if searchable:
         return _make_searchable_tool(_run)
 
-    @tool(name=DOCUMENT_READ_TOOL_NAME)
+    @tool(name=DOCUMENT_READ_TOOL_NAME, context=True)
     async def document_read(
         upload_id: str = "",
         page_range: str = "",
         pattern: str = "",
         max_pages: int = DOCUMENT_READ_MAX_PAGES,
         offset: int = 0,
+        tool_context: Optional[ToolContext] = None,
     ) -> Any:
         """Read part of a document the user attached to this conversation.
 
@@ -239,7 +322,7 @@ def make_document_read_tool(
             JSON metadata, plus the requested pages as an attached document
             for page_range reads.
         """
-        return await _run(upload_id, page_range, pattern, "", max_pages, offset)
+        return await _run(upload_id, page_range, pattern, "", max_pages, offset, tool_context)
 
     return document_read
 
@@ -252,7 +335,7 @@ def _make_searchable_tool(run):
     non-searchable spec must stay exactly as it was.
     """
 
-    @tool(name=DOCUMENT_READ_TOOL_NAME)
+    @tool(name=DOCUMENT_READ_TOOL_NAME, context=True)
     async def document_read(
         upload_id: str = "",
         page_range: str = "",
@@ -260,6 +343,7 @@ def _make_searchable_tool(run):
         query: str = "",
         max_pages: int = DOCUMENT_READ_MAX_PAGES,
         offset: int = 0,
+        tool_context: Optional[ToolContext] = None,
     ) -> Any:
         """Read part of a document the user attached to this conversation.
 
@@ -314,7 +398,7 @@ def _make_searchable_tool(run):
             JSON metadata, plus the requested pages as an attached document
             for page_range reads.
         """
-        return await run(upload_id, page_range, pattern, query, max_pages, offset)
+        return await run(upload_id, page_range, pattern, query, max_pages, offset, tool_context)
 
     return document_read
 

@@ -448,6 +448,24 @@ class StreamCoordinator:
         # interrupt state makes Strands reject this turn's prompt outright.
         # See ``reset_stale_interrupt_state``.
         reset_stale_interrupt_state(agent, prompt)
+
+        # A "Continue" (empty-list prompt) on a model that refuses assistant
+        # prefill (Claude 4.6+) would end the request on the partial assistant
+        # message and fail on every retry. Send a fixed user turn instead.
+        # Runs after everything above has settled the live list, and only reads
+        # it: the history before the partial is unchanged.
+        if isinstance(prompt, list) and not prompt:
+            from apis.shared.models.assistant_prefill import continuation_prompt
+
+            _continuation_model = getattr(getattr(main_agent_wrapper, "model_config", None), "model_id", None)
+            _continued = continuation_prompt(prompt, getattr(agent, "messages", None) or [], _continuation_model)
+            if _continued is not prompt:
+                logger.info(
+                    "Continuation on %s: history ends on assistant text and the model refuses prefill; "
+                    "sending a continue turn instead",
+                    _continuation_model,
+                )
+                prompt = _continued
         # Compaction state re-read (#751), document offload, the resets above.
         _turn_clock_call(turn_clock, "mark", "head_of_turn.compaction")
 
