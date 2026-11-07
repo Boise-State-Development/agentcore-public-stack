@@ -191,8 +191,32 @@ or below the floor**, keeping as much as fits:
    `cutoffs[-protected_turns]` — the last N turns are always kept, as today.
 3. Choose the **oldest** candidate whose retained estimate is ≤ floor. If
    even the minimum-protection cut exceeds the floor (a giant tool result
-   inside the protected tail), take the minimum-protection cut and log it;
-   evicting inside the protected tail is PR-4's escalation, not a deeper cut.
+   inside the protected tail), take the minimum-protection cut and log it
+   (`floor_unreachable`) — as long as the tail fits the token bound below.
+4. **The protected tail is bounded by tokens, not only by turns** (2026-11-07).
+   The bound is the policy's **ceiling**. When the last `protected_turns`
+   turns alone exceed it, the protection shrinks by whole turns: the cut
+   moves to the oldest turn start inside the tail whose retained estimate
+   fits the ceiling, and never past the newest turn, so the current turn's
+   own user message always survives (a newest turn that is by itself over
+   the ceiling is kept alone). A conversation with no more than
+   `protected_turns` turns, which no cut could touch before, is cut the same
+   way once its last input reaches the **hard ceiling** (between the ceiling
+   and the hard ceiling it still waits). Why: a 2-turn Opus 5.5 conversation
+   that read a 166-page PDF in twelve `document_read` calls reached 343k
+   input after turn 1 and 762,519 on turn 2, and a young Haiku 5.5 project
+   session ran 13 of 34 calls over that model's 100k pricing cap (peak 166k),
+   with compaction never firing in either because every cut would have
+   landed inside the tail. The cut is a pure function of the live list and
+   the turn's measured usage, and the checkpoint only moves forward, so any
+   agent instance serving the session derives the same anchor. The cut record
+   carries `tailBounded` / `keptTurns` on the policy snapshot and
+   `CompactionTailBounded` on the EMF record. Rollout switch:
+   `AGENTCORE_MEMORY_COMPACTION_TAIL_TOKEN_BOUND_ENABLED=false` restores the
+   whole-tail protection (and never cutting a young conversation); it retires
+   after one production release plus two weeks unflipped, with the
+   `CompactionTailBounded` count and the share of young sessions still over
+   the hard ceiling recorded.
 
 ### 3.3 Hysteresis: a cut disarms the trigger
 
@@ -308,7 +332,10 @@ The original design sketch, kept for the record:
   attachments are not touched**: the digest + page-range read in
   `document-context-offload.md` is the right shape for those and stays that
   spec's PRs 1–4. What remains of the floor-unreachable case after this is
-  measured by `CompactionFloorUnreachable` on the cut record.
+  measured by `CompactionFloorUnreachable` on the cut record. What the
+  intake offload cannot reach — `document_read` slices (exempt by design) and
+  inline attachments — is bounded at cut time by §3.2 step 4, which drops whole
+  turns from the tail rather than mutating one.
 - **`context_window_limit` on the model** (PR-3, small): plumb
   `maxInputTokens` into `ModelConfig` and set `context_window_limit` in
   `to_bedrock_config` (a valid `BedrockConfig` key in 1.55), so Strands'
@@ -626,6 +653,7 @@ observability layer by `PROMPT_CACHE_OBSERVABILITY_ENABLED=false`):
 | `CompactionInputTokens`, `CompactionRetainedTokens` | how far above the ceiling cuts fire and how deep they land (is the floor being reached?) |
 | `CompactionSummaryTokens`, `CompactionSummaryOverBudget` | is the summary the reason cuts miss the floor; how often the model vs truncation path runs |
 | `CompactionFloorUnreachable` (PR-4) | how often the protected tail alone still exceeds the floor after intake offload — the residual document/attachment case |
+| `CompactionTailBounded` (§3.2 step 4) | how often the protected tail alone exceeded the ceiling and the cut kept fewer than `protected_turns` turns — includes every young conversation cut at the hard ceiling |
 | `ToolResultOffloaded`, `ToolResultOffloadedTokens` (PR-4) | how much tool payload was kept out of the prefix, per tool (`toolName` property) |
 
 Properties (queryable in Logs Insights, not dimensions): `policySource`,

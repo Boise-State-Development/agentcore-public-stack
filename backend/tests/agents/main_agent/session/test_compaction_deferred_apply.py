@@ -61,7 +61,7 @@ class TestPostTurnParksTheCut:
         store = {}
         mgr = _manager(make_session_manager, store)
         live = make_conversation(5)
-        result = await mgr.update_after_turn(2000, current_messages=live)
+        result = await mgr.update_after_turn(1600, current_messages=live)
         assert result is not None and result.deferred is True
         state = mgr.compaction_state
         assert state.pending_checkpoint == 4 and state.checkpoint == 0
@@ -77,7 +77,7 @@ class TestPostTurnParksTheCut:
     async def test_second_over_ceiling_turn_does_not_cut_deeper(self, make_session_manager):
         store = {}
         mgr = _manager(make_session_manager, store)
-        await mgr.update_after_turn(2000, current_messages=make_conversation(5))
+        await mgr.update_after_turn(1600, current_messages=make_conversation(5))
         second = await mgr.update_after_turn(2500, current_messages=make_conversation(7))  # even at hard ceiling
         assert second is None
         assert mgr.compaction_state.pending_checkpoint == 4
@@ -86,7 +86,7 @@ class TestPostTurnParksTheCut:
     async def test_kill_switch_applies_immediately(self, make_session_manager):
         store = {}
         mgr = _manager(make_session_manager, store, deferred_apply_enabled=False)
-        result = await mgr.update_after_turn(2000, current_messages=make_conversation(5))
+        result = await mgr.update_after_turn(1600, current_messages=make_conversation(5))
         assert result.deferred is False
         assert mgr.compaction_state.checkpoint == 4 and mgr.compaction_state.pending_checkpoint is None
 
@@ -94,7 +94,7 @@ class TestPostTurnParksTheCut:
     async def test_legacy_mode_applies_immediately(self, make_session_manager):
         store = {}
         mgr = _manager(make_session_manager, store, model_relative_enabled=False)
-        result = await mgr.update_after_turn(2000, current_messages=make_conversation(5))
+        result = await mgr.update_after_turn(1600, current_messages=make_conversation(5))
         assert result.deferred is False and mgr.compaction_state.checkpoint == 4
 
 
