@@ -1,3 +1,213 @@
+# Release Notes — v1.34.0
+
+**Release Date:** November 7, 2026
+**Previous Release:** v1.33.0 (November 4, 2026)
+
+---
+
+## Highlights
+
+This release is about **long document work finishing**. A review of nine assistants built by a research-administration team (award abstracts, FAR clause checklists, policy benchmarking, contract redlines, solicitation extraction), all on Claude Opus 5.5, found eleven failed runs that came down to four platform mechanisms: a silent model that hit a 120-second read timeout, a 32,000-token output cap followed by a Continue that Opus 5.5 rejects, a tool round whose page reads overflowed one Memory event, and an attachment quietly dropped by the combined size budget. All four are fixed here, along with Bedrock's five-document limit and duplicate attachment names on warm conversations. **Agents** gain a response-strictness setting, a `knowledge_files` tool and a Designer line that says whether Knowledge is sent whole or searched; the **Word tools** can run a bound skill's script inside the sandbox; **knowledge-base uploads** accept 50 MB; **admins** search users by fragment; **API-key callers** get prompt caching; and a **release ledger** stamps every image and cost row so the next release can be compared with this one. Four new flags are in development and off by default; three rollout switches are on. **One manual step:** run the Opus 5.5 output-cap backfill on each environment that already has that model (Manual steps). No GSI changes, no dependency changes.
+
+---
+
+## Long document turns on Claude Opus 5.5 no longer fail
+
+Six production failure classes, each diagnosed from the session's cost rows and runtime logs, each with a fix that leaves the prompt-cache prefix byte-identical (#1890, #1895, #1900, #1902, #1903, #1905, #1909, #1910, #1911, #1912, #1913).
+
+### Backend
+- **Summarized reasoning, no silent gap** (#1890). Opus 5.5 and Haiku 5.5 defaulted to `display: omitted`, so a long think on a big document sent nothing over the wire for more than 120 seconds and the stream hit botocore's read timeout. `_apply_thinking_binding` in `agents/main_agent/core/model_config.py` now sends `thinking {type: adaptive, display: summarized, block_binding: drop_block}` with the `thinking-binding-controls-2026-08-01` beta on both models; a caller-set `thinking` is kept. Measured on dev: a 61 s think streamed 620 reasoning frames with at most 4.9 s between any two, and Bedrock's cache key ignores `display`, so the switch wrote zero new prefix tokens. The `drop_block` binding also means a replayed stale reasoning block is dropped by the API instead of failing the turn.
+- **Read timeout 600 s, explained, never retried** (#1895). `Defaults.RETRY_READ_TIMEOUT` goes from 120 to 600 (`agents/main_agent/config/constants.py`, env `RETRY_READ_TIMEOUT`), app-api's proxy read timeout from 300 to 660 (`_PROXY_READ_TIMEOUT_SECONDS`; `test_read_timeout_budget.py` pins proxy ≥ model + 30), and `TransientModelRetryStrategy` no longer retries a `ReadTimeoutError`, which would only wait another 600 s past the proxy. The streamed error (`model_read_timeout_message` in `apis/shared/errors.py`) names the phase it failed in and is marked recoverable. Two EMF metrics, `ModelReadTimeout` and `ChatStreamUpstreamDropped`, back two new alarms (Infrastructure).
+- **Continue without a prefill** (#1903, #1909). Continue after a `max_tokens` cut re-entered the loop with an empty prompt, so the request ended on the partial assistant message; Claude 4.6 and later reject that ("This model does not support assistant message prefill") and GPT Responses models restarted the answer. `apis/shared/models/assistant_prefill.py::model_accepts_assistant_prefill(model_id, provider)` decides per model, and a fixed `CONTINUATION_PROMPT` user turn is appended on models that refuse one; history is append-only, so the cached prefix is unchanged.
+- **The continued answer stays whole** (#1911). `GET /sessions/{id}/messages` marks the stored continue prompt `continuation: true`, the SPA treats it as scaffolding, and message ids stay aligned with the server so feedback, Rewind and Fork act on the right message. The truncation message now reads "Cut off at the model's output limit. Continue picks up where it stopped." in the chat and in the `max_tokens` `stream_error`.
+- **Opus 5.5 writes up to 64,000 tokens** (#1911). The curated catalog row's `max_tokens.default` goes from 32,000 to 64,000 (`curated-models.ts`; the card allows 128,000). A 91-row clause checklist landed at 31,406 tokens on one document and was cut at exactly 32,000 on three. Agent authors cannot set `max_tokens` (`AUTHOR_HIDDEN_PARAMS`, on purpose: it is a hard truncation, not a length preference), so the catalog default governs every Agent on the model. Existing rows keep their saved value until `backfill_model_output_caps.py` runs or an admin edits the row (Manual steps). Haiku 5.5 stays at 32,000 because of its 100K input price step.
+- **Five non-PDF documents per request** (#1905). Bedrock rejects a Converse request with more than five non-PDF document blocks, counted across history and tool results; PDFs are exempt. The composer caps a message at five, not a conversation, so a later turn's attachments on a warm session force-stopped the turn, and the failed message stayed in history so every retry failed. `apis/shared/models/document_cap.py` is a per-call projection `AgentFactory` installs on every Bedrock Converse model: the first five non-PDF documents in message order stay native, later ones are sent as their text (docx via `docx_paragraphs`, UTF-8 for txt, md, csv, html) or a stub (doc, xls, xlsx). A block's fate depends only on the blocks before it, so the projected prefix stays byte-stable as turns append. Rollout switch `CONVERSE_DOCUMENT_CAP_ENABLED`, default on.
+- **Unique attachment names across the conversation** (#1902). Bedrock also rejects two document blocks that share a name anywhere in `messages`; `PromptBuilder` only de-duplicated within one turn, and a cached agent keeps earlier turns' inline blocks live, so a re-sent same-named file force-stopped the turn and left a duplicate pair that failed every later turn. `build_prompt` now seeds its used-name set from every document name in the live conversation, tool results included, and gives a collision the existing `_2` / `_3` suffix. History is read, never renamed.
+- **A tool round's page reads fit one Memory event** (#1900). Strands writes all of a round's tool results as one user message, which is one AgentCore Memory event held to a 10 MB quota; five parallel page reads of a scanned PDF returned 16.5 MB, `CreateEvent` returned 413, and the turn force-stopped with only the user's message persisted. A round's `document_read` page reads now share `DOCUMENT_READ_MAX_BATCH_BYTES` (7.0 MB raw, the same budget as inline attachments). Each call takes what the round has left under a per-round lock keyed on the round's `toolUse` ids, and `read_document` fits the page range to it by binary search, returning `next_start`. Pattern, index and text-only reads take no share; the tool spec is unchanged. Limited reads emit `DocumentReadByteBudgetLimited`.
+- **Compaction cuts a young conversation** (#1910). `update_after_turn` returned before the hard-ceiling check while a conversation had three turns or fewer, and `choose_checkpoint` always kept the last three turns whole, so a two-turn solicitation analysis reached 762,519 input tokens and $6.51 with compaction never firing. The protected tail is now bounded by the policy ceiling in tokens, shrinking to the newest whole turns that fit (never fewer than one), and a young conversation cuts at the hard ceiling. Dev readout: a two-turn Haiku 5.5 conversation at 159.9K was cut before turn 3 to 68.5K, the anchor stayed monotonic and turn 4 read the cut prefix from cache. The cut kept more than its estimate (62K against 22K) because PDF page slices are under-counted; bounding turn-1 `document_read` slices is the follow-up. `CompactionTailBounded` readout. Rollout switch `AGENTCORE_MEMORY_COMPACTION_TAIL_TOKEN_BOUND_ENABLED`, default on.
+- **Over-budget attachments go by reference** (#1912). A message's inline attachments are one Memory event, so `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` (7.0 MB) is applied first-fit in `_apply_inline_byte_budget`; the file that pushed a five-policy set over was skipped with only a footnote the model relayed. An over-budget uploaded document now becomes a `ReferenceAttachment(over_budget=True)` read through `document_read`, with its digest in the persisted message. Rollout switch `INLINE_BUDGET_BY_REFERENCE_ENABLED`, default on.
+
+### Frontend
+- **The composer shows the budget before send** (#1912). `inline-attachment-budget.ts` totals the message's inline candidates as files are added (files that go by reference and images count as the server counts them) and `inline-budget-notice.component.ts` names the files that will not fit and what happens to them. The constant reaches the SPA from one source.
+- **A follow-up queued during a failed turn is not sent on its own** (#1913). On `stopReason: "error"` the composer restores every queued follow-up (text, attachments, folders, `@`-mention) with a "Follow-up not sent" toast; the parser clears the previous stop reason; the empty assistant bubble a failed call left, and its off-by-one message ids, are discarded. Dev check: Enter then sends exactly one request. A force-stop row joins the smoke checklist (`docs/testing/smoke-regression.md`); it is not an L1 row because no deployed environment can force a read timeout on demand.
+- **Reasoning block** (#1890): redrawn as a tool-rail sibling with a shared `text-shimmer` that honours reduced motion, per-instance `aria-controls`, an inert collapsed panel; the loading label reads "Reasoning" while a summary streams and the preview tracks the latest finished sentence.
+
+### Infrastructure
+- `AiPathAlarmsConstruct`: `model-read-timeouts` (EMF `AgentCoreStack/TurnLatency` / `ModelReadTimeout`, Sum per hour, > 0) and `chat-stream-upstream-drops` (`ChatStreamUpstreamDropped`, Sum per hour, > `CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD`, default 5). Two CloudWatch alarms against the stack ceiling.
+
+### Test Coverage
+Byte-stability tests for the document cap and the name de-duplication, the read-timeout budget pin, the continuation prefill matrix, per-round `document_read` budget tests, compaction cut and anchor tests, and SPA specs for the budget notice and the failed-turn composer restore.
+
+---
+
+## Agents: response strictness, `knowledge_files`, and a mode line for Knowledge
+
+How an Agent's Knowledge reaches the model was invisible to its author, and a Knowledge over the full-context budget had no file names and no tool to open one, so an Agent told to "read Process.txt in full" searched the user's Google Drive instead (#1891, #1915, #1917).
+
+### Backend
+- **Response strictness** (#1891, issue #112). `responseStrictness` (`strict` / `balanced` / `flexible`) on `apis/shared/assistants/models.py`. `strict` and `flexible` append a grounding rule to the Agent-instructions section of the system prompt, so it covers retrieval and full-context mode and turns with no hits; `balanced` adds nothing, leaving existing prompts byte-identical. Part of the version snapshot, flagged as a behaviour change in `version_diff.py`, carried by duplication and the marketplace review diff; pre-#112 versions default to balanced.
+- **`knowledge_files`** (#1915, in development: `AGENT_KNOWLEDGE_FILES_ENABLED`). `project_files_tool.py` gains a `FilesToolVoice` so the same module serves a Shared Project's hidden harness as `project_files` and an ordinary Agent as `knowledge_files`: list every Knowledge document (filename, type, size, status) or read one by `filename` with `offset` paging, bounded as before. Built in `_build_turn_tools` on non-project Agent turns only while the flag is on, after the memory family so cached `toolConfig` prefixes keep their order; access is resolved on every call through `kb_access.resolve_kb_access`, never from the agent instance; nothing runs before the first token. The retrieval preamble gains `KNOWLEDGE_FILES_EXCERPTS_NOTE` only while on, so the prompt is byte-identical while off.
+- **Mixed-format full context** (#1915). In `kb_full_context.py` a spreadsheet or deck no longer disqualifies the whole knowledge base; those documents are skipped (they remain reachable through retrieval and the spreadsheet tools) and the rest is sent whole when the text fits. The budget is settable from CDK as `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` (`ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` on the Runtime, written only when full context is on and the value differs from the 50,000 default; a typo fails synth).
+- **Mode endpoint** (#1915, #1917). `GET /assistants/{assistant_id}/knowledge-base/mode` (`app_api/assistants/knowledge_mode.py`, owner or editor) answers from the same `assess_full_context` the Runtime uses: sent whole (documents, estimated tokens) or searched, with the reason, including `document_over_budget` naming the single document and its token count against the budget, distinct from `no_text_layer`.
+
+### Frontend
+- `knowledge-mode-line.component.ts` / `knowledge-mode.service.ts` show the line on the Agent Designer's knowledge-base card (SPA `features.knowledgeBaseMode`, on in dev only). The strictness control sits in the same card.
+
+### Test Coverage
+Spec digests pinned for the tool on and off, the project-versus-Agent build test, mixed-format eligibility tests, the mode endpoint's access and reason tests, SPA specs for both line messages.
+
+---
+
+## Word tools run a bound skill's script (in development)
+
+A contract-redlining Agent shipped its redline engine as a 20,000-token Python program inside a skill, and because skill scripts are inert on this platform the model had to retype it into `modify_word_document.python_code` on every run: slow, costly and, on Opus 5.5, the place the silent-think timeout landed (#1914).
+
+### Backend
+- `create_word_document` and `modify_word_document` accept `skill_name`, `path` and `params`. `agents/main_agent/skills/skill_scripts.py` resolves the file only among `scripts/*.py` (≤ 1 MiB) of a skill bound to **this** turn (`TurnSkillRecords`), never an arbitrary key, writes it into the Code Interpreter sandbox beside the document and runs a fixed entry, `run(doc, params)`. The script executes only inside Code Interpreter, never on the Runtime host; the result names the file that ran. The arguments are absent from the tool spec while the flag is off, so nothing changes by default (`WORD_SKILL_SCRIPTS_ENABLED`; spec digests pinned both ways). Dev check: the agent ran a bound skill's script through `modify_word_document`, the output document opened, and unbound or missing paths were refused.
+
+---
+
+## Documents as text on Converse (in development)
+
+Behind `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` (on in the `development` environment, off by default and in production), a Bedrock Converse model reads every docx, txt, md, csv and html attachment as text the deployment rendered instead of a Bedrock document block; PDFs stay native. This lifts the five-document limit for everything the platform can render (#1907).
+
+### Backend
+- An `as_text` mode of the document-cap projection, so restore, offload, the attachment card and the share and handoff views are unchanged and only the request carries text. New renderers `apis/shared/files/docx_markdown.py` (headings, list numbering and nesting, pipe tables with blank and merged cells kept in their columns, image alt text, tracked changes) and `html_markdown.py`; rendering is a pure function of the bytes, memoized by content, and the inference route renders a turn's new attachments in worker threads (`_prerender_documents_as_text`, 3.4 ms per docx) so no parse runs on the event loop. The cap's own over-limit path renders through them too: `docx_paragraphs` text dropped a table's blank cells and both Haiku 4.5 and Opus 5.5 read values from the wrong column. Measured on dev: text 101/105 against native 92/105 on Haiku 4.5, input tokens within −14% to +11% of native, no TTFT regression.
+
+---
+
+## Release ledger: cost and quality by version (in development)
+
+Operators can compare a release's cost and quality with the one before it without scanning cost rows (#1888, #1898, #1899; `docs/specs/release-ledger.md`).
+
+### Backend
+- `APP_VERSION` and `APP_BUILD` are baked into every image (`scripts/build/build-one.sh` → all nine `backend/Dockerfile.*`; `apis/shared/build_info.py`) and stamped as `appVersion` / `build` on every `C#` cost row, every EMF record, `/health`, `/ping`, `turn_prelude`, the eval harness's `meta.json` and the SPA's `spaVersion` on `POST /telemetry/turn-timing`. app-api writes one conditional `LEDGER#DEPLOY` row per build after startup (`apis/shared/costs/deploy_marker.py`, in `system-cost-rollup`; not flag-gated, skipped when the build is `unknown`).
+- The tool census adds `resultChars`, `inputChars`, `durationMs` and `timedCalls`; cost rows gain `turnOutcome` (`completed` / `paused` / `error` / `stopped` / `interrupted`) and `emptyAnswer`. `backend/evals/tool_spec_tokens.json` records each seeded tool's spec tokens, with `scripts/measure_tool_spec_tokens.py` to regenerate it and a test that fails when a schema drifts.
+- Behind `RELEASE_LEDGER_ENABLED`, each row also `ADD`s into `LEDGER#VERSION` and monthly `LEDGER#MODEL` / `TOOL` / `AGENT` / `PROJECT` rows (`apis/shared/sessions/ledger_rollups.py`, from `_update_system_rollups_async`, after the stream); KPIs in `apis/shared/costs/ledger_kpis.py`; `scripts/release_ledger_backfill.py` attributes history (Manual steps). The admin cost anatomy shows version and build, "Tools by payload" and the outcome. There is no SPA Releases tab yet.
+
+---
+
+## Smaller additions
+
+- **Prompt caching on `/chat/api-converse`** (#1889). `_with_cache_points` in `app_api/chat/converse_routes.py` places a Bedrock `cachePoint` after the system prompt and after the last message on requests of two or more messages, so API-key callers pay cache-read rates for a repeated system prompt and a client-held conversation. The last 30 days on that route carried 40.7M uncached input tokens against 0.84M cached. `apis/shared/models/cache_points.py::bedrock_cache_points_supported` is shared with `ModelConfig`; a catalog row's `supportsCaching: false` turns it off; fingerprints unchanged. Documented in `docs-site/.../features/api-keys.md`.
+- **Admin user search by fragment** (#1885, issue #1874). Part of a name, email or id, ranked exact > prefix > contains > all-words > typo, from a per-task in-memory index built from `StatusLoginIndex` (`app_api/admin/users/search_index.py`, 60 s, bounded by `ADMIN_USER_INDEX_MAX_ROWS`, default 100,000); `GET /admin/users/search` and `GET /admin/users/domains/list` with status and domain filters, offset paging and `totalCount`; the user-list page searches as you type. `StatusLoginIndex` rows now carry their real status. No table, GSI or backfill.
+- **Knowledge-base uploads to 50 MB** (#1916). `apis/shared/kb_backend/upload_limit.py` holds one limit, `KB_UPLOAD_MAX_FILE_BYTES` (default 52,428,800, Amazon Bedrock Knowledge Bases' own per-file limit; `CDK_KB_UPLOAD_MAX_FILE_BYTES` validated 1..50 MiB at synth), on app-api and the managed ingestion consumer: presign refuses an oversized file with a 413 before reserving bytes, the consumer `HEAD`s the stored object before ingesting, Drive imports stop at it. The SPA reads `kbUsage.maxFileBytes` for the agent knowledge base, document replace and project Files instead of a hard-coded 10 MB. Classic knowledge bases keep their 20 MB processing limit. Dev check: a 30 MB PDF reached `complete`, an over-limit file got the 413 with nothing reserved.
+- **`.sql` attachments and knowledge-base files** (#1887, issue #1883), mapped to `text/plain`; the S3 PUT now uses the presigned Content-Type, which fixed a 403.
+- **Pin and Unpin** in the conversation title menu (#1884).
+- **Chat markdown display** (#1879): 15 px body, tighter headings, gaps and tables; `styles/prism-theme.css` gives code blocks a light and a dark palette (replacing dark-only okaidia).
+
+---
+
+## 🐛 Bug fixes
+
+Beyond the document-turn fixes above:
+
+- **Admin User Lookup matched only a whole email address**; it now finds a fragment (#1885).
+- **403 toasts on the tools pages** for tools the user cannot reach, and request URLs in toast details, are gone: a `SUPPRESS_ERROR_TOAST` context on the tool services and URL redaction in `error.service.ts` (issue #1873) (#1884).
+- **A knowledge-base object refused for size after passing presign stayed in S3** until its agent was deleted. The ingestion consumer could only read the bucket, so its delete was refused and swallowed as a warning; it now deletes the object (Infrastructure) (#1918).
+- **The Designer mode line mislabelled a single oversized document** as having no readable text (#1917).
+- **Pre-#112 Agent versions** could change strictness without a review flag (#1891 follow-up).
+- Test-only: the device-grant authorize test's moto transaction race, the MCP session-heal integration turns bounded with `asyncio.wait_for`, conversation-search fixture dates relative to now (#1896, #1901).
+
+## 🔒 Security
+
+- Error toast details no longer expose request URLs (API paths, resource ids) (#1884); admin user search returns generic error detail instead of exception text (#1885). No dependency CVE patches in this release.
+
+## ⚡ Performance
+
+- API-key callers on `/chat/api-converse` read a repeated system prompt and conversation from the prompt cache (#1889).
+- Summarized thinking removes 30–45 s silent gaps on the 5.5 models and writes no new cached prefix (#1890).
+- Compaction no longer re-reads an oversized protected tail on every call (#1910).
+- Documents-as-text pre-renders in worker threads at 3.4 ms per docx with no TTFT regression (#1907).
+
+## ⚠️ Breaking changes
+
+None. No API contract changes, removals or migrations; no GSI operations. Defaults that changed: `RETRY_READ_TIMEOUT` 120 → 600 s and the app-api proxy read timeout 300 → 660 s (a deployment that pinned `RETRY_READ_TIMEOUT` keeps its value); Opus 5.5 `max_tokens` default 64,000 on newly added rows; knowledge-base per-file limit 50 MiB (`CDK_KB_UPLOAD_MAX_FILE_BYTES=10485760` restores 10 MB). Opus 5.5 and Haiku 5.5 requests now always carry a `thinking` dict unless the caller set one.
+
+## 🏗️ Infrastructure
+
+- **Two CloudWatch alarms**: `model-read-timeouts` and `chat-stream-upstream-drops` in `AiPathAlarmsConstruct`, the latter's threshold from `CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD` (default 5 per hour) (#1895).
+- **IAM**: the kb-migration ingestion consumer gains `s3:DeleteObject*` on `assistants/*/documents/*` of the documents bucket, the only grant change; a CDK test asserts it is the only delete and that no migration Lambda can write the bucket (#1918).
+- **New CDK config**: `agentKnowledgeFiles`, `wordSkillScripts`, `converseDocumentsAsText`, `releaseLedger`, `assistantKbFullContext.maxTokens`, `managedKb.uploadMaxFileBytes` (1..50 MiB, synth fails otherwise), `observability.chatStreamDropThreshold`; new test `infrastructure/test/release-ledger.test.ts`.
+- **Environment variables**: app-api gains `KB_UPLOAD_MAX_FILE_BYTES`, `RELEASE_LEDGER_ENABLED`, `ASSISTANT_KB_FULL_CONTEXT_ENABLED` and `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS`; the kb-migration consumer gains `KB_UPLOAD_MAX_FILE_BYTES`. On the AgentCore Runtime (a 2,560-byte environment budget on V2) every new variable is written **only while on**, so the default spends none of it: `AGENT_KNOWLEDGE_FILES_ENABLED`, `WORD_SKILL_SCRIPTS_ENABLED`, `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`, `RELEASE_LEDGER_ENABLED`, and `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` only when full context is on and the value is not 50,000. `APP_VERSION` / `APP_BUILD` are baked into the images, not Runtime variables.
+- **Every container image rebuilds on this release**: `VERSION` joins each image's hash manifest and `APP_VERSION` / `APP_BUILD` are build args, so a version-only bump rebuilds (#1888). Expect a longer `backend.yml` than a usual patch.
+- No new tables, GSIs, queues, Lambdas or SSM parameters; `gsi-inventory.json` is unchanged.
+
+## 🔧 CI/CD
+
+- `scripts/build/build-one.sh` passes `--build-arg APP_VERSION=<VERSION>` and `APP_BUILD=__CONTENT_HASH__` (substituted by `build-and-push-if-changed.sh`, not part of the hash); `build_info.py` joins each Lambda manifest and `assistant_prefill.py` the scheduled-runs manifest (#1888, #1911).
+- `scripts/common/load-env.sh` and `.github/workflows/platform.yml` forward `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS`, `CDK_AGENT_KNOWLEDGE_FILES_ENABLED`, `CDK_RELEASE_LEDGER_ENABLED`, `CDK_WORD_SKILL_SCRIPTS_ENABLED`, `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`, `CDK_KB_UPLOAD_MAX_FILE_BYTES` and `CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD`; `.github/docs/deploy/step-03-github-config.md` documents the upload limit.
+
+## 📦 Dependencies
+
+None. `backend/pyproject.toml`, `frontend/ai.client/package.json`, `infrastructure/package.json`, `tui/pyproject.toml` and every lockfile carry only the version bump.
+
+## 🧪 Test coverage
+
+9,100+ lines of new tests across 112 files: backend (`tests/shared/test_document_cap.py`, `test_assistant_prefill.py`, `test_read_timeout_budget.py`, `test_document_read_byte_budget.py`, compaction cut and anchor tests, knowledge-files build and digest tests, upload-limit tests, release-ledger rollup tests), SPA specs (budget notice, failed-turn composer restore, mode line, reasoning block, user search) and infrastructure (`release-ledger.test.ts`, the consumer-delete grant test).
+
+## 📚 Docs
+
+- New spec `docs/specs/release-ledger.md`; `compaction-model-relative-thresholds.md` §3.2 (the token bound); `document-context-offload.md`, `skill-creator.md` and `turn-path-ttft.md` updates; a force-stop row in `docs/testing/smoke-regression.md`; `docs/one-pagers/conversation-usage-patterns.md` run-2 readout; kaizen research 2026-11-06 (#1886).
+- Docs-site: `admin/models.md` (raising a model's output cap by hand), `admin/users.md` (search), `configuration/feature-flags.md` (seven new rows and the full-context budget variable), `features/agents.md` (strictness), `features/api-keys.md` (prompt caching), `features/rag.md` (50 MB, the mode line, mixed-format full context).
+
+## 🚩 Feature flags
+
+Four flags are **in development**: only `"true"` enables, and an unset GitHub variable (`""`) is off. Three are **rollout switches**, on unless set to `"false"`, kept so a bad deploy can be undone without a revert; each retires after one production release plus two weeks unflipped with its readout recorded (tracking issue #1422).
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| `AGENT_KNOWLEDGE_FILES_ENABLED` / `CDK_AGENT_KNOWLEDGE_FILES_ENABLED` (no SPA field) | **OFF** (in development) | AgentCore Runtime only, written only while on; no resources, no IAM | Feature switch once finished | A non-project Agent turn with a knowledge base gets `knowledge_files`: list Knowledge, read one document by name. Constant spec, so one `toolConfig` change per deployment when turned on |
+| `WORD_SKILL_SCRIPTS_ENABLED` / `CDK_WORD_SKILL_SCRIPTS_ENABLED` (no SPA field) | **OFF** (in development) | AgentCore Runtime only, written only while on; no resources, no IAM | Feature switch once finished | `create_word_document` / `modify_word_document` accept `skill_name`, `path`, `params` and run a bound skill's `scripts/*.py` (≤ 1 MiB) inside Code Interpreter |
+| `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` / `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` (no SPA field) | **OFF** (in development); on in our `development` environment | AgentCore Runtime only, written only while on | Feature switch once finished | docx, txt, md, csv and html attachments reach a Converse model as rendered text; PDFs native; stored messages unchanged; no five-document limit for rendered types |
+| `RELEASE_LEDGER_ENABLED` / `CDK_RELEASE_LEDGER_ENABLED` (SPA field arrives with the Releases tab) | **OFF** (in development) | app-api (always written `'true'` / `'false'`) and the AgentCore Runtime (written only while on) | Feature switch once finished (one `UpdateItem` per call) | Each cost row also `ADD`s into `LEDGER#VERSION` and monthly `LEDGER#MODEL` / `TOOL` / `AGENT` / `PROJECT` rows in `system-cost-rollup`, after the stream |
+| SPA `features.knowledgeBaseMode` (backend: `ASSISTANT_KB_FULL_CONTEXT_ENABLED`, now also on app-api, and `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` / `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS`) | `true` in `environment.development.ts`; `false` in `environment.ts` and `environment.production.ts` | SPA build; reads `GET /assistants/{id}/knowledge-base/mode` on app-api. Set `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` once; `platform.yml` writes app-api and the Runtime from it so the line agrees with the model | In development | A read-only line on the Agent Designer's knowledge-base card: sent whole or searched, and why |
+| `CONVERSE_DOCUMENT_CAP_ENABLED` (no CDK variable, no SPA field) | **ON** (`=false` disables) | AgentCore Runtime code path (`AgentFactory`) | **Rollout switch**: retires after one prod release + two weeks unflipped, `document_cap:` log count recorded | Keeps a Converse request to five non-PDF documents, sending the rest as text or a stub |
+| `INLINE_BUDGET_BY_REFERENCE_ENABLED` (no CDK variable, no SPA field) | **ON** | AgentCore Runtime code path (`_apply_inline_byte_budget`) | **Rollout switch**: retires after one prod release + two weeks, `AttachmentReference reason=over_budget` count recorded | An uploaded document over the combined inline budget goes by reference instead of being dropped |
+| `AGENTCORE_MEMORY_COMPACTION_TAIL_TOKEN_BOUND_ENABLED` (no CDK variable, no SPA field) | **ON** | AgentCore Runtime code path (`compaction_models.py`) | **Rollout switch**: retires after one prod release + two weeks unflipped, `CompactionTailBounded` readout recorded | The protected tail shrinks to the newest whole turns that fit the ceiling; a young conversation cuts at the hard ceiling |
+
+**Default changes:** none among feature flags (the non-flag defaults that changed are in Breaking changes). **Retired:** none. **Still opt-in, on in our prod** (#1798): `sessionRewind` and `sessionFork` (promote to default-on after two weeks in production; neither flipped since 1.32.0), `sessionPrewarm` (waits on the Runtime V2 readout of what turnless warms cost), `attachmentKb` and `CONVERSATION_INDEX_ENABLED` (a cost and retention decision each deployment makes). None of the new flags is on in our prod; `AGENT_KNOWLEDGE_FILES_ENABLED`, `WORD_SKILL_SCRIPTS_ENABLED` and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` are on in our `development` environment.
+
+## 🛠️ Manual steps
+
+### Backfill: Claude Opus 5.5's stored output cap
+
+**Run after `backend.yml`, on every environment whose catalog already has Claude Opus 5.5. Idempotent; dry-run by default.** The curated 64,000 default seeds only newly added rows; `backend/scripts/backfill_model_output_caps.py` moves `supportedParams.params.max_tokens.default` from the old curated 32,000 to 64,000 on rows still at that value and leaves every admin-edited row alone (any other default, a narrowed `max`, no `max_tokens` spec), reporting each. The write is conditional on the old value, never resurrects a deleted row, and takes effect within the 60-second catalog cache with no restart. Needs the backend venv's interpreter, not a bare `python`.
+
+```bash
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_model_output_caps.py \
+    --table <prefix>-managed-models --region us-west-2            # dry-run: read it first
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_model_output_caps.py \
+    --table <prefix>-managed-models --region us-west-2 --apply
+```
+
+Verify in Admin → Models that the Opus 5.5 row's Max Output Tokens default reads 64,000; a second dry run reports the row as left alone. On dev the run moved exactly one row. An admin can make the same change by hand under Admin → Models → Inference parameters → Max Output Tokens.
+
+### Backfill (optional): release-ledger history
+
+Only for a deployment that turns `RELEASE_LEDGER_ENABLED` on and wants history before it. `backend/scripts/release_ledger_backfill.py` scans `C#` rows, attributes unstamped rows to a release by a `backend.yml` deploy map, and `ADD`s into the same `LEDGER#` rows. **Not idempotent** (`ADD`): it records `LEDGER#BACKFILL` markers and refuses an overlapping range or one past `firstLiveAt`. Procedure: backfill to now, turn the flag on, run once more with no `--to`. The name does not match the `backfill_*.py` pattern the release gate watches, which is why it is listed here by hand.
+
+```bash
+cd backend
+.venv/bin/python scripts/release_ledger_backfill.py build-map --branch develop --out /tmp/versions.json
+AWS_PROFILE=<env> .venv/bin/python scripts/release_ledger_backfill.py backfill \
+    --region us-west-2 --prefix <prefix> --version-map /tmp/versions.json --to <date>    # dry run; add --yes to write
+```
+
+### Re-seed
+
+None. `seed_bootstrap_data.py` is unchanged.
+
+### Environment variables to set
+
+None required. To try a feature, set the matching variable on a GitHub environment and run `platform.yml`: `CDK_AGENT_KNOWLEDGE_FILES_ENABLED`, `CDK_WORD_SKILL_SCRIPTS_ENABLED`, `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`, `CDK_RELEASE_LEDGER_ENABLED`. Optional tuning: `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` (our `production` and `development` environments carry 75000), `CDK_KB_UPLOAD_MAX_FILE_BYTES` (set `10485760` to keep the old 10 MB knowledge-base limit), `CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD`. Set `features.knowledgeBaseMode` in the environment's SPA file to show the Designer line.
+
+## 🚀 Deployment notes
+
+Standard order: `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`, then the Opus 5.5 backfill above on each environment. Every image rebuilds this time (the version is in the hash manifest), so `backend.yml` runs longer than a usual patch. The Platform deploy adds two alarms and one IAM grant, and writes no new Runtime variable at defaults. The 5.5 thinking dict and the document cap were measured not to re-write the prompt-cache prefix; the Opus 5.5 output cap only changes the request's `maxTokens`, which is outside the cached prefix. Three rollout switches ship on; nothing else is required. See Feature flags and Manual steps for everything optional.
+
+---
+
 # Release Notes — v1.33.0
 
 **Release Date:** November 4, 2026
