@@ -306,6 +306,9 @@ class ChatAgent(BaseAgent):
                 event loop re-runs against restored history whose tail is the
                 truncated assistant message — the model continues it
                 (assistant-prefill) instead of answering a new instruction.
+                A model that refuses prefill (Claude 4.6+) gets a fixed
+                continue turn instead; the stream coordinator swaps it in
+                (``apis.shared.models.assistant_prefill``).
             turn_project_id: The Shared Project whose harness ran this turn, if
                 any; recorded on each cost row and in the project's monthly rollup.
                 Per turn for the same reason as `turn_agent_id`.

@@ -239,6 +239,8 @@ class InvocationRequest(BaseModel):
     # the agent re-enters the loop with an empty prompt so the model
     # continues the truncated assistant message already in restored history
     # (assistant-prefill). Bypasses quota / RAG / file resolution like resume.
+    # A model that refuses prefill (Claude 4.6+) is sent a fixed continue turn
+    # instead (``apis.shared.models.assistant_prefill``).
     continue_truncated: Optional[bool] = None
     # Legacy cache/marker dimension. Skills v2 retired the SkillAgent subclass:
     # both "chat" and "skill" build a ChatAgent. When the turn carries
