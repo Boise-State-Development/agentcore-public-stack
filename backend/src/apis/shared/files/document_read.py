@@ -59,7 +59,14 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
 from . import large_document
-from .models import FileMetadata, FileStatus, get_file_format, is_presentation_file, is_tabular_file
+from .models import (
+    INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
+    FileMetadata,
+    FileStatus,
+    get_file_format,
+    is_presentation_file,
+    is_tabular_file,
+)
 from .pdfium_lock import pdfium_lock, serialized_pdfium
 from .repository import get_file_upload_repository
 from .workspace import (
@@ -107,6 +114,21 @@ _CONTEXT_LINES = 1
 #: inline upload cap is 4 MB). A prepared document is exempt: it is read from
 #: its sidecars, which are bounded per call.
 _MAX_DOCUMENT_BYTES = int(os.environ.get("DOCUMENT_READ_MAX_SOURCE_BYTES", 8 * 1024 * 1024))
+#: Raw PDF bytes the page reads of ONE tool round may return between them.
+#: Strands puts every tool result of a round into one user message, and that
+#: message is one AgentCore Memory event — the same unit, and so the same
+#: 7.0 MB raw budget, as a turn's inline attachments (see
+#: ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` for the derivation from the 10 MB
+#: event quota). Over it, ``CreateEvent`` returns 413 and Strands force-stops
+#: the turn. A page count is not a byte bound: in prod one 8-page slice of a
+#: scanned PDF was 86 MB. The tool holds a round's reads to this budget
+#: (``document_read_tool._PageReadBudget``); a read that would pass it returns
+#: fewer pages, or the text layer when not even its first page fits.
+#: ``0`` (or any non-positive value) disables the budget.
+DOCUMENT_READ_MAX_BATCH_BYTES = int(
+    os.environ.get("DOCUMENT_READ_MAX_BATCH_BYTES", INLINE_ATTACHMENTS_MAX_TOTAL_BYTES)
+)
+
 
 #: Bedrock document formats the tool can read. Tabular and presentation files
 #: have their own tools; images have no page/text structure to retrieve.
@@ -325,12 +347,19 @@ async def read_document(
     max_pages: Any = None,
     offset: int = 0,
     text_only: bool = False,
+    max_document_bytes: Optional[int] = None,
 ) -> DocumentReadResult:
     """Read part of one document. See the module docstring for the modes.
 
     ``text_only`` is for a model whose catalog row declares TEXT input only:
     a PDF page range comes back as those pages' text layer instead of a
     native ``document`` block, which such a model rejects outright.
+
+    ``max_document_bytes`` caps the native PDF a page range returns: the
+    range is shortened until it fits (``next_start`` says where to resume),
+    and when not even its first page fits, the pages' text layer comes back
+    instead. ``None`` or a non-positive value means no cap. The tool passes
+    what is left of its round's :data:`DOCUMENT_READ_MAX_BATCH_BYTES`.
     """
     _require_identity(user_id, session_id)
     if not upload_id:
@@ -361,10 +390,13 @@ async def read_document(
         "size_bytes": meta.size_bytes,
     }
 
+    byte_cap = max_document_bytes if max_document_bytes and max_document_bytes > 0 else None
+
     if prepared:
         return await _read_prepared(
             user_id, upload_id, meta, fmt, base,
             pages=pages, pattern=pattern_text, limit=limit, offset=offset, text_only=text_only,
+            max_document_bytes=byte_cap,
         )
 
     if fmt == "pdf":
@@ -374,7 +406,7 @@ async def read_document(
         if pages and text_only:
             return await asyncio.to_thread(_pdf_pages_text, raw, pages, limit, base)
         if pages:
-            return await asyncio.to_thread(_pdf_pages, raw, pages, limit, base, meta.filename)
+            return await asyncio.to_thread(_pdf_pages, raw, pages, limit, base, meta.filename, byte_cap)
         return await asyncio.to_thread(_pdf_index, raw, base)
 
     if pages:
@@ -604,6 +636,7 @@ async def _read_prepared(
     limit: int,
     offset: int,
     text_only: bool,
+    max_document_bytes: Optional[int] = None,
 ) -> DocumentReadResult:
     """``read_document`` over the sidecars. Each branch ends in the same
     helper the original's branch does, so the payloads are the same."""
@@ -611,7 +644,7 @@ async def _read_prepared(
         # Same precedence as the original's branch: pattern, then a page range
         # (as text for a text-only model), then the index.
         if pages and not pattern and not text_only:
-            return await _pdf_pages_from_shards(meta, pages, limit, base)
+            return await _pdf_pages_from_shards(meta, pages, limit, base, max_document_bytes)
         texts = await _fetch_text_layer(meta)
         page_text = texts.__getitem__
         if pattern:
@@ -637,11 +670,17 @@ async def _read_prepared(
 
 
 async def _pdf_pages_from_shards(
-    meta: FileMetadata, pages: Tuple[int, int], limit: int, base: Dict[str, Any]
+    meta: FileMetadata,
+    pages: Tuple[int, int],
+    limit: int,
+    base: Dict[str, Any],
+    max_document_bytes: Optional[int] = None,
 ) -> DocumentReadResult:
     """``_pdf_pages`` over the page shards: the range is resolved against the
     prepared page count, then only the shards covering it are fetched (in
-    parallel) and sliced with the same ``import_pages`` re-assembly."""
+    parallel) and sliced with the same ``import_pages`` re-assembly. Shrinking
+    the range to ``max_document_bytes`` re-assembles from the shards already
+    fetched; it never fetches again."""
     count = large_document.prepared_page_count(meta)
     shard_pages = large_document.prepared_shard_pages(meta)
     start, end, truncated = _resolve_range(pages, count, limit)
@@ -652,8 +691,22 @@ async def _pdf_pages_from_shards(
             for s, e in shards
         )
     )
-    sliced = await asyncio.to_thread(_assemble_from_shards, list(zip(shards, blobs)), start, end)
-    return _pages_result(sliced, start, end, count, truncated, base, meta.filename)
+    fetched = list(zip(shards, blobs))
+
+    def slice_to(last: int) -> bytes:
+        return _assemble_from_shards([sb for sb in fetched if sb[0][0] <= last], start, last)
+
+    fit = await asyncio.to_thread(_fit_to_bytes, slice_to, start, end, max_document_bytes)
+    if fit.sliced is None:
+        texts = await _fetch_text_layer(meta)
+        note = _over_budget_note(start, fit.last_size, max_document_bytes)
+        return _mark_over_budget(await asyncio.to_thread(
+            _pages_text, len(texts), texts.__getitem__, (start, end), limit, base, note
+        ))
+    return _pages_result(
+        fit.sliced, start, fit.end, count, truncated, base, meta.filename,
+        requested_end=end, max_document_bytes=max_document_bytes,
+    )
 
 
 @serialized_pdfium
@@ -663,9 +716,11 @@ def _assemble_from_shards(shards: Sequence[Tuple[Tuple[int, int], bytes]], start
     sub = pdfium.PdfDocument.new()
     try:
         for (shard_start, shard_end), raw in shards:
+            first, last = max(start, shard_start), min(end, shard_end)
+            if last < first:
+                continue
             shard = _open_pdf(raw)
             try:
-                first, last = max(start, shard_start), min(end, shard_end)
                 sub.import_pages(shard, pages=list(range(first - shard_start, last - shard_start + 1)))
             finally:
                 shard.close()
@@ -723,30 +778,134 @@ def _resolve_range(pages: Tuple[int, int], count: int, limit: int) -> Tuple[int,
     return start, end, truncated
 
 
+@dataclass
+class _Fit:
+    """What :func:`_fit_to_bytes` settled on. ``sliced`` is ``None`` when not
+    even the first page fits; ``last_size`` is then that page's size."""
+
+    sliced: Optional[bytes]
+    end: int
+    last_size: int
+
+
+def _fit_to_bytes(
+    slice_to: Callable[[int], bytes], start: int, end: int, max_bytes: Optional[int]
+) -> _Fit:
+    """The longest run of pages from ``start`` whose re-assembled PDF fits
+    ``max_bytes``, re-slicing with ``slice_to(last_page)``.
+
+    A binary search over the last page, because page sizes are uneven (one
+    scanned page can outweigh the rest of the range) and no estimate from
+    the overshoot survives that. A slice only grows as pages are added, so
+    the search is exact. Bounded: one slice of the full range, then at most
+    ``ceil(log2(pages))`` more — six in all for the 20-page hard cap — each
+    under the process-wide PDFium lock. ``max_bytes`` of ``None`` returns the
+    full range untouched.
+    """
+    sliced = slice_to(end)
+    if max_bytes is None or len(sliced) <= max_bytes:
+        return _Fit(sliced, end, len(sliced))
+    best: Optional[_Fit] = None
+    first_page_size = len(sliced) if end == start else 0
+    lo, hi = start, end - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = slice_to(mid)
+        if len(candidate) <= max_bytes:
+            best = _Fit(candidate, mid, len(candidate))
+            lo = mid + 1
+        else:
+            if mid == start:
+                first_page_size = len(candidate)
+            hi = mid - 1
+    return best or _Fit(None, start - 1, first_page_size)
+
+
+def _megabytes(n: int) -> str:
+    return f"{n / 1_000_000:.1f} MB"
+
+
+def _mark_over_budget(result: DocumentReadResult) -> DocumentReadResult:
+    """Tag a text-layer fallback so the tool's record can count it, and say so
+    when the pages have no text at all (a scan), so blank text is not read as
+    blank pages."""
+    result.payload["page_images_omitted"] = "byte_budget"
+    if not any((t.get("text") or "").strip() for t in result.payload.get("page_texts", [])):
+        result.payload["note"] += " These pages have no text layer (they are likely scanned)."
+    return result
+
+
+def _over_budget_note(start: int, page_bytes: int, max_bytes: Optional[int]) -> str:
+    """The text-layer fallback's note, for a page too large to attach."""
+    budget = max_bytes or 0
+    lead = (
+        f"Page {start} as a PDF is {_megabytes(page_bytes)}, more than the "
+        f"{_megabytes(budget)} that page reads can return in this step, so these are the "
+        "pages' text layers; page images, charts and scanned pages are not included."
+    )
+    if DOCUMENT_READ_MAX_BATCH_BYTES > 0 and budget < DOCUMENT_READ_MAX_BATCH_BYTES and page_bytes <= DOCUMENT_READ_MAX_BATCH_BYTES:
+        return lead + (
+            " Other page reads in this step used the rest; read this range again on its own "
+            "in your next step to get the pages themselves."
+        )
+    return lead + " A page that large cannot be attached; work from this text."
+
+
 @serialized_pdfium
-def _pdf_pages(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, Any], filename: str) -> DocumentReadResult:
+def _slice_pdf(pdf: Any, start: int, end: int) -> bytes:
     import pypdfium2 as pdfium
 
+    sub = pdfium.PdfDocument.new()
+    try:
+        sub.import_pages(pdf, pages=list(range(start - 1, end)))
+        buffer = io.BytesIO()
+        sub.save(buffer)
+    finally:
+        sub.close()
+    return buffer.getvalue()
+
+
+@serialized_pdfium
+def _pdf_pages(
+    raw: bytes,
+    pages: Tuple[int, int],
+    limit: int,
+    base: Dict[str, Any],
+    filename: str,
+    max_document_bytes: Optional[int] = None,
+) -> DocumentReadResult:
     pdf = _open_pdf(raw)
     try:
         count = len(pdf)
         start, end, truncated = _resolve_range(pages, count, limit)
-        sub = pdfium.PdfDocument.new()
-        try:
-            sub.import_pages(pdf, pages=list(range(start - 1, end)))
-            buffer = io.BytesIO()
-            sub.save(buffer)
-        finally:
-            sub.close()
+        fit = _fit_to_bytes(lambda last: _slice_pdf(pdf, start, last), start, end, max_document_bytes)
+        if fit.sliced is None:
+            note = _over_budget_note(start, fit.last_size, max_document_bytes)
+            return _mark_over_budget(
+                _pages_text(count, lambda i: _pdf_page_text(pdf, i), (start, end), limit, base, note)
+            )
     finally:
         pdf.close()
-    return _pages_result(buffer.getvalue(), start, end, count, truncated, base, filename)
+    return _pages_result(
+        fit.sliced, start, fit.end, count, truncated, base, filename,
+        requested_end=end, max_document_bytes=max_document_bytes,
+    )
 
 
 def _pages_result(
-    sliced: bytes, start: int, end: int, count: int, truncated: bool, base: Dict[str, Any], filename: str
+    sliced: bytes,
+    start: int,
+    end: int,
+    count: int,
+    truncated: bool,
+    base: Dict[str, Any],
+    filename: str,
+    *,
+    requested_end: Optional[int] = None,
+    max_document_bytes: Optional[int] = None,
 ) -> DocumentReadResult:
     returned = end - start + 1
+    byte_truncated = requested_end is not None and end < requested_end
     name = _unique_document_name(filename, f"p{start}-{end}")
     payload = {
         **base,
@@ -755,12 +914,19 @@ def _pages_result(
         "pages": {"start": start, "end": end},
         "pages_returned": returned,
         "truncated_to_max_pages": truncated,
-        "next_start": end + 1 if (truncated and end < count) else None,
+        "next_start": end + 1 if ((truncated or byte_truncated) and end < count) else None,
         "page_numbering": (
             f"The attached document contains original pages {start}-{end} only; "
             f"its page k is original page {start} + k - 1."
         ),
     }
+    if byte_truncated:
+        payload["truncated_to_byte_budget"] = True
+        payload["byte_budget_note"] = (
+            f"Pages {start}-{requested_end} would not fit in the {_megabytes(max_document_bytes or 0)} "
+            f"that page reads can return in this step, so this read stops at page {end}. "
+            f"Read from page {end + 1} in your next step."
+        )
     block = {"document": {"format": "pdf", "name": name, "source": {"bytes": sliced}}}
     return DocumentReadResult(
         mode="pages", payload=payload, document_block=block,
@@ -779,8 +945,19 @@ def _pdf_pages_text(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[s
         pdf.close()
 
 
+_TEXT_ONLY_NOTE = (
+    "The current model reads text only, so these are the pages' text layers; "
+    "page images, charts and scanned pages are not included."
+)
+
+
 def _pages_text(
-    count: int, page_text: Callable[[int], str], pages: Tuple[int, int], limit: int, base: Dict[str, Any]
+    count: int,
+    page_text: Callable[[int], str],
+    pages: Tuple[int, int],
+    limit: int,
+    base: Dict[str, Any],
+    note: str = _TEXT_ONLY_NOTE,
 ) -> DocumentReadResult:
     start, end, truncated = _resolve_range(pages, count, limit)
     texts = [{"page": i + 1, "text": page_text(i)} for i in range(start - 1, end)]
@@ -793,10 +970,7 @@ def _pages_text(
         "pages_returned": returned,
         "truncated_to_max_pages": truncated,
         "next_start": end + 1 if (truncated and end < count) else None,
-        "note": (
-            "The current model reads text only, so these are the pages' text layers; "
-            "page images, charts and scanned pages are not included."
-        ),
+        "note": note,
         "page_texts": texts,
     }
     return DocumentReadResult(

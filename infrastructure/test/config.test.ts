@@ -794,6 +794,28 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Converse documents-as-text feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED;
+      expect(loadConfig(app).converseDocumentsAsText.enabled).toBe(false);
+      process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED = '';
+      expect(loadConfig(app).converseDocumentsAsText.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED = 'True';
+      expect(loadConfig(app).converseDocumentsAsText.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED = value;
+        expect(loadConfig(app).converseDocumentsAsText.enabled).toBe(false);
+      }
+    });
+  });
+
   describe('Web Search default maxResults feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED;

@@ -415,6 +415,12 @@ jobs:
       # so only "true" enables. Sets the flag on the AgentCore Runtime only, and
       # only while on; no resources.
       CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: ${{ vars.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED }}
+      # Documents as text on Converse: non-PDF attachments (docx, txt, md, csv,
+      # html) reach a Bedrock Converse model as rendered text instead of
+      # document blocks; PDFs stay native. In development, so only "true"
+      # enables. Sets the flag on the AgentCore Runtime only, and only while on;
+      # no resources.
+      CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED: ${{ vars.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED }}
       # Project file readiness: a project turn names the files the model cannot
       # see yet (still being prepared, or failed). In development, so only "true"
       # enables. Sets the flag on the AgentCore Runtime only, and only while on;
