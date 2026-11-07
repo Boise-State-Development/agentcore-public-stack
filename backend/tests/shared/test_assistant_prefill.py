@@ -65,6 +65,37 @@ def test_older_claude_and_other_models_keep_prefill(model_id):
     assert model_accepts_assistant_prefill(model_id) is True
 
 
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "us.openai.gpt-5.5",
+        "us.openai.gpt-5.6-sol",
+        "us.openai.gpt-6.1-sol",
+        # The provider decides, not the id: any model on the Responses API.
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "",
+        None,
+    ],
+)
+@pytest.mark.parametrize("provider", ["bedrock-responses", " Bedrock-Responses "])
+def test_responses_api_models_do_not_continue_from_prefill(model_id, provider):
+    # Measured on dev: a request ending on the partial starts the answer over.
+    assert model_accepts_assistant_prefill(model_id, provider) is False
+
+
+@pytest.mark.parametrize("provider", [None, "", "bedrock", "mantle", "openai", "gemini"])
+def test_other_providers_keep_the_model_id_rule(provider):
+    assert model_accepts_assistant_prefill("us.openai.gpt-5.6-sol", provider) is True
+    assert model_accepts_assistant_prefill("global.anthropic.claude-sonnet-5", provider) is False
+
+
+def test_continuation_on_a_responses_api_model_gets_a_continue_turn():
+    history = [_user("Write a long essay."), _assistant("The first part of the essay")]
+    assert continuation_prompt([], history, "us.openai.gpt-5.6-sol", "bedrock-responses") == CONTINUATION_PROMPT
+    # Without the provider the GPT id alone keeps today's behaviour.
+    assert continuation_prompt([], history, "us.openai.gpt-5.6-sol") == []
+
+
 def test_continuation_ending_on_assistant_text_gets_a_continue_turn():
     history = [_user("Write a long essay."), _assistant("The first part of the essay")]
 

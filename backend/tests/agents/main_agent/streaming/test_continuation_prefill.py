@@ -90,3 +90,56 @@ async def test_a_fresh_turn_is_untouched() -> None:
     await _run(agent, "next question", "global.anthropic.claude-sonnet-5")
 
     assert agent.prompts == ["next question"]
+
+
+async def _run_on(agent: _RecordingAgent, prompt: Any, model_config: Any) -> None:
+    async for _ in StreamCoordinator().stream_response(
+        agent=agent,
+        prompt=prompt,
+        session_manager=_SessionManager(),
+        session_id="sess-1",
+        user_id="user-1",
+        main_agent_wrapper=SimpleNamespace(model_config=model_config),
+    ):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_continue_on_a_responses_api_model_sends_a_user_turn() -> None:
+    """A GPT model on the Responses API starts its answer over on a trailing
+    partial, so Continue sends the continue turn there too. Judged by the real
+    ``ModelConfig.get_provider``, the detection ``AgentFactory`` builds from."""
+    from agents.main_agent.core.model_config import ModelConfig, ModelProvider
+
+    agent = _RecordingAgent(_partial_history())
+
+    await _run_on(agent, [], ModelConfig(model_id="us.openai.gpt-5.6-sol", provider=ModelProvider.BEDROCK_RESPONSES))
+
+    assert agent.prompts == [CONTINUATION_PROMPT]
+    assert agent.messages == _partial_history()
+
+
+@pytest.mark.asyncio
+async def test_continue_on_the_same_gpt_model_over_mantle_keeps_the_empty_prompt() -> None:
+    from agents.main_agent.core.model_config import ModelConfig, ModelProvider
+
+    agent = _RecordingAgent(_partial_history())
+
+    await _run_on(agent, [], ModelConfig(model_id="openai.gpt-5.4", provider=ModelProvider.MANTLE))
+
+    assert agent.prompts == [[]]
+
+
+@pytest.mark.asyncio
+async def test_a_config_whose_provider_cannot_be_read_falls_back_to_the_model_id() -> None:
+    class _Broken:
+        model_id = "global.anthropic.claude-sonnet-5"
+
+        def get_provider(self) -> Any:
+            raise RuntimeError("unreadable")
+
+    agent = _RecordingAgent(_partial_history())
+
+    await _run_on(agent, [], _Broken())
+
+    assert agent.prompts == [CONTINUATION_PROMPT]
