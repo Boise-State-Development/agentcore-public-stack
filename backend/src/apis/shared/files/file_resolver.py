@@ -39,6 +39,11 @@ class ResolvedFileContent:
     # The row of a reference-class upload, which is resolved without its bytes.
     # ``None`` for every file whose bytes were fetched.
     reference: Optional[FileMetadata] = None
+    # The row this file was resolved from, for every upload (bytes or not). The
+    # route reads it only when an inline-class document falls out of the turn's
+    # combined inline budget and goes by reference instead: the row is already
+    # in hand, so that costs no second read.
+    meta: Optional[FileMetadata] = None
 
 
 class FileResolverError(Exception):
@@ -128,6 +133,7 @@ class FileResolver:
                 content_type=file_meta.mime_type,
                 bytes="",
                 reference=file_meta,
+                meta=file_meta,
             )
 
         # Fetch content from S3
@@ -147,7 +153,8 @@ class FileResolver:
         return ResolvedFileContent(
             filename=file_meta.filename,
             content_type=file_meta.mime_type,
-            bytes=base64_content
+            bytes=base64_content,
+            meta=file_meta,
         )
 
 

@@ -740,6 +740,30 @@ def attachment_turn_guard_enabled() -> bool:
     return os.environ.get("ATTACHMENT_TURN_GUARD_ENABLED", "").strip().lower() != "false"
 
 
+def inline_budget_by_reference_enabled() -> bool:
+    """Whether an uploaded document that does not fit in a turn's combined
+    inline budget goes by reference instead of being dropped.
+
+    ``_apply_inline_byte_budget`` holds a turn's inline attachments to
+    ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` first-fit; with this on, a
+    document-class *upload* it moves out becomes a ``ReferenceAttachment``
+    (``over_budget=True``): its stored digest (or a ``status="ready"`` stub) in
+    the user message and ``document_read`` to read it from the original, from the
+    row the resolver already read. No preparation, no extra read before the
+    first token. Images and direct ``files`` bytes have no reference path and
+    are still dropped with the note.
+
+    **Rollout switch, default ON** (house style): unset or empty resolves to
+    enabled; only the literal ``"false"`` (case-insensitive) disables. Off, an
+    over-budget document is dropped with the "combined size limit" note, as
+    before. **Retires** after one production release plus two weeks there with
+    the switch never flipped and the ``AttachmentReference`` count with
+    ``reason = over_budget`` recorded (CLAUDE.md, "Feature switches stay;
+    rollout switches retire").
+    """
+    return os.environ.get("INLINE_BUDGET_BY_REFERENCE_ENABLED", "").strip().lower() != "false"
+
+
 def feedback_eval_sampling_enabled() -> bool:
     """Whether down-thumbed turns may be sent to AgentCore Evaluations.
 

@@ -594,6 +594,41 @@ describe('ChatRequestService', () => {
       await service.continueTruncatedTurn(null);
       expect(mockChatHttpService.sendChatRequest).not.toHaveBeenCalled();
     });
+
+    it('re-reads the conversation after the continuation streams, so ids match the server', async () => {
+      // On a prefill-refusing model the backend stored a continue prompt this
+      // tab never saw; ids are positional, so only a re-read realigns them.
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      const order: string[] = [];
+      mockChatHttpService.sendChatRequest.mockImplementationOnce(async () => {
+        order.push('send');
+      });
+      messageMap.reloadMessagesForSession.mockImplementationOnce(async () => {
+        order.push('reload');
+      });
+
+      await service.continueTruncatedTurn('session1');
+
+      expect(messageMap.reloadMessagesForSession).toHaveBeenCalledWith('session1');
+      expect(order).toEqual(['send', 'reload']);
+    });
+
+    it('does not re-read a preview session, which is never persisted', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      await service.continueTruncatedTurn('preview-abc');
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalled();
+      expect(messageMap.reloadMessagesForSession).not.toHaveBeenCalled();
+    });
+
+    it('does not re-read when the request fails, and clears loading', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      mockChatHttpService.sendChatRequest.mockRejectedValueOnce(new Error('boom'));
+
+      await expect(service.continueTruncatedTurn('session1')).rejects.toThrow('boom');
+
+      expect(messageMap.reloadMessagesForSession).not.toHaveBeenCalled();
+      expect(messageMap.endStreaming).toHaveBeenCalledWith('session1');
+    });
   });
 
   describe('resumeFromOAuthConsent', () => {

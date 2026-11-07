@@ -4,7 +4,7 @@ import { Router } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentMentionService, MentionableAgent } from '../../../agents/services/agent-mention.service';
 import { SkillCommand, SkillCommandService } from '../../../services/skill/skill-command.service';
-import { FileMetadata, FileUploadService } from '../../../services/file-upload';
+import { FileMetadata, FileUploadService, PendingUpload } from '../../../services/file-upload';
 import { FileSourceService } from '../../../assistants/services/file-source.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { ToastService } from '../../../services/toast/toast.service';
@@ -24,6 +24,7 @@ import { ComposerDraftService } from '../../services/session/composer-draft.serv
 import { NEW_CONVERSATION_DRAFT_KEY } from '../../services/session/composer-draft-storage.service';
 import { ChatInputComponent, spliceDictation } from './chat-input.component';
 import { ComposerHandoffService } from './composer-handoff.service';
+import { InlineBudgetNoticeComponent } from './inline-budget-notice.component';
 import { SessionPrewarmService } from '../../services/session/session-prewarm.service';
 import { ShortcutTargetsService } from '../../../components/shortcuts/shortcut-targets.service';
 
@@ -2983,5 +2984,110 @@ describe('ChatInputComponent — a project conversation', () => {
     fixture.detectChanges();
     fixture.componentInstance.onSkillBrowseAll();
     expect(navigate).toHaveBeenLastCalledWith(['/customize/skills']);
+  });
+});
+
+describe('ChatInputComponent — the combined inline budget, before send', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  const pendingUploads = signal<PendingUpload[]>([]);
+  const MB = 1_000_000;
+
+  /** A local upload of `size` bytes; only name, type and size are read. */
+  function upload(uploadId: string, name: string, size: number, type = 'application/pdf', status: PendingUpload['status'] = 'ready'): PendingUpload {
+    return { file: { name, type, size } as File, uploadId, status, progress: 100 };
+  }
+
+  function restored(uploadId: string, filename: string, sizeBytes: number): FileMetadata {
+    return { uploadId, filename, mimeType: 'application/pdf', sizeBytes, sessionId: 's1', s3Uri: '', status: 'ready', createdAt: '' };
+  }
+
+  function notice(): HTMLElement | null {
+    return (fixture.nativeElement as HTMLElement).querySelector('[data-testid="inline-budget-notice"]');
+  }
+
+  beforeEach(async () => {
+    pendingUploads.set([]);
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: pendingUploads,
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: computed(() => pendingUploads().filter(u => u.status === 'ready').map(u => u.uploadId)),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
+          },
+        },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
+        {
+          provide: VoiceChatService,
+          useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, { set: { imports: [InlineBudgetNoticeComponent], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 's1');
+    fixture.detectChanges();
+  });
+
+  it('says nothing while the attachments fit', () => {
+    pendingUploads.set([upload('u1', 'policy-b.pdf', 3.9 * MB), upload('u2', 'policy-c.pdf', 2.7 * MB)]);
+    fixture.detectChanges();
+
+    expect(component.budgetOverflow()).toBeNull();
+    expect(notice()).toBeNull();
+    // The live region is already there, so the notice is announced when it comes.
+    expect((fixture.nativeElement as HTMLElement).querySelector('app-inline-budget-notice')?.getAttribute('role')).toBe('status');
+  });
+
+  it('names the file that will not fit as soon as it is attached, before send', () => {
+    pendingUploads.set([
+      upload('u1', 'policy-a.pdf', 5.7 * MB),
+      upload('u2', 'policy-b.pdf', 3.9 * MB),
+      upload('u3', 'policy-c.pdf', 0.17 * MB),
+      // Still uploading: it will travel, so it counts.
+      upload('u4', 'policy-d.pdf', 4.0 * MB, 'application/pdf', 'uploading'),
+      upload('u5', 'policy-e.pdf', 2.7 * MB),
+    ]);
+    fixture.detectChanges();
+
+    expect(notice()?.textContent?.replace(/\s+/g, ' ')).toContain(
+      'policy-d.pdf will be read from storage instead, in the parts the answer needs.',
+    );
+  });
+
+  it('judges restored attachments first, in the order the send carries them', () => {
+    component.restoredAttachments.set([restored('r1', 'earlier.pdf', 3.9 * MB)]);
+    pendingUploads.set([upload('u1', 'photo.png', 3.5 * MB, 'image/png')]);
+    fixture.detectChanges();
+
+    expect(component.budgetOverflow()?.dropped.map(f => f.filename)).toEqual(['photo.png']);
+    expect(notice()?.textContent).toContain("won't be included. Send it in a follow-up message.");
+  });
+
+  it('ignores a failed upload, which does not travel', () => {
+    pendingUploads.set([upload('u1', 'a.pdf', 3.9 * MB), upload('u2', 'b.pdf', 3.9 * MB, 'application/pdf', 'error')]);
+    fixture.detectChanges();
+
+    expect(notice()).toBeNull();
   });
 });

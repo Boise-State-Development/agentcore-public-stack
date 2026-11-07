@@ -355,7 +355,10 @@ Please wait a moment and try again."""
         # Not rendered as a chat bubble — the frontend shows a compact
         # inline "response length limit reached" notice + Continue button
         # off the stream_error signal. Kept concise for logs / payload.
-        message = "Response length limit reached."
+        message = (
+            "The answer was cut off at the model's output limit. "
+            "Continue picks up where it stopped."
+        )
 
     elif code == ErrorCode.STREAM_ERROR:
         if "accessdenied" in error_lower or "access denied" in error_lower:

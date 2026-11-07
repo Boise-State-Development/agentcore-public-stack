@@ -48,7 +48,10 @@ import {
   MAX_FILES_PER_MESSAGE,
   formatBytes,
   resolveMimeTypeFor,
+  inlineBudgetOverflow,
+  type BudgetedAttachment,
 } from '../../../services/file-upload';
+import { InlineBudgetNoticeComponent } from './inline-budget-notice.component';
 import { FileSourceService } from '../../../assistants/services/file-source.service';
 import { FileSourceConnector, ImportFileRef } from '../../../assistants/models/file-source.model';
 import {
@@ -333,7 +336,7 @@ export const PROJECT_SKILLS_HINT = "Skills for this project are chosen on its Sk
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AgentNoticeBannerComponent, ProjectFileReadinessComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent, IncognitoToggleComponent],
+  imports: [AgentNoticeBannerComponent, ProjectFileReadinessComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent, IncognitoToggleComponent, InlineBudgetNoticeComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },
@@ -663,6 +666,34 @@ export class ChatInputComponent {
       ...this.readyUploadIds(),
     ]),
   ]);
+
+  /**
+   * The attachments this message's combined inline budget will leave out, or
+   * `null` while everything fits. Judged before send, in the order the send
+   * carries them (`attachmentIds`: restored, then this sitting's uploads), with
+   * the first-fit walk the backend runs. An upload still in flight counts, since
+   * it will travel; a failed one and an import without its metadata yet do not.
+   */
+  readonly budgetOverflow = computed(() => {
+    const seen = new Set<string>();
+    const attachments: BudgetedAttachment[] = [];
+    for (const file of this.restoredAttachments()) {
+      if (seen.has(file.uploadId)) continue;
+      seen.add(file.uploadId);
+      attachments.push({ id: file.uploadId, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes });
+    }
+    for (const upload of this.pendingUploads()) {
+      if (upload.status === 'error' || seen.has(upload.uploadId)) continue;
+      seen.add(upload.uploadId);
+      attachments.push({
+        id: upload.uploadId,
+        filename: upload.file.name,
+        mimeType: upload.file.type,
+        sizeBytes: upload.file.size,
+      });
+    }
+    return inlineBudgetOverflow(attachments);
+  });
 
   // Computed: show file attachments area
   readonly showFileAttachments = computed(

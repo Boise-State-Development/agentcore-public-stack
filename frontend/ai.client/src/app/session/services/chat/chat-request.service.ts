@@ -523,6 +523,17 @@ export class ChatRequestService implements OnDestroy {
       this.messageMapService.endStreaming(sessionId);
       throw error;
     }
+
+    // Re-read the conversation once the continuation has streamed. On a model
+    // that refuses assistant prefill the backend stored one more message than
+    // this tab saw (the continue prompt, ahead of the continuation), and ids
+    // are positional (`msg-{sessionId}-{index}`), so without the re-read every
+    // later id here is one short of the server's until a reload: feedback and
+    // rewind would land on the wrong message. A preview session is never
+    // persisted, so there is nothing to re-read and its live state stands.
+    if (!isPreviewSession(sessionId)) {
+      await this.messageMapService.reloadMessagesForSession(sessionId);
+    }
   }
 
   /**

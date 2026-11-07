@@ -263,6 +263,7 @@ case "$SERVICE" in
             "backend/src/apis/shared/extraction/extraction_store.py"
             "backend/src/apis/shared/extraction/field_sets.py"
             "backend/src/apis/shared/extraction/schema.py"
+            "backend/src/apis/shared/models/assistant_prefill.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).

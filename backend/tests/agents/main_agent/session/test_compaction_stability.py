@@ -375,7 +375,7 @@ class TestCheckpointAdvanceMovesAnchor:
         store = _fresh_state()
         mgr = make_wired_manager(store)
 
-        result = await mgr.update_after_turn(input_tokens=5000, current_messages=stored)
+        result = await mgr.update_after_turn(input_tokens=1200, current_messages=stored)
 
         expected_checkpoint = (8 - 3) * 4
         assert result is not None
@@ -398,7 +398,7 @@ class TestCheckpointAdvanceMovesAnchor:
         store = _fresh_state(truncation_anchor=anchor)
         mgr = make_wired_manager(store)
 
-        result = await mgr.update_after_turn(input_tokens=5000, current_messages=stored)
+        result = await mgr.update_after_turn(input_tokens=1200, current_messages=stored)
         assert result is not None
         assert mgr.compaction_state.truncation_anchor == anchor
 
