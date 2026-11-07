@@ -278,7 +278,9 @@ class BaseAgent(ABC):
         max_tokens truncation: `message`/`files` are ignored and the loop is
         re-entered with an empty prompt so the model continues the truncated
         assistant message already in restored history (assistant-prefill),
-        rather than answering a fresh instruction.
+        rather than answering a fresh instruction. On a model that refuses
+        prefill (Claude 4.6+) the stream coordinator sends a fixed continue
+        turn instead (``apis.shared.models.assistant_prefill``).
         """
 
     def _register_external_mcp_tools(self) -> None:
