@@ -33,6 +33,8 @@ import {
   DocumentReplaceService,
   DocumentReplaceTransport,
   REPLACE_POLL_LIMIT_MS,
+  fileTooLargeMessage,
+  formatFileLimit,
   fileExtension,
   orderReplacementsAdjacent,
 } from '../assistants/services/document-replace.service';
@@ -328,6 +330,27 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
 
   /** Managed KBs carry a cap; a legacy KB returns `cap: null` (uncapped). */
   readonly kbHasCap = computed(() => (this.kbUsage()?.cap ?? null) !== null);
+
+  /**
+   * The knowledge base's per-file limit, from the same documents-list read
+   * (`kbUsage.maxFileBytes`). `null` until read — a draft with no record yet —
+   * in which case the server's 413 says the number instead.
+   */
+  readonly maxFileBytes = computed(() => this.kbUsage()?.maxFileBytes ?? null);
+
+  /** "50 MB" for the dropzone copy, or `null` when the limit isn't known yet. */
+  readonly maxFileSizeLabel = computed(() => {
+    const limit = this.maxFileBytes();
+    return limit === null ? null : formatFileLimit(limit);
+  });
+
+  /** The dropzone's format line, with the size only once the API has said it. */
+  readonly dropzoneHint = computed(() => {
+    const label = this.maxFileSizeLabel();
+    const types = 'PDF, DOCX, TXT, MD, and other document types';
+    // A no-break space keeps "50 MB" on one line, as the old copy's &nbsp; did.
+    return label ? `${types} up to ${label.replace(' ', '\u00a0')}` : types;
+  });
 
   /** Show the bar only for an existing record whose usage we have resolved. */
   // The bar visualises stored bytes against a cap — both of which exist only for
@@ -829,14 +852,15 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       return;
     }
 
-    // Validate file size (10MB max)
-    const maxSizeBytes = 10 * 1024 * 1024; // 10MB
-    if (file.size > maxSizeBytes) {
+    // The knowledge base's per-file limit, from the API. Unknown (a draft with no
+    // record yet) leaves it to the server, whose 413 carries the same sentence.
+    const maxFileBytes = this.maxFileBytes();
+    if (maxFileBytes !== null && file.size > maxFileBytes) {
       this.currentUpload.set({
         file,
         progress: 0,
         status: 'error',
-        error: `File size exceeds 10MB limit. File size: ${this.formatBytes(file.size)}`,
+        error: fileTooLargeMessage(maxFileBytes, file.size),
       });
       input.value = '';
       return;
@@ -1333,7 +1357,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     if (!target || !file || !recordId) {
       return;
     }
-    await this.replace.replace(target, file, this.replaceTransport(recordId));
+    await this.replace.replace(target, file, this.replaceTransport(recordId), this.maxFileBytes());
   }
 
   private replaceTransport(recordId: string): DocumentReplaceTransport {

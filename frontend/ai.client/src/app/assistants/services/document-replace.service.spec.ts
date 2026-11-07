@@ -7,9 +7,12 @@ import {
   DocumentReplaceService,
   DocumentReplaceTransport,
   fileExtension,
+  fileTooLargeMessage,
+  formatFileLimit,
   hasSameExtension,
   isByteCapError,
   orderReplacementsAdjacent,
+  validateReplacement,
 } from './document-replace.service';
 import { DocumentUploadError } from './document.service';
 import { Document } from '../models/document.model';
@@ -175,8 +178,9 @@ describe('DocumentReplaceService', () => {
     const t = transport();
     expect((await service.replace(doc(), new File(['x'], 'notes.docx'), t)).kind).toBe('rejected');
     const big = new File(['x'], 'notes.pdf');
-    Object.defineProperty(big, 'size', { value: 11 * 1024 * 1024 });
-    expect((await service.replace(doc(), big, t)).kind).toBe('rejected');
+    Object.defineProperty(big, 'size', { value: 51 * 1024 * 1024 });
+    const outcome = await service.replace(doc(), big, t, 50 * 1024 * 1024);
+    expect(outcome).toEqual({ kind: 'rejected', message: 'Files can be up to 50 MB. This one is 51 MB.' });
     expect(toast.error).toHaveBeenCalledTimes(2);
     for (const fn of Object.values(t)) expect(fn).not.toHaveBeenCalled();
     expect(tasks.tasks()).toHaveLength(0);
@@ -210,5 +214,37 @@ describe('DocumentReplaceService', () => {
     expect(outcome.kind).toBe('interrupted');
     expect(t.deleteDocument).not.toHaveBeenCalled();
     expect(toast.warning).toHaveBeenCalled();
+  });
+});
+
+describe('the per-file limit, as the API reports it', () => {
+  const MIB = 1024 * 1024;
+  const original = { filename: 'notes.pdf' };
+
+  function sized(bytes: number): File {
+    const file = new File(['x'], 'notes.pdf');
+    Object.defineProperty(file, 'size', { value: bytes });
+    return file;
+  }
+
+  it('words the limit the way the server does', () => {
+    expect(formatFileLimit(50 * MIB)).toBe('50 MB');
+    expect(formatFileLimit(2.5 * MIB)).toBe('2.5 MB');
+    expect(fileTooLargeMessage(20 * MIB)).toBe('Files can be up to 20 MB.');
+    expect(fileTooLargeMessage(20 * MIB, 25 * MIB)).toBe('Files can be up to 20 MB. This one is 25 MB.');
+  });
+
+  it('accepts a replacement the old 10 MB limit refused', () => {
+    expect(validateReplacement(original, sized(30 * MIB), 50 * MIB)).toBeNull();
+  });
+
+  it('holds a replacement to a classic knowledge base’s 20 MB', () => {
+    expect(validateReplacement(original, sized(30 * MIB), 20 * MIB)).toBe(
+      'Files can be up to 20 MB. This one is 30 MB.',
+    );
+  });
+
+  it('leaves the size to the server while the limit is unknown', () => {
+    expect(validateReplacement(original, sized(500 * MIB), null)).toBeNull();
   });
 });

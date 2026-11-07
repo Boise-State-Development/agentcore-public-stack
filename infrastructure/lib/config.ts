@@ -380,6 +380,14 @@ export interface ManagedKbConfig {
   perOwnerElevatedBytes: number;
   /** Per-knowledge-base ceiling, bounding a single runaway corpus. Default 500 MB. */
   perKnowledgeBaseCeilingBytes: number;
+  /**
+   * Largest single file a knowledge base accepts, in bytes
+   * (`KB_UPLOAD_MAX_FILE_BYTES`, from `CDK_KB_UPLOAD_MAX_FILE_BYTES`). Default
+   * 50 MiB, at most 50 MiB (Bedrock Knowledge Bases' own non-adjustable
+   * per-document limit). The classic engine stays at its 20 MiB processing
+   * limit; a value below that lowers both.
+   */
+  uploadMaxFileBytes: number;
   /** Rollback window during `retain`, in days. At least 30 (Requirement 15.11). */
   retentionWindowDays: number;
   /** Fleet-wide managed-storage alarm threshold, in GB. */
@@ -392,6 +400,8 @@ export interface ManagedKbConfig {
 export const MANAGED_KB_DEFAULT_PER_OWNER_BYTES = 100 * 1024 * 1024; // 100 MB
 export const MANAGED_KB_ELEVATED_PER_OWNER_BYTES = 1024 * 1024 * 1024; // 1 GB
 export const MANAGED_KB_PER_KB_CEILING_BYTES = 500 * 1024 * 1024; // 500 MB
+/** Per-file knowledge-base upload limit, and Bedrock's own ceiling for it. */
+export const KB_UPLOAD_MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MiB
 /** Minimum legacy-data rollback window (Requirement 15.11). */
 export const MANAGED_KB_RETENTION_WINDOW_DAYS = 30;
 
@@ -1711,6 +1721,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseIntEnv(scope.node.tryGetContext('managedKb.perKnowledgeBaseCeilingBytes'))
         ?? scope.node.tryGetContext('managedKb')?.perKnowledgeBaseCeilingBytes
         ?? MANAGED_KB_PER_KB_CEILING_BYTES,
+      // Not prefixed MANAGED_KB_: it also bounds a classic knowledge base's
+      // uploads (downward only), and it is what the SPA shows in the dropzone.
+      uploadMaxFileBytes:
+        parseIntEnv(process.env.CDK_KB_UPLOAD_MAX_FILE_BYTES)
+        ?? parseIntEnv(scope.node.tryGetContext('managedKb.uploadMaxFileBytes'))
+        ?? scope.node.tryGetContext('managedKb')?.uploadMaxFileBytes
+        ?? KB_UPLOAD_MAX_FILE_BYTES,
       retentionWindowDays:
         parseIntEnv(process.env.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS)
         ?? parseIntEnv(scope.node.tryGetContext('managedKb.retentionWindowDays'))
@@ -2679,6 +2696,17 @@ function validateConfig(config: AppConfig): void {
     throw new Error(
       'CDK_FOLDER_ATTACHMENTS_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED (on by default): '
       + 'a folder\'s files are delivered by reference and read from the sidecars the large-document pipeline prepares.',
+    );
+  }
+
+  // The per-file knowledge-base limit is bounded by Bedrock's own, which is not
+  // adjustable: a larger value would admit files Bedrock then refuses after
+  // their bytes are stored and reserved.
+  const uploadMax = config.managedKb.uploadMaxFileBytes;
+  if (!Number.isInteger(uploadMax) || uploadMax < 1 || uploadMax > KB_UPLOAD_MAX_FILE_BYTES) {
+    throw new Error(
+      `CDK_KB_UPLOAD_MAX_FILE_BYTES must be a whole number of bytes from 1 to ${KB_UPLOAD_MAX_FILE_BYTES} `
+      + `(50 MiB, Amazon Bedrock Knowledge Bases' per-file limit). Got: ${uploadMax}`,
     );
   }
 

@@ -270,8 +270,13 @@ def set_document_terminal(
     indexed_at: Optional[str] = None,
     retrievable_at: Optional[str] = None,
     error: Optional[str] = None,
+    user_message: Optional[str] = None,
 ) -> bool:
     """Drive the ``DOC#`` record to a terminal state, with bounded retries.
+
+    ``error`` is the operator-facing reason (``ingestionError``). ``user_message``,
+    when given, is also written as ``errorMessage`` — the field the documents list
+    returns and the SPA shows on the failed row.
 
     ``indexedAt`` and ``retrievableAt`` are stored separately on purpose: collapsing
     them would erase the only evidence of the INDEXED-to-retrievable gap, which is
@@ -315,6 +320,9 @@ def set_document_terminal(
     if error:
         sets.append("ingestionError = :err")
         values[":err"] = error
+    if user_message:
+        sets.append("errorMessage = :msg")
+        values[":msg"] = user_message
 
     expression = f"SET {', '.join(sets)}"
     last: Optional[Exception] = None
@@ -701,6 +709,60 @@ def _source_object_exists(bucket: str, key: str) -> Optional[bool]:
     except Exception as exc:  # noqa: BLE001 - a probe failure is not a missing upload
         logger.warning(f"could not check s3://{bucket}/{key} exists: {exc}")
         return None
+
+
+def _source_object_size(bucket: str, key: str) -> Optional[int]:
+    """The stored object's size from an S3 HEAD, or ``None`` if it can't be read.
+
+    ``None`` is not a verdict: the probe failing is no evidence the file is too
+    large, so the caller ingests as before and Bedrock's own limit still applies.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    try:
+        return byte_cap.object_size_bytes(bucket, key)
+    except Exception as exc:  # noqa: BLE001 - a probe failure is not an oversized file
+        logger.warning(f"could not read the size of s3://{bucket}/{key}: {exc}")
+        return None
+
+
+def _over_file_limit_result(
+    assistant_id: str,
+    document_id: str,
+    bucket: str,
+    key: str,
+    declared: int,
+    real: int,
+    limit: int,
+) -> Dict[str, Any]:
+    """Fail a document whose stored object is over the per-file limit. Never raises.
+
+    The presign step only saw the size the client declared, and the presigned PUT
+    does not sign Content-Length, so this is the gate that holds the stored bytes
+    to ``KB_UPLOAD_MAX_FILE_BYTES`` — the knowledge-base counterpart of chat's
+    ``complete_upload``. It runs before the ingest call, so Bedrock never sees the
+    file, the reservation is returned, and the object is removed rather than left
+    billed with nothing pointing at it.
+    """
+    from apis.shared.kb_backend import upload_limit
+
+    logger.warning(
+        f"document {document_id} is {real} bytes, over the {limit}-byte per-file "
+        f"limit; marking it failed and removing the object"
+    )
+    message = upload_limit.too_large_message(limit, real)
+    set_document_terminal(
+        assistant_id, document_id, STATUS_FAILED, error=message, user_message=message,
+    )
+    _release_reservation(assistant_id, document_id, declared)
+    _delete_s3_object(bucket, key)
+    return {
+        "routed": "managed",
+        "ingested": False,
+        "document_id": document_id,
+        "status": STATUS_FAILED,
+        "note": "over-file-limit",
+    }
 
 
 def _upload_window_open(doc_row: Optional[Dict[str, Any]]) -> bool:
@@ -1356,6 +1418,15 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
         # object and then never indexes it.
         if _source_object_exists(bucket, key) is False:
             return _missing_upload_result(assistant_id, document_id, doc_row, declared)
+        # Hold the stored bytes to the per-file limit before Bedrock sees them.
+        from apis.shared.kb_backend import upload_limit
+
+        limit = upload_limit.max_file_bytes(managed=True)
+        real = _source_object_size(bucket, key)
+        if real is not None and real > limit:
+            return _over_file_limit_result(
+                assistant_id, document_id, bucket, key, declared, real, limit
+            )
         try:
             asyncio.run(backend.ingest(assistant_id, source))
         except ManagedKbDocumentRejected as exc:

@@ -26,7 +26,10 @@ projects.
 
 The knowledge base section's **Add content** row offers three ways in:
 
-- **Add files** from the device (or drag and drop, up to 10 MB in the SPA).
+- **Add files** from the device (or drag and drop), up to 50 MB a file on a
+  managed knowledge base and 20 MB on a classic one (see Limits). The SPA reads
+  the limit from the documents list (`kbUsage.maxFileBytes`) and says it in the
+  dropzone and the error.
   The SPA asks `POST /assistants/{id}/documents/upload-url` for a presigned S3
   URL, uploads straight to the documents bucket, and the document starts at
   `uploading`.
@@ -104,8 +107,12 @@ PDF, Word (`.docx`, `.doc`, `.odt`), PowerPoint (`.pptx`), Excel (`.xlsx`),
 CSV, text, Markdown, RTF, HTML, XML, JSON and AsciiDoc.
 
 A managed document goes through the managed ingestion consumer instead, on an
-EventBridge event for the same upload. It is marked `complete` only once a
-retrieval actually returns it, not when Bedrock first reports it indexed.
+EventBridge event for the same upload. Before it asks Bedrock to ingest, the
+consumer measures the stored object and fails a file over the per-file limit
+(returning its reservation and deleting the object), because the presigned PUT
+does not sign the size the client declared. A document is marked `complete`
+only once a retrieval actually returns it, not when Bedrock first reports it
+indexed.
 
 Only `complete` documents are ever retrieved.
 
@@ -251,12 +258,21 @@ re-armed without running. See `docs/specs/assistant-kb-sync.md` §11.
 
 | Limit | Value |
 |---|---|
-| Upload size in the SPA | 10 MB |
-| File size the classic pipeline accepts | 20 MB |
+| File size, managed knowledge base | 50 MB (`CDK_KB_UPLOAD_MAX_FILE_BYTES`, default `52428800`, at most that) |
+| File size, classic knowledge base | 20 MB, the classic pipeline's processing limit. `CDK_KB_UPLOAD_MAX_FILE_BYTES` can lower it, never raise it |
 | Website crawl | Depth 3, 100 pages, 5 concurrent fetches |
 | Passages retrieved per turn | 5 |
 | Managed byte cap, per owner | 100 MB standard, 1 GB elevated (`CDK_MANAGED_KB_PER_OWNER_BYTES`, `CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES`) |
 | Managed byte cap, per knowledge base | 500 MB (`CDK_MANAGED_KB_PER_KB_CEILING_BYTES`) |
+
+The per-file limit applies to device uploads, document replace, the project
+Files page and file-source imports alike. A presigned upload over it is refused
+with a 413 ("Files can be up to 50 MB.") before anything is reserved; an import
+over it is stopped at the limit and its document fails with the same sentence.
+50 MB is Amazon Bedrock Knowledge Bases' own per-file limit for text and
+document files (PDF included; not adjustable), which is why the setting cannot
+go higher. To keep the old 10 MB limit, set `CDK_KB_UPLOAD_MAX_FILE_BYTES` to
+`10485760`.
 
 Bytes are reserved before a managed upload is accepted, so an upload over the
 cap is refused with a 413 that says how far over it is, and concurrent uploads

@@ -715,6 +715,88 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
       expect(fixture.componentInstance.showUsageBar()).toBe(false);
     });
   });
+
+  describe('per-file upload limit (kbUsage.maxFileBytes)', () => {
+    const MIB = 1024 * 1024;
+
+    function usage(overrides: Partial<KbUsage> = {}): KbUsage {
+      return {
+        engine: 'managed',
+        storedBytes: 0,
+        reservedBytes: 0,
+        cap: 100 * MIB,
+        elevated: false,
+        maxFileBytes: 50 * MIB,
+        ...overrides,
+      };
+    }
+
+    function sized(name: string, bytes: number): File {
+      const file = new File(['x'], name, { type: 'application/pdf' });
+      Object.defineProperty(file, 'size', { value: bytes });
+      return file;
+    }
+
+    function pickEvent(file: File): Event {
+      return { target: { files: [file], value: file.name } } as unknown as Event;
+    }
+
+    it('says the limit the API reports in the dropzone', async () => {
+      await render(status({ phase: 'none' }));
+      fixture.componentInstance.kbUsage.set(usage());
+      fixture.detectChanges();
+      expect(text()).toMatch(/document types up to 50\s+MB/);
+    });
+
+    it('says the classic limit for a classic knowledge base', async () => {
+      await render(status({ phase: 'none', engine: 'classic' }));
+      fixture.componentInstance.kbUsage.set(usage({ engine: 's3vectors', cap: null, maxFileBytes: 20 * MIB }));
+      fixture.detectChanges();
+      expect(text()).toMatch(/up to 20\s+MB/);
+      expect(text()).not.toMatch(/10\s+MB/);
+    });
+
+    it('names no size before the limit is known', async () => {
+      await render(status({ phase: 'none' }), null);
+      expect(fixture.componentInstance.dropzoneHint()).toBe('PDF, DOCX, TXT, MD, and other document types');
+    });
+
+    it('refuses a file over the limit with an announced error, before asking the server', async () => {
+      await render(status({ phase: 'none' }));
+      const c = fixture.componentInstance;
+      c.kbUsage.set(usage());
+      const upload = vi.spyOn(c, 'uploadDocument').mockResolvedValue(undefined);
+
+      await c.onFileSelected(pickEvent(sized('big.pdf', 51 * MIB)));
+      fixture.detectChanges();
+
+      expect(upload).not.toHaveBeenCalled();
+      const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement | null;
+      expect(alert?.textContent).toContain('Files can be up to 50 MB. This one is 51 MB.');
+    });
+
+    it('accepts a file the old 10 MB limit refused', async () => {
+      await render(status({ phase: 'none' }));
+      const c = fixture.componentInstance;
+      c.kbUsage.set(usage());
+      const upload = vi.spyOn(c, 'uploadDocument').mockResolvedValue(undefined);
+
+      await c.onFileSelected(pickEvent(sized('report.pdf', 30 * MIB)));
+
+      expect(upload).toHaveBeenCalledOnce();
+    });
+
+    it('leaves the size to the server while the limit is unknown', async () => {
+      await render(status({ phase: 'none' }));
+      const c = fixture.componentInstance;
+      c.kbUsage.set(null);
+      const upload = vi.spyOn(c, 'uploadDocument').mockResolvedValue(undefined);
+
+      await c.onFileSelected(pickEvent(sized('report.pdf', 30 * MIB)));
+
+      expect(upload).toHaveBeenCalledOnce();
+    });
+  });
 });
 
 describe('KnowledgeBaseSectionComponent — replace document', () => {

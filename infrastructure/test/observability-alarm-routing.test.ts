@@ -37,6 +37,7 @@ describe('Alarm routing — every alarm reaches a human', () => {
         perOwnerDefaultBytes: 100 * 1024 * 1024,
         perOwnerElevatedBytes: 1024 * 1024 * 1024,
         perKnowledgeBaseCeilingBytes: 500 * 1024 * 1024,
+        uploadMaxFileBytes: 50 * 1024 * 1024,
         retentionWindowDays: 30,
         storageAlarmGb: 500,
         dailyCostAlarmUsd: 100,

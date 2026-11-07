@@ -253,6 +253,10 @@ export function buildAppApiEnvironment(
     MANAGED_KB_PER_OWNER_DEFAULT_BYTES: String(config.managedKb.perOwnerDefaultBytes),
     MANAGED_KB_PER_OWNER_ELEVATED_BYTES: String(config.managedKb.perOwnerElevatedBytes),
     MANAGED_KB_PER_KB_CEILING_BYTES: String(config.managedKb.perKnowledgeBaseCeilingBytes),
+    // Per-file knowledge-base upload limit, enforced at presign and import and
+    // returned to the SPA as `kbUsage.maxFileBytes`. The managed ingestion
+    // consumer holds stored objects to the same value (kb-migration-construct.ts).
+    KB_UPLOAD_MAX_FILE_BYTES: String(config.managedKb.uploadMaxFileBytes),
     // Gates the owner-facing upgrade offer (Requirement 23.1), which is served by
     // THIS task — `apis/app_api/kb_upgrade/service.py` reads this exact variable.
     //

@@ -246,6 +246,9 @@ build_cdk_context_params() {
     if [ -n "${CDK_MANAGED_KB_PER_KB_CEILING_BYTES:-}" ]; then
         context_params="${context_params} --context managedKb.perKnowledgeBaseCeilingBytes=\"${CDK_MANAGED_KB_PER_KB_CEILING_BYTES}\""
     fi
+    if [ -n "${CDK_KB_UPLOAD_MAX_FILE_BYTES:-}" ]; then
+        context_params="${context_params} --context managedKb.uploadMaxFileBytes=\"${CDK_KB_UPLOAD_MAX_FILE_BYTES}\""
+    fi
     if [ -n "${CDK_MANAGED_KB_RETENTION_WINDOW_DAYS:-}" ]; then
         context_params="${context_params} --context managedKb.retentionWindowDays=\"${CDK_MANAGED_KB_RETENTION_WINDOW_DAYS}\""
     fi
@@ -457,6 +460,7 @@ export CDK_MANAGED_KB_DOC_RECONCILER_ARMED="${CDK_MANAGED_KB_DOC_RECONCILER_ARME
 export CDK_MANAGED_KB_PER_OWNER_BYTES="${CDK_MANAGED_KB_PER_OWNER_BYTES:-$(get_json_value "managedKb.perOwnerDefaultBytes" "${CONTEXT_FILE}")}"
 export CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES="${CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES:-$(get_json_value "managedKb.perOwnerElevatedBytes" "${CONTEXT_FILE}")}"
 export CDK_MANAGED_KB_PER_KB_CEILING_BYTES="${CDK_MANAGED_KB_PER_KB_CEILING_BYTES:-$(get_json_value "managedKb.perKnowledgeBaseCeilingBytes" "${CONTEXT_FILE}")}"
+export CDK_KB_UPLOAD_MAX_FILE_BYTES="${CDK_KB_UPLOAD_MAX_FILE_BYTES:-$(get_json_value "managedKb.uploadMaxFileBytes" "${CONTEXT_FILE}")}"
 export CDK_MANAGED_KB_RETENTION_WINDOW_DAYS="${CDK_MANAGED_KB_RETENTION_WINDOW_DAYS:-$(get_json_value "managedKb.retentionWindowDays" "${CONTEXT_FILE}")}"
 # Fleet-level alarm thresholds (Requirement 12.13). Per-owner byte caps
 # bound one user; these bound the account.
