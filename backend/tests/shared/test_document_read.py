@@ -91,8 +91,7 @@ def _meta(upload_id="up-1", filename="policy.pdf", mime="application/pdf", size=
     )
 
 
-@pytest.fixture
-def stored(monkeypatch):
+def patch_store(monkeypatch):
     """Patch the metadata lookup and the S3 fetch; returns a setter."""
     state = {}
 
@@ -109,6 +108,11 @@ def stored(monkeypatch):
         state["meta"], state["raw"] = meta, raw
 
     return _set
+
+
+@pytest.fixture
+def stored(monkeypatch):
+    return patch_store(monkeypatch)
 
 
 # ---------------------------------------------------------------------------

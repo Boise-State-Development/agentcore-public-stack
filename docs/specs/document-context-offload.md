@@ -303,6 +303,16 @@ document_read(upload_id, page_range={start,end} | pattern, max_pages=8)
 - `pattern` greps the extracted text layer and returns the *page numbers* that
   match plus surrounding lines, so the model can then ask for those pages.
 - Hard cap `max_pages` so one call cannot re-inject the whole document.
+- **A page count is not a byte bound.** A tool round's results are written to
+  AgentCore Memory as one event, held to the same 10 MB quota as a turn's
+  attachments, and past it `CreateEvent` returns 413 and the turn is
+  force-stopped. In prod (30 days to 2026-11-06) page reads ran p90 5.3 MB and
+  up to 86.5 MB for one 8-page slice of a scan, and about 21 turns died this
+  way, one of them from five parallel ~3.3 MB reads. So a round's page reads
+  share `DOCUMENT_READ_MAX_BATCH_BYTES` (7.0 MB raw, the attachment budget):
+  each call, in turn under a per-round lock, slices to what is left — fewer
+  pages with `next_start`, or the pages' text layer when not even the first
+  page fits — and records `DocumentReadByteBudgetLimited`.
 
 Modelled on `retrieve_offloaded_content`'s interface deliberately — same three
 modes (pattern / range / full-as-last-resort), same guidance text shape.
