@@ -107,6 +107,7 @@ import {
 } from '../../../services/skill/skill-command.service';
 import { SkillCommandMenuComponent } from './skill-command-menu.component';
 import { SteeringService } from '../../services/chat/steering.service';
+import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ComposerDraftService } from '../../services/session/composer-draft.service';
 import { SessionPrewarmService } from '../../services/session/session-prewarm.service';
 import {
@@ -365,6 +366,7 @@ export class ChatInputComponent {
   private readonly features = inject(FEATURES);
   private readonly toastService = inject(ToastService);
   private readonly steering = inject(SteeringService);
+  private readonly chatState = inject(ChatStateService);
   private readonly sessionPrewarm = inject(SessionPrewarmService);
   private readonly composerDraft = inject(ComposerDraftService);
   private readonly draftStorage = inject(ComposerDraftStorageService);
@@ -1541,6 +1543,20 @@ export class ChatInputComponent {
       // so the hold is always bounded by an action the user already has.
       // See docs/specs/mid-turn-steering.md ("Paused turns").
       if (this.steering.shouldHoldQueue(this.sessionId())) return;
+      // A turn that ended in an error hands the queue back instead of
+      // sending it. What was typed while a failing turn sat silent ("is this
+      // working?", or the next request) was written against a turn the user
+      // now knows failed, and sending it the instant the error lands starts a
+      // new turn under the failed one's "Please try again" without the user
+      // choosing to. Worse, the first turn after a failure re-sends the failed
+      // turn's attachments, so the failed request quietly runs again with it.
+      // Back in the composer, Enter sends it — one deliberate step.
+      const sessionId = this.sessionId();
+      if (sessionId && untracked(() => this.chatState.stopReasonFor(sessionId)) === 'error') {
+        this.turnInFlight = false;
+        untracked(() => this.returnQueueToComposer());
+        return;
+      }
       const [next, ...rest] = untracked(() => this.queuedMessages());
       if (!next) return;
       // Consume the edge before emitting: the next message waits for the next
@@ -1901,6 +1917,60 @@ export class ChatInputComponent {
     // withdrawal below already raced us to the backend).
     this.queuedMessages.update(queue =>
       queue.map(q => (q.id === entry.id ? { ...q, armed: true } : q)),
+    );
+  }
+
+  /**
+   * Fold every queued follow-up back into the composer, ahead of what is being
+   * typed, in the order they were written — the same shape a reload restores
+   * them in (`adoptDraft`). Their attachments, folders and `@`-mention come
+   * back with them; a `/` skill command lives in the text, so it already does.
+   *
+   * Armed entries are included: arming only put them in the running turn's
+   * steering inbox, and that inbox was deleted with the turn's lease.
+   */
+  private returnQueueToComposer(): void {
+    const entries = this.queuedMessages();
+    if (entries.length === 0) return;
+    this.queuedMessages.set([]);
+
+    const text = [...entries.map(entry => entry.content), this.userInput()]
+      .map(part => part.trim())
+      .filter(part => !!part)
+      .join('\n\n');
+    this.userInput.set(text);
+    const textarea = this.messageInput()?.nativeElement;
+    if (textarea) textarea.value = text;
+    this.sizeTextareaTo(text);
+
+    const sessionId = this.sessionId() ?? '';
+    const files = entries
+      .flatMap(entry => entry.attachments ?? [])
+      .map(attachment => toFileMetadata(attachment, sessionId));
+    if (files.length > 0) {
+      for (const file of files) this.fileUploadService.registerKnownFile(file);
+      this.restoredAttachments.update(current => {
+        const held = new Set(current.map(file => file.uploadId));
+        return [...current, ...files.filter(file => !held.has(file.uploadId))];
+      });
+    }
+
+    const folders = entries.flatMap(entry => entry.storedFolders ?? []);
+    if (folders.length > 0) {
+      this.adoptFolders(dedupeFolders([...this.folderDraft(), ...folders]), sessionId);
+    }
+
+    if (!this.mentionedAgent() && !this.pendingMentionAgentId()) {
+      const mentionAgentId = entries.find(entry => entry.mentionAgentId)?.mentionAgentId;
+      if (mentionAgentId) {
+        this.pendingMentionAgentId.set(mentionAgentId);
+        void this.mentionService.load();
+      }
+    }
+
+    this.toastService.info(
+      'Follow-up not sent',
+      'The last response failed, so what you queued is back in the message box. Press Enter to send it.',
     );
   }
 

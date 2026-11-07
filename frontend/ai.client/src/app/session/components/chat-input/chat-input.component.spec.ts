@@ -20,6 +20,7 @@ import {
   type DictationStatus,
 } from '../../services/dictation';
 import { SteeringService } from '../../services/chat/steering.service';
+import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ComposerDraftService } from '../../services/session/composer-draft.service';
 import { NEW_CONVERSATION_DRAFT_KEY } from '../../services/session/composer-draft-storage.service';
 import { ChatInputComponent, spliceDictation } from './chat-input.component';
@@ -590,10 +591,9 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
     expect(component.queuedMessages()).toEqual([]);
   });
 
-  it('flushes after an aborted or failed turn too, not just a clean finish', () => {
-    // The composer cannot tell done from abort from error — it only sees
-    // loading go false. Reading the flush as an invariant rather than a
-    // transition is what makes all three paths behave the same.
+  it('flushes after an aborted turn too, not just a clean finish', () => {
+    // The Stop the user pressed is the end of that turn, so what they queued
+    // while it ran is still what they want next.
     setStreaming(true);
     type('follow-up');
     pressEnter();
@@ -603,6 +603,73 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
 
     expect(cancelled).toBe(1);
     expect(submitted.map(m => m.content)).toEqual(['follow-up']);
+  });
+
+  describe('when the turn ends in an error', () => {
+    // A turn that fails slowly (a model read timeout: minutes of silence under
+    // "Still working…") is exactly when a user types "is this working?" or the
+    // next request. Sending that the instant the error lands started a new turn
+    // under the failed one's "Please try again" — and the server re-sends the
+    // failed turn's attachments with the first turn after a failure, so the
+    // failed request really did run again, alongside the new one.
+    beforeEach(() => {
+      fixture.componentRef.setInput('sessionId', 'sess-1');
+      fixture.detectChanges();
+    });
+
+    function failTurn(): void {
+      TestBed.inject(ChatStateService).setStopReason('sess-1', 'error');
+      setStreaming(false);
+    }
+
+    it('puts the queued follow-up back in the composer instead of sending it', () => {
+      setStreaming(true);
+      type('is this still working?');
+      pressEnter();
+
+      failTurn();
+
+      expect(submitted).toEqual([]);
+      expect(component.queuedMessages()).toEqual([]);
+      expect(component.userInput()).toBe('is this still working?');
+      expect(textarea.value).toBe('is this still working?');
+    });
+
+    it('returns every queued follow-up, ahead of what is being typed, in order', () => {
+      setStreaming(true);
+      type('one');
+      pressEnter();
+      type('two');
+      pressEnter();
+      type('three, still typing');
+
+      failTurn();
+
+      expect(submitted).toEqual([]);
+      expect(component.userInput()).toBe('one\n\ntwo\n\nthree, still typing');
+    });
+
+    it('sends normally once the user presses Enter on it', () => {
+      setStreaming(true);
+      type('try that again');
+      pressEnter();
+      failTurn();
+
+      pressEnter();
+
+      expect(submitted.map(m => m.content)).toEqual(['try that again']);
+    });
+
+    it('still flushes after a max_tokens ending, which is not a failure', () => {
+      setStreaming(true);
+      type('follow-up');
+      pressEnter();
+
+      TestBed.inject(ChatStateService).setStopReason('sess-1', 'max_tokens');
+      setStreaming(false);
+
+      expect(submitted.map(m => m.content)).toEqual(['follow-up']);
+    });
   });
 
   it('stamps the timestamp at send time, not queue time', () => {
