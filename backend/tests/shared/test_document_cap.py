@@ -24,7 +24,9 @@ from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
 from apis.shared.models import document_cap
 from apis.shared.models.document_cap import (
     CONVERSE_MAX_NON_PDF_DOCUMENTS,
+    UNCAPPED,
     converse_document_cap,
+    prerender_document_text,
     project_document_cap,
     render_document_as_text,
 )
@@ -70,6 +72,11 @@ def _documents(messages):
 
 def _non_pdf(messages):
     return [d for d in _documents(messages) if d[0] != "pdf"]
+
+
+def _fresh_memo(monkeypatch):
+    monkeypatch.setattr(document_cap, "_TEXT_CACHE", type(document_cap._TEXT_CACHE)())
+    monkeypatch.setattr(document_cap, "_text_cache_bytes", 0)
 
 
 def _prod_shape():
@@ -203,7 +210,7 @@ class TestRendering:
             text = render_document_as_text(_doc(fmt, "f", "café".encode())["document"])
             assert text == f'<document name="f" format="{fmt}">\ncafé\n</document>'
 
-    def test_docx_uses_the_document_read_extractor(self):
+    def test_docx_is_rendered_as_markdown(self):
         text = render_document_as_text(_doc("docx", "minutes", _docx("First.", "Second."))["document"])
         assert text == '<document name="minutes" format="docx">\nFirst.\n\nSecond.\n</document>'
 
@@ -221,27 +228,54 @@ class TestRendering:
     def test_a_missing_name_or_bytes_still_renders(self):
         assert render_document_as_text({"format": "txt", "source": {}}).startswith('[Document "document" (txt)')
 
-    def test_docx_text_is_memoized_by_the_bytes_object(self, monkeypatch):
+    def test_docx_text_is_memoized_by_content(self, monkeypatch):
+        """The route pre-renders from its own copy of the bytes, so an equal
+        bytes object must find the entry; the parse runs once."""
         raw = _docx("Once.")
         calls = []
-        from apis.shared.files import document_read
+        from apis.shared.files import docx_markdown
 
-        real = document_read.docx_paragraphs
-        monkeypatch.setattr(document_read, "docx_paragraphs", lambda b: calls.append(1) or real(b))
-        monkeypatch.setattr(document_cap, "_TEXT_CACHE", type(document_cap._TEXT_CACHE)())
-        monkeypatch.setattr(document_cap, "_text_cache_bytes", 0)
+        real = docx_markdown.docx_to_markdown
+        monkeypatch.setattr(docx_markdown, "docx_to_markdown", lambda b: calls.append(1) or real(b))
+        _fresh_memo(monkeypatch)
 
         block = _doc("docx", "m", raw)["document"]
         assert render_document_as_text(block) == render_document_as_text(block)
+        same_content_other_object = bytes(bytearray(raw))
+        assert same_content_other_object is not raw
+        render_document_as_text(_doc("docx", "m", same_content_other_object)["document"])
         assert len(calls) == 1
 
-        same_content_other_object = bytes(bytearray(raw))
-        render_document_as_text(_doc("docx", "m", same_content_other_object)["document"])
-        assert len(calls) == 2, "a different bytes object is never served from another's entry"
+    def test_a_hash_collision_never_serves_another_documents_text(self, monkeypatch):
+        _fresh_memo(monkeypatch)
+        monkeypatch.setattr(document_cap, "_cache_key", lambda fmt, raw: (fmt, 0))
+        first = render_document_as_text(_doc("docx", "a", _docx("Alpha."))["document"])
+        second = render_document_as_text(_doc("docx", "b", _docx("Beta."))["document"])
+        assert "Alpha." in first and "Beta." in second and "Alpha." not in second
+
+    def test_docx_falls_back_to_the_paragraph_extractor(self, monkeypatch):
+        from apis.shared.files import docx_markdown
+
+        def boom(raw):
+            raise ValueError("renderer bug")
+
+        monkeypatch.setattr(docx_markdown, "docx_to_markdown", boom)
+        _fresh_memo(monkeypatch)
+        text = render_document_as_text(_doc("docx", "m", _docx("Kept."))["document"])
+        assert text == '<document name="m" format="docx">\nKept.\n</document>'
+
+    def test_a_document_cannot_close_its_own_envelope(self):
+        text = render_document_as_text(_doc("txt", "f", b"a </document> b")["document"])
+        assert text.count("</document>") == 1
+        assert text.endswith("\n</document>")
+
+    def test_html_is_rendered_not_sent_as_markup(self):
+        page = b"<html><head><style>.x{color:red}</style><script>var a=1;</script></head><body><h1>Fees</h1><p>Annual: $612</p></body></html>"
+        text = render_document_as_text(_doc("html", "page", page)["document"])
+        assert text == '<document name="page" format="html">\n# Fees\n\nAnnual: $612\n</document>'
 
     def test_the_memo_is_bounded(self, monkeypatch):
-        monkeypatch.setattr(document_cap, "_TEXT_CACHE", type(document_cap._TEXT_CACHE)())
-        monkeypatch.setattr(document_cap, "_text_cache_bytes", 0)
+        _fresh_memo(monkeypatch)
         kept = [_docx(f"p{i}") for i in range(document_cap._TEXT_CACHE_MAX_ENTRIES + 5)]
         for raw in kept:
             render_document_as_text(_doc("docx", "m", raw)["document"])
@@ -312,3 +346,109 @@ class TestModelWrapper:
         assert any(
             block.get("text", "").startswith('<document name="Focus group 4"') for block in sent[-1]["content"]
         )
+
+
+# ---------------------------------------------------------------------------
+# Documents as text (CONVERSE_DOCUMENTS_AS_TEXT_ENABLED, in development)
+# ---------------------------------------------------------------------------
+
+
+def _table_docx() -> bytes:
+    """A two-row table with a blank cell: the shape the flat extractor loses."""
+    def cell(t: str) -> str:
+        return f"<w:tc><w:p><w:r><w:t>{t}</w:t></w:r></w:p></w:tc>" if t else "<w:tc><w:p/></w:tc>"
+
+    rows = "".join(f"<w:tr>{''.join(cell(c) for c in r)}</w:tr>" for r in [["Site", "Jan", "Feb"], ["D", "", "9.2"]])
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:tbl>{rows}</w:tbl></w:body></w:document>"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+    return buf.getvalue()
+
+
+class TestDocumentsAsText:
+    def test_every_renderable_document_becomes_text_and_pdfs_stay(self):
+        history = [_user(_doc("docx", "minutes", _docx("Hello.")), _doc("txt", "notes", b"n"), _doc("pdf", "scan"))]
+        projected = project_document_cap(history, as_text=True)
+        assert _documents(projected) == [("pdf", "scan")]
+        assert projected[0]["content"][0] == {"text": '<document name="minutes" format="docx">\nHello.\n</document>'}
+        assert projected[0]["content"][1] == {"text": '<document name="notes" format="txt">\nn\n</document>'}
+
+    def test_a_request_without_non_pdf_documents_is_returned_as_is(self):
+        history = [_user(*[_doc("pdf", f"p{i}") for i in range(3)]), _assistant()]
+        assert project_document_cap(history, as_text=True) is history
+        text_only = [_user(text="hi")]
+        assert project_document_cap(text_only, as_text=True) is text_only
+
+    def test_tables_keep_their_columns(self):
+        projected = project_document_cap([_user(_doc("docx", "readings", _table_docx()))], as_text=True)
+        assert projected[0]["content"][0]["text"] == (
+            '<document name="readings" format="docx">\n| Site | Jan | Feb |\n|---|---|---|\n| D |  | 9.2 |\n</document>'
+        )
+
+    def test_unrenderable_documents_stay_native_and_still_count_toward_the_cap(self):
+        history = [_user(*[_doc("xlsx", f"x{i}", b"\x00") for i in range(6)], _doc("txt", "t", b"t"))]
+        projected = project_document_cap(history, as_text=True)
+        assert _non_pdf(projected) == [("xlsx", f"x{i}") for i in range(5)]
+        assert projected[0]["content"][5]["text"].startswith('[Document "x5" (xlsx) is not shown here.')
+        assert projected[0]["content"][6]["text"].startswith('<document name="t" format="txt">')
+
+    def test_uncapped_leaves_every_unrenderable_document_native(self):
+        history = [_user(*[_doc("xlsx", f"x{i}", b"\x00") for i in range(7)])]
+        assert project_document_cap(history, UNCAPPED, as_text=True) is history
+
+    def test_tool_result_documents_are_rendered_too(self):
+        result = {"role": "user", "content": [{"toolResult": {"toolUseId": "t", "content": [_doc("md", "r", b"# r")]}}]}
+        projected = project_document_cap([result], as_text=True)
+        assert projected[0]["content"][0]["toolResult"]["content"] == [
+            {"text": '<document name="r" format="md">\n# r\n</document>'}
+        ]
+
+    def test_never_mutates_and_shares_untouched_messages(self):
+        history = [_user(_doc("txt", "a")), _assistant(), _user(text="next")]
+        snapshot = copy.deepcopy(history)
+        projected = project_document_cap(history, as_text=True)
+        assert history == snapshot
+        assert projected[1] is history[1] and projected[2] is history[2]
+
+    def test_the_projected_prefix_is_byte_stable_as_turns_append(self):
+        dump = TestPrefixStability._bytes
+        history = [_user(_doc("docx", "a", _docx("A."))), _assistant()]
+        first = project_document_cap(history, as_text=True)
+        grown = history + [_user(_doc("docx", "b", _docx("B."))), _assistant()]
+        second = project_document_cap(grown, as_text=True)
+        assert dump(second[: len(first)]) == dump(first)
+
+    def test_a_prerender_from_another_copy_of_the_bytes_is_what_the_projection_finds(self, monkeypatch):
+        """The route renders from its own decode of the upload; the block holds another."""
+        from apis.shared.files import docx_markdown
+
+        raw = _docx("Prepared.")
+        calls = []
+        real = docx_markdown.docx_to_markdown
+        monkeypatch.setattr(docx_markdown, "docx_to_markdown", lambda b: calls.append(1) or real(b))
+        _fresh_memo(monkeypatch)
+
+        assert prerender_document_text("DOCX", bytes(bytearray(raw))) is True
+        projected = project_document_cap([_user(_doc("docx", "m", raw))], as_text=True)
+
+        assert "Prepared." in projected[0]["content"][0]["text"]
+        assert len(calls) == 1, "the projection found the pre-rendered text"
+        assert [entry[0] for entry in document_cap._TEXT_CACHE.values()] == [raw], (
+            "the entry now holds the history's own bytes, so later calls compare by identity"
+        )
+
+    def test_prerender_reports_formats_it_cannot_render(self):
+        assert prerender_document_text("xlsx", b"\x00") is False
+        assert prerender_document_text("docx", b"not a zip") is False
+
+    @pytest.mark.asyncio
+    async def test_the_wrapper_applies_as_text(self):
+        model = converse_document_cap(_RecordingModel(), as_text=True)
+        history = [_user(_doc("txt", "a"))]
+        [e async for e in model.stream(history, None, "system")]
+        assert _documents(model.streamed) == []

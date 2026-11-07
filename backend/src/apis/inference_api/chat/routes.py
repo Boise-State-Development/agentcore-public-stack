@@ -3219,6 +3219,78 @@ async def _adapt_attachments_for_model(attachments: TurnAttachments, turn_model:
         attachments.marker_names = [n for n in attachments.marker_names if n not in dropped_names]
 
 
+#: Providers whose models speak Bedrock Converse, where ``AgentFactory``
+#: installs the document-cap projection. ``None`` is a model with no explicit
+#: provider, which resolves to Converse.
+_CONVERSE_PROVIDERS = frozenset({None, "", "bedrock"})
+
+
+def _is_converse_model(turn_model: "TurnModel") -> bool:
+    if (turn_model.provider or "").strip().lower() not in _CONVERSE_PROVIDERS:
+        return False
+    model_id = (turn_model.model_id or "").lower()
+    # ``ModelConfig.get_provider`` routes these ids away from Converse.
+    return not model_id.startswith(("gpt-", "o1-", "gemini-"))
+
+
+def _renderable_format(file) -> Optional[str]:
+    """The document format ``PromptBuilder`` gives ``file``'s block, when it is
+    one ``document_cap`` renders as text (docx, txt, md, csv, html)."""
+    from apis.shared.models.document_cap import RENDERABLE_FORMATS
+
+    if (file.content_type or "").lower().startswith("image/"):
+        return None
+    name = (file.filename or "").lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    return ext if ext in RENDERABLE_FORMATS else None
+
+
+def _prerender_one(fmt: str, encoded: str) -> bool:
+    import base64
+
+    from apis.shared.models.document_cap import prerender_document_text
+
+    return prerender_document_text(fmt, base64.b64decode(encoded or ""))
+
+
+async def _prerender_documents_as_text(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Render the turn's new non-PDF attachments as text, off the event loop (map stage B11).
+
+    With ``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`` on, the document-cap projection
+    sends every docx, txt, md, csv and html document block to a Converse model
+    as text. It runs inside the model call, on the event loop, and memoizes the
+    text by content; rendering here in worker threads first means the
+    projection only finds the text, so the parse (about 3–5 ms for a
+    few-page Word file, measured) never blocks the loop. The tracked changes
+    are already written out by ``_write_out_tracked_changes``, so the text
+    renders the same bytes the block carries.
+
+    Returns at once with the flag off, for any other model, and on a turn with
+    no such attachment. A failure here only means the projection renders the
+    file itself.
+    """
+    if not attachments.files_to_send or not _is_converse_model(turn_model):
+        return
+    from apis.shared.feature_flags import converse_documents_as_text_enabled
+
+    if not converse_documents_as_text_enabled():
+        return
+    jobs = [(fmt, f.bytes) for f in attachments.files_to_send if (fmt := _renderable_format(f))]
+    if not jobs:
+        return
+    started = time.perf_counter()
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_prerender_one, fmt, encoded) for fmt, encoded in jobs),
+        return_exceptions=True,
+    )
+    logger.info(
+        "documents_as_text: %d attachment(s) rendered in %.1f ms (%d without text)",
+        len(jobs),
+        (time.perf_counter() - started) * 1000,
+        sum(1 for r in results if r is not True),
+    )
+
+
 def _build_extracted_documents_section(extracted: list, document_read_available: bool) -> str:
     """The text a TEXT-only model reads in place of the documents it cannot.
 
@@ -5583,6 +5655,9 @@ async def _run_invocation(
             # image blocks; convert or drop them now that the model is known.
             # Returns immediately for every other model.
             await _adapt_attachments_for_model(attachments, turn_model)
+            # With documents-as-text on, render the turn's non-PDF attachments
+            # now, in worker threads, so the per-call projection finds them.
+            await _prerender_documents_as_text(attachments, turn_model)
 
             # The tool ids this turn carries — one value for the cache key,
             # every builder, the attachment guidance and the paused snapshot.

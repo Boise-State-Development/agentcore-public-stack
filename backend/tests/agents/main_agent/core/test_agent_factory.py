@@ -512,6 +512,28 @@ class TestConverseDocumentCap:
         cfg = ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE)
         assert self._built_stream("build_mantle_model", cfg) is self.HISTORY
 
+    def test_documents_as_text_sends_every_renderable_document_as_text(self, monkeypatch):
+        monkeypatch.setenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "true")
+        sent = self._built_stream("CountTokensBedrockModel", _bedrock_config())
+        assert not any("document" in b for b in sent[0]["content"])
+        assert sent[0]["content"][0] == {"text": '<document name="d0" format="txt">\nx\n</document>'}
+
+    def test_documents_as_text_works_with_the_cap_switched_off(self, monkeypatch):
+        monkeypatch.setenv("CONVERSE_DOCUMENT_CAP_ENABLED", "false")
+        monkeypatch.setenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "true")
+        sent = self._built_stream("CountTokensBedrockModel", _bedrock_config())
+        assert not any("document" in b for b in sent[0]["content"])
+
+    def test_documents_as_text_is_off_by_default(self, monkeypatch):
+        monkeypatch.delenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", raising=False)
+        sent = self._built_stream("CountTokensBedrockModel", _bedrock_config())
+        assert sum("document" in b for b in sent[0]["content"]) == 5
+
+    def test_documents_as_text_never_reaches_a_mantle_model(self, monkeypatch):
+        monkeypatch.setenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "true")
+        cfg = ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE)
+        assert self._built_stream("build_mantle_model", cfg) is self.HISTORY
+
 
 # ---------------------------------------------------------------------------
 # Reasoning hygiene across a model switch — now Strands' job, not ours

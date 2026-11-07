@@ -1255,6 +1255,36 @@ def converse_document_cap_enabled() -> bool:
     return os.environ.get("CONVERSE_DOCUMENT_CAP_ENABLED", "").strip().lower() != "false"
 
 
+def converse_documents_as_text_enabled() -> bool:
+    """Whether a Converse request carries non-PDF attachments as text, not documents.
+
+    Covers the ``as_text`` mode of ``apis.shared.models.document_cap``, the
+    per-call projection ``AgentFactory`` installs on every Bedrock Converse
+    model. On, every docx, txt, md, csv and html document block is sent as a
+    text block the deployment rendered (``docx_markdown``, ``html_markdown``,
+    UTF-8), the way Claude's own product treats files; PDFs stay native
+    document blocks. There is then no five-document limit to reach. The stored
+    conversation is unchanged: the user message keeps its document block, so
+    the attachment card, restore, offload and the share and handoff views see
+    what they always saw. The inference route renders a turn's new attachments
+    in worker threads before the agent runs, so the parse stays off the event
+    loop (``prerender_document_text``).
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.converseDocumentsAsText.enabled``. No SPA switch: there is nothing
+    to show.
+
+    A **feature switch** once finished, not a rollout switch: whether Bedrock or
+    the deployment renders a document is a choice a deployment may make either
+    way. Turning it on or off takes a Runtime update, which replaces every
+    container, so no warm conversation ever holds a prefix projected the other
+    way.
+    """
+    return os.environ.get("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "").strip().lower() == "true"
+
+
 def source_provenance_enabled() -> bool:
     """Whether a cited passage is verified against the document it names
     (``docs/specs/source-provenance-verification.md``).
