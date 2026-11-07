@@ -100,10 +100,36 @@ def _agent(client: Any, titles: list[str], *, heal: bool = True) -> Agent:
     )
 
 
+# A turn here is one scripted model call, one local MCP round trip and a
+# second scripted model call: well under a second. The bound exists only so
+# that an SDK which strands a call on a dead session fails the test instead of
+# parking the event loop forever (the CI job has no timeout of its own).
+_TURN_TIMEOUT_S = 15
+
+_HUNG = (
+    "an MCP call on a dead session never resolved. On strands-agents < 1.58 "
+    "that is the upstream cancel_signal hang (#4499): check that the venv "
+    "running this matches the pin (`uv sync --extra agentcore --extra dev`). "
+    "If it does, the SDK has regressed and `ReleasesCallsOnSessionEnd` has "
+    "to come back."
+)
+
+
+async def _bounded(awaitable: Any, timeout: float = _TURN_TIMEOUT_S) -> Any:
+    try:
+        return await asyncio.wait_for(awaitable, timeout=timeout)
+    except TimeoutError:
+        pytest.fail(f"Timed out after {timeout}s: {_HUNG}")
+
+
 async def _turn(agent: Agent, prompt: str = "go") -> dict:
-    """Run one turn; return the tool result it produced."""
-    async for _ in agent.stream_async(prompt):
-        pass
+    """Run one turn, bounded; return the tool result it produced."""
+
+    async def drain() -> None:
+        async for _ in agent.stream_async(prompt):
+            pass
+
+    await _bounded(drain())
     results = [
         block["toolResult"]
         for message in agent.messages
@@ -143,12 +169,12 @@ async def test_a_call_whose_session_dies_resolves_rather_than_hangs():
     """
     with FlakyMCPServer() as server:
         with _stopping(server.client(MCPClient)) as client:
-            await client.load_tools()
+            await _bounded(client.load_tools())
             call = client.call_tool_async(
                 "t-1", "issue_write", {"title": "MCPClient"},
                 cancel_signal=threading.Event(),
             )
-            result = await asyncio.wait_for(call, timeout=5)
+            result = await _bounded(call, timeout=5)
             assert result["status"] == "error"
             assert "closed" in _text(result)
         assert server.writes == ["MCPClient"]
