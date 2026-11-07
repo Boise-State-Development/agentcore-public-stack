@@ -247,7 +247,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     skills: { enabled: true },
     skillAuthoring: { enabled: true },
     wordTrackedChanges: { enabled: true },
-    assistantKbFullContext: { enabled: true },
+    assistantKbFullContext: { enabled: true, maxTokens: 80_000 },
+    agentKnowledgeFiles: { enabled: true },
     // Large documents gate the next two: synth refuses either without it.
     largeDocumentAttachments: { enabled: true },
     attachmentKb: { enabled: true },

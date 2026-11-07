@@ -17,6 +17,9 @@ import { WebSourceService } from '../assistants/services/web-source.service';
 import { SyncPolicyService } from '../assistants/services/sync-policy.service';
 import { UserConnectorsService } from '../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
+import { FEATURES } from '../services/features';
+import { environment } from '../../environments/environment';
+import { KnowledgeModeService } from './knowledge-mode.service';
 
 /**
  * The upgrade card's five states (Requirement 23) and the stranded-document
@@ -986,5 +989,60 @@ describe('KnowledgeBaseSectionComponent — replace document', () => {
     expect(tasks.tasks()).toHaveLength(0);
     expect(unloadAllowed()).toBe(true);
     expect(el().textContent).not.toContain('Replacing…');
+  });
+});
+
+
+describe('KnowledgeBaseSectionComponent — knowledge-base mode line', () => {
+  let getMode: ReturnType<typeof vi.fn>;
+
+  async function render(options: { flag: boolean; permission?: 'owner' | 'editor' | 'viewer' }) {
+    TestBed.resetTestingModule();
+    getMode = vi.fn().mockResolvedValue({
+      mode: 'whole',
+      reason: null,
+      documentCount: 2,
+      estimatedTokens: 1500,
+      budgetTokens: 50000,
+      skippedDocuments: [],
+    });
+    await TestBed.configureTestingModule({
+      imports: [KnowledgeBaseSectionComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        ...quietCollaborators(),
+        { provide: ConfigService, useValue: { appApiUrl: () => 'http://api.test' } },
+        { provide: KbUpgradeService, useValue: { getStatus: vi.fn().mockResolvedValue(status()) } },
+        { provide: KnowledgeModeService, useValue: { getMode } },
+        { provide: FEATURES, useValue: { ...environment.features, knowledgeBaseMode: options.flag } },
+      ],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
+    fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    fixture.componentRef.setInput('entityId', 'ast-1');
+    fixture.componentRef.setInput('userPermission', options.permission ?? 'owner');
+    fixture.componentRef.setInput('permissionResolved', true);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return (fixture.nativeElement as HTMLElement).textContent ?? '';
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows the mode to an editor while the flag is on', async () => {
+    expect(await render({ flag: true, permission: 'editor' })).toContain('Sent to the model whole');
+    expect(getMode).toHaveBeenCalledWith('ast-1');
+  });
+
+  it('asks nothing while the flag is off', async () => {
+    expect(await render({ flag: false })).not.toContain('Sent to the model whole');
+    expect(getMode).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing for a viewer, whom the endpoint would refuse', async () => {
+    expect(await render({ flag: true, permission: 'viewer' })).not.toContain('Sent to the model whole');
+    expect(getMode).not.toHaveBeenCalled();
   });
 });

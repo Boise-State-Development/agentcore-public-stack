@@ -205,3 +205,20 @@ def _project_files_tools(project_id: str, assistant_id: str, user_id: str, email
     from agents.builtin_tools.project_files_tool import make_project_files_tool
 
     return (make_project_files_tool(project_id, assistant_id, User(email=email, user_id=user_id, name=name, roles=[])),)
+
+
+def build_knowledge_files_tools(assistant_id: str, user: User) -> List[Any]:
+    """An ordinary Agent's ``knowledge_files``, closed over the Agent and the invoking user.
+
+    Memoized like ``project_files``: built on every Agent turn before the
+    agent-cache lookup. It closes over the ``assistant_id`` and the user's id,
+    both cache-key elements, so it needs no key element of its own.
+    """
+    return list(_knowledge_files_tools(assistant_id, user.user_id, user.email, user.name))
+
+
+@functools.lru_cache(maxsize=512)
+def _knowledge_files_tools(assistant_id: str, user_id: str, email: str, name: str) -> Tuple[Any, ...]:
+    from agents.builtin_tools.project_files_tool import make_knowledge_files_tool
+
+    return (make_knowledge_files_tool(assistant_id, User(email=email, user_id=user_id, name=name, roles=[])),)

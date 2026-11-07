@@ -232,6 +232,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     assistantKbFullContext: {
       enabled: false,
+      maxTokens: 50_000,
+    },
+    agentKnowledgeFiles: {
+      enabled: false,
     },
     meetingTasks: {
       enabled: false,

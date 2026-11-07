@@ -79,6 +79,8 @@ import {
   UpgradeStatus,
 } from './kb-upgrade.service';
 import { parseIso } from '../utils/date';
+import { FEATURES } from '../services/features';
+import { KnowledgeModeLineComponent } from './knowledge-mode-line.component';
 
 /**
  * The reusable "Knowledge base" authoring section — device upload, web-crawl
@@ -101,7 +103,7 @@ import { parseIso } from '../utils/date';
   // Block, so a parent's space-y gap (a margin on this element) takes effect.
   host: { class: 'block' },
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SyncPolicyControlComponent, SpinnerComponent],
+  imports: [NgIcon, SyncPolicyControlComponent, SpinnerComponent, KnowledgeModeLineComponent],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -131,6 +133,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   private readonly toast = inject(ToastService);
   private readonly kbUpgrade = inject(KbUpgradeService);
   protected readonly replace = inject(DocumentReplaceService);
+  protected readonly features = inject(FEATURES);
 
   // ── Inputs ────────────────────────────────────────────────────────────
 
@@ -163,6 +166,29 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   private syncHydratedForId: string | null = null;
 
   readonly mode = computed<'create' | 'edit'>(() => (this.id() ? 'edit' : 'create'));
+
+  /**
+   * The knowledge-base mode line ("Sent to the model whole" / "Searched"), for
+   * editors of a saved Agent while `features.knowledgeBaseMode` is on. The
+   * endpoint is owner/editor only, so a viewer never asks.
+   */
+  readonly showKnowledgeMode = computed(
+    () =>
+      this.features.knowledgeBaseMode &&
+      this.mode() === 'edit' &&
+      this.permissionResolved() &&
+      this.userPermission() !== 'viewer',
+  );
+
+  /** The effective id (a draft minted mid-session included), for the mode line. */
+  protected readonly entityIdForMode = computed(() => this.id());
+
+  /** Changes when a document is added, removed or changes status, so the line re-reads. */
+  readonly knowledgeModeKey = computed(() =>
+    this.uploadedDocuments()
+      .map((d) => `${d.documentId}:${d.status}`)
+      .join('|'),
+  );
 
   readonly uploadedDocuments = signal<Document[]>([]);
   readonly isLoadingDocuments = signal<boolean>(false);

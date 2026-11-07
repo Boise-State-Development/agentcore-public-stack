@@ -127,6 +127,30 @@ def assistant_kb_full_context_enabled() -> bool:
     return os.environ.get("ASSISTANT_KB_FULL_CONTEXT_ENABLED", "").strip().lower() == "true"
 
 
+def agent_knowledge_files_enabled() -> bool:
+    """Whether an ordinary Agent's turn gets ``knowledge_files``, which lists its
+    Knowledge documents and reads one by name
+    (``agents/builtin_tools/project_files_tool.py``, the ``project_files`` tool
+    in its Knowledge voice).
+
+    On, a turn with ``rag_assistant_id`` set that is not a project harness's
+    builds the tool (constant spec, so one ``toolConfig`` change per deployment
+    when it is turned on), and the retrieved-excerpts preamble gains one constant
+    sentence naming it (``KNOWLEDGE_FILES_EXCERPTS_NOTE``). Off, neither the
+    ``toolConfig`` nor the persisted user message changes by a byte. A project
+    harness keeps ``project_files`` either way.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. AgentCore Runtime only: CDK writes it there, and only while on, from
+    ``config.agentKnowledgeFiles.enabled``. No SPA switch: the tool has no UI.
+
+    A **feature switch** once finished: it widens what an Agent can read of its
+    own Knowledge (by name, whole), which a deployment may reasonably not want.
+    """
+    return os.environ.get("AGENT_KNOWLEDGE_FILES_ENABLED", "").strip().lower() == "true"
+
+
 def large_document_attachments_enabled() -> bool:
     """Whether documents over the inline limit are attached by reference
     (``docs/specs/large-document-attachments.md``).
