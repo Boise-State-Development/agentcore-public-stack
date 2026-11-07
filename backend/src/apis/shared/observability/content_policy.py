@@ -243,6 +243,7 @@ LEDGER_ROW_PROJECTION: Tuple[str, ...] = (
     "documentDigests",
     "documentTokens",
     "documentReads",
+    "ledgered",
 )
 
 #: FILE# rows for the session profile's attachment summary.
