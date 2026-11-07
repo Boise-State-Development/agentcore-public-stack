@@ -1236,6 +1236,25 @@ def inline_attachment_persist_enabled() -> bool:
     return os.environ.get("INLINE_ATTACHMENT_PERSIST_ENABLED", "").strip().lower() != "false"
 
 
+def converse_document_cap_enabled() -> bool:
+    """Whether a Converse request is kept within Bedrock's five non-PDF documents.
+
+    Covers ``apis.shared.models.document_cap``, installed by ``AgentFactory``
+    on every Bedrock Converse model. A request over the limit has every
+    non-PDF document after the fifth, in message order, sent as its text
+    instead of failing with "You can't include more than 5 documents". A request
+    within the limit is sent unchanged.
+
+    **Rollout switch, default ON** (house style): unset or empty resolves to
+    enabled; only the literal ``"false"`` (case-insensitive) disables. Off, an
+    over-limit request is sent as before and Bedrock rejects it. Retires on the
+    default condition: shipped in a production release, then two weeks there
+    with the switch never flipped, and the ``document_cap:`` log line's count
+    recorded as the readout.
+    """
+    return os.environ.get("CONVERSE_DOCUMENT_CAP_ENABLED", "").strip().lower() != "false"
+
+
 def source_provenance_enabled() -> bool:
     """Whether a cited passage is verified against the document it names
     (``docs/specs/source-provenance-verification.md``).
