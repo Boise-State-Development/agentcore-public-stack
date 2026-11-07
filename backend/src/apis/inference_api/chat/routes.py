@@ -41,6 +41,7 @@ from apis.shared.feature_flags import (
     attachment_turn_guard_enabled,
     folder_attachments_enabled,
     inline_attachment_persist_enabled,
+    inline_budget_by_reference_enabled,
     memory_spaces_enabled,
     mid_turn_steering_enabled,
     project_file_readiness_enabled,
@@ -1736,6 +1737,35 @@ def _apply_inline_byte_budget(
     return kept, over, requested
 
 
+def _over_budget_as_references(
+    over_budget: list,
+    upload_rows: dict,
+) -> tuple[list, list]:
+    """Split the files ``_apply_inline_byte_budget`` moved out into the ones
+    that can go by reference and the ones that are still dropped.
+
+    Returns ``(references, dropped)``, both in attachment order; each reference
+    is paired with the file it replaces, so the caller can place it among the
+    turn's other references in attachment order. A file goes by
+    reference when it is a document ``document_read`` can read *and* it came
+    from an upload, so the resolver has its row (``upload_rows``, keyed by the
+    ``FileContent``'s identity): the reference renders from that row and the
+    tool reads the original, so nothing is fetched, prepared or built here.
+    Images have nothing ``document_read`` could return, and direct ``files``
+    bytes have no row to read later (large-document spec §4B.6): both stay
+    dropped with the "combined size limit" note.
+    """
+    references: list = []
+    dropped: list = []
+    for file in over_budget:
+        row = upload_rows.get(id(file))
+        if row is not None and is_document_class(row.mime_type, row.filename):
+            references.append((file, ReferenceAttachment(meta=row, over_budget=True)))
+        else:
+            dropped.append(file)
+    return references, dropped
+
+
 def _emit_attachment_over_quota_metric(
     requested_bytes: int,
     cap_bytes: int,
@@ -1849,10 +1879,20 @@ def _build_attachment_guidance(
     # injected, and used it only when told to call it. So the sentence names
     # the tool, the call and the id.
     for ref in references or ():
-        lead = (
-            f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached but too large "
-            f"to include in full, so its content is not in this message."
-        )
+        over_budget_ref = getattr(ref, "over_budget", False)
+        if over_budget_ref:
+            # Each file fits on its own; together they exceed what one message
+            # can carry in full (`_over_budget_as_references`).
+            lead = (
+                f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached, but this "
+                f"message's attachments together exceed the combined size limit for a "
+                f"single message, so its content is not in this message."
+            )
+        else:
+            lead = (
+                f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached but too large "
+                f"to include in full, so its content is not in this message."
+            )
         if not document_read_available:
             parts.append(f"{lead} Reading parts of it is not available in this conversation._")
             continue
@@ -1862,9 +1902,12 @@ def _build_attachment_guidance(
         # model opened with pattern in 93 of 93 turns and reached a scanned
         # page by paging through images; naming search made it open with query
         # in 93 of 93, at the same accuracy and 38% less cost per turn.
+        # Only large documents are indexed for search (attachments KB, §4F), so
+        # an over-budget file is never offered `query`: it would answer "not
+        # indexed for search".
         find = (
             "first with `query` (a plain-language search, which also covers scanned pages) or `pattern`"
-            if search_available
+            if search_available and not over_budget_ref
             else "first with `pattern`"
         )
         if ref.format == "pdf":
@@ -2642,8 +2685,9 @@ class TurnAttachments:
     ``files_to_send`` is the inline set the model receives as document/image
     blocks. The three diverted lists never go inline (spreadsheets and decks
     route through their tools; oversized and over-budget files are dropped with
-    a note), and neither does ``reference_documents`` (large documents carried
-    as a digest or stub). ``marker_names`` is every filename that still exists in the
+    a note), and neither does ``reference_documents`` (large documents, and
+    uploaded documents moved out of the combined inline budget, carried as a
+    digest or stub). ``marker_names`` is every filename that still exists in the
     session, in attachment order, for the ``[Attached files: …]`` marker the
     SPA replays on reload. ``turn_has_document`` is the *classified* answer to
     "did this turn attach something ``document_read`` can read", which feeds
@@ -2912,6 +2956,10 @@ async def _resolve_turn_attachments(
     # are all upload ids and none of them is a document. Feeds the injection
     # gate and therefore `toolConfig` — see `_session_has_documents`.
     turn_has_document = False
+    # The row behind each resolved inline-class upload, by the identity of the
+    # ``FileContent`` built from it. Read only if that file falls out of the
+    # combined inline budget below and goes by reference instead.
+    upload_rows: dict = {}
     if upload_ids_to_resolve:
         try:
             file_resolver = get_file_resolver()
@@ -2927,9 +2975,11 @@ async def _resolve_turn_attachments(
                 if reference_meta is not None:
                     all_files.append(ReferenceAttachment(meta=reference_meta))
                     continue
-                all_files.append(
-                    FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
-                )
+                content = FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
+                row = getattr(rf, "meta", None)
+                if row is not None:
+                    upload_rows[id(content)] = row
+                all_files.append(content)
             turn_has_document = _resolved_files_include_a_document(resolved_files)
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
         except Exception:
@@ -3032,6 +3082,27 @@ async def _resolve_turn_attachments(
                 inline_count=len(files_to_send) + len(over_budget_inline),
                 dropped_count=len(over_budget_inline),
             )
+        # An uploaded document that did not fit goes by reference instead of
+        # being dropped: its digest (or a ready stub) in the message and
+        # `document_read` on the original. Rendered from the row the resolver
+        # already read, so it adds no I/O before the first token. A turn within
+        # the budget never reaches this, so its message is unchanged.
+        if over_budget_inline and inline_budget_by_reference_enabled():
+            budget_references, over_budget_inline = _over_budget_as_references(
+                over_budget_inline, upload_rows
+            )
+            if budget_references:
+                logger.info(
+                    "Attached %d over-budget document(s) by reference instead of dropping them",
+                    len(budget_references),
+                )
+                record_reference_attachments([ref for _, ref in budget_references])
+                # One list in attachment order, so the message's reference
+                # blocks read in the order the user attached the files.
+                position = {id(f): i for i, f in enumerate(all_files)}
+                placed = [(position[id(ref)], ref) for ref in reference_documents]
+                placed += [(position[id(src)], ref) for src, ref in budget_references]
+                reference_documents = [ref for _, ref in sorted(placed, key=lambda pair: pair[0])]
 
     # All three classes were dropped from the turn entirely; the marker must
     # not promise a card for any of them.
