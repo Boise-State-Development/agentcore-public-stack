@@ -53,6 +53,97 @@ describe('MessageMapService', () => {
     expect(service).toBeTruthy();
   });
 
+  describe('a turn that force-stopped mid-stream, then the next send', () => {
+    // The frames the Runtime streams for a model read timeout (captured from
+    // `StreamCoordinator`): Bedrock's `messageStart` and an empty block for the
+    // call that then went silent, and the error reply as its own message. The
+    // server stores the user turn and the error reply, nothing else.
+    function failTurn(sessionId: string): void {
+      const parser = TestBed.inject(StreamParserService);
+      const streamId = parser.getCurrentStreamId(sessionId);
+      const ev = (event: string, data: unknown) =>
+        parser.parseEventSourceMessage(sessionId, event, data, streamId);
+      ev('message_start', { role: 'assistant' });
+      ev('content_block_start', { contentBlockIndex: 0 });
+      ev('message_start', { role: 'assistant' });
+      ev('content_block_start', { contentBlockIndex: 0, type: 'text' });
+      ev('content_block_delta', { contentBlockIndex: 0, type: 'text', text: 'The model stopped responding. Please try again.' });
+      ev('content_block_stop', { contentBlockIndex: 0 });
+      ev('message_stop', { stopReason: 'error' });
+      ev('stream_error', { type: 'stream_error', code: 'agent_error', message: 'x', recoverable: true });
+      ev('done', {});
+      TestBed.tick();
+    }
+
+    it('keeps one assistant message for the failed turn, numbered as the server numbers it', () => {
+      service.addUserMessage('s1', 'summarise the attached RFA');
+      service.startStreaming('s1');
+      failTurn('s1');
+      service.endStreaming('s1');
+
+      const messages = service.getMessagesForSession('s1')();
+      expect(messages.map((m) => [m.id, m.role])).toEqual([
+        ['msg-s1-0', 'user'],
+        ['msg-s1-1', 'assistant'],
+      ]);
+      expect(messages[1].content).toEqual([
+        { type: 'text', text: 'The model stopped responding. Please try again.' },
+      ]);
+      // The next user message is index 2 on the server too, so feedback,
+      // rewind and fork on it name the right message.
+      expect(service.nextMessageIndex('s1')).toBe(2);
+    });
+
+    it('starts the next send clean: only the new message, nothing streaming, no stale clock', () => {
+      const parser = TestBed.inject(StreamParserService);
+      service.addUserMessage('s1', 'summarise the attached RFA');
+      service.startStreaming('s1');
+      failTurn('s1');
+      service.endStreaming('s1');
+
+      const before = Date.now();
+      const next = service.addUserMessage('s1', 'try a shorter summary');
+      service.startStreaming('s1');
+      TestBed.tick();
+
+      expect(next.id).toBe('msg-s1-2');
+      expect(service.getMessagesForSession('s1')().map((m) => m.id)).toEqual([
+        'msg-s1-0',
+        'msg-s1-1',
+        'msg-s1-2',
+      ]);
+      expect(parser.streamingMessageIdFor('s1')()).toBeNull();
+      expect(parser.modelRetryFor('s1')()).toBeNull();
+      // The loader's "Still working…" reads silence since this clock; it must
+      // be the new turn's, not the failed turn's last frame.
+      expect(parser.lastEventAtFor('s1')()).toBeGreaterThanOrEqual(before);
+      // The failed turn's ending does not carry into the new one.
+      expect(TestBed.inject(ChatStateService).stopReasonFor('s1')).toBeNull();
+    });
+
+    it('still keeps an abandoned call that streamed text before the error', () => {
+      // Only an EMPTY abandoned call is dropped. Text the user already read
+      // stays on screen until reload, as it always has.
+      const parser = TestBed.inject(StreamParserService);
+      service.addUserMessage('s1', 'q');
+      service.startStreaming('s1');
+      const streamId = parser.getCurrentStreamId('s1');
+      const ev = (event: string, data: unknown) => parser.parseEventSourceMessage('s1', event, data, streamId);
+      ev('message_start', { role: 'assistant' });
+      ev('content_block_start', { contentBlockIndex: 0, type: 'text' });
+      ev('content_block_delta', { contentBlockIndex: 0, type: 'text', text: 'Partial answer' });
+      ev('message_start', { role: 'assistant' });
+      ev('content_block_start', { contentBlockIndex: 0, type: 'text' });
+      ev('content_block_delta', { contentBlockIndex: 0, type: 'text', text: 'error' });
+      ev('message_stop', { stopReason: 'error' });
+      ev('done', {});
+      TestBed.tick();
+      service.endStreaming('s1');
+
+      expect(service.getMessagesForSession('s1')().map((m) => m.role)).toEqual(['user', 'assistant', 'assistant']);
+    });
+  });
+
   describe('numbering after a rewind', () => {
     // Ids are positional and the server never reuses an index, so once a
     // rewind hides messages the next one is numbered from the server's
