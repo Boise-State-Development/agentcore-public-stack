@@ -421,6 +421,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // runs the check and emits `source_provenance`. Written only while ON,
         // so the default costs nothing against the V2 payload budget.
         ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Release ledger writes: every cost row the Runtime stores also bumps
+        // the version-keyed LEDGER# rollups, after the stream. Written only
+        // while ON, so the default costs nothing against the V2 payload budget.
+        ...(config.releaseLedger.enabled ? { RELEASE_LEDGER_ENABLED: 'true' } : {}),
         // Web Search result default: a `___WebSearch` call that names no
         // maxResults asks for 5. Written only while ON, so the default costs
         // nothing against the V2 payload budget.

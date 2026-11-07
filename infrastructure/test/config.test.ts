@@ -743,6 +743,32 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Release ledger writes — in development, so only "true" enables
+  // ============================================================
+
+  describe('Release ledger feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_RELEASE_LEDGER_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_RELEASE_LEDGER_ENABLED;
+      expect(loadConfig(app).releaseLedger.enabled).toBe(false);
+      process.env.CDK_RELEASE_LEDGER_ENABLED = '';
+      expect(loadConfig(app).releaseLedger.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_RELEASE_LEDGER_ENABLED = ' TRUE ';
+      expect(loadConfig(app).releaseLedger.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_RELEASE_LEDGER_ENABLED = value;
+        expect(loadConfig(app).releaseLedger.enabled).toBe(false);
+      }
+    });
+  });
+
+  // ============================================================
   // Web Search result default — in development, so only "true" enables
   // ============================================================
 

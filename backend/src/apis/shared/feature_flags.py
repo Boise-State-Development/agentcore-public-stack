@@ -1377,3 +1377,30 @@ def document_extract_model_id() -> str:
     a default that looks like it works is how one ships.
     """
     return os.environ.get("DOCUMENT_EXTRACT_MODEL_ID", "").strip()
+
+
+def release_ledger_enabled() -> bool:
+    """Whether each model call's cost row also bumps the version-keyed ledger
+    rollups (``docs/specs/release-ledger.md`` §5.2, D3, D8).
+
+    On, ``_update_system_rollups_async`` adds the call to ``LEDGER#VERSION``,
+    ``LEDGER#MODEL#<month>``, ``LEDGER#TOOL#<month>``, ``LEDGER#AGENT#<month>``
+    and ``LEDGER#PROJECT#<month>`` in the existing ``system-cost-rollup`` table,
+    beside the ``ROLLUP#`` bumps and with their fire-and-forget, log-and-swallow
+    semantics: after the stream, never before the first token, and never able
+    to fail a turn. Off, nothing is written. The per-row stamps (``appVersion``,
+    ``build``) and the census weights are not behind it; they are attributes on
+    rows that already exist.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on app-api (which writes api-converse rows) and, only
+    while on, on the AgentCore Runtime (which writes every chat, voice, brief
+    and extraction row) from ``config.releaseLedger.enabled``. The SPA's
+    matching switch, ``features.releaseLedger``, arrives with the Releases tab.
+
+    A **feature switch** once finished, not a rollout switch, and therefore
+    permanent: the writes are a per-call cost (three to five ``UpdateItem``
+    calls) that a deployment may reasonably decline.
+    """
+    return os.environ.get("RELEASE_LEDGER_ENABLED", "").strip().lower() == "true"

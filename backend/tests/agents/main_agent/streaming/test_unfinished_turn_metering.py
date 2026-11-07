@@ -865,3 +865,74 @@ def test_a_paused_turn_is_paused_and_never_an_empty_answer():
     # A MagicMock-ish truthy attribute is not a pause: only a real True counts.
     odd = SimpleNamespace(_interrupt_state=SimpleNamespace(activated=MagicMock()))
     assert StreamCoordinator._completed_turn_outcome(odd, [{"has_text": True}]) == ("completed", False)
+
+
+# ---------------------------------------------------------------------------
+# Release ledger (release-ledger spec §5.2): a turn counts once, on its last
+# row, whichever arm it ended in, and every model call counts as a call.
+# ---------------------------------------------------------------------------
+
+
+def _ledger_version_totals(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    from apis.shared.sessions.ledger_rollups import ledger_updates, merge_updates
+
+    merged = merge_updates(u for row in rows for u in ledger_updates(row))
+    (version,) = [u for u in merged if u.pk == "LEDGER#VERSION"]
+    return version.add
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "events, kwargs, expect, counter, calls",
+    [
+        pytest.param(
+            [*_completed_call("looking"), *_final_answer("Here it is.")], {}, None,
+            "completedTurns", 2, id="completed",
+        ),
+        pytest.param(
+            _three_calls_then([_RAISE]), {}, None, "errorTurns", 3, id="error",
+        ),
+        pytest.param(
+            _three_calls_then([_STOP]), {"projected_input_tokens": PROJECTED_TOKENS}, None,
+            "stoppedTurns", 4, id="user-stop",
+        ),
+        pytest.param(
+            _three_calls_then([_DISCONNECT]), {"projected_input_tokens": PROJECTED_TOKENS},
+            asyncio.CancelledError, "interruptedTurns", 4, id="disconnect",
+        ),
+    ],
+)
+async def test_the_ledger_counts_each_turn_once_and_every_call(
+    events, kwargs, expect, counter, calls, monkeypatch
+):
+    recorded = await _run(events, monkeypatch, expect=expect, **kwargs)
+
+    rows = recorded.cost_rows
+    assert len(rows) == calls
+    # Exactly one row per turn carries `turnDurationMs`: the last.
+    assert ["turnDurationMs" in row for row in rows] == [False] * (calls - 1) + [True]
+    totals = _ledger_version_totals(rows)
+    assert totals["calls"] == calls
+    assert totals["turns"] == 1
+    assert totals["outcomeTurns"] == 1
+    assert totals[counter] == 1
+    assert totals["callKind.chat"] == calls
+
+
+@pytest.mark.asyncio
+async def test_an_empty_answer_counts_once_per_turn(monkeypatch):
+    recorded = await _run(
+        [*_completed_call("Now let me verify:"), *_completed_call("Checking"), *_empty_call()],
+        monkeypatch,
+    )
+
+    totals = _ledger_version_totals(recorded.cost_rows)
+    assert (totals["calls"], totals["turns"], totals["emptyAnswerTurns"]) == (3, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_the_cost_summary_gets_the_stored_item_for_the_ledger(monkeypatch):
+    recorded = await _run([*_completed_call("one"), *_final_answer("two")], monkeypatch)
+
+    handed = [c.kwargs["ledger_row"] for c in recorded.cost_summary.await_args_list]
+    assert handed == recorded.cost_rows

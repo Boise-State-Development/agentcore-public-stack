@@ -210,6 +210,41 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "documentReads",
 )
 
+#: C# rows as the release ledger reads them (``apis.shared.sessions.ledger_rollups``):
+#: what the backfill scans and the only attributes ``ledger_updates`` reads, so a
+#: backfilled range and a live one add up the same way. ``sessionId`` and
+#: ``messageId`` are read only to tell a voice or api-converse call from a chat
+#: one, and are never written to a ledger row.
+LEDGER_ROW_PROJECTION: Tuple[str, ...] = (
+    "sessionId",
+    "messageId",
+    "timestamp",
+    "appVersion",
+    "build",
+    "callKind",
+    "modelInfo.modelId",
+    "modelInfo.pricingSnapshot.inputPricePerMtok",
+    "tokenUsage",
+    "cost",
+    "cacheStatus",
+    "wastedUsd",
+    "usageEstimated",
+    "agentSwitched",
+    "modelSwitched",
+    "turnAgentId",
+    "projectId",
+    "outcome",
+    "emptyAnswer",
+    "turnDurationMs",
+    "latency.timeToFirstToken",
+    "toolCalls",
+    "compactionEvents",
+    "hasDocuments",
+    "documentDigests",
+    "documentTokens",
+    "documentReads",
+)
+
 #: FILE# rows for the session profile's attachment summary.
 FILE_ROW_PROJECTION: Tuple[str, ...] = (
     "uploadId",
@@ -248,6 +283,7 @@ FEEDBACK_ROW_PROJECTION: Tuple[str, ...] = (
 ALL_PROJECTIONS: Dict[str, Tuple[str, ...]] = {
     "SESSION_ROW_PROJECTION": SESSION_ROW_PROJECTION,
     "CALL_ROW_PROJECTION": CALL_ROW_PROJECTION,
+    "LEDGER_ROW_PROJECTION": LEDGER_ROW_PROJECTION,
     "FILE_ROW_PROJECTION": FILE_ROW_PROJECTION,
     "FEEDBACK_ROW_PROJECTION": FEEDBACK_ROW_PROJECTION,
 }

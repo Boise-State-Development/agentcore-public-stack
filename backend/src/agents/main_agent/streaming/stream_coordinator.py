@@ -35,6 +35,7 @@ from apis.shared.errors import (
     model_read_timeout_phase,
 )
 from apis.shared.observability.emf import emit_model_read_timeout
+from apis.shared.sessions.ledger_rollups import TURN_OUTCOMES
 
 from .history_count import HistoryCount, count_created_before
 from .stream_processor import process_agent_stream
@@ -53,8 +54,9 @@ _FIRST_MODEL_OUTPUT_TYPES = frozenset(
 #: the success path, stopped on an interrupt waiting for the user; ``error``:
 #: a failure arm (an agent error, a coordinator exception, a max_tokens
 #: truncation); ``stopped``: the cooperative Stop arm; ``interrupted``: torn
-#: down by the connection closing.
-TURN_OUTCOMES = frozenset({"completed", "paused", "error", "stopped", "interrupted"})
+#: down by the connection closing. ``TURN_OUTCOMES`` is declared in
+#: ``apis.shared.sessions.ledger_rollups``, beside the ledger writer that counts
+#: them, because app-api runs that writer too and may not import ``agents``.
 
 
 def _turn_clock_call(turn_clock: Any, method: str, *args: Any) -> None:
