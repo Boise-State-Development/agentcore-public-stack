@@ -51,7 +51,9 @@ KnowledgeMode = Literal["whole", "searched", "empty", "unknown"]
 
 #: Why ``searched``. ``full_context_off`` is the deployment (flag off or a zero
 #: budget); the rest are :mod:`kb_full_context`'s ``REASON_*`` values.
-SearchedReason = Literal["full_context_off", "no_text_documents", "raw_bytes", "no_text_layer", "over_budget"]
+SearchedReason = Literal[
+    "full_context_off", "no_text_documents", "raw_bytes", "no_text_layer", "document_over_budget", "over_budget"
+]
 
 
 class KnowledgeModeResponse(BaseModel):
@@ -62,6 +64,7 @@ class KnowledgeModeResponse(BaseModel):
     #: Documents whose text is (or would be) sent whole.
     document_count: int = Field(0, alias="documentCount")
     #: Their text in estimated tokens (characters / 4), as the budget counts it.
+    #: For ``document_over_budget``, the one oversized document's alone.
     #: 0 when the text was never read (``raw_bytes``, ``full_context_off``).
     estimated_tokens: int = Field(0, alias="estimatedTokens")
     budget_tokens: int = Field(0, alias="budgetTokens")

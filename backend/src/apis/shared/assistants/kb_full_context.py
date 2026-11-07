@@ -69,7 +69,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from apis.shared.assistants.kb_access import KbAccess
 from apis.shared.assistants.kb_documents import (
-    kb_document_text as _document_text,
+    kb_document_extract as _document_extract,
     list_kb_documents as _list_documents,
     reset_text_cache_for_tests,
 )
@@ -175,7 +175,8 @@ def render_knowledge_base(documents: List[Tuple[str, str]], skipped: Sequence[st
 REASON_EMPTY = "empty"  # no complete document yet
 REASON_NO_TEXT_DOCUMENTS = "no_text_documents"  # only spreadsheets / decks / images
 REASON_RAW_BYTES = "raw_bytes"  # the text documents' files are too large to fetch
-REASON_NO_TEXT_LAYER = "no_text_layer"  # a scan, or one document longer than the budget alone
+REASON_NO_TEXT_LAYER = "no_text_layer"  # a document has no text layer (a scan)
+REASON_DOCUMENT_OVER_BUDGET = "document_over_budget"  # one document is longer than the budget alone
 REASON_OVER_BUDGET = "over_budget"  # the text together is over the budget
 
 
@@ -241,19 +242,25 @@ def assess_full_context(assistant_id: str, budget_tokens: int) -> FullContextAss
 
     budget_chars = budget_tokens * CHARS_PER_TOKEN
     with ThreadPoolExecutor(max_workers=min(_FETCH_WORKERS, len(readable))) as pool:
-        texts = list(pool.map(lambda pair: _document_text(pair[0], pair[1], budget_chars), readable))
+        extracts = list(pool.map(lambda pair: _document_extract(pair[0], pair[1], budget_chars), readable))
 
     documents: List[Tuple[str, str]] = []
     used = 0
-    for doc, text in zip(readable_docs, texts):
+    for doc, extract in zip(readable_docs, extracts):
+        text = extract.text
+        if text is None and extract.chars > budget_chars:
+            # Longer than the whole budget on its own. ``text_chars`` is that one
+            # document's length, so the author sees how far over it is.
+            logger.info("kb_full_context assistant=%s ineligible reason=document chars=%d", assistant_id, extract.chars)
+            return _verdict(REASON_DOCUMENT_OVER_BUDGET, readable=readable_docs, skipped=skipped, chars=extract.chars)
         if text is None:
             logger.info("kb_full_context assistant=%s ineligible reason=text docs=%d", assistant_id, len(docs))
             return _verdict(REASON_NO_TEXT_LAYER, readable=readable_docs, skipped=skipped, chars=used)
         used += len(text)
         if used > budget_chars:
             logger.info("kb_full_context assistant=%s ineligible reason=budget chars=%d", assistant_id, used)
-            # Keep counting for the author's number; the texts are already in hand.
-            total = used + sum(len(t) for t in texts[len(documents) + 1:] if t)
+            # Keep counting for the author's number; every length is already in hand.
+            total = used + sum(extract.chars for extract in extracts[len(documents) + 1:])
             return _verdict(REASON_OVER_BUDGET, readable=readable_docs, skipped=skipped, chars=total)
         documents.append((_name(doc), text))
 

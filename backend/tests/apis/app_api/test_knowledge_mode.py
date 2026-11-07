@@ -71,12 +71,14 @@ class TestVerdicts:
         assert body["mode"] == "whole" and body["skippedDocuments"] == ["budget.xlsx"]
 
     @pytest.mark.parametrize("reason", [
-        fc.REASON_OVER_BUDGET, fc.REASON_RAW_BYTES, fc.REASON_NO_TEXT_LAYER, fc.REASON_NO_TEXT_DOCUMENTS,
+        fc.REASON_OVER_BUDGET, fc.REASON_DOCUMENT_OVER_BUDGET, fc.REASON_RAW_BYTES, fc.REASON_NO_TEXT_LAYER,
+        fc.REASON_NO_TEXT_DOCUMENTS,
     ])
     def test_searched_says_why(self, setup, reason):
         setup.assessment = _assessment(reason=reason, document_count=4, text_chars=400_000)
         body = _get(setup).json()
         assert body["mode"] == "searched" and body["reason"] == reason
+        assert body["estimatedTokens"] == 100_000
 
     def test_no_documents_yet(self, setup):
         setup.assessment = _assessment(reason=fc.REASON_EMPTY)

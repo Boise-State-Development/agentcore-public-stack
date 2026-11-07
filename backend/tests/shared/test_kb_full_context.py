@@ -174,6 +174,29 @@ class TestIneligibleFallsBackToRetrieval:
         kb.add("d2", "blank.txt", "   \n  ")
 
         assert _load() is None
+        found = fc.assess_full_context(ASSISTANT_ID, 50_000)
+        assert found.reason == fc.REASON_NO_TEXT_LAYER
+
+    def test_one_document_over_the_budget_alone_is_named_with_its_size(self, kb, monkeypatch):
+        monkeypatch.setenv(fc.FULL_CONTEXT_MAX_TOKENS_ENV, "100")  # 400 chars
+        kb.add("d1", "a.txt", "alpha")
+        kb.add("d2", "manual.txt", "z" * 1_000)
+
+        assert _load() is None
+        found = fc.assess_full_context(ASSISTANT_ID, 100)  # 400 chars
+        assert found.reason == fc.REASON_DOCUMENT_OVER_BUDGET and found.block is None
+        # That document's own length, not the running total, so the author sees how far over it is.
+        assert found.text_chars == 1_000 and found.estimated_tokens == 250
+
+    def test_documents_over_the_budget_together_count_every_length(self, kb):
+        kb.add("d1", "a.txt", "x" * 300, created="2026-10-01T00:00:00Z")
+        kb.add("d2", "b.txt", "y" * 300, created="2026-10-02T00:00:00Z")
+        kb.add("d3", "c.txt", "z" * 1_000, created="2026-10-03T00:00:00Z")
+
+        found = fc.assess_full_context(ASSISTANT_ID, 100)  # 400 chars: b.txt tips it over first
+        assert found.reason == fc.REASON_OVER_BUDGET
+        # c.txt is past the limit on its own, and still counts at its whole length.
+        assert found.text_chars == 1_600
 
     def test_a_large_corpus_is_not_downloaded(self, kb):
         kb.add("d1", "a.txt", "alpha", size=fc.MAX_RAW_BYTES + 1)
@@ -248,13 +271,13 @@ class TestMixedFormats:
     def test_a_spreadsheet_is_not_downloaded(self, kb):
         self._mixed(kb)
         fetched = []
-        real = fc._document_text
+        real = fc._document_extract
 
         def _spy(doc, fmt, limit):
             fetched.append(doc["filename"])
             return real(doc, fmt, limit)
 
-        with patch.object(fc, "_document_text", _spy):
+        with patch.object(fc, "_document_extract", _spy):
             assert _load() is not None
         assert sorted(fetched) == ["Process.txt", "guide.md"]
 

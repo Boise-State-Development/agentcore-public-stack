@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,18 @@ logger = logging.getLogger(__name__)
 #: are only evicted for room.
 TEXT_CACHE_MAX_ENTRIES = 256
 
-_text_cache: Dict[Tuple[Any, ...], Optional[str]] = {}
+
+
+class KbDocumentText(NamedTuple):
+    """A document's text, or ``None`` when it is empty or over the limit, and
+    the length of its whole text layer either way (0 for a scan). The length is
+    what lets a caller tell "no text" from "too long", and by how much."""
+
+    text: Optional[str]
+    chars: int
+
+
+_text_cache: Dict[Tuple[Any, ...], KbDocumentText] = {}
 _text_cache_lock = threading.Lock()
 
 
@@ -80,6 +91,12 @@ def kb_document_text(doc: Mapping[str, Any], fmt: str, limit: int) -> Optional[s
     :func:`text_cache_key`, including the ``None`` answers, so an over-budget or
     scanned document is downloaded once per process, not once per turn.
     """
+    return kb_document_extract(doc, fmt, limit).text
+
+
+def kb_document_extract(doc: Mapping[str, Any], fmt: str, limit: int) -> KbDocumentText:
+    """:func:`kb_document_text` plus the whole text layer's length, from the same
+    read and the same cache entry, so asking for the length costs nothing more."""
     from apis.shared.aws_clients import get_client
     from apis.shared.files.document_digest import document_text
 
@@ -98,12 +115,13 @@ def kb_document_text(doc: Mapping[str, Any], fmt: str, limit: int) -> Optional[s
         # Over budget, or no text layer (a scan): the caller decides what that
         # means (full context falls back to retrieval; the tool says so).
         text = None
+    result = KbDocumentText(text, extracted.chars if text is None else len(text))
 
     with _text_cache_lock:
         if len(_text_cache) >= TEXT_CACHE_MAX_ENTRIES:
             _text_cache.pop(next(iter(_text_cache)))
-        _text_cache[key] = text
-    return text
+        _text_cache[key] = result
+    return result
 
 
 def reset_text_cache_for_tests() -> None:
@@ -113,6 +131,8 @@ def reset_text_cache_for_tests() -> None:
 
 __all__ = [
     "TEXT_CACHE_MAX_ENTRIES",
+    "KbDocumentText",
+    "kb_document_extract",
     "kb_document_text",
     "list_kb_documents",
     "reset_text_cache_for_tests",

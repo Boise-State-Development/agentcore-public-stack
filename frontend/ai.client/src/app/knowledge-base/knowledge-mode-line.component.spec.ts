@@ -98,9 +98,27 @@ describe('KnowledgeModeLineComponent', () => {
     );
   });
 
+  it('says when one document is over the limit on its own, with its size', async () => {
+    const text = await render(
+      status({ mode: 'searched', reason: 'document_over_budget', estimatedTokens: 131_040, budgetTokens: 75_000 }),
+    );
+    expect(text).toBe(
+      'Searched: the model sees the passages that match each message, because one document is about ' +
+        '131K tokens on its own, over the 75K-token limit for sending it whole.',
+    );
+  });
+
+  it('keeps a document with no readable text as its own reason', async () => {
+    const text = await render(status({ mode: 'searched', reason: 'no_text_layer' }));
+    expect(text).toBe(
+      'Searched: the model sees the passages that match each message, because a document has no ' +
+        'readable text (a scan, for example).',
+    );
+    expect(text).not.toContain('over the limit');
+  });
+
   it.each([
     ['raw_bytes', 'too large to send whole'],
-    ['no_text_layer', 'no readable text'],
     ['no_text_documents', 'only spreadsheets or presentations'],
     ['full_context_off', 'this deployment does not send knowledge bases whole'],
   ] as const)('words the %s reason', async (reason, fragment) => {
