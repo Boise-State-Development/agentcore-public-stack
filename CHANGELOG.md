@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+### 🚀 Deployment notes
+
+- **Raise Claude Opus 5.5's stored output default on each environment after `backend.yml`.** The curated 64,000 default seeds only newly added rows, so a deployment that already has Opus 5.5 keeps 32,000 until its row changes. `backend/scripts/backfill_model_output_caps.py` moves rows still on the old curated 32,000 to 64,000 and leaves every admin-edited row alone (any other default, a narrowed `max`, or no `max_tokens` spec). It is a dry run by default and prints each row's before and after; run it once without `--apply`, read the list, then rerun with `--apply`. Takes effect within the 60 s catalog cache, no restart: `AWS_PROFILE=<profile> backend/.venv/bin/python backend/scripts/backfill_model_output_caps.py --table <prefix>-managed-models --region us-west-2 [--apply]`. Optional: an admin can make the same change by hand under Admin → Models
+
+### ✨ Improved
+
+- **Claude Opus 5.5 writes up to 64,000 output tokens per call by default** (was 32,000; the card allows 128,000). Long structured answers, such as a clause checklist across several documents or a full Word-document build, were cut at exactly 32,000. The curated default applies to newly added rows only: an existing catalog row keeps its saved value until `backfill_model_output_caps.py` runs (see Deployment notes) or an admin raises it under Admin → Models → Inference parameters → Max Output Tokens. Claude Haiku 5.5 stays at 32,000 because of its 100K input price step
+- A response cut at the output limit now says so ("Cut off at the model's output limit. Continue picks up where it stopped."), in the chat and in the `max_tokens` `stream_error` message
+
+### 🐛 Fixed
+
+- After Continue on Claude 4.6 and later, the continued answer no longer splits around a user bubble the user never typed when the conversation is reloaded, and message ids stay aligned with the server, so thumbs feedback and Rewind act on the right message. `GET /sessions/{id}/messages` marks the stored continue prompt `continuation: true`
+
 ## [1.33.0] - 2026-11-04
 
 Ask for more quota, hand work off with a model-written brief, see the account's AWS limits, and turn meetings into GitHub Project items. Every new feature is behind an in-development flag, off by default. Roles gain system instructions, Haiku 5.5 is curated, and app-api's DynamoDB grants are prefix-scoped. No GSI changes; no backfills.
