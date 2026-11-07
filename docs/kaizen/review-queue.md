@@ -5,6 +5,98 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-11-06] Drop `strands-agents-tools`: vendor a byte-identical calculator, delete the pillow override
+- **Source**: research/2026-11-06.md ▸ Top 5 #1; https://github.com/strands-agents/tools/releases/tag/v0.9.0
+- **Surface**: backend
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: a deprecated dependency (0.9.0 turns every tool into an ImportError, and pre-0.9.0 gets no updates), the pillow override at `backend/pyproject.toml:164-173`, the `strands_tools.calculator` warm-up entry, and a Dependabot bump that would break import
+- **Notes**: the only imports are `tool_registry.py:93` and `warmup.py:59`. Upstream's migration maps `calculator` to `vended_tools.shell` running `python3 -c`, which isn't acceptable. Keep the tool name and input schema identical so `toolConfig` doesn't change, and check it against `tests/fixtures/bedrock_golden_requests.json`.
+- **Status**: open
+
+### [2026-11-06] Nightly: delete the orphaned ALB access-log bucket that last week's teardown fix leaves behind
+- **Source**: research/2026-11-06.md ▸ Top 5 #2; nightly runs 41804576559, 41999548718, 42192443357; `b717c10da`
+- **Surface**: CI (`scripts/nightly/teardown.sh`, `scripts/nightly/clear-failed-stack.sh`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: red nights 11-04 → 11-06 and the next manual unstick
+- **Notes**: 11-04 teardown ended with `DELETE_FAILED … [AlbAlbAccessLogBucketA14538BD]`; 11-05 and 11-06 deploys failed on "`nightly-develop-alb-access-logs` already exists" (fixed name, `alb-construct.ts:166`). Hypothesis, asserted: the ALB keeps delivering logs after the bucket is emptied, so the retained bucket's Cloud Control delete also fails. Fix: re-empty right before `delete_retained_resource` and retry once; have `clear-failed-stack.sh` delete a stackless bucket with the fixed name. Also seen in the window: three different time-dependent test failures (`test_spent_rate_degrades_to_lexical`, device-grant `test_concurrent_authorizes_all_succeed` for the third time, `test_ttfb_under_200ms_with_x_accel_buffering`).
+- **Status**: open
+
+### [2026-11-06] Spike AgentCore Web Answer against our WebSearch connector
+- **Source**: research/2026-11-06.md ▸ Top 5 #3; https://aws.amazon.com/about-aws/whats-new/2026/11/web-answer-amazon-bedrock/
+- **Surface**: backend + catalog (Gateway connector config, metering, `WebSearchDefaultsHook`)
+- **Effort × Impact**: M × M
+- **Subtracts**: possibly: multi-round search-read-synthesize loops on research questions. Addition only until measured.
+- **Unlocks**:
+  - a bounded, cited web answer in one Gateway tool call
+- **Notes**: GA 11-05, us-east-1 only, per-call price unpublished. Measure about 10 prompts on tokens, model rounds, final-answer latency and citations. Find out how it bills (it needs a catalog row or `UnmeteredModelCall` fires).
+- **Status**: open
+
+### [2026-11-06] Design note: single-iframe MCP Apps hosting, so Apps no longer require the mcp-sandbox stack
+- **Source**: research/2026-11-06.md ▸ Top 5 #4; https://github.com/modelcontextprotocol/ext-apps/pull/717
+- **Surface**: frontend + infrastructure (App frame component, `ui_resource.sandboxOrigin`, mcp-sandbox construct)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes, if it lands: the sandbox stack as a hard requirement (it can stay as an option), and one iframe hop
+- **Unlocks**:
+  - MCP Apps on any deployment, including forks that never deploy the sandbox stack
+- **Notes**: #717 merged 11-04 and isn't tagged yet; `basic-host`'s single-iframe example follows. Write the note once both land.
+- **Status**: open
+
+### [2026-11-06] Take `bedrock-agentcore` 1.25.4 in one step, never 1.25.0–1.25.2
+- **Source**: research/2026-11-06.md ▸ Top 5 #5; https://github.com/aws/bedrock-agentcore-sdk-python/releases/tag/v1.25.3
+- **Surface**: backend
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: five releases of lag, and the risk of landing on releases whose span flush hangs streams in VPC mode
+- **Notes**: 1.25.4 also preserves guardrail redactions in Memory. Run the smoke turn matrix once on dev for stream close and TTFT.
+- **Status**: open
+
+### [2026-11-06] Spec sync: multi-agent-patterns.md §3, §4.2 and staleness table (pin is 1.63.0)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 1
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: stale version claims
+- **Notes**: `:57`, `:126`, `:274` say 1.57.2; `backend/pyproject.toml:73` is 1.63.0 (`aff220f63`). Supersedes [2026-11-03] *Spec sync: … (pin is 1.61.1, not 1.57.2)*.
+- **Status**: open
+
+### [2026-11-06] Spec sync: multi-agent-patterns.md §3 (`strands-agents-tools` deprecated; tools moved to `strands.vended_tools`)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 2
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a claim that the patterns live in a deprecated package
+- **Notes**: `:58` names `workflow`, `swarm`, `agent_graph`, `use_agent`, `a2a_client` in `strands-agents-tools==0.8.8`. Evidence: tools v0.8.11/0.8.12/0.9.0. Replacement text is in the research doc.
+- **Status**: open
+
+### [2026-11-06] Spec sync: multi-agent-patterns.md §3 Workflow note (`workflow` folds into vended `graph`)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 3
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a stale description
+- **Notes**: `:84`. Append the one-sentence note from the research doc.
+- **Status**: open
+
+### [2026-11-06] Spec sync: multi-agent-patterns.md §4 table, §8 and staleness table (`resolve_turn_agent` exists)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 4
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a "doesn't exist yet" claim and a staleness row that's now settled
+- **Notes**: `:97` "Today ~450 lines inline", `:236`, `:278`. Evidence: `apis/inference_api/chat/routes.py:4073`, `7891266fc`.
+- **Status**: open
+
+### [2026-11-06] Spec sync: agent-handoffs-and-consults.md header (Phase 0 built through PR-0.3c)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 5
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: "Draft proposal. Not scheduled."
+- **Notes**: PR-0.3a `7c5e3fd59`/`585960efc`, PR-0.3b `759cba8b6`, PR-0.3c `0356ea594` merged. Supersedes [2026-10-23] *Spec sync: agent-handoffs-and-consults.md header (Status line)*.
+- **Status**: open
+
+### [2026-11-06] Spec sync: multi-agent-patterns.md §8 sequence step 1 (Phase 0 merged)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 6
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a stale "as specced"
+- **Notes**: `:235`. Supersedes [2026-10-23] *Spec sync: multi-agent-patterns.md §8 (sequence step 1)*.
+- **Status**: open
+
 ### [2026-11-03] Opus 5.5: the drop-block recovery cannot engage for us, so a binding 400 still fails the turn on an enforcing account
 - **Source**: #1850 readout (strands-agents 1.62.0, harness-sdk#5171), then a live probe on dev the same evening
 - **Surface**: backend (`agents/main_agent/core/model_config.py` `_shape_thinking_value` / `to_bedrock_config`, the curated Opus 5.5 row); later `session/hooks/prefix_fingerprint.py` and the `C#` row writer
