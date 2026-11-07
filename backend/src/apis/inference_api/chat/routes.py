@@ -998,7 +998,9 @@ def _build_word_document_tools(
     spreadsheet tools) since the runtime does not populate ToolContext.
     ``redline_word_document`` joins the family only while the in-development
     ``WORD_TRACKED_CHANGES_ENABLED`` is on; off, its spec never reaches
-    ``toolConfig``. ``user_name`` is its default revision author.
+    ``toolConfig``. ``user_name`` is its default revision author. While the
+    in-development ``WORD_SKILL_SCRIPTS_ENABLED`` is on, create and modify
+    also take a bound skill's script by reference (``skill_scripts.py``).
     """
     if not enabled_tools or not WORD_DOCUMENT_TOOL_IDS.intersection(enabled_tools):
         return []
@@ -1013,11 +1015,23 @@ def _build_word_document_tools(
         make_read_word_document_tool,
     )
 
-    from apis.shared.feature_flags import word_tracked_changes_enabled
+    from apis.shared.feature_flags import (
+        word_skill_scripts_enabled,
+        word_tracked_changes_enabled,
+    )
+
+    # With WORD_SKILL_SCRIPTS_ENABLED on, create/modify can run a bound skill's
+    # script. The records arrive later, from the agent's skills runtime
+    # (`ChatAgent` binds them), so the two tools share one empty holder now.
+    skill_records = None
+    if word_skill_scripts_enabled():
+        from agents.main_agent.skills.skill_scripts import TurnSkillRecords
+
+        skill_records = TurnSkillRecords()
 
     tools = [
-        make_create_word_document_tool(session_id, user_id),
-        make_modify_word_document_tool(session_id, user_id),
+        make_create_word_document_tool(session_id, user_id, skill_records),
+        make_modify_word_document_tool(session_id, user_id, skill_records),
         make_list_word_documents_tool(session_id, user_id),
         make_read_word_document_tool(session_id, user_id),
     ]

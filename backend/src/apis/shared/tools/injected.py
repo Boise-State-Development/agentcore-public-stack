@@ -117,7 +117,11 @@ INJECTED_TOOL_IDS = frozenset(
 #     (`_build_workspace_tools`). With `WORD_TRACKED_CHANGES_ENABLED` on, WORD
 #     also closes over the user's display name, as `redline_word_document`'s
 #     default revision author. That names the same identity as `user_id`, the
-#     equivalence SKILL_AUTHORING's email rests on below.
+#     equivalence SKILL_AUTHORING's email rests on below. With
+#     `WORD_SKILL_SCRIPTS_ENABLED` on, create/modify also hold a
+#     `TurnSkillRecords` holder, filled by the agent build from the turn's
+#     skill records; those derive from `accessible_skill_ids`, a key element
+#     (`skills_hash`), so the holder adds nothing the key does not describe.
 #
 #   - SPREADSHEET (`_build_spreadsheet_tools`) closes over `assistant_id` as
 #     well. That was NOT a key element until `_create_cache_key` gained it,

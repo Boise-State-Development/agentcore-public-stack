@@ -415,6 +415,12 @@ jobs:
       # so only "true" enables. Sets the flag on the AgentCore Runtime only, and
       # only while on; no resources.
       CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: ${{ vars.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED }}
+      # Word skill scripts: create/modify_word_document can run a scripts/*.py
+      # file from a skill bound to the turn inside Code Interpreter, so the
+      # model never retypes it into python_code. In development, so only
+      # "true" enables. Sets the flag on the AgentCore Runtime only, and only
+      # while on; no resources.
+      CDK_WORD_SKILL_SCRIPTS_ENABLED: ${{ vars.CDK_WORD_SKILL_SCRIPTS_ENABLED }}
       # Documents as text on Converse: non-PDF attachments (docx, txt, md, csv,
       # html) reach a Bedrock Converse model as rendered text instead of
       # document blocks; PDFs stay native. In development, so only "true"

@@ -11,6 +11,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
+from agents.main_agent.skills.skill_scripts import bind_turn_skill_records
 from agents.main_agent.skills.strands_mapping import build_skills_runtime
 from agents.main_agent.tools.tool_name_conflicts import skipped_tools_note
 
@@ -110,6 +111,12 @@ class ChatAgent(BaseAgent):
             # No new agent-cache key element: the turn's skills are already in
             # the key and the flag is a deployment constant.
             tools = self._with_document_extract(tools, skills_runtime.records)
+
+            # Word tools built with WORD_SKILL_SCRIPTS_ENABLED on hold an empty
+            # skill-records holder; fill it from the records just fetched, so a
+            # script is resolved through exactly this turn's skills. An
+            # attribute scan over the tool list: no I/O.
+            bind_turn_skill_records(tools, skills_runtime.records)
 
             # Tool-result offload at intake (compaction PR-4): oversized tool
             # results become a bounded preview + retrieval references before

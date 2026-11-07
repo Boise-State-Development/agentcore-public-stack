@@ -112,6 +112,7 @@ export interface AppConfig {
   releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
+  wordSkillScripts: WordSkillScriptsConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
@@ -923,6 +924,22 @@ export interface ReleaseLedgerConfig {
  * none of the V2 payload budget. No resources, and nothing reaches the prompt.
  */
 export interface WebSearchDefaultMaxResultsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Word skill scripts. On, create_word_document and modify_word_document also
+ * take `skill_name` / `path` / `params` and run a `scripts/*.py` file from a
+ * skill bound to the turn inside the Code Interpreter sandbox, instead of the
+ * model retyping it into `python_code`. The script never runs on the Runtime
+ * host. **Opt-in while in development**: off unless
+ * CDK_WORD_SKILL_SCRIPTS_ENABLED=true (or a `wordSkillScripts.enabled: true`
+ * cdk.json context). Sets WORD_SKILL_SCRIPTS_ENABLED on the AgentCore Runtime
+ * only, and **only while on**, so the default spends none of the V2 payload
+ * budget. No resources and no IAM: the Runtime already reads skill resources
+ * and already runs Code Interpreter sessions.
+ */
+export interface WordSkillScriptsConfig {
   enabled: boolean;
 }
 
@@ -1909,6 +1926,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
         ? process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('webSearchDefaultMaxResults')?.enabled ?? false,
+    },
+    wordSkillScripts: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED
+        ? process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('wordSkillScripts')?.enabled ?? false,
     },
     converseDocumentsAsText: {
       // In development: only "true" enables, and an unset GitHub variable

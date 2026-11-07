@@ -431,6 +431,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         ...(config.webSearchDefaultMaxResults.enabled
           ? { WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: 'true' }
           : {}),
+        // Word skill scripts: create/modify_word_document can run a bound
+        // skill's scripts/*.py in Code Interpreter. Written only while ON, so
+        // the default costs nothing against the V2 payload budget.
+        ...(config.wordSkillScripts.enabled ? { WORD_SKILL_SCRIPTS_ENABLED: 'true' } : {}),
         // Documents as text: non-PDF attachments reach a Converse model as
         // rendered text, not document blocks. Written only while ON, so the
         // default costs nothing against the V2 payload budget.

@@ -83,6 +83,31 @@ def word_tracked_changes_enabled() -> bool:
     return os.environ.get("WORD_TRACKED_CHANGES_ENABLED", "").strip().lower() != "false"
 
 
+def word_skill_scripts_enabled() -> bool:
+    """Whether the Word tools can run a script that ships inside a bound skill.
+
+    On, ``create_word_document`` and ``modify_word_document`` also take
+    ``skill_name`` / ``path`` / ``params``: the tool resolves the file through
+    the turn's own skill records (only a ``scripts/*.py`` resource of a skill
+    bound to the turn), writes it into the Code Interpreter sandbox next to the
+    document and calls its ``run(doc, params)`` there, so the model never
+    retypes a long program into ``python_code``. The script runs only in the
+    sandbox, never on the Runtime host (``agents/main_agent/skills/skill_scripts.py``).
+    Off, neither tool's spec changes and skill scripts stay inert everywhere.
+
+    The spec change is one ``toolConfig`` rewrite per deployment when it turns
+    on, never per session: the extra arguments are optional and constant.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.wordSkillScripts.enabled``. No SPA switch: the result comes back on
+    the existing download card. A **feature switch** once finished: running an
+    author's code on a user's document is a capability a deployment may not want.
+    """
+    return os.environ.get("WORD_SKILL_SCRIPTS_ENABLED", "").strip().lower() == "true"
+
+
 def assistant_kb_full_context_enabled() -> bool:
     """Whether a small assistant knowledge base reaches the model whole
     (``apis/shared/assistants/kb_full_context.py``).
