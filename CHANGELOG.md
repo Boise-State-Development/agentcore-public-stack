@@ -18,6 +18,7 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ### 🐛 Fixed
 
+- A knowledge-base file that was over the per-file limit or the byte cap when it landed, though it passed the presign check, is now deleted from the documents bucket when the managed ingestion consumer refuses it. The consumer could only read the bucket, so its delete was refused and the object stayed until its agent was deleted. Its document was already marked failed and its byte reservation returned. Platform change: the consumer gains `s3:DeleteObject*` on `assistants/*/documents/*` only
 - After Continue on Claude 4.6 and later, the continued answer no longer splits around a user bubble the user never typed when the conversation is reloaded, and message ids stay aligned with the server, so thumbs feedback and Rewind act on the right message. `GET /sessions/{id}/messages` marks the stored continue prompt `continuation: true`
 
 ## [1.33.0] - 2026-11-04
