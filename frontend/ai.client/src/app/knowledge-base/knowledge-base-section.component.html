@@ -12,6 +12,10 @@
     }
   </div>
 
+  @if (showKnowledgeMode()) {
+    <app-knowledge-mode-line [entityId]="entityIdForMode()" [refreshKey]="knowledgeModeKey()" />
+  }
+
   <!-- ── Knowledge base upgrade (managed-kb-migration, Reqs 21 & 23) ──────
        Renders nothing at all unless the server says there is something to
        say. A knowledge base that works needs no UI, so `phase: 'none'` — the

@@ -64,6 +64,73 @@ class TestSearchAndAugment:
             user_message="Can I use AI on my assignment?", context_chunks=CHUNKS, max_context_length=22000
         )
 
+    @pytest.mark.asyncio
+    async def test_a_mixed_knowledge_base_still_retrieves_from_the_documents_it_skipped(self):
+        """A spreadsheet left out of the block keeps reaching the model through
+        retrieval; passages from documents already in the block are not repeated."""
+        from apis.shared.assistants.kb_full_context import KnowledgeBaseBlock
+
+        sheet = {"text": "Budget row: travel $400.", "distance": 0.2, "metadata": {"document_id": "d9"}, "key": "d9#0"}
+
+        async def _search(**kwargs):
+            return list(CHUNKS) + [sheet], 22000
+
+        block = KnowledgeBaseBlock(BLOCK, frozenset({"d9"}))
+        with patch.object(rag_service, "search_assistant_knowledgebase_with_cap", side_effect=_search):
+            chunks, message = await routes._search_and_augment(
+                assistant_id=ASSISTANT_ID, message="What is the travel budget?", access=ACCESS,
+                full_context=asyncio.ensure_future(_done(block)),
+            )
+
+        assert chunks == CHUNKS + [sheet]  # every citation card, as before
+        assert message == rag_service.augment_prompt_with_context(
+            user_message="What is the travel budget?", context_chunks=[sheet], max_context_length=22000
+        )
+        assert "Video Post" not in message
+
+    @pytest.mark.asyncio
+    async def test_a_mixed_knowledge_base_with_no_matching_skipped_passage_keeps_the_users_words(self):
+        from apis.shared.assistants.kb_full_context import KnowledgeBaseBlock
+
+        async def _search(**kwargs):
+            return list(CHUNKS), 22000
+
+        with patch.object(rag_service, "search_assistant_knowledgebase_with_cap", side_effect=_search):
+            _chunks, message = await routes._search_and_augment(
+                assistant_id=ASSISTANT_ID, message="hi", access=ACCESS,
+                full_context=asyncio.ensure_future(_done(KnowledgeBaseBlock(BLOCK, frozenset({"d9"})))),
+            )
+        assert message == "hi"
+
+
+class TestKnowledgeFilesNote:
+    """The excerpts name `knowledge_files` only on a turn that carries it."""
+
+    async def _augment(self, **kwargs):
+        async def _search(**kw):
+            return list(CHUNKS), 22000
+
+        with patch.object(rag_service, "search_assistant_knowledgebase_with_cap", side_effect=_search):
+            _chunks, message = await routes._search_and_augment(
+                assistant_id=ASSISTANT_ID, message="Draft the memo.", access=ACCESS,
+                full_context=asyncio.ensure_future(_done(None)), **kwargs,
+            )
+        return message
+
+    @pytest.mark.asyncio
+    async def test_off_the_message_is_byte_identical_to_before(self):
+        message = await self._augment()
+        assert "knowledge_files" not in message
+        assert message.startswith(f"{rag_service.RETRIEVED_EXCERPTS_PREAMBLE}\n\n[Context 1]")
+
+    @pytest.mark.asyncio
+    async def test_on_the_preamble_names_the_tool(self):
+        message = await self._augment(knowledge_files=True)
+        assert message.startswith(
+            f"{rag_service.RETRIEVED_EXCERPTS_PREAMBLE} {rag_service.KNOWLEDGE_FILES_EXCERPTS_NOTE}\n\n[Context 1]"
+        )
+        assert "`knowledge_files`" in rag_service.KNOWLEDGE_FILES_EXCERPTS_NOTE
+
 
 class TestResume:
     @pytest.mark.asyncio

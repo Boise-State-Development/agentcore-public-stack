@@ -361,8 +361,19 @@ jobs:
       # chunks. Opt-in while in development: set the
       # `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` variable to "true" in an
       # environment to turn it on there. Unset (empty string) or anything else
-      # means off. Sets the flag on the Runtime only.
+      # means off. Sets the flag on the Runtime, and on app-api for the Agent
+      # Designer's knowledge-base mode line.
       CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED: ${{ vars.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED }}
+      # Its token budget (whole number; 0 switches full context off). Unset
+      # (empty string) means the code's default, 50,000, which writes nothing to
+      # the Runtime's environment.
+      CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS: ${{ vars.CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS }}
+      # knowledge_files for ordinary Agents: an Agent turn that is not a
+      # project's can list its Knowledge and read a document by name. Opt-in
+      # while in development: set the `CDK_AGENT_KNOWLEDGE_FILES_ENABLED`
+      # variable to "true" in an environment to turn it on there. Unset (empty
+      # string) or anything else means off. Sets the flag on the Runtime only.
+      CDK_AGENT_KNOWLEDGE_FILES_ENABLED: ${{ vars.CDK_AGENT_KNOWLEDGE_FILES_ENABLED }}
       # Meeting transcripts → GitHub issues: the Google Calendar, Zoom and
       # GitHub tool families (docs/specs/meeting-transcripts-to-github-issues.md).
       # Opt-in while in development: set the `CDK_MEETING_TASKS_ENABLED`

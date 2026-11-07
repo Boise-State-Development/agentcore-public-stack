@@ -125,6 +125,18 @@ A project turn also gets the `project_files` tool, which lists the project's
 Files and reads one by name. Retrieval answers "what does the playbook say
 about X"; it cannot answer "grade submission 7", which needs a file.
 
+Every other agent turn gets the same tool as `knowledge_files` while
+`CDK_AGENT_KNOWLEDGE_FILES_ENABLED` is on (in development: only `"true"`
+enables it; AgentCore Runtime only, no SPA flag). With no arguments it lists the
+agent's Knowledge documents with their type, status and size; with `filename`
+it reads one document's text, 48 KB at a time, continued with `offset`. Access
+is checked on every call, the way retrieval checks it. It is what makes an
+instruction such as "read Process.txt in your Knowledge in full" work once the
+knowledge base is too large to send whole. The retrieved passages' preamble
+names the tool while the flag is on. Off, the tool list and the user message
+are byte-for-byte what they were. A project turn keeps `project_files` and
+never gets both.
+
 An Agent's **Response strictness** setting is a rule in the system prompt, not
 part of retrieval. It applies the same way to retrieved passages, to
 full-context mode and to turns where the search finds nothing. The default,
@@ -139,18 +151,38 @@ applies ("Can I use AI on my assignment?" when the policy differs by
 assignment), that can answer from the wrong one. Full-context mode sends the
 whole knowledge base instead.
 
-When every `complete` document has extractable text and together they fit the
-token budget, the full text goes at the end of the system prompt as one
-`<knowledge_base>` block, and the user message is not augmented. Retrieval
-still runs, for the citation cards. The block is deterministic, so it is
-cached with the system prompt and changes only when a document is added,
-changed or removed. Anything over budget, any document without a text layer
-(such as a scan), or any error falls back to retrieval.
+When every `complete` document with a text format (PDF, Word, text, Markdown,
+HTML) has extractable text and together they fit the token budget, the full
+text goes at the end of the system prompt as one `<knowledge_base>` block, and
+the user message is not augmented. Retrieval still runs, for the citation
+cards. The block is deterministic, so it is cached with the system prompt and
+changes only when a document is added, changed or removed. Anything over
+budget, any text document without a text layer (such as a scan), or any error
+falls back to retrieval.
+
+Spreadsheets and presentations do not disqualify the knowledge base. They are
+left out of the block, which names them, and the turn still adds retrieved
+passages to the user message, filtered to those documents, so they reach the
+model as they did before. The spreadsheet tools read them as before too. A
+knowledge base with no spreadsheet or presentation renders the same block it
+always did.
+
+The agent form's Knowledge base card tells the author which mode applies:
+"Sent to the model whole (N documents, ~X tokens)", or "Searched: the model
+sees the passages that match each message", with the reason (over the budget,
+no readable text, only spreadsheets, or the mode is off). It reads
+`GET /assistants/{id}/knowledge-base/mode` (owners and editors), which runs the
+same check the Runtime does, under the same flag and budget. The check reads
+each document's text once per app-api process and caches it, so the answer is
+exact rather than an estimate from file sizes; a knowledge base whose text
+documents are over 16 MB is answered from one query, without downloads. The
+line is behind SPA `features.knowledgeBaseMode` (in development).
 
 | Variable | Where | Default | Purpose |
 |---|---|---|---|
-| `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` | AgentCore Runtime | off | In development: only `"true"` enables it. No SPA flag |
-| `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` | AgentCore Runtime | 50,000 | The token budget. `0` switches the mode off |
+| `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` | AgentCore Runtime, app-api | off | In development: only `"true"` enables it. app-api reads it only for the mode line |
+| `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` | AgentCore Runtime, app-api | 50,000 | The token budget, as `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS`. A whole number; `0` switches the mode off. Written to the Runtime only while the mode is on and the value is not the default, so the default spends none of the Runtime's environment budget |
+| `CDK_AGENT_KNOWLEDGE_FILES_ENABLED` | AgentCore Runtime | off | In development: `knowledge_files` for agents (above). Written only while on |
 
 ### Project file readiness
 

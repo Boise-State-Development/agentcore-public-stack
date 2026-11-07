@@ -172,4 +172,15 @@ export interface FeatureFlags {
    * 404s while off). In development, so `false` locally and in prod.
    */
   awsLimits: boolean;
+
+  /**
+   * Knowledge-base mode line: one read-only line on the Agent Designer's
+   * knowledge-base card saying whether the knowledge base is sent to the model
+   * whole (full-context mode) or searched per message, and why. Reads
+   * `GET /assistants/{id}/knowledge-base/mode` (app-api, owner/editor), which is
+   * computed by the same code the AgentCore Runtime decides with, under its
+   * ASSISTANT_KB_FULL_CONTEXT_ENABLED and ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS.
+   * In development, so `false` locally and in prod.
+   */
+  knowledgeBaseMode: boolean;
 }

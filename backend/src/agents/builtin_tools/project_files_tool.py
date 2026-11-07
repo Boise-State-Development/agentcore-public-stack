@@ -1,4 +1,10 @@
-"""``project_files`` — a project harness lists the project's Files and reads one by name.
+"""``project_files`` / ``knowledge_files`` — list a knowledge base's documents and read one by name.
+
+One tool, two voices. ``project_files`` is a project harness's (its Files);
+``knowledge_files`` is an ordinary Agent's (its Knowledge, behind
+``AGENT_KNOWLEDGE_FILES_ENABLED``). The bodies are the same functions; only the
+name, the docstring and the words of the refusals differ (:class:`FilesToolVoice`),
+so the two cannot drift in bounds, access or matching.
 
 A project's Files are its hidden harness Agent's knowledge base: ``DOC#`` rows
 under ``AST#{harnessAgentId}``, indexed into a managed Bedrock knowledge base.
@@ -13,15 +19,22 @@ said it had no way to read the files, because ``list_word_documents`` and
 
 Design notes
 ------------
-* **Harness only.** Built on a project-harness turn
-  (``_build_turn_tools`` in ``routes.py``, when ``turn_project_id`` is set)
-  and never for an ordinary Agent, whose knowledge base is reached through
-  retrieval alone. One tool with two modes (list, then read by ``filename``)
-  rather than two, so the ``toolConfig`` prefix grows by one spec.
-* **Spec constant per deployment.** The tool's name, docstring and signature
-  are fixed; nothing about the project, its files or the member reaches the
-  spec, so every session of every project shares one cached ``toolConfig``.
-  A test pins the spec's digest.
+* **One voice per turn.** ``project_files`` is built on a project-harness turn
+  (``_build_turn_tools`` in ``routes.py``, when ``turn_project_id`` is set);
+  ``knowledge_files`` on every other Agent turn while its flag is on, never on a
+  harness turn. An Agent's Loader instructions ("read Process.txt in your
+  Knowledge in full") only worked in full-context mode: over budget, retrieval
+  handed the model five unnamed passages, and one Agent went looking for the
+  file in the user's Google Drive (2026-11 review). One tool with two modes
+  (list, then read by ``filename``) rather than two, so the ``toolConfig``
+  prefix grows by one spec.
+* **Spec constant per deployment.** Each voice's name, docstring and signature
+  are fixed; nothing about the project, the Agent, its files or the user
+  reaches the spec, so every session shares one cached ``toolConfig``. A test
+  pins each voice's digest.
+* **The Knowledge voice names nobody.** A shared Agent's viewers are not its
+  authors, so its listing carries no ``added_by`` (a project's members are
+  colleagues, and its listing does).
 * **Access is resolved on every call, the way retrieval resolves it**
   (``kb_access.resolve_kb_access``: the project membership model, failing
   closed), never read from the agent instance. The tool may outlive the turn
@@ -43,7 +56,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Mapping, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from strands import tool
 
@@ -56,6 +70,10 @@ logger = logging.getLogger(__name__)
 
 #: The tool's name — also what ``PROJECT_WORKSPACE_GUIDANCE`` tells the model to call.
 PROJECT_FILES_TOOL_NAME = "project_files"
+
+#: An ordinary Agent's voice of the same tool — what ``KNOWLEDGE_FILES_EXCERPTS_NOTE``
+#: in ``rag_service`` names.
+KNOWLEDGE_FILES_TOOL_NAME = "knowledge_files"
 
 #: Entries a listing carries before it says "and N more". A tool result is a
 #: per-turn payload; 100 rows is ~10 KB.
@@ -91,6 +109,125 @@ NO_TEXT = (
     "than this tool reads whole."
 )
 UNAVAILABLE = "The project's files can't be read right now. Try again, or ask the member to check the Files page."
+AMBIGUOUS = (
+    "{count} files are named '{name}': {described}. Tell the member, and ask them to "
+    "rename or remove one on the Files page so each file has one name."
+)
+UNKNOWN = "No file named '{name}' in this project's Files.{suggestion} Call with no arguments to list them."
+
+#: The Knowledge voice's words. An Agent's user is often not its author, so the
+#: fixes are the author's, and the documents are never in the user's own storage.
+KNOWLEDGE_NO_ACCESS = "You don't have access to this assistant's Knowledge."
+KNOWLEDGE_NOT_READY = (
+    "'{name}' is still being prepared (status: {status}), so it can't be read yet. Documents are "
+    "usually ready within a few minutes of upload. Answer from the ready documents, tell the user "
+    "this one isn't ready, and don't call this tool for it again this turn."
+)
+KNOWLEDGE_NOT_ADDED = (
+    "'{name}' was not added to this assistant's Knowledge (its preparation failed), so it can't be "
+    "read. Tell the user; the assistant's author can upload it again in the Agent Designer."
+)
+KNOWLEDGE_UNAVAILABLE = "This assistant's Knowledge can't be read right now. Try again shortly."
+KNOWLEDGE_AMBIGUOUS = (
+    "{count} documents are named '{name}': {described}. Tell the user; the assistant's author "
+    "can rename or remove one in the Agent Designer so each document has one name."
+)
+KNOWLEDGE_UNKNOWN = (
+    "No document named '{name}' in this assistant's Knowledge.{suggestion} Call with no arguments "
+    "to list them. Knowledge is not in the user's Drive or other storage, so don't look for it there."
+)
+
+#: The ``project_files`` docstring, which is its spec's description. Byte for byte
+#: what it was before the voices: a change re-writes every project's cached
+#: ``toolConfig`` prefix.
+_PROJECT_FILES_DOC = """List this project's Files, or read one of them by name.
+
+        The project's Files are the documents members added on the project's
+        Files page. The passages most relevant to each message are retrieved
+        for you automatically; use this tool when that is not enough: a member
+        names a file, asks for work on one document (grade this submission,
+        review that draft, compare two files), or asks what the project holds.
+
+        - No arguments: every file with its status and size. Only a file
+          listed as ready can be read.
+        - filename: that file's whole text (exact name, else
+          case-insensitive), at most 48 KB per call; when the result is
+          truncated, call again with offset = next_offset for the rest.
+          Spreadsheets, presentations and images have no text to read here.
+
+        Args:
+            filename: The file to read, as listed. Empty to list the files.
+            offset: Byte offset to continue a truncated read.
+        """
+
+_KNOWLEDGE_FILES_DOC = """List this assistant's Knowledge documents, or read one of them by name.
+
+        Knowledge is the reference material the assistant's author added to
+        it. The passages most relevant to each message are retrieved for you
+        automatically; use this tool when that is not enough: your
+        instructions or the user name a document, a task needs one document
+        whole (follow a process, fill in a template, check a policy), or the
+        user asks what the Knowledge holds. Knowledge is not in the user's
+        Google Drive, OneDrive or other connected storage; read it here.
+
+        - No arguments: every document with its type, status and size. Only a
+          document listed as ready can be read.
+        - filename: that document's whole text (exact name, else
+          case-insensitive), at most 48 KB per call; when the result is
+          truncated, call again with offset = next_offset for the rest.
+          Spreadsheets, presentations and images have no text to read here.
+
+        Args:
+            filename: The document to read, as listed. Empty to list them.
+            offset: Byte offset to continue a truncated read.
+        """
+
+
+@dataclass(frozen=True)
+class FilesToolVoice:
+    """What one tool says. The behaviour behind every voice is the same."""
+
+    name: str
+    doc: str
+    no_access: str
+    not_ready: str
+    not_added: str
+    unavailable: str
+    ambiguous: str
+    unknown: str
+    #: List entries carry who added each file (project members are colleagues).
+    lists_added_by: bool
+    #: List entries carry the document's type (``pdf``, ``docx``, ``spreadsheet``…).
+    lists_type: bool
+
+
+PROJECT_FILES_VOICE = FilesToolVoice(
+    name=PROJECT_FILES_TOOL_NAME,
+    doc=_PROJECT_FILES_DOC,
+    no_access=NO_ACCESS,
+    not_ready=NOT_READY,
+    not_added=NOT_ADDED,
+    unavailable=UNAVAILABLE,
+    ambiguous=AMBIGUOUS,
+    unknown=UNKNOWN,
+    lists_added_by=True,
+    lists_type=False,
+)
+
+KNOWLEDGE_FILES_VOICE = FilesToolVoice(
+    name=KNOWLEDGE_FILES_TOOL_NAME,
+    doc=_KNOWLEDGE_FILES_DOC,
+    no_access=KNOWLEDGE_NO_ACCESS,
+    not_ready=KNOWLEDGE_NOT_READY,
+    not_added=KNOWLEDGE_NOT_ADDED,
+    unavailable=KNOWLEDGE_UNAVAILABLE,
+    ambiguous=KNOWLEDGE_AMBIGUOUS,
+    unknown=KNOWLEDGE_UNKNOWN,
+    lists_added_by=False,
+    lists_type=True,
+)
+
+
 
 
 class ProjectFilesError(Exception):
@@ -134,21 +271,43 @@ def member_emails(project_id: str) -> Dict[str, str]:
         return {}
 
 
-def list_project_files(project_id: str, assistant_id: str) -> Dict[str, Any]:
-    """The listing payload: every file, deterministically ordered, bounded."""
+def _type_label(doc: Mapping[str, Any]) -> str:
+    """What kind of document a listing says this is: its text format, else its kind."""
+    name = str(doc.get("filename") or "")
+    fmt = document_format_for(str(doc.get("contentType") or ""), name)
+    if fmt:
+        return fmt
+    kind = _kind(name)
+    return "other" if kind == "file of a type" else kind
+
+
+def list_kb_files(
+    assistant_id: str,
+    *,
+    voice: FilesToolVoice,
+    emails: Optional[Callable[[], Mapping[str, str]]] = None,
+) -> Dict[str, Any]:
+    """The listing payload: every document, deterministically ordered, bounded.
+
+    ``emails`` returns ``user id → email``; it is called only by a voice that
+    lists who added each file, and only when there is a file to describe.
+    """
     docs = sorted(list_kb_documents(assistant_id), key=_sort_key)
-    emails = member_emails(project_id) if docs else {}
+    added_by_email = emails() if (voice.lists_added_by and emails and docs) else {}
     files: List[Dict[str, Any]] = []
     for doc in docs[:PROJECT_FILES_LIST_MAX]:
         entry: Dict[str, Any] = {
             "filename": str(doc.get("filename") or doc.get("documentId") or ""),
-            "status": "ready" if _is_ready(doc) else f"not ready ({_status(doc)})",
-            "size_bytes": int(doc.get("sizeBytes") or 0),
         }
-        added_by = doc.get("addedByUserId") or doc.get("importedByUserId")
-        email = emails.get(str(added_by)) if added_by else None
-        if email:
-            entry["added_by"] = email
+        if voice.lists_type:
+            entry["type"] = _type_label(doc)
+        entry["status"] = "ready" if _is_ready(doc) else f"not ready ({_status(doc)})"
+        entry["size_bytes"] = int(doc.get("sizeBytes") or 0)
+        if added_by_email:
+            added_by = doc.get("addedByUserId") or doc.get("importedByUserId")
+            email = added_by_email.get(str(added_by)) if added_by else None
+            if email:
+                entry["added_by"] = email
         files.append(entry)
     omitted = max(0, len(docs) - len(files))
     return {
@@ -162,7 +321,14 @@ def list_project_files(project_id: str, assistant_id: str) -> Dict[str, Any]:
     }
 
 
-def match_project_file(docs: List[Mapping[str, Any]], filename: str) -> Mapping[str, Any]:
+def list_project_files(project_id: str, assistant_id: str) -> Dict[str, Any]:
+    """A project's Files, with who added each one."""
+    return list_kb_files(assistant_id, voice=PROJECT_FILES_VOICE, emails=lambda: member_emails(project_id))
+
+
+def match_project_file(
+    docs: List[Mapping[str, Any]], filename: str, *, voice: FilesToolVoice = PROJECT_FILES_VOICE
+) -> Mapping[str, Any]:
     """The one document named ``filename``: exact, else case-insensitive.
 
     Raises :class:`ProjectFilesError` naming the candidates when the name is
@@ -182,10 +348,7 @@ def match_project_file(docs: List[Mapping[str, Any]], filename: str) -> Mapping[
             f"'{d.get('filename')}' ({int(d.get('sizeBytes') or 0)} bytes, added {d.get('createdAt') or 'unknown'})"
             for d in sorted(exact, key=_sort_key)
         )
-        raise ProjectFilesError(
-            f"{len(exact)} files are named '{wanted}': {described}. Tell the member, and ask them to "
-            "rename or remove one on the Files page so each file has one name."
-        )
+        raise ProjectFilesError(voice.ambiguous.format(count=len(exact), name=wanted, described=described))
     needle = wanted.casefold()
     near = [
         str(d.get("filename"))
@@ -193,9 +356,7 @@ def match_project_file(docs: List[Mapping[str, Any]], filename: str) -> Mapping[
         if needle and (needle in str(d.get("filename") or "").casefold() or str(d.get("filename") or "").casefold() in needle)
     ][:_CANDIDATES_MAX]
     suggestion = f" Did you mean: {', '.join(repr(n) for n in near)}?" if near else ""
-    raise ProjectFilesError(
-        f"No file named '{wanted}' in this project's Files.{suggestion} Call with no arguments to list them."
-    )
+    raise ProjectFilesError(voice.unknown.format(name=wanted, suggestion=suggestion))
 
 
 def _kind(filename: str) -> str:
@@ -210,16 +371,18 @@ def _kind(filename: str) -> str:
     return "file of a type"
 
 
-def read_project_file(assistant_id: str, filename: str, offset: int) -> Dict[str, Any]:
-    """One page of a file's text, located by name. Blocking."""
+def read_project_file(
+    assistant_id: str, filename: str, offset: int, *, voice: FilesToolVoice = PROJECT_FILES_VOICE
+) -> Dict[str, Any]:
+    """One page of a document's text, located by name. Blocking."""
     if offset < 0:
         raise ProjectFilesError("offset must be 0 or more.")
     docs = list_kb_documents(assistant_id)
-    doc = match_project_file(docs, filename)
+    doc = match_project_file(docs, filename, voice=voice)
     name = str(doc.get("filename") or "")
     if not _is_ready(doc):
         status = _status(doc)
-        message = NOT_ADDED if status == "failed" else NOT_READY
+        message = voice.not_added if status == "failed" else voice.not_ready
         return {
             "mode": "not_ready",
             "filename": name,
@@ -252,8 +415,12 @@ def read_project_file(assistant_id: str, filename: str, offset: int) -> Dict[str
     }
 
 
-def make_project_files_tool(project_id: str, assistant_id: str, member: User):
-    """``project_files`` bound to one project's harness and the invoking member."""
+def _make_files_tool(voice: FilesToolVoice, assistant_id: str, member: User, list_files, scope: str):
+    """The tool in ``voice``, bound to one knowledge base and the invoking user.
+
+    ``list_files`` is the zero-argument listing for this voice (a project's adds
+    who added each file). ``scope`` names the binding in the failure log only.
+    """
     # A copy without the bearer token: the tool may outlive this request in the agent cache.
     user = User(email=member.email, user_id=member.user_id, name=member.name, roles=list(member.roles or []))
 
@@ -263,54 +430,68 @@ def make_project_files_tool(project_id: str, assistant_id: str, member: User):
         access = await resolve_kb_access(assistant_id, user.user_id, user_email=user.email)
         return access is None or not access.may_read
 
-    @tool(name=PROJECT_FILES_TOOL_NAME)
-    async def project_files(filename: str = "", offset: int = 0) -> Dict[str, Any]:
-        """List this project's Files, or read one of them by name.
-
-        The project's Files are the documents members added on the project's
-        Files page. The passages most relevant to each message are retrieved
-        for you automatically; use this tool when that is not enough: a member
-        names a file, asks for work on one document (grade this submission,
-        review that draft, compare two files), or asks what the project holds.
-
-        - No arguments: every file with its status and size. Only a file
-          listed as ready can be read.
-        - filename: that file's whole text (exact name, else
-          case-insensitive), at most 48 KB per call; when the result is
-          truncated, call again with offset = next_offset for the rest.
-          Spreadsheets, presentations and images have no text to read here.
-
-        Args:
-            filename: The file to read, as listed. Empty to list the files.
-            offset: Byte offset to continue a truncated read.
-        """
+    async def files_tool(filename: str = "", offset: int = 0) -> Dict[str, Any]:
         try:
             if await _access_denied():
-                return _error(NO_ACCESS)
+                return _error(voice.no_access)
             if not filename.strip():
-                payload = await asyncio.to_thread(list_project_files, project_id, assistant_id)
+                payload = await asyncio.to_thread(list_files)
             else:
-                payload = await asyncio.to_thread(read_project_file, assistant_id, filename, int(offset or 0))
+                payload = await asyncio.to_thread(
+                    read_project_file, assistant_id, filename, int(offset or 0), voice=voice
+                )
         except ProjectFilesError as exc:
             return _error(str(exc))
         except Exception:
-            logger.warning("project_files failed for project %s", project_id, exc_info=True)
-            return _error(UNAVAILABLE)
+            logger.warning("%s failed for %s", voice.name, scope, exc_info=True)
+            return _error(voice.unavailable)
         logger.info(
-            "project_files: mode=%s files=%s bytes=%s",
-            payload.get("mode"), payload.get("count", 1), len(payload.get("content", "")),
+            "%s: mode=%s files=%s bytes=%s",
+            voice.name, payload.get("mode"), payload.get("count", 1), len(payload.get("content", "")),
         )
         return {"content": [{"json": payload}], "status": "success"}
 
-    return project_files
+    # The docstring is the spec's description and its Args are the parameters'
+    # descriptions, so each voice's is set before decorating.
+    files_tool.__doc__ = voice.doc
+    files_tool.__name__ = files_tool.__qualname__ = voice.name
+    return tool(name=voice.name)(files_tool)
+
+
+def make_project_files_tool(project_id: str, assistant_id: str, member: User):
+    """``project_files`` bound to one project's harness and the invoking member."""
+    return _make_files_tool(
+        PROJECT_FILES_VOICE,
+        assistant_id,
+        member,
+        lambda: list_project_files(project_id, assistant_id),
+        f"project {project_id}",
+    )
+
+
+def make_knowledge_files_tool(assistant_id: str, user: User):
+    """``knowledge_files`` bound to one Agent's knowledge base and the invoking user."""
+    return _make_files_tool(
+        KNOWLEDGE_FILES_VOICE,
+        assistant_id,
+        user,
+        lambda: list_kb_files(assistant_id, voice=KNOWLEDGE_FILES_VOICE),
+        f"assistant {assistant_id}",
+    )
 
 
 __all__ = [
+    "FilesToolVoice",
+    "KNOWLEDGE_FILES_TOOL_NAME",
+    "KNOWLEDGE_FILES_VOICE",
     "PROJECT_FILES_LIST_MAX",
+    "PROJECT_FILES_VOICE",
     "PROJECT_FILES_TOOL_NAME",
     "PROJECT_FILE_TEXT_MAX_CHARS",
     "ProjectFilesError",
+    "list_kb_files",
     "list_project_files",
+    "make_knowledge_files_tool",
     "make_project_files_tool",
     "match_project_file",
     "read_project_file",

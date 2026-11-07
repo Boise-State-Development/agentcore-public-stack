@@ -103,6 +103,7 @@ export interface AppConfig {
   skillAuthoring: SkillAuthoringConfig;
   wordTrackedChanges: WordTrackedChangesConfig;
   assistantKbFullContext: AssistantKbFullContextConfig;
+  agentKnowledgeFiles: AgentKnowledgeFilesConfig;
   meetingTasks: MeetingTasksConfig;
   largeDocumentAttachments: LargeDocumentAttachmentsConfig;
   attachmentKb: AttachmentKbConfig;
@@ -783,8 +784,37 @@ export interface WordTrackedChangesConfig {
  * ASSISTANT_KB_FULL_CONTEXT_ENABLED on the AgentCore Runtime; while off, the
  * variable is absent. The text comes from the documents bucket, which the
  * Runtime can always read (`AssistantDocumentsRead`). No SPA switch.
+ *
+ * `maxTokens` is the budget (CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, or an
+ * `assistantKbFullContext.maxTokens` context; 0 switches full context off with
+ * the flag on). Written as ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS only when it
+ * differs from the code's default, 50,000, so the default spends none of the V2
+ * payload budget. app-api carries both values too: its
+ * `GET /assistants/{id}/knowledge-base/mode` tells an Agent's author which mode
+ * the knowledge base runs in, and must answer as the Runtime decides.
  */
 export interface AssistantKbFullContextConfig {
+  enabled: boolean;
+  maxTokens: number;
+}
+
+/** The code's own default (`DEFAULT_FULL_CONTEXT_MAX_TOKENS` in kb_full_context.py). */
+export const DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS = 50_000;
+
+/**
+ * `knowledge_files` for ordinary Agents
+ * (backend/src/agents/builtin_tools/project_files_tool.py): an Agent turn that
+ * is not a project harness's gets one tool that lists its Knowledge documents
+ * and reads one by name, and the retrieved-excerpts preamble names it.
+ * **Opt-in while in development**: off unless
+ * CDK_AGENT_KNOWLEDGE_FILES_ENABLED=true (or an
+ * `agentKnowledgeFiles.enabled: true` context). Sets
+ * AGENT_KNOWLEDGE_FILES_ENABLED on the AgentCore Runtime only, and **only while
+ * on**, so the default spends none of the V2 payload budget. No resources and no
+ * IAM: the Runtime already reads the assistants table and the documents bucket
+ * for full-context mode. No SPA switch.
+ */
+export interface AgentKnowledgeFilesConfig {
   enabled: boolean;
 }
 
@@ -1858,6 +1888,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED
         ? process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('assistantKbFullContext')?.enabled ?? false,
+      maxTokens: parseFullContextMaxTokens(
+        process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS,
+        scope.node.tryGetContext('assistantKbFullContext')?.maxTokens,
+      ),
+    },
+    agentKnowledgeFiles: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_AGENT_KNOWLEDGE_FILES_ENABLED
+        ? process.env.CDK_AGENT_KNOWLEDGE_FILES_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('agentKnowledgeFiles')?.enabled ?? false,
     },
     meetingTasks: {
       // Opt-in while in development, same parsing as assistantKbFullContext.
@@ -2426,6 +2467,19 @@ function requireWholeNumber(source: string, value: unknown): string | undefined 
     );
   }
   return text;
+}
+
+/**
+ * The full-context token budget: the variable, else the context, else the
+ * code's default. A typo fails synth (requireWholeNumber) rather than quietly
+ * running another budget than the operator meant; an unset GitHub variable
+ * arrives as '' and takes the default.
+ */
+export function parseFullContextMaxTokens(rawEnv: string | undefined, rawContext: unknown): number {
+  const text =
+    requireWholeNumber('CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS', rawEnv) ??
+    requireWholeNumber('assistantKbFullContext.maxTokens context', rawContext);
+  return text === undefined ? DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS : parseInt(text, 10);
 }
 
 /**

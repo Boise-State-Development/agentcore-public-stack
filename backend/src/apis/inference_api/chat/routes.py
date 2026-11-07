@@ -35,6 +35,7 @@ from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
     agent_preparing_phase_enabled,
     kb_search_ahead_enabled,
+    agent_knowledge_files_enabled,
     agents_enabled,
     assistant_kb_full_context_enabled,
     attachment_kb_enabled,
@@ -3742,7 +3743,8 @@ async def _build_turn_tools(
     gate, which is memoized per session once it answers yes, and the meeting
     tools' connector lookup, served from the catalog snapshot already in
     memory. ``turn_project_id`` marks a project-harness turn, which also gets
-    ``project_files``."""
+    ``project_files``; any other Agent turn gets ``knowledge_files`` while
+    ``AGENT_KNOWLEDGE_FILES_ENABLED`` is on."""
     extra_tools = _build_spreadsheet_tools(
         enabled_tools=effective_enabled_tools,
         assistant_id=input_data.rag_assistant_id,
@@ -3811,6 +3813,16 @@ async def _build_turn_tools(
         extra_tools = extra_tools + build_project_files_tools(
             turn_project_id, input_data.rag_assistant_id, current_user
         )
+    # Every other Agent lists its Knowledge and reads a document by name
+    # (`knowledge_files`, the same tool in another voice): a Loader that says
+    # "read Process.txt in full" is otherwise unanswerable once the knowledge
+    # base is too big to send whole. Same place in the list as `project_files`,
+    # and never both. A closure over (assistant, user), both cache-key elements;
+    # nothing runs until the model calls it.
+    elif input_data.rag_assistant_id and agent_knowledge_files_enabled():
+        from apis.inference_api.chat.project_memory import build_knowledge_files_tools
+
+        extra_tools = extra_tools + build_knowledge_files_tools(input_data.rag_assistant_id, current_user)
 
     # document_read for any session that carries a readable attachment
     # (this turn's uploads count). Gated on session state, not the
@@ -4029,6 +4041,7 @@ async def _search_and_augment(
     message: str,
     access: Any,
     full_context: Optional["asyncio.Task[Optional[str]]"] = None,
+    knowledge_files: bool = False,
 ) -> Tuple[Optional[list], str]:
     """Search an assistant's knowledge base and augment ``message`` with it.
 
@@ -4043,6 +4056,10 @@ async def _search_and_augment(
     so the chunks are returned for the citation cards and ``message`` comes
     back unaugmented. The search still runs alongside, not after it, so a turn
     that ends up retrieving waits no longer than before.
+
+    ``knowledge_files`` says the turn carries the ``knowledge_files`` tool, so
+    the excerpts' preamble names it (one constant sentence; absent, the
+    augmented message is byte-identical to before the tool existed).
     """
     from apis.shared.assistants.rag_service import (
         augment_prompt_with_context,
@@ -4060,9 +4077,26 @@ async def _search_and_augment(
             access=access,
         )
         logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
-        if full_context is not None and await full_context:
-            logger.info("Knowledge base sent whole (full-context mode) - message not augmented")
-            return context_chunks, message
+        block = await full_context if full_context is not None else None
+        if block:
+            # Documents the block skipped (spreadsheets, decks) are still searched:
+            # augment with their passages and nobody else's, which the model
+            # already has whole. None skipped: the message goes as the user wrote it.
+            searched = getattr(block, "searched_document_ids", frozenset())
+            augment_from = [
+                c for c in (context_chunks or []) if (c.get("metadata") or {}).get("document_id") in searched
+            ]
+            if not augment_from:
+                logger.info("Knowledge base sent whole (full-context mode) - message not augmented")
+                return context_chunks, message
+            augmented = augment_prompt_with_context(
+                user_message=message,
+                context_chunks=augment_from,
+                max_context_length=cap,
+                knowledge_files_note=knowledge_files,
+            )
+            logger.info(f"Knowledge base sent whole; augmented with {len(augment_from)} chunks from skipped documents")
+            return context_chunks, augmented
         if not context_chunks:
             logger.info("No context chunks found for assistant - using original message without augmentation")
             return context_chunks, message
@@ -4073,7 +4107,10 @@ async def _search_and_augment(
         # reranking's top_k chunks actually reach the model; legacy keeps
         # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
         augmented = augment_prompt_with_context(
-            user_message=message, context_chunks=context_chunks, max_context_length=cap
+            user_message=message,
+            context_chunks=context_chunks,
+            max_context_length=cap,
+            knowledge_files_note=knowledge_files,
         )
         logger.info(f"Augmented message with {len(context_chunks)} context chunks")
         logger.info("Augmented message preview available")
@@ -5328,6 +5365,9 @@ async def _run_invocation(
                     message=input_data.message,
                     access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
                     full_context=kb_full_context_task,
+                    # The same condition `_build_turn_tools` builds the tool on,
+                    # so the excerpts never name a tool the turn does not have.
+                    knowledge_files=not turn_project_id and agent_knowledge_files_enabled(),
                 )
             )
             if not kb_search_ahead_enabled():
