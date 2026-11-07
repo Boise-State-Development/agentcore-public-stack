@@ -449,9 +449,16 @@ export class KbMigrationConstruct extends Construct {
 
     // Source bytes for re-ingestion, and the S3 HEAD that byte accounting
     // sizes documents with (Requirement 12.3 — never a client-reported
-    // size). Read-only: nothing here writes user documents.
+    // size). Nothing here writes user documents.
     documentsBucket.grantRead(this.workerLambda);
     documentsBucket.grantRead(this.ingestionConsumerLambda);
+    // The consumer's one delete: an object it refuses after measuring it —
+    // over KB_UPLOAD_MAX_FILE_BYTES, or overshooting the byte cap — is
+    // removed so it isn't billed with no row pointing at it (chat's
+    // `complete_upload` rejects the same way). Without this the delete was
+    // AccessDenied and swallowed as a warning, stranding the object until its
+    // agent was deleted (seen on dev, 2026-11-07). Documents keys only; no Put.
+    documentsBucket.grantDelete(this.ingestionConsumerLambda, 'assistants/*/documents/*');
     // The document reconciler re-ingests NOT_FOUND documents from their
     // existing S3 keys — the same re-ingest path as the ingestion consumer,
     // so it needs the same read grant. Read-only: it never writes documents.
