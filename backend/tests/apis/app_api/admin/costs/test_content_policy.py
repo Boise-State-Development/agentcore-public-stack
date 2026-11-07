@@ -22,7 +22,9 @@ from typing import Any, List, Set, Tuple
 import pytest
 from pydantic import BaseModel
 
+from apis.app_api.admin.costs import ledger_models
 from apis.app_api.admin.costs import models as cost_models
+from apis.shared.costs import ledger_provenance
 from apis.shared.observability import content_policy as cp
 
 #: The single decided exemption on the admin cost surface. The "most expensive
@@ -61,12 +63,43 @@ def _declared_fields(model: type, seen: Set[type] | None = None) -> List[Tuple[s
     return fields
 
 
-def _all_models() -> List[type]:
+def _models_of(module) -> List[type]:
     return [
-        obj for _, obj in inspect.getmembers(cost_models, inspect.isclass)
+        obj for _, obj in inspect.getmembers(module, inspect.isclass)
         if issubclass(obj, BaseModel) and obj is not BaseModel
-        and obj.__module__ == cost_models.__name__
+        and obj.__module__ == module.__name__
     ]
+
+
+def _all_models() -> List[type]:
+    # The release ledger's response models (release-ledger spec §8) are on the
+    # same surface and under the same rule, with no exemption at all.
+    return _models_of(cost_models) + _models_of(ledger_models)
+
+
+#: Stricter than the rest of the cost surface (release-ledger D7): ledger
+#: responses carry ids of versions, builds, models, tools, agents and projects
+#: only. A session, user, message or tool-use id, or a quoted passage, on any
+#: ledger model fails here even though the drill-down views carry some of them.
+LEDGER_IDENTITY_FIELDS = {"sessionId", "userId", "messageId", "toolUseId", "email", "uploadId", "quote", "arguments"}
+
+
+def test_ledger_models_carry_no_identity_or_content_field():
+    offenders = set()
+    for model in _models_of(ledger_models):
+        for owner, alias in _declared_fields(model):
+            if cp.is_content_bearing(alias) or alias in LEDGER_IDENTITY_FIELDS:
+                offenders.add((owner, alias))
+    assert offenders == set(), f"identity or content field on a ledger response model: {sorted(offenders)}"
+
+
+def test_the_provenance_join_requests_only_claim_states():
+    assert ledger_provenance.PROVENANCE_STATE_PROJECTION is cp.PROVENANCE_STATE_PROJECTION
+    projection = ledger_provenance._projection()
+    names = set(projection["ExpressionAttributeNames"].values())
+    assert names == {"sessionId", "createdAt", "claims", "state"}
+    for path in projection["ProjectionExpression"].split(", "):
+        assert path in ("#sid", "#cat") or (path.startswith("#cl[") and path.endswith("].#st")), path
 
 
 def test_response_models_are_content_free_except_the_one_decided_exemption():
