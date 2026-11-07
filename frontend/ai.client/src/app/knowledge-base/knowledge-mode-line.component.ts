@@ -16,8 +16,10 @@ function searchedBecause(status: KnowledgeModeStatus): string | null {
       return `its text (~${formatTokens(status.estimatedTokens)} tokens) is over the ${formatTokens(status.budgetTokens)}-token limit for sending it whole.`;
     case 'raw_bytes':
       return 'its documents are too large to send whole.';
+    case 'document_over_budget':
+      return `one document is about ${formatTokens(status.estimatedTokens)} tokens on its own, over the ${formatTokens(status.budgetTokens)}-token limit for sending it whole.`;
     case 'no_text_layer':
-      return 'a document has no readable text (a scan, for example) or is over the limit on its own.';
+      return 'a document has no readable text (a scan, for example).';
     case 'no_text_documents':
       return 'it holds only spreadsheets or presentations, which are always searched.';
     case 'full_context_off':

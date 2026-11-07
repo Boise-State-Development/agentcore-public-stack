@@ -176,8 +176,10 @@ always did.
 
 The agent form's Knowledge base card tells the author which mode applies:
 "Sent to the model whole (N documents, ~X tokens)", or "Searched: the model
-sees the passages that match each message", with the reason (over the budget,
-no readable text, only spreadsheets, or the mode is off). It reads
+sees the passages that match each message", with the reason: the text together
+is over the budget, one document is over it on its own (with that document's
+size), a document has no readable text, it holds only spreadsheets, or the mode
+is off. It reads
 `GET /assistants/{id}/knowledge-base/mode` (owners and editors), which runs the
 same check the Runtime does, under the same flag and budget. The check reads
 each document's text once per app-api process and caches it, so the answer is

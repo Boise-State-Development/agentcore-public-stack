@@ -20,6 +20,7 @@ export type KnowledgeSearchedReason =
   | 'no_text_documents'
   | 'raw_bytes'
   | 'no_text_layer'
+  | 'document_over_budget'
   | 'over_budget';
 
 export interface KnowledgeModeStatus {
@@ -27,7 +28,10 @@ export interface KnowledgeModeStatus {
   reason: KnowledgeSearchedReason | null;
   /** Documents whose text is (or would be) sent whole. */
   documentCount: number;
-  /** Their text in estimated tokens; 0 when it was never read. */
+  /**
+   * Their text in estimated tokens; 0 when it was never read. For
+   * `document_over_budget`, the one oversized document's alone.
+   */
   estimatedTokens: number;
   budgetTokens: number;
   /** Spreadsheets and decks, which are searched in either mode. */
