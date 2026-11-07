@@ -343,8 +343,14 @@ class ChatAgent(BaseAgent):
             # user turn, no multimodal/files.
             prompt = []
         else:
+            # `conversation` lets a new document block take a name no block
+            # already in the live list holds (Bedrock rejects duplicates
+            # across the whole request; see `document_names_in`).
             prompt = self.multimodal_builder.build_prompt(
-                message, files, attachment_names=attachment_names
+                message,
+                files,
+                attachment_names=attachment_names,
+                conversation=getattr(self.agent, "messages", None),
             )
 
         async for event in self.stream_coordinator.stream_response(
