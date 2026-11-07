@@ -326,6 +326,24 @@ async def test_the_flag_gates_every_write(monkeypatch):
         assert table.update_item.call_count == 6
 
 
+def test_live_writes_need_the_flag_and_the_table(monkeypatch):
+    """The `ledgered` mark on a C# row reads this, so it agrees with the write it promises."""
+    monkeypatch.delenv("DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME", raising=False)
+    monkeypatch.setenv("RELEASE_LEDGER_ENABLED", "true")
+    assert lr.live_ledger_writes_on() is False
+    monkeypatch.setenv("DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME", "rollups")
+    assert lr.live_ledger_writes_on() is True
+    for value in ("", "false", "1"):
+        monkeypatch.setenv("RELEASE_LEDGER_ENABLED", value)
+        assert lr.live_ledger_writes_on() is False
+
+
+def test_the_mark_is_in_the_backfill_projection():
+    from apis.shared.observability.content_policy import LEDGER_ROW_PROJECTION
+
+    assert lr.LEDGERED in LEDGER_ROW_PROJECTION
+
+
 @pytest.mark.asyncio
 async def test_a_failing_ledger_never_raises(monkeypatch):
     monkeypatch.setenv("RELEASE_LEDGER_ENABLED", "true")

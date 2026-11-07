@@ -62,6 +62,12 @@ FIRST_LIVE_AT = "firstLiveAt"
 #: Set by the backfill on every row it writes, and the PK of its run markers.
 BACKFILLED_AT = "backfilledAt"
 BACKFILL_PK = "LEDGER#BACKFILL"
+#: Set on a ``C#`` row, in the same ``put_item`` that stores it, when the live
+#: writer will count it. The backfill skips a row carrying it, so no backfill
+#: range can count a call twice: a row's ``timestamp`` is when the call ran,
+#: earlier than when it was stored and counted, so the first live turn's rows
+#: sit just *before* ``firstLiveAt``.
+LEDGERED = "ledgered"
 UNKNOWN = "unknown"
 
 #: How a turn ended, on every row of it (``outcome``). Declared here, in
@@ -453,6 +459,18 @@ async def write_ledger_updates(updates: Sequence[LedgerUpdate], table: Any) -> i
     return len(failures)
 
 
+def live_ledger_writes_on() -> bool:
+    """Whether a cost row stored now will be counted by the live writer.
+
+    The same two conditions :func:`bump_ledger_for_row` checks, so the
+    :data:`LEDGERED` mark and the write it promises never disagree about
+    whether the ledger is on.
+    """
+    from apis.shared.feature_flags import release_ledger_enabled
+
+    return release_ledger_enabled() and bool(os.environ.get(ROLLUP_TABLE_ENV))
+
+
 async def bump_ledger_for_row(row: Optional[Mapping[str, Any]]) -> None:
     """Add one stored cost row to the ledger, when ``RELEASE_LEDGER_ENABLED`` is on.
 
@@ -462,13 +480,9 @@ async def bump_ledger_for_row(row: Optional[Mapping[str, Any]]) -> None:
     if not row:
         return
     try:
-        from apis.shared.feature_flags import release_ledger_enabled
-
-        if not release_ledger_enabled():
+        if not live_ledger_writes_on():
             return
-        table_name = os.environ.get(ROLLUP_TABLE_ENV)
-        if not table_name:
-            return
+        table_name = os.environ[ROLLUP_TABLE_ENV]
         from apis.shared.aws_clients import get_dynamodb_table
 
         await write_ledger_updates(ledger_updates(row), get_dynamodb_table(table_name))
