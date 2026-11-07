@@ -112,6 +112,7 @@ export interface AppConfig {
   releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
+  converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
@@ -922,6 +923,23 @@ export interface ReleaseLedgerConfig {
  * none of the V2 payload budget. No resources, and nothing reaches the prompt.
  */
 export interface WebSearchDefaultMaxResultsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Documents as text on Converse. On, the per-call document projection the
+ * Runtime installs on every Bedrock Converse model sends each non-PDF
+ * attachment (docx, txt, md, csv, html) as text the deployment rendered,
+ * instead of a Bedrock `document` block; PDFs stay native. There is then no
+ * five-document limit to reach. The stored conversation is unchanged.
+ * **Opt-in while in development**: off unless
+ * CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED=true (or a
+ * `converseDocumentsAsText.enabled: true` cdk.json context). A feature switch
+ * once finished. Sets CONVERSE_DOCUMENTS_AS_TEXT_ENABLED on the AgentCore
+ * Runtime only, and **only while on**, so the default spends none of the V2
+ * payload budget. No resources.
+ */
+export interface ConverseDocumentsAsTextConfig {
   enabled: boolean;
 }
 
@@ -1891,6 +1909,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
         ? process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('webSearchDefaultMaxResults')?.enabled ?? false,
+    },
+    converseDocumentsAsText: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED
+        ? process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('converseDocumentsAsText')?.enabled ?? false,
     },
     projectFileReadiness: {
       // In development: only "true" enables, and an unset GitHub variable

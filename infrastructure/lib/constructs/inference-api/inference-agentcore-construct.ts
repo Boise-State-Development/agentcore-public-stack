@@ -431,6 +431,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         ...(config.webSearchDefaultMaxResults.enabled
           ? { WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: 'true' }
           : {}),
+        // Documents as text: non-PDF attachments reach a Converse model as
+        // rendered text, not document blocks. Written only while ON, so the
+        // default costs nothing against the V2 payload budget.
+        ...(config.converseDocumentsAsText.enabled ? { CONVERSE_DOCUMENTS_AS_TEXT_ENABLED: 'true' } : {}),
         // Project file readiness: a project turn names the files the model cannot
         // see yet. Written only while ON, so the default costs nothing against
         // the V2 payload budget.

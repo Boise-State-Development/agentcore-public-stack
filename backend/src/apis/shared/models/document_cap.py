@@ -36,17 +36,52 @@ The fix is a projection at the model seam, per request, beside
   documents are the ones converted. A converted block never reached the model
   as a document, because that request failed, so no cached prefix holds it.
 
-A replaced block becomes a text block with the document's text, from the same
-extractors ``document_read`` uses: UTF-8 for txt, md, csv and html, and
-``docx_paragraphs`` for docx. Bedrock turns a non-PDF document into text before
-the model sees it, so the model reads nearly the same content. Formats without
-a pure extractor (doc, xls, xlsx), and a docx that will not parse, become a
-one-line stub that names the document.
+A replaced block becomes a text block with the document's text: UTF-8 for
+txt, md and csv, ``html_markdown`` for html, and ``docx_markdown`` for docx
+(falling back to ``docx_paragraphs`` if that renderer cannot read the file).
+Formats without a pure extractor (doc, xls, xlsx), and a docx that will not
+parse, become a one-line stub that names the document.
+
+Documents as text (``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED``, in development)
+--------------------------------------------------------------------------
+
+With the flag on, the same projection sends **every** non-PDF document it can
+render as text, not just the ones past the fifth, the way Claude's own product
+treats files: PDFs stay native document blocks (Claude reads their pages),
+everything else is text the deployment rendered. There is then no
+document-count limit to reach, and the rendering is ours to improve. A
+document with no renderer stays a native block and still counts toward the
+cap.
+
+Measured on dev (2026-11-06, Haiku 4.5 and Opus 5.5, Converse, two to three
+trials per question): a native docx block and ``docx_markdown`` text answered
+the same table, list and tracked-change questions equally (markdown slightly
+ahead on nested lists, where Bedrock's own conversion drops the nesting), at
+input tokens within a few percent of each other. ``docx_paragraphs`` text did
+not: a table with blank cells lost its column alignment and both models gave
+wrong or no values for 13 of 18 lookups. That is why the cap path renders
+through ``docx_markdown`` too. Raw HTML cost 12x the native block's tokens, so
+html goes through ``html_markdown``. See the PR that introduced the flag for
+the full table.
+
+The stored conversation is unchanged either way: the user message keeps its
+document block, so the attachment card, restore's digest swap, offload's
+upload matching and the share and handoff views all see what they always saw.
+Only the request carries text.
+
+Rendering happens at most once per document per process. The text is
+memoized by the bytes' content (their hash, confirmed by equality), so the
+inference route renders a turn's new attachments in worker threads before the
+agent runs (``prerender_document_text``), and the projection on the event loop
+finds the text ready. A miss, after eviction for example, renders in place and
+gives the same text.
 """
 
 from __future__ import annotations
 
 import logging
+import sys
+import threading
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,21 +92,35 @@ logger = logging.getLogger(__name__)
 #: Non-PDF document blocks Bedrock's Converse API accepts in one request.
 CONVERSE_MAX_NON_PDF_DOCUMENTS = 5
 
+#: No cap: used when the cap's rollout switch is off but documents-as-text is on.
+UNCAPPED = sys.maxsize
+
 #: Formats that do not count toward the limit.
 _EXEMPT_FORMATS = frozenset({"pdf"})
 #: Formats whose bytes are the text.
-_TEXT_FORMATS = frozenset({"txt", "md", "csv", "html"})
+_RAW_TEXT_FORMATS = frozenset({"txt", "md", "csv"})
+#: Formats this module can render as text.
+RENDERABLE_FORMATS = frozenset(_RAW_TEXT_FORMATS | {"html", "docx"})
 
-#: Extracted text, keyed by the identity of the bytes it came from. A tool
-#: round re-sends the same request and the next turn re-sends the same history,
-#: so the same block is projected many times. The entry holds the bytes
-#: object itself. That keeps its ``id`` from being reused while the entry
-#: lives, and ``is`` proves the content is the same. Bounded by entry count
-#: and by total source bytes.
-_TEXT_CACHE: "OrderedDict[int, Tuple[bytes, str]]" = OrderedDict()
+#: Rendered text, keyed by ``(format, hash of the bytes)``. A tool round
+#: re-sends the same request and the next turn re-sends the same history, so
+#: the same block is projected many times; the inference route also renders a
+#: turn's attachments ahead of time from its own copy of the bytes. The entry
+#: holds the bytes it was rendered from and a hit is confirmed by equality
+#: (``bytes.__eq__`` short-circuits on identity, and a ``bytes`` object caches
+#: its hash), so a hash collision can never hand one document another's text.
+#: Bounded by entry count and by total source bytes. Guarded by a lock: the
+#: pre-render runs in worker threads.
+_TEXT_CACHE: "OrderedDict[Tuple[str, int], Tuple[bytes, str]]" = OrderedDict()
 _TEXT_CACHE_MAX_ENTRIES = 32
 _TEXT_CACHE_MAX_BYTES = 32 * 1024 * 1024
 _text_cache_bytes = 0
+_TEXT_CACHE_LOCK = threading.Lock()
+
+
+def _normalized_format(document: Dict[str, Any]) -> str:
+    fmt = document.get("format")
+    return fmt.strip().lower() if isinstance(fmt, str) and fmt.strip() else "txt"
 
 
 def _counts(block: Any) -> bool:
@@ -85,47 +134,93 @@ def _counts(block: Any) -> bool:
     return not (isinstance(fmt, str) and fmt.strip().lower() in _EXEMPT_FORMATS)
 
 
-def _cached_text(raw: bytes) -> Optional[str]:
-    entry = _TEXT_CACHE.get(id(raw))
-    if entry is None or entry[0] is not raw:
-        return None
-    _TEXT_CACHE.move_to_end(id(raw))
-    return entry[1]
+def _cache_key(fmt: str, raw: bytes) -> Tuple[str, int]:
+    return fmt, hash(raw)
 
 
-def _remember_text(raw: bytes, text: str) -> None:
+def _cached_text(fmt: str, raw: bytes) -> Optional[str]:
+    key = _cache_key(fmt, raw)
+    with _TEXT_CACHE_LOCK:
+        entry = _TEXT_CACHE.get(key)
+        if entry is None or entry[0] != raw:
+            return None
+        if entry[0] is not raw:
+            # Hold the caller's object from now on: the block in the live
+            # history is what every later call asks about, so its equality
+            # check becomes an identity check instead of a full compare.
+            entry = (raw, entry[1])
+            _TEXT_CACHE[key] = entry
+        _TEXT_CACHE.move_to_end(key)
+        return entry[1]
+
+
+def _remember_text(fmt: str, raw: bytes, text: str) -> None:
     global _text_cache_bytes
     if len(raw) > _TEXT_CACHE_MAX_BYTES:
         return
-    stale = _TEXT_CACHE.pop(id(raw), None)
-    if stale is not None:
-        _text_cache_bytes -= len(stale[0])
-    _TEXT_CACHE[id(raw)] = (raw, text)
-    _text_cache_bytes += len(raw)
-    while _TEXT_CACHE and (len(_TEXT_CACHE) > _TEXT_CACHE_MAX_ENTRIES or _text_cache_bytes > _TEXT_CACHE_MAX_BYTES):
-        _, (old, _) = _TEXT_CACHE.popitem(last=False)
-        _text_cache_bytes -= len(old)
+    key = _cache_key(fmt, raw)
+    with _TEXT_CACHE_LOCK:
+        stale = _TEXT_CACHE.pop(key, None)
+        if stale is not None:
+            _text_cache_bytes -= len(stale[0])
+        _TEXT_CACHE[key] = (raw, text)
+        _text_cache_bytes += len(raw)
+        while _TEXT_CACHE and (len(_TEXT_CACHE) > _TEXT_CACHE_MAX_ENTRIES or _text_cache_bytes > _TEXT_CACHE_MAX_BYTES):
+            _, (old, _) = _TEXT_CACHE.popitem(last=False)
+            _text_cache_bytes -= len(old)
 
 
-def _extract_text(fmt: str, raw: bytes) -> Optional[str]:
-    """The document's text, or ``None`` when there is no pure extractor for it."""
-    if fmt in _TEXT_FORMATS:
+def _render(fmt: str, raw: bytes) -> Optional[str]:
+    if fmt in _RAW_TEXT_FORMATS:
         return raw.decode("utf-8", errors="replace")
+    if fmt == "html":
+        from apis.shared.files.html_markdown import html_to_markdown
+
+        return html_to_markdown(raw.decode("utf-8", errors="replace"))
     if fmt != "docx":
         return None
-    cached = _cached_text(raw)
-    if cached is not None:
-        return cached
-    # Imported here: document_read is a large module and this path is rare.
+    # Imported here: the document modules are large and the cap path is rare.
+    from apis.shared.files.docx_markdown import docx_to_markdown
+
+    try:
+        return docx_to_markdown(raw)
+    except Exception:  # noqa: BLE001 — try the plain extractor before giving up
+        logger.info("document_cap: docx_markdown could not render a docx; trying docx_paragraphs", exc_info=True)
     from apis.shared.files.document_read import docx_paragraphs
 
     try:
-        text = "\n\n".join(docx_paragraphs(raw))
+        return "\n\n".join(docx_paragraphs(raw))
     except Exception:  # noqa: BLE001 — a corrupt file becomes a stub, never a failed turn
         logger.info("document_cap: a docx block did not parse; sending a stub", exc_info=True)
         return None
-    _remember_text(raw, text)
+
+
+def _extract_text(fmt: str, raw: Any) -> Optional[str]:
+    """The document's text, or ``None`` when there is no renderer for it."""
+    if fmt not in RENDERABLE_FORMATS or not isinstance(raw, (bytes, bytearray)):
+        return None
+    raw = bytes(raw) if isinstance(raw, bytearray) else raw
+    cached = _cached_text(fmt, raw)
+    if cached is not None:
+        return cached
+    text = _render(fmt, raw)
+    if text is not None:
+        _remember_text(fmt, raw, text)
     return text
+
+
+def prerender_document_text(fmt: str, raw: bytes) -> bool:
+    """Render ``raw`` now so a later projection of the same bytes is a cache hit.
+
+    For the inference route, which calls it in a worker thread for each of a
+    turn's new non-PDF attachments, so the parse never runs on the event loop.
+    Returns whether there is text for it. Never raises.
+    """
+    try:
+        return _extract_text((fmt or "").strip().lower(), raw) is not None
+    except Exception:  # noqa: BLE001 - the projection renders it again in place
+        logger.info("document_cap: pre-render failed", exc_info=True)
+        return False
 
 
 def _display_name(document: Dict[str, Any]) -> str:
@@ -133,50 +228,85 @@ def _display_name(document: Dict[str, Any]) -> str:
     return name.strip() if isinstance(name, str) and name.strip() else "document"
 
 
-def render_document_as_text(document: Dict[str, Any]) -> str:
-    """The text block that stands in for one document block. Pure: same block, same text."""
-    name = _display_name(document)
-    fmt_value = document.get("format")
-    fmt = fmt_value.strip().lower() if isinstance(fmt_value, str) and fmt_value.strip() else "txt"
+def _envelope(name: str, fmt: str, text: str) -> str:
+    # A document cannot end its own envelope early.
+    body = text.replace("</document", "<\\/document")
+    quoted = name.replace('"', "'")
+    return f'<document name="{quoted}" format="{fmt}">\n{body}\n</document>'
+
+
+def _stub(name: str, fmt: str) -> str:
+    return (
+        f'[Document "{name}" ({fmt}) is not shown here. A request can carry at most '
+        f"{CONVERSE_MAX_NON_PDF_DOCUMENTS} non-PDF documents, and earlier messages already "
+        "carry that many. If the file is in this session, a file tool may still read it.]"
+    )
+
+
+def _rendered_text(document: Dict[str, Any]) -> Optional[str]:
+    """The envelope for ``document``'s text, or ``None`` with no renderer for it."""
+    fmt = _normalized_format(document)
     source = document.get("source")
     raw = source.get("bytes") if isinstance(source, dict) else None
-    text = _extract_text(fmt, raw) if isinstance(raw, (bytes, bytearray)) else None
+    text = _extract_text(fmt, raw)
     if text is None:
-        return (
-            f'[Document "{name}" ({fmt}) is not shown here. A request can carry at most '
-            f"{CONVERSE_MAX_NON_PDF_DOCUMENTS} non-PDF documents, and earlier messages already "
-            "carry that many. If the file is in this session, a file tool may still read it.]"
-        )
-    return f'<document name="{name}" format="{fmt}">\n{text}\n</document>'
+        return None
+    return _envelope(_display_name(document), fmt, text)
 
 
-def _project_block(block: Any, seen: int, limit: int) -> Tuple[Any, int]:
-    if _counts(block):
-        seen += 1
-        if seen > limit:
-            return {"text": render_document_as_text(block["document"])}, seen
-        return block, seen
-    tool_result = block.get("toolResult") if isinstance(block, dict) else None
-    if not isinstance(tool_result, dict):
-        return block, seen
-    items = tool_result.get("content")
-    if not isinstance(items, list):
-        return block, seen
-    projected, seen = _project_content(items, seen, limit)
-    if projected is items:
-        return block, seen
-    return {**block, "toolResult": {**tool_result, "content": projected}}, seen
+def render_document_as_text(document: Dict[str, Any]) -> str:
+    """The text block that stands in for one document block. Pure: same block, same text."""
+    rendered = _rendered_text(document)
+    if rendered is not None:
+        return rendered
+    return _stub(_display_name(document), _normalized_format(document))
 
 
-def _project_content(content: List[Any], seen: int, limit: int) -> Tuple[List[Any], int]:
-    replaced: Optional[List[Any]] = None
-    for i, block in enumerate(content):
-        projected, seen = _project_block(block, seen, limit)
-        if projected is not block:
-            if replaced is None:
-                replaced = list(content)
-            replaced[i] = projected
-    return (content if replaced is None else replaced), seen
+class _Pass:
+    """One projection pass: ``seen`` counts the documents that stay native and
+    count toward the cap; ``capped`` and ``as_text`` count replacements."""
+
+    __slots__ = ("limit", "as_text", "seen", "capped", "rendered")
+
+    def __init__(self, limit: int, as_text: bool) -> None:
+        self.limit = limit
+        self.as_text = as_text
+        self.seen = 0
+        self.capped = 0
+        self.rendered = 0
+
+    def block(self, block: Any) -> Any:
+        if _counts(block):
+            if self.as_text:
+                rendered = _rendered_text(block["document"])
+                if rendered is not None:
+                    self.rendered += 1
+                    return {"text": rendered}
+            self.seen += 1
+            if self.seen > self.limit:
+                self.capped += 1
+                return {"text": render_document_as_text(block["document"])}
+            return block
+        tool_result = block.get("toolResult") if isinstance(block, dict) else None
+        if not isinstance(tool_result, dict):
+            return block
+        items = tool_result.get("content")
+        if not isinstance(items, list):
+            return block
+        projected = self.content(items)
+        if projected is items:
+            return block
+        return {**block, "toolResult": {**tool_result, "content": projected}}
+
+    def content(self, content: List[Any]) -> List[Any]:
+        replaced: Optional[List[Any]] = None
+        for i, block in enumerate(content):
+            projected = self.block(block)
+            if projected is not block:
+                if replaced is None:
+                    replaced = list(content)
+                replaced[i] = projected
+        return content if replaced is None else replaced
 
 
 def _count_over(messages: List[Any], limit: int) -> int:
@@ -215,34 +345,47 @@ def _count_over(messages: List[Any], limit: int) -> int:
     return total
 
 
-def project_document_cap(messages: List[Any], limit: int = CONVERSE_MAX_NON_PDF_DOCUMENTS) -> List[Any]:
+def project_document_cap(
+    messages: List[Any],
+    limit: int = CONVERSE_MAX_NON_PDF_DOCUMENTS,
+    *,
+    as_text: bool = False,
+) -> List[Any]:
     """``messages`` with every non-PDF document after the first ``limit`` replaced by text.
 
-    Returns ``messages`` itself when it carries ``limit`` or fewer. Otherwise
+    With ``as_text``, every non-PDF document that has a renderer is replaced by
+    its text first, and only the rest count toward ``limit``.
+
+    Returns ``messages`` itself when there is nothing to replace. Otherwise
     returns a new list that shares every untouched message with the input.
     """
-    if _count_over(messages, limit) <= limit:
+    if _count_over(messages, 0 if as_text else limit) <= (0 if as_text else limit):
         return messages
-    seen = 0
+    projection = _Pass(limit, as_text)
     replaced: Optional[List[Any]] = None
     for i, message in enumerate(messages):
         content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
-        projected, seen = _project_content(content, seen, limit)
+        projected = projection.content(content)
         if projected is not content:
             if replaced is None:
                 replaced = list(messages)
             replaced[i] = {**message, "content": projected}
-    if replaced is not None:
+    if projection.capped:
         logger.info(
             "document_cap: %d non-PDF documents in the request; %d sent as text",
-            seen,
-            seen - limit,
+            projection.seen,
+            projection.capped,
         )
     return messages if replaced is None else replaced
 
 
-def converse_document_cap(model: Any) -> Any:
+def converse_document_cap(
+    model: Any,
+    *,
+    limit: int = CONVERSE_MAX_NON_PDF_DOCUMENTS,
+    as_text: bool = False,
+) -> Any:
     """Make ``model`` see its message history through the document-cap projection."""
-    return project_model_history(model, project_document_cap)
+    return project_model_history(model, lambda messages: project_document_cap(messages, limit, as_text=as_text))

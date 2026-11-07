@@ -257,6 +257,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     webSearchDefaultMaxResults: {
       enabled: false,
     },
+    converseDocumentsAsText: {
+      enabled: false,
+    },
     projectFileReadiness: {
       enabled: false,
     },
