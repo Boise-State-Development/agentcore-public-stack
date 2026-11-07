@@ -424,6 +424,11 @@ export function buildAppApiEnvironment(
     // so only "true" enables.
     SOURCE_PROVENANCE_ENABLED: config.sourceProvenance.enabled ? 'true' : 'false',
 
+    // Release ledger writes (docs/specs/release-ledger.md §5.2). app-api's share
+    // is the api-converse cost rows it writes; the Runtime writes the rest. In
+    // development, so only "true" enables.
+    RELEASE_LEDGER_ENABLED: config.releaseLedger.enabled ? 'true' : 'false',
+
     // Typed structured extraction (docs/specs/structured-extraction.md).
     // app-api's share is the read side: `GET /messages` replays the stored
     // `EXTR#` rows, which the SSE event does not re-stream. In development, so

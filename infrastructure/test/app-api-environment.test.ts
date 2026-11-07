@@ -150,6 +150,14 @@ describe('buildAppApiEnvironment — source provenance', () => {
   });
 });
 
+describe('buildAppApiEnvironment — release ledger', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).RELEASE_LEDGER_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ releaseLedger: { enabled: true } }), stubParams());
+    expect(on.RELEASE_LEDGER_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — client turn timing', () => {
   it('forwards the flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).CLIENT_TURN_TIMING_ENABLED).toBe('false');

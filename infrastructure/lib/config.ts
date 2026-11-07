@@ -109,6 +109,7 @@ export interface AppConfig {
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
   sourceProvenance: SourceProvenanceConfig;
+  releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
@@ -886,6 +887,23 @@ export interface FolderSyncConfig {
  * SessionLookupIndex GSI.
  */
 export interface SourceProvenanceConfig {
+  enabled: boolean;
+}
+
+/**
+ * Release ledger writes (docs/specs/release-ledger.md §5.2, D8): each model
+ * call's cost row also `ADD`s itself into version-keyed `LEDGER#VERSION` /
+ * `#MODEL` / `#TOOL` / `#AGENT` / `#PROJECT` rollups in the existing
+ * system-cost-rollup table, after the stream and beside the `ROLLUP#` bumps.
+ * **Opt-in while in development**: off unless CDK_RELEASE_LEDGER_ENABLED=true
+ * (or a `releaseLedger.enabled: true` cdk.json context). A feature switch once
+ * finished: the writes are a per-call cost a deployment may decline. Sets
+ * RELEASE_LEDGER_ENABLED on app-api (api-converse rows) and on the AgentCore
+ * Runtime (every chat, voice, brief and extraction row), the Runtime copy
+ * **only while on**, so the default spends none of the V2 payload budget. No
+ * resources and no IAM: both roles already hold UpdateItem on the table.
+ */
+export interface ReleaseLedgerConfig {
   enabled: boolean;
 }
 
@@ -1859,6 +1877,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SOURCE_PROVENANCE_ENABLED
         ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
+    },
+    releaseLedger: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_RELEASE_LEDGER_ENABLED
+        ? process.env.CDK_RELEASE_LEDGER_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('releaseLedger')?.enabled ?? false,
     },
     webSearchDefaultMaxResults: {
       // In development: only "true" enables, and an unset GitHub variable
