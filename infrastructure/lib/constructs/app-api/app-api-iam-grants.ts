@@ -432,6 +432,20 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       // rather than in a managed policy of its own because the stack is a few
       // resources under its ceiling (platform-ceilings.test.ts).
       ...(config.awsLimits.enabled ? awsLimitsStatements(config) : []),
+      // Release ledger (docs/specs/release-ledger.md §6.1): the readout's TTFT
+      // percentiles come from the dimensionless TurnLatency metrics at read
+      // time. Only while CDK_RELEASE_LEDGER_ENABLED is on; GetMetricData has no
+      // resource-level permissions. Same policy, same reasons as AWS Limits.
+      ...(config.releaseLedger.enabled
+        ? [
+            new iam.PolicyStatement({
+              sid: 'ReleaseLedgerMetricsRead',
+              effect: iam.Effect.ALLOW,
+              actions: ['cloudwatch:GetMetricData'],
+              resources: ['*'],
+            }),
+          ]
+        : []),
     ],
   });
 

@@ -1031,6 +1031,12 @@ from .costs.routes import router as costs_router
 
 router.include_router(costs_router)
 
+# Release ledger (docs/specs/release-ledger.md §6.1): admin.costs, and 404s
+# while RELEASE_LEDGER_ENABLED is off (auth first).
+from .costs.ledger_routes import router as costs_ledger_router
+
+router.include_router(costs_ledger_router)
+
 # ========== Include Feedback Eval-Sampling Subrouter ==========
 from .feedback.routes import router as feedback_admin_router
 

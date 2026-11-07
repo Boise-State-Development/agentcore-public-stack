@@ -228,7 +228,7 @@ export class FleetFeedbackPage {
   /** Dimensions in a fixed order, so the page does not reshuffle between loads. */
   readonly dimensions = computed(() => {
     const arms = this.fleetResource.hasValue() ? this.fleetResource.value().arms : {};
-    const order = ['model', 'callsSinceCompaction', 'agentSwitch', 'turnClass'];
+    const order = ['model', 'callsSinceCompaction', 'agentSwitch', 'turnClass', 'version'];
     const known = order.filter(key => key in arms);
     const extra = Object.keys(arms).filter(key => !order.includes(key)).sort();
     return [...known, ...extra].map(key => ({ key, arms: arms[key] ?? [] }));
