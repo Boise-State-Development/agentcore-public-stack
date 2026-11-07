@@ -9,6 +9,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
+from apis.shared.models.assistant_prefill import is_continuation_prompt
+
 # Relative imports from shared sessions module
 from .models import Message, MessageContent, MessageResponse, MessagesListResponse, MessageMetadata, Citation
 
@@ -230,8 +232,16 @@ def _convert_message_to_response(msg: Message, session_id: str, sequence_number:
                     logger.warning(f"Failed to parse citations for message {computed_id}: {e}")
                     citations = None
 
+    continuation = is_continuation_prompt(msg.role, [block.text if block.type == "text" else None for block in msg.content])
+
     return MessageResponse(
-        id=computed_id, role=msg.role, content=msg.content, created_at=msg.timestamp or "", metadata=metadata_dict, citations=citations
+        id=computed_id,
+        role=msg.role,
+        content=msg.content,
+        created_at=msg.timestamp or "",
+        metadata=metadata_dict,
+        citations=citations,
+        continuation=True if continuation else None,
     )
 
 

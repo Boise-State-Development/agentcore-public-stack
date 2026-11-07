@@ -131,13 +131,16 @@ import { shortcutAria, withShortcut } from '../../../../components/shortcuts/sho
            the answer is incomplete and offer the only way to finish it, which
            a user has to be able to see without knowing to hover. -->
       @if (canContinue()) {
-        <span class="pl-1 text-xs text-gray-500 dark:text-gray-400">
-          Response length limit reached
+        <!-- Says what happened and what Continue does: the cut is the model's
+             output cap, not an error, and Continue resumes rather than
+             starting over. -->
+        <span class="pl-1 text-xs text-gray-500 dark:text-gray-400" data-testid="max-tokens-notice">
+          Cut off at the model's output limit. Continue picks up where it stopped.
         </span>
         <button
           type="button"
           class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-primary-accessible transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
-          appTooltip="Resume response"
+          appTooltip="Pick up where the answer stopped"
           appTooltipPosition="top"
           aria-label="Continue the truncated response"
           (click)="onContinue()"

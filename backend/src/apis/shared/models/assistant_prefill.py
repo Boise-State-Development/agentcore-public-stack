@@ -121,3 +121,18 @@ def continuation_prompt(
     if model_accepts_assistant_prefill(model_id, provider):
         return prompt
     return CONTINUATION_PROMPT
+
+
+def is_continuation_prompt(role: Optional[str], texts: List[Optional[str]]) -> bool:
+    """Whether a stored message is the user turn a continuation sent.
+
+    ``texts`` are the message's content blocks' text, ``None`` for a block
+    that is not text. True only for a user message that holds exactly
+    ``CONTINUATION_PROMPT`` and nothing else, so a person who happens to type
+    the same words alongside anything else (another block, an attachment) is
+    never hidden. The SPA renders a match as part of the answer it continues
+    rather than as something the user said.
+    """
+    if role != "user" or len(texts) != 1:
+        return False
+    return texts[0] == CONTINUATION_PROMPT
