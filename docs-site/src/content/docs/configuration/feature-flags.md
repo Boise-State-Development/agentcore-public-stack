@@ -287,6 +287,8 @@ for the authoritative list and defaults:
   `CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES` (1 GB),
   `CDK_MANAGED_KB_PER_KB_CEILING_BYTES` (500 MB), plus fleet alarms
   `CDK_MANAGED_KB_STORAGE_ALARM_GB` / `CDK_MANAGED_KB_DAILY_COST_ALARM_USD`.
+- **Knowledge-base file size**: `CDK_KB_UPLOAD_MAX_FILE_BYTES` (50 MB, at most
+  that; classic knowledge bases stay at 20 MB). `10485760` keeps the old 10 MB.
 - **Observability thresholds**: log retention, X-Ray sampling, ALB/Lambda/ECS
   alarm thresholds, per-model Bedrock TPM quotas — all `CDK_OBSERVABILITY_*`.
 - **App-API sizing**: `CDK_APP_API_CPU` / `_MEMORY` / `_DESIRED_COUNT` /

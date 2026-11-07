@@ -568,6 +568,10 @@ describe('KbMigrationConstruct — flags reach every function', () => {
     expect(env(p).MANAGED_KB_PER_OWNER_DEFAULT_BYTES).toBe(String(100 * 1024 * 1024));
     expect(env(p).MANAGED_KB_PER_OWNER_ELEVATED_BYTES).toBe(String(1024 * 1024 * 1024));
     expect(env(p).MANAGED_KB_PER_KB_CEILING_BYTES).toBe(String(500 * 1024 * 1024));
+    // The ingestion consumer holds each stored object to the per-file limit.
+    expect(env(lambdaFor(t, HANDLERS.ingestionConsumer)).KB_UPLOAD_MAX_FILE_BYTES).toBe(
+      String(50 * 1024 * 1024),
+    );
     // KB_MIGRATION_RETAIN_DAYS, not MANAGED_KB_RETENTION_WINDOW_DAYS. This
     // assertion previously pinned the latter — which the construct set and
     // `worker._retain_days()` never read, so it confirmed the construct against

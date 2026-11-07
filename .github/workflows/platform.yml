@@ -533,6 +533,9 @@ jobs:
       CDK_MANAGED_KB_PER_OWNER_BYTES: ${{ vars.CDK_MANAGED_KB_PER_OWNER_BYTES }}
       CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES: ${{ vars.CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES }}
       CDK_MANAGED_KB_PER_KB_CEILING_BYTES: ${{ vars.CDK_MANAGED_KB_PER_KB_CEILING_BYTES }}
+      # Largest single knowledge-base file, in BYTES. Default 52428800 (50 MiB),
+      # at most that (Bedrock's per-file limit); 10485760 restores the old 10 MB.
+      CDK_KB_UPLOAD_MAX_FILE_BYTES: ${{ vars.CDK_KB_UPLOAD_MAX_FILE_BYTES }}
       CDK_MANAGED_KB_RETENTION_WINDOW_DAYS: ${{ vars.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS }}
       # Fleet-level alarm thresholds (Requirement 12.13). The Byte_Caps above
       # bound ONE owner; these two bound the whole account, which is the gap

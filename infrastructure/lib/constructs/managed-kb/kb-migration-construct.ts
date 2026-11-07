@@ -243,6 +243,9 @@ export class KbMigrationConstruct extends Construct {
       MANAGED_KB_PER_OWNER_DEFAULT_BYTES: String(managedKb.perOwnerDefaultBytes),
       MANAGED_KB_PER_OWNER_ELEVATED_BYTES: String(managedKb.perOwnerElevatedBytes),
       MANAGED_KB_PER_KB_CEILING_BYTES: String(managedKb.perKnowledgeBaseCeilingBytes),
+      // The ingestion consumer holds each stored object to the per-file limit
+      // before submitting it; the presign check only saw the declared size.
+      KB_UPLOAD_MAX_FILE_BYTES: String(managedKb.uploadMaxFileBytes),
       // Read by worker._retain_days(). The MANAGED_KB_ spelling was published and
       // read by nothing, so Requirement 15.11's configured window was silently
       // replaced by the code's 30-day floor.

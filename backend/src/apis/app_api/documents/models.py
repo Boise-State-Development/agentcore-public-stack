@@ -92,7 +92,7 @@ class CreateDocumentRequest(BaseModel):
 
     filename: str = Field(..., description="Original filename")
     content_type: str = Field(..., alias="contentType", description="MIME type")
-    size_bytes: int = Field(..., alias="sizeBytes", description="File size in bytes")
+    size_bytes: int = Field(..., alias="sizeBytes", ge=0, description="File size in bytes")
 
 
 class UploadUrlResponse(BaseModel):
@@ -159,6 +159,14 @@ class KbUsage(BaseModel):
         description="Binding byte cap (min of owner tier and per-KB ceiling); null for uncapped legacy KBs",
     )
     elevated: bool = Field(False, description="Whether the elevated owner tier applies")
+    max_file_bytes: Optional[int] = Field(
+        None,
+        alias="maxFileBytes",
+        description=(
+            "Largest single file this knowledge base accepts, in bytes "
+            "(KB_UPLOAD_MAX_FILE_BYTES; 20 MiB on the classic engine)"
+        ),
+    )
 
 
 class DocumentsListResponse(BaseModel):

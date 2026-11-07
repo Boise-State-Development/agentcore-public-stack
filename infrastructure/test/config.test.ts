@@ -68,6 +68,7 @@ const MANAGED_KB_ENV_KEYS = [
   'CDK_MANAGED_KB_PER_OWNER_BYTES',
   'CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES',
   'CDK_MANAGED_KB_PER_KB_CEILING_BYTES',
+  'CDK_KB_UPLOAD_MAX_FILE_BYTES',
   'CDK_MANAGED_KB_RETENTION_WINDOW_DAYS',
 ] as const;
 
@@ -1600,6 +1601,30 @@ describe('RAG Ingestion Configuration', () => {
       expect(managedKb.perOwnerDefaultBytes).toBe(52428800);
       expect(managedKb.perOwnerElevatedBytes).toBe(2147483648);
       expect(managedKb.perKnowledgeBaseCeilingBytes).toBe(262144000);
+    });
+
+    test('the per-file upload limit defaults to 50 MiB', () => {
+      expect(loadConfig(app).managedKb.uploadMaxFileBytes).toBe(52428800);
+    });
+
+    test('the per-file upload limit is overridable, e.g. back to the old 10 MB', () => {
+      process.env.CDK_KB_UPLOAD_MAX_FILE_BYTES = '10485760';
+      expect(loadConfig(app).managedKb.uploadMaxFileBytes).toBe(10485760);
+    });
+
+    test('the per-file upload limit arrives via the flat dotted context key too', () => {
+      app.node.setContext('managedKb.uploadMaxFileBytes', '20971520');
+      expect(loadConfig(app).managedKb.uploadMaxFileBytes).toBe(20971520);
+    });
+
+    test('a per-file upload limit above Bedrock\'s 50 MiB fails synth', () => {
+      process.env.CDK_KB_UPLOAD_MAX_FILE_BYTES = String(50 * 1024 * 1024 + 1);
+      expect(() => loadConfig(app)).toThrow(/CDK_KB_UPLOAD_MAX_FILE_BYTES/);
+    });
+
+    test('a non-positive per-file upload limit fails synth', () => {
+      process.env.CDK_KB_UPLOAD_MAX_FILE_BYTES = '0';
+      expect(() => loadConfig(app)).toThrow(/CDK_KB_UPLOAD_MAX_FILE_BYTES/);
     });
 
     test('a Byte_Cap override arrives via the flat dotted context key too', () => {
