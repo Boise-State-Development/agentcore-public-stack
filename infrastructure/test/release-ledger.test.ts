@@ -4,9 +4,10 @@
  *     that leaves it off spends none of the V2 environment budget;
  *   - app-api always carries it ('false' by default), since it writes the
  *     api-converse cost rows;
- *   - turning it on changes no IAM and adds no resource: the `LEDGER#` rows
- *     live in the existing system-cost-rollup table, and both roles already
- *     hold UpdateItem on it.
+ *   - turning it on adds no resource, and one IAM statement: the `LEDGER#`
+ *     rows live in the existing system-cost-rollup table, which both roles
+ *     already read and write, and app-api gains `cloudwatch:GetMetricData`
+ *     for the readout's TTFT percentiles (§6.1), on a policy that exists.
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -58,10 +59,22 @@ describe('release ledger wiring', () => {
     expect(appApiEnv(on).RELEASE_LEDGER_ENABLED).toBe('true');
   });
 
-  it('changes no IAM when turned on', () => {
-    const policies = (t: Template) =>
-      ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy'].map((type) => JSON.stringify(t.findResources(type)));
-    expect(policies(on)).toEqual(policies(off));
+  it('adds exactly one IAM statement when turned on: GetMetricData for the readout', () => {
+    const statements = (t: Template) => {
+      const out: any[] = [];
+      for (const type of ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy']) {
+        for (const resource of Object.values(t.findResources(type)) as any[]) {
+          out.push(...resource.Properties.PolicyDocument.Statement);
+        }
+      }
+      return out;
+    };
+    const offSids = new Set(statements(off).map((s) => JSON.stringify(s)));
+    const added = statements(on).filter((s) => !offSids.has(JSON.stringify(s)));
+    expect(added).toEqual([
+      { Sid: 'ReleaseLedgerMetricsRead', Effect: 'Allow', Action: 'cloudwatch:GetMetricData', Resource: '*' },
+    ]);
+    expect(statements(on)).toHaveLength(statements(off).length + 1);
   });
 
   it('adds no resource', () => {

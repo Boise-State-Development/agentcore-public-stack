@@ -247,7 +247,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     skills: { enabled: true },
     skillAuthoring: { enabled: true },
     wordTrackedChanges: { enabled: true },
-    assistantKbFullContext: { enabled: true },
+    assistantKbFullContext: { enabled: true, maxTokens: 80_000 },
+    agentKnowledgeFiles: { enabled: true },
     // Large documents gate the next two: synth refuses either without it.
     largeDocumentAttachments: { enabled: true },
     attachmentKb: { enabled: true },
@@ -259,7 +260,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     sourceProvenance: { enabled: true },
     // The release ledger adds no resources either — `LEDGER#` rows on the
     // existing system-cost-rollup table — so it is here for the Runtime's
-    // environment-variable ceiling and flag coverage.
+    // environment-variable ceiling, flag coverage, and its one statement
+    // (`ReleaseLedgerMetricsRead`) on the managed policy AWS Limits shares.
     releaseLedger: { enabled: true },
     // Structured extraction adds no resources either — `EXTR#` rows on the
     // existing sessions-metadata table, an artifact through the existing
@@ -270,6 +272,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },
+    wordSkillScripts: { enabled: true },
     // Documents as text: one Runtime variable, written only while on.
     converseDocumentsAsText: { enabled: true },
     // Project file readiness: one Runtime variable, written only while on.

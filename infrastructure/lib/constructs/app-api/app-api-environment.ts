@@ -253,6 +253,10 @@ export function buildAppApiEnvironment(
     MANAGED_KB_PER_OWNER_DEFAULT_BYTES: String(config.managedKb.perOwnerDefaultBytes),
     MANAGED_KB_PER_OWNER_ELEVATED_BYTES: String(config.managedKb.perOwnerElevatedBytes),
     MANAGED_KB_PER_KB_CEILING_BYTES: String(config.managedKb.perKnowledgeBaseCeilingBytes),
+    // Per-file knowledge-base upload limit, enforced at presign and import and
+    // returned to the SPA as `kbUsage.maxFileBytes`. The managed ingestion
+    // consumer holds stored objects to the same value (kb-migration-construct.ts).
+    KB_UPLOAD_MAX_FILE_BYTES: String(config.managedKb.uploadMaxFileBytes),
     // Gates the owner-facing upgrade offer (Requirement 23.1), which is served by
     // THIS task — `apis/app_api/kb_upgrade/service.py` reads this exact variable.
     //
@@ -435,6 +439,13 @@ export function buildAppApiEnvironment(
     // only "true" enables. The model id is deliberately NOT set here — app-api
     // never makes the extraction call.
     DOCUMENT_EXTRACT_ENABLED: config.documentExtract.enabled ? 'true' : 'false',
+
+    // Assistant KB full-context mode. app-api never sends a knowledge base to a
+    // model; its share is `GET /assistants/{id}/knowledge-base/mode`, which tells
+    // an Agent's author which mode the Runtime runs it in, and so must see the
+    // Runtime's flag and budget. In development, so only "true" enables.
+    ASSISTANT_KB_FULL_CONTEXT_ENABLED: config.assistantKbFullContext.enabled ? 'true' : 'false',
+    ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS: String(config.assistantKbFullContext.maxTokens),
     ...(params.largeDocumentPrepareQueueUrl
       ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
       : {}),

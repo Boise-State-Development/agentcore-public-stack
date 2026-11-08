@@ -72,6 +72,10 @@ RUN useradd -m -u 1000 -s /bin/bash appuser
 # is the regression guard; if it fails, this image stops booting.
 COPY --from=builder /app/.venv /app/.venv
 COPY backend/src /app/src
+# The committed per-tool spec-token measurement, read by the release ledger's
+# tools table (apis/shared/costs/ledger_reader.spec_tokens resolves
+# /app/evals/ from /app/src/). Hashed as a manifest in build-one.sh.
+COPY backend/evals/tool_spec_tokens.json /app/evals/tool_spec_tokens.json
 
 # Precompile our own source the same way the venv was (see UV_COMPILE_BYTECODE
 # above). `-q` keeps the layer log quiet; a syntax error still fails the build,

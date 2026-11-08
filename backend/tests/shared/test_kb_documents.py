@@ -137,6 +137,20 @@ class TestText:
         assert kd.kb_document_text(over, "text", 100) is None
         assert kd.kb_document_text(empty, "text", 100) is None
 
+    def test_the_extract_tells_too_long_from_no_text_by_the_whole_length(self, kb):
+        over = kb.add("d1", "long.txt", "x" * 500)
+        empty = kb.add("d2", "empty.txt", "   ")
+        short = kb.add("d3", "short.txt", "  alpha  ")
+        assert kd.kb_document_extract(over, "text", 100) == kd.KbDocumentText(None, 500)
+        assert kd.kb_document_extract(empty, "text", 100) == kd.KbDocumentText(None, 0)
+        assert kd.kb_document_extract(short, "text", 100) == kd.KbDocumentText("alpha", 5)
+
+    def test_the_length_comes_from_the_same_read_as_the_text(self, kb):
+        doc = kb.add("d1", "long.txt", "x" * 500)
+        assert kd.kb_document_text(doc, "text", 100) is None
+        with patch("apis.shared.aws_clients.get_client", side_effect=AssertionError("downloaded again")):
+            assert kd.kb_document_extract(doc, "text", 100).chars == 500
+
     def test_the_cache_is_bounded(self, kb, monkeypatch):
         monkeypatch.setattr(kd, "TEXT_CACHE_MAX_ENTRIES", 2)
         docs = [kb.add(f"d{i}", f"f{i}.txt", f"text {i}") for i in range(3)]

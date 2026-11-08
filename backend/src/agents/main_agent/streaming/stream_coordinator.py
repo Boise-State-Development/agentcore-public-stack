@@ -121,6 +121,23 @@ def _memory_extraction_of(main_agent_wrapper: Any) -> bool:
     return getattr(manager, "memory_extraction", True) is not False
 
 
+def _model_provider_value(model_config: Any) -> Optional[str]:
+    """The ``ModelProvider`` value the turn's model runs on, or ``None`` if unknown.
+
+    ``get_provider`` is the detection ``AgentFactory`` builds the model from,
+    so a continuation is judged by the transport it is actually sent over.
+    """
+    get_provider = getattr(model_config, "get_provider", None)
+    if not callable(get_provider):
+        return None
+    try:
+        provider = get_provider()
+    except Exception:  # noqa: BLE001 — an unreadable config keeps the model-id rule alone
+        logger.debug("Could not resolve the model provider for a continuation", exc_info=True)
+        return None
+    return getattr(provider, "value", provider) or None
+
+
 def _record_model_read_timeout(
     error_text: str, main_agent_wrapper: Any, session_id: Optional[str]
 ) -> None:
@@ -449,21 +466,27 @@ class StreamCoordinator:
         # See ``reset_stale_interrupt_state``.
         reset_stale_interrupt_state(agent, prompt)
 
-        # A "Continue" (empty-list prompt) on a model that refuses assistant
-        # prefill (Claude 4.6+) would end the request on the partial assistant
-        # message and fail on every retry. Send a fixed user turn instead.
+        # A "Continue" (empty-list prompt) on a model that does not continue
+        # from assistant prefill would end the request on the partial assistant
+        # message: Claude 4.6+ rejects it on every retry, and a Responses-API
+        # model (GPT) starts the answer over. Send a fixed user turn instead.
         # Runs after everything above has settled the live list, and only reads
         # it: the history before the partial is unchanged.
         if isinstance(prompt, list) and not prompt:
             from apis.shared.models.assistant_prefill import continuation_prompt
 
-            _continuation_model = getattr(getattr(main_agent_wrapper, "model_config", None), "model_id", None)
-            _continued = continuation_prompt(prompt, getattr(agent, "messages", None) or [], _continuation_model)
+            _continuation_config = getattr(main_agent_wrapper, "model_config", None)
+            _continuation_model = getattr(_continuation_config, "model_id", None)
+            _continuation_provider = _model_provider_value(_continuation_config)
+            _continued = continuation_prompt(
+                prompt, getattr(agent, "messages", None) or [], _continuation_model, _continuation_provider
+            )
             if _continued is not prompt:
                 logger.info(
-                    "Continuation on %s: history ends on assistant text and the model refuses prefill; "
-                    "sending a continue turn instead",
+                    "Continuation on %s (%s): history ends on assistant text and the model does not continue "
+                    "from prefill; sending a continue turn instead",
                     _continuation_model,
+                    _continuation_provider or "bedrock",
                 )
                 prompt = _continued
         # Compaction state re-read (#751), document offload, the resets above.

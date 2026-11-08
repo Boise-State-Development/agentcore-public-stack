@@ -103,6 +103,13 @@ export interface KbUsage {
   cap: number | null;
   /** Whether the elevated owner tier applies. */
   elevated: boolean;
+  /**
+   * Largest single file this knowledge base accepts, in bytes
+   * (`KB_UPLOAD_MAX_FILE_BYTES`: 50 MiB managed by default, 20 MiB classic).
+   * The server enforces it either way; the UI uses it to refuse early and to
+   * say the number. Absent from an older API.
+   */
+  maxFileBytes?: number | null;
 }
 
 /**

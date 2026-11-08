@@ -15,7 +15,7 @@ task only and is never logged.
 
 import asyncio
 import logging
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import boto3
 
@@ -29,7 +29,8 @@ from apis.app_api.documents.services.storage_service import (
     _sanitize_filename,
 )
 from apis.app_api.file_sources.adapter import FileSourceAdapter
-from apis.app_api.file_sources.models import FileSourceError
+from apis.app_api.file_sources.models import FileSourceError, FileSourceTooLargeError
+from apis.shared.kb_backend import upload_limit
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ async def run_import(
     adapter: FileSourceAdapter,
     access_token: str,
     items: List[Tuple[str, str]],
+    max_file_bytes: Optional[int] = None,
 ) -> None:
     """Download each imported file and stage it to S3 for ingestion.
 
@@ -46,15 +48,24 @@ async def run_import(
     document record the import endpoint created. Processed sequentially so a
     large batch doesn't open many provider connections at once. Never raises.
 
+    `max_file_bytes` is the knowledge base's per-file limit (the same one a
+    device upload is held to, ``upload_limit.max_file_bytes``). The adapter is
+    told it, so an oversized file is refused from its reported size or stops
+    streaming at the limit rather than being buffered whole, and the document
+    fails with the message the upload screen shows. Defaults to the managed
+    limit, the largest any engine allows.
+
     Args:
         assistant_id: Parent assistant identifier
         adapter: The resolved file-source adapter (registry singleton)
         access_token: The importing user's OAuth access token
         items: (document_id, source_file_id) pairs to import
+        max_file_bytes: The knowledge base's per-file limit
     """
+    limit = max_file_bytes or upload_limit.max_file_bytes(managed=True)
     for document_id, file_id in items:
         try:
-            await _import_one(assistant_id, adapter, access_token, document_id, file_id)
+            await _import_one(assistant_id, adapter, access_token, document_id, file_id, limit)
         except Exception as e:
             # Defensive: _import_one already swallows its own errors, but a
             # bug there must not abort the rest of the batch.
@@ -70,10 +81,25 @@ async def _import_one(
     access_token: str,
     document_id: str,
     file_id: str,
+    max_file_bytes: int,
 ) -> None:
     """Import a single file: download, backfill metadata, PUT to S3."""
     try:
-        downloaded = await adapter.download(access_token, file_id)
+        downloaded = await adapter.download(access_token, file_id, max_bytes=max_file_bytes)
+        if len(downloaded.content) > max_file_bytes:
+            # An adapter that ignores max_bytes still never stages an oversized file.
+            raise FileSourceTooLargeError(
+                f"downloaded {len(downloaded.content)} bytes, over the {max_file_bytes}-byte limit"
+            )
+    except FileSourceTooLargeError as e:
+        logger.info(f"File-source file for document {document_id} is over the per-file limit: {e}")
+        await _mark_failed(
+            assistant_id,
+            document_id,
+            upload_limit.too_large_message(max_file_bytes),
+            str(e),
+        )
+        return
     except FileSourceError as e:
         logger.warning(f"File-source download failed for document {document_id}: {e}")
         await _mark_failed(

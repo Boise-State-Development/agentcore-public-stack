@@ -40,6 +40,7 @@ import { AppConfig,
   MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
   MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
   MANAGED_KB_PER_KB_CEILING_BYTES,
+  KB_UPLOAD_MAX_FILE_BYTES,
   MANAGED_KB_RETENTION_WINDOW_DAYS,
   OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
   OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
@@ -162,6 +163,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       perOwnerDefaultBytes: MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
       perOwnerElevatedBytes: MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
       perKnowledgeBaseCeilingBytes: MANAGED_KB_PER_KB_CEILING_BYTES,
+      uploadMaxFileBytes: KB_UPLOAD_MAX_FILE_BYTES,
       retentionWindowDays: MANAGED_KB_RETENTION_WINDOW_DAYS,
       storageAlarmGb: 500,
       dailyCostAlarmUsd: 100,
@@ -232,6 +234,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     assistantKbFullContext: {
       enabled: false,
+      maxTokens: 50_000,
+    },
+    agentKnowledgeFiles: {
+      enabled: false,
     },
     meetingTasks: {
       enabled: false,
@@ -255,6 +261,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       enabled: false,
     },
     webSearchDefaultMaxResults: {
+      enabled: false,
+    },
+    wordSkillScripts: {
       enabled: false,
     },
     converseDocumentsAsText: {

@@ -26,6 +26,12 @@ Targets (pick one):
         --base-url https://<alb-or-cloudfront>/api --auth cognito \
         --cognito-domain https://<pool-domain>.auth.<region>.amazoncognito.com
 
+    # Deployed environment through app-api as the eval user that
+    # scripts/seed_eval_user.py seeds (credentials read from its SSM
+    # parameter, never the command line). The nightly dev track runs this way.
+    AWS_PROFILE=dev-ai uv run python scripts/smoke_turns.py \
+        --base-url https://dev.boisestate.ai/api --auth eval-user --prefix dev-boisestateai-v2
+
     # Deployed environment straight at the AgentCore Runtime, as the owner of
     # an active headless grant (apis/shared/harness/grants.py). Bypasses
     # app-api, so the 409 / Stop / steer rows are skipped; persistence is read
@@ -39,6 +45,14 @@ it runs as. Prompts are deliberately tiny, `--model-id` defaults to the user's
 default model, and sessions are deleted at the end unless `--keep`. The script
 refuses a `--prefix` or `--base-url` that looks like production unless
 `--allow-prod` is passed — this is a dev/local tool.
+
+``--publish --prefix <prefix>`` also writes the run's result as one
+``LEDGER#SMOKE`` row into that deployment's system-cost-rollup table
+(docs/specs/release-ledger.md §5.2): pass/fail/skip counts, each row's status,
+the first-token median and the second turn's cache tokens, keyed by the
+Runtime build that served the turns (read from the run's own ``C#`` rows, else
+the Runtime's image tag at the start of the run). Best-effort, content-free,
+and it never changes the exit status.
 
 Exit status: 0 when no row FAILED (SKIP and OBSERVED do not fail a run), 1
 otherwise, 2 for a setup error before any turn ran.
@@ -1637,6 +1651,23 @@ def resolve_runtime_env(prefix: str, region: str) -> None:
         os.environ.setdefault(k, v)
 
 
+def eval_user_credentials(prefix: Optional[str], region: str) -> Tuple[str, str]:
+    """The eval user's username and password from the SSM parameter ``seed_eval_user.py`` writes.
+
+    The same account the eval harness signs in as, so the nightly dev track
+    needs no second test user with a permanent password. Never logged.
+    """
+    if not prefix:
+        raise SystemExit("--auth eval-user needs --prefix (the deployment whose eval user to sign in as)")
+    import boto3
+    from seed_eval_user import credentials_parameter, read_credentials
+
+    creds = read_credentials(boto3.client("ssm", region_name=region), prefix)
+    if not creds:
+        raise SystemExit(f"no eval user credentials at {credentials_parameter(prefix)}; run scripts/seed_eval_user.py first")
+    return str(creds["username"]), str(creds["password"])
+
+
 async def build_transport(args: argparse.Namespace) -> Transport:
     if args.auth == "headless-grant":
         if not args.user_id or not args.prefix:
@@ -1645,12 +1676,15 @@ async def build_transport(args: argparse.Namespace) -> Transport:
         return RuntimeTransport(args.user_id, args.prefix, args.region, args.invocations_url)
     if not args.base_url:
         raise SystemExit("--base-url is required unless --auth headless-grant")
-    t = AppApiTransport(args.base_url, label=args.base_url)
-    if args.auth == "cognito":
-        user = os.environ.get("SMOKE_USERNAME")
-        pw = os.environ.get("SMOKE_PASSWORD")
+    if args.auth == "eval-user":
+        user, pw = eval_user_credentials(args.prefix, args.region)
+    elif args.auth == "cognito":
+        user = os.environ.get("SMOKE_USERNAME") or ""
+        pw = os.environ.get("SMOKE_PASSWORD") or ""
         if not user or not pw:
             raise SystemExit("--auth cognito reads SMOKE_USERNAME / SMOKE_PASSWORD from the environment")
+    t = AppApiTransport(args.base_url, label=args.base_url)
+    if args.auth in ("cognito", "eval-user"):
         await t.login_cognito(user, pw, args.cognito_domain or "")
     else:
         await t.ensure_anonymous_ok()
@@ -1677,10 +1711,118 @@ def _print_report(results: List[RowResult], ctx: Context, label: str) -> None:
     print()
 
 
+# ============================================================
+# Publishing to the release ledger (docs/specs/release-ledger.md §5.2)
+# ============================================================
+
+
+def _git_commit() -> Optional[str]:
+    if os.environ.get("GITHUB_SHA"):
+        return os.environ["GITHUB_SHA"]
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.abspath(__file__)),
+                             capture_output=True, text=True, timeout=10, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def _health_version(base_url: Optional[str]) -> Optional[str]:
+    """app-api's ``/health`` version: only the label of the image-tag fallback, never the build."""
+    if not base_url:
+        return None
+    try:
+        body = httpx.get(f"{base_url.rstrip('/')}/health", timeout=10).json()
+    except Exception:  # noqa: BLE001 — metadata only
+        return None
+    return str(body["version"]) if isinstance(body, dict) and body.get("version") else None
+
+
+@dataclass
+class PublishPlan:
+    """What ``--publish`` read before the first turn, so a deploy during the run cannot move it."""
+
+    started_at: str
+    image_tag: Optional[str] = None
+    app_version: Optional[str] = None
+
+
+async def _session_calls(prefix: str, region: str, session_ids: List[str]) -> Dict[str, Any]:
+    from apis.shared.config.runtime_environment import derived_environment_manifest
+    from apis.shared.evals.calls import fetch_session_calls
+    from apis.shared.storage.dynamodb_storage import DynamoDBStorage
+
+    name = "DYNAMODB_SESSIONS_METADATA_TABLE_NAME"
+    entry = next(v for v in derived_environment_manifest() if v.name == name)
+    os.environ.setdefault(name, entry.derive(prefix, None) or "")
+    os.environ.setdefault("AWS_DEFAULT_REGION", region)
+    try:
+        return await fetch_session_calls(session_ids, DynamoDBStorage())
+    except Exception as exc:  # noqa: BLE001 — falls back to the image tag
+        logger.info("cost rows unavailable: %s", exc)
+        return {}
+
+
+async def publish_smoke(
+    args: argparse.Namespace, plan: PublishPlan, ctx: Context, results: List[RowResult], label: str, user_id: str
+) -> bool:
+    """Write the run as one ``LEDGER#SMOKE`` row. Best-effort: prints and returns ``False`` on any failure."""
+    from apis.shared.costs import ledger_publish as lp
+
+    # Rows are stored a moment after each stream closes; the last turn's may still be in flight.
+    await asyncio.sleep(3.0)
+    found = await _session_calls(args.prefix, args.region, list(ctx.created_sessions))
+    calls = [c for sid in ctx.created_sessions for c in found.get(sid, ())]
+    served = lp.served_build(calls, image_tag=plan.image_tag, app_version=plan.app_version)
+    if served is None:
+        print("ledger: not published (no C# row carries a build and the Runtime's image tag was unreadable)",
+              file=sys.stderr)
+        return False
+    if served.source == lp.BUILD_FROM_COST_ROWS and plan.image_tag and plan.image_tag != served.build:
+        print(f"ledger: the Runtime's image tag at run start was {plan.image_tag}; the turns ran on {served.build}",
+              file=sys.stderr)
+    try:
+        row = lp.smoke_ledger_row(
+            started_at=plan.started_at,
+            finished_at=lp.now_iso(),
+            target="_".join(label.split()),
+            results=[{"row": r.row, "status": r.status, "data": r.data} for r in results],
+            served=served,
+            first_token_ms=ctx.first_token_ms,
+            model_id=args.model_id,
+            git_commit=_git_commit(),
+            shared_session_calls=found.get(ctx.shared_session, ()) if ctx.shared_session else (),
+            call_rows=calls,
+        )
+        lp.assert_content_free(row, lp.SMOKE_ROW_FIELDS, forbidden=[*ctx.created_sessions, user_id])
+    except lp.PublishError as exc:
+        print(f"ledger: not published ({exc})", file=sys.stderr)
+        return False
+    if not lp.put_ledger_row(row, prefix=args.prefix, region=args.region):
+        print("ledger: publish failed; see the log line above. The run's result stands.", file=sys.stderr)
+        return False
+    print(f"ledger: published {lp.describe(row)}")
+    return True
+
+
 async def main_async(args: argparse.Namespace) -> int:
     if _looks_like_prod(args.base_url, args.prefix) and not args.allow_prod:
         print("refusing: target looks like production (pass --allow-prod if you really mean it)", file=sys.stderr)
         return 2
+    if args.publish and not args.prefix:
+        print("setup: --publish needs --prefix (the deployment whose ledger to write)", file=sys.stderr)
+        return 2
+    plan: Optional[PublishPlan] = None
+    if args.publish:
+        from apis.shared.costs import ledger_publish as lp
+
+        plan = PublishPlan(
+            started_at=lp.now_iso(),
+            image_tag=lp.read_runtime_image_tag(args.prefix, args.region),
+            app_version=_health_version(args.base_url),
+        )
     try:
         transport = await build_transport(args)
     except (SystemExit, RuntimeError) as exc:
@@ -1729,6 +1871,10 @@ async def main_async(args: argparse.Namespace) -> int:
         await transport.close()
 
     _print_report(results, ctx, transport.label)
+    published = False
+    if plan is not None:
+        user_id = str(getattr(transport, "user", {}).get("user_id") or args.user_id or "")
+        published = await publish_smoke(args, plan, ctx, results, transport.label, user_id)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(
@@ -1738,6 +1884,8 @@ async def main_async(args: argparse.Namespace) -> int:
                     "observed": ctx.observed,
                     "firstTokenMs": ctx.first_token_ms,
                     "sessions": ctx.created_sessions,
+                    "startedAt": plan.started_at if plan else None,
+                    "published": published,
                 },
                 fh,
                 indent=2,
@@ -1749,10 +1897,12 @@ async def main_async(args: argparse.Namespace) -> int:
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--base-url", help="app-api origin, e.g. http://127.0.0.1:8000 or https://host/api")
-    p.add_argument("--auth", choices=["none", "cognito", "headless-grant"], default="none")
+    p.add_argument("--auth", choices=["none", "cognito", "eval-user", "headless-grant"], default="none",
+                   help="eval-user: sign in as the seeded eval user, credentials from SSM (needs --prefix)")
     p.add_argument("--cognito-domain", help="Hosted UI origin (for --auth cognito; informational)")
     p.add_argument("--user-id", help="Cognito sub owning the headless grant (for --auth headless-grant)")
-    p.add_argument("--prefix", help="CDK project prefix, e.g. dev-boisestateai-v2 (for --auth headless-grant)")
+    p.add_argument("--prefix", help="CDK project prefix, e.g. dev-boisestateai-v2 "
+                                    "(for --auth headless-grant / eval-user, and --publish)")
     p.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"))
     p.add_argument(
         "--invocations-url",
@@ -1775,6 +1925,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--delete-sessions", help="comma-separated session ids to delete, then exit (no turns)")
     p.add_argument("--json", help="write the report to this path")
     p.add_argument("--allow-prod", action="store_true")
+    p.add_argument("--publish", action="store_true",
+                   help="write the result as a LEDGER#SMOKE row into --prefix's system-cost-rollup table "
+                        "(release-ledger spec §5.2); best-effort, never changes the exit status")
     return p.parse_args(argv)
 
 

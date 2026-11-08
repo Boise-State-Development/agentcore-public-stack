@@ -202,6 +202,7 @@ def choose_checkpoint(
     protected_turns: int,
     floor_tokens: int,
     history_tokens: Optional[int],
+    tail_bound_tokens: Optional[int] = None,
 ) -> Tuple[int, Optional[int]]:
     """Pick the cut (index into ``messages``) that lands retained history at or
     below ``floor_tokens`` while keeping as much as fits.
@@ -209,23 +210,47 @@ def choose_checkpoint(
     Returns ``(relative_cut, retained_estimate)``. ``relative_cut == 0`` means
     nothing to cut. Candidates are ``cutoffs`` (tool-pair-safe turn starts) no
     newer than ``cutoffs[-protected_turns]``; the last ``protected_turns``
-    turns are always kept. Among candidates that satisfy the floor the
-    **oldest** wins. If none does — the protected tail alone exceeds the floor
-    — the minimum-protection cut is returned and the caller logs it (evicting
-    inside the tail is the offload escalation, a later PR, not a deeper cut).
+    turns are kept. Among candidates that satisfy the floor the **oldest**
+    wins.
+
+    If none does — the protected tail alone exceeds the floor — the
+    protection is still kept whole while the tail fits ``tail_bound_tokens``
+    (the policy's ceiling): the minimum-protection cut is returned and the
+    caller logs it as ``floor_unreachable``. When the tail alone exceeds that
+    bound, the protection **shrinks by whole turns**: the cut moves to the
+    oldest turn start inside the tail whose retained estimate fits the bound,
+    and never past ``cutoffs[-1]`` — the newest turn, whose own user message
+    always survives. A tail of one turn that is still over the bound keeps
+    that one turn. ``tail_bound_tokens=None`` (the kill switch, and every
+    caller before the bound existed) keeps the whole tail whatever its size.
+
+    The same bound is what lets a conversation with no more than
+    ``protected_turns`` turns be cut at all: without it such a conversation
+    returns ``(0, None)``, with it the whole history is the tail and shrinks
+    the same way.
+
+    The result is a pure function of the arguments, which the caller derives
+    from the live list and the turn's measured usage, so whichever agent
+    instance serves the turn computes the same cut; the caller only ever moves
+    the checkpoint forward.
 
     ``history_tokens`` is the measured size of the conversation portion of
     the prompt this turn; per-message estimates are rescaled to sum to it so
     only their ratios matter. ``None`` leaves the raw estimates as-is.
     """
     protected_turns = max(0, int(protected_turns))
-    if not cutoffs or len(cutoffs) <= protected_turns:
+    if not cutoffs:
+        return 0, None
+    young = len(cutoffs) <= protected_turns
+    if young and tail_bound_tokens is None:
         return 0, None
 
-    newest_allowed = cutoffs[-protected_turns] if protected_turns > 0 else cutoffs[-1]
+    # Position (in ``cutoffs``) of the oldest protected turn start.
+    tail_start = 0 if young else (len(cutoffs) - protected_turns if protected_turns > 0 else len(cutoffs) - 1)
+    newest_allowed = cutoffs[tail_start]
     n = len(messages)
     if n == 0:
-        return int(newest_allowed), None
+        return (0, None) if young else (int(newest_allowed), None)
 
     estimates = [estimate_message_tokens(m) for m in messages]
     raw_total = sum(estimates)
@@ -242,15 +267,32 @@ def choose_checkpoint(
         idx = min(max(int(cut), 0), n)
         return int(round(suffix[idx] * scale))
 
-    candidates = [c for c in cutoffs if c <= newest_allowed]
-    fitting = [c for c in candidates if retained(c) <= floor_tokens]
-    if fitting:
-        cut = min(fitting)
-        return int(cut), retained(cut)
+    if not young:
+        candidates = [c for c in cutoffs if c <= newest_allowed]
+        fitting = [c for c in candidates if retained(c) <= floor_tokens]
+        if fitting:
+            cut = min(fitting)
+            return int(cut), retained(cut)
 
+    tail_tokens = retained(newest_allowed)
+    shrink = [c for c in cutoffs[tail_start + 1:] if c > 0]
+    if tail_bound_tokens is None or tail_tokens <= int(tail_bound_tokens) or not shrink:
+        if young:
+            return 0, None
+        logger.info(
+            "compaction_floor_unreachable: protected tail alone is ~%d tokens "
+            "(floor=%d); taking the minimum-protection cut at %d",
+            tail_tokens, floor_tokens, newest_allowed,
+        )
+        return int(newest_allowed), tail_tokens
+
+    bound = int(tail_bound_tokens)
+    fitting_tail = [c for c in shrink if retained(c) <= bound]
+    cut = min(fitting_tail) if fitting_tail else shrink[-1]
+    kept_turns = len(cutoffs) - cutoffs.index(cut)
     logger.info(
-        "compaction_floor_unreachable: protected tail alone is ~%d tokens "
-        "(floor=%d); taking the minimum-protection cut at %d",
-        retained(newest_allowed), floor_tokens, newest_allowed,
+        "compaction_tail_bounded: protected tail is ~%d tokens (> bound=%d, "
+        "floor=%d); keeping the newest %d turn(s) from %d, retained≈%d",
+        tail_tokens, bound, floor_tokens, kept_turns, cut, retained(cut),
     )
-    return int(newest_allowed), retained(newest_allowed)
+    return int(cut), retained(cut)

@@ -47,6 +47,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from strands import tool
 
 from agents.builtin_tools.office.docx_redline import Change, RedlineError, redline
+from agents.main_agent.skills.skill_scripts import (
+    SkillScript,
+    SkillScriptError,
+    TurnSkillRecords,
+    attach_turn_skill_records,
+    load_skill_script,
+    parse_script_params,
+)
 from agents.builtin_tools.office._storage import (
     _DocGenError,
     _ci_exec,
@@ -89,6 +97,92 @@ _DOCX_PREAMBLE = (
     "from docx.shared import Pt, RGBColor, Inches\n"
     "from docx.enum.text import WD_ALIGN_PARAGRAPH\n"
 )
+
+
+# Sandbox path a skill script is written to. A fixed name, not the skill's
+# filename: "redline-engine.py" is not an importable module name, and a fixed
+# name means two skills' scripts can never collide on one sandbox session.
+_SANDBOX_SKILL_SCRIPT = "_skill_script.py"
+
+# What a skill script prints, or returns from ``run``, reaches the model. It is
+# a per-turn payload that stays in history, so it is bounded.
+_MAX_SCRIPT_OUTPUT_CHARS = 4_000
+
+
+def _skill_script_entry(label: str, params_json: str) -> str:
+    """The fixed code that runs a skill script against ``doc``.
+
+    Loads the file written at :data:`_SANDBOX_SKILL_SCRIPT` as a module (by
+    path, so nothing depends on ``sys.path``), then calls its
+    ``run(doc, params)``. ``doc`` is the document the tool opened or created;
+    ``run`` edits it in place and may return a short text summary, which is
+    printed so it comes back as the sandbox's stdout. ``params_json`` is
+    already JSON text (``parse_script_params``) and is embedded as a string
+    literal, never as code.
+    """
+    return (
+        "import importlib.util as _skill_ilu\n"
+        "import json as _skill_json\n"
+        f"_skill_spec = _skill_ilu.spec_from_file_location('_skill_script', {_SANDBOX_SKILL_SCRIPT!r})\n"
+        "_skill_mod = _skill_ilu.module_from_spec(_skill_spec)\n"
+        "_skill_spec.loader.exec_module(_skill_mod)\n"
+        "if not callable(getattr(_skill_mod, 'run', None)):\n"
+        f"    raise RuntimeError({label + ' defines no run(doc, params) function.'!r})\n"
+        f"_skill_result = _skill_mod.run(doc, _skill_json.loads({params_json!r}))\n"
+        "if _skill_result is not None:\n"
+        "    print(_skill_result if isinstance(_skill_result, str) "
+        "else _skill_json.dumps(_skill_result, default=str))\n"
+    )
+
+
+def _run_docx_skill_script(
+    code_interpreter_id: str,
+    script: Any,
+    params_json: str,
+    filename: str,
+    source_bytes: Optional[bytes] = None,
+) -> Tuple[bytes, str]:
+    """Run a skill script on a new (``source_bytes`` None) or loaded document.
+
+    The script's bytes are written into the sandbox as a file and executed
+    there only; the Runtime host never imports or compiles them. Returns the
+    document bytes and the script's bounded output. Blocking — call via
+    ``asyncio.to_thread``.
+    """
+    from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
+
+    code_interpreter = CodeInterpreter(_region())
+    code_interpreter.start(identifier=code_interpreter_id)
+    try:
+        if source_bytes is not None:
+            _ci_write_bytes(code_interpreter, _SANDBOX_SOURCE, source_bytes)
+            opener = f"doc = Document({_SANDBOX_SOURCE!r})\n"
+        else:
+            opener = "doc = Document()\n"
+        _ci_write_bytes(code_interpreter, _SANDBOX_SKILL_SCRIPT, script.source)
+        output = _ci_exec(
+            code_interpreter,
+            (
+                f"{_DOCX_PREAMBLE}\n"
+                f"{opener}\n"
+                f"{_skill_script_entry(script.label, params_json)}\n"
+                f"doc.save({filename!r})\n"
+            ),
+        )
+        data = _ci_read_bytes(code_interpreter, filename)
+        if data is None:
+            raise _DocGenError(
+                f"Document '{filename}' was not produced by {script.label}."
+            )
+        output = output.strip()
+        if len(output) > _MAX_SCRIPT_OUTPUT_CHARS:
+            output = output[:_MAX_SCRIPT_OUTPUT_CHARS] + " … (output truncated)"
+        return data, output
+    finally:
+        try:
+            code_interpreter.stop()
+        except Exception:  # pragma: no cover - cleanup best-effort
+            pass
 
 
 def _generate_docx_bytes(
@@ -244,8 +338,234 @@ async def _find_word_document(
 # ---------------------------------------------------------------------------
 
 
-def make_create_word_document_tool(session_id: str, user_id: str):
-    """Create a ``create_word_document`` tool bound to the given identity."""
+def _script_call_problem(
+    python_code: Optional[str],
+    skill_name: Optional[str],
+    path: Optional[str],
+    params: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """Why a flag-on call's arguments cannot run, or ``None``.
+
+    Exactly one source of code: ``python_code``, or ``skill_name`` + ``path``.
+    """
+    wants_script = bool(skill_name) or bool(path)
+    if python_code and wants_script:
+        return (
+            "❌ Pass either `python_code` or `skill_name` + `path`, not both. "
+            "Use the skill script alone; put its inputs in `params`."
+        )
+    if wants_script and not (skill_name and path):
+        return "❌ Running a skill script needs both `skill_name` and `path`."
+    if not wants_script and not python_code:
+        return "❌ Pass `python_code`, or `skill_name` + `path` to run a skill's script."
+    if params is not None and not wants_script:
+        return "❌ `params` is only used with a skill script (`skill_name` + `path`)."
+    return None
+
+
+async def _load_script(
+    skill_records: TurnSkillRecords,
+    skill_name: str,
+    path: str,
+    params: Optional[Dict[str, Any]],
+) -> Tuple[Optional[SkillScript], str, Optional[Dict[str, Any]]]:
+    """``(script, params_json, error)``: the skill script resolved on this turn's skills."""
+    try:
+        params_json = parse_script_params(params)
+        script = await asyncio.to_thread(
+            load_skill_script, skill_records.records, skill_name, path
+        )
+    except SkillScriptError as exc:
+        return None, "", _error(f"❌ {exc}")
+    return script, params_json, None
+
+
+def _script_details(script: Optional[SkillScript], output: str) -> str:
+    """The download card's extra sentence naming the skill file that ran."""
+    if script is None:
+        return ""
+    details = f"Ran skill script {script.label}."
+    return f"{details} Its output: {output}" if output else details
+
+
+async def _create_word_document(
+    session_id: str,
+    user_id: str,
+    document_name: str,
+    python_code: Optional[str],
+    skill_records: Optional[TurnSkillRecords] = None,
+    skill_name: Optional[str] = None,
+    path: Optional[str] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """``create_word_document``'s body, from python-docx code or a skill script."""
+    is_valid, error_msg = _validate_document_name(document_name)
+    if not is_valid:
+        return _error(
+            f"❌ Invalid document name '{document_name}': {error_msg}\n\n"
+            "Examples: sales-report, Q4_analysis, report-final"
+        )
+
+    filename = f"{document_name}.docx"
+    code_interpreter_id = _get_code_interpreter_id()
+    if not code_interpreter_id:
+        return _error(_NO_CI_MESSAGE)
+    if not _storage_configured():
+        return _error(_NO_STORAGE_MESSAGE)
+
+    script: Optional[SkillScript] = None
+    params_json = "{}"
+    if skill_records is not None and (skill_name or path):
+        script, params_json, problem = await _load_script(
+            skill_records, skill_name or "", path or "", params
+        )
+        if problem is not None:
+            return problem
+
+    output = ""
+    try:
+        if script is None:
+            file_bytes = await asyncio.to_thread(
+                _generate_docx_bytes, code_interpreter_id, python_code or "", filename
+            )
+        else:
+            file_bytes, output = await asyncio.to_thread(
+                _run_docx_skill_script, code_interpreter_id, script, params_json, filename
+            )
+    except _DocGenError as exc:
+        hint = (
+            "Check the python-docx code for errors."
+            if script is None
+            else f"The error came from skill script {script.label}."
+        )
+        return _error(
+            f"❌ Failed to create '{filename}'.\n\n```\n{exc}\n```\n\n{hint}"
+        )
+    except Exception as exc:  # noqa: BLE001 - surface any sandbox error
+        logger.error(f"create_word_document sandbox error: {exc}")
+        return _error(f"❌ Failed to create '{filename}': {exc}")
+
+    try:
+        upload_id, size_kb = await _store_document(
+            user_id, session_id, filename, file_bytes, _DOCX_MIME
+        )
+    except Exception as exc:  # noqa: BLE001 - storage failure is terminal
+        logger.error(f"create_word_document storage error: {exc}")
+        return _error(f"❌ Created '{filename}' but failed to save it: {exc}")
+
+    return _download_card(
+        filename, upload_id, size_kb, "Created", _script_details(script, output)
+    )
+
+
+async def _modify_word_document(
+    session_id: str,
+    user_id: str,
+    document_name: str,
+    python_code: Optional[str],
+    output_name: Optional[str],
+    skill_records: Optional[TurnSkillRecords] = None,
+    skill_name: Optional[str] = None,
+    path: Optional[str] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """``modify_word_document``'s body, from python-docx code or a skill script."""
+    code_interpreter_id = _get_code_interpreter_id()
+    if not code_interpreter_id:
+        return _error(_NO_CI_MESSAGE)
+    if not _storage_configured():
+        return _error(_NO_STORAGE_MESSAGE)
+
+    source = await _find_word_document(user_id, session_id, document_name)
+    if source is None:
+        return _error(
+            f"❌ No Word document named '{document_name}' was found in this "
+            "chat. Use list_word_documents to see what's available."
+        )
+
+    out_base = output_name or source.filename
+    if out_base.lower().endswith(".docx"):
+        out_base = out_base[: -len(".docx")]
+    is_valid, error_msg = _validate_document_name(out_base)
+    if not is_valid:
+        return _error(
+            f"❌ Invalid output name '{out_base}': {error_msg}"
+        )
+    output_filename = f"{out_base}.docx"
+
+    script: Optional[SkillScript] = None
+    params_json = "{}"
+    if skill_records is not None and (skill_name or path):
+        script, params_json, problem = await _load_script(
+            skill_records, skill_name or "", path or "", params
+        )
+        if problem is not None:
+            return problem
+
+    output = ""
+    try:
+        source_bytes = await asyncio.to_thread(
+            _download_s3_bytes, source.s3_bucket, source.s3_key
+        )
+        if script is None:
+            file_bytes = await asyncio.to_thread(
+                _modify_docx_bytes,
+                code_interpreter_id,
+                source_bytes,
+                python_code or "",
+                output_filename,
+            )
+        else:
+            file_bytes, output = await asyncio.to_thread(
+                _run_docx_skill_script,
+                code_interpreter_id,
+                script,
+                params_json,
+                output_filename,
+                source_bytes,
+            )
+    except _DocGenError as exc:
+        hint = (
+            "Check the python-docx code for errors."
+            if script is None
+            else f"The error came from skill script {script.label}."
+        )
+        return _error(
+            f"❌ Failed to modify '{source.filename}'.\n\n```\n{exc}\n```\n\n{hint}"
+        )
+    except Exception as exc:  # noqa: BLE001 - surface any sandbox error
+        logger.error(f"modify_word_document error: {exc}")
+        return _error(f"❌ Failed to modify '{source.filename}': {exc}")
+
+    try:
+        upload_id, size_kb = await _store_document(
+            user_id, session_id, output_filename, file_bytes, _DOCX_MIME
+        )
+    except Exception as exc:  # noqa: BLE001 - storage failure is terminal
+        logger.error(f"modify_word_document storage error: {exc}")
+        return _error(
+            f"❌ Modified '{source.filename}' but failed to save it: {exc}"
+        )
+
+    return _download_card(
+        output_filename, upload_id, size_kb, "Updated", _script_details(script, output)
+    )
+
+
+def make_create_word_document_tool(
+    session_id: str,
+    user_id: str,
+    skill_records: Optional[TurnSkillRecords] = None,
+):
+    """Create a ``create_word_document`` tool bound to the given identity.
+
+    ``skill_records`` is passed only while ``WORD_SKILL_SCRIPTS_ENABLED`` is
+    on: the tool then also accepts ``skill_name`` / ``path`` / ``params`` and
+    runs a bound skill's script in Code Interpreter. Without it the spec is
+    the one this tool has always had.
+    """
+    if skill_records is not None:
+        return _make_create_with_skill_scripts(session_id, user_id, skill_records)
 
     @tool
     async def create_word_document(
@@ -305,48 +625,118 @@ def make_create_word_document_tool(session_id: str, user_id: str):
             An inline download card. The document is also saved to this
             chat's Files.
         """
-        is_valid, error_msg = _validate_document_name(document_name)
-        if not is_valid:
-            return _error(
-                f"❌ Invalid document name '{document_name}': {error_msg}\n\n"
-                "Examples: sales-report, Q4_analysis, report-final"
-            )
-
-        filename = f"{document_name}.docx"
-        code_interpreter_id = _get_code_interpreter_id()
-        if not code_interpreter_id:
-            return _error(_NO_CI_MESSAGE)
-        if not _storage_configured():
-            return _error(_NO_STORAGE_MESSAGE)
-
-        try:
-            file_bytes = await asyncio.to_thread(
-                _generate_docx_bytes, code_interpreter_id, python_code, filename
-            )
-        except _DocGenError as exc:
-            return _error(
-                f"❌ Failed to create '{filename}'.\n\n```\n{exc}\n```\n\n"
-                "Check the python-docx code for errors."
-            )
-        except Exception as exc:  # noqa: BLE001 - surface any sandbox error
-            logger.error(f"create_word_document sandbox error: {exc}")
-            return _error(f"❌ Failed to create '{filename}': {exc}")
-
-        try:
-            upload_id, size_kb = await _store_document(
-                user_id, session_id, filename, file_bytes, _DOCX_MIME
-            )
-        except Exception as exc:  # noqa: BLE001 - storage failure is terminal
-            logger.error(f"create_word_document storage error: {exc}")
-            return _error(f"❌ Created '{filename}' but failed to save it: {exc}")
-
-        return _download_card(filename, upload_id, size_kb, "Created")
+        return await _create_word_document(session_id, user_id, document_name, python_code)
 
     return create_word_document
 
 
-def make_modify_word_document_tool(session_id: str, user_id: str):
-    """Create a ``modify_word_document`` tool bound to the given identity."""
+def _make_create_with_skill_scripts(
+    session_id: str, user_id: str, skill_records: TurnSkillRecords
+):
+    @tool
+    async def create_word_document(
+        document_name: str,
+        python_code: Optional[str] = None,
+        skill_name: Optional[str] = None,
+        path: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Create a new Word (.docx) document using python-docx code or a skill's script.
+
+        Executes python-docx code, or a Python script that ships with an
+        active skill, in a sandboxed Code Interpreter to build a document
+        from scratch, saves it to the user's files, and returns a
+        download card. Great for structured reports with headings,
+        paragraphs, tables, and matplotlib charts.
+
+        Available libraries in the sandbox: python-docx, matplotlib, pandas,
+        numpy.
+
+        Args:
+            python_code: python-docx code that builds the document. Omit it
+                when running a skill's script (skill_name + path). A blank
+                document is already available as ``doc = Document()`` — do NOT
+                call ``Document()`` or ``doc.save()`` yourself; the tool saves
+                it for you. ``Pt``, ``RGBColor``, ``Inches`` and
+                ``WD_ALIGN_PARAGRAPH`` are already imported.
+
+                Example:
+                    doc.add_heading('Quarterly Report', level=1)
+                    doc.add_paragraph('Revenue increased by 15%...')
+                    table = doc.add_table(rows=2, cols=2)
+                    table.style = 'Light Grid Accent 1'
+                    table.rows[0].cells[0].text = 'Quarter'
+                    # ALWAYS bold a header row this way. A table style's
+                    # own header emphasis is conditional formatting that
+                    # not every viewer applies, so set it on the runs:
+                    for cell in table.rows[0].cells:
+                        for run in cell.paragraphs[0].runs:
+                            run.bold = True
+
+                To embed a chart, save a PNG with matplotlib then insert it:
+                    import matplotlib.pyplot as plt
+                    plt.figure(figsize=(8, 5))
+                    plt.bar(['Q1', 'Q2'], [100, 120])
+                    plt.savefig('chart.png', dpi=200, bbox_inches='tight')
+                    plt.close()
+                    doc.add_picture('chart.png', width=Inches(6))
+
+                Start a major section on a fresh page with an explicit
+                break -- python-docx does no layout, so a document that
+                should be several pages contains no page boundaries at
+                all unless you add them:
+                    doc.add_page_break()
+                    doc.add_heading('Appendix A', level=1)
+
+            skill_name: Instead of python_code, run a Python script that ships
+                with an active skill: the skill's name (as in
+                ``<available_skills>``). Use this whenever a skill provides a
+                script for the job: do NOT copy the script into python_code.
+            path: The script's path from the skill's file listing, e.g.
+                ``scripts/engine.py``. Only files under ``scripts/`` can run.
+                The script runs in the same sandbox, must define
+                ``run(doc, params)``, edits ``doc`` in place and may return a
+                short summary, which comes back to you.
+            params: Optional object passed to the script's ``run`` as
+                ``params`` (for example which playbook or clauses to apply).
+                Keep it small; at most 16 KB as JSON.
+
+            document_name: File name WITHOUT extension (.docx is added
+                automatically). Use only letters, numbers, hyphens, and
+                underscores (e.g. "sales-report", "Q4_analysis").
+
+        Returns:
+            An inline download card. The document is also saved to this
+            chat's Files.
+        """
+        problem = _script_call_problem(python_code, skill_name, path, params)
+        if problem:
+            return _error(problem)
+        return await _create_word_document(
+            session_id,
+            user_id,
+            document_name,
+            python_code,
+            skill_records=skill_records,
+            skill_name=skill_name,
+            path=path,
+            params=params,
+        )
+
+    return attach_turn_skill_records(create_word_document, skill_records)
+
+
+def make_modify_word_document_tool(
+    session_id: str,
+    user_id: str,
+    skill_records: Optional[TurnSkillRecords] = None,
+):
+    """Create a ``modify_word_document`` tool bound to the given identity.
+
+    ``skill_records``: as for :func:`make_create_word_document_tool`.
+    """
+    if skill_records is not None:
+        return _make_modify_with_skill_scripts(session_id, user_id, skill_records)
 
     @tool
     async def modify_word_document(
@@ -380,62 +770,81 @@ def make_modify_word_document_tool(session_id: str, user_id: str):
         Returns:
             An inline download card for the edited document.
         """
-        code_interpreter_id = _get_code_interpreter_id()
-        if not code_interpreter_id:
-            return _error(_NO_CI_MESSAGE)
-        if not _storage_configured():
-            return _error(_NO_STORAGE_MESSAGE)
-
-        source = await _find_word_document(user_id, session_id, document_name)
-        if source is None:
-            return _error(
-                f"❌ No Word document named '{document_name}' was found in this "
-                "chat. Use list_word_documents to see what's available."
-            )
-
-        out_base = output_name or source.filename
-        if out_base.lower().endswith(".docx"):
-            out_base = out_base[: -len(".docx")]
-        is_valid, error_msg = _validate_document_name(out_base)
-        if not is_valid:
-            return _error(
-                f"❌ Invalid output name '{out_base}': {error_msg}"
-            )
-        output_filename = f"{out_base}.docx"
-
-        try:
-            source_bytes = await asyncio.to_thread(
-                _download_s3_bytes, source.s3_bucket, source.s3_key
-            )
-            file_bytes = await asyncio.to_thread(
-                _modify_docx_bytes,
-                code_interpreter_id,
-                source_bytes,
-                python_code,
-                output_filename,
-            )
-        except _DocGenError as exc:
-            return _error(
-                f"❌ Failed to modify '{source.filename}'.\n\n```\n{exc}\n```\n\n"
-                "Check the python-docx code for errors."
-            )
-        except Exception as exc:  # noqa: BLE001 - surface any sandbox error
-            logger.error(f"modify_word_document error: {exc}")
-            return _error(f"❌ Failed to modify '{source.filename}': {exc}")
-
-        try:
-            upload_id, size_kb = await _store_document(
-                user_id, session_id, output_filename, file_bytes, _DOCX_MIME
-            )
-        except Exception as exc:  # noqa: BLE001 - storage failure is terminal
-            logger.error(f"modify_word_document storage error: {exc}")
-            return _error(
-                f"❌ Modified '{source.filename}' but failed to save it: {exc}"
-            )
-
-        return _download_card(output_filename, upload_id, size_kb, "Updated")
+        return await _modify_word_document(
+            session_id, user_id, document_name, python_code, output_name
+        )
 
     return modify_word_document
+
+
+def _make_modify_with_skill_scripts(
+    session_id: str, user_id: str, skill_records: TurnSkillRecords
+):
+    @tool
+    async def modify_word_document(
+        document_name: str,
+        python_code: Optional[str] = None,
+        output_name: Optional[str] = None,
+        skill_name: Optional[str] = None,
+        path: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Modify an existing Word (.docx) document with python-docx code or a skill's script.
+
+        Loads a document previously created in this chat, runs your
+        python-docx code (or a Python script that ships with an active skill)
+        against it, and saves the result (as a new file so the original is
+        preserved). Returns a download card.
+
+        Use ``list_word_documents`` first if you are unsure of the exact name.
+
+        Args:
+            document_name: Name of the existing document to edit (with or
+                without the .docx extension), e.g. "sales-report".
+            python_code: python-docx code that edits the document. Omit it
+                when running a skill's script (skill_name + path). The loaded
+                document is available as ``doc = Document(...)`` — do NOT call
+                ``Document()`` or ``doc.save()`` yourself. ``Pt``, ``RGBColor``,
+                ``Inches`` and ``WD_ALIGN_PARAGRAPH`` are already imported.
+
+                Example (append a section):
+                    doc.add_heading('Addendum', level=1)
+                    doc.add_paragraph('Updated figures for Q2.')
+
+            output_name: Optional name (without extension) for the edited copy.
+                Defaults to the source name (a new versioned copy is saved).
+            skill_name: Instead of python_code, run a Python script that ships
+                with an active skill: the skill's name (as in
+                ``<available_skills>``). Use this whenever a skill provides a
+                script for the job: do NOT copy the script into python_code.
+            path: The script's path from the skill's file listing, e.g.
+                ``scripts/engine.py``. Only files under ``scripts/`` can run.
+                The script runs in the same sandbox, must define
+                ``run(doc, params)``, edits ``doc`` in place and may return a
+                short summary, which comes back to you.
+            params: Optional object passed to the script's ``run`` as
+                ``params`` (for example which playbook or clauses to apply).
+                Keep it small; at most 16 KB as JSON.
+
+        Returns:
+            An inline download card for the edited document.
+        """
+        problem = _script_call_problem(python_code, skill_name, path, params)
+        if problem:
+            return _error(problem)
+        return await _modify_word_document(
+            session_id,
+            user_id,
+            document_name,
+            python_code,
+            output_name,
+            skill_records=skill_records,
+            skill_name=skill_name,
+            path=path,
+            params=params,
+        )
+
+    return attach_turn_skill_records(modify_word_document, skill_records)
 
 
 def _parse_changes(changes: Any) -> Tuple[List[Change], List[str]]:

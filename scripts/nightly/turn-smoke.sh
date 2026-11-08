@@ -9,17 +9,28 @@ set -euo pipefail
 #              preview sessions, attachments, restore, cache-hash stability.
 #              See docs/testing/smoke-regression.md §2 for the rows.
 #
-# Runs AFTER scripts/nightly/e2e-test.sh in the same job, which has already
-# added the CloudFront URL to app-api's CORS origins and to the Cognito app
-# client's callback list — both of which the scripted Hosted UI login needs.
+# Two callers. nightly-deploy-pipeline.yml runs it AFTER
+# scripts/nightly/e2e-test.sh in the same job, as the E2E user, against an
+# ephemeral stack (e2e-test.sh has already added the CloudFront URL to app-api's
+# CORS origins and to the Cognito app client's callback list, which the
+# scripted Hosted UI login needs). nightly.yml's eval track runs it against the
+# long-lived dev deployment as the eval user (TURN_SMOKE_AUTH=eval-user), and
+# that run publishes to the release ledger: the ephemeral stack's ledger is
+# deleted with the stack at teardown, so a row written there is read by nobody.
 #
 # Required environment variables:
 #   CDK_PROJECT_PREFIX    — CDK project prefix (e.g. nightly-develop)
 #   CDK_AWS_REGION        — AWS region for the SSM lookup
-#   USER_USERNAME         — Cognito regular-user test account (permanent password)
-#   USER_PASSWORD
+#   USER_USERNAME         — Cognito regular-user test account (permanent
+#   USER_PASSWORD           password); not needed with TURN_SMOKE_AUTH=eval-user
 #
 # Optional:
+#   TURN_SMOKE_AUTH       — "eval-user" to sign in as the user
+#                           backend/scripts/seed_eval_user.py seeded on this
+#                           deployment (credentials from its SSM parameter)
+#   TURN_SMOKE_PUBLISH    — "true" to write the result as a LEDGER#SMOKE row
+#                           (smoke_turns.py --publish, release-ledger spec §5.2);
+#                           best-effort, never changes the exit status
 #   TURN_SMOKE_REPORT     — path for the JSON report (default: turn-smoke-report.json)
 #   TURN_SMOKE_EXTRA_ARGS — appended to the smoke_turns.py invocation
 #
@@ -63,7 +74,11 @@ get_base_url() {
 }
 
 main() {
-    for var in CDK_PROJECT_PREFIX CDK_AWS_REGION USER_USERNAME USER_PASSWORD; do
+    local required=(CDK_PROJECT_PREFIX CDK_AWS_REGION)
+    if [ "${TURN_SMOKE_AUTH:-}" != "eval-user" ]; then
+        required+=(USER_USERNAME USER_PASSWORD)
+    fi
+    for var in "${required[@]}"; do
         if [ -z "${!var:-}" ]; then
             log_error "${var} environment variable is required"
             exit 2
@@ -78,17 +93,32 @@ main() {
 
     local report="${TURN_SMOKE_REPORT:-${PROJECT_ROOT}/turn-smoke-report.json}"
 
-    # The script reads the credentials from SMOKE_USERNAME / SMOKE_PASSWORD so
-    # they never appear on a command line.
-    export SMOKE_USERNAME="${USER_USERNAME}"
-    export SMOKE_PASSWORD="${USER_PASSWORD}"
+    local auth_args=()
+    if [ "${TURN_SMOKE_AUTH:-}" = "eval-user" ]; then
+        # The script reads the eval user's credentials from SSM itself.
+        auth_args=(--auth eval-user --prefix "${CDK_PROJECT_PREFIX}" --region "${CDK_AWS_REGION}")
+        log_info "Signing in as the eval user"
+    else
+        # The script reads the credentials from SMOKE_USERNAME / SMOKE_PASSWORD so
+        # they never appear on a command line.
+        export SMOKE_USERNAME="${USER_USERNAME}"
+        export SMOKE_PASSWORD="${USER_PASSWORD}"
+        auth_args=(--auth cognito)
+    fi
+    local publish_args=()
+    if [ "${TURN_SMOKE_PUBLISH:-}" = "true" ]; then
+        publish_args=(--publish --prefix "${CDK_PROJECT_PREFIX}" --region "${CDK_AWS_REGION}")
+        log_info "Publishing the result to the release ledger"
+    fi
 
     cd "${BACKEND_DIR}"
+    export AWS_REGION="${CDK_AWS_REGION}"
     # shellcheck disable=SC2086 — TURN_SMOKE_EXTRA_ARGS is deliberately word-split
     set +e
     uv run python scripts/smoke_turns.py \
         --base-url "${api_url}" \
-        --auth cognito \
+        "${auth_args[@]}" \
+        ${publish_args[@]+"${publish_args[@]}"} \
         --with-attachments \
         --json "${report}" \
         ${TURN_SMOKE_EXTRA_ARGS:-}

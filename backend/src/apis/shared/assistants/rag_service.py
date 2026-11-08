@@ -662,8 +662,27 @@ RETRIEVED_EXCERPTS_PREAMBLE = (
     "knowledge base contains."
 )
 
+#: Appended to :data:`RETRIEVED_EXCERPTS_PREAMBLE` on an Agent turn that carries
+#: ``knowledge_files`` (``AGENT_KNOWLEDGE_FILES_ENABLED``; never a project
+#: harness, which has ``project_files`` and its own guidance). The excerpts carry
+#: no file names, so an Agent whose instructions say "read Process.txt in full"
+#: had no way to: one searched the user's Google Drive for it instead (2026-11
+#: review). Constant, and absent while the flag is off, so the persisted user
+#: message is byte-identical to before the tool existed.
+KNOWLEDGE_FILES_EXCERPTS_NOTE = (
+    "To read a Knowledge document whole, or to see which documents there are (for example, "
+    "when your instructions name one), call `knowledge_files`. The Knowledge is not in the "
+    "user's Drive or other connected storage, so never look for it there."
+)
 
-def augment_prompt_with_context(user_message: str, context_chunks: List[Dict[str, Any]], max_context_length: int = MAX_CONTEXT_CHARS) -> str:
+
+def augment_prompt_with_context(
+    user_message: str,
+    context_chunks: List[Dict[str, Any]],
+    max_context_length: int = MAX_CONTEXT_CHARS,
+    *,
+    knowledge_files_note: bool = False,
+) -> str:
     """
     Augment user message with retrieved context chunks
 
@@ -677,6 +696,8 @@ def augment_prompt_with_context(user_message: str, context_chunks: List[Dict[str
         user_message: Original user message
         context_chunks: List of context chunks from vector search
         max_context_length: Maximum total length of context to include (chars)
+        knowledge_files_note: The turn carries ``knowledge_files``; append
+            :data:`KNOWLEDGE_FILES_EXCERPTS_NOTE` to the preamble.
 
     Returns:
         Augmented message string with context prepended
@@ -713,7 +734,12 @@ def augment_prompt_with_context(user_message: str, context_chunks: List[Dict[str
 
     # Combine context and user message
     context_section = "\n".join(context_parts)
-    augmented_message = f"""{RETRIEVED_EXCERPTS_PREAMBLE}
+    preamble = (
+        f"{RETRIEVED_EXCERPTS_PREAMBLE} {KNOWLEDGE_FILES_EXCERPTS_NOTE}"
+        if knowledge_files_note
+        else RETRIEVED_EXCERPTS_PREAMBLE
+    )
+    augmented_message = f"""{preamble}
 
 {context_section}
 ---

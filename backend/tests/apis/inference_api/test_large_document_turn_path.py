@@ -418,5 +418,7 @@ class TestMetric:
         [(namespace, record)] = emitted
         assert namespace == "AgentCoreStack/Compaction"
         assert record["metrics"] == {"AttachmentReference": 1}
-        assert record["properties"] == {"sizeBucket": "32-50MB", "format": "pdf", "status": "ready"}
+        assert record["properties"] == {
+            "sizeBucket": "32-50MB", "format": "pdf", "status": "ready", "reason": "size"
+        }
         assert "policy-manual" not in json.dumps(record)

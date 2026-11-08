@@ -281,12 +281,20 @@ FEEDBACK_ROW_PROJECTION: Tuple[str, ...] = (
     "updatedAt",
 )
 
+#: SRCV# provenance rows as the release ledger's quality join reads them
+#: (``apis.shared.costs.ledger_provenance``): the session to join on, when, and
+#: each claim's verdict state. Never the claim's quote, value or filename,
+#: which carry the user's document; ``claims.state`` is requested per list
+#: index (``claims[i].state``) so nothing else of a claim leaves DynamoDB.
+PROVENANCE_STATE_PROJECTION: Tuple[str, ...] = ("sessionId", "createdAt", "claims.state")
+
 ALL_PROJECTIONS: Dict[str, Tuple[str, ...]] = {
     "SESSION_ROW_PROJECTION": SESSION_ROW_PROJECTION,
     "CALL_ROW_PROJECTION": CALL_ROW_PROJECTION,
     "LEDGER_ROW_PROJECTION": LEDGER_ROW_PROJECTION,
     "FILE_ROW_PROJECTION": FILE_ROW_PROJECTION,
     "FEEDBACK_ROW_PROJECTION": FEEDBACK_ROW_PROJECTION,
+    "PROVENANCE_STATE_PROJECTION": PROVENANCE_STATE_PROJECTION,
 }
 
 

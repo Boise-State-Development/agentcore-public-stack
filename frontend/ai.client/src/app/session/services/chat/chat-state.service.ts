@@ -326,6 +326,15 @@ export class ChatStateService {
     }
 
     /**
+     * How a session's last assistant message ended (`end_turn`, `max_tokens`,
+     * `error`, …), or null while one is streaming or none has. `error` means
+     * the turn's reply is the server's error message.
+     */
+    stopReasonFor(sessionId: string): string | null {
+        return this.states().get(sessionId)?.stopReason() ?? null;
+    }
+
+    /**
      * Marks (or clears) whether a session's last turn ended in a recoverable
      * max_tokens truncation that the user can continue from.
      */

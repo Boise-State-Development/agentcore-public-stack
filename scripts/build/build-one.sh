@@ -74,7 +74,9 @@ case "$SERVICE" in
     app-api)
         DOCKERFILE="backend/Dockerfile.app-api"
         SOURCE_DIRS=("backend/src")
-        MANIFESTS=("backend/pyproject.toml" "backend/uv.lock")
+        # tool_spec_tokens.json is a single-file COPY (the release ledger's
+        # tools table), so it is hashed here or a re-measurement ships stale.
+        MANIFESTS=("backend/pyproject.toml" "backend/uv.lock" "backend/evals/tool_spec_tokens.json")
         PLATFORM=""
         SSM_KEY="/${CDK_PROJECT_PREFIX}/app-api/image-tag"
         ;;
@@ -263,6 +265,7 @@ case "$SERVICE" in
             "backend/src/apis/shared/extraction/extraction_store.py"
             "backend/src/apis/shared/extraction/field_sets.py"
             "backend/src/apis/shared/extraction/schema.py"
+            "backend/src/apis/shared/models/assistant_prefill.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).

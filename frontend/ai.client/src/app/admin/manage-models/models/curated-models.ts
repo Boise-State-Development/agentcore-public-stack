@@ -198,9 +198,19 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       // already saved in a deployment never picks up a change here. The
       // effort enum is the endpoint's own 400 on a bogus level; `medium` is
       // the card's published default.
+      //
+      // max_tokens defaults to 64K, half the card's 128K. At 32K, long
+      // structured answers (a 91-row clause checklist over three documents, a
+      // full Word-document build) were cut at exactly 32,000 output tokens.
+      // 64K fits two such answers, and a longer one still ends in the
+      // Continue affordance, not an error. The cap bounds the worst case only:
+      // a call bills the tokens it writes, so a typical answer costs the same
+      // either way, and a capped call costs ~$1.41 at $22/MTok (128K would be
+      // ~$2.82, paid again on every tool round that hits it). A saved catalog
+      // row keeps its own default; admins change it in Manage Models.
       supportedParams: {
         params: {
-          max_tokens: { supported: true, min: 1, max: 128_000, default: 32_000 },
+          max_tokens: { supported: true, min: 1, max: 128_000, default: 64_000 },
           effort: {
             supported: true,
             allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -339,6 +349,12 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       // bedrock-runtime, so context attribution records nothing for this id.
       // The cache minimum measured between 475 (no write) and 772 tokens
       // (written); the card says 512.
+      //
+      // max_tokens stays at 32K, below the card's 128K, because of the 100K
+      // input step above. Output becomes input: the next tool round in the
+      // same turn, and the next turn, re-send it. A 64K answer on a 50K prompt
+      // puts the following call past 100K and bills it at 5x, and compaction
+      // cannot cut inside a protected turn to prevent that.
       supportedParams: {
         params: {
           max_tokens: { supported: true, min: 1, max: 128_000, default: 32_000 },

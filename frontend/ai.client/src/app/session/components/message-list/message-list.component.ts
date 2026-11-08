@@ -92,12 +92,18 @@ interface Turn {
  * tool call, which is precisely the grouping this component is trying to do,
  * and they start a spurious turn group on top of that.
  *
+ * The stored continue prompt (`continuation`) is scaffolding too: on a model
+ * that refuses assistant prefill, Continue sends a fixed user turn the user
+ * never typed. Rendered, it split one answer into two around a bubble the
+ * user did not write; skipped, the partial and its continuation are one run.
+ *
  * A mid-turn steer is the case this must NOT catch: that is a real user
  * message with real text, and the words on either side of it are answers to
  * different things, so it genuinely should break the run.
  */
 function isProtocolScaffolding(message: Message): boolean {
   if (message.role !== 'user') return false;
+  if (message.continuation) return true;
   return message.content.every((block) => block.type === 'toolResult');
 }
 
@@ -1030,7 +1036,8 @@ export class MessageListComponent {
    */
   scrollToLastUserMessage(behavior: ScrollBehavior = 'smooth'): void {
     const msgs = this.messages();
-    const lastUserMsg = [...msgs].reverse().find(m => m.role === 'user');
+    // Scaffolding never renders, so it has no element to scroll to.
+    const lastUserMsg = [...msgs].reverse().find(m => m.role === 'user' && !isProtocolScaffolding(m));
     if (lastUserMsg) {
       this.scrollToMessage(lastUserMsg.id, behavior);
     }

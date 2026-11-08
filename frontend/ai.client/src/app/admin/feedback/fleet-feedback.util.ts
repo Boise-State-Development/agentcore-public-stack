@@ -11,6 +11,7 @@ export const DIMENSION_LABELS: Record<string, string> = {
   agentSwitch: 'Agent switch',
   callsSinceCompaction: 'Distance from a compaction cut',
   turnClass: 'Document turn class',
+  version: 'App version',
 };
 
 export const DIMENSION_HINTS: Record<string, string> = {
@@ -18,6 +19,7 @@ export const DIMENSION_HINTS: Record<string, string> = {
   agentSwitch: 'An @-mention forks the history. Does it also cost quality?',
   callsSinceCompaction: 'Does quality drop after history is summarised away?',
   turnClass: 'Full document in context, a digest only, or pages retrieved back.',
+  version: 'The release that answered. "unstamped" is a turn from before versions were recorded.',
 };
 
 export const REASON_LABELS: Record<string, string> = {

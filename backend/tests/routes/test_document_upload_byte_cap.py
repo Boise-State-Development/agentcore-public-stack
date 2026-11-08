@@ -197,10 +197,13 @@ class TestManagedUploadIsCapped:
 
 
 class TestLegacyUploadIsNotCapped:
-    def test_a_legacy_kb_is_never_reserved_against(self, table, app):
-        """No KB_Record -> legacy -> uncapped. The upload succeeds and nothing is
-        written to a KB accounting record."""
+    def test_a_legacy_kb_is_never_reserved_against(self, table, app, monkeypatch):
+        """No KB_Record -> legacy -> no byte cap. An upload far over the managed cap
+        (but inside the classic per-file limit) succeeds and nothing is written to a
+        KB accounting record."""
         # deliberately no _seed_managed_kb
+        monkeypatch.setenv("MANAGED_KB_PER_OWNER_DEFAULT_BYTES", "5000")
+        monkeypatch.setenv("MANAGED_KB_PER_KB_CEILING_BYTES", "5000")
 
         with patch(
             f"{ROUTES_MODULE}.resolve_assistant_permission",
@@ -213,7 +216,7 @@ class TestLegacyUploadIsNotCapped:
             new_callable=AsyncMock,
             return_value=("https://signed.example/put", None),
         ):
-            resp = _post(app, 10_000_000_000)  # 10 GB, would fail any managed cap
+            resp = _post(app, 10 * 1024 * 1024)  # 2000x the managed cap set above
 
         assert resp.status_code == 200
         assert _kb(table) is None, "a legacy upload created a byte-cap record"

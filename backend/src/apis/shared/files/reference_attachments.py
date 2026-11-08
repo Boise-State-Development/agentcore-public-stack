@@ -13,6 +13,15 @@ block per file:
 of CPU before the first token; the ``large-document-prepare`` Lambda builds it off
 the request path.
 
+**Over the message budget (``over_budget``).** An inline-class upload (a document
+of at most ``INLINE_DOCUMENT_MAX_BYTES``) that does not fit in the turn's combined
+inline budget (``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES``) rides by reference too,
+instead of being dropped. It needs no preparation: its digest was built in-process
+when it was uploaded, and ``document_read`` reads a file that size straight from the
+original. So it renders like a prepared reference, from the same row the resolver
+already read: its stored digest, or a ``status="ready"`` stub when that digest is
+not there.
+
 **Prompt-cache contract (§4B.5).** The block is rendered once, into the persisted
 user message, and is a pure function of the row as it was read on that turn. A
 digest that becomes ready later never rewrites the earlier message (the model gets
@@ -52,6 +61,9 @@ class ReferenceAttachment:
     """
 
     meta: FileMetadata
+    #: An inline-class upload moved out of the turn's combined inline budget
+    #: (module docstring). Readable from the original, so never "preparing".
+    over_budget: bool = False
 
     @property
     def filename(self) -> str:
@@ -80,8 +92,12 @@ class ReferenceAttachment:
         return document_format_for(self.meta.mime_type, self.meta.filename)
 
     def ready_digest(self) -> Optional[DocumentDigest]:
-        """The stored digest, when preparation is ready and the digest built."""
-        if not large_document.is_prepared(self.meta):
+        """The stored digest, when preparation is ready and the digest built.
+
+        An ``over_budget`` file is never prepared: its digest is the in-process
+        one written at upload, so only the digest's own status is checked.
+        """
+        if not self.over_budget and not large_document.is_prepared(self.meta):
             return None
         digest = DocumentDigest.from_item(self.meta.digest)
         if digest is None or digest.status != "ready":
@@ -89,6 +105,8 @@ class ReferenceAttachment:
         return digest
 
     def stub_status(self) -> str:
+        if self.over_budget:
+            return STUB_STATUS_READY
         status = large_document.preparation_status(self.meta)
         if status == large_document.STATUS_READY:
             return STUB_STATUS_READY
@@ -139,6 +157,9 @@ _SIZE_BUCKETS_MB = (8, 16, 32, 50)
 
 def size_bucket(size_bytes: int) -> str:
     mb = size_bytes / (1024 * 1024)
+    if mb <= 4:
+        # Only an ``over_budget`` reference is this small.
+        return "0-4MB"
     lower = 4
     for upper in _SIZE_BUCKETS_MB:
         if mb <= upper:
@@ -151,8 +172,9 @@ def record_reference_attachments(refs: List[ReferenceAttachment]) -> None:
     """One content-free ``AttachmentReference`` EMF record per reference (§6).
 
     In ``AgentCoreStack/Compaction`` beside ``DocumentRead``. Properties are the
-    size bucket, the format and the stub status: never a name, an id or text.
-    Never raises.
+    size bucket, the format, the stub status and why the file went by reference
+    (``size``, or ``over_budget`` for one moved out of the combined inline budget):
+    never a name, an id or text. Never raises.
     """
     if not refs:
         return
@@ -170,6 +192,7 @@ def record_reference_attachments(refs: List[ReferenceAttachment]) -> None:
                     "sizeBucket": size_bucket(ref.size_bytes),
                     "format": ref.format,
                     "status": ref.stub_status(),
+                    "reason": "over_budget" if ref.over_budget else "size",
                 },
                 units={"AttachmentReference": "Count"},
             )
