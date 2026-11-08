@@ -46,7 +46,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
 
-from agents.builtin_tools.office.docx_redline import Change, RedlineError, redline
+from agents.builtin_tools.office.docx_redline import Change, NewParagraph, RedlineError, redline
 from agents.main_agent.skills.skill_scripts import (
     SkillScript,
     SkillScriptError,
@@ -873,8 +873,39 @@ def _parse_changes(changes: Any) -> Tuple[List[Change], List[str]]:
         if occurrence is not None and (isinstance(occurrence, bool) or not isinstance(occurrence, int)):
             problems.append(f"{label}: `occurrence` must be a whole number.")
             continue
-        parsed.append(Change(find, replace, comment, occurrence))
+        if raw.get("insert") is None and raw.get("paragraphs") is None:
+            parsed.append(Change(find, replace, comment, occurrence))
+            continue
+        insert = raw.get("insert")
+        new, problem = _parse_new_paragraphs(raw.get("paragraphs"), label)
+        if problem:
+            problems.append(problem)
+            continue
+        if not isinstance(insert, str):
+            problems.append(f'{label}: `insert` must be "after" or "before".')
+            continue
+        parsed.append(Change(find, replace, comment, occurrence, insert.strip().lower(), new))
     return parsed, problems
+
+
+def _parse_new_paragraphs(raw: Any, label: str) -> Tuple[Tuple[NewParagraph, ...], Optional[str]]:
+    """``paragraphs`` as :class:`NewParagraph` objects; a bare string is its ``text``."""
+    if not isinstance(raw, list) or not raw:
+        return (), f"{label}: `paragraphs` must be a non-empty list of {{text, like?, lead?}}."
+    out: List[NewParagraph] = []
+    for number, item in enumerate(raw, 1):
+        if isinstance(item, str):
+            item = {"text": item}
+        if not isinstance(item, dict):
+            return (), f"{label}: new paragraph {number} must be an object with `text`."
+        text, like, lead = item.get("text"), item.get("like"), item.get("lead")
+        if not isinstance(text, str):
+            return (), f"{label}: new paragraph {number} needs `text`."
+        for name, value in (("like", like), ("lead", lead)):
+            if value is not None and not isinstance(value, str):
+                return (), f"{label}: new paragraph {number}'s `{name}` must be text."
+        out.append(NewParagraph(text, like, lead))
+    return tuple(out), None
 
 
 def _default_redline_name(source_base: str) -> str:
@@ -891,13 +922,74 @@ def _default_redline_name(source_base: str) -> str:
     return f"{safe or 'document'}-redline"
 
 
+async def _redline_word_document(
+    session_id: str,
+    user_id: str,
+    user_name: Optional[str],
+    document_name: str,
+    changes: Any,
+    author: Optional[str],
+    output_name: Optional[str],
+) -> Any:
+    if not _storage_configured():
+        return _error(_NO_STORAGE_MESSAGE)
+
+    parsed, problems = _parse_changes(changes)
+    if problems:
+        return _error("❌ Nothing was changed:\n" + "\n".join(f"- {p}" for p in problems))
+
+    source = await _find_word_document(user_id, session_id, document_name)
+    if source is None:
+        return _error(
+            f"❌ No Word document named '{document_name}' was found in this "
+            "chat. Use list_word_documents to see what's available."
+        )
+
+    source_base = source.filename[: -len(".docx")] if source.filename.lower().endswith(".docx") else source.filename
+    out_base = output_name or _default_redline_name(source_base)
+    if out_base.lower().endswith(".docx"):
+        out_base = out_base[: -len(".docx")]
+    is_valid, error_msg = _validate_document_name(out_base)
+    if not is_valid:
+        return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
+    output_filename = f"{out_base}.docx"
+    reviewer = (author or user_name or "").strip() or "Reviewer"
+
+    try:
+        source_bytes = await asyncio.to_thread(
+            _download_s3_bytes, source.s3_bucket, source.s3_key
+        )
+        result = await asyncio.to_thread(redline, source_bytes, parsed, reviewer)
+    except RedlineError as exc:
+        return _error(
+            f"❌ Nothing was changed in '{source.filename}':\n"
+            + "\n".join(f"- {p}" for p in exc.problems)
+        )
+    except Exception as exc:  # noqa: BLE001 - surface any read/parse error
+        logger.error(f"redline_word_document error: {exc}")
+        return _error(f"❌ Failed to redline '{source.filename}': {exc}")
+
+    try:
+        upload_id, size_kb = await _store_document(
+            user_id, session_id, output_filename, result.docx, _DOCX_MIME
+        )
+    except Exception as exc:  # noqa: BLE001 - storage failure is terminal
+        logger.error(f"redline_word_document storage error: {exc}")
+        return _error(
+            f"❌ Redlined '{source.filename}' but failed to save it: {exc}"
+        )
+
+    details = f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
+    return _download_card(output_filename, upload_id, size_kb, "Redlined", details)
+
+
 def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Optional[str]):
     """Create a ``redline_word_document`` tool bound to the given identity.
 
     Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on
     (``docs/specs/word-tracked-changes.md`` §3). ``user_name`` is the default
     author of each revision: a redline goes back to the counterparty as the
-    user's.
+    user's. Changes can also insert whole paragraphs (§3a).
     """
 
     @tool
@@ -933,6 +1025,21 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
                 - comment: optional comment on the change, or on `find` alone
                   when there is no `replace`.
                 - occurrence: 1-based, only when `find` appears more than once.
+                To add whole paragraphs (a new section, list item or clause),
+                give these instead of `replace`:
+                - insert: "after" or "before" the paragraph `find` is in.
+                - paragraphs: the new paragraphs in order, each {"text": ...,
+                  "like"?: ..., "lead"?: ...}. `like` is wording from the
+                  paragraph whose style, numbering and font to copy (default:
+                  the `find` paragraph), so one like a numbered heading or
+                  list item takes the next number; where numbers are typed,
+                  write the number in `text`. `lead` is an inline heading
+                  such as "Survival." in that paragraph's lead-in format.
+                  A `comment` goes on the `find` paragraph. Example, a new
+                  section after section 7: {"find": "<words from section 7's
+                  last paragraph>", "insert": "after", "paragraphs":
+                  [{"text": "Survival", "like": "<words of a section
+                  heading>"}, {"text": "Sections 4 and 5 survive..."}]}
             author: Name shown on each change. Defaults to the user's name.
             output_name: File name for the redline, without extension.
                 Defaults to "<document_name>-redline".
@@ -940,56 +1047,9 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
         Returns:
             A download card for the redline and one line per change applied.
         """
-        if not _storage_configured():
-            return _error(_NO_STORAGE_MESSAGE)
-
-        parsed, problems = _parse_changes(changes)
-        if problems:
-            return _error("❌ Nothing was changed:\n" + "\n".join(f"- {p}" for p in problems))
-
-        source = await _find_word_document(user_id, session_id, document_name)
-        if source is None:
-            return _error(
-                f"❌ No Word document named '{document_name}' was found in this "
-                "chat. Use list_word_documents to see what's available."
-            )
-
-        source_base = source.filename[: -len(".docx")] if source.filename.lower().endswith(".docx") else source.filename
-        out_base = output_name or _default_redline_name(source_base)
-        if out_base.lower().endswith(".docx"):
-            out_base = out_base[: -len(".docx")]
-        is_valid, error_msg = _validate_document_name(out_base)
-        if not is_valid:
-            return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
-        output_filename = f"{out_base}.docx"
-        reviewer = (author or user_name or "").strip() or "Reviewer"
-
-        try:
-            source_bytes = await asyncio.to_thread(
-                _download_s3_bytes, source.s3_bucket, source.s3_key
-            )
-            result = await asyncio.to_thread(redline, source_bytes, parsed, reviewer)
-        except RedlineError as exc:
-            return _error(
-                f"❌ Nothing was changed in '{source.filename}':\n"
-                + "\n".join(f"- {p}" for p in exc.problems)
-            )
-        except Exception as exc:  # noqa: BLE001 - surface any read/parse error
-            logger.error(f"redline_word_document error: {exc}")
-            return _error(f"❌ Failed to redline '{source.filename}': {exc}")
-
-        try:
-            upload_id, size_kb = await _store_document(
-                user_id, session_id, output_filename, result.docx, _DOCX_MIME
-            )
-        except Exception as exc:  # noqa: BLE001 - storage failure is terminal
-            logger.error(f"redline_word_document storage error: {exc}")
-            return _error(
-                f"❌ Redlined '{source.filename}' but failed to save it: {exc}"
-            )
-
-        details = f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
-        return _download_card(output_filename, upload_id, size_kb, "Redlined", details)
+        return await _redline_word_document(
+            session_id, user_id, user_name, document_name, changes, author, output_name
+        )
 
     return redline_word_document
 
