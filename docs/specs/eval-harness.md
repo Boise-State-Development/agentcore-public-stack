@@ -420,11 +420,11 @@ Each PR re-promotes the baselines its families touch, for every model with a com
 
 ## 16. Phase 3 — the Evaluations page
 
-**Status:** Proposed 2026-11-07. It refines §12's phase 3 and depends on the release ledger's PR-5 (built: `score --publish` and `LEDGER#EVAL`).
+**Status:** Proposed 2026-11-07. It refines §12's phase 3. Both of its release-ledger dependencies are built: PR-5 (`score --publish` and `LEDGER#EVAL`) and PR-6 (the Releases tab and its quality panel, `frontend/ai.client/src/app/admin/costs/releases/`, #1921).
 
 ### 16.1 What the ledger panel already shows, and what it cannot
 
-The release ledger's quality panel (`release-ledger.md` §6.4, item 7) puts the §8 table next to each version. That answers "is this version as good as the last one". It cannot answer the questions someone reading eval results asks next:
+The release ledger's quality panel (`release-ledger.md` §6.4, item 7; `release-quality-panel.component.ts`) puts the §8 table next to each version. That answers "is this version as good as the last one". It cannot answer the questions someone reading eval results asks next:
 
 - **Trend.** How has `document_qa` moved over the last 30 nightly runs, on one model?
 - **Which cases.** Which cases flipped, and is this one a regression or a case that always flips?
@@ -437,7 +437,7 @@ Most of this needs per-case outcomes, and the ledger row deliberately leaves out
 
 **D20 — Per-case outcomes join the `LEDGER#EVAL` row, as ids and codes.** `score --publish` adds `cases: {caseId: {pass, passes, samples, base, codes}}` and `track` (`nightly`, `release` or `manual`, from `--track`). `codes` are the failure kinds `score_sample` already produces, mapped to a closed vocabulary (`missing_value`, `forbidden_value`, `tool_missing`, `tool_forbidden`, `tool_order`, `max_calls`, `format`, `refusal_missed`, `over_refusal`, `skill_missing`, `skill_unexpected`, `memory`, `status`, `empty`), and a tool's or skill's name goes in a separate `names` list. Case ids are synthetic and stable (D6, §5), and every one passes `ID_TEXT`, so `assert_content_free` keeps its allowlist, gaining only the new field names. Answers, prompts and failure prose stay out, exactly as today. At 138 cases a row grows by about 13 KB, far under DynamoDB's 400 KB item limit. This reverses one line of `release-ledger.md` §5.4 (flipped case ids stay out), and that spec gets a note saying so, with the reason: an id that names a synthetic case reveals nothing, and a failure's reader needs it.
 
-**D21 — One page, reading the ledger's rows. No second store.** The page is `/admin/evaluations` in the admin console (`data.chrome: 'admin'` inherited from `/admin`), gated by `features.releaseLedger` (which the Releases tab adds) and the `admin.costs` scope, because it reads `LEDGER#EVAL` rows through the ledger's store. Its one new route is `GET /admin/costs/ledger/evals?from&to&modelId&track`, which returns the rows in range, newest first. The release ledger's quality panel links each version's eval line to the page, filtered to that build.
+**D21 — One page, reading the ledger's rows. No second store.** The page is `/admin/evaluations` in the admin console (`data.chrome: 'admin'` inherited from `/admin`), gated by `features.releaseLedger` (on in `environment.development.ts`, off by default and in prod), because it reads `LEDGER#EVAL` rows through the ledger's store. Its one new route is `GET /admin/costs/ledger/evals?from&to&modelId&track` on the ledger router (`app_api/admin/costs/ledger_routes.py`), behind `require_ledger_admin` like every other ledger route: `admin.costs` first, then the flag, so a 404 never hides a 401 or 403. It returns the rows in range, newest first. The release ledger's quality panel links each version's eval line to the page, filtered to that build.
 
 **D22 — Never a pooled score, never two models on one line.** As the release ledger's D6 says, no number on the page averages across families. A baseline is per model (D10), so every chart is drawn for one model id at a time, chosen in the page header. A judge mean is shown with its `n`, and a family under the floor of D18 is labelled with its `n`, not hidden.
 
@@ -456,6 +456,6 @@ The page is read-only. Starting a run from the page is still open (§12); it is 
 ### 16.4 Punch list
 
 - **PR-9 — data.** `--track` on `score --publish`, `cases` and `names` with the code mapping in `ledger_publish.py`, the allowlist test extended, and the nightly and release callers passing their track. The `release-ledger.md` §5.4 note.
-- **PR-10 — page.** `GET /admin/costs/ledger/evals`, the page, the panel link, specs for the gate grid and the noisy-case rule, and verification in the browser on dev against at least ten nightly rows.
+- **PR-10 — page.** `GET /admin/costs/ledger/evals`, the page, the link from `release-quality-panel.component.ts`, specs for the gate grid and the noisy-case rule, and verification in the browser on dev against at least ten nightly rows.
 
 A trend needs history, so PR-9 should land as soon as possible: every nightly run before it publishes a row without per-case outcomes, and that history cannot be backfilled. The run directories that would hold it go with the nightly runner.
