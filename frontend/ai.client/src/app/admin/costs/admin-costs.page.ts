@@ -230,12 +230,15 @@ const ALL_TABS: ReadonlyArray<{ id: CostTab; label: string; icon: string }> = [
 
           <!-- inline-flex, never flex: a strip stretched to the content
                width reads as a segmented control over the whole page rather
-               than as four choices. -->
+               than as separate choices. max-w-full + flex-wrap: between the
+               sm breakpoint and a wide console the six tabs do not fit on one
+               row beside the sidenav, and a strip wider than its column
+               scrolled the whole page sideways. -->
           <div
             role="tablist"
             aria-label="Cost analytics views"
             (keydown)="onTabKeydown($event)"
-            class="hidden items-center gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 sm:inline-flex dark:border-gray-700 dark:bg-gray-800"
+            class="hidden max-w-full flex-wrap items-center gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 sm:inline-flex dark:border-gray-700 dark:bg-gray-800"
           >
             @for (tab of tabs; track tab.id) {
               <button

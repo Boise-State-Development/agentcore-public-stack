@@ -164,6 +164,9 @@ export class ReleaseLedgerStateService {
     this.unitOverride.set(unit);
     this.candidateKey.set(null);
     this.baselineKey.set(null);
+    // A version readout under a strip of builds would be read as a build's.
+    this.readout.set(null);
+    this.tools.set(null);
     void this.load();
   }
 

@@ -5,6 +5,9 @@ import { LedgerReadout, ReadoutSide } from '../models';
 import { UnitChip, caveatTone, formatPercent, unitLabel } from './release-ledger.util';
 import { WINDOW_DAYS } from './release-ledger-state.service';
 
+/** The readout's own floor for a model to count in the mix (`ledger_readout.MIX_SHIFT_MIN_SHARE`). */
+const MIX_SHIFT_MIN_SHARE = 0.05;
+
 /**
  * Candidate vs baseline, their windows, the mix-shift warning and the
  * caveats, all before any number (release-ledger spec §6.4 item 2, D5).
@@ -76,12 +79,17 @@ import { WINDOW_DAYS } from './release-ledger-state.service';
             <div class="text-sm/6 text-state-warning-900 dark:text-state-warning-100">
               <p class="font-semibold">Mix shift: read this before any delta</p>
               <p>The work changed between the windows, so a cost delta may be the mix, not the code.</p>
-              @if (mixModels().length > 0) {
+              @if (mixModels().shown.length > 0) {
                 <ul role="list" class="mt-2 space-y-0.5">
-                  @for (m of mixModels(); track m.modelId) {
+                  @for (m of mixModels().shown; track m.modelId) {
                     <li class="tabular-nums"><span class="font-mono text-xs/5">{{ m.modelId }}</span>: {{ m.baseline }} → {{ m.candidate }} of calls</li>
                   }
                 </ul>
+              }
+              @if (mixModels().minor > 0) {
+                <p class="mt-1">
+                  {{ mixModels().minor }} other model{{ mixModels().minor === 1 ? '' : 's' }} under 5% of calls in both windows.
+                </p>
               }
               @if (activeUsers(); as users) {
                 <p class="mt-1 tabular-nums">Mean daily active users: {{ users }}</p>
@@ -130,13 +138,18 @@ export class ReleaseCompareHeaderComponent {
     return (index < 0 ? chips.filter(c => c.key !== key) : chips.slice(0, index)).slice().reverse();
   });
 
-  protected readonly mixModels = computed(() =>
-    Object.entries(this.readout().mixShift.models).map(([modelId, [b, c]]) => ({
-      modelId,
-      baseline: formatPercent(b),
-      candidate: formatPercent(c),
-    })),
-  );
+  /**
+   * The models the readout's mix-shift test looks at: 5% of calls or more in
+   * either window (`MIX_SHIFT_MIN_SHARE`). The rest are counted, not listed;
+   * on dev a dozen models at a fraction of a percent buried the two that moved.
+   */
+  protected readonly mixModels = computed(() => {
+    const entries = Object.entries(this.readout().mixShift.models);
+    const shown = entries
+      .filter(([, [b, c]]) => Math.max(b, c) >= MIX_SHIFT_MIN_SHARE)
+      .map(([modelId, [b, c]]) => ({ modelId, baseline: formatPercent(b), candidate: formatPercent(c) }));
+    return { shown, minor: entries.length - shown.length };
+  });
 
   protected readonly activeUsers = computed(() => {
     const [b, c] = this.readout().mixShift.activeUsers;

@@ -80,6 +80,8 @@ describe('ReleaseLedgerStateService', () => {
     await state.load();
     state.setUnit('version');
     expect(state.candidateKey()).toBeNull();
+    // The build readout must not linger under a strip of versions.
+    expect(state.readout()).toBeNull();
     await vi.waitFor(() => expect(http.getSeries).toHaveBeenLastCalledWith(expect.anything(), 'version'));
   });
 });

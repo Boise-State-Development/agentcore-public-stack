@@ -111,6 +111,7 @@ export class ReleaseVersionStripComponent {
       ? `, deploy markers: ${chip.deployMarkers.map(m => m.service).join(', ')}`
       : '';
     const mapped = chip.attributed ? ', attributed by the deploy-time map' : '';
-    return `${chip.key}${role}: ${chip.firstDate} to ${chip.lastDate}, ${chip.daysObserved} days${deploys}${mapped}`;
+    const days = `${chip.daysObserved} day${chip.daysObserved === 1 ? '' : 's'}`;
+    return `${chip.key}${role}: ${chip.firstDate} to ${chip.lastDate}, ${days}${deploys}${mapped}`;
   }
 }

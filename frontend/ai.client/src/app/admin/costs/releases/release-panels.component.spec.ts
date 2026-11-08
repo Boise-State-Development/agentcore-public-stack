@@ -67,6 +67,25 @@ describe('ReleaseCompareHeaderComponent', () => {
     expect(text(el)).not.toContain('$0.00865');
   });
 
+  it('lists only models at 5% of calls or more, and counts the rest', () => {
+    const readout = readoutFixture({
+      mixShift: {
+        warn: true,
+        models: {
+          'us.anthropic.claude-haiku-5-5': [0.45, 0.92],
+          'us.openai.gpt-5.6-sol': [0, 0.0072],
+          'us.moonshotai.kimi-k3': [0.01, 0.0064],
+        },
+        activeUsers: [4, 3],
+      },
+    });
+    const fixture = render(ReleaseCompareHeaderComponent, { readout, chips });
+    const box = text(fixture.nativeElement.querySelector('[data-testid="mix-shift"]'));
+    expect(box).toContain('us.anthropic.claude-haiku-5-5');
+    expect(box).not.toContain('gpt-5.6-sol');
+    expect(box).toContain('2 other models under 5% of calls in both windows.');
+  });
+
   it('omits the warning when the mix held', () => {
     const readout = readoutFixture({ mixShift: { warn: false, models: {}, activeUsers: [4, 4] } });
     const fixture = render(ReleaseCompareHeaderComponent, { readout, chips });
@@ -106,6 +125,9 @@ describe('ReleaseToolsTableComponent', () => {
     expect(text(rows[0])).toContain('browse_web');
     expect(text(rows[0])).toContain('4.0% → 9.0%');
     expect(text(rows[1])).toContain('fetch_url_content (payload not measured)');
+    // A window from before the census weighed results reads "—", never "0 chars" or "$0.00".
+    expect(text(rows[1])).toContain('— → 6,100 chars');
+    expect(text(rows[1])).toContain('— → $0.0500');
     expect(text(rows[1])).toContain('310');
     expect(text(fixture.nativeElement)).toContain('Not recorded by the tool census yet: awaiting-user share.');
   });

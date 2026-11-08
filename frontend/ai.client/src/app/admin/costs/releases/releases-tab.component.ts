@@ -178,7 +178,7 @@ const CHART_FORMAT: Record<KpiFormat, TrendChartFormat> = {
             [primaryFormat]="trendFormat()"
             secondaryLabel="Calls"
             [showSummary]="false"
-            emptyText="No ledger rows in this range"
+            [emptyText]="state.series() ? 'No ledger rows in this range' : 'Loading the series…'"
           />
         </section>
 

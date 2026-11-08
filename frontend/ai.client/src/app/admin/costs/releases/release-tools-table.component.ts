@@ -99,10 +99,10 @@ export class ReleaseToolsTableComponent {
       toolId: t.toolId,
       calls: pair(t.calls, 'number'),
       errorRate: pair(t.errorRate, 'percent'),
-      payload: pair(t.resultCharsPerCall, 'chars'),
+      payload: pair(measured(t, t.resultCharsPerCall), 'chars'),
       latency: pair(t.meanDurationMs, 'ms'),
-      estTokens: pair(t.estInputTokens, 'number'),
-      estUsd: pair(t.estInputUsd, 'usd'),
+      estTokens: pair(measured(t, t.estInputTokens), 'number'),
+      estUsd: pair(measured(t, t.estInputUsd), 'usd'),
       specTokens: t.specTokens === null ? '—' : t.specTokens.toLocaleString('en-US'),
       unmeasured: t.payloadMeasured.includes(false),
     })),
@@ -113,6 +113,17 @@ export class ReleaseToolsTableComponent {
       .map(f => NOT_MEASURED_LABELS[f] ?? f)
       .join(', '),
   );
+}
+
+/**
+ * A window whose rows predate the census's payload fields reads 0 for every
+ * payload measure; that is "not measured", not "nothing", so it prints as "—".
+ */
+function measured(tool: ReadoutTool, values: LedgerPair<number | null>): LedgerPair<number | null> {
+  return [
+    tool.payloadMeasured[0] === false ? null : values[0],
+    tool.payloadMeasured[1] === false ? null : values[1],
+  ];
 }
 
 function pair(values: LedgerPair<number | null>, format: KpiFormat): string {

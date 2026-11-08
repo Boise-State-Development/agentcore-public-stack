@@ -441,7 +441,8 @@ function versionBandsPlugin(
   const fills = isDarkMode
     ? ['rgba(148, 163, 184, 0.14)', 'rgba(148, 163, 184, 0.06)']
     : ['rgba(100, 116, 139, 0.12)', 'rgba(100, 116, 139, 0.04)'];
-  const text = isDarkMode ? '#cbd5e1' : '#475569';
+  // slate-200 / slate-700: AA against both tints, which the lighter pair was not.
+  const text = isDarkMode ? '#e2e8f0' : '#334155';
   const dates = points.map(p => p.date);
   return {
     id: 'versionBands',
@@ -466,7 +467,7 @@ function versionBandsPlugin(
         const right = Math.min(area.right, x.getPixelForValue(last) + step / 2);
         ctx.fillStyle = fills[i % 2];
         ctx.fillRect(left, area.top, right - left, area.bottom - area.top);
-        ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
+        ctx.font = '500 11px ui-sans-serif, system-ui, sans-serif';
         const width = ctx.measureText(band.label).width;
         if (width + 8 <= right - left) {
           ctx.fillStyle = text;
