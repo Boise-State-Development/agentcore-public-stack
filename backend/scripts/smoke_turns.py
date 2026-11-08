@@ -1511,6 +1511,68 @@ async def row_attach_csv(ctx: Context) -> RowResult:
     return RowResult("attach_csv", "PASS", f"CSV diverted, visible to the tools, marker persisted; tools={tools}", warnings)
 
 
+def _generated_fixture(name: str) -> bytes:
+    """A generated eval fixture (``scripts/eval_fixtures``), so smoke and eval send the same file."""
+    from eval_fixtures.build import build
+
+    return build(name)
+
+
+async def row_attach_image(ctx: Context) -> RowResult:
+    if not ctx.args.with_attachments:
+        raise RowSkip("pass --with-attachments")
+    from eval_fixtures.build import SYNC_ERROR_CODE
+
+    sid = ctx.new_session()
+    prompt = "What error code is shown in the attached screenshot? Reply with just the code."
+    files = [{"filename": "smoke.png", "content_type": "image/png",
+              "bytes": base64.b64encode(_generated_fixture("sync_error.png")).decode()}]
+    turn = await ctx.transport.stream_turn(ctx.base_payload(sid, prompt, files=files, enabled_tools=[]))
+    ctx.note(turn)
+    warnings = assert_frame_contract(turn)
+    if SYNC_ERROR_CODE.lower() not in turn.final_text.lower():
+        warnings.append(f"model did not read the code off the image: {turn.final_text[:60]!r}")
+    code, body = await ctx.transport.get_messages(sid)
+    if code != 200 or body is None:
+        raise RowFailure(f"GET /messages -> {code}")
+    has_image = any(
+        c.get("type") == "image" or c.get("image") for m in (body.get("messages") or []) if m.get("role") == "user"
+        for c in (m.get("content") or [])
+    ) or any("smoke.png" in u for u in _message_texts(body, "user"))
+    if not has_image:
+        raise RowFailure("restored user message carries neither an image block nor the attachment marker")
+    return RowResult("attach_image", "PASS", f"image block accepted, answer streamed, attachment restored; tools={_tools_used(turn)}", warnings)
+
+
+async def row_attach_pptx(ctx: Context) -> RowResult:
+    if not ctx.args.with_attachments:
+        raise RowSkip("pass --with-attachments")
+    from eval_fixtures.build import PILOT_SITES
+
+    sid = ctx.new_session()
+    prompt = "According to the attached deck smoke.pptx, how many pilot sites are there this quarter? Reply with just the number."
+    files = [{"filename": "smoke.pptx",
+              "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+              "bytes": base64.b64encode(_generated_fixture("quarterly_review.pptx")).decode()}]
+    turn = await ctx.transport.stream_turn(
+        ctx.base_payload(sid, prompt, files=files, enabled_tools=["create_powerpoint_presentation"])
+    )
+    ctx.note(turn)
+    warnings = assert_frame_contract(turn)
+    if PILOT_SITES not in turn.final_text:
+        warnings.append(f"answer did not say {PILOT_SITES}: {turn.final_text[:60]!r}")
+    # A deck is never a document block (Bedrock has no pptx format): the only
+    # way to its text is the PowerPoint tools, so a turn that did not call
+    # one never read the file, whatever it answered.
+    tools = _tools_used(turn)
+    if "read_powerpoint_presentation" not in tools:
+        raise RowFailure(f"model did not read the diverted deck with read_powerpoint_presentation; tools={tools}")
+    seen = any("smoke.pptx" in json.dumps(f.data) for f in turn.all("tool_result"))
+    if not seen:
+        raise RowFailure("the PowerPoint tools ran but no tool_result mentions smoke.pptx; the diverted deck is not visible to them")
+    return RowResult("attach_pptx", "PASS", f"deck diverted and read through the PowerPoint tools; tools={tools}", warnings)
+
+
 async def row_skill_invoke(ctx: Context) -> RowResult:
     skill = ctx.args.skill_id
     if not skill:
@@ -1577,6 +1639,8 @@ ROWS: List[Tuple[str, Callable[[Context], Awaitable[Any]]]] = [
     ("attach_pdf", row_attach_pdf),
     ("source_provenance", row_source_provenance),
     ("attach_csv", row_attach_csv),
+    ("attach_image", row_attach_image),
+    ("attach_pptx", row_attach_pptx),
     ("skill_invoke", row_skill_invoke),
     ("kb_agent_first_turn", row_kb_agent),
     ("quota_exceeded", row_quota_exceeded),
