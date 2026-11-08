@@ -50,7 +50,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from strands import tool
 
 from agents.builtin_tools.office.docx_compare import DEFAULT_AUTHOR, NoDifferences, compare
-from agents.builtin_tools.office.docx_redline import Change, NewParagraph, RedlineError, redline
+from agents.builtin_tools.office.docx_redline import (
+    IF_UNPLACED,
+    Change,
+    NewParagraph,
+    RedlineError,
+    RedlineResult,
+    redline,
+)
 from agents.main_agent.skills.skill_scripts import (
     SkillScript,
     SkillScriptError,
@@ -877,6 +884,22 @@ def _parse_changes(changes: Any) -> Tuple[List[Change], List[str]]:
         if occurrence is not None and (isinstance(occurrence, bool) or not isinstance(occurrence, int)):
             problems.append(f"{label}: `occurrence` must be a whole number.")
             continue
+        if raw.get("delete") is not None or raw.get("through") is not None:
+            delete, through = raw.get("delete"), raw.get("through")
+            if raw.get("insert") is not None or raw.get("paragraphs") is not None:
+                problems.append(f"{label}: give `insert` or `delete`, not both.")
+                continue
+            if delete is not None and not isinstance(delete, str):
+                problems.append(f'{label}: `delete` must be "paragraph".')
+                continue
+            if through is not None and not isinstance(through, str):
+                problems.append(f"{label}: `through` must be text.")
+                continue
+            if isinstance(delete, str):
+                delete = delete.strip().lower()
+                delete = "paragraph" if delete == "paragraphs" else delete
+            parsed.append(Change(find, replace, comment, occurrence, delete=delete, through=through))
+            continue
         if raw.get("insert") is None and raw.get("paragraphs") is None:
             parsed.append(Change(find, replace, comment, occurrence))
             continue
@@ -934,11 +957,15 @@ async def _redline_word_document(
     changes: Any,
     author: Optional[str],
     output_name: Optional[str],
+    if_unplaced: Any = "fail",
 ) -> Any:
     if not _storage_configured():
         return _error(_NO_STORAGE_MESSAGE)
 
     parsed, problems = _parse_changes(changes)
+    mode = if_unplaced.strip().lower() if isinstance(if_unplaced, str) else None
+    if mode not in IF_UNPLACED:
+        problems.append('`if_unplaced` must be "fail" or "comment".')
     if problems:
         return _error("❌ Nothing was changed:\n" + "\n".join(f"- {p}" for p in problems))
 
@@ -963,7 +990,7 @@ async def _redline_word_document(
         source_bytes = await asyncio.to_thread(
             _download_s3_bytes, source.s3_bucket, source.s3_key
         )
-        result = await asyncio.to_thread(redline, source_bytes, parsed, reviewer)
+        result = await asyncio.to_thread(redline, source_bytes, parsed, reviewer, None, mode)
     except RedlineError as exc:
         return _error(
             f"❌ Nothing was changed in '{source.filename}':\n"
@@ -983,8 +1010,23 @@ async def _redline_word_document(
             f"❌ Redlined '{source.filename}' but failed to save it: {exc}"
         )
 
-    details = f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
-    return _download_card(output_filename, upload_id, size_kb, "Redlined", details)
+    return _download_card(output_filename, upload_id, size_kb, "Redlined", _redline_details(reviewer, result))
+
+
+def _redline_details(reviewer: str, result: RedlineResult) -> str:
+    """What the call did: the applied changes, then (``if_unplaced="comment"``)
+    the ones left as ACTION NEEDED comments, so a read-back fixes only those."""
+    if not result.commented:
+        return f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
+    applied = (
+        f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
+        if result.applied
+        else "No change could be placed."
+    )
+    return (
+        f"{applied} Not placed, left as ACTION NEEDED comments ({len(result.commented)}): "
+        + "; ".join(result.commented)
+    )
 
 
 def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Optional[str]):
@@ -993,7 +1035,10 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
     Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on
     (``docs/specs/word-tracked-changes.md`` §3). ``user_name`` is the default
     author of each revision: a redline goes back to the counterparty as the
-    user's. Changes can also insert whole paragraphs (§3a).
+    user's. Changes can also insert whole paragraphs (§3a) and delete them,
+    paragraph marks included (§3c), and ``if_unplaced="comment"`` leaves the
+    ones it cannot place as ACTION NEEDED comments (§3b); its default keeps the
+    all-or-nothing call.
     """
 
     @tool
@@ -1002,6 +1047,7 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
         changes: List[Dict[str, Any]],
         author: Optional[str] = None,
         output_name: Optional[str] = None,
+        if_unplaced: str = "fail",
     ) -> Any:
         """Propose edits to a Word (.docx) document as tracked changes and comments.
 
@@ -1011,8 +1057,11 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
         Reviewing pane and can be accepted or rejected. The original is kept;
         the redline is saved as a new file and returned as a download card.
 
-        All or nothing: if any change cannot be placed, nothing is saved and
-        the error names each problem, so fix those changes and call again.
+        All or nothing by default: if any change cannot be placed, nothing is
+        saved and the error names each problem, so fix those changes and call
+        again. With if_unplaced="comment", each change that cannot be placed
+        becomes an "ACTION NEEDED" comment on the paragraph it most likely
+        meant, and the rest are saved.
 
         Args:
             document_name: The document to mark up (with or without .docx),
@@ -1044,15 +1093,30 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
                   last paragraph>", "insert": "after", "paragraphs":
                   [{"text": "Survival", "like": "<words of a section
                   heading>"}, {"text": "Sections 4 and 5 survive..."}]}
+                To remove whole paragraphs, give instead of `replace`:
+                - delete: "paragraph" removes the paragraph `find` is in,
+                  paragraph mark included, so the list items or sections
+                  after it renumber once accepted. Prefer it to replace ""
+                  when a whole item, clause or section goes.
+                - through: optional wording from a later paragraph in the
+                  same part of the document (body, cell); every paragraph
+                  from `find`'s through the first after it containing this
+                  is removed, e.g. a section from heading to last paragraph.
+                  A `comment` is placed beside the deletion.
             author: Name shown on each change. Defaults to the user's name.
             output_name: File name for the redline, without extension.
                 Defaults to "<document_name>-redline".
+            if_unplaced: "fail" (default) or "comment". Prefer "comment" for
+                more than a few changes, so one wrong `find` costs no re-send
+                of the rest. To fix a commented change, call again on the saved
+                redline with just that change.
 
         Returns:
-            A download card for the redline and one line per change applied.
+            A download card for the redline, one line per change applied and,
+            with "comment", one per change left as a comment.
         """
         return await _redline_word_document(
-            session_id, user_id, user_name, document_name, changes, author, output_name
+            session_id, user_id, user_name, document_name, changes, author, output_name, if_unplaced
         )
 
     return redline_word_document

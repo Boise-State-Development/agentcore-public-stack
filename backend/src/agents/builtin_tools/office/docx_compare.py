@@ -60,18 +60,22 @@ from agents.builtin_tools.office.docx_redline import (
     Change,
     NewParagraph,
     RedlineError,
+    _block_siblings,
+    _comment_on_paragraph,
+    _Deletion,
+    _deletion_of,
     _Document,
+    _ends_paragraph_run,
+    _Extras,
     _Ids,
     _Insertion,
     _Located,
-    _Paragraph,
-    _ends_paragraph_run,
     _locked_at,
     _locked_within,
-    _mark_inserted,
     _mark_is_revised,
     _nested_text,
     _open_document,
+    _Paragraph,
     _paragraphs,
     _run_text,
     _segments,
@@ -79,12 +83,11 @@ from agents.builtin_tools.office.docx_redline import (
     _template_ppr,
     _template_rpr,
     _trim,
+    _undeletable,
     _write,
 )
 
 DEFAULT_AUTHOR = "Counterparty"
-
-_Extras = Dict[int, Tuple[List[ElementTree.Element], List[ElementTree.Element]]]
 
 #: Similarity a paragraph needs to its counterpart to be paired as a rewording
 #: rather than one removed and one added (``SequenceMatcher.ratio``).
@@ -451,6 +454,10 @@ class _Comparison:
         self.inserts: Dict[Tuple[int, str], Tuple[_Paragraph, List[_Paragraph]]] = {}
         self.removed: List[_Paragraph] = []
         self.removed_ids: Set[int] = set()
+        self.additions: List[Tuple[List[_Block], int, List[_Paragraph], bool, List[ElementTree.Element]]] = []
+        self.deletion_items: List[_Deletion] = []
+        #: Deletions that take a staying paragraph's mark, by that paragraph.
+        self.merged: Dict[int, _Deletion] = {}
         self.notes: List[_Note] = []
         #: Per paragraph: the revised wording its accept view must read as.
         self.expect: Dict[int, Tuple[_Paragraph, str]] = {}
@@ -555,13 +562,13 @@ class _Comparison:
             return
         para = x.para
         assert para is not None
-        locked = next((s.locked for s in _segments(para.element) if s.locked), None)
-        if locked:
+        reason = _undeletable(para.element)
+        if reason:
             self.note(
                 [para.element],
-                f"The revised version removes this paragraph, but it holds {locked}, which cannot be "
+                f"The revised version removes this paragraph, but it {reason}, which cannot be "
                 "marked as a tracked deletion.",
-                f'Not marked: "{_short(para.text, 50)}" is removed, but holds {locked}; a comment says so.',
+                f'Not marked: "{_short(para.text, 50)}" is removed, but it {reason}; a comment says so.',
             )
             return
         self.removed.append(para)
@@ -588,31 +595,77 @@ class _Comparison:
                     f"Not marked: a {what} is added in the revised version; a comment quotes it.",
                 )
         paragraphs = [block.para for block in blocks if block.kind == "p" and block.para is not None]
-        if not paragraphs:
-            return
-        anchor: Optional[Tuple[_Paragraph, str]] = None
-        if gap < len(a) and a[gap].kind == "p":
-            anchor = (a[gap].para, "before")
-        elif gap > 0 and a[gap - 1].kind == "p":
-            before = a[gap - 1]
-            if not (_ends_paragraph_run(before.element, self.parents) and _mark_is_revised(before.element)):
-                anchor = (before.para, "after")
-        if anchor is None or anchor[0] is None:
-            quoted = " / ".join(_short(p.text, 120) for p in paragraphs)
-            self.note(
-                near,
-                f'The revised version adds wording here that cannot be marked as a tracked change: "{_short(quoted, _QUOTE_CHARS)}"',
-                f"Not marked: {len(paragraphs)} paragraph(s) added where no paragraph can hold them; a comment quotes them.",
-            )
-            return
-        para, position = anchor
-        self.inserts.setdefault((id(para.element), position), (para, []))[1].extend(paragraphs)
-        self.added += len(paragraphs)
-        count = "a paragraph" if len(paragraphs) == 1 else f"{len(paragraphs)} paragraphs"
-        quoted = ", ".join(f'"{_short(p.text, 40)}"' for p in paragraphs[:3]) + (" …" if len(paragraphs) > 3 else "")
-        prefix = "In a table: added" if cell else "Added"
-        order = self.where(para.element) + (0.5 if position == "after" else -0.5)
-        self.lines.append((order, f'{prefix} {count} {position} "{_short(para.text, 50)}": {quoted}'))
+        if paragraphs:
+            self.additions.append((list(a), gap, paragraphs, cell, near))
+
+    def anchor(self, a: Sequence[_Block], gap: int) -> Optional[Tuple[_Paragraph, str]]:
+        """Where paragraphs added in the gap before ``a[gap]`` go: before the next
+        paragraph that stays, else after the previous one that stays."""
+        k = gap
+        while k < len(a) and a[k].kind == "p" and id(a[k].element) in self.removed_ids:
+            k += 1
+        if k < len(a) and a[k].kind == "p" and a[k].para is not None:
+            return a[k].para, "before"
+        j = gap - 1
+        while j >= 0 and a[j].kind == "p" and id(a[j].element) in self.removed_ids:
+            j -= 1
+        if j >= 0 and a[j].kind == "p" and a[j].para is not None:
+            stays = a[j]
+            if not (_ends_paragraph_run(stays.element, self.parents) and _mark_is_revised(stays.element)):
+                return stays.para, "after"
+        return None
+
+    def place_additions(self) -> None:
+        for a, gap, paragraphs, cell, near in self.additions:
+            anchor = self.anchor(a, gap)
+            if anchor is None:
+                quoted = " / ".join(_short(p.text, 120) for p in paragraphs)
+                self.note(
+                    near,
+                    f'The revised version adds wording here that cannot be marked as a tracked change: "{_short(quoted, _QUOTE_CHARS)}"',
+                    f"Not marked: {len(paragraphs)} paragraph(s) added where no paragraph can hold them; a comment quotes them.",
+                )
+                continue
+            para, position = anchor
+            if position == "after" and id(para.element) in self.merged:
+                # A deletion would take this paragraph's mark, and the engine
+                # never inserts after such a paragraph: the deletion keeps its
+                # own last mark instead.
+                deletion = self.merged.pop(id(para.element))
+                deletion.marks, deletion.merge_into = deletion.paragraphs[:-1], None
+            self.inserts.setdefault((id(para.element), position), (para, []))[1].extend(paragraphs)
+            self.added += len(paragraphs)
+            count = "a paragraph" if len(paragraphs) == 1 else f"{len(paragraphs)} paragraphs"
+            quoted = ", ".join(f'"{_short(p.text, 40)}"' for p in paragraphs[:3]) + (" …" if len(paragraphs) > 3 else "")
+            prefix = "In a table: added" if cell else "Added"
+            order = self.where(para.element) + (0.5 if position == "after" else -0.5)
+            self.lines.append((order, f'{prefix} {count} {position} "{_short(para.text, 50)}": {quoted}'))
+
+    def deletions(self) -> None:
+        """The removed paragraphs as the redline engine's own deletions, one per
+        run of neighbouring paragraphs, so each loses its mark as
+        ``redline_word_document``'s ``delete`` would (§3c)."""
+        runs: List[List[_Paragraph]] = []
+        for para in sorted(self.removed, key=lambda p: self.where(p.element)):
+            siblings = _block_siblings(para.element, self.parents)
+            if runs:
+                last = runs[-1][-1].element
+                if self.parents[last] is self.parents[para.element]:
+                    at = siblings.index(para.element)
+                    if at > 0 and siblings[at - 1] is last:
+                        runs[-1].append(para)
+                        continue
+            runs.append([para])
+        for index, run in enumerate(runs):
+            change = Change(find=run[0].text, delete="paragraph")
+            deletion, problem = _deletion_of(index, change, run, self.lookup, self.parents)
+            if deletion is None:
+                # Nothing can take the last mark's place: its wording is struck
+                # and the mark stays, as Word does at the end of a cell.
+                deletion = _Deletion(index, change, run, run[:-1], None, None, run[-1])
+            if deletion.merge_into is not None:
+                self.merged[id(deletion.merge_into.element)] = deletion
+            self.deletion_items.append(deletion)
 
     def table(self, x: _Block, y: _Block) -> None:
         grid = _grid(x.element)
@@ -690,42 +743,16 @@ class _Comparison:
         """Notes by paragraph, each on its first candidate that is not removed."""
         placed: Dict[int, Tuple[ElementTree.Element, List[str]]] = {}
         for note in self.notes:
-            host = next((c for c in note.candidates if id(c) not in self.removed_ids and id(c) in self.lookup), None)
+            host = next(
+                (
+                    c for c in note.candidates
+                    if id(c) not in self.removed_ids and id(c) not in self.merged and id(c) in self.lookup
+                ),
+                None,
+            )
             if host is not None:
                 placed.setdefault(id(host), (host, []))[1].append(note.text)
         return placed
-
-
-def _delete_paragraph(para: _Paragraph, parents: Dict[ElementTree.Element, ElementTree.Element], ids: _Ids) -> None:
-    paragraph = para.element
-    group: Optional[ElementTree.Element] = None
-    for child in list(paragraph):
-        if child.tag != _W + "r":
-            group = None
-            continue
-        if group is None:
-            group = ids.revision("del")
-            paragraph.insert(list(paragraph).index(child), group)
-        paragraph.remove(child)
-        for t in child.iter(_W + "t"):
-            t.tag = _W + "delText"
-        group.append(child)
-    if _ends_paragraph_run(paragraph, parents) is None and not _mark_is_revised(paragraph):
-        ppr = paragraph.find(_W + "pPr")
-        if ppr is None:
-            ppr = ElementTree.Element(_W + "pPr")
-            paragraph.insert(0, ppr)
-        _mark_inserted(ppr, ids.revision("del"))
-
-
-def _comment_on(paragraph: ElementTree.Element, text: str, ids: _Ids, comments: List[Tuple[str, str]]) -> None:
-    comment_id = ids.take()
-    start_at = 1 if paragraph.find(_W + "pPr") is not None else 0
-    paragraph.insert(start_at, ElementTree.Element(_W + "commentRangeStart", {_W + "id": comment_id}))
-    paragraph.append(ElementTree.Element(_W + "commentRangeEnd", {_W + "id": comment_id}))
-    reference = ElementTree.SubElement(paragraph, _W + "r")
-    ElementTree.SubElement(reference, _W + "commentReference", {_W + "id": comment_id})
-    comments.append((comment_id, text))
 
 
 def compare(
@@ -756,6 +783,8 @@ def compare(
                 raise RedlineError(problems)
             comparison = _Comparison(ours, theirs)
             comparison.container(ours.body, theirs.body, cell=False)
+            comparison.deletions()
+            comparison.place_additions()
 
         placed = comparison.placed_notes()
         unmarked = [n.line for n in comparison.notes]
@@ -765,13 +794,11 @@ def compare(
             raise NoDifferences(["The two documents have the same wording."])
 
         insertions, expected_inserts = comparison.insertions()
-        more_dirty = {p.unit for p in comparison.removed} | {comparison.lookup[k].unit for k in placed}
+        more_dirty = {comparison.lookup[k].unit for k in placed}
 
         def apply_more(ids: _Ids, comments: List[Tuple[str, str]], extras: _Extras) -> None:
-            for para in comparison.removed:
-                _delete_paragraph(para, comparison.parents, ids)
             for element, texts in placed.values():
-                _comment_on(element, "\n".join(texts), ids, comments)
+                _comment_on_paragraph(element, "\n".join(texts), ids, comments)
             # Accept view: every marked paragraph must read as the revised one.
             wrong = [
                 para.text
@@ -787,7 +814,8 @@ def compare(
                 raise RedlineError(["The comparison would not read as the revised version once accepted, so nothing was saved."])
 
         result = _write(
-            ours, comparison.units, comparison.located, insertions, comparison.parents, author, now,
+            ours, comparison.units, comparison.located, insertions, comparison.deletion_items, comparison.parents,
+            author, now,
             more_dirty=sorted(more_dirty), apply_more=apply_more,
         )
     lines = [line for _, line in sorted(comparison.lines, key=lambda x: x[0])]

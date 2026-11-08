@@ -216,15 +216,38 @@ class TestParagraphs:
         assert _texts(accepted(out.docx)) == ["Recitals.", "Body."]
         assert _texts(rejected(out.docx)) == ["Body."]
 
-    def test_removing_the_last_paragraph_keeps_its_mark(self):
+    def test_removing_the_last_paragraph_takes_the_previous_mark(self):
+        # The engine's own deletion (§3c): the document's last mark has to
+        # stay, so the paragraph before gives up its mark instead, and Accept
+        # All leaves no empty paragraph.
         a = build_docx(paragraph(run("Keep.")), paragraph(run("Drop.")))
         b = build_docx(paragraph(run("Keep.")))
         out = _compare(a, b)
-        # Like Word: the document's last paragraph mark cannot be deleted, so
-        # Accept All leaves it empty.
-        assert _texts(accepted(out.docx)) == ["Keep.", ""]
+        assert _texts(accepted(out.docx)) == ["Keep."]
         assert _texts(rejected(out.docx)) == ["Keep.", "Drop."]
         assert out.changes == ['Removed "Drop."']
+        keep = next(p for p in _unit_sources(out.docx) if "Keep." in p)
+        assert re.search(r"<w:pPr><w:rPr><w:del ", keep)
+
+    def test_removing_after_a_differently_formatted_paragraph_keeps_the_last_mark(self):
+        heading = '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>' + run("Terms") + "</w:p>"
+        a = build_docx(heading, paragraph(run("Drop.")))
+        b = build_docx(heading)
+        out = _compare(a, b)
+        # Taking the heading's mark would give it the body's formatting, so
+        # the last mark stays, as Word keeps it: one empty paragraph.
+        assert _texts(accepted(out.docx)) == ["Terms", ""]
+        assert _texts(rejected(out.docx)) == ["Terms", "Drop."]
+
+    def test_removed_paragraphs_are_whole_tracked_deletions(self):
+        a = build_docx(*(paragraph(run(t)) for t in ("One.", "Two.", "Three.", "Four.")))
+        b = build_docx(paragraph(run("One.")), paragraph(run("Four.")))
+        out = _compare(a, b)
+        for wording in ("Two.", "Three."):
+            source = next(p for p in _unit_sources(out.docx) if wording in p)
+            assert "<w:delText" in source and re.search(r"<w:pPr><w:rPr><w:del ", source)
+        assert _texts(accepted(out.docx)) == ["One.", "Four."]
+        assert _texts(rejected(out.docx)) == ["One.", "Two.", "Three.", "Four."]
 
     def test_a_replaced_last_paragraph_reads_as_a_rewording(self):
         a = build_docx(paragraph(run("Intro.")), paragraph(run("Old A.")), paragraph(run("Old B.")))
@@ -232,6 +255,20 @@ class TestParagraphs:
         out = _compare(a, b)
         assert _texts(accepted(out.docx)) == ["Intro.", "Completely different wording here."]
         assert _texts(rejected(out.docx)) == ["Intro.", "Old A.", "Old B."]
+
+    def test_removed_and_added_paragraphs_together_are_whole_paragraph_revisions(self):
+        a = build_docx(*(paragraph(run(t)) for t in ("Intro.", "Old clause about fees.", "Old clause about venue.", "End.")))
+        b = build_docx(*(paragraph(run(t)) for t in ("Intro.", "A new indemnity paragraph entirely.", "End.")))
+        out = _compare(a, b)
+        assert (out.reworded, out.added, out.removed) == (0, 1, 2)
+        sources = _unit_sources(out.docx)
+        added = next(p for p in sources if "indemnity" in p)
+        assert re.search(r"<w:pPr><w:rPr><w:ins ", added) and "<w:del" not in added
+        for wording in ("about fees", "about venue"):
+            removed = next(p for p in sources if wording in p)
+            assert re.search(r"<w:pPr><w:rPr><w:del ", removed) and "<w:t" not in removed.replace("<w:tab", "")
+        assert _texts(accepted(out.docx)) == _texts(accepted(b))
+        assert _texts(rejected(out.docx)) == _texts(accepted(a))
 
     def test_a_moved_paragraph_reads_as_removed_and_added(self):
         a = build_docx(*(paragraph(run(f"Clause {n} text that is long enough to pair.")) for n in "ABC"))
