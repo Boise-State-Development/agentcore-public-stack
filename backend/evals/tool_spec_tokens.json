@@ -1,0 +1,208 @@
+{
+  "measuredAt": "2026-11-06",
+  "modelId": "anthropic.claude-haiku-4-5-20251001-v1:0",
+  "region": "us-west-2",
+  "method": "Bedrock CountTokens, marginal beside one anchor tool (the fixed tool-use preamble is in the baseline); flags in MEASURE_ENV forced on",
+  "baselineTokens": 558,
+  "tools": {
+    "analyze_spreadsheet": {
+      "tokens": 1013,
+      "tools": {
+        "analyze_spreadsheet": 1013
+      },
+      "chars": 3297,
+      "specHash": "cc5cb594c7e007c7"
+    },
+    "ask_user_question": {
+      "tokens": 678,
+      "tools": {
+        "ask_user_question": 678
+      },
+      "chars": 2429,
+      "specHash": "b3d7f9970911be40"
+    },
+    "browse_web": {
+      "tokens": 535,
+      "tools": {
+        "browse_web": 535
+      },
+      "chars": 1814,
+      "specHash": "cf20b0efc10e757b"
+    },
+    "calculator": {
+      "tokens": 1381,
+      "tools": {
+        "calculator": 1381
+      },
+      "chars": 5429,
+      "specHash": "623266ed9a79eb30"
+    },
+    "create_artifact": {
+      "tokens": 1042,
+      "tools": {
+        "create_artifact": 759,
+        "update_artifact": 283
+      },
+      "chars": 3390,
+      "specHash": "eff8ce1dd332cd3d"
+    },
+    "create_excel_spreadsheet": {
+      "tokens": 1823,
+      "tools": {
+        "create_excel_spreadsheet": 1077,
+        "list_excel_spreadsheets": 95,
+        "modify_excel_spreadsheet": 463,
+        "read_excel_spreadsheet": 188
+      },
+      "chars": 5557,
+      "specHash": "b69644080066c646"
+    },
+    "create_powerpoint_presentation": {
+      "tokens": 2852,
+      "tools": {
+        "create_powerpoint_presentation": 1811,
+        "list_powerpoint_layouts": 261,
+        "list_powerpoint_presentations": 96,
+        "modify_powerpoint_presentation": 508,
+        "read_powerpoint_presentation": 176
+      },
+      "chars": 8788,
+      "specHash": "35779fd8954fecb7"
+    },
+    "create_visualization": {
+      "tokens": 1592,
+      "tools": {
+        "create_visualization": 1592
+      },
+      "chars": 4705,
+      "specHash": "b04e7b03152dc756"
+    },
+    "create_word_document": {
+      "tokens": 2344,
+      "tools": {
+        "create_word_document": 1134,
+        "list_word_documents": 89,
+        "modify_word_document": 387,
+        "read_word_document": 166,
+        "redline_word_document": 568
+      },
+      "chars": 7889,
+      "specHash": "f36d0128938bec90"
+    },
+    "fetch_url_content": {
+      "tokens": 292,
+      "tools": {
+        "fetch_url_content": 292
+      },
+      "chars": 968,
+      "specHash": "69dcf01cf75121e6"
+    },
+    "generate_diagram_and_validate": {
+      "tokens": 753,
+      "tools": {
+        "generate_diagram_and_validate": 753
+      },
+      "chars": 2386,
+      "specHash": "18b82c852983ebb9"
+    },
+    "get_my_quota": {
+      "tokens": 118,
+      "tools": {
+        "get_my_quota": 118
+      },
+      "chars": 412,
+      "specHash": "1945479185b9c69d"
+    },
+    "get_my_settings": {
+      "tokens": 137,
+      "tools": {
+        "get_my_settings": 137
+      },
+      "chars": 503,
+      "specHash": "301a14f918192567"
+    },
+    "github_issues_local": {
+      "tokens": 896,
+      "tools": {
+        "create_project_tasks": 628,
+        "list_github_projects": 136,
+        "list_github_repositories": 132
+      },
+      "chars": 3231,
+      "specHash": "e88fddd73b859531"
+    },
+    "google_calendar_meetings": {
+      "tokens": 249,
+      "tools": {
+        "list_calendar_meetings": 249
+      },
+      "chars": 833,
+      "specHash": "9c1879ad375f294a"
+    },
+    "list_spreadsheets": {
+      "tokens": 154,
+      "tools": {
+        "list_spreadsheets": 154
+      },
+      "chars": 558,
+      "specHash": "24da327217607c57"
+    },
+    "my_skill_create": {
+      "tokens": 1303,
+      "tools": {
+        "my_skill_create": 276,
+        "my_skill_delete_file": 134,
+        "my_skill_list": 82,
+        "my_skill_read": 126,
+        "my_skill_read_file": 159,
+        "my_skill_update": 296,
+        "my_skill_write_file": 230
+      },
+      "chars": 4383,
+      "specHash": "135599b74825a05d"
+    },
+    "request_user_login": {
+      "tokens": 400,
+      "tools": {
+        "request_user_login": 400
+      },
+      "chars": 1434,
+      "specHash": "b9ad413aaba89704"
+    },
+    "set_default_model": {
+      "tokens": 298,
+      "tools": {
+        "set_default_model": 298
+      },
+      "chars": 1074,
+      "specHash": "c149195e5a267377"
+    },
+    "whoami": {
+      "tokens": 126,
+      "tools": {
+        "whoami": 126
+      },
+      "chars": 451,
+      "specHash": "bc8c850a5994353c"
+    },
+    "workspace_files": {
+      "tokens": 788,
+      "tools": {
+        "workspace_list": 229,
+        "workspace_read": 250,
+        "workspace_write": 309
+      },
+      "chars": 2737,
+      "specHash": "c57f6affe38f8b77"
+    },
+    "zoom_meeting_transcripts": {
+      "tokens": 398,
+      "tools": {
+        "get_zoom_transcript": 228,
+        "list_zoom_recordings": 170
+      },
+      "chars": 1303,
+      "specHash": "9ca59108d6ae6f08"
+    }
+  }
+}

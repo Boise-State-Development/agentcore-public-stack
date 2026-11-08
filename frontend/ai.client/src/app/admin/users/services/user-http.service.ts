@@ -6,6 +6,7 @@ import {
   UserListResponse,
   UserDetailResponse,
   UserListRequestOptions,
+  UserSearchOptions,
 } from '../models';
 
 /**
@@ -27,6 +28,23 @@ export class UserHttpService {
    * @returns Observable of paginated user list
    */
   listUsers(options: UserListRequestOptions = {}): Observable<UserListResponse> {
+    return this.http.get<UserListResponse>(this.baseUrl(), { params: this.listParams(options) });
+  }
+
+  /**
+   * Search users by part of a name, email or user id. Case-insensitive and
+   * typo tolerant, ranked best match first, paged like `listUsers`. Every
+   * profile for an exact email comes first, the live one (most recent login)
+   * on top.
+   *
+   * @param options Query plus the list filters and pagination
+   */
+  searchUsers(options: UserSearchOptions): Observable<UserListResponse> {
+    const params = this.listParams(options).set('q', options.q);
+    return this.http.get<UserListResponse>(`${this.baseUrl()}/search`, { params });
+  }
+
+  private listParams(options: UserListRequestOptions): HttpParams {
     let params = new HttpParams();
 
     if (options.status) {
@@ -41,19 +59,7 @@ export class UserHttpService {
     if (options.cursor) {
       params = params.set('cursor', options.cursor);
     }
-
-    return this.http.get<UserListResponse>(this.baseUrl(), { params });
-  }
-
-  /**
-   * Search for a user by exact email match.
-   *
-   * @param email Email address to search for
-   * @returns Observable of matching users (0 or 1)
-   */
-  searchByEmail(email: string): Observable<UserListResponse> {
-    const params = new HttpParams().set('email', email);
-    return this.http.get<UserListResponse>(`${this.baseUrl()}/search`, { params });
+    return params;
   }
 
   /**
@@ -68,8 +74,7 @@ export class UserHttpService {
   }
 
   /**
-   * List distinct email domains.
-   * Currently returns empty list - requires backend implementation.
+   * Distinct email domains, the most users first.
    *
    * @param limit Maximum number of domains to return
    * @returns Observable of domain strings

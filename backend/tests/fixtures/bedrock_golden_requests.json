@@ -372,6 +372,7 @@
     "block_binding": {
      "prefix_mismatch_behavior": "drop_block"
     },
+    "display": "summarized",
     "type": "adaptive"
    }
   },
@@ -908,9 +909,17 @@
  "opus55-thinking": {
   "additionalModelRequestFields": {
    "anthropic_beta": [
+    "thinking-binding-controls-2026-08-01",
     "fine-grained-tool-streaming-2025-05-14"
    ],
+   "output_config": {
+    "effort": "medium"
+   },
    "thinking": {
+    "block_binding": {
+     "prefix_mismatch_behavior": "drop_block"
+    },
+    "display": "summarized",
     "type": "adaptive"
    }
   },

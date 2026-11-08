@@ -1489,3 +1489,76 @@ class TestNotFoundGraceAfterSubmit:
 
         assert status == "NOT_FOUND"
         assert fake.status_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# The per-file limit holds the STORED object, not the declared size
+# ---------------------------------------------------------------------------
+class TestStoredObjectIsHeldToThePerFileLimit:
+    """The presign check (``POST /upload-url``) only saw what the client declared,
+    and the presigned PUT does not sign Content-Length, so a client can declare a
+    small file and store a large one. This is the knowledge-base counterpart of
+    chat's ``complete_upload``: the stored object is measured before Bedrock is
+    asked to ingest it."""
+
+    DECLARED = 500
+
+    def _seed(self, table):
+        _seed_kb(
+            table,
+            retrievalEngine="managed",
+            awsKbId="KB123",
+            awsDataSourceId="DS456",
+            reservedBytes=self.DECLARED,
+            storedBytes=0,
+        )
+        table.put_item(
+            Item={
+                "PK": f"AST#{ASSISTANT_ID}",
+                "SK": f"DOC#{DOCUMENT_ID}",
+                "status": "uploading",
+                "sizeBytes": self.DECLARED,
+            }
+        )
+
+    def _kb_row(self, table):
+        return table.get_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"})["Item"]
+
+    def test_an_object_over_the_limit_is_failed_released_and_removed(self, table, monkeypatch):
+        monkeypatch.setenv("KB_UPLOAD_MAX_FILE_BYTES", "1000")  # the object is 2048
+        self._seed(table)
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["note"] == "over-file-limit"
+        assert fake.ingested == [], "an over-limit object was sent to Bedrock"
+        doc = _doc(table)
+        assert doc["status"] == "failed"
+        assert "Files can be up to" in doc["errorMessage"]
+        assert int(self._kb_row(table)["reservedBytes"]) == 0, "the reservation leaked"
+        objects = boto3.client("s3", region_name=REGION).list_objects_v2(Bucket=BUCKET)
+        assert objects.get("KeyCount", 0) == 0, "the oversized object was left stored"
+
+    def test_an_object_within_the_limit_is_ingested(self, table, monkeypatch):
+        monkeypatch.setenv("KB_UPLOAD_MAX_FILE_BYTES", str(OBJECT_BYTES))
+        self._seed(table)
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [DOCUMENT_ID]
+        assert _doc(table)["status"] == "complete"
+
+    def test_a_size_probe_that_cannot_answer_ingests_as_before(self, table, monkeypatch):
+        monkeypatch.setenv("KB_UPLOAD_MAX_FILE_BYTES", "1000")
+        self._seed(table)
+        monkeypatch.setattr(ic, "_source_object_size", lambda bucket, key: None)
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [DOCUMENT_ID]

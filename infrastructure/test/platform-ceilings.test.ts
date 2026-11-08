@@ -247,7 +247,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     skills: { enabled: true },
     skillAuthoring: { enabled: true },
     wordTrackedChanges: { enabled: true },
-    assistantKbFullContext: { enabled: true },
+    assistantKbFullContext: { enabled: true, maxTokens: 80_000 },
+    agentKnowledgeFiles: { enabled: true },
     // Large documents gate the next two: synth refuses either without it.
     largeDocumentAttachments: { enabled: true },
     attachmentKb: { enabled: true },
@@ -257,6 +258,10 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // sessions-metadata table and one more tool in toolConfig — so it is here
     // for the environment-variable ceilings, not the resource count.
     sourceProvenance: { enabled: true },
+    // The release ledger adds no resources either — `LEDGER#` rows on the
+    // existing system-cost-rollup table — so it is here for the Runtime's
+    // environment-variable ceiling and flag coverage.
+    releaseLedger: { enabled: true },
     // Structured extraction adds no resources either — `EXTR#` rows on the
     // existing sessions-metadata table, an artifact through the existing
     // artifacts path, and an .xlsx through the existing user-files path — so
@@ -266,6 +271,9 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },
+    wordSkillScripts: { enabled: true },
+    // Documents as text: one Runtime variable, written only while on.
+    converseDocumentsAsText: { enabled: true },
     // Project file readiness: one Runtime variable, written only while on.
     projectFileReadiness: { enabled: true },
     // Meeting tasks add no resources — one Runtime variable, written only while

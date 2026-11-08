@@ -64,6 +64,7 @@ DOCLING_SUPPORTED_EXTENSIONS = {
     ".odt",
     ".txt",
     ".md",
+    ".sql",
     ".rtf",
     ".markdown",
     ".csv",
@@ -166,6 +167,10 @@ async def process_with_docling(
     """
 
     logger.info(f"Docling processor initialized...starting to process document...")
+
+    # SQL is plain text. Browsers label it application/sql or nothing, so route it by extension.
+    if filename and filename.lower().endswith(".sql"):
+        mime_type = "text/plain"
 
     # Normalize text encoding if it's a text format
     if mime_type in TEXT_BASED_MIME_TYPES:

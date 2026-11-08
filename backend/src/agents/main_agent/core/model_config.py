@@ -16,6 +16,7 @@ from apis.shared.models.mantle import (
     MANTLE_CHAT_PARAM_MAP as _MANTLE_CHAT_PARAM_MAP,
     MANTLE_RESPONSES_PARAM_MAP as _MANTLE_RESPONSES_PARAM_MAP,
 )
+from apis.shared.models.cache_points import bedrock_cache_points_supported as _cache_points_supported_for
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +39,24 @@ _FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
 # default without one, so nothing would retry and the turn would fail. We
 # therefore set the binding on every request up front.
 #
-# Only models with no live conversations are listed. Adding one that has
-# them changes `additionalModelRequestFields` and re-writes every such
-# conversation's cached prefix once, so price it first. Opus 5.5 is in that
-# position: docs/kaizen/review-queue.md, [2026-11-03] Opus 5.5 drop-block entry.
+# The same dict also sets `display: "summarized"`. Both models default to
+# "omitted", which sends no bytes while they reason: on dev an Opus 5.5 think
+# was silent for 30.6 s and a Haiku 5.5 one for 45 s. A long think on a large
+# document outlasts the per-read timeout ("Agent force-stopped … Read timed
+# out" in prod). Summarized, the longest gap in a 48 s turn was 7.1 s.
 #
-# Probed on dev for Haiku 5.5 (2026-11-03): accepted with the beta, and
-# "thinking.adaptive.block_binding: Extra inputs are not permitted" without it.
+# Neither field re-writes a cached prefix. Measured on dev 2026-11-06 for
+# both models, with signed reasoning already in the history: moving from no
+# `thinking` dict to this one, and back, read all ~50K cached tokens and
+# wrote none. Replay is unchanged too: the turn after a summarized block
+# bills the same input with the summary blanked, so it adds nothing per turn.
+#
+# Probed on dev (Haiku 5.5 2026-11-03, Opus 5.5 2026-11-06): accepted with the
+# beta, and "thinking.adaptive.block_binding: Extra inputs are not permitted"
+# without it.
 _THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 _THINKING_BINDING_DROP_BLOCK = {"prefix_mismatch_behavior": "drop_block"}
-_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5",)
+_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5", "claude-opus-5-5")
 
 
 class ModelProvider(str, Enum):
@@ -160,6 +169,9 @@ _BEDROCK_ADAPTIVE_THINKING_MARKERS = (
     # Probed 2026-11-03: `{type: "enabled", budget_tokens}` 400s with
     # "thinking.type.enabled is not supported for this model".
     "claude-haiku-5-5",
+    # Adaptive is always on; no curated row declares `thinking`, so this only
+    # shapes an admin-set budget the way Haiku 5.5's is shaped.
+    "claude-opus-5-5",
 )
 
 
@@ -170,13 +182,15 @@ def _bedrock_uses_adaptive_thinking(model_id: Optional[str]) -> bool:
 
 
 def _apply_thinking_binding(config: Dict[str, Any], model_id: Optional[str]) -> None:
-    """Ask a listed 5.5-generation model to drop stale replayed thinking blocks.
+    """Ask a listed 5.5-generation model to drop stale replayed thinking blocks
+    and to stream its reasoning.
 
     These models think by default, so a request that names no ``thinking``
-    gets ``{type: "adaptive"}`` (what they would do anyway, display left at
-    its default) plus the ``drop_block`` binding and its beta. A thinking
-    config that is disabled, not adaptive, or already carries a
-    ``block_binding`` is left as written. See ``_BEDROCK_THINKING_BINDING_MARKERS``.
+    gets ``{type: "adaptive"}`` (what they would do anyway) with ``display:
+    "summarized"`` unless the config names a display, plus the ``drop_block``
+    binding and its beta. A thinking config that is disabled, not adaptive,
+    or already carries a ``block_binding`` is left as written. See
+    ``_BEDROCK_THINKING_BINDING_MARKERS``.
     """
     mid = (model_id or "").lower()
     if not any(marker in mid for marker in _BEDROCK_THINKING_BINDING_MARKERS):
@@ -185,7 +199,10 @@ def _apply_thinking_binding(config: Dict[str, Any], model_id: Optional[str]) -> 
     thinking = arf.get("thinking", {"type": "adaptive"})
     if not isinstance(thinking, dict) or thinking.get("type") != "adaptive" or "block_binding" in thinking:
         return
-    arf["thinking"] = {**thinking, "block_binding": dict(_THINKING_BINDING_DROP_BLOCK)}
+    shaped = dict(thinking)
+    shaped.setdefault("display", "summarized")
+    shaped["block_binding"] = dict(_THINKING_BINDING_DROP_BLOCK)
+    arf["thinking"] = shaped
     betas = list(arf.get("anthropic_beta") or [])
     if _THINKING_BINDING_BETA not in betas:
         betas.append(_THINKING_BINDING_BETA)
@@ -287,7 +304,15 @@ class RetryConfig:
     """
     # Transport timeouts (botocore). Retries happen only in the SDK layer.
     connect_timeout: int = 5            # Seconds to wait for connection
-    read_timeout: int = 120             # Seconds to wait for response
+    # Longest gap between bytes from Bedrock. Opus 5.5 and the other models
+    # whose thinking display defaults to "omitted" send nothing while they
+    # think, so this is the longest a model may reason silently. 600s matches
+    # Claude Code's default API timeout. Must stay below app-api's proxy read
+    # timeout (`_PROXY_READ_TIMEOUT_SECONDS`, 660s), or the proxy drops the
+    # stream first and the user gets a lost connection instead of an
+    # explained error (`test_read_timeout_budget.py`). Never retried, for the
+    # same reason (`retry_strategy.is_transient_bedrock_fault`).
+    read_timeout: int = 600
 
     # SDK layer (agent event loop) — the only retry layer
     # Backoff sequence with defaults: 2s, 4s, 8s (3 retries before giving up)
@@ -302,7 +327,7 @@ class RetryConfig:
 
         Environment variables (all optional, defaults shown):
             RETRY_CONNECT_TIMEOUT=5
-            RETRY_READ_TIMEOUT=120
+            RETRY_READ_TIMEOUT=600
             RETRY_SDK_MAX_ATTEMPTS=4
             RETRY_SDK_INITIAL_DELAY=2.0
             RETRY_SDK_MAX_DELAY=16.0
@@ -425,11 +450,10 @@ class ModelConfig:
         ``system_prompt_content`` verbatim and
         ``_apply_system_cache_ttl`` only ever rewrites a TTL, never removes a
         point, so a point placed on a model that cannot cache reaches Bedrock
-        and the call fails with **AccessDeniedException** — "You invoked an
-        unsupported model or your request did not allow prompt caching."
-        Measured live in us-west-2 (2026-09-11) on llama3-3-70b,
-        mistral-large-2407 and deepseek-r1; the identical request without the
-        point succeeds on all three.
+        and the call fails with **AccessDeniedException**. The model-family
+        test and that measurement live in
+        ``apis.shared.models.cache_points``, which the api-converse route
+        reads too.
 
         It is also passed as ``tools_ttl``, where since strands-agents 1.55.0
         it is belt-and-braces rather than load-bearing:
@@ -448,7 +472,6 @@ class ModelConfig:
         re-measure with ``scripts/probe_bedrock_cache_point_support.py`` first
         and widen the tools point in the same change.
         """
-        model_lower = self.model_id.lower()
         return (
             self.caching_enabled
             # Redundant with the family test below rather than an independent
@@ -456,7 +479,7 @@ class ModelConfig:
             # id regardless of the configured provider. Kept as documentation of
             # the surface this gates — the Converse path, not Mantle/Responses.
             and self.get_provider() == ModelProvider.BEDROCK
-            and ("claude" in model_lower or "anthropic" in model_lower)
+            and _cache_points_supported_for(self.model_id)
         )
 
     def to_bedrock_config(self) -> Dict[str, Any]:

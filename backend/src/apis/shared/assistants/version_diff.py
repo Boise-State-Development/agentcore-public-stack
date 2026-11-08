@@ -29,7 +29,7 @@ import difflib
 from typing import Any, List, Optional, Tuple
 
 from .models import AgentVersion
-from .versions import DIFF_FIELD_ORDER
+from .versions import BEHAVIOR_SNAPSHOT_FIELDS, DIFF_FIELD_ORDER
 
 # How many lines of unchanged context to keep around each change in the instructions diff.
 # Three is the ``diff -u`` default and reads right for prose: enough to locate an edit in a
@@ -124,13 +124,13 @@ def behavior_changed(before: Optional[AgentVersion], after: AgentVersion) -> boo
     """Whether anything that changes what the Agent *does* differs.
 
     The single most useful line in the review UI, and deliberately narrower than "did
-    anything change": instructions, bindings and model. A reviewer glancing at a queue needs
+    anything change": instructions, bindings, model and response strictness. A reviewer glancing at a queue needs
     to know whether this is a presentation fix or a behavior change, and that distinction is
     the same one ``BEHAVIOR_FIELDS`` draws for the D13 admin-edit guard.
     """
     return any(
         field_changed(before, after, field)
-        for field in ("instructions", "bindings", "model_settings")
+        for field in BEHAVIOR_SNAPSHOT_FIELDS
     )
 
 
@@ -139,6 +139,7 @@ _WIRE_FIELD_NAMES = {
     "model_settings": "modelConfig",
     "icon_key": "iconKey",
     "publisher_id": "publisherId",
+    "response_strictness": "responseStrictness",
 }
 
 

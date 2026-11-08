@@ -1,6 +1,7 @@
 """Admin API routes for user management."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import status as status_codes  # list/search take a ``status`` query param that shadows the module
 from typing import Optional, List
 import logging
 
@@ -67,19 +68,22 @@ def get_user_admin_service(
 
 # ========== Routes ==========
 
+_STATUS_PATTERN = "^(all|active|inactive|suspended)$"
+
+
 @router.get("", response_model=UserListResponse)
 async def list_users(
-    status: str = Query("active", description="Filter by status"),
-    domain: Optional[str] = Query(None, description="Filter by email domain"),
+    status: str = Query("active", pattern=_STATUS_PATTERN, description="active, inactive, suspended, or all"),
+    domain: Optional[str] = Query(None, max_length=253, description="Filter by email domain"),
     limit: int = Query(25, ge=1, le=100),
-    cursor: Optional[str] = Query(None, description="Pagination cursor"),
+    cursor: Optional[str] = Query(None, max_length=2048, description="Pagination cursor"),
     admin_user: User = Depends(require_users_admin),
     service: UserAdminService = Depends(get_user_admin_service)
 ):
     """
     List users with optional filters.
 
-    - **status**: Filter by user status (active, inactive, suspended)
+    - **status**: Filter by user status (active, inactive, suspended, all)
     - **domain**: Filter by email domain (e.g., "example.com")
     - **limit**: Number of results per page (1-100)
     - **cursor**: Pagination cursor from previous response
@@ -93,38 +97,42 @@ async def list_users(
         logger.warning("User admin service is disabled - no table configured")
         return UserListResponse(users=[], next_cursor=None)
 
-    return await service.list_users(
-        status=status,
-        domain=domain,
-        limit=limit,
-        cursor=cursor
-    )
+    try:
+        return await service.list_users(status=status, domain=domain, limit=limit, cursor=cursor)
+    except Exception:
+        logger.exception("Admin user list failed")
+        raise HTTPException(status_code=status_codes.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list users")
 
 
 @router.get("/search", response_model=UserListResponse)
 async def search_users(
-    email: str = Query(..., description="Email to search (exact match)"),
+    q: str = Query(..., min_length=1, max_length=254, description="Part of a name, email or user id"),
+    status: str = Query("all", pattern=_STATUS_PATTERN, description="active, inactive, suspended, or all"),
+    domain: Optional[str] = Query(None, max_length=253, description="Filter by email domain"),
+    limit: int = Query(25, ge=1, le=100),
+    cursor: Optional[str] = Query(None, max_length=2048, description="Pagination cursor"),
     admin_user: User = Depends(require_users_admin),
     service: UserAdminService = Depends(get_user_admin_service)
 ):
     """
-    Search for users by exact email match.
+    Search users by name, email or user id: case-insensitive, contains, typo tolerant.
 
-    Args:
-        email: Email address to search for (case-insensitive)
-
-    Returns:
-        UserListResponse with every profile for the email, the live one
-        (most recent login) first; more than one means legacy duplicates.
+    Results are ranked exact, prefix, contains, all words, then near misses,
+    with the most recent sign-in first within a rank. Every profile for an
+    exact email comes first, the live one (most recent login) on top; more
+    than one means legacy duplicates.
     """
-    logger.info("Admin searching for user by email")
+    logger.info("Admin searching users")
 
     if not service.enabled:
         logger.warning("User admin service is disabled - no table configured")
         return UserListResponse(users=[], next_cursor=None)
 
-    users = await service.search_by_email(email)
-    return UserListResponse(users=users, next_cursor=None)
+    try:
+        return await service.search_users(q, status=status, domain=domain, limit=limit, cursor=cursor)
+    except Exception:
+        logger.exception("Admin user search failed")
+        raise HTTPException(status_code=status_codes.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to search users")
 
 
 @router.get("/domains/list", response_model=List[str])
@@ -133,16 +141,14 @@ async def list_email_domains(
     admin_user: User = Depends(require_users_admin),
     service: UserAdminService = Depends(get_user_admin_service)
 ):
-    """
-    List distinct email domains with user counts.
-    Useful for domain filter dropdown.
-
-    Note: Currently returns empty list. Full implementation requires
-    maintaining a separate domain aggregation.
-    """
+    """Distinct email domains, the most users first, for the domain filter."""
     logger.info("Admin listing email domains")
 
-    return await service.list_domains(limit=limit)
+    try:
+        return await service.list_domains(limit=limit)
+    except Exception:
+        logger.exception("Admin domain list failed")
+        raise HTTPException(status_code=status_codes.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list domains")
 
 
 @router.get("/{user_id}", response_model=UserDetailResponse)

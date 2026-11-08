@@ -73,6 +73,25 @@ def _as_int(value: Any) -> Optional[int]:
         return None
 
 
+#: Census weight fields (release-ledger spec D4): row key -> entry attribute.
+_TOOL_WEIGHT_FIELDS = (
+    ("resultChars", "result_chars"),
+    ("inputChars", "input_chars"),
+    ("durationMs", "duration_ms"),
+    ("timedCalls", "timed_calls"),
+)
+
+
+def _add_tool_weight(slot: Any, entry: Dict[str, Any]) -> None:
+    """Sum one row's tool weight into the session's entry. A field no row
+    carried stays ``None`` (not measured), never ``0``."""
+    for key, attr in _TOOL_WEIGHT_FIELDS:
+        value = _as_int(entry.get(key))
+        if value is None:
+            continue
+        setattr(slot, attr, (getattr(slot, attr) or 0) + value)
+
+
 def _as_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -1086,6 +1105,10 @@ class AdminCostService:
                     else None
                 ),
                 turn_agent_id=record.get("turnAgentId"),
+                app_version=record.get("appVersion"),
+                build=record.get("build"),
+                outcome=record.get("outcome"),
+                empty_answer=record.get("emptyAnswer") is True,
                 agent_switched=agent_switched,
                 model_switched=model_switched,
                 prefix_fingerprints=(
@@ -1442,6 +1465,8 @@ class AdminCostService:
                     slot = census.setdefault(name, ToolCensusEntry())
                     slot.calls += calls
                     slot.errors += errors
+                    if isinstance(entry, dict):
+                        _add_tool_weight(slot, entry)
 
             ledger = _call_ledger(record, previous_removed)
             if ledger.prefix_tokens is not None:

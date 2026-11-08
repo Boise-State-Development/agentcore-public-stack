@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import { ToolService, Tool, ToolsResponse } from './tool.service';
 import { ConfigService } from '../config.service';
 import { signal } from '@angular/core';
@@ -397,6 +398,18 @@ describe('ToolService', () => {
       });
       await promise;
       expect(service.initialized()).toBe(true);
+    });
+  });
+
+  describe('discoverServerTools', () => {
+    beforeEach(setup);
+
+    it('opts out of the global error toast (caller shows an inline error)', async () => {
+      const promise = service.discoverServerTools('web-search');
+      const req = httpMock.expectOne('http://localhost:8000/tools/web-search/discover');
+      expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+      req.flush({ tools: [] });
+      await promise;
     });
   });
 });

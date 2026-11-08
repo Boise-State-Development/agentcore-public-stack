@@ -1,7 +1,8 @@
 import { Injectable, inject, resource, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { Tool, ToolListResponse, UserToolPermissions } from '../models/tool.model';
 
 /**
@@ -63,7 +64,8 @@ export class ToolsService {
   async fetchCatalog(): Promise<ToolListResponse> {
     const response = await firstValueFrom(
       this.http.get<ToolListResponse>(
-        `${this.baseUrl()}/tools/catalog`
+        `${this.baseUrl()}/tools/catalog`,
+        { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) }
       )
     );
     return response;
@@ -88,7 +90,8 @@ export class ToolsService {
   async fetchMyPermissions(): Promise<UserToolPermissions> {
     const response = await firstValueFrom(
       this.http.get<UserToolPermissions>(
-        `${this.baseUrl()}/tools/my-permissions`
+        `${this.baseUrl()}/tools/my-permissions`,
+        { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) }
       )
     );
     return response;

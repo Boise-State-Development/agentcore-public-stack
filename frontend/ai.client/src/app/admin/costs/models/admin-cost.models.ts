@@ -245,6 +245,8 @@ export interface DocumentReads {
 }
 
 /** One model call within a session's cost anatomy. */
+export type TurnOutcome = 'completed' | 'paused' | 'error' | 'stopped' | 'interrupted';
+
 export interface SessionCallRow {
   timestamp: string;
   messageId?: number | null;
@@ -286,6 +288,16 @@ export interface SessionCallRow {
    */
   turnAgentId?: string | null;
   agentSwitched?: boolean;
+  /** Which build of inference-api served this call (release-ledger D1). */
+  appVersion?: string | null;
+  build?: string | null;
+  /**
+   * How this call's turn ended (release-ledger §5.1). Absent on rows written
+   * before it shipped and on calls that are not a turn's.
+   */
+  outcome?: TurnOutcome | null;
+  /** True only on the last row of a completed turn whose final call streamed no text. */
+  emptyAnswer?: boolean;
   /**
    * This call ran on a different model than the call before it. A mid-conversation
    * model switch keeps the conversation, and each model has its own cache, so the first
@@ -510,6 +522,16 @@ export interface FingerprintChanges {
 export interface ToolCensusEntry {
   calls: number;
   errors: number;
+  /**
+   * Weight (release-ledger D4), summed over the session. `null` when no row
+   * carried it (written before it shipped), which means "not measured", not 0.
+   * `resultChars` counts text and JSON characters, plus 1,500 per image.
+   */
+  resultChars?: number | null;
+  inputChars?: number | null;
+  /** Strands' measured execution time over the `timedCalls` that reported one. */
+  durationMs?: number | null;
+  timedCalls?: number | null;
 }
 
 /** Which optional signals this session actually has ("not tracked" vs "0"). */

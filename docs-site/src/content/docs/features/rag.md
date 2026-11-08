@@ -26,7 +26,10 @@ projects.
 
 The knowledge base section's **Add content** row offers three ways in:
 
-- **Add files** from the device (or drag and drop, up to 10 MB in the SPA).
+- **Add files** from the device (or drag and drop), up to 50 MB a file on a
+  managed knowledge base and 20 MB on a classic one (see Limits). The SPA reads
+  the limit from the documents list (`kbUsage.maxFileBytes`) and says it in the
+  dropzone and the error.
   The SPA asks `POST /assistants/{id}/documents/upload-url` for a presigned S3
   URL, uploads straight to the documents bucket, and the document starts at
   `uploading`.
@@ -104,8 +107,12 @@ PDF, Word (`.docx`, `.doc`, `.odt`), PowerPoint (`.pptx`), Excel (`.xlsx`),
 CSV, text, Markdown, RTF, HTML, XML, JSON and AsciiDoc.
 
 A managed document goes through the managed ingestion consumer instead, on an
-EventBridge event for the same upload. It is marked `complete` only once a
-retrieval actually returns it, not when Bedrock first reports it indexed.
+EventBridge event for the same upload. Before it asks Bedrock to ingest, the
+consumer measures the stored object and fails a file over the per-file limit
+(returning its reservation and deleting the object), because the presigned PUT
+does not sign the size the client declared. A document is marked `complete`
+only once a retrieval actually returns it, not when Bedrock first reports it
+indexed.
 
 Only `complete` documents are ever retrieved.
 
@@ -125,6 +132,24 @@ A project turn also gets the `project_files` tool, which lists the project's
 Files and reads one by name. Retrieval answers "what does the playbook say
 about X"; it cannot answer "grade submission 7", which needs a file.
 
+Every other agent turn gets the same tool as `knowledge_files` while
+`CDK_AGENT_KNOWLEDGE_FILES_ENABLED` is on (in development: only `"true"`
+enables it; AgentCore Runtime only, no SPA flag). With no arguments it lists the
+agent's Knowledge documents with their type, status and size; with `filename`
+it reads one document's text, 48 KB at a time, continued with `offset`. Access
+is checked on every call, the way retrieval checks it. It is what makes an
+instruction such as "read Process.txt in your Knowledge in full" work once the
+knowledge base is too large to send whole. The retrieved passages' preamble
+names the tool while the flag is on. Off, the tool list and the user message
+are byte-for-byte what they were. A project turn keeps `project_files` and
+never gets both.
+
+An Agent's **Response strictness** setting is a rule in the system prompt, not
+part of retrieval. It applies the same way to retrieved passages, to
+full-context mode and to turns where the search finds nothing. The default,
+**Prefer documents**, adds no text. See
+[Agents](/agentcore-public-stack/features/agents/#response-strictness).
+
 ### Full-context mode for small knowledge bases
 
 Retrieval hands the model the few passages closest to the wording of the
@@ -133,18 +158,40 @@ applies ("Can I use AI on my assignment?" when the policy differs by
 assignment), that can answer from the wrong one. Full-context mode sends the
 whole knowledge base instead.
 
-When every `complete` document has extractable text and together they fit the
-token budget, the full text goes at the end of the system prompt as one
-`<knowledge_base>` block, and the user message is not augmented. Retrieval
-still runs, for the citation cards. The block is deterministic, so it is
-cached with the system prompt and changes only when a document is added,
-changed or removed. Anything over budget, any document without a text layer
-(such as a scan), or any error falls back to retrieval.
+When every `complete` document with a text format (PDF, Word, text, Markdown,
+HTML) has extractable text and together they fit the token budget, the full
+text goes at the end of the system prompt as one `<knowledge_base>` block, and
+the user message is not augmented. Retrieval still runs, for the citation
+cards. The block is deterministic, so it is cached with the system prompt and
+changes only when a document is added, changed or removed. Anything over
+budget, any text document without a text layer (such as a scan), or any error
+falls back to retrieval.
+
+Spreadsheets and presentations do not disqualify the knowledge base. They are
+left out of the block, which names them, and the turn still adds retrieved
+passages to the user message, filtered to those documents, so they reach the
+model as they did before. The spreadsheet tools read them as before too. A
+knowledge base with no spreadsheet or presentation renders the same block it
+always did.
+
+The agent form's Knowledge base card tells the author which mode applies:
+"Sent to the model whole (N documents, ~X tokens)", or "Searched: the model
+sees the passages that match each message", with the reason: the text together
+is over the budget, one document is over it on its own (with that document's
+size), a document has no readable text, it holds only spreadsheets, or the mode
+is off. It reads
+`GET /assistants/{id}/knowledge-base/mode` (owners and editors), which runs the
+same check the Runtime does, under the same flag and budget. The check reads
+each document's text once per app-api process and caches it, so the answer is
+exact rather than an estimate from file sizes; a knowledge base whose text
+documents are over 16 MB is answered from one query, without downloads. The
+line is behind SPA `features.knowledgeBaseMode` (in development).
 
 | Variable | Where | Default | Purpose |
 |---|---|---|---|
-| `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` | AgentCore Runtime | off | In development: only `"true"` enables it. No SPA flag |
-| `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` | AgentCore Runtime | 50,000 | The token budget. `0` switches the mode off |
+| `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` | AgentCore Runtime, app-api | off | In development: only `"true"` enables it. app-api reads it only for the mode line |
+| `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` | AgentCore Runtime, app-api | 50,000 | The token budget, as `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS`. A whole number; `0` switches the mode off. Written to the Runtime only while the mode is on and the value is not the default, so the default spends none of the Runtime's environment budget |
+| `CDK_AGENT_KNOWLEDGE_FILES_ENABLED` | AgentCore Runtime | off | In development: `knowledge_files` for agents (above). Written only while on |
 
 ### Project file readiness
 
@@ -213,12 +260,21 @@ re-armed without running. See `docs/specs/assistant-kb-sync.md` §11.
 
 | Limit | Value |
 |---|---|
-| Upload size in the SPA | 10 MB |
-| File size the classic pipeline accepts | 20 MB |
+| File size, managed knowledge base | 50 MB (`CDK_KB_UPLOAD_MAX_FILE_BYTES`, default `52428800`, at most that) |
+| File size, classic knowledge base | 20 MB, the classic pipeline's processing limit. `CDK_KB_UPLOAD_MAX_FILE_BYTES` can lower it, never raise it |
 | Website crawl | Depth 3, 100 pages, 5 concurrent fetches |
 | Passages retrieved per turn | 5 |
 | Managed byte cap, per owner | 100 MB standard, 1 GB elevated (`CDK_MANAGED_KB_PER_OWNER_BYTES`, `CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES`) |
 | Managed byte cap, per knowledge base | 500 MB (`CDK_MANAGED_KB_PER_KB_CEILING_BYTES`) |
+
+The per-file limit applies to device uploads, document replace, the project
+Files page and file-source imports alike. A presigned upload over it is refused
+with a 413 ("Files can be up to 50 MB.") before anything is reserved; an import
+over it is stopped at the limit and its document fails with the same sentence.
+50 MB is Amazon Bedrock Knowledge Bases' own per-file limit for text and
+document files (PDF included; not adjustable), which is why the setting cannot
+go higher. To keep the old 10 MB limit, set `CDK_KB_UPLOAD_MAX_FILE_BYTES` to
+`10485760`.
 
 Bytes are reserved before a managed upload is accepted, so an upload over the
 cap is refused with a 413 that says how far over it is, and concurrent uploads

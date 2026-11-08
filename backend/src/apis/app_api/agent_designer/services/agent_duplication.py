@@ -77,6 +77,7 @@ async def duplicate_agent(agent_id: str, user: User) -> Assistant:
         model_settings=source.model_settings,
         show_citations=source.show_citations,
         allow_document_download=source.allow_document_download,
+        response_strictness=source.response_strictness,
     )
     await _copy_icon(source, new)
     return new

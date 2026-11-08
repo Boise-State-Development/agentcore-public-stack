@@ -12,6 +12,10 @@
     }
   </div>
 
+  @if (showKnowledgeMode()) {
+    <app-knowledge-mode-line [entityId]="entityIdForMode()" [refreshKey]="knowledgeModeKey()" />
+  }
+
   <!-- ── Knowledge base upgrade (managed-kb-migration, Reqs 21 & 23) ──────
        Renders nothing at all unless the server says there is something to
        say. A knowledge base that works needs no UI, so `phase: 'none'` — the
@@ -243,7 +247,7 @@
     name="file-upload"
     class="sr-only"
     (change)="onFileSelected($event)"
-    accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
+    accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.sql"
   />
   <!-- Picker for "Replace with a newer version". Its accept list is set to
        the original's extension each time it opens (see startReplace). -->
@@ -351,7 +355,7 @@
             <path d="M1.5 6a2.25 2.25 0 0 1 2.25-2.25h16.5A2.25 2.25 0 0 1 22.5 6v12a2.25 2.25 0 0 1-2.25 2.25H3.75A2.25 2.25 0 0 1 1.5 18V6ZM3 16.06V18c0 .414.336.75.75.75h16.5A.75.75 0 0 0 21 18v-1.94l-2.69-2.689a1.5 1.5 0 0 0-2.12 0l-.88.879.97.97a.75.75 0 1 1-1.06 1.06l-5.16-5.159a1.5 1.5 0 0 0-2.12 0L3 16.061Zm10.125-7.81a1.125 1.125 0 1 1 2.25 0 1.125 1.125 0 0 1-2.25 0Z" clip-rule="evenodd" fill-rule="evenodd" />
           </svg>
           <p class="mt-4 text-sm/6 text-gray-600 dark:text-gray-400">Drag and drop a file here</p>
-          <p class="text-xs/5 text-gray-500 dark:text-gray-400">PDF, DOCX, TXT, MD, and other document types up to 10&nbsp;MB</p>
+          <p class="text-xs/5 text-gray-500 dark:text-gray-400">{{ dropzoneHint() }}</p>
         </div>
       </div>
     }
@@ -388,7 +392,7 @@
         </div>
       }
       @if (upload.status === 'error' && upload.error) {
-        <p class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ upload.error }}</p>
+        <p role="alert" class="mt-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ upload.error }}</p>
       }
     </div>
   }
@@ -662,4 +666,6 @@
     </div>
   }
   }
+  <!-- Host-supplied settings shown at the bottom of the card (the agent form's response strictness, #112). -->
+  <ng-content />
 </section>

@@ -32,7 +32,10 @@ from apis.shared.errors import (
     ErrorCode,
     StreamErrorEvent,
     build_conversational_error_event,
+    model_read_timeout_phase,
 )
+from apis.shared.observability.emf import emit_model_read_timeout
+from apis.shared.sessions.ledger_rollups import TURN_OUTCOMES
 
 from .history_count import HistoryCount, count_created_before
 from .stream_processor import process_agent_stream
@@ -45,6 +48,15 @@ from .stream_processor import process_agent_stream
 _FIRST_MODEL_OUTPUT_TYPES = frozenset(
     {"content_block_start", "content_block_delta", "reasoning", "tool_use"}
 )
+
+#: How a turn ended, recorded as ``outcome`` on each of its ``C#`` cost rows
+#: (release-ledger spec §5.1). ``completed``: the success path; ``paused``:
+#: the success path, stopped on an interrupt waiting for the user; ``error``:
+#: a failure arm (an agent error, a coordinator exception, a max_tokens
+#: truncation); ``stopped``: the cooperative Stop arm; ``interrupted``: torn
+#: down by the connection closing. ``TURN_OUTCOMES`` is declared in
+#: ``apis.shared.sessions.ledger_rollups``, beside the ledger writer that counts
+#: them, because app-api runs that writer too and may not import ``agents``.
 
 
 def _turn_clock_call(turn_clock: Any, method: str, *args: Any) -> None:
@@ -107,6 +119,45 @@ def _memory_extraction_of(main_agent_wrapper: Any) -> bool:
     """
     manager = getattr(main_agent_wrapper, "session_manager", None)
     return getattr(manager, "memory_extraction", True) is not False
+
+
+def _model_provider_value(model_config: Any) -> Optional[str]:
+    """The ``ModelProvider`` value the turn's model runs on, or ``None`` if unknown.
+
+    ``get_provider`` is the detection ``AgentFactory`` builds the model from,
+    so a continuation is judged by the transport it is actually sent over.
+    """
+    get_provider = getattr(model_config, "get_provider", None)
+    if not callable(get_provider):
+        return None
+    try:
+        provider = get_provider()
+    except Exception:  # noqa: BLE001 — an unreadable config keeps the model-id rule alone
+        logger.debug("Could not resolve the model provider for a continuation", exc_info=True)
+        return None
+    return getattr(provider, "value", provider) or None
+
+
+def _record_model_read_timeout(
+    error_text: str, main_agent_wrapper: Any, session_id: Optional[str]
+) -> None:
+    """Count a turn a model read timeout ended (``ModelReadTimeout``, alarmed).
+
+    Called from the in-loop ``error`` arm, where both a force-stop and an
+    exception raised inside the agent stream arrive. Nothing else records it:
+    the turn reports no usage, so it writes no ``C#`` row.
+    """
+    phase = model_read_timeout_phase(error_text.lower())
+    if phase is None:
+        return
+    model_config = getattr(main_agent_wrapper, "model_config", None)
+    retry_config = getattr(model_config, "retry_config", None)
+    emit_model_read_timeout(
+        model_id=getattr(model_config, "model_id", None),
+        phase=phase,
+        read_timeout_seconds=getattr(retry_config, "read_timeout", None),
+        session_id=session_id,
+    )
 
 
 def reset_cancellation_state(agent: Any, session_manager: Any) -> None:
@@ -414,6 +465,30 @@ class StreamCoordinator:
         # interrupt state makes Strands reject this turn's prompt outright.
         # See ``reset_stale_interrupt_state``.
         reset_stale_interrupt_state(agent, prompt)
+
+        # A "Continue" (empty-list prompt) on a model that does not continue
+        # from assistant prefill would end the request on the partial assistant
+        # message: Claude 4.6+ rejects it on every retry, and a Responses-API
+        # model (GPT) starts the answer over. Send a fixed user turn instead.
+        # Runs after everything above has settled the live list, and only reads
+        # it: the history before the partial is unchanged.
+        if isinstance(prompt, list) and not prompt:
+            from apis.shared.models.assistant_prefill import continuation_prompt
+
+            _continuation_config = getattr(main_agent_wrapper, "model_config", None)
+            _continuation_model = getattr(_continuation_config, "model_id", None)
+            _continuation_provider = _model_provider_value(_continuation_config)
+            _continued = continuation_prompt(
+                prompt, getattr(agent, "messages", None) or [], _continuation_model, _continuation_provider
+            )
+            if _continued is not prompt:
+                logger.info(
+                    "Continuation on %s (%s): history ends on assistant text and the model does not continue "
+                    "from prefill; sending a continue turn instead",
+                    _continuation_model,
+                    _continuation_provider or "bedrock",
+                )
+                prompt = _continued
         # Compaction state re-read (#751), document offload, the resets above.
         _turn_clock_call(turn_clock, "mark", "head_of_turn.compaction")
 
@@ -727,6 +802,10 @@ class StreamCoordinator:
                     # and the append_message hook persists it to AgentCore
                     # Memory. It is no longer "in flight", so an interruption
                     # from here on must not re-persist its text.
+                    # Whether this call said anything is kept on its slot first:
+                    # a turn whose final call streamed no text is an empty
+                    # answer (`emptyAnswer` on the cost row, release-ledger D6).
+                    call_streamed_text = any(t.strip() for t in assistant_text_acc)
                     assistant_text_acc.clear()
                     # Bedrock opens an EMPTY response with no `messageStart`:
                     # the call streams only `messageStop` + `metadata`. With no
@@ -745,6 +824,7 @@ class StreamCoordinator:
                         )
                     if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
                         per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
+                        per_message_metadata[current_assistant_message_index]["has_text"] = call_streamed_text
                         logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
 
                 # Track individual metadata events (per assistant message)
@@ -1165,6 +1245,9 @@ class StreamCoordinator:
                     error_message = error_data.get("error", "An error occurred")
                     error_detail = error_data.get("detail", "")
                     error_code_str = error_data.get("code", "stream_error")
+                    _record_model_read_timeout(
+                        f"{error_message} {error_detail or ''}", main_agent_wrapper, session_id
+                    )
 
                     # Map string code to ErrorCode enum
                     try:
@@ -1590,6 +1673,7 @@ class StreamCoordinator:
             message_ids_to_store = assistant_message_ids if assistant_message_ids else ([message_id] if message_id is not None else [])
 
             if message_ids_to_store:
+                turn_outcome, empty_answer = self._completed_turn_outcome(agent, per_message_metadata)
                 await self._store_turn_call_metadata(
                     session_id=session_id,
                     user_id=user_id,
@@ -1604,6 +1688,8 @@ class StreamCoordinator:
                     citations=citations,
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
+                    outcome=turn_outcome,
+                    empty_answer=empty_answer,
                 )
 
             # displayText backstop. `DisplayTextHook` normally wrote this at
@@ -1902,6 +1988,28 @@ class StreamCoordinator:
                 discard_provenance(user_id, session_id)
             except Exception:  # noqa: BLE001
                 logger.debug("source provenance discard failed", exc_info=True)
+
+    @staticmethod
+    def _completed_turn_outcome(
+        agent: Any, per_message_metadata: List[Dict[str, Any]]
+    ) -> Tuple[str, bool]:
+        """``(outcome, empty_answer)`` for a turn that reached the success path.
+
+        A turn that paused for the user (OAuth consent, an approval, a
+        question, a browser sign-in) is ``paused``, never an empty answer: its
+        last call ends on the tool use the user is now answering, which is the
+        normal shape of a pause. Any other turn is ``completed``, and an empty
+        answer when its final model call streamed no text — the failure the
+        eval harness found on dev 2026-10-30, a turn whose last visible words
+        were a tool preamble ("Now let me verify:") and whose final call said
+        nothing. Read off facts already in memory, after the stream.
+        """
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if interrupt_state is not None and getattr(interrupt_state, "activated", False) is True:
+            return "paused", False
+        final_call = per_message_metadata[-1] if per_message_metadata else None
+        empty = final_call is not None and not final_call.get("has_text")
+        return "completed", empty
 
     @staticmethod
     def _new_call_slot(call_index: int) -> Dict[str, Any]:
@@ -2253,6 +2361,11 @@ class StreamCoordinator:
                             # The breakdown describes the call in flight, so
                             # only a row for that call may carry it.
                             attach_context_breakdown=metered[-1] == in_flight_idx,
+                            # A Stop the coordinator saw is `stopped`; a turn
+                            # torn down by the connection closing is
+                            # `interrupted` (that includes a Stop whose signal
+                            # lost the race with the disconnect).
+                            outcome="stopped" if reason == "user_stopped" else "interrupted",
                         )
                     logger.info(
                         "📊 Metered interrupted turn for session %s: %d model call(s) (in flight: %s)",
@@ -3928,6 +4041,8 @@ class StreamCoordinator:
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
         attach_context_breakdown: bool = True,
+        outcome: Optional[str] = None,
+        empty_answer: bool = False,
     ) -> None:
         """Write one cost row per model call of this turn, in call order.
 
@@ -3941,6 +4056,11 @@ class StreamCoordinator:
         ``attach_context_breakdown`` is off for a failed turn: the breakdown
         describes the turn's last *attempted* call, which on a failure may be
         the one that never answered rather than the last row written.
+
+        ``outcome`` is how the turn ended (:data:`TURN_OUTCOMES`) and goes on
+        every row of the turn, so a filter on any one call sees it;
+        ``empty_answer`` is a fact about the turn's final call and goes on the
+        last row only, which is the one row per turn a count reads.
         """
         # Content-free tool census, read (not drained) per call so each
         # cost row carries the tools that call requested. None when the
@@ -4027,6 +4147,8 @@ class StreamCoordinator:
                     include_context_breakdown=attach_context_breakdown and is_last,
                     turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
                     turn_project_id=turn_project_id,
+                    turn_outcome=outcome,
+                    empty_answer=empty_answer and is_last,
                     tool_calls=(
                         tool_census_hook.tally_for_call(hook_index)
                         if tool_census_hook is not None else None
@@ -4132,6 +4254,7 @@ class StreamCoordinator:
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
                 attach_context_breakdown=False,
+                outcome="error",
             )
             logger.info(
                 "📊 Metered failed turn for session %s: %d of %d model call(s) reported usage",
@@ -4211,6 +4334,8 @@ class StreamCoordinator:
         include_context_breakdown: bool = False,
         call_kind: Optional[str] = None,
         prefix_fingerprint: Optional[Dict[str, Any]] = None,
+        turn_outcome: Optional[str] = None,
+        empty_answer: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Store message-level metadata (token usage, latency, model info, citations)
@@ -4234,6 +4359,12 @@ class StreamCoordinator:
                 ``messageId`` when ``message_id`` is None.
             prefix_fingerprint: This call's fingerprint, for a caller that ran no
                 hooks (the brief computes it over the request it sent).
+            turn_outcome: How the turn this call belongs to ended, recorded as
+                ``outcome`` (one of :data:`TURN_OUTCOMES`); None for a call
+                that is not a turn's, which then carries no ``outcome``.
+            empty_answer: Recorded as ``emptyAnswer: true`` — the turn
+                completed and its final call streamed no text. Set by the
+                caller on the turn's last row only.
 
         Returns the row's derived cache observability (``cacheStatus`` …), or None
         when no row was written.
@@ -4416,6 +4547,13 @@ class StreamCoordinator:
                     metadata_kwargs["prefixFingerprints"] = prefix_fingerprint
                 if call_kind:
                     metadata_kwargs["callKind"] = call_kind
+                # How the turn ended (release-ledger spec §5.1): a closed
+                # vocabulary, no content. `emptyAnswer` is written only when
+                # true, so its absence is the normal case and costs nothing.
+                if turn_outcome in TURN_OUTCOMES:
+                    metadata_kwargs["outcome"] = turn_outcome
+                if empty_answer:
+                    metadata_kwargs["emptyAnswer"] = True
 
                 # Which Agent ran this turn (#756), as another extra field. An
                 # `@`-mention swaps the Agent for one turn, which genuinely re-writes

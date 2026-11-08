@@ -43,6 +43,7 @@ admin curated, or from one of your existing Agents.
 | **Tools** | The tools the Agent may call. For an MCP connector you can bind only some of its tools instead of all of them |
 | **Skills** | The skills the Agent may use |
 | **Knowledge base** | Documents the Agent searches: uploaded files, crawled web pages, and imports from connected sources, with optional automatic sync |
+| **Response strictness** | How closely the Agent sticks to its knowledge base: **Only use documents**, **Prefer documents** (the default) or **Use documents as context**. See below |
 | **Sources** | **Show source citations** and **Allow document downloads**, both on by default. Downloads need citations on |
 
 The pickers list only what your roles let you use. Models and tools that are
@@ -52,6 +53,29 @@ A **Preview** pane beside the form runs the Agent through the same path a real
 conversation uses. It runs the **saved** Agent, not what is typed in the form,
 so save to see a change; the pane says so when the form has unsaved edits.
 Preview conversations are not kept.
+
+### Response strictness
+
+This setting adds a grounding rule to the Agent's system prompt, under its
+instructions, so the Agent's rule wins over a user's personal instructions.
+
+| Setting | Behavior |
+|---|---|
+| **Only use documents** | Answers only from the knowledge base. If the documents don't cover the question, the Agent says so instead of using general knowledge, web search or other tools |
+| **Prefer documents** | The default, and the behavior before this setting existed. It adds nothing to the prompt |
+| **Use documents as context** | Documents inform the answer, and general knowledge and tools fill gaps freely |
+
+Limits to know about:
+
+- **Only use documents** is an instruction to the model, not a block. Bound web
+  search and other tools stay available, so leave them unbound if the Agent
+  should have no web access.
+- When the Agent searches its knowledge base (rather than sending it whole),
+  it sees the five closest passages. A question the documents do answer can
+  still get "I couldn't find that" when the search misses.
+- The setting applies even when the Agent has no documents. A strict Agent
+  with an empty knowledge base declines factual questions.
+- Shared Projects do not have this setting.
 
 ### What a binding means at run time
 
@@ -168,7 +192,8 @@ Once an Agent is published:
 ### Versions
 
 Every submission saves an immutable snapshot of the Agent (instructions,
-model settings and bindings). Approval publishes that snapshot, so later edits
+model settings, bindings and response strictness). A change to response
+strictness shows in the review diff as a behavior change. Approval publishes that snapshot, so later edits
 reach nobody until a new version is approved.
 
 | Who | Runs |

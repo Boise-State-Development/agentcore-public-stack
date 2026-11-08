@@ -156,6 +156,12 @@
             />
           }
         </div>
+        <!--
+          Files the message's combined inline budget leaves out, said before
+          send. Always present with the cards, so its live region exists before
+          the notice appears in it.
+        -->
+        <app-inline-budget-notice [overflow]="budgetOverflow()" />
       </div>
     }
 

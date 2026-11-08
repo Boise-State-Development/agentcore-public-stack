@@ -178,14 +178,43 @@ describe('ProjectFilesComponent', () => {
     expect(el.querySelector('[role=status]')?.textContent).toContain('Upload failed');
   });
 
-  it('refuses a file over the limit before asking the server', async () => {
+  it('refuses a file over the API’s limit before asking the server', async () => {
+    api.files.mockReturnValue(of({
+      documents: [doc('a')], nextToken: null, canEdit: true,
+      kbUsage: { engine: 'managed', storedBytes: 0, reservedBytes: 0, cap: 100 * 1024 * 1024, elevated: false, maxFileBytes: 50 * 1024 * 1024 },
+    }));
     const { fixture, el, component } = await render();
     const big = new File(['x'], 'huge.pdf');
-    Object.defineProperty(big, 'size', { value: 11 * 1024 * 1024 });
+    Object.defineProperty(big, 'size', { value: 51 * 1024 * 1024 });
     await pick(component, [big]);
     fixture.detectChanges();
     expect(api.fileUploadUrl).not.toHaveBeenCalled();
-    expect(el.textContent).toContain('Files can be up to 10 MB');
+    expect(el.textContent).toContain('Files can be up to 50 MB. This one is 51 MB.');
+  });
+
+  it('sends a file the old 10 MB limit refused when the API allows it', async () => {
+    api.files.mockReturnValue(of({
+      documents: [doc('a')], nextToken: null, canEdit: true,
+      kbUsage: { engine: 'managed', storedBytes: 0, reservedBytes: 0, cap: 100 * 1024 * 1024, elevated: false, maxFileBytes: 50 * 1024 * 1024 },
+    }));
+    api.fileUploadUrl.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 503 })));
+    const { component } = await render();
+    const file = new File(['x'], 'report.pdf');
+    Object.defineProperty(file, 'size', { value: 30 * 1024 * 1024 });
+    await pick(component, [file]);
+    expect(api.fileUploadUrl).toHaveBeenCalled();
+  });
+
+  it('shows the server’s sentence when it refuses a file over the limit', async () => {
+    api.fileUploadUrl.mockReturnValue(
+      throwError(() => new HttpErrorResponse({ status: 413, error: { detail: 'Files can be up to 50 MB. This one is 60 MB.' } })),
+    );
+    const { fixture, el, component } = await render();
+    const big = new File(['x'], 'huge.pdf');
+    Object.defineProperty(big, 'size', { value: 60 * 1024 * 1024 });
+    await pick(component, [big]);
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Files can be up to 50 MB. This one is 60 MB.');
   });
 
   it('shows the API’s sentence when the upload is refused (archived)', async () => {

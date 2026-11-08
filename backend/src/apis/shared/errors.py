@@ -176,6 +176,63 @@ def is_service_unavailable_error(error_lower: str) -> bool:
     return any(marker in error_lower for marker in _SERVICE_UNAVAILABLE_MARKERS)
 
 
+# The two wordings of a Bedrock read timeout (`RETRY_READ_TIMEOUT`). botocore
+# raises its own `ReadTimeoutError` ("Read timeout on endpoint URL: ...") when
+# the response never opens. Once the stream is open, botocore's `EventStream`
+# iterates the raw urllib3 stream unwrapped, so the error is urllib3's
+# ("AWSHTTPSConnectionPool(host=...): Read timed out."). The mid-stream form is
+# the one prod hits: Opus 5.5 thinks with `display: "omitted"` by default, which
+# sends no bytes while it reasons, and a long think on a large document ran
+# past the old 120s timeout about 5 times a day in prod in 2026-10.
+# It reached users as the raw "Agent force-stopped: ...: Read timed out."
+_BEFORE_STREAM_READ_TIMEOUT_MARKER = "read timeout on endpoint url"
+_MID_STREAM_READ_TIMEOUT_MARKER = "read timed out"
+
+
+def model_read_timeout_phase(error_lower: str) -> Optional[str]:
+    """Which kind of model read timeout a lowercased error string is, if any.
+
+    Returns ``"before_stream"`` (botocore's wording: the response never
+    opened), ``"mid_stream"`` (urllib3's: the stream opened, then went
+    silent), or ``None`` for anything else.
+
+    Args:
+        error_lower: The error text, ALREADY lowercased by the caller.
+    """
+    if _BEFORE_STREAM_READ_TIMEOUT_MARKER in error_lower:
+        return "before_stream"
+    if _MID_STREAM_READ_TIMEOUT_MARKER in error_lower:
+        return "mid_stream"
+    return None
+
+
+def is_model_read_timeout_error(error_lower: str) -> bool:
+    """Whether a lowercased error string is a model read timeout.
+
+    Args:
+        error_lower: The error text, ALREADY lowercased by the caller.
+    """
+    return model_read_timeout_phase(error_lower) is not None
+
+
+def model_read_timeout_message(raw: str) -> str:
+    """User-facing copy for a model read timeout.
+
+    Never retried (``TransientModelRetryStrategy`` excludes read timeouts:
+    a retry would sit through the same silence, bill the input again and
+    outlast app-api's proxy), so the copy does not claim a retry happened.
+    """
+    return (
+        "⚠️ The model didn't send anything for several minutes, so I stopped "
+        "waiting for it.\n\n"
+        f"> {raw}\n\n"
+        "This can happen when it is working through a very large request, "
+        "such as a long document or a request for everything at once, before "
+        "it starts writing. Send your message again, or ask for one part at a "
+        "time."
+    )
+
+
 # Bedrock's wording when a model rejects a content block it has no modality
 # for. Measured 2026-10-06 against `zai.glm-5` (a TEXT-only Converse model):
 # "This model doesn't support documents." for pdf and txt document blocks, and
@@ -298,7 +355,10 @@ Please wait a moment and try again."""
         # Not rendered as a chat bubble — the frontend shows a compact
         # inline "response length limit reached" notice + Continue button
         # off the stream_error signal. Kept concise for logs / payload.
-        message = "Response length limit reached."
+        message = (
+            "The answer was cut off at the model's output limit. "
+            "Continue picks up where it stopped."
+        )
 
     elif code == ErrorCode.STREAM_ERROR:
         if "accessdenied" in error_lower or "access denied" in error_lower:
@@ -356,6 +416,10 @@ Please try again."""
             "request — I already retried it a few times. Send your message "
             "again in a moment, or switch models if it keeps happening."
         )
+        recoverable = True
+
+    if is_model_read_timeout_error(error_lower):
+        message = model_read_timeout_message(error_str)
         recoverable = True
 
     if "duplicate document name" in error_lower or "can't contain duplicate document" in error_lower:

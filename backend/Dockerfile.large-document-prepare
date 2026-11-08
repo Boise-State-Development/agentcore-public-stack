@@ -30,6 +30,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # Application code: the namespace-package layout mirrors backend/src. `apis/`
 # has no `__init__.py` and relies on implicit namespace packages.
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+# Read by emf.py for the appVersion/build stamp on every metric record.
+COPY backend/src/apis/shared/build_info.py ${LAMBDA_TASK_ROOT}/apis/shared/build_info.py
 COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
 # aws_clients.py — the S3 client and the digest's Bedrock client.
 COPY backend/src/apis/shared/aws_clients.py ${LAMBDA_TASK_ROOT}/apis/shared/aws_clients.py
@@ -52,5 +54,13 @@ COPY backend/src/lambdas/large_document_prepare/handler.py ${LAMBDA_TASK_ROOT}/h
 # /var/task is read-only at runtime, so precompile what we COPYed; pip already
 # compiled site-packages.
 RUN python -m compileall -q ${LAMBDA_TASK_ROOT}
+
+# Version injection (defaults to "unknown" if not provided via --build-arg).
+# APP_BUILD is the image's own content-hash tag; scripts/build/build-one.sh
+# passes both to every image. docs/specs/release-ledger.md D2.
+ARG APP_VERSION=unknown
+ARG APP_BUILD=unknown
+ENV APP_VERSION=${APP_VERSION}
+ENV APP_BUILD=${APP_BUILD}
 
 CMD ["handler.lambda_handler"]

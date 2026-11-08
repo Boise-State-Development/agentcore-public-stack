@@ -271,6 +271,18 @@ class SessionCallRow(BaseModel):
     # is indistinguishable from a nondeterministic-ordering regression, since both
     # flip `toolConfigHash` and `systemPromptHash` together.
     turn_agent_id: Optional[str] = Field(None, alias="turnAgentId")
+    # Which build of inference-api served this call (release-ledger spec D1):
+    # the VERSION file and the image's content-hash tag. Absent on rows
+    # written before the stamp shipped.
+    app_version: Optional[str] = Field(None, alias="appVersion")
+    build: Optional[str] = Field(None)
+    # How this call's turn ended (release-ledger spec §5.1): `completed`,
+    # `paused` (waiting on the user), `error`, `stopped` or `interrupted`.
+    # Absent on rows written before it shipped and on calls that are not a
+    # turn's (a handoff brief). `emptyAnswer` is true only on the last row of a
+    # completed turn whose final model call streamed no text.
+    outcome: Optional[str] = Field(None)
+    empty_answer: bool = Field(False, alias="emptyAnswer")
     agent_switched: bool = Field(
         False,
         alias="agentSwitched",
@@ -555,10 +567,22 @@ class FingerprintChanges(BaseModel):
 
 
 class ToolCensusEntry(BaseModel):
+    """One tool's census over the session: how often it ran and failed, and
+    (release-ledger spec D4) how much it weighed. The weights are ``None``, not
+    zero, when no row carried them — rows written before the measure shipped,
+    or a census that was off — so "not measured" never reads as "nothing"."""
     model_config = ConfigDict(populate_by_name=True)
 
     calls: int = 0
     errors: int = 0
+    # Summed characters the tool's results put into the context (text, JSON,
+    # a fixed 1,500 per image) and the characters of the inputs the model wrote.
+    result_chars: Optional[int] = Field(None, alias="resultChars")
+    input_chars: Optional[int] = Field(None, alias="inputChars")
+    # Strands' measured execution time, summed over the calls that reported
+    # one; `timedCalls` is how many did, so a mean divides by the right count.
+    duration_ms: Optional[int] = Field(None, alias="durationMs")
+    timed_calls: Optional[int] = Field(None, alias="timedCalls")
 
 
 class FeedbackCounts(BaseModel):

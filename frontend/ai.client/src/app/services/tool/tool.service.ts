@@ -1,7 +1,8 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import { makeScopedToolId } from '../../shared/utils/scoped-tool-id';
 import { ToggleOptions } from '../toggle-options';
 
@@ -488,7 +489,8 @@ export class ToolService {
     const res = await firstValueFrom(
       this.http.post<{ tools: { name: string; description?: string | null }[] }>(
         `${this.baseUrl()}/${toolId}/discover`,
-        {}
+        {},
+        { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) }
       )
     );
     this._tools.update(tools =>

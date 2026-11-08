@@ -134,9 +134,13 @@ COPY --from=builder /tmp/models/docling-artifacts /opt/ml/models/docling-artifac
 # Tiktoken Cache (Must copy contents to a folder; handler will move this to /tmp)
 COPY --from=builder /tmp/models/tiktoken_cache /opt/ml/models/tiktoken_cache/
 
-# Version injection (defaults to "unknown" if not provided via --build-arg)
+# Version injection (defaults to "unknown" if not provided via --build-arg).
+# APP_BUILD is the image's own content-hash tag; scripts/build/build-one.sh
+# passes both. Baked, not a Runtime variable: docs/specs/release-ledger.md D2.
 ARG APP_VERSION=unknown
+ARG APP_BUILD=unknown
 ENV APP_VERSION=${APP_VERSION}
+ENV APP_BUILD=${APP_BUILD}
 
 # 4. Set Environment Variables
 ENV DOCLING_ARTIFACTS_PATH=/opt/ml/models/docling-artifacts \

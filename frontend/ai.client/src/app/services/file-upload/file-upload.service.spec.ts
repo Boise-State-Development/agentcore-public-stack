@@ -318,6 +318,38 @@ describe('FileUploadService', () => {
           const badFile = new File(['x'], 'test.exe', { type: 'application/exe' });
           expect(service.uploadFile('session1', badFile)).rejects.toThrow(InvalidFileTypeError);
         });
+
+        it('should PUT to S3 with the same Content-Type it presigned with', async () => {
+          // S3 signs the URL with the presigned type and returns 403 on a mismatch.
+          const headers: Record<string, string> = {};
+          class FakeXhr {
+            upload = { onprogress: null };
+            status = 200;
+            statusText = 'OK';
+            onload: (() => void) | null = null;
+            onerror: (() => void) | null = null;
+            open() {}
+            setRequestHeader(name: string, value: string) { headers[name] = value; }
+            send() { setTimeout(() => this.onload?.()); }
+          }
+          vi.stubGlobal('XMLHttpRequest', FakeXhr);
+          try {
+            const file = new File(['SELECT 1;'], 'query.sql', { type: 'application/sql' });
+            const upload = service.uploadFile('session1', file);
+
+            const presign = await vi.waitFor(() => httpMock.expectOne(r => r.url.endsWith('/presign')));
+            expect(presign.request.body.mimeType).toBe('text/plain');
+            presign.flush({ uploadId: 'u1', presignedUrl: 'https://s3.example/put', expiresAt: '' });
+
+            const complete = await vi.waitFor(() => httpMock.expectOne(r => r.url.includes('/u1/complete')));
+            complete.flush({});
+            await upload;
+
+            expect(headers['Content-Type']).toBe('text/plain');
+          } finally {
+            vi.unstubAllGlobals();
+          }
+        });
       });
 
       describe('uploadFiles', () => {
@@ -541,6 +573,9 @@ describe('FileUploadService', () => {
             ['log.txt', 'text/plain'],
             ['notes.md', 'text/markdown'],
             ['page.html', 'text/html'],
+            // Browsers report .sql as application/sql, application/x-sql or nothing.
+            ['query.sql', 'application/sql'],
+            ['query.sql', ''],
             // The browser reported nothing; the extension decides, as presign will.
             ['scan.pdf', ''],
           ];
@@ -598,6 +633,8 @@ describe('FileUploadService', () => {
         it('falls back to the extension when the provider reports a vague type', () => {
           expect(isAttachableSourceFile({ name: 'notes.md', mimeType: 'application/octet-stream', sizeBytes: 10 }, FLAG_OFF)).toBe(true);
           expect(resolveMimeTypeFor('notes.md', 'application/octet-stream')).toBe('text/markdown');
+          expect(resolveMimeTypeFor('query.sql', 'application/sql')).toBe('text/plain');
+          expect(resolveMimeTypeFor('query.sql', '')).toBe('text/plain');
         });
 
         it('applies the class cap, which the large-document flag raises for documents', () => {

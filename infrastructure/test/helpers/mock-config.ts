@@ -40,9 +40,11 @@ import { AppConfig,
   MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
   MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
   MANAGED_KB_PER_KB_CEILING_BYTES,
+  KB_UPLOAD_MAX_FILE_BYTES,
   MANAGED_KB_RETENTION_WINDOW_DAYS,
   OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
   OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD,
   OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
   OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
   OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
@@ -106,6 +108,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       albP99LatencyMs: OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
       agentCoreLatencyMs: OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
       agentCoreErrorThreshold: OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      chatStreamDropThreshold: OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD,
       agentCoreActiveSessionThreshold:
         OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
       lambdaErrorThreshold: OBSERVABILITY_DEFAULT_LAMBDA_ERROR_THRESHOLD,
@@ -160,6 +163,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       perOwnerDefaultBytes: MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
       perOwnerElevatedBytes: MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
       perKnowledgeBaseCeilingBytes: MANAGED_KB_PER_KB_CEILING_BYTES,
+      uploadMaxFileBytes: KB_UPLOAD_MAX_FILE_BYTES,
       retentionWindowDays: MANAGED_KB_RETENTION_WINDOW_DAYS,
       storageAlarmGb: 500,
       dailyCostAlarmUsd: 100,
@@ -230,6 +234,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     assistantKbFullContext: {
       enabled: false,
+      maxTokens: 50_000,
+    },
+    agentKnowledgeFiles: {
+      enabled: false,
     },
     meetingTasks: {
       enabled: false,
@@ -249,7 +257,16 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     sourceProvenance: {
       enabled: false,
     },
+    releaseLedger: {
+      enabled: false,
+    },
     webSearchDefaultMaxResults: {
+      enabled: false,
+    },
+    wordSkillScripts: {
+      enabled: false,
+    },
+    converseDocumentsAsText: {
       enabled: false,
     },
     projectFileReadiness: {

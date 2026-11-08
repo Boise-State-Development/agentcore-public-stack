@@ -23,6 +23,9 @@ export interface Assistant {
   showCitations?: boolean;
   allowDocumentDownload?: boolean;
 
+  /** How strictly answers stay within the knowledge base (#112); default 'balanced'. */
+  responseStrictness?: 'strict' | 'balanced' | 'flexible';
+
   // Share metadata (only present for shared assistants)
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;

@@ -193,6 +193,15 @@ export interface Message {
    */
   steering?: boolean;
   /**
+   * True on the user turn a Continue sent after a max_tokens cut, on a model
+   * that refuses assistant prefill (Claude 4.6 and later). The backend
+   * persists a fixed instruction there and marks it on `GET /messages`; the
+   * user never typed it. The message list treats it as protocol scaffolding,
+   * so the partial answer and its continuation render as one response.
+   * Server-set only, and only on a reloaded message.
+   */
+  continuation?: boolean;
+  /**
    * Set on a user message whose request was refused before any of the
    * response streamed — the BFF or the Runtime answered non-2xx, or the
    * connection never opened. The agent never saw it, so the bubble says so

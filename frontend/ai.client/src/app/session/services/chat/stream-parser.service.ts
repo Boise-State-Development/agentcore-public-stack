@@ -402,6 +402,11 @@ export class StreamParserService {
     this.quotaWarningService.clearQuotaExceeded();
     this.quotaWarningService.clearFundingNotice();
     this.quotaWarningService.forgetSessionNotice();
+    // The previous turn's ending belongs to that turn. A new one that never
+    // reaches `message_start` (refused, dropped before it opened) must not
+    // inherit it — the composer reads it to decide what to do with a queued
+    // follow-up when this turn ends.
+    this.chatStateService.setStopReason(sessionId, null);
     const state = this.createState(sessionId, startingMessageCount || 0);
     this.states.update((map) => {
       const next = new Map(map);
@@ -821,6 +826,15 @@ export class StreamParserService {
     };
   }
 
+  /** Whether a message holds anything the user could have seen. */
+  private hasVisibleContent(builder: MessageBuilder): boolean {
+    for (const block of builder.contentBlocks.values()) {
+      if (block.type !== 'text') return true;
+      if (block.textChunks.join('').trim()) return true;
+    }
+    return false;
+  }
+
   private findLastAssistantId(state: ParserSessionState): string | undefined {
     const messages = state.allMessages();
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -845,10 +859,25 @@ export class StreamParserService {
     // Content is arriving, so whatever retry we were explaining is over.
     state.modelRetry.set(null);
 
-    // If there's an existing message, finalize it before starting a new one
+    // If there's an existing message, finalize it before starting a new one —
+    // unless it is a model call that died before it said anything.
+    //
+    // Bedrock opens a call with `messageStart` before any content, so a call
+    // that fails mid-stream (a read timeout while the model thinks silently)
+    // leaves an empty, never-stopped builder behind, and the server's error
+    // reply then arrives as a second `message_start`. The server never stored
+    // that empty call: Strands commits only a completed one. Keeping it showed
+    // an empty bubble above the error, and, worse, numbered every later
+    // message one past the server's index for the rest of the session, so
+    // feedback, rewind and fork on those messages pointed at the wrong one.
+    // A model retry (`model_retry`) leaves the same abandoned attempt behind.
     const currentBuilder = state.currentMessageBuilder();
     if (currentBuilder) {
-      this.finalizeCurrentMessage(state);
+      if (!currentBuilder.isComplete && !this.hasVisibleContent(currentBuilder)) {
+        state.currentMessageBuilder.set(null);
+      } else {
+        this.finalizeCurrentMessage(state);
+      }
     }
 
     // Clear stopReason in ChatStateService

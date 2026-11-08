@@ -16,6 +16,7 @@ from agents.main_agent.streaming.stream_processor import (
 from apis.shared.errors import (
     ErrorCode,
     build_conversational_error_event,
+    is_model_read_timeout_error,
     is_service_unavailable_error,
 )
 
@@ -172,3 +173,62 @@ class TestForceStopIsLogged:
             )
 
         assert "Agent force-stopped: The service is temporarily unavailable." in caplog.text
+
+
+# The exact force_stop_reason prod logged (2026-10-30) after Opus 5.5 sent
+# nothing for 120s mid-stream.
+_PROD_MID_STREAM_TIMEOUT = (
+    "AWSHTTPSConnectionPool(host='bedrock-runtime.us-west-2.amazonaws.com', "
+    "port=443): Read timed out."
+)
+
+
+def _botocore_read_timeout() -> Exception:
+    from botocore.exceptions import ReadTimeoutError
+
+    return ReadTimeoutError(endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com/model/x/converse-stream")
+
+
+def _urllib3_read_timeout() -> Exception:
+    from urllib3.exceptions import ReadTimeoutError
+
+    return ReadTimeoutError(None, "/model/x/converse-stream", "Read timed out.")
+
+
+class TestModelReadTimeoutCopy:
+    @pytest.mark.parametrize(
+        "make_error", [_botocore_read_timeout, _urllib3_read_timeout], ids=["botocore", "urllib3"]
+    )
+    def test_matcher_recognizes_both_library_wordings(self, make_error):
+        assert is_model_read_timeout_error(str(make_error()).lower()) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "service unavailable",
+            "validationexception: input is too long",
+            "throttlingexception: rate exceeded",
+            "tool call timed out after 30s",
+        ],
+    )
+    def test_matcher_stays_narrow(self, text):
+        assert is_model_read_timeout_error(text) is False
+
+    def test_force_stop_classifier_explains_the_silence(self):
+        message, recoverable = _format_force_stop_message(_PROD_MID_STREAM_TIMEOUT)
+        assert "didn't send anything for several minutes" in message
+        assert "Agent force-stopped" not in message
+        assert recoverable is True
+
+    def test_copy_does_not_claim_a_retry(self):
+        """A read timeout is never retried, unlike a 503."""
+        message, _ = _format_force_stop_message(_PROD_MID_STREAM_TIMEOUT)
+        assert "retried" not in message
+
+    @pytest.mark.parametrize(
+        "code", [ErrorCode.MODEL_ERROR, ErrorCode.STREAM_ERROR, ErrorCode.AGENT_ERROR]
+    )
+    def test_conversational_event_is_specific_under_every_code(self, code):
+        event = build_conversational_error_event(code=code, error=_botocore_read_timeout())
+        assert "didn't send anything for several minutes" in event.message
+        assert event.recoverable is True

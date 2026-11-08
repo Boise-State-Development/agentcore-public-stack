@@ -31,6 +31,7 @@ import base64
 from dataclasses import dataclass
 
 from apis.shared.aws_clients import get_dynamodb_table
+from apis.shared.build_info import build_stamp
 from typing import Iterable, List, Literal, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
@@ -333,6 +334,11 @@ async def _store_message_metadata_cloud(
             # TTL - only cost records have this attribute
             "ttl": ttl,
 
+            # Which build of the service produced this call: `appVersion` and
+            # `build` (docs/specs/release-ledger.md D1). Before the metadata so
+            # a caller that knows better (the backfill) can override them.
+            **build_stamp(),
+
             # Cost and usage metadata
             **metadata_decimal,
 
@@ -375,7 +381,8 @@ async def _store_message_metadata_cloud(
         await _update_cost_summary_async(
             user_id=user_id,
             timestamp=timestamp,
-            message_metadata=message_metadata
+            message_metadata=message_metadata,
+            ledger_row=item,
         )
 
         # Shared Projects: a call made by a project's harness also counts toward that
@@ -804,7 +811,8 @@ async def _update_project_rollup_async(
 async def _update_cost_summary_async(
     user_id: str,
     timestamp: str,
-    message_metadata: MessageMetadata
+    message_metadata: MessageMetadata,
+    ledger_row: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Update pre-aggregated cost summary (async, non-blocking)
@@ -822,6 +830,8 @@ async def _update_cost_summary_async(
         user_id: User identifier
         timestamp: ISO timestamp of the message
         message_metadata: MessageMetadata containing cost, usage, and model info
+        ledger_row: The ``C#`` item just written, for the release ledger's
+            version-keyed rollups (``ledger_rollups``); None writes none.
     """
     try:
         import asyncio
@@ -935,7 +945,8 @@ async def _update_cost_summary_async(
                 cache_savings=cache_savings,
                 model_id=model_id,
                 model_name=model_name,
-                provider=provider
+                provider=provider,
+                ledger_row=ledger_row,
             )
         )
 
@@ -958,7 +969,8 @@ async def _update_system_rollups_async(
     cache_savings: float,
     model_id: str | None,
     model_name: str | None,
-    provider: str | None
+    provider: str | None,
+    ledger_row: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Update system-wide rollups for admin dashboard (async, fire-and-forget)
@@ -967,6 +979,11 @@ async def _update_system_rollups_async(
     - Daily rollup (ROLLUP#DAILY, SK: YYYY-MM-DD)
     - Monthly rollup (ROLLUP#MONTHLY, SK: YYYY-MM)
     - Per-model rollup (ROLLUP#MODEL, SK: YYYY-MM#model_id)
+    - While ``RELEASE_LEDGER_ENABLED`` is on, the release ledger's
+      ``LEDGER#VERSION`` / ``#MODEL`` / ``#TOOL`` / ``#AGENT`` / ``#PROJECT``
+      rows for ``ledger_row`` (docs/specs/release-ledger.md §5.2), concurrently
+      with the ``ROLLUP#`` writes and with their failure semantics: each side
+      logs and swallows its own errors, so neither can skip the other.
 
     These updates are non-blocking and failures don't affect the main request flow.
     The rollups support the admin cost dashboard with pre-aggregated system-wide metrics.
@@ -981,7 +998,40 @@ async def _update_system_rollups_async(
         model_id: Model identifier
         model_name: Human-readable model name
         provider: LLM provider
+        ledger_row: The stored ``C#`` item, for the release ledger; None skips it.
     """
+    import asyncio
+
+    from apis.shared.sessions.ledger_rollups import bump_ledger_for_row
+
+    await asyncio.gather(
+        _bump_rollup_rows(
+            user_id=user_id,
+            period=period,
+            date=date,
+            cost=cost,
+            usage_delta=usage_delta,
+            cache_savings=cache_savings,
+            model_id=model_id,
+            model_name=model_name,
+            provider=provider,
+        ),
+        bump_ledger_for_row(ledger_row),
+    )
+
+
+async def _bump_rollup_rows(
+    user_id: str,
+    period: str,
+    date: str,
+    cost: float,
+    usage_delta: dict,
+    cache_savings: float,
+    model_id: str | None,
+    model_name: str | None,
+    provider: str | None,
+) -> None:
+    """The ``ROLLUP#DAILY`` / ``#MONTHLY`` / ``#MODEL`` bumps. Never raises."""
     try:
         # Check if we're using DynamoDB storage (rollups only make sense in cloud mode)
         system_rollup_table = os.environ.get("DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME")

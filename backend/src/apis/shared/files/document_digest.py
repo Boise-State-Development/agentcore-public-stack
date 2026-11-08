@@ -262,6 +262,8 @@ class DocumentText(BaseModel):
     truncated: bool
     unit: str
     count: int
+    #: Length of the whole text layer, even when ``text`` is an excerpt of it.
+    chars: int = 0
 
 
 def document_text(fmt: str, raw: bytes, limit: int) -> DocumentText:
@@ -279,8 +281,10 @@ def document_text(fmt: str, raw: bytes, limit: int) -> DocumentText:
     separator = "\n\n" if fmt == "pdf" else "\n"
     full = separator.join(t.strip() if fmt == "pdf" else t for t in texts if t.strip())
     if len(full) <= limit:
-        return DocumentText(text=full, truncated=False, unit=unit, count=len(texts))
-    return DocumentText(text=_sample_units(fmt, texts, limit), truncated=True, unit=unit, count=len(texts))
+        return DocumentText(text=full, truncated=False, unit=unit, count=len(texts), chars=len(full))
+    return DocumentText(
+        text=_sample_units(fmt, texts, limit), truncated=True, unit=unit, count=len(texts), chars=len(full)
+    )
 
 
 # ---------------------------------------------------------------------------

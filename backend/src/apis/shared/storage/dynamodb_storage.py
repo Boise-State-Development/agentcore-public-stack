@@ -31,6 +31,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
+from apis.shared.build_info import build_stamp
+
 
 def _safe_decimal(value: Any) -> Decimal:
     """Coerce ``value`` to a finite ``Decimal``, falling back to ``Decimal("0")``.
@@ -178,6 +180,9 @@ class DynamoDBStorage(MetadataStorage):
 
             # TTL - only cost records have this attribute
             "ttl": ttl,
+
+            # Which build produced this call (docs/specs/release-ledger.md D1).
+            **build_stamp(),
 
             # Cost and usage metadata
             **metadata_decimal

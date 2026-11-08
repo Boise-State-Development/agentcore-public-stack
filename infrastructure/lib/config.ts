@@ -103,14 +103,18 @@ export interface AppConfig {
   skillAuthoring: SkillAuthoringConfig;
   wordTrackedChanges: WordTrackedChangesConfig;
   assistantKbFullContext: AssistantKbFullContextConfig;
+  agentKnowledgeFiles: AgentKnowledgeFilesConfig;
   meetingTasks: MeetingTasksConfig;
   largeDocumentAttachments: LargeDocumentAttachmentsConfig;
   attachmentKb: AttachmentKbConfig;
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
   sourceProvenance: SourceProvenanceConfig;
+  releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
+  wordSkillScripts: WordSkillScriptsConfig;
+  converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
@@ -376,6 +380,14 @@ export interface ManagedKbConfig {
   perOwnerElevatedBytes: number;
   /** Per-knowledge-base ceiling, bounding a single runaway corpus. Default 500 MB. */
   perKnowledgeBaseCeilingBytes: number;
+  /**
+   * Largest single file a knowledge base accepts, in bytes
+   * (`KB_UPLOAD_MAX_FILE_BYTES`, from `CDK_KB_UPLOAD_MAX_FILE_BYTES`). Default
+   * 50 MiB, at most 50 MiB (Bedrock Knowledge Bases' own non-adjustable
+   * per-document limit). The classic engine stays at its 20 MiB processing
+   * limit; a value below that lowers both.
+   */
+  uploadMaxFileBytes: number;
   /** Rollback window during `retain`, in days. At least 30 (Requirement 15.11). */
   retentionWindowDays: number;
   /** Fleet-wide managed-storage alarm threshold, in GB. */
@@ -388,6 +400,8 @@ export interface ManagedKbConfig {
 export const MANAGED_KB_DEFAULT_PER_OWNER_BYTES = 100 * 1024 * 1024; // 100 MB
 export const MANAGED_KB_ELEVATED_PER_OWNER_BYTES = 1024 * 1024 * 1024; // 1 GB
 export const MANAGED_KB_PER_KB_CEILING_BYTES = 500 * 1024 * 1024; // 500 MB
+/** Per-file knowledge-base upload limit, and Bedrock's own ceiling for it. */
+export const KB_UPLOAD_MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MiB
 /** Minimum legacy-data rollback window (Requirement 15.11). */
 export const MANAGED_KB_RETENTION_WINDOW_DAYS = 30;
 
@@ -781,8 +795,37 @@ export interface WordTrackedChangesConfig {
  * ASSISTANT_KB_FULL_CONTEXT_ENABLED on the AgentCore Runtime; while off, the
  * variable is absent. The text comes from the documents bucket, which the
  * Runtime can always read (`AssistantDocumentsRead`). No SPA switch.
+ *
+ * `maxTokens` is the budget (CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, or an
+ * `assistantKbFullContext.maxTokens` context; 0 switches full context off with
+ * the flag on). Written as ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS only when it
+ * differs from the code's default, 50,000, so the default spends none of the V2
+ * payload budget. app-api carries both values too: its
+ * `GET /assistants/{id}/knowledge-base/mode` tells an Agent's author which mode
+ * the knowledge base runs in, and must answer as the Runtime decides.
  */
 export interface AssistantKbFullContextConfig {
+  enabled: boolean;
+  maxTokens: number;
+}
+
+/** The code's own default (`DEFAULT_FULL_CONTEXT_MAX_TOKENS` in kb_full_context.py). */
+export const DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS = 50_000;
+
+/**
+ * `knowledge_files` for ordinary Agents
+ * (backend/src/agents/builtin_tools/project_files_tool.py): an Agent turn that
+ * is not a project harness's gets one tool that lists its Knowledge documents
+ * and reads one by name, and the retrieved-excerpts preamble names it.
+ * **Opt-in while in development**: off unless
+ * CDK_AGENT_KNOWLEDGE_FILES_ENABLED=true (or an
+ * `agentKnowledgeFiles.enabled: true` context). Sets
+ * AGENT_KNOWLEDGE_FILES_ENABLED on the AgentCore Runtime only, and **only while
+ * on**, so the default spends none of the V2 payload budget. No resources and no
+ * IAM: the Runtime already reads the assistants table and the documents bucket
+ * for full-context mode. No SPA switch.
+ */
+export interface AgentKnowledgeFilesConfig {
   enabled: boolean;
 }
 
@@ -890,6 +933,23 @@ export interface SourceProvenanceConfig {
 }
 
 /**
+ * Release ledger writes (docs/specs/release-ledger.md §5.2, D8): each model
+ * call's cost row also `ADD`s itself into version-keyed `LEDGER#VERSION` /
+ * `#MODEL` / `#TOOL` / `#AGENT` / `#PROJECT` rollups in the existing
+ * system-cost-rollup table, after the stream and beside the `ROLLUP#` bumps.
+ * **Opt-in while in development**: off unless CDK_RELEASE_LEDGER_ENABLED=true
+ * (or a `releaseLedger.enabled: true` cdk.json context). A feature switch once
+ * finished: the writes are a per-call cost a deployment may decline. Sets
+ * RELEASE_LEDGER_ENABLED on app-api (api-converse rows) and on the AgentCore
+ * Runtime (every chat, voice, brief and extraction row), the Runtime copy
+ * **only while on**, so the default spends none of the V2 payload budget. No
+ * resources and no IAM: both roles already hold UpdateItem on the table.
+ */
+export interface ReleaseLedgerConfig {
+  enabled: boolean;
+}
+
+/**
  * AgentCore Web Search result default
  * (docs/specs/web-search-default-comparison-findings.md). On, a Web Search call
  * (`<target>___WebSearch`) whose input names no `maxResults` asks for 5 results
@@ -904,6 +964,39 @@ export interface SourceProvenanceConfig {
  * none of the V2 payload budget. No resources, and nothing reaches the prompt.
  */
 export interface WebSearchDefaultMaxResultsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Word skill scripts. On, create_word_document and modify_word_document also
+ * take `skill_name` / `path` / `params` and run a `scripts/*.py` file from a
+ * skill bound to the turn inside the Code Interpreter sandbox, instead of the
+ * model retyping it into `python_code`. The script never runs on the Runtime
+ * host. **Opt-in while in development**: off unless
+ * CDK_WORD_SKILL_SCRIPTS_ENABLED=true (or a `wordSkillScripts.enabled: true`
+ * cdk.json context). Sets WORD_SKILL_SCRIPTS_ENABLED on the AgentCore Runtime
+ * only, and **only while on**, so the default spends none of the V2 payload
+ * budget. No resources and no IAM: the Runtime already reads skill resources
+ * and already runs Code Interpreter sessions.
+ */
+export interface WordSkillScriptsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Documents as text on Converse. On, the per-call document projection the
+ * Runtime installs on every Bedrock Converse model sends each non-PDF
+ * attachment (docx, txt, md, csv, html) as text the deployment rendered,
+ * instead of a Bedrock `document` block; PDFs stay native. There is then no
+ * five-document limit to reach. The stored conversation is unchanged.
+ * **Opt-in while in development**: off unless
+ * CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED=true (or a
+ * `converseDocumentsAsText.enabled: true` cdk.json context). A feature switch
+ * once finished. Sets CONVERSE_DOCUMENTS_AS_TEXT_ENABLED on the AgentCore
+ * Runtime only, and **only while on**, so the default spends none of the V2
+ * payload budget. No resources.
+ */
+export interface ConverseDocumentsAsTextConfig {
   enabled: boolean;
 }
 
@@ -1191,6 +1284,15 @@ export const OBSERVABILITY_DEFAULT_P99_LATENCY_MS = 120_000;
 export const OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD = 10;
 
 /**
+ * Chat turns per hour whose Runtime stream broke under app-api mid-turn
+ * (`ChatStreamUpstreamDropped`), above which to alarm. Not zero: production
+ * ran about 3 a day (47 in 14 days to 2026-11-06, at most 10 in a day), mostly
+ * the Runtime closing the connection. Above that baseline, a burst means
+ * something new is cutting streams, such as an idle limit on a silent turn.
+ */
+export const OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD = 5;
+
+/**
  * Concurrent AgentCore Runtime sessions (`ActiveSessionCount`, Maximum) above
  * which to alarm.
  *
@@ -1298,6 +1400,8 @@ export interface ObservabilityConfig {
   /** AgentCore Runtime p99 Latency floor, in ms. */
   agentCoreLatencyMs: number;
   agentCoreErrorThreshold: number;
+  /** Chat Runtime streams dropped mid-turn per hour above which to alarm. */
+  chatStreamDropThreshold: number;
   /**
    * Concurrent AgentCore Runtime sessions above which to alarm. A cost signal
    * (Runtime bills memory for session lifetime), not a quota one.
@@ -1617,6 +1721,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseIntEnv(scope.node.tryGetContext('managedKb.perKnowledgeBaseCeilingBytes'))
         ?? scope.node.tryGetContext('managedKb')?.perKnowledgeBaseCeilingBytes
         ?? MANAGED_KB_PER_KB_CEILING_BYTES,
+      // Not prefixed MANAGED_KB_: it also bounds a classic knowledge base's
+      // uploads (downward only), and it is what the SPA shows in the dropzone.
+      uploadMaxFileBytes:
+        parseIntEnv(process.env.CDK_KB_UPLOAD_MAX_FILE_BYTES)
+        ?? parseIntEnv(scope.node.tryGetContext('managedKb.uploadMaxFileBytes'))
+        ?? scope.node.tryGetContext('managedKb')?.uploadMaxFileBytes
+        ?? KB_UPLOAD_MAX_FILE_BYTES,
       retentionWindowDays:
         parseIntEnv(process.env.CDK_MANAGED_KB_RETENTION_WINDOW_DAYS)
         ?? parseIntEnv(scope.node.tryGetContext('managedKb.retentionWindowDays'))
@@ -1811,6 +1922,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED
         ? process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('assistantKbFullContext')?.enabled ?? false,
+      maxTokens: parseFullContextMaxTokens(
+        process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS,
+        scope.node.tryGetContext('assistantKbFullContext')?.maxTokens,
+      ),
+    },
+    agentKnowledgeFiles: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_AGENT_KNOWLEDGE_FILES_ENABLED
+        ? process.env.CDK_AGENT_KNOWLEDGE_FILES_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('agentKnowledgeFiles')?.enabled ?? false,
     },
     meetingTasks: {
       // Opt-in while in development, same parsing as assistantKbFullContext.
@@ -1849,12 +1971,33 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
     },
+    releaseLedger: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_RELEASE_LEDGER_ENABLED
+        ? process.env.CDK_RELEASE_LEDGER_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('releaseLedger')?.enabled ?? false,
+    },
     webSearchDefaultMaxResults: {
       // In development: only "true" enables, and an unset GitHub variable
       // arrives as "" rather than undefined.
       enabled: process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
         ? process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('webSearchDefaultMaxResults')?.enabled ?? false,
+    },
+    wordSkillScripts: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED
+        ? process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('wordSkillScripts')?.enabled ?? false,
+    },
+    converseDocumentsAsText: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED
+        ? process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('converseDocumentsAsText')?.enabled ?? false,
     },
     projectFileReadiness: {
       // In development: only "true" enables, and an unset GitHub variable
@@ -2097,6 +2240,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreErrorThreshold'))
         ?? scope.node.tryGetContext('observability')?.agentCoreErrorThreshold
         ?? OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+      chatStreamDropThreshold:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.chatStreamDropThreshold'))
+        ?? scope.node.tryGetContext('observability')?.chatStreamDropThreshold
+        ?? OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD,
       agentCoreActiveSessionThreshold:
         parseIntEnv(process.env.CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD)
         ?? parseIntEnv(scope.node.tryGetContext('observability.agentCoreActiveSessionThreshold'))
@@ -2363,6 +2511,19 @@ function requireWholeNumber(source: string, value: unknown): string | undefined 
 }
 
 /**
+ * The full-context token budget: the variable, else the context, else the
+ * code's default. A typo fails synth (requireWholeNumber) rather than quietly
+ * running another budget than the operator meant; an unset GitHub variable
+ * arrives as '' and takes the default.
+ */
+export function parseFullContextMaxTokens(rawEnv: string | undefined, rawContext: unknown): number {
+  const text =
+    requireWholeNumber('CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS', rawEnv) ??
+    requireWholeNumber('assistantKbFullContext.maxTokens context', rawContext);
+  return text === undefined ? DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS : parseInt(text, 10);
+}
+
+/**
  * Parse a floating-point environment/context value.
  *
  * Separate from parseIntEnv because the fractional observability tunables
@@ -2535,6 +2696,17 @@ function validateConfig(config: AppConfig): void {
     throw new Error(
       'CDK_FOLDER_ATTACHMENTS_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED (on by default): '
       + 'a folder\'s files are delivered by reference and read from the sidecars the large-document pipeline prepares.',
+    );
+  }
+
+  // The per-file knowledge-base limit is bounded by Bedrock's own, which is not
+  // adjustable: a larger value would admit files Bedrock then refuses after
+  // their bytes are stored and reserved.
+  const uploadMax = config.managedKb.uploadMaxFileBytes;
+  if (!Number.isInteger(uploadMax) || uploadMax < 1 || uploadMax > KB_UPLOAD_MAX_FILE_BYTES) {
+    throw new Error(
+      `CDK_KB_UPLOAD_MAX_FILE_BYTES must be a whole number of bytes from 1 to ${KB_UPLOAD_MAX_FILE_BYTES} `
+      + `(50 MiB, Amazon Bedrock Knowledge Bases' per-file limit). Got: ${uploadMax}`,
     );
   }
 

@@ -180,8 +180,9 @@ interface DisplayBlock {
               [style.animation-delay]="$index * 0.1 + 's'"
             >
               <app-reasoning-content
-                class="flex w-full justify-start"
+                class="block w-full"
                 [contentBlock]="block.data!"
+                [isStreaming]="block.streaming ?? false"
               />
             </div>
           }
@@ -506,7 +507,7 @@ export class AssistantMessageComponent {
       // the history-rehydration path bypasses.
       if (block.type === 'reasoningContent' && this.hasRenderableReasoning(block)) {
         flushToolGroup();
-        result.push({ type: 'reasoningContent', data: block });
+        result.push({ type: 'reasoningContent', data: block, streaming });
         continue;
       }
 

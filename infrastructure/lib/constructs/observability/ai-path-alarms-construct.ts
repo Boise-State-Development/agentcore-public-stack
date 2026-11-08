@@ -10,6 +10,8 @@ import { AlarmFactory, ALARM_PERIOD } from './alarm-factory';
 const AGENTCORE_NAMESPACE = 'AWS/Bedrock-AgentCore';
 /** The namespace bedrock-runtime inference publishes to. */
 const BEDROCK_NAMESPACE = 'AWS/Bedrock';
+/** Our own EMF namespace for turn time limits (`apis/shared/observability/emf.py`). */
+const TURN_LATENCY_NAMESPACE = 'AgentCoreStack/TurnLatency';
 
 /**
  * Alarm-name-safe label for a Bedrock model id.
@@ -142,6 +144,58 @@ export class AiPathAlarmsConstruct extends Construct {
       metric: bedrockMetric('InvocationServerErrors'),
       threshold: errorThreshold,
       evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // EMF from the Runtime (`emit_model_read_timeout`), not an AWS/Bedrock
+    // metric: Bedrock records nothing when the client gives up on a silent
+    // stream. Any one is worth a look, because the read timeout is 10 minutes:
+    // a model thinking that long without output, or a Bedrock hang. Hourly,
+    // like UnmeteredModelCall, so a burst is one notification.
+    alarms.alarm('ModelReadTimeoutAlarm', {
+      name: 'model-read-timeouts',
+      alarmDescription:
+        'A chat turn failed because the model sent nothing for RETRY_READ_TIMEOUT '
+        + 'seconds (default 600). The user got a "didn\'t send anything for several '
+        + 'minutes" error, and the call was billed but recorded no usage. Logs Insights '
+        + 'on the Runtime log group: filter ispresent(ModelReadTimeout) | stats count() '
+        + 'by modelId, readTimeoutPhase. mid_stream means silent thinking (raise the '
+        + 'timeout, or stream thinking); before_stream means Bedrock never answered.',
+      metric: new cloudwatch.Metric({
+        namespace: TURN_LATENCY_NAMESPACE,
+        metricName: 'ModelReadTimeout',
+        statistic: 'Sum',
+        period: cdk.Duration.hours(1),
+      }),
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // EMF from app-api (`emit_chat_stream_upstream_dropped`): the Runtime's
+    // stream broke under the chat proxy mid-turn, so the user saw a lost
+    // connection and no explained error. There is a standing baseline (see
+    // OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD), so this watches for a
+    // burst above it, the shape a new idle limit on silent turns would take.
+    alarms.alarm('ChatStreamUpstreamDropAlarm', {
+      name: 'chat-stream-upstream-drops',
+      alarmDescription:
+        'Chat turns lost their Runtime stream mid-turn faster than the configured '
+        + 'hourly threshold. Users saw a dropped connection. Logs Insights on the '
+        + 'app-api log group: filter ispresent(ChatStreamUpstreamDropped) | stats '
+        + 'count() by dropReason, bin(silentSeconds, 60). Drops clustered at a fixed '
+        + 'silentSeconds mean an idle limit (AgentCore, or the proxy read timeout '
+        + 'when ReadTimeout); drops at low silence mean the Runtime closed or died.',
+      metric: new cloudwatch.Metric({
+        namespace: TURN_LATENCY_NAMESPACE,
+        metricName: 'ChatStreamUpstreamDropped',
+        statistic: 'Sum',
+        period: cdk.Duration.hours(1),
+      }),
+      threshold: config.observability.chatStreamDropThreshold,
+      evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });

@@ -148,6 +148,7 @@ case "$SERVICE" in
         # kb_sync/requirements.txt lives inside the first source dir.
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/build_info.py"
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/dynamo_errors.py"
             "backend/src/apis/shared/feature_flags.py"
@@ -180,6 +181,7 @@ case "$SERVICE" in
         # kb_migration/requirements.txt lives inside the first source dir.
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/build_info.py"
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/aws_clients.py"
         )
@@ -204,6 +206,7 @@ case "$SERVICE" in
         # live.py is not in the image), so its files are hashed one by one.
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/build_info.py"
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/aws_clients.py"
             "backend/src/apis/shared/feature_flags.py"
@@ -248,6 +251,7 @@ case "$SERVICE" in
         # the dispatcher's requirements.txt lives inside its own source dir.
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/build_info.py"
             "backend/src/apis/shared/errors.py"
             "backend/src/apis/shared/feature_flags.py"
             "backend/src/apis/shared/dynamo_errors.py"
@@ -259,6 +263,7 @@ case "$SERVICE" in
             "backend/src/apis/shared/extraction/extraction_store.py"
             "backend/src/apis/shared/extraction/field_sets.py"
             "backend/src/apis/shared/extraction/schema.py"
+            "backend/src/apis/shared/models/assistant_prefill.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).
@@ -300,6 +305,7 @@ case "$SERVICE" in
         )
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/build_info.py"
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/aws_clients.py"
             "backend/src/apis/shared/feature_flags.py"
@@ -330,9 +336,22 @@ done
 for m in "${MANIFESTS[@]}"; do
     build_args+=( --manifest "$m" )
 done
+# The release version is part of every image's identity: it is baked in as
+# APP_VERSION (docs/specs/release-ledger.md D2) and so must also be a hash
+# input, or a release that bumps only VERSION would reuse the previous
+# image and report the old number.
+build_args+=( --manifest "VERSION" )
 if [[ -n "$PLATFORM" ]]; then
     build_args+=( --platform "$PLATFORM" )
 fi
+# Baked into the image rather than sent as a Runtime variable: every cost
+# row and latency record carries both, and the AgentCore Runtime's
+# environment is a 2,560-byte budget. APP_BUILD is the content hash the
+# image is tagged with, computed from the same inputs by
+# build-and-push-if-changed.sh, so passing it cannot change the hash.
+APP_VERSION_VALUE="$(tr -d '[:space:]' < "${PROJECT_ROOT}/VERSION" 2>/dev/null || echo unknown)"
+build_args+=( --build-arg "APP_VERSION=${APP_VERSION_VALUE:-unknown}" )
+build_args+=( --build-arg "APP_BUILD=__CONTENT_HASH__" )
 
 cd "$PROJECT_ROOT"
 log_info "Building ${SERVICE}..."

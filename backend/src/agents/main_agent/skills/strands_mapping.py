@@ -46,6 +46,26 @@ _INERT_SCRIPT_NOTICE = (
     "reproduce the steps yourself.]"
 )
 
+# The notice while WORD_SKILL_SCRIPTS_ENABLED is on, when the one path that can
+# run a skill script exists (agents/main_agent/skills/skill_scripts.py). The
+# inert notice would then tell the model to retype a program the Word tools can
+# load by reference. Chosen per deployment, so it is constant for a session.
+_WORD_RUNNABLE_SCRIPT_NOTICE = (
+    "[This script is stored with the skill. It does not run on its own here. "
+    "If it is a Python file that builds or edits a Word document and you have "
+    "create_word_document or modify_word_document, run it with that tool's "
+    "skill_name and path arguments instead of copying it into python_code. "
+    "Otherwise read it to understand the approach, then reproduce the steps "
+    "yourself.]"
+)
+
+
+def _script_notice() -> str:
+    """The notice ``read_skill_file`` puts ahead of a script's text."""
+    from apis.shared.feature_flags import word_skill_scripts_enabled
+
+    return _WORD_RUNNABLE_SCRIPT_NOTICE if word_skill_scripts_enabled() else _INERT_SCRIPT_NOTICE
+
 
 def _manifest_path(ref: Any) -> str:
     """Standard bundle path for a manifest entry, e.g. ``references/forms.md``."""
@@ -240,7 +260,7 @@ def make_read_skill_file_tool(records: List[Any]):
 
         kind = getattr(ref, "kind", "reference")
         if kind == "script":
-            return f"{_INERT_SCRIPT_NOTICE}\n\n{raw.decode('utf-8', errors='replace')}"
+            return f"{_script_notice()}\n\n{raw.decode('utf-8', errors='replace')}"
         if kind == "asset" or not is_text_content_type(ref.content_type):
             return (
                 f"'{path}' is a binary {kind} ({ref.content_type or 'unknown type'}, "

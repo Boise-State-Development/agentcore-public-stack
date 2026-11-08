@@ -41,13 +41,15 @@ export const ALLOWED_MIME_TYPES: Record<string, string> = {
  */
 export const ALLOWED_EXTENSIONS = [
   // Documents
-  '.pdf', '.docx', '.txt', '.html', '.csv', '.xls', '.xlsx', '.pptx', '.md',
+  '.pdf', '.docx', '.txt', '.html', '.csv', '.xls', '.xlsx', '.pptx', '.md', '.sql',
   // Images
   '.png', '.jpg', '.jpeg', '.gif', '.webp'
 ];
 
 /**
- * Maximum file size in bytes (4MB)
+ * Maximum file size in bytes (4MB): the per-file inline limit. Must match
+ * `INLINE_DOCUMENT_MAX_BYTES` in `backend/src/apis/shared/files/models.py`
+ * (pinned by `test_inline_budget_by_reference.py`).
  */
 export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024;
 
@@ -184,6 +186,25 @@ export function isAttachableSourceFile(
  * Maximum files per message
  */
 export const MAX_FILES_PER_MESSAGE = 5;
+
+/**
+ * Combined bytes of one message's inline attachments (7.0 MB): every image and
+ * every document under `MAX_FILE_SIZE_BYTES`. Spreadsheets, decks and large
+ * documents never ride inline, so they do not count. The backend holds a turn
+ * to it first-fit in attachment order (`_apply_inline_byte_budget`), because the
+ * turn's inline attachments are stored as one AgentCore Memory event, which
+ * fails past ~7.5 MB. The composer computes the same total before send
+ * (`inlineBudgetOverflow`) so the user is told which files will not fit.
+ *
+ * Mirrored rather than fetched: no endpoint serves the SPA its upload limits
+ * (every number in this file is a mirror of this kind), and a fetch would leave
+ * the composer unable to judge a drop until it answered. A deployment can
+ * override the backend's value with an env var; the SPA would then mis-predict,
+ * which is cosmetic, since the backend decides. Must match
+ * `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` in `backend/src/apis/shared/files/models.py`;
+ * `test_inline_budget_by_reference.py` pins the two.
+ */
+export const INLINE_ATTACHMENTS_MAX_TOTAL_BYTES = 7_000_000;
 
 /**
  * Request body for POST /files/presign
@@ -408,6 +429,7 @@ const EXTENSION_TO_MIME_TYPE: Record<string, string> = {
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.md': 'text/markdown',
+  '.sql': 'text/plain',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -696,7 +718,10 @@ export class FileUploadService {
         };
 
         xhr.open('PUT', presignedUrl);
-        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        // Must match the type sent to presign: S3 signs the URL with it and
+        // rejects (403) a PUT whose Content-Type differs. Browsers label some
+        // files (.sql, often .md) with a type presign resolved away.
+        xhr.setRequestHeader('Content-Type', resolveMimeType(file));
         xhr.send(file);
       });
     } catch (err) {

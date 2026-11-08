@@ -32,6 +32,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # kb-sync SOURCE_DIRS/MANIFESTS in scripts/build/build-one.sh so the
 # content-hash tag notices changes.
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+# Read by emf.py for the appVersion/build stamp on every metric record.
+COPY backend/src/apis/shared/build_info.py ${LAMBDA_TASK_ROOT}/apis/shared/build_info.py
 COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
 COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py
 # aws_clients.py — kb_backend/records.py and assistants/rag_service.py read the
@@ -97,4 +99,12 @@ RUN python -m compileall -q ${LAMBDA_TASK_ROOT}
 
 # Default command: dispatcher. The worker function's CMD is overridden
 # to apis.app_api.kb_sync.worker.lambda_handler by its ImageConfig.
+# Version injection (defaults to "unknown" if not provided via --build-arg).
+# APP_BUILD is the image's own content-hash tag; scripts/build/build-one.sh
+# passes both to every image. docs/specs/release-ledger.md D2.
+ARG APP_VERSION=unknown
+ARG APP_BUILD=unknown
+ENV APP_VERSION=${APP_VERSION}
+ENV APP_BUILD=${APP_BUILD}
+
 CMD ["apis.app_api.kb_sync.dispatcher.lambda_handler"]

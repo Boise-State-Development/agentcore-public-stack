@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { loadConfig, buildCorsOrigins, AppConfig, MEMORY_SENSITIVE_PATTERNS_MAX_CHARS,
   OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
   OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
+  OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD,
   OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
   OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
   OBSERVABILITY_DEFAULT_DYNAMO_THROTTLE_THRESHOLD,
@@ -67,6 +68,7 @@ const MANAGED_KB_ENV_KEYS = [
   'CDK_MANAGED_KB_PER_OWNER_BYTES',
   'CDK_MANAGED_KB_PER_OWNER_ELEVATED_BYTES',
   'CDK_MANAGED_KB_PER_KB_CEILING_BYTES',
+  'CDK_KB_UPLOAD_MAX_FILE_BYTES',
   'CDK_MANAGED_KB_RETENTION_WINDOW_DAYS',
 ] as const;
 
@@ -87,6 +89,7 @@ const OBSERVABILITY_ENV_KEYS = [
   'CDK_OBSERVABILITY_ALB_P99_LATENCY_MS',
   'CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS',
   'CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD',
+  'CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD',
   'CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD',
   'CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD',
   'CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT',
@@ -741,6 +744,32 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Release ledger writes — in development, so only "true" enables
+  // ============================================================
+
+  describe('Release ledger feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_RELEASE_LEDGER_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_RELEASE_LEDGER_ENABLED;
+      expect(loadConfig(app).releaseLedger.enabled).toBe(false);
+      process.env.CDK_RELEASE_LEDGER_ENABLED = '';
+      expect(loadConfig(app).releaseLedger.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_RELEASE_LEDGER_ENABLED = ' TRUE ';
+      expect(loadConfig(app).releaseLedger.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_RELEASE_LEDGER_ENABLED = value;
+        expect(loadConfig(app).releaseLedger.enabled).toBe(false);
+      }
+    });
+  });
+
+  // ============================================================
   // Web Search result default — in development, so only "true" enables
   // ============================================================
 
@@ -762,6 +791,50 @@ describe('RAG Ingestion Configuration', () => {
       for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
         process.env.CDK_PROJECT_FILE_READINESS_ENABLED = value;
         expect(loadConfig(app).projectFileReadiness.enabled).toBe(false);
+      }
+    });
+  });
+
+  describe('Converse documents-as-text feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED;
+      expect(loadConfig(app).converseDocumentsAsText.enabled).toBe(false);
+      process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED = '';
+      expect(loadConfig(app).converseDocumentsAsText.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED = 'True';
+      expect(loadConfig(app).converseDocumentsAsText.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED = value;
+        expect(loadConfig(app).converseDocumentsAsText.enabled).toBe(false);
+      }
+    });
+  });
+
+  describe('Word skill scripts feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED;
+      expect(loadConfig(app).wordSkillScripts.enabled).toBe(false);
+      process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED = '';
+      expect(loadConfig(app).wordSkillScripts.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED = 'True';
+      expect(loadConfig(app).wordSkillScripts.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED = value;
+        expect(loadConfig(app).wordSkillScripts.enabled).toBe(false);
       }
     });
   });
@@ -1528,6 +1601,30 @@ describe('RAG Ingestion Configuration', () => {
       expect(managedKb.perOwnerDefaultBytes).toBe(52428800);
       expect(managedKb.perOwnerElevatedBytes).toBe(2147483648);
       expect(managedKb.perKnowledgeBaseCeilingBytes).toBe(262144000);
+    });
+
+    test('the per-file upload limit defaults to 50 MiB', () => {
+      expect(loadConfig(app).managedKb.uploadMaxFileBytes).toBe(52428800);
+    });
+
+    test('the per-file upload limit is overridable, e.g. back to the old 10 MB', () => {
+      process.env.CDK_KB_UPLOAD_MAX_FILE_BYTES = '10485760';
+      expect(loadConfig(app).managedKb.uploadMaxFileBytes).toBe(10485760);
+    });
+
+    test('the per-file upload limit arrives via the flat dotted context key too', () => {
+      app.node.setContext('managedKb.uploadMaxFileBytes', '20971520');
+      expect(loadConfig(app).managedKb.uploadMaxFileBytes).toBe(20971520);
+    });
+
+    test('a per-file upload limit above Bedrock\'s 50 MiB fails synth', () => {
+      process.env.CDK_KB_UPLOAD_MAX_FILE_BYTES = String(50 * 1024 * 1024 + 1);
+      expect(() => loadConfig(app)).toThrow(/CDK_KB_UPLOAD_MAX_FILE_BYTES/);
+    });
+
+    test('a non-positive per-file upload limit fails synth', () => {
+      process.env.CDK_KB_UPLOAD_MAX_FILE_BYTES = '0';
+      expect(() => loadConfig(app)).toThrow(/CDK_KB_UPLOAD_MAX_FILE_BYTES/);
     });
 
     test('a Byte_Cap override arrives via the flat dotted context key too', () => {
@@ -2455,6 +2552,7 @@ describe('Observability Configuration', () => {
       const obs = loadConfig(app).observability;
       expect(obs.albTarget5xxThreshold).toBe(OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD);
       expect(obs.agentCoreErrorThreshold).toBe(OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD);
+      expect(obs.chatStreamDropThreshold).toBe(OBSERVABILITY_DEFAULT_CHAT_STREAM_DROP_THRESHOLD);
       expect(obs.agentCoreActiveSessionThreshold).toBe(
         OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
       );
@@ -2553,6 +2651,7 @@ describe('Observability Configuration', () => {
       process.env.CDK_OBSERVABILITY_ALB_P99_LATENCY_MS = '2000';
       process.env.CDK_OBSERVABILITY_AGENTCORE_LATENCY_MS = '3000';
       process.env.CDK_OBSERVABILITY_AGENTCORE_ERROR_THRESHOLD = '4';
+      process.env.CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD = '12';
       process.env.CDK_OBSERVABILITY_AGENTCORE_ACTIVE_SESSION_THRESHOLD = '250';
       process.env.CDK_OBSERVABILITY_LAMBDA_ERROR_THRESHOLD = '5';
       process.env.CDK_OBSERVABILITY_LAMBDA_DURATION_PERCENT_OF_TIMEOUT = '60';
@@ -2566,6 +2665,7 @@ describe('Observability Configuration', () => {
       expect(obs.albP99LatencyMs).toBe(2000);
       expect(obs.agentCoreLatencyMs).toBe(3000);
       expect(obs.agentCoreErrorThreshold).toBe(4);
+      expect(obs.chatStreamDropThreshold).toBe(12);
       expect(obs.agentCoreActiveSessionThreshold).toBe(250);
       expect(obs.lambdaErrorThreshold).toBe(5);
       expect(obs.lambdaDurationPercentOfTimeout).toBe(60);
@@ -2602,6 +2702,7 @@ describe('Observability Configuration', () => {
       app.node.setContext('observability.albP99LatencyMs', '12');
       app.node.setContext('observability.agentCoreLatencyMs', '13');
       app.node.setContext('observability.agentCoreErrorThreshold', '14');
+      app.node.setContext('observability.chatStreamDropThreshold', '24');
       app.node.setContext('observability.agentCoreActiveSessionThreshold', '140');
       app.node.setContext('observability.lambdaErrorThreshold', '15');
       app.node.setContext('observability.lambdaDurationPercentOfTimeout', '16');
@@ -2624,6 +2725,7 @@ describe('Observability Configuration', () => {
         albP99LatencyMs: 12,
         agentCoreLatencyMs: 13,
         agentCoreErrorThreshold: 14,
+        chatStreamDropThreshold: 24,
         agentCoreActiveSessionThreshold: 140,
         lambdaErrorThreshold: 15,
         lambdaDurationPercentOfTimeout: 16,

@@ -50,6 +50,22 @@ describe('MessageActionsComponent — Continue affordance', () => {
     expect(continueButton(fixture)).not.toBeNull();
   });
 
+  it('says the answer hit the output limit and that Continue resumes it', () => {
+    fixture.componentRef.setInput('canContinue', true);
+    fixture.detectChanges();
+    const notice = fixture.nativeElement.querySelector('[data-testid="max-tokens-notice"]') as HTMLElement;
+    expect(notice).not.toBeNull();
+    // Names the cause (the model's output cap, not a failure) and what the
+    // button does, so a user does not resend the whole request instead.
+    expect(notice.textContent).toContain("Cut off at the model's output limit.");
+    expect(notice.textContent).toContain('Continue picks up where it stopped.');
+  });
+
+  it('shows no output-limit notice without canContinue', () => {
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[data-testid="max-tokens-notice"]')).toBeNull();
+  });
+
   it('emits continueRequested when the Continue button is clicked', () => {
     fixture.componentRef.setInput('canContinue', true);
     fixture.detectChanges();
@@ -119,7 +135,7 @@ describe('MessageActionsComponent — interrupted-turn chip', () => {
     fixture.detectChanges();
 
     // The truncated-turn label wins; the interrupted chip is not also shown.
-    expect(fixture.nativeElement.textContent).toContain('Response length limit reached');
+    expect(fixture.nativeElement.textContent).toContain("Cut off at the model's output limit");
     expect(fixture.nativeElement.textContent).not.toContain('Response interrupted');
   });
 });

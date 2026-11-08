@@ -11,8 +11,22 @@ import {
   ConfirmationDialogData,
 } from '../../components/confirmation-dialog';
 
-/** The document pipeline's per-file limit, the same one both upload screens enforce. */
-export const MAX_REPLACE_FILE_BYTES = 10 * 1024 * 1024;
+const MIB = 1024 * 1024;
+
+/**
+ * A per-file limit as the server words it: `52428800` → `"50 MB"`. The limit
+ * itself comes from the API (`kbUsage.maxFileBytes`), never from a constant here.
+ */
+export function formatFileLimit(bytes: number): string {
+  const mb = bytes / MIB;
+  return `${Number.isInteger(mb) ? mb : parseFloat(mb.toFixed(1))} MB`;
+}
+
+/** The sentence every upload screen shows for an oversized file, matching the API's 413. */
+export function fileTooLargeMessage(limitBytes: number, sizeBytes?: number): string {
+  const base = `Files can be up to ${formatFileLimit(limitBytes)}.`;
+  return sizeBytes === undefined ? base : `${base} This one is ${formatFileLimit(sizeBytes)}.`;
+}
 
 /**
  * How long a replacement is watched before giving up. The backend auto-fails a
@@ -71,15 +85,23 @@ export function orderReplacementsAdjacent<T extends { documentId: string }>(
   return result;
 }
 
-/** Why a picked file can't replace a document, or `null` when it can. */
-export function validateReplacement(oldDoc: Pick<Document, 'filename'>, file: File): string | null {
+/**
+ * Why a picked file can't replace a document, or `null` when it can. `maxFileBytes`
+ * is the knowledge base's per-file limit from the API; `null` (not read yet) leaves
+ * the size to the server, which refuses an oversized file with the same sentence.
+ */
+export function validateReplacement(
+  oldDoc: Pick<Document, 'filename'>,
+  file: File,
+  maxFileBytes: number | null = null,
+): string | null {
   if (!hasSameExtension(oldDoc.filename, file.name)) {
     const ext = fileExtension(oldDoc.filename);
     const wanted = ext ? `a ${ext} file` : 'a file with no extension';
     return `Choose ${wanted} — a replacement must be the same type as “${oldDoc.filename}”.`;
   }
-  if (file.size > MAX_REPLACE_FILE_BYTES) {
-    return 'Files can be up to 10 MB.';
+  if (maxFileBytes !== null && file.size > maxFileBytes) {
+    return fileTooLargeMessage(maxFileBytes, file.size);
   }
   return null;
 }
@@ -161,11 +183,12 @@ export class DocumentReplaceService {
     oldDoc: Document,
     picked: File,
     transport: DocumentReplaceTransport,
+    maxFileBytes: number | null = null,
   ): Promise<ReplaceOutcome> {
     if (this.inFlight()) return { kind: 'blocked' };
 
     const name = oldDoc.filename;
-    const invalid = validateReplacement(oldDoc, picked);
+    const invalid = validateReplacement(oldDoc, picked, maxFileBytes);
     if (invalid) {
       this.toast.error(`Can’t replace “${name}”`, invalid);
       return { kind: 'rejected', message: invalid };

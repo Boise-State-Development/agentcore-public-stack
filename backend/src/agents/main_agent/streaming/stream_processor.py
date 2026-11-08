@@ -50,7 +50,9 @@ from strands.types.exceptions import MaxTokensReachedException
 from apis.shared.errors import (
     ErrorCode,
     StreamErrorEvent,
+    is_model_read_timeout_error,
     is_service_unavailable_error,
+    model_read_timeout_message,
     unsupported_attachment_message,
 )
 
@@ -459,6 +461,11 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
             "again in a moment, or switch models if it keeps happening.",
             True,
         )
+
+    # The model sent nothing for RETRY_READ_TIMEOUT seconds. The matcher and
+    # copy are shared with the raised-exception path.
+    if is_model_read_timeout_error(reason_lower):
+        return model_read_timeout_message(reason_str), True
 
     if "accessdenied" in reason_lower or "access denied" in reason_lower:
         return (

@@ -92,6 +92,17 @@ class TestStoreMessageMetadata:
         assert item["GSI_SK"].startswith("C#")
 
     @pytest.mark.asyncio
+    async def test_names_the_build_that_wrote_it(self, storage, moto_dynamodb, sample_metadata, monkeypatch):
+        """release-ledger spec D1, on the second cost-row writer too."""
+        import apis.shared.storage.dynamodb_storage as module
+
+        monkeypatch.setattr(module, "build_stamp", lambda: {"appVersion": "1.33.0", "build": "8f676bb2e1a4c0d2"})
+        await storage.store_message_metadata("user-1", "sess-1", 10, sample_metadata())
+        (item,) = moto_dynamodb.Table("SessionsMetadata").scan()["Items"]
+        assert item["appVersion"] == "1.33.0"
+        assert item["build"] == "8f676bb2e1a4c0d2"
+
+    @pytest.mark.asyncio
     async def test_sets_ttl_approximately_365_days(self, storage, moto_dynamodb, sample_metadata):
         meta = sample_metadata()
         await storage.store_message_metadata("user-1", "sess-1", 1, meta)

@@ -4,6 +4,80 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+## [1.34.0] - 2026-11-07
+
+Long document work on Claude Opus 5.5 stops failing: reasoning streams as a summary instead of a silent gap that hit the 120 s read timeout, the read timeout itself is 600 s, Continue sends a user turn on models that refuse an assistant prefill, a conversation stays within Bedrock's five non-PDF documents, duplicate attachment names are avoided across turns, a tool round's page reads fit one Memory event, a young conversation compacts at the hard ceiling, and the Opus 5.5 output default is 64K. Agents gain a response-strictness setting, a `knowledge_files` tool and a Designer mode line; the Word tools can run a bound skill's script; the composer shows the attachment budget before send; knowledge-base uploads accept 50 MB; admins search users by fragment; API-key callers get prompt caching; and a release ledger stamps every image and cost row. Flags: four in development, default off (`AGENT_KNOWLEDGE_FILES_ENABLED`, `WORD_SKILL_SCRIPTS_ENABLED`, `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`, `RELEASE_LEDGER_ENABLED`, plus SPA `features.knowledgeBaseMode`) and three default-on rollout switches (`CONVERSE_DOCUMENT_CAP_ENABLED`, `INLINE_BUDGET_BY_REFERENCE_ENABLED`, `AGENTCORE_MEMORY_COMPACTION_TAIL_TOKEN_BOUND_ENABLED`). Manual step: run `backfill_model_output_caps.py` on every environment that already has Claude Opus 5.5 in its catalog. No GSI changes; no dependency changes.
+
+### 🚀 Added
+
+- **Response strictness on Agents** (issue #112). `responseStrictness` (`strict` / `balanced` / `flexible`) appends a grounding rule to the Agent's instructions; balanced leaves the prompt byte-identical; part of version snapshots and the marketplace review diff (#1891)
+- **`knowledge_files` for Agents** (in development, default off: `AGENT_KNOWLEDGE_FILES_ENABLED` / `CDK_AGENT_KNOWLEDGE_FILES_ENABLED`, Runtime only; on in our production). A non-project Agent lists its Knowledge and reads one document by name when the knowledge base is too large to send whole (#1915)
+- **Knowledge-base mode line** (in development: SPA `features.knowledgeBaseMode`). `GET /assistants/{id}/knowledge-base/mode` tells an author whether the knowledge base is sent whole or searched, and why, including which single document is over the budget (#1915, #1917)
+- **Word tools run a bound skill's script** (in development, default off: `WORD_SKILL_SCRIPTS_ENABLED` / `CDK_WORD_SKILL_SCRIPTS_ENABLED`, Runtime only). `create_word_document` and `modify_word_document` accept `skill_name`, `path` and `params` and run the skill's `scripts/*.py` inside Code Interpreter instead of the model retyping it (#1914)
+- **Documents as text on Converse** (in development, default off: `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` / `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`, Runtime only; on in our `development` and `production` environments). docx, txt, md, csv and html attachments reach a Converse model as rendered text; PDFs stay native; stored messages unchanged (#1907)
+- **Release ledger** (in development, default off: `RELEASE_LEDGER_ENABLED` / `CDK_RELEASE_LEDGER_ENABLED`). `APP_VERSION` / `APP_BUILD` baked into every image and stamped on cost rows, EMF records, `/health`, `/ping` and eval runs; a `LEDGER#DEPLOY` marker per build; `turnOutcome` and `emptyAnswer` on `C#` rows; tool census payload sizes; `LEDGER#VERSION` and monthly `LEDGER#MODEL` / `TOOL` / `AGENT` / `PROJECT` rollups while on (#1888, #1898, #1899)
+- **Composer shows the combined attachment budget before send.** Files that will not fit a message's 7 MB inline budget are named before the send, and an over-budget document is read by reference instead of dropped (rollout switch `INLINE_BUDGET_BY_REFERENCE_ENABLED`, default on) (#1912)
+- **Prompt caching on `/chat/api-converse`.** A `cachePoint` after the system prompt and after the last message, so API-key callers pay cache-read rates for a repeated prompt and a client-held conversation (#1889)
+- **Admin user search by fragment.** `GET /admin/users/search` and `GET /admin/users/domains/list` rank exact, prefix, contains, all-words and typo matches from a per-task in-memory index bounded by `ADMIN_USER_INDEX_MAX_ROWS` (issue #1874) (#1885)
+- **Knowledge-base uploads up to 50 MB** on managed knowledge bases. One server-side limit, `KB_UPLOAD_MAX_FILE_BYTES` from `CDK_KB_UPLOAD_MAX_FILE_BYTES` (default 52,428,800, the Bedrock per-file limit); the SPA reads it as `kbUsage.maxFileBytes`; classic knowledge bases keep their 20 MB processing limit (#1916)
+- `.sql` files accepted as chat attachments and knowledge-base files (issue #1883) (#1887)
+- Pin and Unpin in the conversation title menu (#1884)
+- Two CloudWatch alarms: `model-read-timeouts` and `chat-stream-upstream-drops` (#1895)
+
+### ✨ Improved
+
+- **Claude Opus 5.5 writes up to 64,000 output tokens per call by default** (was 32,000; the card allows 128,000). Applies to newly added catalog rows; an existing row changes with `backfill_model_output_caps.py` or an admin edit under Admin → Models. Haiku 5.5 stays at 32,000 because of its 100K input price step (#1911)
+- A response cut at the output limit says so, in the chat and in the `max_tokens` `stream_error`: "Cut off at the model's output limit. Continue picks up where it stopped." (#1911)
+- **Opus 5.5 and Haiku 5.5 stream summarized reasoning** with the `drop_block` binding, so a long think no longer sits silent; measured as no prompt-cache re-write (#1890)
+- Reasoning block redrawn as a tool-rail sibling with a shared shimmer that honours reduced motion; the loading label reads "Reasoning" (#1890)
+- Chat markdown typography tightened; code-block colours follow light and dark themes (#1879)
+- A spreadsheet or deck no longer disqualifies a knowledge base from full-context mode; the budget is settable from CDK as `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` (#1915)
+- A tool round's `document_read` page reads share `DOCUMENT_READ_MAX_BATCH_BYTES` (7 MB) so one Memory event never exceeds its 10 MB quota; `next_start` continues the range (#1900)
+- Compaction's protected tail is bounded by tokens and a young conversation cuts at the hard ceiling (rollout switch `AGENTCORE_MEMORY_COMPACTION_TAIL_TOKEN_BOUND_ENABLED`, default on) (#1910)
+
+### 🐛 Fixed
+
+- "Agent force-stopped: … Read timed out" on long Opus 5.5 turns: `RETRY_READ_TIMEOUT` 120 → 600 s, app-api proxy read 660 s, read timeouts no longer retried, and the error names the phase it failed in (#1895)
+- A follow-up queued during a turn that then failed was sent on its own; it now returns to the composer with a "Follow-up not sent" toast, and the empty assistant bubble a failed call left behind is dropped (#1913)
+- Continue failed on Claude 4.6 and later ("does not support assistant message prefill") and restarted the answer on GPT Responses models; both now send a fixed user turn (#1903, #1909)
+- After Continue, the continued answer no longer splits around a user bubble the user never typed, and message ids stay aligned with the server; `GET /sessions/{id}/messages` marks the continue prompt `continuation: true` (#1911)
+- Two same-named attachments across turns force-stopped every later turn on a warm agent; names are now unique across the live conversation (#1902)
+- "You can't include more than 5 documents in a request" on a warm conversation: a per-call projection keeps the first five non-PDF documents native and sends the rest as text or a stub (rollout switch `CONVERSE_DOCUMENT_CAP_ENABLED`, default on) (#1905)
+- Admin User Lookup matched only a whole email address (#1885)
+- 403 toasts on the tools pages for tools the user cannot reach, and request URLs in toast details (issue #1873) (#1884)
+- A `.sql` upload got a 403 from S3; the PUT now uses the presigned Content-Type (#1887)
+- A knowledge-base object refused for size after passing presign stayed in S3 until its agent was deleted; the ingestion consumer now deletes it (#1918)
+- The Designer mode line mislabelled a single oversized document as having no text (#1917)
+- Test flakes: the device-grant authorize test's moto transaction race and an unbounded MCP session-heal turn (#1896, #1901)
+
+### ⚠️ Changed
+
+- `RETRY_READ_TIMEOUT` defaults to 600 s (was 120); the app-api proxy read timeout is 660 s (was 300); a read timeout is no longer retried. A deployment that pinned `RETRY_READ_TIMEOUT` keeps its value (#1895)
+- Opus 5.5 and Haiku 5.5 requests always carry a `thinking` dict (`summarized`, `drop_block`) unless the caller set one (#1890)
+- A Converse request is projected per call for the document cap, so the wire request can differ from the stored message (#1905)
+- The knowledge-base per-file limit is 50 MiB by default (was 10 MB in the SPA); `CDK_KB_UPLOAD_MAX_FILE_BYTES=10485760` restores the old limit (#1916)
+
+### 🔒 Security
+
+- Error toast details no longer expose request URLs; admin user search returns generic error detail (#1884, #1885)
+
+### 🏗️ Infrastructure
+
+- Two new CloudWatch alarms in `AiPathAlarmsConstruct`, threshold `CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD` (default 5/h) for the drop alarm (#1895)
+- The kb-migration ingestion consumer gains `s3:DeleteObject*` on `assistants/*/documents/*`, the only IAM change (#1918)
+- New CDK config: `agentKnowledgeFiles`, `wordSkillScripts`, `converseDocumentsAsText`, `releaseLedger`, `assistantKbFullContext.maxTokens`, `managedKb.uploadMaxFileBytes` (1..50 MiB, synth fails otherwise). New Runtime variables are written only while on, so the default spends none of the Runtime's 2,560-byte environment budget (#1907, #1914, #1915, #1916, #1899)
+- Every container image rebuilds on this release: `VERSION` joins each image's hash manifest and `APP_VERSION` / `APP_BUILD` are build args (#1888)
+
+### 🔧 CI/CD
+
+- `build-one.sh` passes `APP_VERSION` and `APP_BUILD` build args; `build-and-push-if-changed.sh` substitutes the content hash; `load-env.sh` and `platform.yml` forward `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS`, `CDK_AGENT_KNOWLEDGE_FILES_ENABLED`, `CDK_RELEASE_LEDGER_ENABLED`, `CDK_WORD_SKILL_SCRIPTS_ENABLED`, `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`, `CDK_KB_UPLOAD_MAX_FILE_BYTES`, `CDK_OBSERVABILITY_CHAT_STREAM_DROP_THRESHOLD` (#1888, #1895, #1907, #1914, #1915, #1916, #1899)
+
+### 📚 Docs
+
+- New spec `docs/specs/release-ledger.md`; compaction thresholds §3.2; document-context-offload, skill-creator and turn-path-ttft updates; a force-stop row in `docs/testing/smoke-regression.md`; docs-site pages for models, users, feature flags, agents, API keys and knowledge bases; kaizen research 2026-11-06 (#1886, #1888, #1899, #1910, #1913, #1914, #1915, #1916)
+
 ## [1.33.0] - 2026-11-04
 
 Ask for more quota, hand work off with a model-written brief, see the account's AWS limits, and turn meetings into GitHub Project items. Every new feature is behind an in-development flag, off by default. Roles gain system instructions, Haiku 5.5 is curated, and app-api's DynamoDB grants are prefix-scoped. No GSI changes; no backfills.

@@ -418,3 +418,62 @@ async def test_agent_error_still_persists_when_tail_is_user():
     inner = getattr(persist_sm.calls[0]["message"], "message", None)
     role = inner.get("role") if isinstance(inner, dict) else None
     assert role == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_read_timeout_keeps_pending_attachments_and_ends_once():
+    """A read timeout after Bedrock opened the call, the shape behind the
+    "Please try again" + "Still working…" report.
+
+    Bedrock sends ``messageStart`` before any content, so the failed call's
+    ``message_start`` reaches the client ahead of the error reply's own. The
+    SPA drops that empty, never-stopped message (stream-parser
+    ``handleMessageStart``); what the server owns is pinned here:
+
+    - the write-ahead pending-attachment marker is NOT cleared. The model never
+      answered, and inline document bytes are stripped from restored history,
+      so the next turn is the only chance to re-send what this one carried.
+      Clearing it here would make "try again" arrive without the documents.
+    - exactly one ``done``, last, and the generator returns. The route
+      releases the single-flight lease in ``_guarded_stream``'s ``finally``,
+      which only runs once this generator is exhausted; a send after the
+      error therefore never meets a held lease (409).
+    - exactly one assistant message is persisted (the error), matching the
+      single assistant message the SPA keeps.
+    """
+    reason = (
+        "AWSHTTPSConnectionPool(host='bedrock-runtime.us-west-2.amazonaws.com', "
+        "port=443): Read timed out."
+    )
+    events = [
+        {"event": {"messageStart": {"role": "assistant"}}},
+        {"event": {"contentBlockStart": {"contentBlockIndex": 0, "start": {}}}},
+        _force_stop_event(reason),
+    ]
+    persist_sm = _RecordingPersistSessionManager()
+    cleared: List[tuple] = []
+
+    async def _record_clear(session_id: str, user_id: str) -> None:
+        cleared.append((session_id, user_id))
+
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=persist_sm,
+    ), patch(
+        "apis.shared.sessions.metadata.clear_pending_attachments",
+        side_effect=_record_clear,
+    ):
+        frames = await _collect(_FakeAgent(events), _NoopSessionManager())
+
+    assert cleared == [], "a failed turn must leave its attachments to be re-sent"
+
+    dones = [i for i, f in enumerate(frames) if f.startswith("event: done")]
+    assert dones == [len(frames) - 1], frames
+    assert any(f.startswith("event: stream_error") for f in frames)
+    assert any('"stopReason": "error"' in f for f in frames)
+    # The failed call's message_start, then the error reply's.
+    assert sum(f.startswith("event: message_start") for f in frames) == 2
+
+    assert len(persist_sm.calls) == 1
+    inner = getattr(persist_sm.calls[0]["message"], "message", None)
+    assert isinstance(inner, dict) and inner.get("role") == "assistant"

@@ -17,6 +17,9 @@ import { WebSourceService } from '../assistants/services/web-source.service';
 import { SyncPolicyService } from '../assistants/services/sync-policy.service';
 import { UserConnectorsService } from '../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
+import { FEATURES } from '../services/features';
+import { environment } from '../../environments/environment';
+import { KnowledgeModeService } from './knowledge-mode.service';
 
 /**
  * The upgrade card's five states (Requirement 23) and the stranded-document
@@ -712,6 +715,88 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
       expect(fixture.componentInstance.showUsageBar()).toBe(false);
     });
   });
+
+  describe('per-file upload limit (kbUsage.maxFileBytes)', () => {
+    const MIB = 1024 * 1024;
+
+    function usage(overrides: Partial<KbUsage> = {}): KbUsage {
+      return {
+        engine: 'managed',
+        storedBytes: 0,
+        reservedBytes: 0,
+        cap: 100 * MIB,
+        elevated: false,
+        maxFileBytes: 50 * MIB,
+        ...overrides,
+      };
+    }
+
+    function sized(name: string, bytes: number): File {
+      const file = new File(['x'], name, { type: 'application/pdf' });
+      Object.defineProperty(file, 'size', { value: bytes });
+      return file;
+    }
+
+    function pickEvent(file: File): Event {
+      return { target: { files: [file], value: file.name } } as unknown as Event;
+    }
+
+    it('says the limit the API reports in the dropzone', async () => {
+      await render(status({ phase: 'none' }));
+      fixture.componentInstance.kbUsage.set(usage());
+      fixture.detectChanges();
+      expect(text()).toMatch(/document types up to 50\s+MB/);
+    });
+
+    it('says the classic limit for a classic knowledge base', async () => {
+      await render(status({ phase: 'none', engine: 'classic' }));
+      fixture.componentInstance.kbUsage.set(usage({ engine: 's3vectors', cap: null, maxFileBytes: 20 * MIB }));
+      fixture.detectChanges();
+      expect(text()).toMatch(/up to 20\s+MB/);
+      expect(text()).not.toMatch(/10\s+MB/);
+    });
+
+    it('names no size before the limit is known', async () => {
+      await render(status({ phase: 'none' }), null);
+      expect(fixture.componentInstance.dropzoneHint()).toBe('PDF, DOCX, TXT, MD, and other document types');
+    });
+
+    it('refuses a file over the limit with an announced error, before asking the server', async () => {
+      await render(status({ phase: 'none' }));
+      const c = fixture.componentInstance;
+      c.kbUsage.set(usage());
+      const upload = vi.spyOn(c, 'uploadDocument').mockResolvedValue(undefined);
+
+      await c.onFileSelected(pickEvent(sized('big.pdf', 51 * MIB)));
+      fixture.detectChanges();
+
+      expect(upload).not.toHaveBeenCalled();
+      const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement | null;
+      expect(alert?.textContent).toContain('Files can be up to 50 MB. This one is 51 MB.');
+    });
+
+    it('accepts a file the old 10 MB limit refused', async () => {
+      await render(status({ phase: 'none' }));
+      const c = fixture.componentInstance;
+      c.kbUsage.set(usage());
+      const upload = vi.spyOn(c, 'uploadDocument').mockResolvedValue(undefined);
+
+      await c.onFileSelected(pickEvent(sized('report.pdf', 30 * MIB)));
+
+      expect(upload).toHaveBeenCalledOnce();
+    });
+
+    it('leaves the size to the server while the limit is unknown', async () => {
+      await render(status({ phase: 'none' }));
+      const c = fixture.componentInstance;
+      c.kbUsage.set(null);
+      const upload = vi.spyOn(c, 'uploadDocument').mockResolvedValue(undefined);
+
+      await c.onFileSelected(pickEvent(sized('report.pdf', 30 * MIB)));
+
+      expect(upload).toHaveBeenCalledOnce();
+    });
+  });
 });
 
 describe('KnowledgeBaseSectionComponent — replace document', () => {
@@ -986,5 +1071,60 @@ describe('KnowledgeBaseSectionComponent — replace document', () => {
     expect(tasks.tasks()).toHaveLength(0);
     expect(unloadAllowed()).toBe(true);
     expect(el().textContent).not.toContain('Replacing…');
+  });
+});
+
+
+describe('KnowledgeBaseSectionComponent — knowledge-base mode line', () => {
+  let getMode: ReturnType<typeof vi.fn>;
+
+  async function render(options: { flag: boolean; permission?: 'owner' | 'editor' | 'viewer' }) {
+    TestBed.resetTestingModule();
+    getMode = vi.fn().mockResolvedValue({
+      mode: 'whole',
+      reason: null,
+      documentCount: 2,
+      estimatedTokens: 1500,
+      budgetTokens: 50000,
+      skippedDocuments: [],
+    });
+    await TestBed.configureTestingModule({
+      imports: [KnowledgeBaseSectionComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        ...quietCollaborators(),
+        { provide: ConfigService, useValue: { appApiUrl: () => 'http://api.test' } },
+        { provide: KbUpgradeService, useValue: { getStatus: vi.fn().mockResolvedValue(status()) } },
+        { provide: KnowledgeModeService, useValue: { getMode } },
+        { provide: FEATURES, useValue: { ...environment.features, knowledgeBaseMode: options.flag } },
+      ],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
+    fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    fixture.componentRef.setInput('entityId', 'ast-1');
+    fixture.componentRef.setInput('userPermission', options.permission ?? 'owner');
+    fixture.componentRef.setInput('permissionResolved', true);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return (fixture.nativeElement as HTMLElement).textContent ?? '';
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows the mode to an editor while the flag is on', async () => {
+    expect(await render({ flag: true, permission: 'editor' })).toContain('Sent to the model whole');
+    expect(getMode).toHaveBeenCalledWith('ast-1');
+  });
+
+  it('asks nothing while the flag is off', async () => {
+    expect(await render({ flag: false })).not.toContain('Sent to the model whole');
+    expect(getMode).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing for a viewer, whom the endpoint would refuse', async () => {
+    expect(await render({ flag: true, permission: 'viewer' })).not.toContain('Sent to the model whole');
+    expect(getMode).not.toHaveBeenCalled();
   });
 });

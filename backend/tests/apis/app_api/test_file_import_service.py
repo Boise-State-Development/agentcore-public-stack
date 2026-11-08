@@ -116,6 +116,15 @@ class TestImportFile:
         assert meta.mime_type == "text/markdown"
         assert s3.put_object.call_args.kwargs["ContentType"] == "text/markdown"
 
+    @pytest.mark.parametrize("reported", ["application/sql", "application/x-sql", "", "application/octet-stream"])
+    async def test_sql_file_is_stored_as_text_plain_whatever_the_browser_reports(self, reported):
+        service, _, s3, _, _ = _service()
+
+        meta = await service.import_file("u1", "s1", "query.sql", reported, b"SELECT 1;")
+
+        assert meta.mime_type == "text/plain"
+        assert s3.put_object.call_args.kwargs["ContentType"] == "text/plain"
+
     async def test_unsupported_type_is_refused_before_any_write(self):
         service, repository, s3, _, _ = _service()
 

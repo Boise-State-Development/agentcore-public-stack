@@ -68,6 +68,9 @@ export interface AgentCapability {
   kind: string;
 }
 
+/** How strictly an Agent grounds its answers in its knowledge base (#112). */
+export type ResponseStrictness = 'strict' | 'balanced' | 'flexible';
+
 export interface Agent {
   agentId: string;
   ownerName: string;
@@ -99,6 +102,8 @@ export interface Agent {
    */
   showCitations?: boolean;
   allowDocumentDownload?: boolean;
+  /** #112: how strictly answers stay within the knowledge base. Absent ⇒ 'balanced'. */
+  responseStrictness?: ResponseStrictness;
   // Marketplace listing (Phase 1) + the detail read (Phase 3). All are absent on the
   // list route and on an agent that was never submitted.
   tagline?: string;
@@ -184,6 +189,8 @@ export interface CreateAgentRequest {
   /** #111 — default true when omitted. */
   showCitations?: boolean;
   allowDocumentDownload?: boolean;
+  /** #112 — default 'balanced' when omitted. */
+  responseStrictness?: ResponseStrictness;
 }
 
 export interface UpdateAgentRequest {
@@ -201,6 +208,8 @@ export interface UpdateAgentRequest {
   /** #111 — omit to leave the stored value unchanged. */
   showCitations?: boolean;
   allowDocumentDownload?: boolean;
+  /** #112 — omit to leave the stored value unchanged. */
+  responseStrictness?: ResponseStrictness;
 }
 
 export interface AgentsListResponse {
