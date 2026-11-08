@@ -58,6 +58,18 @@ The `/smoke-regression` skill runs the full pass (hermetic suites → turn matri
 
 **New or in-development features default OFF. A deployment turns them on by choice.** Other organizations build on and deploy this stack, so half-finished work must not switch on for them just because it merged. When a feature is finished, flipping it to default-on (with an `=false` kill switch, like most shipped flags) is its own deliberate change.
 
+**Not everything new needs a flag.** A flag is for two things. The first is **half-finished work** that lands over several PRs. The second is a **capability a deployment may reasonably not want**: one that costs money, adds AWS resources, widens what users can do, or is a product choice.
+
+A finished change that only extends something a deployment already chose does not get its own flag. That means a new optional argument on an existing tool, a mode whose default is today's behaviour, or a new kind of change a tool can now write. Gate it by whatever already gates that tool, and prove it before merge. A flag on such a change protects nothing: old calls behave exactly as before, and the existing switch already turns the tool off. It only postpones the one `toolConfig` rewrite, while doubling the spec, the CDK and workflow wiring, the tests and the docs, and it needs a PR later to retire it.
+
+The proof that replaces it:
+
+- a test pinning the new spec's digest
+- `scripts/measure_tool_spec_tokens.py` re-run against dev, with the token growth stated in the PR as one deliberate prefix rewrite at deploy
+- for anything that writes a file a user opens, a check in the real app
+
+For example, `redline_word_document`'s whole-paragraph insertions (#1922) shipped with no flag of their own after Word for Mac and LibreOffice both passed the check: Reject All gave back the original, and Accept All renumbered correctly. Word's AppleScript does that check with no clicking: `reject all revisions` / `accept all revisions`, then each paragraph's `list string of list format of text object` and `content of text object`. When in doubt, ask the developer driving the change. Don't add a flag by reflex, or because a brief from another session asked for one.
+
 A feature has up to two switches, one per side, set per environment:
 
 | Side | Where | How it's set |
