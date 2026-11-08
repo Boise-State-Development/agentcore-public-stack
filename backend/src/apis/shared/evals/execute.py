@@ -42,6 +42,7 @@ class TurnRunner(Protocol):
         enabled_tools: Optional[List[str]],
         enabled_skills: Optional[List[str]],
         file_upload_ids: Optional[List[str]],
+        rag_assistant_id: Optional[str] = None,
     ) -> Awaitable[RunResult]: ...
 
 
@@ -101,8 +102,12 @@ async def run_sample(
     register_fixture: Optional[FixtureRegistrar] = None,
     fixtures_dir: Optional[Path] = None,
     staged: Optional[StagedSample] = None,
+    assistant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run every turn of ``case`` in one fresh session and score the last.
+
+    ``assistant_id`` is the seeded fixture the case runs against (a project's
+    harness Agent or an Agent), sent as ``rag_assistant_id`` on every turn.
 
     ``staged`` is a session whose large documents were uploaded and prepared
     ahead of the run (``StagedSample``): the turns run in that session and
@@ -127,8 +132,10 @@ async def run_sample(
     turns: List[Dict[str, Any]] = []
     status = "completed"
     error: Optional[str] = None
+    extra: Dict[str, Any] = {"rag_assistant_id": assistant_id} if assistant_id else {}
     for index, prompt in enumerate(case.turns):
         result = await run_turn(
+            **extra,
             prompt=prompt,
             session_id=session_id,
             title=f"[eval] {case.id}",

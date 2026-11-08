@@ -1,0 +1,291 @@
+[
+  {
+    "id": "project_kb.small_literal_training_deadline",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "Within how many working days must a new lab member finish the safety training? Reply with just the number."
+      }
+    ],
+    "run": {
+      "project": "kb_small"
+    },
+    "expect": {
+      "contains_any": [
+        "10"
+      ],
+      "forbidden": [
+        "2"
+      ]
+    },
+    "notes": "kb_small sits inside the full-context budget, so the whole knowledge base is in the system prompt. 2 is the visitors' orientation."
+  },
+  {
+    "id": "project_kb.small_word_table_blank_cell",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "How many days is a tripod loaned out for? Reply with just the number of days."
+      }
+    ],
+    "run": {
+      "project": "kb_small"
+    },
+    "expect": {
+      "contains_any": [
+        "7"
+      ],
+      "forbidden": [
+        "$3"
+      ]
+    },
+    "notes": "A Word table in project files whose Deposit cell is blank for the tripod; a column shift reads the late fee."
+  },
+  {
+    "id": "project_kb.small_pdf_spring_trip",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "When does the spring field trip depart? Reply with just the date."
+      }
+    ],
+    "run": {
+      "project": "kb_small"
+    },
+    "expect": {
+      "contains_any": [
+        "April 22",
+        "22 April"
+      ],
+      "forbidden": [
+        "October 9"
+      ]
+    },
+    "notes": "A PDF in the full-context block."
+  },
+  {
+    "id": "project_kb.small_mixed_format_spreadsheet_value",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "What is the total budgeted for Glassware in the supply budget? Reply with just the amount."
+      }
+    ],
+    "run": {
+      "project": "kb_small"
+    },
+    "expect": {
+      "contains_any": [
+        "1,940",
+        "1940"
+      ]
+    },
+    "notes": "The .xlsx is skipped from the full-context block, named in it, and reached by the filtered retrieval or the spreadsheet tools (mixed-format full context, #1915). Checks the value, not the path."
+  },
+  {
+    "id": "project_kb.small_absent_fact",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "Do the project files say how much a parking permit costs? If they don't, reply exactly: NOT IN PROJECT FILES"
+      }
+    ],
+    "run": {
+      "project": "kb_small"
+    },
+    "expect": {
+      "regex": {
+        "search": [
+          "NOT IN PROJECT FILES"
+        ]
+      },
+      "forbidden": [
+        "$118",
+        "$181"
+      ]
+    },
+    "notes": "No project file mentions parking. The forbidden values are the attachment fixtures' permit fees."
+  },
+  {
+    "id": "project_kb.small_synthesis_across_files",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "From the project files: what is the safety training deadline for new lab members, and when does the spring field trip depart?"
+      }
+    ],
+    "run": {
+      "project": "kb_small"
+    },
+    "expect": {
+      "contains_all": [
+        "10",
+        "April 22"
+      ]
+    },
+    "notes": "Two facts from two files (Markdown and PDF) in one answer."
+  },
+  {
+    "id": "project_kb.small_project_instructions_followed",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "How many days is a camera loaned out for?"
+      }
+    ],
+    "run": {
+      "project": "kb_small"
+    },
+    "expect": {
+      "contains_any": [
+        "3"
+      ],
+      "regex": {
+        "search": [
+          "Source: project files\\s*$"
+        ]
+      }
+    },
+    "notes": "The project's instructions say to end every answer with 'Source: project files'."
+  },
+  {
+    "id": "project_kb.large_literal_international_travel",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "How many days before departure must an international travel request be filed? Reply with just the number."
+      }
+    ],
+    "run": {
+      "project": "kb_large"
+    },
+    "expect": {
+      "contains_any": [
+        "45"
+      ],
+      "forbidden": [
+        "21"
+      ],
+      "tools": {
+        "max_calls": 4
+      }
+    },
+    "notes": "kb_large is over the full-context budget, so this is retrieval. 21 is the domestic rule in the same handbook. max_calls catches a search spree."
+  },
+  {
+    "id": "project_kb.large_paraphrase_quotes",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "I'm buying a $9,000 instrument. How many written quotes do I need?"
+      }
+    ],
+    "run": {
+      "project": "kb_large"
+    },
+    "expect": {
+      "contains_any": [
+        "three",
+        "3"
+      ],
+      "forbidden": [
+        "two written quotes are enough",
+        "only two"
+      ]
+    },
+    "notes": "Paraphrase: the handbook says 'above $7,500 requires three written quotes'; two quotes is the $2,500-$7,500 band."
+  },
+  {
+    "id": "project_kb.large_same_field_two_files",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "On which day of the week does the grants review committee meet? Reply with just the day."
+      }
+    ],
+    "run": {
+      "project": "kb_large"
+    },
+    "expect": {
+      "contains_any": [
+        "Tuesday"
+      ],
+      "forbidden": [
+        "Thursday"
+      ]
+    },
+    "notes": "Another handbook says a different board meets on Thursdays."
+  },
+  {
+    "id": "project_kb.large_replaced_file_new_value",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "How often does the after-hours building access code rotate? Reply with just the number of days."
+      }
+    ],
+    "run": {
+      "project": "kb_large"
+    },
+    "expect": {
+      "contains_any": [
+        "30"
+      ],
+      "forbidden": [
+        "60"
+      ]
+    },
+    "notes": "facilities_handbook.md was uploaded saying 60, deleted, and uploaded again saying 30: a stale chunk answers 60."
+  },
+  {
+    "id": "project_kb.large_read_file_by_name",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "Open hr_handbook.md and tell me the title of Section 7. Reply with just the title."
+      }
+    ],
+    "run": {
+      "project": "kb_large"
+    },
+    "expect": {
+      "contains_any": [
+        "Leave Requests"
+      ],
+      "tools": {
+        "must_call": [
+          "project_files"
+        ]
+      }
+    },
+    "notes": "A section title retrieval by wording would not find; project_files reads the file by name."
+  },
+  {
+    "id": "project_kb.large_list_files",
+    "family": "project_kb",
+    "turns": [
+      {
+        "prompt": "List the names of the files in this project."
+      }
+    ],
+    "run": {
+      "project": "kb_large"
+    },
+    "expect": {
+      "contains_all": [
+        "grants_handbook.md",
+        "travel_handbook.md",
+        "procurement_handbook.md",
+        "hr_handbook.md",
+        "facilities_handbook.md",
+        "it_handbook.md"
+      ],
+      "tools": {
+        "must_call": [
+          "project_files"
+        ]
+      }
+    },
+    "notes": "Retrieval has no notion of a file; project_files lists them."
+  }
+]

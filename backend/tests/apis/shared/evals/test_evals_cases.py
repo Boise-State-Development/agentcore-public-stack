@@ -194,3 +194,41 @@ class TestLoadCases:
         assert [c.family for c in load_cases(tmp_path, families=["retention"])] == ["retention"]
         with pytest.raises(CaseError, match="unknown"):
             load_cases(tmp_path, families=["nope"])
+
+
+class TestFixtureRuns:
+    def test_a_case_may_run_against_a_project_or_an_agent(self):
+        case = parse_case(_case(run={"project": "kb_small"}), family="tool_selection")
+        assert case.run.project == "kb_small" and case.run.agent is None
+
+    def test_not_both(self):
+        with pytest.raises(CaseError, match="not both"):
+            parse_case(_case(run={"project": "kb_small", "agent": "agent_format"}), family="tool_selection")
+
+    def test_a_fixture_name_is_a_short_name(self):
+        with pytest.raises(CaseError, match="fixture name"):
+            parse_case(_case(run={"project": "[eval] kb_small"}), family="tool_selection")
+
+    def test_fixture_keys_name_each_fixture_once(self):
+        from apis.shared.evals.cases import fixture_key, fixture_keys
+
+        a = parse_case(_case(id="tool_selection.a", run={"project": "kb_small"}), family="tool_selection")
+        b = parse_case(_case(id="tool_selection.b", run={"agent": "agent_format"}), family="tool_selection")
+        c = parse_case(_case(id="tool_selection.c"), family="tool_selection")
+        assert fixture_keys([a, b, a, c]) == ["agent:agent_format", "project:kb_small"]
+        assert fixture_key(c) is None
+
+
+class TestMaxCalls:
+    def test_parses(self):
+        case = parse_case(_case(expect={"contains_any": ["4"], "tools": {"max_calls": 2}}), family="tool_selection")
+        assert case.expect.tools.max_calls == 2
+
+    def test_cannot_be_lower_than_the_tools_it_must_call(self):
+        raw = _case(expect={"contains_any": ["4"], "tools": {"must_call": ["calculator"], "max_calls": 0}})
+        with pytest.raises(CaseError, match="max_calls"):
+            parse_case(raw, family="tool_selection")
+
+    def test_rejects_a_non_integer(self):
+        with pytest.raises(CaseError, match="max_calls"):
+            parse_case(_case(expect={"contains_any": ["4"], "tools": {"max_calls": "3"}}), family="tool_selection")

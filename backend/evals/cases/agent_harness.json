@@ -1,0 +1,239 @@
+[
+  {
+    "id": "agent_harness.format_instructions_json",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "What is the capital of France?"
+      }
+    ],
+    "run": {
+      "agent": "agent_format"
+    },
+    "expect": {
+      "regex": {
+        "fullmatch": "\\{.*\\}",
+        "search": [
+          "\"answer\"\\s*:\\s*\"[^\"]*Paris"
+        ],
+        "absent": [
+          "```"
+        ]
+      }
+    },
+    "notes": "The agent's instructions require a bare JSON object."
+  },
+  {
+    "id": "agent_harness.format_instructions_hold_on_a_list_question",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "Name three primary colours."
+      }
+    ],
+    "run": {
+      "agent": "agent_format"
+    },
+    "expect": {
+      "regex": {
+        "fullmatch": "\\{.*\\}",
+        "search": [
+          "\"answer\"\\s*:"
+        ],
+        "absent": [
+          "```"
+        ]
+      }
+    },
+    "notes": "A question that invites a bulleted list still gets the JSON object."
+  },
+  {
+    "id": "agent_harness.bound_tool_used",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "What is 739,481 multiplied by 52,967? I need the exact figure."
+      }
+    ],
+    "run": {
+      "agent": "agent_bound_tools",
+      "enabled_tools": [
+        "calculator",
+        "whoami"
+      ]
+    },
+    "expect": {
+      "contains_any": [
+        "39,168,090,127",
+        "39168090127"
+      ],
+      "tools": {
+        "must_call": [
+          "calculator"
+        ]
+      }
+    },
+    "notes": "The agent is bound to calculator only."
+  },
+  {
+    "id": "agent_harness.unbound_tool_unavailable",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "Which account am I signed in as right now?"
+      }
+    ],
+    "run": {
+      "agent": "agent_bound_tools",
+      "enabled_tools": [
+        "calculator",
+        "whoami"
+      ]
+    },
+    "expect": {
+      "tools": {
+        "must_not_call": [
+          "whoami"
+        ]
+      }
+    },
+    "notes": "The request offers whoami, but an agent's bound tools replace the request's, so it must not be callable."
+  },
+  {
+    "id": "agent_harness.knowledge_fact",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "What time does the front desk open on weekdays? Reply with just the time."
+      }
+    ],
+    "run": {
+      "agent": "agent_knowledge"
+    },
+    "expect": {
+      "contains_any": [
+        "07:30",
+        "7:30"
+      ],
+      "forbidden": [
+        "09:30",
+        "9:30"
+      ]
+    },
+    "notes": "A small knowledge base, sent whole. 09:30 is Saturday."
+  },
+  {
+    "id": "agent_harness.knowledge_absent_fact",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "Does the front desk open on Sundays?"
+      }
+    ],
+    "run": {
+      "agent": "agent_knowledge"
+    },
+    "expect": {
+      "regex": {
+        "search": [
+          "NOT IN KNOWLEDGE"
+        ]
+      }
+    },
+    "notes": "The knowledge says nothing about Sundays; the instructions say to reply NOT IN KNOWLEDGE."
+  },
+  {
+    "id": "agent_harness.loader_reads_named_file",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "What is the purpose of the travel handbook?"
+      }
+    ],
+    "run": {
+      "agent": "agent_loader"
+    },
+    "expect": {
+      "regex": {
+        "search": [
+          "^\\W*Per process:"
+        ]
+      },
+      "tools": {
+        "must_call": [
+          "knowledge_files"
+        ],
+        "must_not_call": [
+          "search_files"
+        ]
+      }
+    },
+    "notes": "The DRED pattern: instructions say to read process.md in Knowledge in full. The knowledge base is over budget, so only knowledge_files can open it by name (#1915, AGENT_KNOWLEDGE_FILES_ENABLED, on in dev). Before that, one agent searched the user's Drive."
+  },
+  {
+    "id": "agent_harness.long_instructions_last_rule",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "What is 12 times 12?"
+      }
+    ],
+    "run": {
+      "agent": "agent_long_instructions"
+    },
+    "expect": {
+      "contains_any": [
+        "144"
+      ],
+      "regex": {
+        "search": [
+          "ZQ-END\\W*$"
+        ]
+      }
+    },
+    "notes": "Instructions over 8 KiB whose only actionable rule is the last one: catches instructions cut short."
+  },
+  {
+    "id": "agent_harness.long_instructions_last_rule_again",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "Name the largest planet in the solar system."
+      }
+    ],
+    "run": {
+      "agent": "agent_long_instructions"
+    },
+    "expect": {
+      "contains_any": [
+        "Jupiter"
+      ],
+      "regex": {
+        "search": [
+          "ZQ-END\\W*$"
+        ]
+      }
+    },
+    "notes": "A second sample of the same rule on a different question."
+  },
+  {
+    "id": "agent_harness.bound_skill_loads",
+    "family": "agent_harness",
+    "turns": [
+      {
+        "prompt": "Fetch https://example.com and turn it into short notes with a citation (page title and URL) for each point."
+      }
+    ],
+    "run": {
+      "agent": "agent_skill"
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ]
+      }
+    },
+    "notes": "The agent is bound to the web_research skill."
+  }
+]

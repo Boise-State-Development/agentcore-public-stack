@@ -165,3 +165,10 @@ class TestCompareFamily:
         result = compare_family("f", base, run, gating=True)
         assert result.n == 1
         assert result.missing_in_run == ("f.a",) and result.new_in_run == ("f.c",)
+
+
+def test_max_calls_fails_a_search_spree():
+    expect = Expect(contains_any=("ok",), tools=ToolExpect(max_calls=2))
+    assert _score(expect, tools=["a", "b"]).passed
+    result = _score(expect, tools=["a", "b", "a"])
+    assert not result.passed and result.failures == ("too many tool calls: 3 > 2",)
