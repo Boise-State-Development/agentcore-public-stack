@@ -260,7 +260,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     sourceProvenance: { enabled: true },
     // The release ledger adds no resources either — `LEDGER#` rows on the
     // existing system-cost-rollup table — so it is here for the Runtime's
-    // environment-variable ceiling and flag coverage.
+    // environment-variable ceiling, flag coverage, and its one statement
+    // (`ReleaseLedgerMetricsRead`) on the managed policy AWS Limits shares.
     releaseLedger: { enabled: true },
     // Structured extraction adds no resources either — `EXTR#` rows on the
     // existing sessions-metadata table, an artifact through the existing
