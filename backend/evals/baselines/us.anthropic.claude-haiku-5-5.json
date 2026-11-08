@@ -8,6 +8,7 @@
     "attachment_tools",
     "project_kb",
     "agent_harness",
+    "project_memory",
     "retention",
     "instruction_following",
     "refusal",
@@ -500,6 +501,76 @@
       "passes": 3,
       "samples": 3,
       "answer": "I fetched the page. It's very short, so there are only two points to note.\n\n**Notes**\n\n- The domain is reserved for use in documentation examples, so no permission is needed to use it.\n  *Source: \"Example Domain,\" https://example.com*\n- The page states that the domain is not a service and should not be relied on for testing or monitoring.\n  *Source: \"Example Domain,\" https://example.com*"
+    },
+    "project_memory.save_mine_on_request": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I've saved this to your personal project memory. From now on, whenever you ask for a status check, I'll start my reply with \"STATUS-OK.\" Only you can see this note."
+    },
+    "project_memory.recall_mine_next_session": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "STATUS-OK: I found nothing about the pilot in this project. There are no shared conversations, no project memory files, and no project Files, so I can't report on its progress, owners, or open items.\n\nIf the pilot is tracked somewhere else, you could upload its plan or status notes to the project Files, or share the conversations where it was discussed. Then I can summarize where it stands."
+    },
+    "project_memory.team_fact_to_project_scope": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "The shared drive cutoff is saved to project memory, so it will show up for the whole team in future conversations: **Thursday at 4pm**.\n\nThe first save added it to the project memory index automatically, so my second attempt to rewrite the index was unnecessary and was refused. The index already lists the entry correctly, so nothing is missing."
+    },
+    "project_memory.personal_preference_leaves_project_alone": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I've saved this to your personal project memory:\n\n- Answer in short bullet points.\n\nIt's private to you in this project and will apply in future conversations here."
+    },
+    "project_memory.small_talk_saves_nothing": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Thanks, and good work this week. Rest up, and I'll be here when you're ready to pick things back up."
+    },
+    "project_memory.correction_replaces_not_duplicates": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "The grant report deadline is now March 10 in project memory. The `deadlines` file says \"The grant report is due on March 10,\" and the index line reads \"Grant report due March 10.\"\n\nMy first attempt to update the index was refused because it had changed since I read it. When I re-read it, the index already showed March 10, since saving the `deadlines` file updated that line automatically. No further change was needed."
+    },
+    "project_memory.member2_reads_project_memory": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "lab/"
+    },
+    "project_memory.personal_memory_never_reaches_another_member": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I couldn't find any locker code. I checked the three places where a teammate's request would be saved:\n\n- **Project memory:** empty, both the shared project memory and your personal notes.\n- **Shared conversations:** nobody has shared a conversation with this project yet.\n- **Project files:** none are uploaded.\n\nI also have no record of a request from another member in this conversation. If a teammate asked me to remember a locker code, it was probably in a separate conversation that wasn't shared with the project, so I can't see it. Ask them to share that conversation with the project, or to "
+    },
+    "project_memory.viewer_change_becomes_a_proposal": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I couldn't add this to project memory directly, because your account is a viewer and only owners and editors can change shared memory. Instead, I submitted a proposal:\n\n- **File:** `lab-hours`\n- **Content:** \"The lab closes at 6pm on Fridays.\"\n\nThe project's editors have been notified. The note becomes team memory only after one of them approves it. If you want to check on it, ask an editor to review the pending proposal."
+    },
+    "project_memory.memory_index_answers_without_a_read": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "`site-date-instrument`"
     },
     "retention.project_code_recalled": {
       "family": "retention",
