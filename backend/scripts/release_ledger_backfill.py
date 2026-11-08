@@ -17,11 +17,20 @@ of ``git-<sha12>`` (the image's content hash was never recorded for those runs,
 so the label says it is a commit, not a hash). A row older than the map's first
 entry is ``unknown``. Build the map with ``build-map``.
 
-**Where it must stop.** The live writer stamps ``firstLiveAt`` on each ledger
-row it first touches; the earliest across ``LEDGER#VERSION`` is where live
-counting began. A range reaching past it would count those calls twice, so the
-script refuses it, and with no ``--to`` it stops exactly there (or now, if the
-flag has never been on). Each run records a ``LEDGER#BACKFILL`` marker for its
+**Rows the live writer already counted are skipped.** The live writer marks
+each ``C#`` row it will count with ``ledgered``, in the same ``put_item`` that
+stores it, and the backfill never adds a marked row. That mark, not a time, is
+what keeps a call from being counted twice: a row's ``timestamp`` is when the
+call ran, earlier than when it was stored, so the first live turn's rows sit
+just *before* ``firstLiveAt`` (four of them on dev, 2026-11-07). A marked row
+still counts toward the per-day reconciliation, since it is in the ledger.
+
+**Where it must stop.** The live writer also stamps ``firstLiveAt`` on each
+ledger row it first touches; the earliest across ``LEDGER#VERSION`` is where
+live counting began. The script refuses a range past it, and with no ``--to``
+it stops exactly there (or now, if the flag has never been on). Rows written by
+PR-3's build, the first live writer, carry no mark, and the ceiling keeps the
+backfill clear of them. Each run records a ``LEDGER#BACKFILL`` marker for its
 range and a later run refuses to overlap one, because ``ADD`` is not
 idempotent. So the procedure is: backfill up to now, turn the flag on, then
 run once more with no ``--to`` to fill the gap up to the first live write.
@@ -65,6 +74,7 @@ from apis.shared.sessions.ledger_rollups import (  # noqa: E402
     BACKFILL_PK,
     BACKFILLED_AT,
     FIRST_LIVE_AT,
+    LEDGERED,
     UNKNOWN,
     LedgerUpdate,
     ledger_updates,
@@ -244,7 +254,8 @@ def plan(
         if instant is None or not (start <= instant < end):
             continue
         in_range += 1
-        attribution[attribute(row, deploys, keys)] += 1
+        live = bool(row.get(LEDGERED))
+        attribution["live" if live else attribute(row, deploys, keys)] += 1
         row_updates = ledger_updates(row)
         if not row_updates:
             continue
@@ -252,6 +263,8 @@ def plan(
         day = by_day[row_date(row)]
         day["cost"] += Decimal(version.get("cost", 0))
         day["calls"] += Decimal(version.get("calls", 0))
+        if live:
+            continue
         label = f"{row['appVersion']}#{row['build']}"
         for name in ("calls", "turns", "cost"):
             by_version[label][name] += Decimal(version.get(name, 0))
