@@ -5,6 +5,7 @@
   "families": [
     "tool_selection",
     "document_qa",
+    "attachment_tools",
     "retention",
     "instruction_following",
     "refusal",
@@ -203,6 +204,139 @@
       "passes": 3,
       "samples": 3,
       "answer": "**12**"
+    },
+    "document_qa.word_table_blank_cell_column": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "6"
+    },
+    "document_qa.word_tracked_change_current_value": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$58"
+    },
+    "document_qa.native_pdf_weekday_shuttle": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "21:40"
+    },
+    "document_qa.html_semester_permit_fee": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$118"
+    },
+    "document_qa.two_attachments_pick_the_right_year": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$240"
+    },
+    "document_qa.inline_budget_overflow_by_reference": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "RX-4417"
+    },
+    "document_qa.follow_up_turn_same_document": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "19:15"
+    },
+    "attachment_tools.image_chart_value": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "1,315"
+    },
+    "attachment_tools.image_screenshot_error_code": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "0x80070AB3"
+    },
+    "attachment_tools.two_images_compared": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Plums"
+    },
+    "attachment_tools.image_with_document": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "STEP-K9"
+    },
+    "attachment_tools.spreadsheet_category_total": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "4815"
+    },
+    "attachment_tools.spreadsheet_filtered_count": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "3"
+    },
+    "attachment_tools.spreadsheet_second_sheet": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "AP-77"
+    },
+    "attachment_tools.csv_max_reading": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "41.7"
+    },
+    "attachment_tools.deck_slide_fact": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "14"
+    },
+    "attachment_tools.deck_speaker_notes": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "7.5%"
+    },
+    "attachment_tools.mixed_image_and_spreadsheet": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**2024 fall enrollment:** 1,315, from the bar chart.\n\n**Total Travel Amount:** $4,815, from the Expenses sheet of `grant_expenses.xlsx`. It comes from three lines:\n\n| Line | Amount |\n|---|---|\n| EXP-0040 | $1,210 |\n| EXP-0042 | $905 |\n| EXP-0045 | $2,700 |\n\nI didn't use `lab_equipment_inventory.docx` because it doesn't relate to either question."
+    },
+    "attachment_tools.mixed_deck_and_pdf": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**Pilot sites:** The deck lists **14** pilot sites this quarter (slide 3). It also notes that two of them joined in March.\n\n**Last weekday shuttle:** According to the campus shuttle timetable, the last weekday departure from the Library stop is **21:40**. Service doesn't run on university holidays, so check the academic calendar before relying on that time for a specific date.\n\nThe sync error image isn't related to either question, so I didn't use it."
     },
     "retention.project_code_recalled": {
       "family": "retention",
