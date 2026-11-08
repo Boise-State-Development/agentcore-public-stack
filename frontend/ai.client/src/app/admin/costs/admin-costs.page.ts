@@ -18,6 +18,7 @@ import {
   heroChevronDown,
   heroServerStack,
   heroMagnifyingGlass,
+  heroRocketLaunch,
   heroUsers,
 } from '@ng-icons/heroicons/outline';
 import { AdminCostStateService } from './services';
@@ -31,9 +32,21 @@ import { CostTrendsChartComponent } from './components/cost-trends-chart.compone
 import { ModelBreakdownComponent } from './components/model-breakdown.component';
 import { PlatformCostBreakdownComponent } from './components/platform-cost-breakdown.component';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
+import { ReleasesTabComponent } from './releases/releases-tab.component';
+import { FEATURES } from '../../services/features';
 
-/** The four views the dashboard's content is split across. */
-type CostTab = 'models' | 'trends' | 'platform' | 'users' | 'conversations';
+/** The views the dashboard's content is split across. */
+type CostTab = 'models' | 'trends' | 'platform' | 'users' | 'conversations' | 'releases';
+
+const ALL_TABS: ReadonlyArray<{ id: CostTab; label: string; icon: string }> = [
+  { id: 'models', label: 'Model Usage', icon: 'heroChartPie' },
+  { id: 'trends', label: 'Cost Trends', icon: 'heroArrowTrendingUp' },
+  { id: 'platform', label: 'Platform', icon: 'heroServerStack' },
+  { id: 'users', label: 'Top Users', icon: 'heroUsers' },
+  { id: 'conversations', label: 'Conversations', icon: 'heroChatBubbleLeftRight' },
+  // Release ledger (docs/specs/release-ledger.md §6.4), behind features.releaseLedger.
+  { id: 'releases', label: 'Releases', icon: 'heroRocketLaunch' },
+];
 
 /**
  * Admin cost dashboard page.
@@ -65,6 +78,7 @@ type CostTab = 'models' | 'trends' | 'platform' | 'users' | 'conversations';
     ModelBreakdownComponent,
     PlatformCostBreakdownComponent,
     SpinnerComponent,
+    ReleasesTabComponent,
   ],
   providers: [
     provideIcons({
@@ -76,6 +90,7 @@ type CostTab = 'models' | 'trends' | 'platform' | 'users' | 'conversations';
       heroChevronDown,
       heroServerStack,
       heroMagnifyingGlass,
+      heroRocketLaunch,
       heroUsers,
     }),
   ],
@@ -191,7 +206,7 @@ type CostTab = 'models' | 'trends' | 'platform' | 'users' | 'conversations';
         <!-- Tab strip. Raised-pill idiom per app conventions, not an
              underline: the brand token has no dark variant, so a brand-
              coloured underline all but disappears on the dark surface.
-             On small screens the strip collapses to a select — four
+             On small screens the strip collapses to a select — the
              labelled tabs with icons do not fit a phone without wrapping
              to two rows. -->
         <div class="mt-8">
@@ -367,6 +382,16 @@ type CostTab = 'models' | 'trends' | 'platform' | 'users' | 'conversations';
                 />
               </section>
             }
+            @case ('releases') {
+              <section
+                role="tabpanel"
+                id="cost-panel-releases"
+                aria-labelledby="cost-tab-releases"
+                tabindex="0"
+              >
+                <app-releases-tab />
+              </section>
+            }
           }
         </div>
       }
@@ -376,6 +401,7 @@ type CostTab = 'models' | 'trends' | 'platform' | 'users' | 'conversations';
 export class AdminCostsPage implements OnInit {
   private stateService = inject(AdminCostStateService);
   private router = inject(Router);
+  private features = inject(FEATURES);
 
   // State from service
   loading = this.stateService.loading;
@@ -397,18 +423,13 @@ export class AdminCostsPage implements OnInit {
    * Model Usage leads because the donut answers the first question an admin
    * brings to this page — *what* is the money going to — and it is the only
    * panel that is complete on load with no further fetch or scan.
+   *
+   * Releases is last and is offered only while `features.releaseLedger` is
+   * on: its routes 404 until the deployment turns `RELEASE_LEDGER_ENABLED` on.
    */
-  protected readonly tabs: ReadonlyArray<{
-    id: CostTab;
-    label: string;
-    icon: string;
-  }> = [
-    { id: 'models', label: 'Model Usage', icon: 'heroChartPie' },
-    { id: 'trends', label: 'Cost Trends', icon: 'heroArrowTrendingUp' },
-    { id: 'platform', label: 'Platform', icon: 'heroServerStack' },
-    { id: 'users', label: 'Top Users', icon: 'heroUsers' },
-    { id: 'conversations', label: 'Conversations', icon: 'heroChatBubbleLeftRight' },
-  ];
+  protected readonly tabs = ALL_TABS.filter(
+    tab => tab.id !== 'releases' || this.features.releaseLedger,
+  );
 
   protected readonly activeTab = signal<CostTab>('models');
 
@@ -428,6 +449,7 @@ export class AdminCostsPage implements OnInit {
     platform: this.platformServiceCount() || null,
     users: this.topUsers().length || null,
     conversations: this.topSessions().length || null,
+    releases: null,
   }));
 
   // Session-id lookup for the cost-anatomy drill-down
