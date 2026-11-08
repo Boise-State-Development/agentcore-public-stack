@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Literal, Optional
 # oauth_required   — the turn finished but at least one connector tool needs
 #                    user consent (headless runs cannot pop a consent window;
 #                    callers should surface the authorization URL to the user)
-RunStatus = Literal["completed", "error", "timeout", "oauth_required"]
+RunStatus = Literal["completed", "error", "timeout", "oauth_required", "client_tool_call"]
 
 
 @dataclass
@@ -57,6 +57,11 @@ class RunResult:
     # the SSE payloads: {"usage": {...}, "metrics": {...}}.
     usage: Dict[str, Any] = field(default_factory=dict)
     oauth_required: List[OAuthConsentRequired] = field(default_factory=list)
+    #: ``client_tool_call`` frames: a tool the request declared in ``client_tools``
+    #: was called and the turn paused for the client to run it. Each is
+    #: ``{interruptId, toolUseId, toolName, arguments}``. Only a caller that
+    #: sends ``client_tools`` (the eval harness's terminal cases) ever sees one.
+    client_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     started_at: str = ""
     finished_at: str = ""
     # Diagnostic: counts of every SSE event name seen, e.g. {"tool_use": 2}.

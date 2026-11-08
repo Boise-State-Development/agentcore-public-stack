@@ -49,9 +49,11 @@ class TestCommittedGoldenSet:
     def test_every_gating_family_has_enough_cases_to_ever_fail(self):
         # The gate's small-family clause needs a few cases to mean anything;
         # spec §9 targets eight to twelve per gating family.
+        from apis.shared.evals.cases import ADVISORY_FAMILIES
+
         cases = load_cases(CASES_DIR)
         for family in FAMILIES:
-            if family == "general_chat":
+            if family in ADVISORY_FAMILIES:
                 continue
             assert sum(1 for c in cases if c.family == family) >= 8, family
 
@@ -289,3 +291,23 @@ class TestProjectMemoryFormat:
 
         case = parse_case(_memory_case(), family="project_memory")
         assert fixture_keys([case]) == [] and fixture_key(case) is None
+
+
+class TestTerminalFormat:
+    def _raw(self, **run):
+        return {"id": "terminal.x", "family": "terminal", "turns": [{"prompt": "Read a file"}],
+                "run": {"client_surface": "terminal", **run}, "expect": {"tools": {"must_call": ["local_read_file"]}}}
+
+    def test_a_terminal_case_is_advisory_and_its_client_tools_need_no_grant(self):
+        case = parse_case(self._raw(client_tools=[{"name": "read_file", "description": "Read.", "respond": {"output": "x"}}],
+                                    enabled_tools=[]), family="terminal")
+        assert not case.gating and required_grants([case])["tools"] == []
+
+    def test_a_client_tool_needs_an_answer(self):
+        with pytest.raises(CaseError, match="respond"):
+            parse_case(self._raw(client_tools=[{"name": "read_file", "description": "Read.", "respond": {}}]),
+                       family="terminal")
+
+    def test_an_unknown_surface_is_refused(self):
+        with pytest.raises(CaseError, match="client_surface"):
+            parse_case(self._raw(client_surface="tui"), family="terminal")

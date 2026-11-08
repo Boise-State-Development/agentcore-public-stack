@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from apis.shared.evals.calls import summarize_calls
-from apis.shared.evals.cases import FAMILIES, JUDGED_FAMILIES, EvalCase
+from apis.shared.evals.cases import ADVISORY_FAMILIES, FAMILIES, EvalCase
 from apis.shared.evals.score import FamilyComparison, compare_family, majority
 
 BASELINE_SCHEMA_VERSION = 1
@@ -192,7 +192,7 @@ def compare_run(
                 family,
                 by_family_base.get(family, {}),
                 by_family_run[family],
-                gating=family not in JUDGED_FAMILIES,
+                gating=family not in ADVISORY_FAMILIES,
             )
         )
     return comparisons

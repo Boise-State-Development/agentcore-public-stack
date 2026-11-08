@@ -29,6 +29,7 @@ FAMILIES: Tuple[str, ...] = (
     "agent_harness",
     "project_memory",
     "skill_outcome",
+    "terminal",
     "retention",
     "instruction_following",
     "refusal",
@@ -36,6 +37,10 @@ FAMILIES: Tuple[str, ...] = (
     "general_chat",
 )
 JUDGED_FAMILIES = frozenset({"general_chat"})
+#: Families that report but never fail a run: the judged ones, and a
+#: deterministic family under D18's ten-case floor (``terminal``), which gates
+#: once it reaches ten.
+ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal"})
 
 #: The strands-evals evaluators a case may name: exactly the ones the judge adapter maps.
 JUDGE_EVALUATORS = CASE_EVALUATORS
@@ -64,8 +69,17 @@ PROVISIONED_TOOLS: Dict[str, Optional[str]] = {
 }
 
 
+#: The prefix a client-declared tool carries on the wire (``apis.shared.client_tools.TOOL_NAME_PREFIX``).
+CLIENT_TOOL_PREFIX = "local_"
+
+
 def grant_for_tool(name: str) -> Optional[str]:
-    """The catalog id that makes ``name`` reachable, or ``None`` when no grant is needed."""
+    """The catalog id that makes ``name`` reachable, or ``None`` when no grant is needed.
+
+    A client tool (``local_<name>``) is declared by the request itself.
+    """
+    if name.startswith(CLIENT_TOOL_PREFIX):
+        return None
     return PROVISIONED_TOOLS[name] if name in PROVISIONED_TOOLS else name
 
 
@@ -161,6 +175,12 @@ class RunConfig:
     #: With ``project == EPHEMERAL_PROJECT``: the second eval member's role, which
     #: a turn ``"as": "member2"`` needs (spec D16).
     member2_role: Optional[str] = None
+    #: ``InvocationRequest.client_surface`` (``"terminal"`` for the terminal client).
+    client_surface: Optional[str] = None
+    #: Tools the "client" declares, each with the answer the harness gives when
+    #: the model calls it: ``{name, description, input_schema, respond}``,
+    #: ``respond`` being ``{"output": str, "is_error": bool}`` or ``{"declined": true}``.
+    client_tools: Optional[Tuple[Mapping[str, Any], ...]] = None
 
 
 #: A project of the sample's own, created before its first turn and purged after
@@ -213,7 +233,7 @@ class EvalCase:
 
     @property
     def gating(self) -> bool:
-        return self.family not in JUDGED_FAMILIES
+        return self.family not in ADVISORY_FAMILIES
 
 
 def _check_keys(raw: Mapping[str, Any], allowed: Iterable[str], where: str) -> None:
@@ -371,8 +391,28 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
 
     run_raw = raw.get("run") or {}
     _check_keys(
-        run_raw, ("enabled_tools", "enabled_skills", "project", "agent", "project_memory", "member2_role"), f"{where}.run"
+        run_raw,
+        ("enabled_tools", "enabled_skills", "project", "agent", "project_memory", "member2_role", "client_surface",
+         "client_tools"),
+        f"{where}.run",
     )
+    client_surface = run_raw.get("client_surface")
+    if client_surface is not None and client_surface not in ("terminal", "web"):
+        raise CaseError(f"{where}.run.client_surface: expected 'terminal' or 'web'")
+    client_tools = run_raw.get("client_tools")
+    if client_tools is not None:
+        if not isinstance(client_tools, list) or not client_tools:
+            raise CaseError(f"{where}.run.client_tools: expected a list of tools")
+        for i, tool in enumerate(client_tools):
+            at = f"{where}.run.client_tools[{i}]"
+            _check_keys(tool, ("name", "description", "input_schema", "respond"), at)
+            if not isinstance(tool.get("name"), str) or not re.match(r"^[a-zA-Z][a-zA-Z0-9_]{0,63}$", tool["name"]):
+                raise CaseError(f"{at}.name: expected an identifier")
+            if not isinstance(tool.get("description"), str) or not tool["description"].strip():
+                raise CaseError(f"{at}.description: expected text")
+            respond = tool.get("respond")
+            if not isinstance(respond, Mapping) or not (respond.get("declined") is True or isinstance(respond.get("output"), str)):
+                raise CaseError(f"{at}.respond: expected {{output, is_error}} or {{declined: true}}")
     for key in ("project", "agent"):
         value = run_raw.get(key)
         if key == "project" and value == EPHEMERAL_PROJECT:
@@ -406,6 +446,8 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         agent=run_raw.get("agent"),
         project_memory=project_memory,
         member2_role=member2_role,
+        client_surface=client_surface,
+        client_tools=tuple(client_tools) if client_tools else None,
     )
 
     expect = _parse_expect(raw.get("expect") or {}, f"{where}.expect")

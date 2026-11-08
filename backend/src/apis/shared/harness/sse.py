@@ -84,6 +84,7 @@ class InvocationStreamAccumulator:
     title: Optional[str] = None
     tool_trace: List[ToolTraceEntry] = field(default_factory=list)
     oauth_required: List[OAuthConsentRequired] = field(default_factory=list)
+    client_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     usage: Dict[str, Any] = field(default_factory=dict)
     events_seen: Dict[str, int] = field(default_factory=dict)
 
@@ -214,6 +215,13 @@ class InvocationStreamAccumulator:
                 self.oauth_required.append(
                     OAuthConsentRequired(provider_id=provider, authorization_url=url)
                 )
+        elif name == "client_tool_call":
+            self.client_tool_calls.append({
+                "interruptId": payload.get("interruptId"),
+                "toolUseId": payload.get("toolUseId"),
+                "toolName": payload.get("toolName"),
+                "arguments": payload.get("arguments") or {},
+            })
         elif name in ("stream_error", "error"):
             self.error = str(
                 payload.get("message") or payload.get("error") or payload

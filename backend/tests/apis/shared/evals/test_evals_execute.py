@@ -215,3 +215,65 @@ async def test_a_one_session_case_run_as_member2_records_its_owner_for_cleanup()
     )
     row = await run_sample(case, sample=0, model_id="m", run_turn=FakeRunner(["lab/"]))
     assert row["sessions"] == [{"session_id": row["session_id"], "as_user": "member2"}]
+
+
+def _terminal_case(respond):
+    return parse_case(
+        {
+            "id": "terminal.read",
+            "family": "terminal",
+            "turns": [{"prompt": "Read ./a.txt"}],
+            "run": {"client_surface": "terminal", "enabled_tools": [], "client_tools": [
+                {"name": "read_file", "description": "Read a file.", "respond": respond}]},
+            "expect": {"contains_any": ["42"], "tools": {"must_call": ["local_read_file"]}},
+        },
+        family="terminal",
+    )
+
+
+class PausingRunner:
+    """Pauses on a client tool ``pauses`` times, then answers."""
+
+    def __init__(self, pauses=1):
+        self.pauses = pauses
+        self.calls = []
+
+    async def __call__(self, **kwargs):
+        index = len(self.calls)
+        self.calls.append(kwargs)
+        result = RunResult(run_id=f"r{index}", session_id=kwargs["session_id"], user_id="u", status="completed",
+                           final_message="The answer is 42.", started_at="t", finished_at="t",
+                           usage={"usage": {"inputTokens": 10, "outputTokens": 1}})
+        if index < self.pauses:
+            result.status = "client_tool_call"
+            result.final_message = ""
+            result.tool_trace = [ToolTraceEntry(tool_use_id=f"t{index}", name="local_read_file", input={"path": "./a.txt"})]
+            result.client_tool_calls = [{"interruptId": f"i{index}", "toolUseId": f"t{index}", "toolName": "read_file",
+                                         "arguments": {"path": "./a.txt"}}]
+        return result
+
+
+@pytest.mark.asyncio
+async def test_a_client_tool_pause_is_answered_from_the_case_and_resumed_in_the_same_session():
+    runner = PausingRunner()
+    row = await run_sample(_terminal_case({"output": "x = 42", "is_error": False}), sample=0, model_id="m", run_turn=runner)
+    first, resume = runner.calls
+    assert first["client_surface"] == "terminal" and first["client_tools"][0]["name"] == "read_file"
+    assert "interrupt_responses" not in first
+    assert resume["session_id"] == first["session_id"] and resume["prompt"] == ""
+    assert resume["interrupt_responses"] == [{"interruptId": "i0", "response": {"output": "x = 42", "isError": False}}]
+    assert row["passed"], row["failures"]
+    assert len(row["turns"]) == 1 and row["turns"][0]["rounds"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_declined_call_is_answered_as_declined():
+    runner = PausingRunner()
+    await run_sample(_terminal_case({"declined": True}), sample=0, model_id="m", run_turn=runner)
+    assert runner.calls[1]["interrupt_responses"][0]["response"] == {"declined": True}
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_never_stops_calling_fails_rather_than_looping():
+    row = await run_sample(_terminal_case({"output": "x"}), sample=0, model_id="m", run_turn=PausingRunner(pauses=99))
+    assert not row["passed"] and row["status"] == "client_tool_loop"

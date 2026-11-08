@@ -86,6 +86,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from apis.shared.evals.cases import (  # noqa: E402
+    ADVISORY_FAMILIES,
     FAMILIES,
     CaseError,
     EPHEMERAL_PROJECT,
@@ -307,7 +308,7 @@ def cmd_cases(args: argparse.Namespace) -> int:
     print(f"{'family':<22} {'cases':>5} {'turns':>5}  gate")
     for family in FAMILIES:
         if counts.get(family):
-            gate = "advisory" if family == "general_chat" else "gating"
+            gate = "advisory" if family in ADVISORY_FAMILIES else "gating"
             print(f"{family:<22} {counts[family]:>5} {turns[family]:>5}  {gate}")
     print(f"{'total':<22} {len(cases):>5} {sum(turns.values()):>5}")
     grants = required_grants(cases)
