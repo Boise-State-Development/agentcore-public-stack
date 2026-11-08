@@ -445,6 +445,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // skill's scripts/*.py in Code Interpreter. Written only while ON, so
         // the default costs nothing against the V2 payload budget.
         ...(config.wordSkillScripts.enabled ? { WORD_SKILL_SCRIPTS_ENABLED: 'true' } : {}),
+        // Word redline paragraphs: redline_word_document can insert whole
+        // tracked paragraphs. Written only while ON, so the default costs
+        // nothing against the V2 payload budget.
+        ...(config.wordRedlineParagraphs.enabled ? { WORD_REDLINE_PARAGRAPHS_ENABLED: 'true' } : {}),
         // Documents as text: non-PDF attachments reach a Converse model as
         // rendered text, not document blocks. Written only while ON, so the
         // default costs nothing against the V2 payload budget.

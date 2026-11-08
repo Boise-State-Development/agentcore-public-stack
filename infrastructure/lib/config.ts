@@ -114,6 +114,7 @@ export interface AppConfig {
   documentExtract: DocumentExtractConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   wordSkillScripts: WordSkillScriptsConfig;
+  wordRedlineParagraphs: WordRedlineParagraphsConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
@@ -980,6 +981,22 @@ export interface WebSearchDefaultMaxResultsConfig {
  * and already runs Code Interpreter sessions.
  */
 export interface WordSkillScriptsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Word redline paragraphs. On, redline_word_document's changes can also give
+ * `insert` ("after" / "before") and `paragraphs`: each new paragraph is a
+ * tracked insertion that copies the style, numbering and run formatting of the
+ * paragraph it names, so a contract redline can add a numbered section or a
+ * list item without custom python-docx code. **Opt-in while in development**:
+ * off unless CDK_WORD_REDLINE_PARAGRAPHS_ENABLED=true (or a
+ * `wordRedlineParagraphs.enabled: true` cdk.json context). Sets
+ * WORD_REDLINE_PARAGRAPHS_ENABLED on the AgentCore Runtime only, and **only
+ * while on**, so the default spends none of the V2 payload budget. No
+ * resources and no IAM.
+ */
+export interface WordRedlineParagraphsConfig {
   enabled: boolean;
 }
 
@@ -1991,6 +2008,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED
         ? process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('wordSkillScripts')?.enabled ?? false,
+    },
+    wordRedlineParagraphs: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_WORD_REDLINE_PARAGRAPHS_ENABLED
+        ? process.env.CDK_WORD_REDLINE_PARAGRAPHS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('wordRedlineParagraphs')?.enabled ?? false,
     },
     converseDocumentsAsText: {
       // In development: only "true" enables, and an unset GitHub variable

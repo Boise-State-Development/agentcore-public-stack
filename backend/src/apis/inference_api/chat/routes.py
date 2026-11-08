@@ -1002,7 +1002,9 @@ def _build_word_document_tools(
     ``WORD_TRACKED_CHANGES_ENABLED`` is on; off, its spec never reaches
     ``toolConfig``. ``user_name`` is its default revision author. While the
     in-development ``WORD_SKILL_SCRIPTS_ENABLED`` is on, create and modify
-    also take a bound skill's script by reference (``skill_scripts.py``).
+    also take a bound skill's script by reference (``skill_scripts.py``), and
+    while ``WORD_REDLINE_PARAGRAPHS_ENABLED`` is on the redline tool can also
+    insert whole paragraphs.
     """
     if not enabled_tools or not WORD_DOCUMENT_TOOL_IDS.intersection(enabled_tools):
         return []
@@ -1018,6 +1020,7 @@ def _build_word_document_tools(
     )
 
     from apis.shared.feature_flags import (
+        word_redline_paragraphs_enabled,
         word_skill_scripts_enabled,
         word_tracked_changes_enabled,
     )
@@ -1040,7 +1043,12 @@ def _build_word_document_tools(
     if word_tracked_changes_enabled():
         from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
 
-        tools.append(make_redline_word_document_tool(session_id, user_id, user_name))
+        # WORD_REDLINE_PARAGRAPHS_ENABLED widens its spec once per deployment.
+        tools.append(
+            make_redline_word_document_tool(
+                session_id, user_id, user_name, insert_paragraphs=word_redline_paragraphs_enabled()
+            )
+        )
 
     logger.info(f"Created {len(tools)} word document tools")
     return tools

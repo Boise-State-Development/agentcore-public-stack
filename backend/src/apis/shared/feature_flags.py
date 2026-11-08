@@ -108,6 +108,34 @@ def word_skill_scripts_enabled() -> bool:
     return os.environ.get("WORD_SKILL_SCRIPTS_ENABLED", "").strip().lower() == "true"
 
 
+def word_redline_paragraphs_enabled() -> bool:
+    """Whether ``redline_word_document`` can insert whole paragraphs
+    (``docs/specs/word-tracked-changes.md`` §3a).
+
+    On, a change may give ``insert`` ("after" / "before") and ``paragraphs``
+    instead of ``replace``: each new paragraph is a tracked insertion, paragraph
+    mark included, that copies the style, numbering and run formatting of the
+    paragraph its ``like`` wording names, so a new numbered section or list item
+    takes the next number. That is what a contract redline needs to add a clause
+    without custom python-docx code. Off, the tool's spec is byte-identical to
+    before and an ``insert`` key is ignored as any unknown key is.
+
+    The spec change is one ``toolConfig`` rewrite per deployment when it turns
+    on, never per session: the added wording is constant. Only takes effect
+    while ``WORD_TRACKED_CHANGES_ENABLED`` builds the tool at all.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.wordRedlineParagraphs.enabled``. No SPA switch: the redline comes
+    back on the existing download card. Its kind is decided when it is
+    promoted; expect it to retire rather than stay a feature switch, because
+    it widens a tool the deployment already chose and adds no capability of
+    its own to opt out of.
+    """
+    return os.environ.get("WORD_REDLINE_PARAGRAPHS_ENABLED", "").strip().lower() == "true"
+
+
 def assistant_kb_full_context_enabled() -> bool:
     """Whether a small assistant knowledge base reaches the model whole
     (``apis/shared/assistants/kb_full_context.py``).

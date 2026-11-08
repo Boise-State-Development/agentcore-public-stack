@@ -24,6 +24,25 @@ as equal, and any run of whitespace as one, because a model rarely reproduces a
 contract's typography exactly. It matches whole words: ``pay`` never matches
 inside ``payable``.
 
+**Whole new paragraphs** (``Change.insert``, spec §3a). A change can instead add
+paragraphs before or after the one ``find`` names: a new numbered section, a
+list item, a clause. Each new paragraph copies the paragraph properties
+(``w:pPr``: style, ``w:numPr`` numbering, indentation, spacing) of the paragraph
+its ``like`` wording names, or of the anchor, so a paragraph like a numbered one
+takes the list's next number. Its runs copy that paragraph's run formatting: the
+body wording takes its dominant run's ``w:rPr``, and an optional ``lead`` (an
+inline heading such as ``Survival.``) its first worded run's, which is how a
+bold lead-in stays bold. The runs sit in ``w:ins`` and the paragraph mark is
+itself a revision (``w:pPr/w:rPr/w:ins``), so Reject All removes the paragraph
+whole rather than leaving an empty one. After the last paragraph of a table
+cell, of the document, or before a table there is no following paragraph mark
+to merge into, so the anchor's own mark becomes the inserted one and the last
+new paragraph keeps the anchor's formatting (which ``_locate`` enforces).
+
+Before anything is saved, every edited paragraph is checked: with this call's
+insertions dropped and its deletions restored, its wording must equal what it
+was. A failure is a bug, and nothing is written.
+
 **Only the edited paragraphs are re-serialized.** ``word/document.xml`` is parsed
 once to find text, but the output is the original bytes with each edited
 outermost ``w:p`` spliced back in. ElementTree cannot be trusted to write a whole
@@ -119,13 +138,34 @@ class RedlineError(Exception):
 
 
 @dataclass(frozen=True)
+class NewParagraph:
+    """A paragraph a change inserts.
+
+    ``like`` is wording from the paragraph whose formatting it copies (default:
+    the change's anchor). ``lead`` is an optional inline heading written before
+    ``text`` in the formatting of that paragraph's first worded run.
+    """
+
+    text: str
+    like: Optional[str] = None
+    lead: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class Change:
-    """One requested edit. ``replace=""`` deletes; ``replace=None`` leaves the wording."""
+    """One requested edit. ``replace=""`` deletes; ``replace=None`` leaves the wording.
+
+    With ``insert`` (``"after"`` or ``"before"``), ``find`` names the anchor
+    paragraph and ``paragraphs`` are added next to it as tracked insertions;
+    ``replace`` must then be ``None``.
+    """
 
     find: str
     replace: Optional[str] = None
     comment: Optional[str] = None
     occurrence: Optional[int] = None
+    insert: Optional[str] = None
+    paragraphs: Tuple[NewParagraph, ...] = ()
 
 
 @dataclass
@@ -348,42 +388,193 @@ def _trim(old: str, new: str) -> Tuple[int, int, str]:
     return start, end, insert
 
 
-def _locate(changes: Sequence[Change], paragraphs: Sequence[_Paragraph]) -> List[_Located]:
+@dataclass
+class _Insertion:
+    """A located ``insert`` change: its anchor and each new paragraph's format source."""
+
+    index: int
+    change: Change
+    anchor: _Paragraph
+    likes: List[_Paragraph]
+
+
+#: Siblings that end a run of paragraphs: an inserted paragraph mark has to be
+#: followed by a paragraph for Reject All to merge it away.
+_BLOCK_TAGS = frozenset(_W + name for name in ("p", "tbl", "sdt", "sectPr", "customXml", "altChunk"))
+
+
+def _match(
+    find: str, occurrence: Optional[int], paragraphs: Sequence[_Paragraph], label: str, problems: List[str]
+) -> Optional[Tuple[_Paragraph, "re.Match[str]"]]:
+    """The one paragraph and span ``find`` names, or ``None`` with the problem recorded."""
+    pattern = _pattern(find)
+    matches = [(p, m) for p in paragraphs for m in pattern.finditer(p.folded)]
+    quoted = f'"{_short(find)}"'
+    if not matches:
+        if "\n" in find.strip():
+            problems.append(f"{label}: {quoted} spans paragraphs. A change must stay inside one paragraph.")
+            return None
+        loose = re.compile(pattern.pattern, re.IGNORECASE)
+        near = next((m.group(0) for p in paragraphs for m in [loose.search(p.folded)] if m), None)
+        hint = f' It does appear with different capitalization: "{_short(near)}".' if near else (
+            " Copy the wording exactly as it appears in a single paragraph."
+        )
+        problems.append(f"{label}: {quoted} was not found.{hint}")
+        return None
+    if occurrence is None and len(matches) > 1:
+        problems.append(
+            f"{label}: {quoted} appears {len(matches)} times. Pass `occurrence` "
+            f"(1–{len(matches)}) or a longer `find` that appears once."
+        )
+        return None
+    number = occurrence or 1
+    if not 1 <= number <= len(matches):
+        problems.append(f"{label}: `occurrence` is {number}, but {quoted} appears {len(matches)} time(s).")
+        return None
+    return matches[number - 1]
+
+
+def _ends_paragraph_run(anchor: ElementTree.Element, parents: Dict[ElementTree.Element, ElementTree.Element]) -> Optional[str]:
+    """What follows ``anchor`` when it is not another paragraph, else ``None``."""
+    parent = parents[anchor]
+    siblings = list(parent)
+    following = next((s for s in siblings[siblings.index(anchor) + 1 :] if s.tag in _BLOCK_TAGS), None)
+    if following is not None and following.tag == _W + "p":
+        return None
+    if following is not None and following.tag == _W + "tbl":
+        return "comes right before a table"
+    if parent.tag == _W + "tc":
+        return "is the last paragraph of its table cell"
+    if parent.tag == _W + "body":
+        return "is the last paragraph of the document"
+    return "is the last paragraph of its container"
+
+
+def _mark_is_revised(paragraph: ElementTree.Element) -> bool:
+    ppr = paragraph.find(_W + "pPr")
+    rpr = ppr.find(_W + "rPr") if ppr is not None else None
+    marks = (_W + "ins", _W + "del", _W + "moveFrom", _W + "moveTo")
+    return ppr is not None and (
+        ppr.find(_W + "sectPr") is not None
+        or ppr.find(_W + "pPrChange") is not None
+        or (rpr is not None and any(c.tag in marks for c in rpr))
+    )
+
+
+def _locate_insertion(
+    index: int,
+    change: Change,
+    paragraphs: Sequence[_Paragraph],
+    problems: List[str],
+) -> Optional[_Insertion]:
+    label = f"Change {index + 1}"
+    before = len(problems)
+    if change.insert not in ("after", "before"):
+        problems.append(f'{label}: `insert` must be "after" or "before".')
+    if change.replace is not None:
+        problems.append(f"{label}: give `replace` or `insert`, not both.")
+    if not change.paragraphs:
+        problems.append(f"{label}: `insert` needs `paragraphs`, the wording of each new paragraph.")
+    for number, new in enumerate(change.paragraphs, 1):
+        if not isinstance(new.text, str) or not new.text.strip():
+            problems.append(f"{label}: new paragraph {number} has no `text`.")
+        if new.lead is not None and not new.lead.strip():
+            problems.append(f"{label}: new paragraph {number} has an empty `lead`.")
+    if len(problems) > before:
+        return None
+
+    found = _match(change.find, change.occurrence, paragraphs, label, problems)
+    likes: List[_Paragraph] = []
+    for number, new in enumerate(change.paragraphs, 1):
+        if new.like is None:
+            if found is not None:
+                likes.append(found[0])
+            continue
+        pattern = _pattern(new.like) if isinstance(new.like, str) else None
+        hosts = [p for p in paragraphs if pattern is not None and pattern.search(p.folded)]
+        quoted = f'"{_short(new.like)}"'
+        if not hosts:
+            problems.append(
+                f"{label}: `like` {quoted} for new paragraph {number} was not found. Copy wording "
+                "from the paragraph whose formatting it should have."
+            )
+        elif len(hosts) > 1:
+            problems.append(
+                f"{label}: `like` {quoted} for new paragraph {number} appears in {len(hosts)} paragraphs. "
+                "Use wording from only one."
+            )
+        else:
+            likes.append(hosts[0])
+    if found is None or len(problems) > before:
+        return None
+    return _Insertion(index, change, found[0], likes)
+
+
+def _check_insertion_groups(
+    insertions: Sequence[_Insertion],
+    parents: Dict[ElementTree.Element, ElementTree.Element],
+    problems: List[str],
+) -> None:
+    """Where an "after" group has no following paragraph to merge into, its last
+    new paragraph inherits the anchor's mark, so it must keep the anchor's format."""
+    for (_, position), group in _insertion_groups(insertions).items():
+        if position != "after":
+            continue
+        anchor = group[0].anchor.element
+        reason = _ends_paragraph_run(anchor, parents)
+        if reason is None:
+            continue
+        last = group[-1]
+        quoted = f'"{_short(last.anchor.text)}"'
+        if _mark_is_revised(anchor):
+            problems.append(
+                f"Change {last.index + 1}: {quoted} {reason} and its paragraph mark is already a "
+                "tracked change or a section break, so nothing can be inserted after it. Insert before "
+                "a nearby paragraph instead."
+            )
+        elif last.likes[-1].element is not anchor:
+            problems.append(
+                f"Change {last.index + 1}: {quoted} {reason}, so the last new paragraph after it must "
+                "keep that paragraph's own formatting. Drop `like` on the last new paragraph."
+            )
+
+
+def _insertion_groups(insertions: Sequence[_Insertion]) -> Dict[Tuple[int, str], List[_Insertion]]:
+    """Insertions keyed by (anchor, position), in request order within each."""
+    groups: Dict[Tuple[int, str], List[_Insertion]] = {}
+    for item in sorted(insertions, key=lambda x: x.index):
+        groups.setdefault((id(item.anchor.element), item.change.insert or ""), []).append(item)
+    return groups
+
+
+def _locate(
+    changes: Sequence[Change],
+    paragraphs: Sequence[_Paragraph],
+    parents: Optional[Dict[ElementTree.Element, ElementTree.Element]] = None,
+) -> Tuple[List[_Located], List[_Insertion]]:
     problems: List[str] = []
     located: List[_Located] = []
+    insertions: List[_Insertion] = []
     for index, change in enumerate(changes):
         label = f"Change {index + 1}"
         if not isinstance(change.find, str) or not change.find.strip():
             problems.append(f"{label}: `find` is empty.")
             continue
+        if change.insert is not None or change.paragraphs:
+            if parents is None:  # pragma: no cover - redline() always passes them
+                raise ValueError("insertions need the paragraph parent map")
+            item = _locate_insertion(index, change, paragraphs, problems)
+            if item is not None:
+                insertions.append(item)
+            continue
         if change.replace is None and not (change.comment or "").strip():
             problems.append(f"{label}: give `replace` (new wording, \"\" to delete) or `comment`.")
             continue
-        pattern = _pattern(change.find)
-        matches = [(p, m) for p in paragraphs for m in pattern.finditer(p.folded)]
+        found = _match(change.find, change.occurrence, paragraphs, label, problems)
+        if found is None:
+            continue
+        paragraph, match = found
         quoted = f'"{_short(change.find)}"'
-        if not matches:
-            if "\n" in change.find.strip():
-                problems.append(f"{label}: {quoted} spans paragraphs. A change must stay inside one paragraph.")
-                continue
-            loose = re.compile(pattern.pattern, re.IGNORECASE)
-            near = next((m.group(0) for p in paragraphs for m in [loose.search(p.folded)] if m), None)
-            hint = f' It does appear with different capitalization: "{_short(near)}".' if near else (
-                " Copy the wording exactly as it appears in a single paragraph."
-            )
-            problems.append(f"{label}: {quoted} was not found.{hint}")
-            continue
-        if change.occurrence is None and len(matches) > 1:
-            problems.append(
-                f"{label}: {quoted} appears {len(matches)} times. Pass `occurrence` "
-                f"(1–{len(matches)}) or a longer `find` that appears once."
-            )
-            continue
-        number = change.occurrence or 1
-        if not 1 <= number <= len(matches):
-            problems.append(f"{label}: `occurrence` is {number}, but {quoted} appears {len(matches)} time(s).")
-            continue
-        paragraph, match = matches[number - 1]
         start, end = match.span()
         if change.replace is None:
             edit_start, edit_end, insert = start, end, ""
@@ -426,9 +617,11 @@ def _locate(changes: Sequence[Change], paragraphs: Sequence[_Paragraph]) -> List
             )
             if touches:
                 problems.append(f"Change {after.index + 1} overlaps change {before.index + 1}.")
+    if insertions and parents is not None:
+        _check_insertion_groups(insertions, parents, problems)
     if problems:
         raise RedlineError(problems)
-    return located
+    return located, insertions
 
 
 def _absorb_space(text: str, start: int, end: int) -> Tuple[int, int]:
@@ -612,6 +805,156 @@ def _apply(item: _Located, ids: _Ids, comments: List[Tuple[str, str]]) -> str:
     return f"{item.index + 1}. " + ", ".join(parts)
 
 
+# ── Inserting whole paragraphs ───────────────────────────────────────────────
+
+_MARK_REVISIONS = frozenset(_W + name for name in ("ins", "del", "moveFrom", "moveTo", "rPrChange"))
+
+
+def _template_ppr(paragraph: ElementTree.Element) -> ElementTree.Element:
+    """A copy of ``paragraph``'s properties for a new paragraph: style, numbering,
+    indentation and spacing kept; a section break and any revision dropped."""
+    source = paragraph.find(_W + "pPr")
+    ppr = copy.deepcopy(source) if source is not None else ElementTree.Element(_W + "pPr")
+    for child in [c for c in ppr if c.tag in (_W + "sectPr", _W + "pPrChange")]:
+        ppr.remove(child)
+    rpr = ppr.find(_W + "rPr")
+    if rpr is not None:
+        for child in [c for c in rpr if c.tag in _MARK_REVISIONS]:
+            rpr.remove(child)
+    numbering = ppr.find(_W + "numPr")
+    if numbering is not None:
+        for child in [c for c in numbering if c.tag == _W + "ins"]:
+            numbering.remove(child)
+    return ppr
+
+
+def _mark_inserted(ppr: ElementTree.Element, mark: ElementTree.Element) -> None:
+    """Record the paragraph mark ``ppr`` belongs to as a tracked insertion."""
+    rpr = ppr.find(_W + "rPr")
+    if rpr is None:
+        rpr = ElementTree.Element(_W + "rPr")
+        # rPr precedes a section break and the property-change record.
+        later = [i for i, c in enumerate(ppr) if c.tag in (_W + "sectPr", _W + "pPrChange")]
+        ppr.insert(later[0] if later else len(ppr), rpr)
+    rpr.insert(0, mark)
+
+
+def _run_templates(paragraph: ElementTree.Element) -> Tuple[Optional[ElementTree.Element], Optional[ElementTree.Element]]:
+    """``(lead, body)`` runs to copy formatting from: the first run with a letter
+    in it (a bold "Invoices." lead-in) and the run holding the most wording."""
+    runs = [s for s in _segments(paragraph) if s.is_run and s.text.strip()]
+    if not runs:
+        return None, None
+    lead = next((s for s in runs if any(ch.isalpha() for ch in s.text)), runs[0])
+    body = max(runs, key=lambda s: len(s.text))
+    return lead.element, body.element
+
+
+def _new_paragraph(
+    new: NewParagraph, like: ElementTree.Element, ppr: ElementTree.Element, ids: _Ids
+) -> ElementTree.Element:
+    paragraph = ElementTree.Element(_W + "p")
+    if len(ppr):
+        paragraph.append(ppr)
+    lead_run, body_run = _run_templates(like)
+    ins = ids.revision("ins")
+    text = new.text
+    if new.lead:
+        ins.append(_new_run(new.lead, _template_rpr(lead_run)))
+        if not (new.lead[-1].isspace() or text[0].isspace()):
+            text = " " + text
+    ins.append(_new_run(text, _template_rpr(body_run)))
+    paragraph.append(ins)
+    return paragraph
+
+
+def _apply_insertions(
+    insertions: Sequence[_Insertion],
+    parents: Dict[ElementTree.Element, ElementTree.Element],
+    units: Sequence[ElementTree.Element],
+    extras: Dict[int, Tuple[List[ElementTree.Element], List[ElementTree.Element]]],
+    ids: _Ids,
+    comments: List[Tuple[str, str]],
+) -> Dict[int, str]:
+    """Add every inserted paragraph next to its anchor. Returns summary lines by index."""
+    summaries: Dict[int, str] = {}
+    for (_, position), group in _insertion_groups(insertions).items():
+        anchor = group[0].anchor.element
+        adopt_mark = position == "after" and _ends_paragraph_run(anchor, parents) is not None
+        # Taken before the anchor's own mark is touched.
+        anchor_ppr = _template_ppr(anchor)
+        built: List[ElementTree.Element] = []
+        for item in group:
+            made: List[ElementTree.Element] = []
+            for number, (new, like) in enumerate(zip(item.change.paragraphs, item.likes), 1):
+                last_of_group = item is group[-1] and number == len(item.change.paragraphs)
+                if adopt_mark and last_of_group:
+                    # No paragraph follows, so this one keeps the anchor's mark
+                    # and the anchor's mark becomes the inserted one.
+                    made.append(_new_paragraph(new, like.element, copy.deepcopy(anchor_ppr), ids))
+                    continue
+                ppr = _template_ppr(like.element)
+                _mark_inserted(ppr, ids.revision("ins"))
+                made.append(_new_paragraph(new, like.element, ppr, ids))
+            comment = (item.change.comment or "").strip()
+            if comment:
+                # On the anchor, never inside the new paragraphs: a comment in
+                # inserted text survives Reject All in LibreOffice and keeps an
+                # empty paragraph alive where the insertion was.
+                comment_id = ids.take()
+                start_at = 1 if anchor.find(_W + "pPr") is not None else 0
+                anchor.insert(start_at, ElementTree.Element(_W + "commentRangeStart", {_W + "id": comment_id}))
+                anchor.append(ElementTree.Element(_W + "commentRangeEnd", {_W + "id": comment_id}))
+                reference = ElementTree.SubElement(anchor, _W + "r")
+                ElementTree.SubElement(reference, _W + "commentReference", {_W + "id": comment_id})
+                comments.append((comment_id, comment))
+            count = len(made)
+            what = "a paragraph" if count == 1 else f"{count} paragraphs"
+            line = f'{item.index + 1}. inserted {what} {position} "{_short(item.anchor.text)}"'
+            summaries[item.index] = line + (", with a comment on that paragraph" if comment else "")
+            built.extend(made)
+        if adopt_mark:
+            own = anchor.find(_W + "pPr")
+            if own is None:
+                own = ElementTree.Element(_W + "pPr")
+                anchor.insert(0, own)
+            _mark_inserted(own, ids.revision("ins"))
+
+        unit = group[0].anchor.unit
+        if units[unit] is anchor:
+            # The anchor is itself re-serialized from its source span, so the
+            # new paragraphs are written beside it rather than into the tree.
+            before, after = extras.setdefault(unit, ([], []))
+            (after if position == "after" else before).extend(built)
+        else:
+            parent = parents[anchor]
+            at = list(parent).index(anchor) + (1 if position == "after" else 0)
+            for offset, element in enumerate(built):
+                parent.insert(at + offset, element)
+    return summaries
+
+
+# ── Checking the result ──────────────────────────────────────────────────────
+
+
+def _rejected_wording(node: ElementTree.Element, first_id: int) -> str:
+    """``node``'s wording with this call's insertions dropped and deletions kept."""
+    parts: List[str] = []
+    for child in node:
+        if not isinstance(child.tag, str):
+            continue
+        if child.tag in (_W + "ins", _W + "moveTo"):
+            revision_id = child.get(_W + "id") or ""
+            if revision_id.lstrip("-").isdigit() and int(revision_id) >= first_id:
+                continue
+        if child.tag in (_W + "t", _W + "delText"):
+            parts.append(child.text or "")
+        elif child.tag in _ATOM_TEXT:
+            parts.append(_ATOM_TEXT[child.tag])
+        parts.append(_rejected_wording(child, first_id))
+    return "".join(parts)
+
+
 # ── Serializing a paragraph ──────────────────────────────────────────────────
 
 
@@ -715,11 +1058,26 @@ def _serialize_units(
     namespaces: _Namespaces,
     units: Sequence[ElementTree.Element],
     dirty: Sequence[int],
+    extras: Optional[Dict[int, Tuple[List[ElementTree.Element], List[ElementTree.Element]]]] = None,
 ) -> str:
-    """``xml`` with each dirty outermost paragraph replaced by its edited form."""
+    """``xml`` with each dirty outermost paragraph replaced by its edited form,
+    and any new paragraph from ``extras`` written before or after it."""
     spans = _unit_spans(xml, namespaces.w)
     if len(spans) != len(units):
         raise RedlineError(["The document's paragraph markup could not be matched up, so it was left unchanged."])
+
+    def declared(element: ElementTree.Element, local: Sequence[Tuple[str, str]]) -> str:
+        # A declaration that sat inside the paragraph is lost on parsing; put
+        # it back on the paragraph, with any prefix the root does not declare.
+        probe = _Writer(namespaces.prefixes)
+        probe.write(element, [], tail=False)
+        declare = {p for p, _ in local} | (probe.used - set(namespaces.root))
+        return "".join(f' xmlns:{p}="{_escape_attr(namespaces.bound[p])}"' for p in sorted(declare))
+
+    def written(element: ElementTree.Element, local: Sequence[Tuple[str, str]] = ()) -> str:
+        out: List[str] = []
+        _Writer(namespaces.prefixes).write(element, out, declared(element, local), tail=False)
+        return "".join(out)
 
     pieces: List[Tuple[int, int, str]] = []
     for unit in sorted(set(dirty)):
@@ -728,15 +1086,11 @@ def _serialize_units(
         local = _declarations(source)
         if _DEFAULT_XMLNS.search(source) or any(namespaces.bound.get(p) != u for p, u in local):
             raise RedlineError(["A paragraph to change uses namespace markup this tool cannot write back."])
-        # A declaration that sat inside the paragraph is lost on parsing; put
-        # it back on the paragraph, with any prefix the root does not declare.
-        probe = _Writer(namespaces.prefixes)
-        probe.write(units[unit], [], tail=False)
-        declare = {p for p, _ in local} | (probe.used - set(namespaces.root))
-        extra = "".join(f' xmlns:{p}="{_escape_attr(namespaces.bound[p])}"' for p in sorted(declare))
-        out: List[str] = []
-        _Writer(namespaces.prefixes).write(units[unit], out, extra, tail=False)
-        pieces.append((start, end, "".join(out)))
+        before, after = (extras or {}).get(unit, ([], []))
+        text = "".join(written(p) for p in before) + written(units[unit], local) + "".join(
+            written(p) for p in after
+        )
+        pieces.append((start, end, text))
     for start, end, text in reversed(pieces):
         xml = xml[:start] + text + xml[end:]
     return xml
@@ -818,17 +1172,34 @@ def redline(
 
         namespaces = _Namespaces.of(xml)
         paragraphs, units = _paragraphs(body)
-        located = _locate(changes, paragraphs)
+        inserting = any(c.insert is not None or c.paragraphs for c in changes)
+        parents = {child: node for node in body.iter() for child in node} if inserting else None
+        located, insertions = _locate(changes, paragraphs, parents)
 
         stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         ids = _Ids(_max_id(package) + 1, author, stamp)
+        first_id = ids.next_id
+        dirty = sorted({item.paragraph.unit for item in located} | {item.anchor.unit for item in insertions})
+        wording = {unit: _rejected_wording(units[unit], first_id) for unit in dirty}
         comments: List[Tuple[str, str]] = []
         summaries: Dict[int, str] = {}
         # Right to left within a paragraph, so earlier offsets stay valid.
         for item in sorted(located, key=lambda x: (x.paragraph.unit, -x.edit_start, -x.start)):
             summaries[item.index] = _apply(item, ids, comments)
+        extras: Dict[int, Tuple[List[ElementTree.Element], List[ElementTree.Element]]] = {}
+        if insertions and parents is not None:
+            summaries.update(_apply_insertions(insertions, parents, units, extras, ids, comments))
 
-        new_xml = _serialize_units(xml, namespaces, units, [item.paragraph.unit for item in located])
+        changed = [
+            unit
+            for unit in dirty
+            if _rejected_wording(units[unit], first_id) != wording[unit]
+            or any(_rejected_wording(p, first_id) for side in extras.get(unit, ([], [])) for p in side)
+        ]
+        if changed:  # a bug, never the user's input
+            raise RedlineError(["The redline would have changed wording it did not mark, so nothing was saved."])
+
+        new_xml = _serialize_units(xml, namespaces, units, dirty, extras)
         try:
             ElementTree.fromstring(new_xml)
         except ElementTree.ParseError as exc:  # pragma: no cover - a bug, never the user's input
@@ -883,4 +1254,4 @@ def redline(
         return RedlineResult(buffer.getvalue(), [summaries[i] for i in sorted(summaries)])
 
 
-__all__ = ["Change", "RedlineError", "RedlineResult", "redline"]
+__all__ = ["Change", "NewParagraph", "RedlineError", "RedlineResult", "redline"]
