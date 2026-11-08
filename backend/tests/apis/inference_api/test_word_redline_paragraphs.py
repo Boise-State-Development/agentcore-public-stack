@@ -1,9 +1,7 @@
-"""``redline_word_document`` inserting whole paragraphs, behind ``WORD_REDLINE_PARAGRAPHS_ENABLED``.
+"""``redline_word_document`` inserting whole paragraphs (docs/specs/word-tracked-changes.md §3a).
 
-Off, the tool's spec is byte-identical to before the feature and an ``insert``
-key is ignored as any unknown key is. On, the spec gains the ``insert`` /
-``paragraphs`` wording once per deployment (pinned below) and changes can add
-paragraphs (docs/specs/word-tracked-changes.md §3a).
+The spec documents ``insert`` / ``paragraphs`` and is pinned below: it sits in
+the cached ``toolConfig``, so any change to it is a deliberate prefix rewrite.
 """
 
 from __future__ import annotations
@@ -16,16 +14,14 @@ from types import SimpleNamespace
 import pytest
 
 from apis.inference_api.chat.routes import _build_word_document_tools
-from apis.shared.feature_flags import word_redline_paragraphs_enabled
 from apis.shared.files.document_read import docx_paragraphs
 
 FIXTURE = (Path(__file__).parents[2] / "agents" / "builtin_tools" / "fixtures" / "contract-numbered.docx").read_bytes()
 
-#: The spec before this feature existed. Off, it must not move by a byte.
-OFF_DIGEST = "d143bc01b17e7e914991f25e7f835b64eb5f4084313002a61544f96de7a50f27"
-#: On: one toolConfig rewrite per deployment when the flag turns on (about 250
-#: more cl100k tokens: 515 → 767). A change here is a deliberate spec change.
-ON_DIGEST = "8907f51944826aaef446fffd25c90bd00c5dbe08de9c004d953e21077543c864"
+#: The spec with ``insert`` / ``paragraphs`` (285 more tokens than the v1 spec
+#: by Bedrock CountTokens: 568 → 853). A change here is a deliberate toolConfig rewrite;
+#: update the pin with it, and re-run ``scripts/measure_tool_spec_tokens.py``.
+SPEC_DIGEST = "8907f51944826aaef446fffd25c90bd00c5dbe08de9c004d953e21077543c864"
 
 
 def _digest(tool) -> str:
@@ -43,41 +39,24 @@ def _said(result) -> str:
     return json.loads(result)["summary"]
 
 
-def _redline_tool(monkeypatch, flag: str):
+def _redline_tool(monkeypatch):
     monkeypatch.setenv("WORD_TRACKED_CHANGES_ENABLED", "true")
-    monkeypatch.setenv("WORD_REDLINE_PARAGRAPHS_ENABLED", flag)
     tools = _build_word_document_tools(["create_word_document"], "s1", "u1", "Pat Reviewer")
     return next(t for t in tools if t.tool_name == "redline_word_document")
 
 
-@pytest.mark.parametrize(
-    "value,expected", [(None, False), ("", False), ("1", False), ("yes", False), ("true", True), (" TRUE ", True)]
-)
-def test_the_flag_is_off_unless_true(monkeypatch, value, expected):
-    if value is None:
-        monkeypatch.delenv("WORD_REDLINE_PARAGRAPHS_ENABLED", raising=False)
-    else:
-        monkeypatch.setenv("WORD_REDLINE_PARAGRAPHS_ENABLED", value)
-    assert word_redline_paragraphs_enabled() is expected
-
-
 class TestSpec:
-    def test_off_the_spec_is_unchanged(self, monkeypatch):
-        tool = _redline_tool(monkeypatch, "")
-        assert _digest(tool) == OFF_DIGEST
-        assert "paragraphs" not in _changes_doc(tool)
-
-    def test_on_the_spec_is_pinned(self, monkeypatch):
-        tool = _redline_tool(monkeypatch, "true")
-        assert _digest(tool) == ON_DIGEST
+    def test_the_spec_is_pinned_and_documents_insertions(self, monkeypatch):
+        tool = _redline_tool(monkeypatch)
+        assert _digest(tool) == SPEC_DIGEST
         assert '- insert: "after" or "before"' in _changes_doc(tool)
 
-    def test_on_the_spec_does_not_depend_on_identity(self, monkeypatch):
+    def test_the_spec_does_not_depend_on_identity(self):
         from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
 
-        a = make_redline_word_document_tool("s1", "u1", "Pat Reviewer", insert_paragraphs=True)
-        b = make_redline_word_document_tool("s2", "u2", "Lee Counsel", insert_paragraphs=True)
-        assert _digest(a) == _digest(b) == ON_DIGEST
+        a = make_redline_word_document_tool("s1", "u1", "Pat Reviewer")
+        b = make_redline_word_document_tool("s2", "u2", "Lee Counsel")
+        assert _digest(a) == _digest(b) == SPEC_DIGEST
 
 
 @pytest.fixture()
@@ -118,8 +97,8 @@ NEW_SECTION = {
 
 class TestCall:
     @pytest.mark.asyncio
-    async def test_on_a_change_adds_paragraphs(self, monkeypatch, store):
-        tool = _redline_tool(monkeypatch, "true")
+    async def test_a_change_adds_paragraphs(self, monkeypatch, store):
+        tool = _redline_tool(monkeypatch)
         said = _said(await _call(tool, document_name="services-agreement", changes=[NEW_SECTION]))
         assert "Tracked changes by Pat Reviewer: 1. inserted 2 paragraphs after" in said
         assert "with a comment on that paragraph" in said
@@ -137,14 +116,6 @@ class TestCall:
         ]
 
     @pytest.mark.asyncio
-    async def test_off_an_insert_key_is_ignored_as_before(self, monkeypatch, store):
-        tool = _redline_tool(monkeypatch, "false")
-        change = {k: v for k, v in NEW_SECTION.items() if k != "comment"}
-        result = await _call(tool, document_name="services-agreement", changes=[change])
-        assert "give `replace`" in _said(result)
-        assert store == {}
-
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "change,problem",
         [
@@ -158,14 +129,14 @@ class TestCall:
         ],
     )
     async def test_malformed_insertions_change_nothing(self, monkeypatch, store, change, problem):
-        tool = _redline_tool(monkeypatch, "true")
+        tool = _redline_tool(monkeypatch)
         result = await _call(tool, document_name="services-agreement", changes=[change])
         assert problem in _said(result)
         assert store == {}
 
     @pytest.mark.asyncio
     async def test_engine_problems_come_back_one_per_line(self, monkeypatch, store):
-        tool = _redline_tool(monkeypatch, "true")
+        tool = _redline_tool(monkeypatch)
         change = {"find": "Kickoff", "insert": "after", "paragraphs": [{"text": "x", "like": "Limitation of Liability"}]}
         result = _said(await _call(tool, document_name="services-agreement", changes=[change]))
         assert "Drop `like` on the last new paragraph" in result

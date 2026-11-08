@@ -839,28 +839,6 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
-  describe('Word redline paragraphs feature flag', () => {
-    afterEach(() => {
-      delete process.env.CDK_WORD_REDLINE_PARAGRAPHS_ENABLED;
-    });
-
-    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
-      delete process.env.CDK_WORD_REDLINE_PARAGRAPHS_ENABLED;
-      expect(loadConfig(app).wordRedlineParagraphs.enabled).toBe(false);
-      process.env.CDK_WORD_REDLINE_PARAGRAPHS_ENABLED = '';
-      expect(loadConfig(app).wordRedlineParagraphs.enabled).toBe(false);
-    });
-
-    test('only "true" enables it', () => {
-      process.env.CDK_WORD_REDLINE_PARAGRAPHS_ENABLED = 'True';
-      expect(loadConfig(app).wordRedlineParagraphs.enabled).toBe(true);
-      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
-        process.env.CDK_WORD_REDLINE_PARAGRAPHS_ENABLED = value;
-        expect(loadConfig(app).wordRedlineParagraphs.enabled).toBe(false);
-      }
-    });
-  });
-
   describe('Web Search default maxResults feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED;

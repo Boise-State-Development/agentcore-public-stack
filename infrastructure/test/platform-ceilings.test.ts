@@ -273,8 +273,6 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },
     wordSkillScripts: { enabled: true },
-    // Word redline paragraphs: one Runtime variable, written only while on.
-    wordRedlineParagraphs: { enabled: true },
     // Documents as text: one Runtime variable, written only while on.
     converseDocumentsAsText: { enabled: true },
     // Project file readiness: one Runtime variable, written only while on.

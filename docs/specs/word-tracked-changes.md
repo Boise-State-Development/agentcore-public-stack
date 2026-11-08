@@ -1,7 +1,7 @@
 # Word tracked changes: reading redlines and writing them
 
-Status: in development, behind `WORD_TRACKED_CHANGES_ENABLED` (on by default); whole-paragraph
-insertions (§3a) behind `WORD_REDLINE_PARAGRAPHS_ENABLED` (off by default).
+Status: shipped, behind `WORD_TRACKED_CHANGES_ENABLED` (on by default); whole-paragraph insertions
+(§3a) ship with the tool, with no flag of their own (§4a).
 
 ## 1. Problem
 
@@ -103,8 +103,6 @@ session, then cache reads.
 
 ## 3a. Inserting whole paragraphs
 
-Behind `WORD_REDLINE_PARAGRAPHS_ENABLED` (in development, off by default; §4a).
-
 **Why.** v1 could only change wording inside a paragraph that already exists. A
 contract redline also adds clauses: a missing Survival section, a new item in a
 lettered list. Without a way to add a paragraph, a reviewer agent had two bad
@@ -191,10 +189,11 @@ same in the margin.
   wording. A failure raises and nothing is written. This is the edit-in-place
   check a hand-written engine would run, done on every call.
 
-**Cost.** The spec gains about 250 cl100k tokens (515 → 767) in `toolConfig`.
-Turning the flag on in an environment rewrites the cached prefix once, for users
-who have the Word tools, and never per session. A new clause costs the output
-tokens of its own wording, against about 20K for retyping an engine.
+**Cost.** The spec gains 285 tokens in `toolConfig` (568 → 853 by Bedrock
+CountTokens on Haiku 4.5, `evals/tool_spec_tokens.json`; 515 → 767 in cl100k).
+The deploy that ships it rewrites the cached prefix once, for users who have the
+Word tools, and never per session. A new clause costs the output tokens of its
+own wording, against about 20K for retyping an engine.
 
 **Capability against a hand-written contract redline engine.** The reference is
 a team's python-docx engine that a contract-review Agent was retyping each run:
@@ -219,25 +218,25 @@ a team's python-docx engine that a contract-review Agent was retyping each run:
 ## 4. Flag
 
 `WORD_TRACKED_CHANGES_ENABLED` / `CDK_WORD_TRACKED_CHANGES_ENABLED` /
-`wordTrackedChanges.enabled`. In development, so only `"true"` enables it. It is
-set on the AgentCore Runtime and app-api only while on, so an environment that
-leaves it off spends nothing from the Runtime's environment budget. There is no
-SPA flag: the redline comes back on the existing download card.
+`wordTrackedChanges.enabled`. Default on, with a kill switch: only `"false"`
+disables it. CDK sets it on app-api always and on the AgentCore Runtime only
+while off, so the default spends nothing from the Runtime's environment budget.
+Both services must agree, because the upload digest built on app-api has to
+number paragraphs the way `document_read` does on the Runtime. There is no SPA
+flag: the redline comes back on the existing download card.
 
-When it ships it becomes a **feature switch**, not a rollout switch: it changes
-what users' documents read like and adds a tool.
+It is a **feature switch**, not a rollout switch: it changes what users'
+documents read like and adds a tool.
 
-### 4a. `WORD_REDLINE_PARAGRAPHS_ENABLED`
+### 4a. Why §3a has no flag
 
-`WORD_REDLINE_PARAGRAPHS_ENABLED` / `CDK_WORD_REDLINE_PARAGRAPHS_ENABLED` /
-`wordRedlineParagraphs.enabled`. In development, so only `"true"` enables it.
-It is set on the AgentCore Runtime only, and only while on. It takes effect only
-where `WORD_TRACKED_CHANGES_ENABLED` builds the tool at all. Off, the tool's spec
-is byte-identical to v1 (digest-pinned in
-`tests/apis/inference_api/test_word_redline_paragraphs.py`), and an `insert` key
-is ignored like any unknown key. No SPA flag. The kind is decided at promotion.
-Expect it to retire: it widens a tool the deployment already chose, and adds no
-capability of its own to opt out of.
+It was built behind an in-development flag while the new markup (paragraph-mark
+revisions, and the anchor's own mark becoming the inserted one) was unproven in
+Word. Once Word for Mac had opened it cleanly (§6), the flag protected nothing:
+the change is additive, old calls behave exactly as before, and the new markup
+appears only when a change gives `insert`. A flag would only have postponed the
+one `toolConfig` rewrite and doubled the tool's spec, wiring and tests. The kill
+switch is `WORD_TRACKED_CHANGES_ENABLED`, which removes the tool.
 
 ## 5. Tests
 
@@ -256,6 +255,9 @@ capability of its own to opt out of.
   cell's end and at the document's end; section breaks and revision records not
   copied; a text box; text edits and insertions together; request order at one
   anchor; unique ids; the problem lines; and the self-check refusing a leaked run.
+- `tests/apis/inference_api/test_word_redline_paragraphs.py`: the tool's spec
+  (digest-pinned), an end-to-end call read back through `docx_paragraphs`, and
+  malformed `insert` / `paragraphs` arguments changing nothing.
 - Read surfaces: `docx_paragraphs` with the flag on and off, R3 swapping only a
   redlined `.docx`, and R2 annotating before the sandbox.
 - Flag and tool injection: the tool is built only with the flag on and the Word
@@ -282,9 +284,16 @@ comments. LibreOffice 26.2, driven headless through UNO, loaded the file with
 8 tracked-change regions. Reject All gave back the original paragraph text and
 list labels exactly. Accept All gave the new list item `(c)` with the old `(c)`
 renumbered `(d)`, and the new headings as `4.` and `6.` with the later sections
-renumbered. **Still to do: open it in Microsoft Word for Mac** and confirm there
-is no repair prompt, that Reject All leaves no empty paragraph, and that the
-numbering continues.
+renumbered.
+
+The same file in **Microsoft Word for Mac**, 2026-11-08: it opened with no repair
+prompt and reported 8 revisions. The new list item showed as `(c)` with the next
+renumbered `(d)`, and the new headings as `4.` and `6.`. Comments sat on their
+anchor paragraphs. Read back through Word's own AppleScript (`reject all
+revisions`, then each paragraph's `list string` and text), Reject All was
+identical to the original document: the same paragraphs, list labels and table
+cells, with no empty paragraph where an insertion had been. Accept All gave the
+intended text and numbering.
 
 On dev, once the flag is on:
 

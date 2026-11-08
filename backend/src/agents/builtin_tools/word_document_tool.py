@@ -847,13 +847,8 @@ def _make_modify_with_skill_scripts(
     return attach_turn_skill_records(modify_word_document, skill_records)
 
 
-def _parse_changes(changes: Any, insert_paragraphs: bool = False) -> Tuple[List[Change], List[str]]:
-    """The tool's ``changes`` argument as :class:`Change` objects, or the problems.
-
-    ``insert`` / ``paragraphs`` are read only with ``insert_paragraphs``
-    (``WORD_REDLINE_PARAGRAPHS_ENABLED``); off, they are ignored like any
-    unknown key, as before.
-    """
+def _parse_changes(changes: Any) -> Tuple[List[Change], List[str]]:
+    """The tool's ``changes`` argument as :class:`Change` objects, or the problems."""
     if not isinstance(changes, list) or not changes:
         return [], ["`changes` must be a non-empty list of {find, replace?, comment?, occurrence?}."]
     parsed: List[Change] = []
@@ -878,7 +873,7 @@ def _parse_changes(changes: Any, insert_paragraphs: bool = False) -> Tuple[List[
         if occurrence is not None and (isinstance(occurrence, bool) or not isinstance(occurrence, int)):
             problems.append(f"{label}: `occurrence` must be a whole number.")
             continue
-        if not insert_paragraphs or (raw.get("insert") is None and raw.get("paragraphs") is None):
+        if raw.get("insert") is None and raw.get("paragraphs") is None:
             parsed.append(Change(find, replace, comment, occurrence))
             continue
         insert = raw.get("insert")
@@ -935,12 +930,11 @@ async def _redline_word_document(
     changes: Any,
     author: Optional[str],
     output_name: Optional[str],
-    insert_paragraphs: bool,
 ) -> Any:
     if not _storage_configured():
         return _error(_NO_STORAGE_MESSAGE)
 
-    parsed, problems = _parse_changes(changes, insert_paragraphs)
+    parsed, problems = _parse_changes(changes)
     if problems:
         return _error("❌ Nothing was changed:\n" + "\n".join(f"- {p}" for p in problems))
 
@@ -989,69 +983,15 @@ async def _redline_word_document(
     return _download_card(output_filename, upload_id, size_kb, "Redlined", details)
 
 
-def make_redline_word_document_tool(
-    session_id: str, user_id: str, user_name: Optional[str], insert_paragraphs: bool = False
-):
+def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Optional[str]):
     """Create a ``redline_word_document`` tool bound to the given identity.
 
     Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on
     (``docs/specs/word-tracked-changes.md`` §3). ``user_name`` is the default
     author of each revision: a redline goes back to the counterparty as the
-    user's. ``insert_paragraphs`` (``WORD_REDLINE_PARAGRAPHS_ENABLED``) builds
-    the variant whose changes can also add whole paragraphs (§3a); off, the
-    spec is exactly what it was before that existed.
+    user's. Changes can also insert whole paragraphs (§3a).
     """
-    if insert_paragraphs:
-        return _make_redline_with_paragraphs(session_id, user_id, user_name)
 
-    @tool
-    async def redline_word_document(
-        document_name: str,
-        changes: List[Dict[str, Any]],
-        author: Optional[str] = None,
-        output_name: Optional[str] = None,
-    ) -> Any:
-        """Propose edits to a Word (.docx) document as tracked changes and comments.
-
-        Use this instead of modify_word_document whenever the user wants a
-        redline, markup, suggested edits or comments: on a contract, policy or
-        anything someone else will review. Each change shows in Word's
-        Reviewing pane and can be accepted or rejected. The original is kept;
-        the redline is saved as a new file and returned as a download card.
-
-        All or nothing: if any change cannot be placed, nothing is saved and
-        the error names each problem, so fix those changes and call again.
-
-        Args:
-            document_name: The document to mark up (with or without .docx),
-                e.g. "services-agreement". Use list_word_documents if unsure.
-            changes: The edits, in any order. Each is an object:
-                - find: wording copied exactly from ONE paragraph (quotes,
-                  dashes and spacing may differ). Include enough words to be
-                  unique, or pass occurrence.
-                - replace: the new wording for `find`; "" deletes it. Give the
-                  whole new phrase: only the words that differ are marked, so
-                  {"find": "within thirty (30) days", "replace": "within
-                  ninety (90) days"} marks just "thirty (30)" → "ninety (90)".
-                  To insert, repeat the neighbouring words in both.
-                - comment: optional comment on the change, or on `find` alone
-                  when there is no `replace`.
-                - occurrence: 1-based, only when `find` appears more than once.
-            author: Name shown on each change. Defaults to the user's name.
-            output_name: File name for the redline, without extension.
-                Defaults to "<document_name>-redline".
-
-        Returns:
-            A download card for the redline and one line per change applied.
-        """
-        return await _redline_word_document(
-            session_id, user_id, user_name, document_name, changes, author, output_name, False
-        )
-
-    return redline_word_document
-
-
-def _make_redline_with_paragraphs(session_id: str, user_id: str, user_name: Optional[str]):
     @tool
     async def redline_word_document(
         document_name: str,
@@ -1108,7 +1048,7 @@ def _make_redline_with_paragraphs(session_id: str, user_id: str, user_name: Opti
             A download card for the redline and one line per change applied.
         """
         return await _redline_word_document(
-            session_id, user_id, user_name, document_name, changes, author, output_name, True
+            session_id, user_id, user_name, document_name, changes, author, output_name
         )
 
     return redline_word_document

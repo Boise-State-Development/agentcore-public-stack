@@ -266,9 +266,6 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     wordSkillScripts: {
       enabled: false,
     },
-    wordRedlineParagraphs: {
-      enabled: false,
-    },
     converseDocumentsAsText: {
       enabled: false,
     },

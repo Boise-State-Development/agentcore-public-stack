@@ -8,7 +8,7 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ### 🚀 Added
 
-- **`redline_word_document` inserts whole paragraphs** (in development, default off: `WORD_REDLINE_PARAGRAPHS_ENABLED` / `CDK_WORD_REDLINE_PARAGRAPHS_ENABLED`, Runtime only). A change can give `insert` ("after" / "before") and `paragraphs` instead of `replace`; each new paragraph is a tracked insertion, paragraph mark included, copying the style, numbering and run formatting of the paragraph its `like` names, so a new numbered section or list item takes the next number and Reject All leaves no empty paragraph. Every call now also checks that its edited paragraphs read as before once its own revisions are rejected. Off, the tool spec is byte-identical
+- **`redline_word_document` inserts whole paragraphs** (on wherever `WORD_TRACKED_CHANGES_ENABLED` builds the tool; no new flag). A change can give `insert` ("after" / "before") and `paragraphs` instead of `replace`; each new paragraph is a tracked insertion, paragraph mark included, copying the style, numbering and run formatting of the paragraph its `like` names, so a new numbered section or list item takes the next number and Reject All leaves no empty paragraph. Every call now also checks that its edited paragraphs read as before once its own revisions are rejected. The tool spec grows by 285 tokens (568 → 853, Bedrock CountTokens), so the first turn after the deploy rewrites the cached `toolConfig` once for users with the Word tools. Verified in Word for Mac and LibreOffice
 
 ## [1.34.0] - 2026-11-07
 
