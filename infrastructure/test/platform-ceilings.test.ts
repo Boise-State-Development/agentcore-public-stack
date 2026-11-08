@@ -247,7 +247,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     skills: { enabled: true },
     skillAuthoring: { enabled: true },
     wordTrackedChanges: { enabled: true },
-    assistantKbFullContext: { enabled: true },
+    assistantKbFullContext: { enabled: true, maxTokens: 80_000 },
+    agentKnowledgeFiles: { enabled: true },
     // Large documents gate the next two: synth refuses either without it.
     largeDocumentAttachments: { enabled: true },
     attachmentKb: { enabled: true },
@@ -271,6 +272,9 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },
+    wordSkillScripts: { enabled: true },
+    // Documents as text: one Runtime variable, written only while on.
+    converseDocumentsAsText: { enabled: true },
     // Project file readiness: one Runtime variable, written only while on.
     projectFileReadiness: { enabled: true },
     // Meeting tasks add no resources — one Runtime variable, written only while

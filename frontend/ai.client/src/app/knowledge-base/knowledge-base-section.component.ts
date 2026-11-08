@@ -33,6 +33,8 @@ import {
   DocumentReplaceService,
   DocumentReplaceTransport,
   REPLACE_POLL_LIMIT_MS,
+  fileTooLargeMessage,
+  formatFileLimit,
   fileExtension,
   orderReplacementsAdjacent,
 } from '../assistants/services/document-replace.service';
@@ -79,6 +81,8 @@ import {
   UpgradeStatus,
 } from './kb-upgrade.service';
 import { parseIso } from '../utils/date';
+import { FEATURES } from '../services/features';
+import { KnowledgeModeLineComponent } from './knowledge-mode-line.component';
 
 /**
  * The reusable "Knowledge base" authoring section — device upload, web-crawl
@@ -101,7 +105,7 @@ import { parseIso } from '../utils/date';
   // Block, so a parent's space-y gap (a margin on this element) takes effect.
   host: { class: 'block' },
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SyncPolicyControlComponent, SpinnerComponent],
+  imports: [NgIcon, SyncPolicyControlComponent, SpinnerComponent, KnowledgeModeLineComponent],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -131,6 +135,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   private readonly toast = inject(ToastService);
   private readonly kbUpgrade = inject(KbUpgradeService);
   protected readonly replace = inject(DocumentReplaceService);
+  protected readonly features = inject(FEATURES);
 
   // ── Inputs ────────────────────────────────────────────────────────────
 
@@ -163,6 +168,29 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   private syncHydratedForId: string | null = null;
 
   readonly mode = computed<'create' | 'edit'>(() => (this.id() ? 'edit' : 'create'));
+
+  /**
+   * The knowledge-base mode line ("Sent to the model whole" / "Searched"), for
+   * editors of a saved Agent while `features.knowledgeBaseMode` is on. The
+   * endpoint is owner/editor only, so a viewer never asks.
+   */
+  readonly showKnowledgeMode = computed(
+    () =>
+      this.features.knowledgeBaseMode &&
+      this.mode() === 'edit' &&
+      this.permissionResolved() &&
+      this.userPermission() !== 'viewer',
+  );
+
+  /** The effective id (a draft minted mid-session included), for the mode line. */
+  protected readonly entityIdForMode = computed(() => this.id());
+
+  /** Changes when a document is added, removed or changes status, so the line re-reads. */
+  readonly knowledgeModeKey = computed(() =>
+    this.uploadedDocuments()
+      .map((d) => `${d.documentId}:${d.status}`)
+      .join('|'),
+  );
 
   readonly uploadedDocuments = signal<Document[]>([]);
   readonly isLoadingDocuments = signal<boolean>(false);
@@ -302,6 +330,27 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
 
   /** Managed KBs carry a cap; a legacy KB returns `cap: null` (uncapped). */
   readonly kbHasCap = computed(() => (this.kbUsage()?.cap ?? null) !== null);
+
+  /**
+   * The knowledge base's per-file limit, from the same documents-list read
+   * (`kbUsage.maxFileBytes`). `null` until read — a draft with no record yet —
+   * in which case the server's 413 says the number instead.
+   */
+  readonly maxFileBytes = computed(() => this.kbUsage()?.maxFileBytes ?? null);
+
+  /** "50 MB" for the dropzone copy, or `null` when the limit isn't known yet. */
+  readonly maxFileSizeLabel = computed(() => {
+    const limit = this.maxFileBytes();
+    return limit === null ? null : formatFileLimit(limit);
+  });
+
+  /** The dropzone's format line, with the size only once the API has said it. */
+  readonly dropzoneHint = computed(() => {
+    const label = this.maxFileSizeLabel();
+    const types = 'PDF, DOCX, TXT, MD, and other document types';
+    // A no-break space keeps "50 MB" on one line, as the old copy's &nbsp; did.
+    return label ? `${types} up to ${label.replace(' ', '\u00a0')}` : types;
+  });
 
   /** Show the bar only for an existing record whose usage we have resolved. */
   // The bar visualises stored bytes against a cap — both of which exist only for
@@ -803,14 +852,15 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       return;
     }
 
-    // Validate file size (10MB max)
-    const maxSizeBytes = 10 * 1024 * 1024; // 10MB
-    if (file.size > maxSizeBytes) {
+    // The knowledge base's per-file limit, from the API. Unknown (a draft with no
+    // record yet) leaves it to the server, whose 413 carries the same sentence.
+    const maxFileBytes = this.maxFileBytes();
+    if (maxFileBytes !== null && file.size > maxFileBytes) {
       this.currentUpload.set({
         file,
         progress: 0,
         status: 'error',
-        error: `File size exceeds 10MB limit. File size: ${this.formatBytes(file.size)}`,
+        error: fileTooLargeMessage(maxFileBytes, file.size),
       });
       input.value = '';
       return;
@@ -1307,7 +1357,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     if (!target || !file || !recordId) {
       return;
     }
-    await this.replace.replace(target, file, this.replaceTransport(recordId));
+    await this.replace.replace(target, file, this.replaceTransport(recordId), this.maxFileBytes());
   }
 
   private replaceTransport(recordId: string): DocumentReplaceTransport {

@@ -83,6 +83,31 @@ def word_tracked_changes_enabled() -> bool:
     return os.environ.get("WORD_TRACKED_CHANGES_ENABLED", "").strip().lower() != "false"
 
 
+def word_skill_scripts_enabled() -> bool:
+    """Whether the Word tools can run a script that ships inside a bound skill.
+
+    On, ``create_word_document`` and ``modify_word_document`` also take
+    ``skill_name`` / ``path`` / ``params``: the tool resolves the file through
+    the turn's own skill records (only a ``scripts/*.py`` resource of a skill
+    bound to the turn), writes it into the Code Interpreter sandbox next to the
+    document and calls its ``run(doc, params)`` there, so the model never
+    retypes a long program into ``python_code``. The script runs only in the
+    sandbox, never on the Runtime host (``agents/main_agent/skills/skill_scripts.py``).
+    Off, neither tool's spec changes and skill scripts stay inert everywhere.
+
+    The spec change is one ``toolConfig`` rewrite per deployment when it turns
+    on, never per session: the extra arguments are optional and constant.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.wordSkillScripts.enabled``. No SPA switch: the result comes back on
+    the existing download card. A **feature switch** once finished: running an
+    author's code on a user's document is a capability a deployment may not want.
+    """
+    return os.environ.get("WORD_SKILL_SCRIPTS_ENABLED", "").strip().lower() == "true"
+
+
 def assistant_kb_full_context_enabled() -> bool:
     """Whether a small assistant knowledge base reaches the model whole
     (``apis/shared/assistants/kb_full_context.py``).
@@ -100,6 +125,30 @@ def assistant_kb_full_context_enabled() -> bool:
     (``AssistantDocumentsRead``, shared with spreadsheet analysis). No SPA switch.
     """
     return os.environ.get("ASSISTANT_KB_FULL_CONTEXT_ENABLED", "").strip().lower() == "true"
+
+
+def agent_knowledge_files_enabled() -> bool:
+    """Whether an ordinary Agent's turn gets ``knowledge_files``, which lists its
+    Knowledge documents and reads one by name
+    (``agents/builtin_tools/project_files_tool.py``, the ``project_files`` tool
+    in its Knowledge voice).
+
+    On, a turn with ``rag_assistant_id`` set that is not a project harness's
+    builds the tool (constant spec, so one ``toolConfig`` change per deployment
+    when it is turned on), and the retrieved-excerpts preamble gains one constant
+    sentence naming it (``KNOWLEDGE_FILES_EXCERPTS_NOTE``). Off, neither the
+    ``toolConfig`` nor the persisted user message changes by a byte. A project
+    harness keeps ``project_files`` either way.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. AgentCore Runtime only: CDK writes it there, and only while on, from
+    ``config.agentKnowledgeFiles.enabled``. No SPA switch: the tool has no UI.
+
+    A **feature switch** once finished: it widens what an Agent can read of its
+    own Knowledge (by name, whole), which a deployment may reasonably not want.
+    """
+    return os.environ.get("AGENT_KNOWLEDGE_FILES_ENABLED", "").strip().lower() == "true"
 
 
 def large_document_attachments_enabled() -> bool:
@@ -716,6 +765,30 @@ def attachment_turn_guard_enabled() -> bool:
     return os.environ.get("ATTACHMENT_TURN_GUARD_ENABLED", "").strip().lower() != "false"
 
 
+def inline_budget_by_reference_enabled() -> bool:
+    """Whether an uploaded document that does not fit in a turn's combined
+    inline budget goes by reference instead of being dropped.
+
+    ``_apply_inline_byte_budget`` holds a turn's inline attachments to
+    ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` first-fit; with this on, a
+    document-class *upload* it moves out becomes a ``ReferenceAttachment``
+    (``over_budget=True``): its stored digest (or a ``status="ready"`` stub) in
+    the user message and ``document_read`` to read it from the original, from the
+    row the resolver already read. No preparation, no extra read before the
+    first token. Images and direct ``files`` bytes have no reference path and
+    are still dropped with the note.
+
+    **Rollout switch, default ON** (house style): unset or empty resolves to
+    enabled; only the literal ``"false"`` (case-insensitive) disables. Off, an
+    over-budget document is dropped with the "combined size limit" note, as
+    before. **Retires** after one production release plus two weeks there with
+    the switch never flipped and the ``AttachmentReference`` count with
+    ``reason = over_budget`` recorded (CLAUDE.md, "Feature switches stay;
+    rollout switches retire").
+    """
+    return os.environ.get("INLINE_BUDGET_BY_REFERENCE_ENABLED", "").strip().lower() != "false"
+
+
 def feedback_eval_sampling_enabled() -> bool:
     """Whether down-thumbed turns may be sent to AgentCore Evaluations.
 
@@ -1234,6 +1307,55 @@ def inline_attachment_persist_enabled() -> bool:
     returns exactly: nothing is written and the note is unchanged.
     """
     return os.environ.get("INLINE_ATTACHMENT_PERSIST_ENABLED", "").strip().lower() != "false"
+
+
+def converse_document_cap_enabled() -> bool:
+    """Whether a Converse request is kept within Bedrock's five non-PDF documents.
+
+    Covers ``apis.shared.models.document_cap``, installed by ``AgentFactory``
+    on every Bedrock Converse model. A request over the limit has every
+    non-PDF document after the fifth, in message order, sent as its text
+    instead of failing with "You can't include more than 5 documents". A request
+    within the limit is sent unchanged.
+
+    **Rollout switch, default ON** (house style): unset or empty resolves to
+    enabled; only the literal ``"false"`` (case-insensitive) disables. Off, an
+    over-limit request is sent as before and Bedrock rejects it. Retires on the
+    default condition: shipped in a production release, then two weeks there
+    with the switch never flipped, and the ``document_cap:`` log line's count
+    recorded as the readout.
+    """
+    return os.environ.get("CONVERSE_DOCUMENT_CAP_ENABLED", "").strip().lower() != "false"
+
+
+def converse_documents_as_text_enabled() -> bool:
+    """Whether a Converse request carries non-PDF attachments as text, not documents.
+
+    Covers the ``as_text`` mode of ``apis.shared.models.document_cap``, the
+    per-call projection ``AgentFactory`` installs on every Bedrock Converse
+    model. On, every docx, txt, md, csv and html document block is sent as a
+    text block the deployment rendered (``docx_markdown``, ``html_markdown``,
+    UTF-8), the way Claude's own product treats files; PDFs stay native
+    document blocks. There is then no five-document limit to reach. The stored
+    conversation is unchanged: the user message keeps its document block, so
+    the attachment card, restore, offload and the share and handoff views see
+    what they always saw. The inference route renders a turn's new attachments
+    in worker threads before the agent runs, so the parse stays off the event
+    loop (``prerender_document_text``).
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.converseDocumentsAsText.enabled``. No SPA switch: there is nothing
+    to show.
+
+    A **feature switch** once finished, not a rollout switch: whether Bedrock or
+    the deployment renders a document is a choice a deployment may make either
+    way. Turning it on or off takes a Runtime update, which replaces every
+    container, so no warm conversation ever holds a prefix projected the other
+    way.
+    """
+    return os.environ.get("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "").strip().lower() == "true"
 
 
 def source_provenance_enabled() -> bool:

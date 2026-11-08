@@ -11,7 +11,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Construct } from 'constructs';
-import { AppConfig, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
+import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
@@ -404,6 +404,16 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Assistant KB full-context mode (in development, default off). Spread in
         // only while on: the code reads unset as off. Runtime only.
         ...(config.assistantKbFullContext.enabled ? { ASSISTANT_KB_FULL_CONTEXT_ENABLED: 'true' } : {}),
+        // Its token budget, only while the flag is on and the budget is not the
+        // code's own default: either way the default spends no V2 env bytes.
+        ...(config.assistantKbFullContext.enabled &&
+        config.assistantKbFullContext.maxTokens !== DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS
+          ? { ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS: String(config.assistantKbFullContext.maxTokens) }
+          : {}),
+        // knowledge_files for ordinary Agents (in development, default off).
+        // Written only while ON, so the default costs nothing against the V2
+        // payload budget.
+        ...(config.agentKnowledgeFiles.enabled ? { AGENT_KNOWLEDGE_FILES_ENABLED: 'true' } : {}),
         // Meeting transcripts → GitHub issues tool families (in development,
         // default off). Spread in only while on: the code reads unset as off.
         // Runtime only; the tools are built on the invocation path.
@@ -431,6 +441,14 @@ export class InferenceAgentCoreConstruct extends Construct {
         ...(config.webSearchDefaultMaxResults.enabled
           ? { WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: 'true' }
           : {}),
+        // Word skill scripts: create/modify_word_document can run a bound
+        // skill's scripts/*.py in Code Interpreter. Written only while ON, so
+        // the default costs nothing against the V2 payload budget.
+        ...(config.wordSkillScripts.enabled ? { WORD_SKILL_SCRIPTS_ENABLED: 'true' } : {}),
+        // Documents as text: non-PDF attachments reach a Converse model as
+        // rendered text, not document blocks. Written only while ON, so the
+        // default costs nothing against the V2 payload budget.
+        ...(config.converseDocumentsAsText.enabled ? { CONVERSE_DOCUMENTS_AS_TEXT_ENABLED: 'true' } : {}),
         // Project file readiness: a project turn names the files the model cannot
         // see yet. Written only while ON, so the default costs nothing against
         // the V2 payload budget.

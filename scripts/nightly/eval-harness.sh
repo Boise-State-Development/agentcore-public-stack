@@ -32,6 +32,12 @@ set -euo pipefail
 #   EVAL_REPORT           — path for the score JSON (default: eval-harness-report.json)
 #   EVAL_MODEL_ID         — model under test (default: Haiku 5.5, the catalog default on dev since 2026-11-04)
 #   EVAL_FAMILIES         — comma-separated families (default below)
+#   EVAL_PUBLISH          — "true" to also write the score as a LEDGER#EVAL row
+#                           (score --publish, docs/specs/release-ledger.md §5.2).
+#                           nightly.yml passes the environment's
+#                           CDK_RELEASE_LEDGER_ENABLED, so only a deployment
+#                           with the ledger on gets the rows. Best-effort: a
+#                           failed publish never changes the exit status.
 #
 # Exit status: 0 when no gating family regressed, 1 when one did, 2 for a setup
 # problem. The workflow step that calls this is non-blocking: one sample per
@@ -121,8 +127,14 @@ main() {
         exit 2
     fi
 
+    local publish_args=()
+    if [ "${EVAL_PUBLISH:-}" = "true" ]; then
+        publish_args=(--publish)
+        log_info "Publishing the score to the release ledger"
+    fi
+
     set +e
-    uv run python scripts/eval_harness.py score --out "${out}" --json "${report}"
+    uv run python scripts/eval_harness.py score --out "${out}" --json "${report}" ${publish_args[@]+"${publish_args[@]}"}
     local score_code=$?
     set -e
 

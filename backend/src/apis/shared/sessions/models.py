@@ -1090,6 +1090,14 @@ class MessageResponse(BaseModel):
     created_at: str = Field(..., alias="createdAt", description="ISO timestamp when the message was created")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata associated with the message")
     citations: Optional[List[Citation]] = Field(None, description="RAG citations from knowledge base retrieval (assistant messages only)")
+    continuation: Optional[bool] = Field(
+        None,
+        description=(
+            "True on the user turn a Continue sent to a model that refuses assistant prefill "
+            "(`CONTINUATION_PROMPT`, apis/shared/models/assistant_prefill.py). The user never typed it: "
+            "clients render the partial answer and its continuation as one response. Omitted otherwise."
+        ),
+    )
 
 
 class MessagesListResponse(BaseModel):

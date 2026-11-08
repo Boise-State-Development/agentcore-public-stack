@@ -46,6 +46,7 @@ from apis.shared.oauth.provider_repository import (
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.kb_backend.byte_cap import ByteCapExceeded
+from apis.shared.kb_backend.upload_limit import FileTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +91,10 @@ async def _resolve_managed_kb(assistant_id: str) -> tuple[bool, bool]:
     return True, bool((record or {}).get("elevatedByteCap"))
 
 
-async def _resolve_kb_usage(assistant_id: str) -> Optional[KbUsage]:
-    """Storage usage + binding cap for this assistant's knowledge base.
+async def _resolve_kb_usage(
+    assistant_id: str, *, has_documents: Optional[bool] = None
+) -> Optional[KbUsage]:
+    """Storage usage, binding cap and per-file limit for this assistant's knowledge base.
 
     Read once from the KB_Record and shaped for the UI usage bar. A managed KB
     reports its committed and reserved bytes plus the binding cap
@@ -102,11 +105,17 @@ async def _resolve_kb_usage(assistant_id: str) -> Optional[KbUsage]:
     counters and the UI renders an uncapped indicator. The elevated tier is READ
     from ``elevatedByteCap``, never written here.
 
+    ``maxFileBytes`` is the per-file limit the next upload is held to
+    (``upload_limit.max_file_bytes``). An agent with no record and no documents
+    reports the MANAGED limit while ``MANAGED_KB_NEW_DEFAULT`` is on, because its
+    first upload is what makes it born managed; ``has_documents`` lets a caller
+    that already listed the documents answer that without another read.
+
     Best-effort: the usage bar is enrichment, not the point of the endpoint, so a
     failed record read returns ``None`` (the bar is simply not shown) rather than
     failing the whole documents list.
     """
-    from apis.shared.kb_backend import byte_cap
+    from apis.shared.kb_backend import byte_cap, upload_limit
     from apis.shared.kb_backend.records import (
         ENGINE_LEGACY,
         ENGINE_MANAGED,
@@ -118,7 +127,13 @@ async def _resolve_kb_usage(assistant_id: str) -> Optional[KbUsage]:
         # app_kb_id == assistant_id this phase. get_kb_record is a blocking boto3 call.
         record = await asyncio.to_thread(get_kb_record, assistant_id, assistant_id)
         if resolve_engine(record) != ENGINE_MANAGED:
-            return KbUsage(engine=ENGINE_LEGACY)
+            born_managed = record is None and await _will_be_born_managed(
+                assistant_id, has_documents
+            )
+            return KbUsage(
+                engine=ENGINE_LEGACY,
+                maxFileBytes=upload_limit.max_file_bytes(managed=born_managed),
+            )
         elevated = bool((record or {}).get("elevatedByteCap"))
         return KbUsage(
             engine=ENGINE_MANAGED,
@@ -126,6 +141,7 @@ async def _resolve_kb_usage(assistant_id: str) -> Optional[KbUsage]:
             reservedBytes=int((record or {}).get("reservedBytes") or 0),
             cap=byte_cap.effective_cap(elevated),
             elevated=elevated,
+            maxFileBytes=upload_limit.max_file_bytes(managed=True),
         )
     except Exception as exc:  # noqa: BLE001 — enrichment must not fail the list
         logger.warning(
@@ -136,8 +152,42 @@ async def _resolve_kb_usage(assistant_id: str) -> Optional[KbUsage]:
         return None
 
 
+async def _will_be_born_managed(assistant_id: str, has_documents: Optional[bool]) -> bool:
+    """Whether a record-less agent's first upload would make it born managed.
+
+    The same two conditions ``begin_born_managed`` starts on: the flag, and no
+    documents yet (an established legacy agent has documents and no record).
+    """
+    from apis.app_api.kb_upgrade.service import new_default_enabled
+
+    if not new_default_enabled():
+        return False
+    if has_documents is None:
+        from apis.app_api.documents.services.document_service import assistant_has_documents
+
+        has_documents = await assistant_has_documents(assistant_id)
+    return not has_documents
+
+
+async def _max_file_bytes_for(assistant_id: str) -> int:
+    """The per-file limit for an upload to this knowledge base, as it stands now.
+
+    Read after ``begin_born_managed`` on the upload paths, so a born-managed first
+    document resolves to the managed engine and its limit.
+    """
+    from apis.shared.kb_backend import upload_limit
+
+    is_managed, _ = await _resolve_managed_kb(assistant_id)
+    return upload_limit.max_file_bytes(managed=is_managed)
+
+
 async def _reserve_managed_upload(assistant_id: str, size_bytes: int) -> int:
-    """Provisionally reserve a declared upload size against the managed-KB cap.
+    """Admit a declared upload size: the per-file limit, then the managed-KB cap.
+
+    Raises :class:`~apis.shared.kb_backend.upload_limit.FileTooLarge` when the file
+    is over its engine's per-file limit (``KB_UPLOAD_MAX_FILE_BYTES``; 20 MiB on the
+    classic engine), checked BEFORE anything is reserved, so a refused file leaves
+    no reservation behind. Both engines are checked; only a managed one reserves.
 
     Returns the number of bytes reserved — ``0`` for a legacy knowledge base,
     which is uncapped and never touched. Raises
@@ -152,9 +202,12 @@ async def _reserve_managed_upload(assistant_id: str, size_bytes: int) -> int:
     ``effective_cap`` folds the per-owner allowance and the per-KB ceiling into one
     atomic conditional write (Requirement 12.1/12.5).
     """
-    from apis.shared.kb_backend import byte_cap
+    from apis.shared.kb_backend import byte_cap, upload_limit
 
     is_managed, elevated = await _resolve_managed_kb(assistant_id)
+    limit = upload_limit.max_file_bytes(managed=is_managed)
+    if size_bytes > limit:
+        raise FileTooLarge(size_bytes, limit)
     if not is_managed:
         return 0
     cap = byte_cap.effective_cap(elevated)
@@ -184,6 +237,26 @@ async def _release_managed_reservation(assistant_id: str, size_bytes: int) -> No
     await asyncio.to_thread(byte_cap.release, assistant_id, assistant_id, size_bytes)
 
 
+async def _import_max_file_bytes(assistant_id: str) -> int:
+    """The per-file limit for an import, or the managed limit if it can't be read.
+
+    An import's bytes are sized only once downloaded, after the request returns,
+    so a failed record read must not fail the request: the managed limit is the
+    largest any engine allows, and the classic handler still enforces its own.
+    """
+    from apis.shared.kb_backend import upload_limit
+
+    try:
+        return await _max_file_bytes_for(assistant_id)
+    except Exception as exc:  # noqa: BLE001 — fall back, never fail the import
+        logger.warning(
+            "Could not resolve the per-file limit for %s; using the managed limit: %s",
+            scrub_log(assistant_id),
+            scrub_log(exc),
+        )
+        return upload_limit.max_file_bytes(managed=True)
+
+
 @router.post("/upload-url", response_model=UploadUrlResponse, status_code=status.HTTP_200_OK)
 async def generate_upload_url_endpoint(
     assistant_id: str,
@@ -204,6 +277,15 @@ async def generate_upload_url_endpoint(
         # 1. Resolve permission — owner or editor may upload documents
         assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
 
+        # 1a. A file over the largest per-file limit any engine allows is refused
+        #     before it can start provisioning a knowledge base it will never be
+        #     put in. The engine's own limit is checked with the reserve below.
+        from apis.shared.kb_backend import upload_limit
+
+        ceiling = upload_limit.max_file_bytes(managed=True)
+        if request.size_bytes > ceiling:
+            raise FileTooLarge(request.size_bytes, ceiling)
+
         # 1b. Born-managed (MANAGED_KB_NEW_DEFAULT): the FIRST document is what
         #     triggers knowledge-base provisioning, so a prompt-only agent or an
         #     abandoned draft never spends a Bedrock knowledge base. This declares
@@ -220,7 +302,8 @@ async def generate_upload_url_endpoint(
         #     Reserve the client-declared size BEFORE creating the DOC# row or
         #     issuing a presigned URL, so an over-cap upload is refused with a 413
         #     the client can act on rather than after the bytes are already staged.
-        #     Legacy KBs return 0 and are never checked.
+        #     Legacy KBs return 0 and are never reserved against; both engines are
+        #     held to their per-file limit here, before anything is reserved.
         #
         #     This runs AFTER the born-managed trigger deliberately: the record it
         #     creates already resolves to managed, so a born-managed first document
@@ -269,6 +352,10 @@ async def generate_upload_url_endpoint(
         # 5. Return response
         return UploadUrlResponse(documentId=document_id, uploadUrl=presigned_url, expiresIn=UPLOAD_URL_TTL_SECONDS)
 
+    except FileTooLarge as e:
+        # Over the per-file limit: refused before anything was reserved or written,
+        # in the words the SPA shows ("Files can be up to 50 MB.").
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
     except ByteCapExceeded as e:
         # Requirement 12.12: the numbers make the error actionable — the user can
         # see how far over they are and request an elevated tier.
@@ -328,6 +415,9 @@ async def import_documents(
         #    born-managed provisioning like a first upload, and every file waits
         #    on it while the knowledge base is built.
         initial_status = await initial_document_status(assistant_id, owner_user_id=assistant_owner_id)
+        # The per-file limit a device upload to this knowledge base is held to,
+        # resolved after born-managed so a first import gets the managed limit.
+        max_file_bytes = await _import_max_file_bytes(assistant_id)
         created: list = []
         items: list = []
         for file_ref in request.files:
@@ -361,6 +451,7 @@ async def import_documents(
                 adapter=adapter,
                 access_token=access_token,
                 items=items,
+                max_file_bytes=max_file_bytes,
             )
         )
 
@@ -464,7 +555,9 @@ async def list_documents(
         # Storage usage + cap for the assistant's knowledge base, so the UI can
         # render the usage bar without a second round-trip (Requirement 12.11
         # visibility). Legacy KBs return cap=None and the bar shows uncapped.
-        kb_usage = await _resolve_kb_usage(assistant_id)
+        kb_usage = await _resolve_kb_usage(
+            assistant_id, has_documents=bool(documents) or bool(next_page_token)
+        )
 
         return DocumentsListResponse(
             documents=document_responses, nextToken=next_page_token, kbUsage=kb_usage

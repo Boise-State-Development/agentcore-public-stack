@@ -283,3 +283,18 @@ describe('buildAppApiEnvironment — born-managed (NEW_DEFAULT)', () => {
     expect(Object.keys(off)).toContain('MANAGED_KB_NEW_DEFAULT');
   });
 });
+
+describe('buildAppApiEnvironment — knowledge-base per-file upload limit', () => {
+  it('forwards KB_UPLOAD_MAX_FILE_BYTES, 50 MiB by default', () => {
+    const env = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(env.KB_UPLOAD_MAX_FILE_BYTES).toBe('52428800');
+  });
+
+  it('forwards an operator-lowered limit unchanged', () => {
+    const base = createMockConfig();
+    const config = createMockConfig({
+      managedKb: { ...base.managedKb, uploadMaxFileBytes: 10 * 1024 * 1024 },
+    });
+    expect(buildAppApiEnvironment(config, stubParams()).KB_UPLOAD_MAX_FILE_BYTES).toBe('10485760');
+  });
+});

@@ -19,6 +19,8 @@ TABLE = "test-assistants"
 BUCKET = "test-rag-documents"
 ASSISTANT_ID = "ast-course-0001"
 OWNER_ACCESS = granted(ASSISTANT_ID, "user-1", "owner")
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
 @pytest.fixture
@@ -159,18 +161,42 @@ class TestIneligibleFallsBackToRetrieval:
 
         assert _load() is None
 
-    def test_a_format_without_a_text_layer(self, kb):
-        kb.add("d1", "a.txt", "alpha")
-        kb.add("d2", "grades.xlsx", b"PK\x03\x04",
-               content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    def test_only_spreadsheets_and_decks_is_not_eligible(self, kb):
+        kb.add("d1", "grades.xlsx", b"PK\x03\x04", content_type=XLSX)
+        kb.add("d2", "slides.pptx", b"PK\x03\x04", content_type=PPTX)
 
         assert _load() is None
+        found = fc.assess_full_context(ASSISTANT_ID, 50_000)
+        assert found.reason == fc.REASON_NO_TEXT_DOCUMENTS and found.skipped == ("grades.xlsx", "slides.pptx")
 
     def test_a_document_with_no_extractable_text(self, kb):
         kb.add("d1", "a.txt", "alpha")
         kb.add("d2", "blank.txt", "   \n  ")
 
         assert _load() is None
+        found = fc.assess_full_context(ASSISTANT_ID, 50_000)
+        assert found.reason == fc.REASON_NO_TEXT_LAYER
+
+    def test_one_document_over_the_budget_alone_is_named_with_its_size(self, kb, monkeypatch):
+        monkeypatch.setenv(fc.FULL_CONTEXT_MAX_TOKENS_ENV, "100")  # 400 chars
+        kb.add("d1", "a.txt", "alpha")
+        kb.add("d2", "manual.txt", "z" * 1_000)
+
+        assert _load() is None
+        found = fc.assess_full_context(ASSISTANT_ID, 100)  # 400 chars
+        assert found.reason == fc.REASON_DOCUMENT_OVER_BUDGET and found.block is None
+        # That document's own length, not the running total, so the author sees how far over it is.
+        assert found.text_chars == 1_000 and found.estimated_tokens == 250
+
+    def test_documents_over_the_budget_together_count_every_length(self, kb):
+        kb.add("d1", "a.txt", "x" * 300, created="2026-10-01T00:00:00Z")
+        kb.add("d2", "b.txt", "y" * 300, created="2026-10-02T00:00:00Z")
+        kb.add("d3", "c.txt", "z" * 1_000, created="2026-10-03T00:00:00Z")
+
+        found = fc.assess_full_context(ASSISTANT_ID, 100)  # 400 chars: b.txt tips it over first
+        assert found.reason == fc.REASON_OVER_BUDGET
+        # c.txt is past the limit on its own, and still counts at its whole length.
+        assert found.text_chars == 1_600
 
     def test_a_large_corpus_is_not_downloaded(self, kb):
         kb.add("d1", "a.txt", "alpha", size=fc.MAX_RAW_BYTES + 1)
@@ -212,3 +238,75 @@ class TestGates:
 
         with patch.object(fc, "_list_documents", side_effect=AssertionError("listed under the wrong grant")):
             assert _load(access=granted("ast-other", "user-1", "owner")) is None
+
+
+class TestMixedFormats:
+    """A spreadsheet or deck no longer sends the whole knowledge base to retrieval.
+
+    The 2026-11 review: an Agent whose knowledge base was a process file, a Word
+    template, a PDF and one .xlsx template ran on five retrieved passages, because
+    the .xlsx alone disqualified it; its instructions said to read the process file
+    in full.
+    """
+
+    def _mixed(self, kb):
+        kb.add("d1", "Process.txt", "Step 1: read the request.", created="2026-10-01T00:00:00Z")
+        kb.add("d2", "budget-template.xlsx", b"PK\x03\x04", content_type=XLSX, created="2026-10-02T00:00:00Z")
+        kb.add("d3", "guide.md", "Guide: be brief.", content_type="text/markdown", created="2026-10-03T00:00:00Z")
+        kb.add("d4", "kickoff.pptx", b"PK\x03\x04", content_type=PPTX, created="2026-10-04T00:00:00Z")
+
+    def test_the_text_documents_go_whole_and_the_others_are_named(self, kb):
+        self._mixed(kb)
+        block = _load()
+
+        assert isinstance(block, fc.KnowledgeBaseBlock) and isinstance(block, str)
+        assert '<document name="Process.txt">\nStep 1: read the request.\n</document>' in block
+        assert '<document name="guide.md">' in block
+        assert "budget-template.xlsx" in block and "kickoff.pptx" in block
+        assert "<document name=\"budget-template.xlsx\">" not in block
+        assert "complete text of 2 documents" in block and "2 spreadsheet or presentation files" in block
+        # The turn still retrieves from exactly those two.
+        assert block.searched_document_ids == frozenset({"d2", "d4"})
+
+    def test_a_spreadsheet_is_not_downloaded(self, kb):
+        self._mixed(kb)
+        fetched = []
+        real = fc._document_extract
+
+        def _spy(doc, fmt, limit):
+            fetched.append(doc["filename"])
+            return real(doc, fmt, limit)
+
+        with patch.object(fc, "_document_extract", _spy):
+            assert _load() is not None
+        assert sorted(fetched) == ["Process.txt", "guide.md"]
+
+    def test_a_spreadsheet_does_not_count_against_the_raw_bytes_gate(self, kb):
+        kb.add("d1", "a.txt", "alpha")
+        kb.add("d2", "huge.xlsx", b"PK\x03\x04", content_type=XLSX, size=fc.MAX_RAW_BYTES + 1)
+
+        assert _load() is not None
+
+    def test_nothing_skipped_renders_the_block_it_always_did(self, kb):
+        """The prompt-cache contract: an all-text knowledge base keeps its bytes."""
+        kb.add("d1", "a.txt", "alpha")
+        block = _load()
+
+        assert block == fc.render_knowledge_base([("a.txt", "alpha")])
+        assert block.startswith(
+            "<knowledge_base>\n\nThis is the complete text of every document in this assistant's "
+            "knowledge base (1 document). It is reference material"
+        )
+        assert block.searched_document_ids == frozenset()
+
+    def test_the_assessment_reports_counts_and_reasons(self, kb, monkeypatch):
+        self._mixed(kb)
+        found = fc.assess_full_context(ASSISTANT_ID, 50_000)
+        assert found.eligible and found.reason is None
+        assert found.document_count == 2 and found.skipped == ("budget-template.xlsx", "kickoff.pptx")
+        assert found.text_chars == len("Step 1: read the request.") + len("Guide: be brief.")
+
+        over = fc.assess_full_context(ASSISTANT_ID, 10)  # 40 chars: each fits, both do not
+        assert not over.eligible and over.reason == fc.REASON_OVER_BUDGET and over.block is None
+        # The whole text is counted, so the author sees how far over it is.
+        assert over.text_chars == found.text_chars

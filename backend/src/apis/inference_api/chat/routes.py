@@ -35,12 +35,14 @@ from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
     agent_preparing_phase_enabled,
     kb_search_ahead_enabled,
+    agent_knowledge_files_enabled,
     agents_enabled,
     assistant_kb_full_context_enabled,
     attachment_kb_enabled,
     attachment_turn_guard_enabled,
     folder_attachments_enabled,
     inline_attachment_persist_enabled,
+    inline_budget_by_reference_enabled,
     memory_spaces_enabled,
     mid_turn_steering_enabled,
     project_file_readiness_enabled,
@@ -998,7 +1000,9 @@ def _build_word_document_tools(
     spreadsheet tools) since the runtime does not populate ToolContext.
     ``redline_word_document`` joins the family only while the in-development
     ``WORD_TRACKED_CHANGES_ENABLED`` is on; off, its spec never reaches
-    ``toolConfig``. ``user_name`` is its default revision author.
+    ``toolConfig``. ``user_name`` is its default revision author. While the
+    in-development ``WORD_SKILL_SCRIPTS_ENABLED`` is on, create and modify
+    also take a bound skill's script by reference (``skill_scripts.py``).
     """
     if not enabled_tools or not WORD_DOCUMENT_TOOL_IDS.intersection(enabled_tools):
         return []
@@ -1013,11 +1017,23 @@ def _build_word_document_tools(
         make_read_word_document_tool,
     )
 
-    from apis.shared.feature_flags import word_tracked_changes_enabled
+    from apis.shared.feature_flags import (
+        word_skill_scripts_enabled,
+        word_tracked_changes_enabled,
+    )
+
+    # With WORD_SKILL_SCRIPTS_ENABLED on, create/modify can run a bound skill's
+    # script. The records arrive later, from the agent's skills runtime
+    # (`ChatAgent` binds them), so the two tools share one empty holder now.
+    skill_records = None
+    if word_skill_scripts_enabled():
+        from agents.main_agent.skills.skill_scripts import TurnSkillRecords
+
+        skill_records = TurnSkillRecords()
 
     tools = [
-        make_create_word_document_tool(session_id, user_id),
-        make_modify_word_document_tool(session_id, user_id),
+        make_create_word_document_tool(session_id, user_id, skill_records),
+        make_modify_word_document_tool(session_id, user_id, skill_records),
         make_list_word_documents_tool(session_id, user_id),
         make_read_word_document_tool(session_id, user_id),
     ]
@@ -1736,6 +1752,35 @@ def _apply_inline_byte_budget(
     return kept, over, requested
 
 
+def _over_budget_as_references(
+    over_budget: list,
+    upload_rows: dict,
+) -> tuple[list, list]:
+    """Split the files ``_apply_inline_byte_budget`` moved out into the ones
+    that can go by reference and the ones that are still dropped.
+
+    Returns ``(references, dropped)``, both in attachment order; each reference
+    is paired with the file it replaces, so the caller can place it among the
+    turn's other references in attachment order. A file goes by
+    reference when it is a document ``document_read`` can read *and* it came
+    from an upload, so the resolver has its row (``upload_rows``, keyed by the
+    ``FileContent``'s identity): the reference renders from that row and the
+    tool reads the original, so nothing is fetched, prepared or built here.
+    Images have nothing ``document_read`` could return, and direct ``files``
+    bytes have no row to read later (large-document spec §4B.6): both stay
+    dropped with the "combined size limit" note.
+    """
+    references: list = []
+    dropped: list = []
+    for file in over_budget:
+        row = upload_rows.get(id(file))
+        if row is not None and is_document_class(row.mime_type, row.filename):
+            references.append((file, ReferenceAttachment(meta=row, over_budget=True)))
+        else:
+            dropped.append(file)
+    return references, dropped
+
+
 def _emit_attachment_over_quota_metric(
     requested_bytes: int,
     cap_bytes: int,
@@ -1849,10 +1894,20 @@ def _build_attachment_guidance(
     # injected, and used it only when told to call it. So the sentence names
     # the tool, the call and the id.
     for ref in references or ():
-        lead = (
-            f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached but too large "
-            f"to include in full, so its content is not in this message."
-        )
+        over_budget_ref = getattr(ref, "over_budget", False)
+        if over_budget_ref:
+            # Each file fits on its own; together they exceed what one message
+            # can carry in full (`_over_budget_as_references`).
+            lead = (
+                f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached, but this "
+                f"message's attachments together exceed the combined size limit for a "
+                f"single message, so its content is not in this message."
+            )
+        else:
+            lead = (
+                f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached but too large "
+                f"to include in full, so its content is not in this message."
+            )
         if not document_read_available:
             parts.append(f"{lead} Reading parts of it is not available in this conversation._")
             continue
@@ -1862,9 +1917,12 @@ def _build_attachment_guidance(
         # model opened with pattern in 93 of 93 turns and reached a scanned
         # page by paging through images; naming search made it open with query
         # in 93 of 93, at the same accuracy and 38% less cost per turn.
+        # Only large documents are indexed for search (attachments KB, §4F), so
+        # an over-budget file is never offered `query`: it would answer "not
+        # indexed for search".
         find = (
             "first with `query` (a plain-language search, which also covers scanned pages) or `pattern`"
-            if search_available
+            if search_available and not over_budget_ref
             else "first with `pattern`"
         )
         if ref.format == "pdf":
@@ -2642,8 +2700,9 @@ class TurnAttachments:
     ``files_to_send`` is the inline set the model receives as document/image
     blocks. The three diverted lists never go inline (spreadsheets and decks
     route through their tools; oversized and over-budget files are dropped with
-    a note), and neither does ``reference_documents`` (large documents carried
-    as a digest or stub). ``marker_names`` is every filename that still exists in the
+    a note), and neither does ``reference_documents`` (large documents, and
+    uploaded documents moved out of the combined inline budget, carried as a
+    digest or stub). ``marker_names`` is every filename that still exists in the
     session, in attachment order, for the ``[Attached files: …]`` marker the
     SPA replays on reload. ``turn_has_document`` is the *classified* answer to
     "did this turn attach something ``document_read`` can read", which feeds
@@ -2912,6 +2971,10 @@ async def _resolve_turn_attachments(
     # are all upload ids and none of them is a document. Feeds the injection
     # gate and therefore `toolConfig` — see `_session_has_documents`.
     turn_has_document = False
+    # The row behind each resolved inline-class upload, by the identity of the
+    # ``FileContent`` built from it. Read only if that file falls out of the
+    # combined inline budget below and goes by reference instead.
+    upload_rows: dict = {}
     if upload_ids_to_resolve:
         try:
             file_resolver = get_file_resolver()
@@ -2927,9 +2990,11 @@ async def _resolve_turn_attachments(
                 if reference_meta is not None:
                     all_files.append(ReferenceAttachment(meta=reference_meta))
                     continue
-                all_files.append(
-                    FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
-                )
+                content = FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
+                row = getattr(rf, "meta", None)
+                if row is not None:
+                    upload_rows[id(content)] = row
+                all_files.append(content)
             turn_has_document = _resolved_files_include_a_document(resolved_files)
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
         except Exception:
@@ -3032,6 +3097,27 @@ async def _resolve_turn_attachments(
                 inline_count=len(files_to_send) + len(over_budget_inline),
                 dropped_count=len(over_budget_inline),
             )
+        # An uploaded document that did not fit goes by reference instead of
+        # being dropped: its digest (or a ready stub) in the message and
+        # `document_read` on the original. Rendered from the row the resolver
+        # already read, so it adds no I/O before the first token. A turn within
+        # the budget never reaches this, so its message is unchanged.
+        if over_budget_inline and inline_budget_by_reference_enabled():
+            budget_references, over_budget_inline = _over_budget_as_references(
+                over_budget_inline, upload_rows
+            )
+            if budget_references:
+                logger.info(
+                    "Attached %d over-budget document(s) by reference instead of dropping them",
+                    len(budget_references),
+                )
+                record_reference_attachments([ref for _, ref in budget_references])
+                # One list in attachment order, so the message's reference
+                # blocks read in the order the user attached the files.
+                position = {id(f): i for i, f in enumerate(all_files)}
+                placed = [(position[id(ref)], ref) for ref in reference_documents]
+                placed += [(position[id(src)], ref) for src, ref in budget_references]
+                reference_documents = [ref for _, ref in sorted(placed, key=lambda pair: pair[0])]
 
     # All three classes were dropped from the turn entirely; the marker must
     # not promise a card for any of them.
@@ -3217,6 +3303,78 @@ async def _adapt_attachments_for_model(attachments: TurnAttachments, turn_model:
     attachments.unreadable_documents = unreadable
     if dropped_names:
         attachments.marker_names = [n for n in attachments.marker_names if n not in dropped_names]
+
+
+#: Providers whose models speak Bedrock Converse, where ``AgentFactory``
+#: installs the document-cap projection. ``None`` is a model with no explicit
+#: provider, which resolves to Converse.
+_CONVERSE_PROVIDERS = frozenset({None, "", "bedrock"})
+
+
+def _is_converse_model(turn_model: "TurnModel") -> bool:
+    if (turn_model.provider or "").strip().lower() not in _CONVERSE_PROVIDERS:
+        return False
+    model_id = (turn_model.model_id or "").lower()
+    # ``ModelConfig.get_provider`` routes these ids away from Converse.
+    return not model_id.startswith(("gpt-", "o1-", "gemini-"))
+
+
+def _renderable_format(file) -> Optional[str]:
+    """The document format ``PromptBuilder`` gives ``file``'s block, when it is
+    one ``document_cap`` renders as text (docx, txt, md, csv, html)."""
+    from apis.shared.models.document_cap import RENDERABLE_FORMATS
+
+    if (file.content_type or "").lower().startswith("image/"):
+        return None
+    name = (file.filename or "").lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    return ext if ext in RENDERABLE_FORMATS else None
+
+
+def _prerender_one(fmt: str, encoded: str) -> bool:
+    import base64
+
+    from apis.shared.models.document_cap import prerender_document_text
+
+    return prerender_document_text(fmt, base64.b64decode(encoded or ""))
+
+
+async def _prerender_documents_as_text(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Render the turn's new non-PDF attachments as text, off the event loop (map stage B11).
+
+    With ``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`` on, the document-cap projection
+    sends every docx, txt, md, csv and html document block to a Converse model
+    as text. It runs inside the model call, on the event loop, and memoizes the
+    text by content; rendering here in worker threads first means the
+    projection only finds the text, so the parse (about 3–5 ms for a
+    few-page Word file, measured) never blocks the loop. The tracked changes
+    are already written out by ``_write_out_tracked_changes``, so the text
+    renders the same bytes the block carries.
+
+    Returns at once with the flag off, for any other model, and on a turn with
+    no such attachment. A failure here only means the projection renders the
+    file itself.
+    """
+    if not attachments.files_to_send or not _is_converse_model(turn_model):
+        return
+    from apis.shared.feature_flags import converse_documents_as_text_enabled
+
+    if not converse_documents_as_text_enabled():
+        return
+    jobs = [(fmt, f.bytes) for f in attachments.files_to_send if (fmt := _renderable_format(f))]
+    if not jobs:
+        return
+    started = time.perf_counter()
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_prerender_one, fmt, encoded) for fmt, encoded in jobs),
+        return_exceptions=True,
+    )
+    logger.info(
+        "documents_as_text: %d attachment(s) rendered in %.1f ms (%d without text)",
+        len(jobs),
+        (time.perf_counter() - started) * 1000,
+        sum(1 for r in results if r is not True),
+    )
 
 
 def _build_extracted_documents_section(extracted: list, document_read_available: bool) -> str:
@@ -3670,7 +3828,8 @@ async def _build_turn_tools(
     gate, which is memoized per session once it answers yes, and the meeting
     tools' connector lookup, served from the catalog snapshot already in
     memory. ``turn_project_id`` marks a project-harness turn, which also gets
-    ``project_files``."""
+    ``project_files``; any other Agent turn gets ``knowledge_files`` while
+    ``AGENT_KNOWLEDGE_FILES_ENABLED`` is on."""
     extra_tools = _build_spreadsheet_tools(
         enabled_tools=effective_enabled_tools,
         assistant_id=input_data.rag_assistant_id,
@@ -3739,6 +3898,16 @@ async def _build_turn_tools(
         extra_tools = extra_tools + build_project_files_tools(
             turn_project_id, input_data.rag_assistant_id, current_user
         )
+    # Every other Agent lists its Knowledge and reads a document by name
+    # (`knowledge_files`, the same tool in another voice): a Loader that says
+    # "read Process.txt in full" is otherwise unanswerable once the knowledge
+    # base is too big to send whole. Same place in the list as `project_files`,
+    # and never both. A closure over (assistant, user), both cache-key elements;
+    # nothing runs until the model calls it.
+    elif input_data.rag_assistant_id and agent_knowledge_files_enabled():
+        from apis.inference_api.chat.project_memory import build_knowledge_files_tools
+
+        extra_tools = extra_tools + build_knowledge_files_tools(input_data.rag_assistant_id, current_user)
 
     # document_read for any session that carries a readable attachment
     # (this turn's uploads count). Gated on session state, not the
@@ -3957,6 +4126,7 @@ async def _search_and_augment(
     message: str,
     access: Any,
     full_context: Optional["asyncio.Task[Optional[str]]"] = None,
+    knowledge_files: bool = False,
 ) -> Tuple[Optional[list], str]:
     """Search an assistant's knowledge base and augment ``message`` with it.
 
@@ -3971,6 +4141,10 @@ async def _search_and_augment(
     so the chunks are returned for the citation cards and ``message`` comes
     back unaugmented. The search still runs alongside, not after it, so a turn
     that ends up retrieving waits no longer than before.
+
+    ``knowledge_files`` says the turn carries the ``knowledge_files`` tool, so
+    the excerpts' preamble names it (one constant sentence; absent, the
+    augmented message is byte-identical to before the tool existed).
     """
     from apis.shared.assistants.rag_service import (
         augment_prompt_with_context,
@@ -3988,9 +4162,26 @@ async def _search_and_augment(
             access=access,
         )
         logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
-        if full_context is not None and await full_context:
-            logger.info("Knowledge base sent whole (full-context mode) - message not augmented")
-            return context_chunks, message
+        block = await full_context if full_context is not None else None
+        if block:
+            # Documents the block skipped (spreadsheets, decks) are still searched:
+            # augment with their passages and nobody else's, which the model
+            # already has whole. None skipped: the message goes as the user wrote it.
+            searched = getattr(block, "searched_document_ids", frozenset())
+            augment_from = [
+                c for c in (context_chunks or []) if (c.get("metadata") or {}).get("document_id") in searched
+            ]
+            if not augment_from:
+                logger.info("Knowledge base sent whole (full-context mode) - message not augmented")
+                return context_chunks, message
+            augmented = augment_prompt_with_context(
+                user_message=message,
+                context_chunks=augment_from,
+                max_context_length=cap,
+                knowledge_files_note=knowledge_files,
+            )
+            logger.info(f"Knowledge base sent whole; augmented with {len(augment_from)} chunks from skipped documents")
+            return context_chunks, augmented
         if not context_chunks:
             logger.info("No context chunks found for assistant - using original message without augmentation")
             return context_chunks, message
@@ -4001,7 +4192,10 @@ async def _search_and_augment(
         # reranking's top_k chunks actually reach the model; legacy keeps
         # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
         augmented = augment_prompt_with_context(
-            user_message=message, context_chunks=context_chunks, max_context_length=cap
+            user_message=message,
+            context_chunks=context_chunks,
+            max_context_length=cap,
+            knowledge_files_note=knowledge_files,
         )
         logger.info(f"Augmented message with {len(context_chunks)} context chunks")
         logger.info("Augmented message preview available")
@@ -5256,6 +5450,9 @@ async def _run_invocation(
                     message=input_data.message,
                     access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
                     full_context=kb_full_context_task,
+                    # The same condition `_build_turn_tools` builds the tool on,
+                    # so the excerpts never name a tool the turn does not have.
+                    knowledge_files=not turn_project_id and agent_knowledge_files_enabled(),
                 )
             )
             if not kb_search_ahead_enabled():
@@ -5583,6 +5780,9 @@ async def _run_invocation(
             # image blocks; convert or drop them now that the model is known.
             # Returns immediately for every other model.
             await _adapt_attachments_for_model(attachments, turn_model)
+            # With documents-as-text on, render the turn's non-PDF attachments
+            # now, in worker threads, so the per-call projection finds them.
+            await _prerender_documents_as_text(attachments, turn_model)
 
             # The tool ids this turn carries — one value for the cache key,
             # every builder, the attachment guidance and the paused snapshot.

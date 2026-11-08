@@ -3,12 +3,54 @@ Prompt builder for multimodal content (text, images, documents)
 """
 import logging
 import base64
-from typing import List, Optional, Union, Dict, Any, Set
+from typing import List, Optional, Sequence, Union, Dict, Any, Set
 from agents.main_agent.multimodal.image_handler import ImageHandler
 from agents.main_agent.multimodal.document_handler import DocumentHandler
 from agents.main_agent.multimodal.file_sanitizer import FileSanitizer
 
 logger = logging.getLogger(__name__)
+
+
+def document_names_in(messages: Optional[Sequence[Any]]) -> Set[str]:
+    """Every document block name already in ``messages``, tool results included.
+
+    Bedrock rejects a request in which two document blocks share a name
+    anywhere in the conversation, not only within one message. A cached agent
+    keeps the inline blocks of its earlier turns in its live ``agent.messages``
+    (only a restore from Memory swaps them for digests). That includes a turn
+    that failed: its user message stays in the list with the synthetic error
+    reply after it. So an attachment sent again under the same filename, by the
+    user or by the pending-attachment recovery after a failed turn, collides
+    with the copy already there. One collision leaves the pair in the list, and
+    every later turn on that agent fails the same way.
+
+    Read-only, and only names are collected, so history is never rewritten and
+    the cached prefix is untouched. One pass over the content blocks: a few
+    microseconds for a long conversation.
+    """
+    names: Set[str] = set()
+    if not messages:
+        return names
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            document = block.get("document")
+            if isinstance(document, dict) and isinstance(document.get("name"), str):
+                names.add(document["name"])
+                continue
+            tool_result = block.get("toolResult")
+            inner = tool_result.get("content") if isinstance(tool_result, dict) else None
+            if not isinstance(inner, list):
+                continue
+            for item in inner:
+                nested = item.get("document") if isinstance(item, dict) else None
+                if isinstance(nested, dict) and isinstance(nested.get("name"), str):
+                    names.add(nested["name"])
+    return names
 
 
 class PromptBuilder:
@@ -25,6 +67,7 @@ class PromptBuilder:
         message: str,
         files: Optional[List[Any]] = None,
         attachment_names: Optional[List[str]] = None,
+        conversation: Optional[Sequence[Any]] = None,
     ) -> Union[str, List[Dict[str, Any]]]:
         """
         Build prompt for Strands Agent with multimodal support
@@ -44,6 +87,10 @@ class PromptBuilder:
                 name missing here means that file's card silently disappears
                 from history even though the file itself is still in the
                 session.
+            conversation: The messages this prompt will be appended to (the
+                agent's live ``agent.messages``). A new document block is named
+                so it collides with no document already in them; see
+                ``document_names_in``. Read only, never modified.
 
         Returns:
             str or list[ContentBlock]: Simple string or multimodal content blocks
@@ -70,9 +117,11 @@ class PromptBuilder:
         # Build ContentBlock list for multimodal input
         content_blocks: List[Dict[str, Any]] = [{"text": text}]
 
-        # Track sanitized document names used in this turn to prevent
-        # Bedrock ValidationException: "Messages can't contain duplicate document names"
-        used_document_names: Set[str] = set()
+        # Track the document names already taken, in this turn AND in the
+        # conversation it joins, to prevent Bedrock's ValidationException
+        # "Messages can't contain duplicate document names". Seeded from the
+        # conversation because the uniqueness rule spans the whole request.
+        used_document_names: Set[str] = document_names_in(conversation)
 
         # Add each file as appropriate ContentBlock
         for file in files:
@@ -88,7 +137,8 @@ class PromptBuilder:
 
         Args:
             file: FileContent object with content_type, filename, and base64 bytes
-            used_document_names: Set of already-used document names in this turn.
+            used_document_names: Set of document names already taken, in this
+                turn and in the conversation it joins.
                 When provided, duplicate document names are made unique by appending
                 a counter suffix to prevent Bedrock ValidationException.
 
@@ -114,11 +164,12 @@ class PromptBuilder:
             # Sanitize filename for Bedrock
             sanitized_name = self.file_sanitizer.sanitize_filename(file.filename)
 
-            # Deduplicate document names within this turn. Bedrock rejects
-            # requests where two document blocks share the same name, even
-            # across different messages in the conversation history. When the
-            # same (or similarly-named) file appears more than once, append
-            # a numeric suffix to make the name unique.
+            # Deduplicate document names against this turn and the
+            # conversation. Bedrock rejects requests where two document blocks
+            # share the same name, even across different messages in the
+            # conversation history. When the same (or similarly-named) file
+            # appears more than once, append a numeric suffix to make the name
+            # unique. Only the new block is named; history is never renamed.
             if used_document_names is not None:
                 sanitized_name = self._unique_document_name(sanitized_name, used_document_names)
                 used_document_names.add(sanitized_name)

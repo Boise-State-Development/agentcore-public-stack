@@ -69,8 +69,11 @@ class TestTool:
         ))
         monkeypatch.setattr(f"{TOOL_MODULE}.read_document", read)
         result = await _call(make_document_read_tool("s1", "u1"), upload_id="up-1", page_range="4-7", max_pages=6)
+        # A page range is the one read that can return a native PDF, so it is
+        # the one that carries the round's byte budget (all of it, alone).
         read.assert_awaited_once_with(
-            "u1", "s1", "up-1", page_range="4-7", pattern=None, max_pages=6, offset=0, text_only=False
+            "u1", "s1", "up-1", page_range="4-7", pattern=None, max_pages=6, offset=0, text_only=False,
+            max_document_bytes=7_000_000,
         )
         assert result["content"] == [{"json": {"pages_returned": 4}}, block]
 

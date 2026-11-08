@@ -19,6 +19,7 @@ import {
   DocumentReplaceService,
   DocumentReplaceTransport,
   REPLACE_POLL_LIMIT_MS,
+  fileTooLargeMessage,
   fileExtension,
   orderReplacementsAdjacent,
 } from '../../assistants/services/document-replace.service';
@@ -65,7 +66,6 @@ import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
 
 /** The agent document pipeline's per-file limit (the knowledge-base section's too). */
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const ACCEPT = '.pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.sql';
 const POLL_START_MS = 1000;
 const POLL_MAX_MS = 10000;
@@ -484,6 +484,8 @@ export class ProjectFilesComponent {
   protected readonly documents = signal<ProjectDocument[]>([]);
   protected readonly nextToken = signal<string | null>(null);
   protected readonly kbUsage = signal<KbUsage | null>(null);
+  /** The knowledge base's per-file limit (`kbUsage.maxFileBytes`), or `null` until read. */
+  protected readonly maxFileBytes = computed(() => this.kbUsage()?.maxFileBytes ?? null);
   protected readonly canEdit = signal(false);
   protected readonly loading = signal(false);
   protected readonly loaded = signal(false);
@@ -722,12 +724,15 @@ export class ProjectFilesComponent {
   private async uploadOne(file: File): Promise<boolean> {
     const projectId = this.projectId();
     const generation = this.generation;
-    if (file.size > MAX_FILE_BYTES) {
+    // The knowledge base's per-file limit, from the files list. Unknown leaves it
+    // to the server, whose 413 carries the same sentence.
+    const maxFileBytes = this.maxFileBytes();
+    if (maxFileBytes !== null && file.size > maxFileBytes) {
       this.upload.set({
         filename: file.name,
         progress: 0,
         status: 'error',
-        error: `Files can be up to ${formatBytes(MAX_FILE_BYTES)}. This one is ${formatBytes(file.size)}.`,
+        error: fileTooLargeMessage(maxFileBytes, file.size),
       });
       return false;
     }
@@ -905,7 +910,7 @@ export class ProjectFilesComponent {
     const target = this.replaceTarget;
     this.replaceTarget = null;
     if (!target || !file) return;
-    await this.replace.replace(target, file, this.replaceTransport());
+    await this.replace.replace(target, file, this.replaceTransport(), this.maxFileBytes());
   }
 
   private replaceTransport(): DocumentReplaceTransport {

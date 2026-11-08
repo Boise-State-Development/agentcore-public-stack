@@ -281,6 +281,38 @@ class TestPdfParity:
         ]
         assert out["original"][1] == ["user-files/u1/s1/up-1/manual.pdf"]
 
+    async def test_a_byte_cap_shortens_a_prepared_read_from_the_shards_it_fetched(self, both):
+        setup, read = both
+        await setup(_meta(), build_pdf(PAGES))
+        full = (await read(page_range="9-12"))["prepared"][0]
+        cap = full.bytes_returned - 1
+
+        result, fetched = (await read(page_range="9-12", max_document_bytes=cap))["prepared"]
+
+        assert result.mode == "pages"
+        assert 1 <= result.pages_returned < 4
+        assert result.bytes_returned <= cap
+        assert result.payload["truncated_to_byte_budget"] is True
+        assert result.payload["next_start"] == 9 + result.pages_returned
+        # Shrinking re-assembles from the shards already fetched, once each.
+        assert sorted(fetched) == [
+            "user-files/u1/s1/up-1/_derived/pages-0001-0010.pdf",
+            "user-files/u1/s1/up-1/_derived/pages-0011-0020.pdf",
+        ]
+
+    async def test_a_page_too_large_to_attach_is_the_same_text_both_ways(self, both):
+        setup, read = both
+        await setup(_meta(), build_pdf(PAGES))
+        out = await read(page_range="9-12", max_document_bytes=1)
+
+        prepared, original = out["prepared"][0], out["original"][0]
+        assert prepared.payload["page_images_omitted"] == original.payload["page_images_omitted"] == "byte_budget"
+        # The note names the page's size, which differs between a slice of the
+        # original and a re-assembly from shards; everything else is equal.
+        for result in (prepared, original):
+            result.payload.pop("note")
+        assert _comparable(prepared) == _comparable(original)
+
     async def test_pattern_and_index_read_the_text_layer_not_the_pdf(self, both):
         setup, read = both
         await setup(_meta(), build_pdf(PAGES))

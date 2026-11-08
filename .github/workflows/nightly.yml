@@ -525,6 +525,13 @@ jobs:
   # seeded skills, the eval user, the deploy the baseline was promoted on), and
   # because it costs a few dozen turns instead of a full deploy. Informational:
   # one sample per case is a smoke signal, the gate is the k=3 release run.
+  #
+  # The same job then runs the turn smoke matrix against dev as the eval user.
+  # Where the environment has the release ledger on (CDK_RELEASE_LEDGER_ENABLED),
+  # both publish into dev's ledger as LEDGER#EVAL and LEDGER#SMOKE rows keyed by
+  # the Runtime build that served the turns (docs/specs/release-ledger.md §5.2).
+  # The e2e track's smoke run does not publish: its stack's ledger is deleted at
+  # teardown.
 
   eval:
     name: Eval Harness (dev)
@@ -540,9 +547,12 @@ jobs:
       # The run step is continue-on-error, so the job always concludes success;
       # the summary reads the step's own outcome to show a regression.
       outcome: ${{ steps.eval-harness.outcome }}
+      smoke_outcome: ${{ steps.turn-smoke.outcome }}
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      # "true" only where the environment has the release ledger on; unset is "".
+      RELEASE_LEDGER_PUBLISH: ${{ vars.CDK_RELEASE_LEDGER_ENABLED }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -569,6 +579,7 @@ jobs:
         continue-on-error: true
         env:
           EVAL_REPORT: ${{ github.workspace }}/eval-harness-report.json
+          EVAL_PUBLISH: ${{ env.RELEASE_LEDGER_PUBLISH }}
         run: |
           set +e
           bash scripts/nightly/eval-harness.sh
@@ -584,6 +595,26 @@ jobs:
             eval-harness-report.json
             eval-harness-run/meta.json
             eval-harness-run/results.jsonl
+          retention-days: 90
+          if-no-files-found: ignore
+      # The smoke matrix on dev, as the eval user the step above just seeded.
+      # Rows that need a grant the eval user lacks (ask_user_question) report
+      # SKIP, never FAIL. Non-blocking, like the eval step.
+      - name: Run turn smoke matrix (dev)
+        id: turn-smoke
+        if: always()
+        continue-on-error: true
+        env:
+          TURN_SMOKE_AUTH: eval-user
+          TURN_SMOKE_PUBLISH: ${{ env.RELEASE_LEDGER_PUBLISH }}
+          TURN_SMOKE_REPORT: ${{ github.workspace }}/turn-smoke-report.json
+        run: bash scripts/nightly/turn-smoke.sh
+      - name: Upload turn smoke report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: turn-smoke-report-dev
+          path: turn-smoke-report.json
           retention-days: 90
           if-no-files-found: ignore
 
@@ -793,6 +824,9 @@ jobs:
           if [ "$RUN_EVAL" = "true" ]; then
             status="$(map_status "${{ needs.eval.outputs.outcome || needs.eval.result }}")"
             ROWS+=("Eval Harness (dev)|${status}|${{ needs.eval.outputs.duration || '0' }}")
+            [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
+            status="$(map_status "${{ needs.eval.outputs.smoke_outcome || needs.eval.result }}")"
+            ROWS+=("Turn Smoke (dev)|${status}|0")
             [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
           fi
 
