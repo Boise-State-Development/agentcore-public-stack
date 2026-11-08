@@ -54,6 +54,7 @@ EXPECTED_MODULE_SCOPES = {
     "quota_requests/routes.py": "admin.quota_requests",
     "aws_limits/routes.py": "admin.aws_limits",
     "costs/routes.py": "admin.costs",
+    "costs/ledger_routes.py": "admin.costs",  # the release ledger reads the cost rollups
     "feedback/routes.py": "admin.costs",  # eval-sampling queue sits beside the cost rows
     "users/routes.py": "admin.users",
     "tools/routes.py": "admin.tools",
@@ -223,8 +224,15 @@ def test_every_mounted_admin_route_has_a_scope_dependency() -> None:
         if dependant is None:
             continue
 
+        # The whole dependency tree, not just the handler's direct
+        # dependencies: a flag guard that chains through the scope dependency
+        # (the release ledger's `require_ledger_admin`, which must authenticate
+        # before its 404) is governed by the closure one level beneath it.
         sources = []
-        for dep in dependant.dependencies:
+        pending = list(dependant.dependencies)
+        while pending:
+            dep = pending.pop()
+            pending.extend(dep.dependencies)
             call = dep.call
             if call is None:
                 continue
