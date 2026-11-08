@@ -1,7 +1,8 @@
 # Word tracked changes: reading redlines and writing them
 
 Status: shipped, behind `WORD_TRACKED_CHANGES_ENABLED` (on by default); whole-paragraph insertions
-(§3a) ship with the tool, with no flag of their own (§4a).
+(§3a) and the opt-in `if_unplaced` argument (§3b) ship with the tool, with no flag of
+their own (§4a, §4b).
 
 ## 1. Problem
 
@@ -210,10 +211,78 @@ a team's python-docx engine that a contract-review Agent was retyping each run:
 | **Font and heading formatting for new text** | **§3a**, copied from a named paragraph rather than inferred from document-wide statistics |
 | **New list item that takes the list's numbering** | **§3a** |
 | Validation gate: reject-view equals the input | The self-check above, on every call |
-| Never fail: unplaceable edits become ACTION NEEDED comments | Deliberately different: all or nothing with one line per problem. The agent fixes those or turns them into comments |
+| Never fail: unplaceable edits become ACTION NEEDED comments | Opt-in, §3b: `if_unplaced: "comment"`. The default stays all or nothing with one line per problem |
 | Topic-aware placement, the heading-style heuristics, typed-vs-automatic numbering notes, seam and capitalization repair, `[RESERVED]` notes | The agent's drafting judgment. It picks `find`, `like` and the wording |
 | Whole-paragraph deletion (removing the paragraph mark) | Neither does it. Striking a paragraph's text leaves its mark, as the engine does. Not built |
 | Moves, formatting-only revisions, headers, footers, footnotes | Neither does it |
+
+## 3b. Unplaced changes as comments: `if_unplaced`
+
+**Problem.** All or nothing (§3) costs a long review several full rounds. One
+change whose `find` is slightly off fails the whole call, so the model re-sends
+every change, each with its full clause text: a 40-change contract review can
+spend two or three full rounds of output tokens and minutes on Opus before it
+gives up on the stragglers. The hand-written engine it replaced never failed: it
+left each unplaceable change as an ACTION NEEDED margin comment.
+
+**Shape.** One top-level argument, `if_unplaced`: `"fail"` (the default, §3
+unchanged) or `"comment"`. Under `"comment"`, every change the *document*
+defeats becomes a comment instead of a failure, the rest are applied, and the
+call saves. Its result lists the two sets apart:
+
+```
+Tracked changes by Pat Reviewer: 1. deleted "thirty (30)", inserted "sixty (60)";
+3. deleted "one year", inserted "two years". Not placed, left as ACTION NEEDED
+comments (1): 2. "force majeure": The wording to change was not found in the document.
+```
+
+so the model reads back once and fixes only what needs it, by calling again on
+the saved redline with just those changes.
+
+**What becomes a comment, and where it goes.** The comment covers the whole
+paragraph the change most likely meant:
+
+| Problem (the `"fail"` line is unchanged) | Comment on |
+|---|---|
+| `find` not found | the paragraph of a match ignoring capitalization; else the paragraph holding at least half of its words (3+ letters; the first on a tie); else the first paragraph with any wording |
+| `find` spans paragraphs | the same ladder, matching the first line |
+| `find` appears N times, no `occurrence` | the first candidate |
+| `occurrence` out of range | the last candidate (the first, for one below 1) |
+| runs into a hyperlink, field, content control or existing revision | its paragraph |
+| overlaps another change | its paragraph. The **later change in request order** is the comment, whatever its position, so the result is deterministic |
+| `like` found nowhere, or in several paragraphs | the anchor |
+| an insertion point that cannot take one (mark already revised; last paragraph of a cell, the document or before a table with a different `like`) | the anchor. Only the offending change of a group drops, and the group is re-checked |
+
+The comment begins `ACTION NEEDED —`, gives the reason in one plain sentence for
+a reader of the document, then quotes the requested `find` in full and gives the
+full `replace` ("Delete it." for `""`) or each new paragraph, and the change's own
+`comment`, one line each.
+
+**What still fails.** Problems with the request itself, which no document would
+place: an empty `find`; neither `replace` nor `comment`; `replace` equal to
+`find` with no comment; a malformed insertion (`insert` not after/before, both
+`replace` and `insert`, no `paragraphs`, a paragraph with no `text` or an empty
+`lead`); malformed arguments; an unknown `if_unplaced`. Then only those
+problems are listed and nothing is saved.
+
+**Guarantees kept.**
+
+- **Placed changes are byte-identical to `"fail"`.** The ACTION NEEDED comments
+  are written after every placed change and insertion, so each placed change
+  takes the revision and comment ids it would take in a `"fail"` run of the
+  placed changes alone. Taking the three comment markers out of the body gives
+  that run's `word/document.xml` exactly (tested).
+- **Narrow re-serialization.** A paragraph that only receives an ACTION NEEDED
+  comment is now re-serialized, the one paragraph each such comment adds.
+  Its wording is untouched, and every other paragraph keeps its bytes.
+- **Self-check.** The reject-view check runs over every re-serialized paragraph,
+  the commented ones included.
+- With nothing unplaced, `"comment"` writes the same file as `"fail"`.
+
+**Cost.** The spec grows 853 → 1004 tokens (+151, Bedrock CountTokens;
+`evals/tool_spec_tokens.json`), one deliberate `toolConfig` rewrite at the deploy
+for users with the Word tools, never per session. Against that, a long review
+stops paying a full re-send of every change for each `find` that misses.
 
 ## 4. Flag
 
@@ -238,6 +307,15 @@ appears only when a change gives `insert`. A flag would only have postponed the
 one `toolConfig` rewrite and doubled the tool's spec, wiring and tests. The kill
 switch is `WORD_TRACKED_CHANGES_ENABLED`, which removes the tool.
 
+### 4b. Why §3b has no flag
+
+`if_unplaced` is an optional argument whose default, `"fail"`, is the call as it
+was: a model that never passes it gets exactly the old behaviour, so the
+argument is its own switch. A flag would have doubled the spec, its pins and its
+tests to postpone one `toolConfig` rewrite. Before merge it was checked in Word
+for Mac (§6) and its spec cost measured (§3b). The kill switch is
+`WORD_TRACKED_CHANGES_ENABLED`, which removes the tool.
+
 ## 5. Tests
 
 - `tests/agents/builtin_tools/test_docx_redline.py`: the engine. Covers
@@ -258,6 +336,11 @@ switch is `WORD_TRACKED_CHANGES_ENABLED`, which removes the tool.
 - `tests/apis/inference_api/test_word_redline_paragraphs.py`: the tool's spec
   (digest-pinned), an end-to-end call read back through `docx_paragraphs`, and
   malformed `insert` / `paragraphs` arguments changing nothing.
+- `tests/agents/builtin_tools/test_docx_redline_unplaced.py`: §3b. Each kind of
+  miss lands as its comment on the right paragraph; the comment's wording; the
+  caller's own problems still failing; overlaps resolved by request order; and a
+  mixed list whose placed edits equal a `"fail"` run of just those edits, byte
+  for byte once the action comments are taken out, insertions included.
 - Read surfaces: `docx_paragraphs` with the flag on and off, R3 swapping only a
   redlined `.docx`, and R2 annotating before the sandbox.
 - Flag and tool injection: the tool is built only with the flag on and the Word
@@ -294,6 +377,20 @@ revisions`, then each paragraph's `list string` and text), Reject All was
 identical to the original document: the same paragraphs, list labels and table
 cells, with no empty paragraph where an insertion had been. Accept All gave the
 intended text and numbering.
+
+§3b in **Microsoft Word for Mac**, 2026-11-08: the same fixture was redlined with
+nine changes and `if_unplaced: "comment"`. Four placed (a commented replacement,
+a new numbered section, two surgical edits) and five became ACTION NEEDED
+comments (two not found, one ambiguous, one capitalization-only, and an
+insertion at a table cell's end asking for another paragraph's format). Word
+opened it with no repair prompt and reported 7 revisions and 6 comments. Read
+back through its AppleScript, each ACTION NEEDED comment's scope was the intended
+paragraph: the title for the two misses with no words in common, the first
+candidate for the ambiguous one, the `Kickoff` cell, and the signature line for
+the capitalization one. The placed change's own comment stayed on its edit.
+Reject All was identical to the original document read the same way (27
+paragraphs, text and list labels), and Accept All gave the edits, with the new
+section numbered `4.` and the next renumbered `5.`.
 
 On dev, once the flag is on:
 

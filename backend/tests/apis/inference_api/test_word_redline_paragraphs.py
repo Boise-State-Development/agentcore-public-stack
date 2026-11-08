@@ -18,10 +18,10 @@ from apis.shared.files.document_read import docx_paragraphs
 
 FIXTURE = (Path(__file__).parents[2] / "agents" / "builtin_tools" / "fixtures" / "contract-numbered.docx").read_bytes()
 
-#: The spec with ``insert`` / ``paragraphs`` (285 more tokens than the v1 spec
-#: by Bedrock CountTokens: 568 → 853). A change here is a deliberate toolConfig rewrite;
-#: update the pin with it, and re-run ``scripts/measure_tool_spec_tokens.py``.
-SPEC_DIGEST = "8907f51944826aaef446fffd25c90bd00c5dbe08de9c004d953e21077543c864"
+#: The spec with ``insert`` / ``paragraphs`` (§3a: 568 → 853 Bedrock CountTokens)
+#: and ``if_unplaced`` (§3b: 853 → 1004). A change here is a deliberate toolConfig
+#: rewrite; update the pin with it, and re-run ``scripts/measure_tool_spec_tokens.py``.
+SPEC_DIGEST = "f61604ba2ae5b7d2b3c09775f53130797f3b6fd496e95365e1162bb192358ff2"
 
 
 def _digest(tool) -> str:

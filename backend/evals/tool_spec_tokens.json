@@ -78,16 +78,16 @@
       "specHash": "b04e7b03152dc756"
     },
     "create_word_document": {
-      "tokens": 2629,
+      "tokens": 2780,
       "tools": {
         "create_word_document": 1134,
         "list_word_documents": 89,
         "modify_word_document": 387,
         "read_word_document": 166,
-        "redline_word_document": 853
+        "redline_word_document": 1004
       },
-      "chars": 8790,
-      "specHash": "545423cd64be4ee9"
+      "chars": 9309,
+      "specHash": "3fab3a9e7e91ed36"
     },
     "fetch_url_content": {
       "tokens": 292,
