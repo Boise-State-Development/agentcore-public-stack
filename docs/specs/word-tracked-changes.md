@@ -2,7 +2,8 @@
 
 Status: shipped, behind `WORD_TRACKED_CHANGES_ENABLED` (on by default); whole-paragraph insertions
 (§3a), the opt-in `if_unplaced` argument (§3b) and whole-paragraph deletions (§3c)
-ship with the tool, with no flag of their own (§4a, §4b, §4c).
+ship with the tool, and comparing two documents into a redline (§3d) ships as a tool
+beside it, with no flags of their own (§4a–§4d).
 
 ## 1. Problem
 
@@ -397,6 +398,155 @@ ships it rewrites the cached `toolConfig` prefix once, for users who have the
 Word tools, never per session. Deleting a section costs one short change
 instead of one `replace: ""` per paragraph and a manual clean-up.
 
+## 3d. Comparing two documents: `compare_word_documents`
+
+Built beside `redline_word_document`, under the same condition
+(`WORD_TRACKED_CHANGES_ENABLED` and the Word grant), with no flag of its own
+(§4d).
+
+**Why.** A counterparty often sends a contract back as a clean copy, with no
+tracked changes, and the user asks what changed. Without a tool the model reads
+both files and reconstructs the edits by hand: it misses small ones (a number in
+a table cell, a dropped "and"), it cannot show them in Word, and the user still
+has to run Word's own Compare to get a redline they can accept or reject.
+
+**What it does.** Given an original and a revised `.docx`, it writes the revised
+wording into a copy of the **original** as tracked changes by one author. The
+author defaults to `Counterparty`, because the revisions are theirs; the model
+passes a name when the user gives one. Reject All gives back the original. Accept
+All gives the revised wording. The tool returns the download card and a bounded
+list of the changes (at most 40 lines, 4,000 characters), so the model can
+summarize them without reading either document.
+
+### Design
+
+**Blocks.** Each container (the body, then each table cell) is read as a
+sequence of blocks: paragraphs, tables, and anything else at block level (a
+content control). Each block is keyed by its wording, folded the way `find` is
+folded (curly and straight quotes, dash variants and non-breaking spaces equal,
+whitespace collapsed).
+
+**Paragraph alignment.** `difflib.SequenceMatcher` aligns the two key sequences
+(an LCS-style alignment, `autojunk` off). Equal blocks are left alone, byte for
+byte. Inside each differing stretch, blocks are paired in order by a weighted
+LCS (dynamic programming over the stretch) whose score is the similarity of the
+two paragraphs: the larger of a word-level and, for short paragraphs, a
+character-level `SequenceMatcher` ratio, counted only at 0.5 or above (0.3 for
+tables). A stretch of one paragraph against one paragraph is always a pairing,
+which is what a changed table cell is (`$10,000` → `$15,000` shares no word).
+A stretch larger than 2,500 candidate pairs is not paired; it is a rewrite, and
+is written as removals and additions.
+
+**Reworded paragraphs** (paired) are diffed word by word. Tokens are aligned
+finely (words, single punctuation marks and spaces, with spaces as `difflib`
+junk so a run of spaces never anchors the alignment), each differing stretch is
+widened to whole words, stretches separated only by spaces and punctuation are
+joined, and the redline engine's own `_trim` narrows each to the words that
+differ, so `receipt.` → `receipt, without setoff.` is a pure insertion of
+`, without setoff`, exactly as a `redline_word_document` change would be. Each
+stretch becomes one `w:del` / `w:ins` pair written by the redline engine's
+`_apply`, in the **original paragraph's own runs and formatting**: the
+comparison is against the original's formatting, never the revised copy's.
+
+**Removed paragraphs** are §3c's whole-paragraph deletions, built by the
+engine itself (`_deletion_of`, the rule `redline_word_document`'s `delete`
+uses): neighbouring removed paragraphs form one run, their runs move into
+`w:del` and their paragraph marks are deleted, so Accept All leaves no empty
+paragraph and Reject All restores them. Where no paragraph follows (the end of a
+cell or of the document, or before a table) the paragraph before the run gives
+up its mark instead, when it is formatted like the last one; otherwise the last
+mark stays, as Word keeps it, and Accept All leaves that one paragraph empty. A
+paragraph §3c cannot delete (it holds a hyperlink, field, section break or an
+equation) becomes a comment. When a differing stretch ends with no paragraph
+after it and has both a removed and an added paragraph after its last pairing,
+those two are paired instead, so a replaced last paragraph is an exact rewording.
+
+**Added paragraphs** reuse §3a's tracked paragraph insertions (runs in `w:ins`,
+paragraph mark in `w:pPr/w:rPr/w:ins`). They are written **before** the next
+original paragraph that stays, so the inserted mark always has a paragraph to
+merge into on Reject All; only where none follows are they written after the
+previous one that stays, and then the last of them takes that paragraph's mark
+and formatting (§3a's adopted-mark rule). They are never anchored on a removed
+paragraph, nor after one whose mark a deletion takes. An added paragraph keeps the **revised** paragraph's own run
+formatting run by run (a bold lead-in stays bold) and its paragraph properties,
+with its style and list ids mapped to the original's: each id pair seen on the
+paragraphs the two documents share teaches the mapping (an editor that renamed
+`Heading1` is followed), an id the original defines is kept, and one it does not
+is dropped rather than left dangling. Markup outside WordprocessingML (`w14`
+attributes and the like) is not copied, because the original may not declare it.
+
+**Tables.** A paired table whose grid is unchanged (same rows, the same cells
+per row, the same `gridSpan` and `vMerge`) is compared cell by cell, each cell
+as a container of its own. A table whose rows or columns changed gets a comment
+on its first paragraph saying so and quoting the revised table (at most 500
+characters), and its contents are not marked. An added or removed table, and an
+added or removed content control, get the same kind of comment.
+
+**What cannot be marked** becomes a comment instead, and a "Not marked" line in
+the result: a rewording that would cut into a hyperlink, field, smart tag or
+content control (the same locks as v1), and a removed paragraph that holds one.
+The other edits in such a paragraph are still marked; the comment quotes only
+the ones that could not be, and the revised paragraph whole.
+A comment is never placed inside a paragraph the comparison removes, because
+LibreOffice keeps a comment's anchor alive when the text around it is removed
+(§3a).
+
+**Already redlined documents are refused.** If either document holds any
+tracked change (insertion, deletion, move, or a formatting, numbering or table
+revision), the call fails with one line naming which document. Comparing on top
+of someone's live revisions would mix two authors' changes, and the self-checks
+below assume every revision is this call's. The model is told to read the
+document instead, which shows its changes (§2).
+
+**No differences.** When the wording is the same (typography, spacing and
+formatting are not differences), nothing is saved and the model is told so.
+
+**Out of scope.** Formatting-only changes (bold, a style, numbering format),
+headers, footers, footnotes and endnotes, text boxes and shapes, images, and
+moves: a moved paragraph reads as removed in one place and added in another,
+which is also how a reviewer reads it in the margin. Inserted text from a
+hyperlink or field in the revised copy arrives as plain runs with that run's
+formatting.
+
+**Guarantees kept.**
+
+- **Narrow re-serialization.** Only paragraphs that change are re-serialized and
+  spliced into the original's bytes through the redline engine's writer
+  (`_write`, shared with `redline_word_document`), namespace-safe; every other
+  paragraph and every other part of the package is copied unchanged.
+- **Reject-view self-check.** As for every redline: each edited paragraph, with
+  this call's insertions dropped and deletions kept, must read as it did.
+- **Accept-view self-check.** New here: each reworded paragraph, once accepted,
+  must read as its revised counterpart; each removed one as empty; and each
+  group of added paragraphs as the revised paragraphs it came from. Either check
+  failing is a bug, and nothing is written.
+
+### A new tool, not a mode of `redline_word_document`
+
+| Choice | cl100k (spec JSON, §3a's first method) | Bedrock CountTokens (marginal, `tool_spec_tokens.json`) |
+|---|---|---|
+| New tool `compare_word_documents` (chosen) | **378** | **419** (Word family 2,928 → 3,347) |
+| A `revised_name` mode of `redline_word_document` (prototyped, not built) | about 131 more on the redline spec | not measured |
+
+The mode is about 250 tokens cheaper and was rejected anyway:
+
+- It would make `changes` optional on `redline_word_document`, weakening a
+  schema the model uses every time it proposes edits.
+- The two jobs have opposite default authors: a redline is the user's, a
+  comparison is the counterparty's. One tool with both defaults is a
+  misattributed redline waiting to happen.
+- "What changed?" maps onto a tool named for it, and the redline spec stays
+  byte-identical (its digest is asserted again in this tool's tests).
+
+**Cost, every turn, for every user with the Word tools.** The spec is a
+constant in the cacheable `toolConfig` prefix. Shipping it is one deliberate
+`toolConfig` rewrite at deploy for those users, never per session; afterwards it
+is a cache read of 419 tokens on each turn (about $0.00005 a turn on Haiku 4.5). A
+deployment that does not want the tool turns off `WORD_TRACKED_CHANGES_ENABLED`,
+which removes the whole tracked-changes family. The tool's result is bounded,
+and replaces the model reading two documents and writing out the differences
+itself.
+
 ## 4. Flag
 
 `WORD_TRACKED_CHANGES_ENABLED` / `CDK_WORD_TRACKED_CHANGES_ENABLED` /
@@ -437,6 +587,14 @@ appears only when a change gives `delete`. Evidence took the flag's place
 before merge: Word for Mac and LibreOffice read-backs of fixture redlines
 (§6), and the spec's measured growth, one deliberate `toolConfig` rewrite at
 deploy (§3c, Cost).
+
+### 4d. Why §3d has no flag
+
+It adds a tool to a family a deployment already chose with
+`WORD_TRACKED_CHANGES_ENABLED`, and its markup is §3a's and §3c's, already proven in Word.
+Evidence before merge stands in for a flag: Word for Mac and LibreOffice
+read-backs (§6) and a measured, pinned spec. A deployment that does not want
+it turns off the tracked-changes family.
 
 ## 5. Tests
 
@@ -479,6 +637,23 @@ deploy (§3c, Cost).
   caller's own problems still failing; overlaps resolved by request order; and a
   mixed list whose placed edits equal a `"fail"` run of just those edits, byte
   for byte once the action comments are taken out, insertions included.
+- `tests/agents/builtin_tools/test_docx_compare.py`: §3d, on the real fixture
+  and a LibreOffice-written revised copy (`fixtures/contract-numbered-revised.docx`:
+  two reworded clauses, a removed list item, an added numbered section and a
+  changed table cell) and on synthetic edge cases. Covers Accept All equal to
+  the revised document and Reject All to the original (text, style and
+  numbering), the change list, word-level marks in the original's runs, the
+  removed item's deleted mark, untouched paragraphs and parts keeping their
+  bytes, the author, the reverse comparison, refusing tracked changes (a
+  formatting revision included), no differences (typography, spacing,
+  formatting), additions at the start and end, removing the last paragraph (the previous mark taken, or kept
+  when formatted differently) and replacing it, removed and added paragraphs
+  together as whole-paragraph revisions, moves, run formatting and style mapping from the revised copy,
+  foreign markup not copied, cells, changed grids, added and removed tables,
+  hyperlinks (a comment, with the other edits still marked), the pairing cap,
+  and the accept-view self-check refusing.
+- `tests/apis/inference_api/test_word_compare_documents.py`: both specs pinned,
+  the gating, and the tool's calls and messages.
 - Read surfaces: `docx_paragraphs` with the flag on and off, R3 swapping only a
   redlined `.docx`, and R2 annotating before the sandbox.
 - Flag and tool injection: the tool is built only with the flag on and the Word
@@ -571,6 +746,30 @@ Reject All was identical to the original document read the same way (27
 paragraphs, text and list labels), and Accept All gave the edits, with the new
 section numbered `4.` and the next renumbered `5.`.
 
+§3d, locally, 2026-11-08, on the engine with §3b and §3c merged: the fixture and
+its LibreOffice-written revised copy were compared (9 tracked-change regions,
+all by Counterparty).
+
+- **LibreOffice 26.2**, headless through UNO (a Python macro in a private
+  profile): Accept All gave the revised document's paragraphs exactly, list
+  labels and heading numbers included (`(b)` relettered from `(c)`, `4. Survival`
+  with `Entire Agreement` renumbered `5.`); Reject All gave the original's
+  exactly. So did the reverse comparison. Six synthetic cases gave the original
+  on Reject All every time, and the revised copy on Accept All except the two
+  designed as comments: a table with a new row, and an edit inside a hyperlink.
+  Removing the document's last paragraph is exact: the paragraph before gives up
+  its mark (§3c).
+- **Microsoft Word for Mac**, read back through Word's own AppleScript (`open`,
+  `accept all revisions` / `reject all revisions`, then each paragraph's `list
+  string of list format` and `content` of its `text object`, `close saving no`),
+  with copies in Word's container so no access prompt appears: the comparison
+  opened with no repair prompt and 9 revisions; Accept All was identical to the
+  revised document (28 paragraphs: text, list labels, table cells) and Reject
+  All to the original (27). The reverse comparison was exact both ways. The
+  synthetic cases were not read in Word: the test helper's minimal packages
+  (`tests/shared/docx_fixtures.build_docx`) declare `mc:Ignorable="w14"` without
+  the `w14` namespace, so Word offers to repair those inputs themselves.
+
 On dev, once the flag is on:
 
 1. Attach a redlined contract and ask what changed. The model should name each
@@ -578,3 +777,6 @@ On dev, once the flag is on:
 2. Ask for a redline of a clean contract. Open the output in Word: each change
    shows in the Reviewing pane under the user's name, comments appear in the
    margin, and Accept All gives the intended text.
+3. Attach a contract and a clean revised copy and ask what changed. The model
+   should call `compare_word_documents`, list the changes from its result, and
+   the download opens in Word with each change under Counterparty.

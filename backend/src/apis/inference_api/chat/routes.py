@@ -1000,7 +1000,8 @@ def _build_word_document_tools(
     spreadsheet tools) since the runtime does not populate ToolContext.
     ``redline_word_document`` joins the family only while the in-development
     ``WORD_TRACKED_CHANGES_ENABLED`` is on; off, its spec never reaches
-    ``toolConfig``. ``user_name`` is its default revision author. While the
+    ``toolConfig``. ``user_name`` is its default revision author.
+    ``compare_word_documents`` joins it under the same condition. While the
     in-development ``WORD_SKILL_SCRIPTS_ENABLED`` is on, create and modify
     also take a bound skill's script by reference (``skill_scripts.py``).
     """
@@ -1038,9 +1039,13 @@ def _build_word_document_tools(
         make_read_word_document_tool(session_id, user_id),
     ]
     if word_tracked_changes_enabled():
-        from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
+        from agents.builtin_tools.word_document_tool import (
+            make_compare_word_documents_tool,
+            make_redline_word_document_tool,
+        )
 
         tools.append(make_redline_word_document_tool(session_id, user_id, user_name))
+        tools.append(make_compare_word_documents_tool(session_id, user_id))
 
     logger.info(f"Created {len(tools)} word document tools")
     return tools

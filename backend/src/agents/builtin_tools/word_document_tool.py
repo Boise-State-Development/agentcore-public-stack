@@ -16,6 +16,9 @@ Tools
 * ``redline_word_document`` — propose edits as tracked changes and comments.
   Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on; stdlib, no Code
   Interpreter (``office/docx_redline.py``).
+* ``compare_word_documents`` — write a revised copy's differences into the
+  original as tracked changes. Built with the redline tool, while
+  ``WORD_TRACKED_CHANGES_ENABLED`` is on; stdlib (``office/docx_compare.py``).
 
 (A page-screenshot/preview tool is intentionally omitted: rasterizing a
 .docx requires LibreOffice/poppler, which the Python-only Code Interpreter
@@ -46,6 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
 
+from agents.builtin_tools.office.docx_compare import DEFAULT_AUTHOR, NoDifferences, compare
 from agents.builtin_tools.office.docx_redline import (
     IF_UNPLACED,
     Change,
@@ -931,7 +935,7 @@ def _parse_new_paragraphs(raw: Any, label: str) -> Tuple[Tuple[NewParagraph, ...
     return tuple(out), None
 
 
-def _default_redline_name(source_base: str) -> str:
+def _default_redline_name(source_base: str, suffix: str = "redline") -> str:
     """``<source>-redline``, reduced to what ``_validate_document_name`` accepts.
 
     Real file names carry spaces and punctuation ("Q3 Budget (draft)"), and
@@ -942,7 +946,7 @@ def _default_redline_name(source_base: str) -> str:
     """
     ascii_base = unicodedata.normalize("NFKD", source_base).encode("ascii", "ignore").decode()
     safe = re.sub(r"[^A-Za-z0-9_]+", "-", ascii_base).strip("-")
-    return f"{safe or 'document'}-redline"
+    return f"{safe or 'document'}-{suffix}"
 
 
 async def _redline_word_document(
@@ -1116,6 +1120,153 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
         )
 
     return redline_word_document
+
+
+#: The comparison's change list reaches the model and stays in history, so it
+#: is bounded; the redline itself holds every change.
+_MAX_COMPARE_LINES = 40
+_MAX_COMPARE_CHARS = 4_000
+
+
+def _compare_details(original: str, reviewer: str, result: Any) -> str:
+    """What the model is told: counts, then one line per change, bounded."""
+    counts = f"{result.reworded} reworded, {result.added} added and {result.removed} removed paragraph(s)"
+    head = f"Tracked changes by {reviewer} against '{original}': {counts}."
+    lines = list(result.changes) + list(result.unmarked)
+    kept: List[str] = []
+    used = len(head)
+    for line in lines[:_MAX_COMPARE_LINES]:
+        if used + len(line) + 3 > _MAX_COMPARE_CHARS:
+            break
+        kept.append(line)
+        used += len(line) + 3
+    more = len(lines) - len(kept)
+    tail = f" …and {more} more; the redline has every change." if more else ""
+    note = (
+        " Differences that could not be marked are comments in the document."
+        if result.unmarked else ""
+    )
+    return head + (" Changes: " + " | ".join(kept) + "." if kept else "") + tail + note
+
+
+async def _compare_word_documents(
+    session_id: str,
+    user_id: str,
+    original_name: str,
+    revised_name: str,
+    author: Optional[str],
+    output_name: Optional[str],
+) -> Any:
+    if not _storage_configured():
+        return _error(_NO_STORAGE_MESSAGE)
+
+    found = []
+    for name in (original_name, revised_name):
+        meta = await _find_word_document(user_id, session_id, name)
+        if meta is None:
+            return _error(
+                f"❌ No Word document named '{name}' was found in this "
+                "chat. Use list_word_documents to see what's available."
+            )
+        found.append(meta)
+    original, revised = found
+    if (original.s3_bucket, original.s3_key) == (revised.s3_bucket, revised.s3_key):
+        return _error(f"❌ '{original_name}' and '{revised_name}' are the same document. Name two different files.")
+
+    source_base = (
+        original.filename[: -len(".docx")] if original.filename.lower().endswith(".docx") else original.filename
+    )
+    out_base = output_name or _default_redline_name(source_base, "compared")
+    if out_base.lower().endswith(".docx"):
+        out_base = out_base[: -len(".docx")]
+    is_valid, error_msg = _validate_document_name(out_base)
+    if not is_valid:
+        return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
+    output_filename = f"{out_base}.docx"
+    reviewer = (author or "").strip() or DEFAULT_AUTHOR
+
+    try:
+        original_bytes, revised_bytes = await asyncio.gather(
+            asyncio.to_thread(_download_s3_bytes, original.s3_bucket, original.s3_key),
+            asyncio.to_thread(_download_s3_bytes, revised.s3_bucket, revised.s3_key),
+        )
+        result = await asyncio.to_thread(compare, original_bytes, revised_bytes, reviewer)
+    except NoDifferences:
+        return {
+            "content": [{"text": (
+                f"'{original.filename}' and '{revised.filename}' have the same wording, so there is "
+                "nothing to mark. Formatting-only changes are not compared."
+            )}],
+            "status": "success",
+        }
+    except RedlineError as exc:
+        return _error(
+            f"❌ Could not compare '{original.filename}' with '{revised.filename}':\n"
+            + "\n".join(f"- {p}" for p in exc.problems)
+        )
+    except Exception as exc:  # noqa: BLE001 - surface any read/parse error
+        logger.error(f"compare_word_documents error: {exc}")
+        return _error(f"❌ Failed to compare '{original.filename}' with '{revised.filename}': {exc}")
+
+    try:
+        upload_id, size_kb = await _store_document(
+            user_id, session_id, output_filename, result.docx, _DOCX_MIME
+        )
+    except Exception as exc:  # noqa: BLE001 - storage failure is terminal
+        logger.error(f"compare_word_documents storage error: {exc}")
+        return _error(f"❌ Compared the documents but failed to save the redline: {exc}")
+
+    details = _compare_details(original.filename, reviewer, result)
+    return _download_card(output_filename, upload_id, size_kb, "Compared", details)
+
+
+def make_compare_word_documents_tool(session_id: str, user_id: str):
+    """Create a ``compare_word_documents`` tool bound to the given identity.
+
+    Built beside ``redline_word_document``, while ``WORD_TRACKED_CHANGES_ENABLED``
+    is on (``docs/specs/word-tracked-changes.md`` §3b). Its spec is a constant: the default author is ``Counterparty``, not the
+    user, because the revisions being marked are someone else's.
+    """
+
+    @tool
+    async def compare_word_documents(
+        original_name: str,
+        revised_name: str,
+        author: Optional[str] = None,
+        output_name: Optional[str] = None,
+    ) -> Any:
+        """Compare two versions of a Word (.docx) document and mark the differences as tracked changes.
+
+        Use this when the user has an original and a revised copy without
+        tracked changes (such as a counterparty's clean return of a contract)
+        and asks what changed, for a comparison or for a redline between them.
+        The revised wording is written into a copy of the original as tracked
+        changes, so each one can be accepted or rejected in Word. Neither file
+        is changed; the comparison is saved as a new file and returned as a
+        download card with a list of the changes to summarize for the user.
+
+        Compares wording, not formatting, headers, footers or footnotes. A
+        table whose rows or columns changed, and a change inside a hyperlink or
+        field, become comments instead. A document that already has tracked
+        changes is refused: read it instead.
+
+        Args:
+            original_name: The earlier version (with or without .docx). Use
+                list_word_documents if unsure.
+            revised_name: The later version to compare with it.
+            author: Name shown on each change: whoever made the revisions.
+                Defaults to "Counterparty".
+            output_name: File name for the comparison, without extension.
+                Defaults to "<original_name>-compared".
+
+        Returns:
+            A download card for the redline and the list of changes.
+        """
+        return await _compare_word_documents(
+            session_id, user_id, original_name, revised_name, author, output_name
+        )
+
+    return compare_word_documents
 
 
 def make_list_word_documents_tool(session_id: str, user_id: str):
