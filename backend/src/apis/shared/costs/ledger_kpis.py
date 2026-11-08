@@ -28,6 +28,10 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 #: The smallest denominator a share is reported over.
 MIN_SHARE_N = 20
 
+#: Characters per token for the tool-payload estimate (D4); the writer's
+#: ``ledger_rollups.CHARS_PER_TOKEN``, restated so this module stays stdlib-only.
+CHARS_PER_TOKEN = 4
+
 #: Attributes on a ledger row that are labels, not counters.
 _LABELS = frozenset({
     "PK", "SK", "date", "appVersion", "build", "modelId", "toolId", "agentId", "projectId",
@@ -133,6 +137,25 @@ def tool_kpis(totals: Mapping[str, Any]) -> Dict[str, KPI]:
         "inputCharsPerCall": mean(t, "inputChars", "calls"),
         "meanDurationMs": mean(t, "durationMsSum", "timedCalls"),
         "estInputUsd": {"value": _num(t.get("estInputUsd")), "n": int(_num(t.get("calls")))},
+        # The same estimate in tokens: result characters / CHARS_PER_TOKEN.
+        "estInputTokens": {
+            "value": _num(t.get("resultChars")) / CHARS_PER_TOKEN,
+            "n": int(_num(t.get("calls"))),
+        },
+    }
+
+
+def model_kpis(totals: Mapping[str, Any]) -> Dict[str, KPI]:
+    """Per-model KPIs from summed ``LEDGER#MODEL`` counters (the readout's per-model break-out)."""
+    t = totals
+    cache_read = _num(t.get("cacheReadTokens"))
+    cache_write = _num(t.get("cacheWriteTokens"))
+    return {
+        "costPerTurn": mean(t, "cost", "turns"),
+        "costPerCall": mean(t, "cost", "calls"),
+        "cacheEfficiency": _ratio(cache_read, cache_read + cache_write, 1),
+        "partialMissShare": share(t, "partialMissCount", "calls"),
+        "meanFirstTokenMs": mean(t, "firstTokenMsSum", "firstTokenCount"),
     }
 
 
