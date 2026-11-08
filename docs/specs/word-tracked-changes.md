@@ -186,7 +186,8 @@ same in the margin.
   kept as the document spells them.
 - **Self-check.** Before saving, every edited paragraph is read with this
   call's insertions dropped and its deletions kept, and must equal its original
-  wording. A failure raises and nothing is written. This is the edit-in-place
+  wording, paragraph marks and properties included (§3b widened it from
+  wording alone). A failure raises and nothing is written. This is the edit-in-place
   check a hand-written engine would run, done on every call.
 
 **Cost.** The spec gains 285 tokens in `toolConfig` (568 → 853 by Bedrock
@@ -212,8 +213,103 @@ a team's python-docx engine that a contract-review Agent was retyping each run:
 | Validation gate: reject-view equals the input | The self-check above, on every call |
 | Never fail: unplaceable edits become ACTION NEEDED comments | Deliberately different: all or nothing with one line per problem. The agent fixes those or turns them into comments |
 | Topic-aware placement, the heading-style heuristics, typed-vs-automatic numbering notes, seam and capitalization repair, `[RESERVED]` notes | The agent's drafting judgment. It picks `find`, `like` and the wording |
-| Whole-paragraph deletion (removing the paragraph mark) | Neither does it. Striking a paragraph's text leaves its mark, as the engine does. Not built |
+| Whole-paragraph deletion (removing the paragraph mark) | The engine does not: it strikes the text and leaves the mark. **§3b** deletes the mark too, so later items and sections renumber |
 | Moves, formatting-only revisions, headers, footers, footnotes | Neither does it |
+
+## 3b. Deleting whole paragraphs
+
+No flag of its own, like §3a (§4a): it is on wherever `WORD_TRACKED_CHANGES_ENABLED`
+builds the tool.
+
+**Why.** `replace: ""` strikes a paragraph's wording but leaves its paragraph
+mark, so after Accept All an empty paragraph remains. In a numbered list or a
+numbered section it still holds its number. Striking clause (b) of (a)–(c)
+leaves "(a) …, (b) [empty], (c) …" instead of "(a) …, (b) …", and a contract
+reviewer has to clean every one up by hand.
+
+**Shape.** A change gives `delete` instead of `replace`:
+
+```json
+{"find": "Contractor has given written notice", "delete": "paragraph"}
+{"find": "Payment", "delete": "paragraph", "through": "University has not cured",
+ "comment": "Payment terms move to Exhibit B."}
+```
+
+- `find` names the first paragraph to delete, matched exactly as for an edit:
+  one paragraph, `occurrence` when the wording repeats.
+- `delete`: `"paragraph"` (`"paragraphs"` is read the same).
+- `through`: optional wording from a later paragraph. Every paragraph from
+  `find`'s through **the first later paragraph in the same container** (the
+  body, one table cell, one text box) whose wording contains it is deleted, so a
+  section goes in one change, from its heading to its last body paragraph.
+  Nearest-first means a `through` that repeats deletes less, never more.
+- `comment` goes on a paragraph whose **mark survives** (below).
+
+**Revision markup.** Every run of each paragraph moves into `w:del` (its `w:t`
+renamed `w:delText`), and each paragraph mark is a deletion too
+(`w:pPr/w:rPr/w:del`). On Accept All each deleted paragraph joins the next one,
+whose mark, and so whose style and numbering, is the one that survives; the
+list or the style-numbered headings after it renumber. On Reject All the marks
+are restored and nothing has moved.
+
+**No paragraph after the deletion.** The last paragraph of a table cell or of
+the document, and a paragraph just before a table, have no following mark to
+merge into, so their mark has to stay. This mirrors §3a's adopted mark, the
+other way round:
+
+- When the paragraph **before** the deletion is a paragraph formatted exactly
+  like the last deleted one (the same `w:pPr`, whitespace and an empty mark
+  `w:rPr` aside), the deletion deletes that paragraph's mark instead and keeps
+  the last deleted paragraph's. On Accept All the paragraph before ends up with a mark identical to
+  its own, so nothing about it changes. Deleting a whole section that ends just
+  before a table is this case: the previous section's last body paragraph and
+  this section's last body paragraph are formatted alike.
+- When it is formatted differently, the call refuses with a problem line
+  (keeping it would hand that paragraph the deleted one's style). The model
+  strikes the wording with `replace: ""` instead, or starts the deletion after
+  a paragraph formatted like its last one. Rewriting the surviving mark's
+  properties with a `w:pPrChange` would avoid the refusal; it is not built,
+  because LibreOffice's reject of a paragraph-property revision has not been
+  verified.
+- When nothing comes before it in the container either, every paragraph of the
+  container is being deleted. The container keeps one empty paragraph, as Word
+  requires of a table cell, and the summary line says so.
+- When a table or a content control comes before it, the call refuses.
+
+**Refused.** A paragraph that holds a hyperlink, a field, a content control, an
+existing tracked change by anyone, a section break, a tracked formatting change,
+or content with no wording the tool can mark (an equation). A `through` that
+does not name a later paragraph in the same container, or a span with a table or
+content control inside it. A deletion that shares a paragraph with another
+deletion, with a text edit, or with an insertion's anchor. An insertion after the
+paragraph whose mark a deletion takes. A comment whose next paragraph another
+change deletes (the fix is one change with `through`). Bookmarks,
+proofing marks and comment ranges inside a deleted paragraph are allowed and
+stay where they are.
+
+**Where the comment goes.** Measured headless (LibreOffice
+26.2, 2026-11-08): a comment anchored around the deleted wording, as Word itself
+places one, survives Accept All in LibreOffice and keeps the deleted paragraph
+alive as an empty paragraph that still holds its letter, which is exactly what
+deleting the mark is for. The same happens on the paragraph whose mark a
+backwards merge takes, though its wording stays. So the comment goes on the next
+paragraph, or, where the deletion takes the previous mark, on the last deleted
+paragraph, whose mark is the one that survives; both accept cleanly. It is the
+same finding as §3a's comment on the anchor.
+
+**Self-check.** The §3a check now reads each edited paragraph as Reject All
+would leave it: this call's insertions dropped, its deletions kept, a paragraph
+mark it inserted merged into the next paragraph, a mark it deleted restored, and
+each mark's paragraph properties compared with this call's mark revisions
+removed. That view must equal the original. Separately, every deleted paragraph
+must hold no wording outside `w:del`. Either failure is a bug, and nothing is
+written.
+
+**Cost.** The spec gains 148 tokens by Bedrock CountTokens on Haiku 4.5 (853 →
+1001, `evals/tool_spec_tokens.json`; 767 → 904 in cl100k). The deploy that
+ships it rewrites the cached `toolConfig` prefix once, for users who have the
+Word tools, never per session. Deleting a section costs one short change
+instead of one `replace: ""` per paragraph and a manual clean-up.
 
 ## 4. Flag
 
@@ -228,7 +324,7 @@ flag: the redline comes back on the existing download card.
 It is a **feature switch**, not a rollout switch: it changes what users'
 documents read like and adds a tool.
 
-### 4a. Why §3a has no flag
+### 4a. Why §3a and §3b have no flag
 
 It was built behind an in-development flag while the new markup (paragraph-mark
 revisions, and the anchor's own mark becoming the inserted one) was unproven in
@@ -237,6 +333,13 @@ the change is additive, old calls behave exactly as before, and the new markup
 appears only when a change gives `insert`. A flag would only have postponed the
 one `toolConfig` rewrite and doubled the tool's spec, wiring and tests. The kill
 switch is `WORD_TRACKED_CHANGES_ENABLED`, which removes the tool.
+
+§3b followed the same reasoning without a flag at all: deletion is optional on
+a tool the deployment already chose, old calls are unchanged, and its markup
+appears only when a change gives `delete`. Evidence took the flag's place
+before merge: Word for Mac and LibreOffice read-backs of fixture redlines
+(§6), and the spec's measured growth, one deliberate `toolConfig` rewrite at
+deploy (§3b, Cost).
 
 ## 5. Tests
 
@@ -258,11 +361,22 @@ switch is `WORD_TRACKED_CHANGES_ENABLED`, which removes the tool.
 - `tests/apis/inference_api/test_word_redline_paragraphs.py`: the tool's spec
   (digest-pinned), an end-to-end call read back through `docx_paragraphs`, and
   malformed `insert` / `paragraphs` arguments changing nothing.
-- Read surfaces: `docx_paragraphs` with the flag on and off, R3 swapping only a
-  redlined `.docx`, and R2 annotating before the sandbox.
-- Flag and tool injection: the tool is built only with the flag on and the Word
-  gate granted.
-- CDK: the env var is opt-in and set only while on, on both services.
+- `tests/agents/builtin_tools/test_docx_redline_deletions.py`: §3b (the engine) on the same
+  fixture with the same Word-semantics views (a deleted mark joins the next
+  paragraph on Accept All). Covers deleting a lettered item (the next item takes
+  its letter), a whole numbered section with `through`, nearest-first `through`,
+  the only paragraph of a table cell, the last paragraph of a two-paragraph cell
+  (the previous mark taken), a section ending before a table, the lone paragraph
+  before a table and the last paragraph after one (refused), comment placement,
+  deletions with insertions and text edits in one call, unique ids, every
+  problem line, and the self-check refusing a run left outside `w:del` and a
+  paragraph property changed outside a revision.
+- `tests/apis/inference_api/test_word_redline_paragraph_deletions.py`: the
+  spec documenting `delete` / `through` after the insertion wording (the whole
+  spec is digest-pinned in `test_word_redline_paragraphs.py`); an end-to-end
+  delete read back through `docx_paragraphs` as `[deleted: …]` with the comment
+  on the next paragraph; `through` through the tool; malformed `delete` /
+  `through` changing nothing.
 
 ## 6. Validation
 
@@ -294,6 +408,31 @@ revisions`, then each paragraph's `list string` and text), Reject All was
 identical to the original document: the same paragraphs, list labels and table
 cells, with no empty paragraph where an insertion had been. Accept All gave the
 intended text and numbering.
+
+§3b, locally, 2026-11-08, LibreOffice 26.2 headless (a Python macro run inside
+`soffice`, since its standalone Python is killed on this Mac): the fixture was
+redlined with a lettered item deleted (with and without a comment), the Payment
+section deleted heading-to-list and heading-to-intro, the only paragraph of a
+table cell deleted, the Entire Agreement section deleted up to the table, and a
+deletion beside a text edit and an insertion. Every file loaded with its tracked
+changes. Reject All gave back the original text, list labels and paragraph
+styles exactly. Accept All removed the paragraphs: old (c) became (b), the
+headings after the Payment section renumbered from 3. and 4. to 2. and 3., the
+cell kept one empty paragraph, and no empty paragraph was left anywhere else.
+**Microsoft Word for Mac**, the same day, driven through its AppleScript
+(`open POSIX file`, `reject all revisions` / `accept all revisions`, then each
+paragraph's `list string of list format of text object`, style and `content of
+text object`, then `close saving no`), on six of those redlines including the
+combined five-change call and the synthetic two-paragraph cell plus document
+end: every file opened with no repair prompt and its revisions counted. Reject
+All equalled the original exactly in every file, list labels and styles
+included. Accept All gave old (c) as (b), the headings after the Payment section
+as 2. and 3., the Entire Agreement section gone with no empty paragraph before
+the table, the emptied cell with one empty paragraph, and the backwards-merged
+cell and document end with no stray paragraph; the paragraph that took over a
+deleted mark kept its own style. (Word refuses scripted opens outside its
+sandbox with a Grant File Access prompt; copies in
+`~/Library/Containers/com.microsoft.Word/Data/tmp/` open without one.)
 
 On dev, once the flag is on:
 

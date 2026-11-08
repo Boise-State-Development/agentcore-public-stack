@@ -39,9 +39,25 @@ cell, of the document, or before a table there is no following paragraph mark
 to merge into, so the anchor's own mark becomes the inserted one and the last
 new paragraph keeps the anchor's formatting (which ``_locate`` enforces).
 
+**Whole paragraphs deleted** (``Change.delete``, spec §3b). A change can instead
+delete the paragraph ``find`` names, or with ``through`` every paragraph from
+it to a later one in the same container: a lettered item, a whole section from
+heading to last paragraph. Every run moves into ``w:del`` and each paragraph
+mark is a deletion too (``w:pPr/w:rPr/w:del``), so Accept All removes the
+paragraphs outright and the list or sections after them renumber, rather than
+leaving an empty paragraph that still holds its number. The paragraph after the
+deletion keeps its own mark, so its formatting is untouched. Where no paragraph
+follows (the end of a table cell or of the document, or just before a table),
+the last mark has to stay: the deletion then takes the mark of the paragraph
+before it instead, which is only right when that paragraph is formatted the
+same, so otherwise the call refuses. A container whose every paragraph is
+deleted keeps one empty paragraph, as Word requires.
+
 Before anything is saved, every edited paragraph is checked: with this call's
-insertions dropped and its deletions restored, its wording must equal what it
-was. A failure is a bug, and nothing is written.
+insertions dropped and its deletions restored, paragraph marks included, its
+wording and paragraph properties must equal what they were, and every deleted
+paragraph must hold no wording outside ``w:del``. A failure is a bug, and
+nothing is written.
 
 **Only the edited paragraphs are re-serialized.** ``word/document.xml`` is parsed
 once to find text, but the output is the original bytes with each edited
@@ -158,6 +174,10 @@ class Change:
     With ``insert`` (``"after"`` or ``"before"``), ``find`` names the anchor
     paragraph and ``paragraphs`` are added next to it as tracked insertions;
     ``replace`` must then be ``None``.
+
+    With ``delete="paragraph"``, the paragraph ``find`` names is deleted whole,
+    mark included, and with ``through`` (wording of a later paragraph in the
+    same container) every paragraph from it through that one.
     """
 
     find: str
@@ -166,6 +186,8 @@ class Change:
     occurrence: Optional[int] = None
     insert: Optional[str] = None
     paragraphs: Tuple[NewParagraph, ...] = ()
+    delete: Optional[str] = None
+    through: Optional[str] = None
 
 
 @dataclass
@@ -443,6 +465,8 @@ def _ends_paragraph_run(anchor: ElementTree.Element, parents: Dict[ElementTree.E
         return None
     if following is not None and following.tag == _W + "tbl":
         return "comes right before a table"
+    if following is not None and following.tag == _W + "sdt":
+        return "comes right before a content control"
     if parent.tag == _W + "tc":
         return "is the last paragraph of its table cell"
     if parent.tag == _W + "body":
@@ -453,7 +477,7 @@ def _ends_paragraph_run(anchor: ElementTree.Element, parents: Dict[ElementTree.E
 def _mark_is_revised(paragraph: ElementTree.Element) -> bool:
     ppr = paragraph.find(_W + "pPr")
     rpr = ppr.find(_W + "rPr") if ppr is not None else None
-    marks = (_W + "ins", _W + "del", _W + "moveFrom", _W + "moveTo")
+    marks = (_W + "ins", _W + "del", _W + "moveFrom", _W + "moveTo", _W + "rPrChange")
     return ppr is not None and (
         ppr.find(_W + "sectPr") is not None
         or ppr.find(_W + "pPrChange") is not None
@@ -547,18 +571,262 @@ def _insertion_groups(insertions: Sequence[_Insertion]) -> Dict[Tuple[int, str],
     return groups
 
 
+@dataclass
+class _Deletion:
+    """A located ``delete`` change: the paragraphs it deletes and whose marks go."""
+
+    index: int
+    change: Change
+    paragraphs: List[_Paragraph]
+    #: Paragraphs whose mark becomes a deletion, in document order. Usually all
+    #: of ``paragraphs``; where the last one's mark has to stay, its mark is
+    #: kept and ``merge_into``'s is taken instead.
+    marks: List[_Paragraph]
+    merge_into: Optional[_Paragraph]
+    #: Every paragraph of its container is deleted, so one empty one stays.
+    empties: Optional[str]
+    #: The paragraph that holds the change's comment: the next one, or where
+    #: the last mark stays, the last deleted one, whose mark survives.
+    keeper: _Paragraph
+
+
+#: Paragraph children a deleted paragraph may hold besides its runs: markers
+#: with no wording, which stay where they are.
+_DELETABLE_MARKERS = frozenset(
+    _W + name
+    for name in ("bookmarkStart", "bookmarkEnd", "proofErr", "commentRangeStart", "commentRangeEnd", "permStart", "permEnd")
+)
+
+
+def _undeletable(paragraph: ElementTree.Element) -> Optional[str]:
+    """Why ``paragraph`` cannot be deleted whole, if it cannot."""
+    ppr = paragraph.find(_W + "pPr")
+    if ppr is not None and ppr.find(_W + "sectPr") is not None:
+        return "ends a document section (it holds a section break)"
+    if _mark_is_revised(paragraph):
+        return "has a paragraph mark or formatting that is already a tracked change"
+    for seg in _segments(paragraph):
+        tag = seg.element.tag
+        if seg.locked:
+            return f"holds {seg.locked}"
+        if tag != _W + "r" and tag not in _DELETABLE_MARKERS:
+            return "holds content this tool cannot delete, such as an equation"
+    return None
+
+
+def _block_siblings(element: ElementTree.Element, parents: Dict[ElementTree.Element, ElementTree.Element]) -> List[ElementTree.Element]:
+    return [s for s in parents[element] if s.tag in _BLOCK_TAGS and s.tag != _W + "sectPr"]
+
+
+def _canonical_ppr(paragraph: ElementTree.Element, first_id: Optional[int] = None) -> str:
+    """``paragraph``'s properties as comparable text: whitespace and an empty
+    mark ``w:rPr`` ignored, and with ``first_id`` this call's mark revisions too."""
+    source = paragraph.find(_W + "pPr")
+    if source is None:
+        return ""
+    ppr = copy.deepcopy(source)
+    rpr = ppr.find(_W + "rPr")
+    if rpr is not None:
+        if first_id is not None:
+            for mark in [c for c in rpr if c.tag in (_W + "ins", _W + "del") and _is_ours(c, first_id)]:
+                rpr.remove(mark)
+        if len(rpr) == 0 and not rpr.attrib:
+            ppr.remove(rpr)
+    if len(ppr) == 0 and not ppr.attrib:
+        return ""
+    for node in ppr.iter():
+        if node.text is not None and not node.text.strip():
+            node.text = None
+        if node.tail is not None and not node.tail.strip():
+            node.tail = None
+    ppr.tail = None
+    return ElementTree.tostring(ppr, encoding="unicode")
+
+
+def _locate_deletion(
+    index: int,
+    change: Change,
+    paragraphs: Sequence[_Paragraph],
+    parents: Dict[ElementTree.Element, ElementTree.Element],
+    problems: List[str],
+) -> Optional[_Deletion]:
+    label = f"Change {index + 1}"
+    before = len(problems)
+    if change.delete != "paragraph":
+        problems.append(f'{label}: `delete` must be "paragraph".')
+    if change.replace is not None:
+        problems.append(f'{label}: give `replace` or `delete`, not both. To strike only some wording, use `replace: ""`.')
+    if change.insert is not None or change.paragraphs:
+        problems.append(f"{label}: give `insert` or `delete`, not both.")
+    if change.through is not None and (not isinstance(change.through, str) or _pattern(change.through) is None):
+        problems.append(f"{label}: `through` is empty.")
+    if len(problems) > before:
+        return None
+    found = _match(change.find, change.occurrence, paragraphs, label, problems)
+    if found is None:
+        return None
+    first = found[0]
+    known = {id(p.element): p for p in paragraphs}
+    siblings = _block_siblings(first.element, parents)
+    start = siblings.index(first.element)
+    end = start
+    if change.through is not None:
+        pattern = _pattern(change.through)
+        quoted = f'"{_short(change.through)}"'
+        crossed: Optional[str] = None
+        target: Optional[int] = None
+        for at in range(start + 1, len(siblings)):
+            sibling = siblings[at]
+            if sibling.tag != _W + "p":
+                crossed = crossed or ("a table" if sibling.tag == _W + "tbl" else "a content control")
+                continue
+            candidate = known.get(id(sibling))
+            if candidate is not None and pattern.search(candidate.folded):
+                target = at
+                break
+        if target is None:
+            elsewhere = any(pattern.search(p.folded) for p in paragraphs)
+            where = (
+                " It appears only earlier, or in another table cell or text box." if elsewhere
+                else " Copy wording from the last paragraph to delete."
+            )
+            problems.append(
+                f'{label}: `through` {quoted} was not found in a paragraph after "{_short(first.text)}" '
+                f"in the same part of the document.{where}"
+            )
+            return None
+        if crossed:
+            problems.append(
+                f"{label}: {crossed} lies between \"{_short(first.text)}\" and `through` {quoted}. Delete the "
+                "paragraphs on each side of it in separate changes."
+            )
+            return None
+        end = target
+    run: List[_Paragraph] = []
+    for sibling in siblings[start : end + 1]:
+        paragraph = known.get(id(sibling))
+        reason = _undeletable(sibling) if paragraph is not None else "is not a paragraph this tool can read"
+        if reason:
+            text = paragraph.text if paragraph is not None else ""
+            problems.append(f'{label}: the paragraph "{_short(text)}" {reason}, which this tool cannot delete.')
+            continue
+        run.append(paragraph)
+    if len(problems) > before:
+        return None
+
+    last = run[-1]
+    reason = _ends_paragraph_run(last.element, parents)
+    if reason is None:
+        return _Deletion(index, change, run, list(run), None, None, known[id(siblings[end + 1])])
+    # No paragraph follows to take over, so the last mark stays.
+    previous = siblings[start - 1] if start > 0 else None
+    following = siblings[end + 1] if end + 1 < len(siblings) else None
+    quoted_last = f'"{_short(last.text)}"'
+    if previous is None and following is None:
+        container = {_W + "tc": "table cell", _W + "body": "document", _W + "sdtContent": "content control"}.get(
+            parents[last.element].tag, "text box"
+        )
+        return _Deletion(index, change, run, run[:-1], None, container, last)
+    keep = (
+        f"{label}: {quoted_last} {reason}, so its paragraph mark has to stay, and the deletion can only "
+        "end there by taking the mark of the paragraph before it instead."
+    )
+    merge = known.get(id(previous)) if previous is not None and previous.tag == _W + "p" else None
+    if merge is None:
+        what = "nothing" if previous is None else ("a table" if previous.tag == _W + "tbl" else "a content control")
+        problems.append(
+            f"{keep} Here {what} comes before it. Strike the wording with `replace: \"\"` instead."
+        )
+        return None
+    if _mark_is_revised(merge.element):
+        problems.append(
+            f"{keep} That paragraph's mark is already a tracked change or a section break. Strike the "
+            "wording with `replace: \"\"` instead."
+        )
+        return None
+    if _canonical_ppr(merge.element) != _canonical_ppr(last.element):
+        problems.append(
+            f'{keep} That paragraph, "{_short(merge.text)}", is formatted differently, so it would take '
+            f"{quoted_last}'s formatting. Strike the wording with `replace: \"\"` instead, or start the "
+            "deletion after a paragraph formatted like the last one deleted."
+        )
+        return None
+    return _Deletion(index, change, run, [merge] + run[:-1], merge, None, last)
+
+
+def _check_deletions(
+    deletions: Sequence[_Deletion],
+    located: Sequence["_Located"],
+    insertions: Sequence[_Insertion],
+    problems: List[str],
+) -> None:
+    """A deletion may not share a paragraph with another change."""
+    owner: Dict[int, int] = {}
+    for item in deletions:
+        for paragraph in item.paragraphs:
+            other = owner.setdefault(id(paragraph.element), item.index)
+            if other != item.index:
+                problems.append(f"Change {item.index + 1} deletes a paragraph change {other + 1} also deletes.")
+                break
+    for item in located:
+        other = owner.get(id(item.paragraph.element))
+        if other is not None:
+            problems.append(
+                f"Change {item.index + 1} edits wording in a paragraph change {other + 1} deletes. Drop one of them."
+            )
+    for item in insertions:
+        other = owner.get(id(item.anchor.element))
+        if other is not None:
+            problems.append(
+                f"Change {item.index + 1} inserts next to a paragraph change {other + 1} deletes. Anchor it on "
+                "a paragraph that stays."
+            )
+    for item in deletions:
+        other = owner.get(id(item.keeper.element))
+        if (item.change.comment or "").strip() and other is not None and other != item.index:
+            problems.append(
+                f"Change {item.index + 1}'s comment would go on the next paragraph, which change {other + 1} "
+                "deletes. Delete them in one change with `through`."
+            )
+        if item.merge_into is None:
+            continue
+        other = owner.get(id(item.merge_into.element))
+        if other is not None:
+            problems.append(
+                f"Change {item.index + 1} and change {other + 1} delete neighbouring paragraphs that end where "
+                "no paragraph follows. Delete them in one change with `through`."
+            )
+        for insertion in insertions:
+            if insertion.anchor.element is item.merge_into.element and insertion.change.insert == "after":
+                problems.append(
+                    f"Change {insertion.index + 1} inserts after \"{_short(item.merge_into.text)}\", whose "
+                    f"paragraph mark change {item.index + 1} deletes. Insert before the next paragraph that stays."
+                )
+
+
 def _locate(
     changes: Sequence[Change],
     paragraphs: Sequence[_Paragraph],
     parents: Optional[Dict[ElementTree.Element, ElementTree.Element]] = None,
-) -> Tuple[List[_Located], List[_Insertion]]:
+) -> Tuple[List[_Located], List[_Insertion], List[_Deletion]]:
     problems: List[str] = []
     located: List[_Located] = []
     insertions: List[_Insertion] = []
+    deletions: List[_Deletion] = []
     for index, change in enumerate(changes):
         label = f"Change {index + 1}"
         if not isinstance(change.find, str) or not change.find.strip():
             problems.append(f"{label}: `find` is empty.")
+            continue
+        if change.delete is not None or change.through is not None:
+            if parents is None:  # pragma: no cover - redline() always passes them
+                raise ValueError("deletions need the paragraph parent map")
+            if change.delete is None:
+                problems.append(f'{label}: `through` needs `delete: "paragraph"`.')
+                continue
+            deletion = _locate_deletion(index, change, paragraphs, parents, problems)
+            if deletion is not None:
+                deletions.append(deletion)
             continue
         if change.insert is not None or change.paragraphs:
             if parents is None:  # pragma: no cover - redline() always passes them
@@ -619,9 +887,11 @@ def _locate(
                 problems.append(f"Change {after.index + 1} overlaps change {before.index + 1}.")
     if insertions and parents is not None:
         _check_insertion_groups(insertions, parents, problems)
+    if deletions:
+        _check_deletions(deletions, located, insertions, problems)
     if problems:
         raise RedlineError(problems)
-    return located, insertions
+    return located, insertions, deletions
 
 
 def _absorb_space(text: str, start: int, end: int) -> Tuple[int, int]:
@@ -829,7 +1099,8 @@ def _template_ppr(paragraph: ElementTree.Element) -> ElementTree.Element:
 
 
 def _mark_inserted(ppr: ElementTree.Element, mark: ElementTree.Element) -> None:
-    """Record the paragraph mark ``ppr`` belongs to as a tracked insertion."""
+    """Record the paragraph mark ``ppr`` belongs to as a tracked revision
+    (``mark`` is a ``w:ins`` or a ``w:del``)."""
     rpr = ppr.find(_W + "rPr")
     if rpr is None:
         rpr = ElementTree.Element(_W + "rPr")
@@ -934,24 +1205,122 @@ def _apply_insertions(
     return summaries
 
 
+# ── Deleting whole paragraphs ────────────────────────────────────────────────
+
+
+def _strike_runs(paragraph: ElementTree.Element, ids: _Ids) -> None:
+    """Move every run of ``paragraph`` into ``w:del``, one per unbroken stretch."""
+    group: Optional[ElementTree.Element] = None
+    for child in list(paragraph):
+        if child.tag != _W + "r":
+            group = None
+            continue
+        if group is None:
+            group = ids.revision("del")
+            paragraph.insert(list(paragraph).index(child), group)
+        paragraph.remove(child)
+        for t in child.iter(_W + "t"):
+            t.tag = _W + "delText"
+        group.append(child)
+
+
+def _apply_deletions(deletions: Sequence[_Deletion], ids: _Ids, comments: List[Tuple[str, str]]) -> Dict[int, str]:
+    """Delete every located paragraph, runs and marks. Returns summary lines by index."""
+    summaries: Dict[int, str] = {}
+    for item in deletions:
+        for paragraph in item.paragraphs:
+            _strike_runs(paragraph.element, ids)
+        for paragraph in item.marks:
+            ppr = paragraph.element.find(_W + "pPr")
+            if ppr is None:
+                ppr = ElementTree.Element(_W + "pPr")
+                paragraph.element.insert(0, ppr)
+            _mark_inserted(ppr, ids.revision("del"))
+        comment = (item.change.comment or "").strip()
+        if comment:
+            # In a paragraph whose mark survives, never in one whose mark is
+            # deleted: LibreOffice keeps a comment's anchor when it accepts the
+            # deletion around it, and with it an empty paragraph that still
+            # holds its number, which is what deleting the mark is for. That
+            # includes the paragraph whose mark a backwards merge takes.
+            keeper = item.keeper.element
+            comment_id = ids.take()
+            start_at = 1 if keeper.find(_W + "pPr") is not None else 0
+            keeper.insert(start_at, ElementTree.Element(_W + "commentRangeStart", {_W + "id": comment_id}))
+            keeper.append(ElementTree.Element(_W + "commentRangeEnd", {_W + "id": comment_id}))
+            reference = ElementTree.SubElement(keeper, _W + "r")
+            ElementTree.SubElement(reference, _W + "commentReference", {_W + "id": comment_id})
+            comments.append((comment_id, comment))
+        count = len(item.paragraphs)
+        if count == 1:
+            line = f'{item.index + 1}. deleted the paragraph "{_short(item.paragraphs[0].text)}"'
+        else:
+            line = (
+                f'{item.index + 1}. deleted {count} paragraphs, "{_short(item.paragraphs[0].text, 40)}" '
+                f'through "{_short(item.paragraphs[-1].text, 40)}"'
+            )
+        if comment:
+            stays = item.keeper not in item.paragraphs and item.keeper.text
+            line += f' and commented on "{_short(item.keeper.text, 40)}"' if stays else ", with a comment"
+        if item.empties:
+            line += f" (the {item.empties} keeps one empty paragraph, as Word requires)"
+        summaries[item.index] = line
+    return summaries
+
+
 # ── Checking the result ──────────────────────────────────────────────────────
+
+#: Stands for a paragraph mark in :func:`_paragraph_view`.
+_MARK = "¶"
+
+
+def _is_ours(revision: ElementTree.Element, first_id: int) -> bool:
+    revision_id = revision.get(_W + "id") or ""
+    return revision_id.lstrip("-").isdigit() and int(revision_id) >= first_id
 
 
 def _rejected_wording(node: ElementTree.Element, first_id: int) -> str:
-    """``node``'s wording with this call's insertions dropped and deletions kept."""
+    """``node``'s wording with this call's insertions dropped and deletions kept,
+    each nested paragraph followed by its mark as :func:`_paragraph_view` reads it."""
     parts: List[str] = []
     for child in node:
-        if not isinstance(child.tag, str):
+        if not isinstance(child.tag, str) or child.tag == _W + "pPr":
             continue
-        if child.tag in (_W + "ins", _W + "moveTo"):
-            revision_id = child.get(_W + "id") or ""
-            if revision_id.lstrip("-").isdigit() and int(revision_id) >= first_id:
-                continue
+        if child.tag in (_W + "ins", _W + "moveTo") and _is_ours(child, first_id):
+            continue
+        if child.tag == _W + "p":
+            parts.append(_paragraph_view(child, first_id))
+            continue
         if child.tag in (_W + "t", _W + "delText"):
             parts.append(child.text or "")
         elif child.tag in _ATOM_TEXT:
             parts.append(_ATOM_TEXT[child.tag])
         parts.append(_rejected_wording(child, first_id))
+    return "".join(parts)
+
+
+def _paragraph_view(paragraph: ElementTree.Element, first_id: int) -> str:
+    """``paragraph`` as Reject All leaves it: its wording, then its mark and
+    properties. A mark this call inserted is rejected, so the wording runs on
+    into the next paragraph; a mark this call deleted is restored."""
+    wording = _rejected_wording(paragraph, first_id)
+    rpr = paragraph.find(f"{_W}pPr/{_W}rPr")
+    if rpr is not None and any(c.tag == _W + "ins" and _is_ours(c, first_id) for c in rpr):
+        return wording
+    return wording + _MARK + _canonical_ppr(paragraph, first_id)
+
+
+def _live_wording(node: ElementTree.Element) -> str:
+    """Wording Accept All would keep: everything outside ``w:del``."""
+    parts: List[str] = []
+    for child in node:
+        if not isinstance(child.tag, str) or child.tag in (_W + "del", _W + "moveFrom", _W + "pPr"):
+            continue
+        if child.tag == _W + "t":
+            parts.append(child.text or "")
+        elif child.tag in _ATOM_TEXT:
+            parts.append(_ATOM_TEXT[child.tag])
+        parts.append(_live_wording(child))
     return "".join(parts)
 
 
@@ -1172,31 +1541,41 @@ def redline(
 
         namespaces = _Namespaces.of(xml)
         paragraphs, units = _paragraphs(body)
-        inserting = any(c.insert is not None or c.paragraphs for c in changes)
-        parents = {child: node for node in body.iter() for child in node} if inserting else None
-        located, insertions = _locate(changes, paragraphs, parents)
+        structural = any(
+            c.insert is not None or c.paragraphs or c.delete is not None or c.through is not None for c in changes
+        )
+        parents = {child: node for node in body.iter() for child in node} if structural else None
+        located, insertions, deletions = _locate(changes, paragraphs, parents)
 
         stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         ids = _Ids(_max_id(package) + 1, author, stamp)
         first_id = ids.next_id
-        dirty = sorted({item.paragraph.unit for item in located} | {item.anchor.unit for item in insertions})
-        wording = {unit: _rejected_wording(units[unit], first_id) for unit in dirty}
+        dirty = sorted(
+            {item.paragraph.unit for item in located}
+            | {item.anchor.unit for item in insertions}
+            | {p.unit for item in deletions for p in item.paragraphs + item.marks}
+            | {item.keeper.unit for item in deletions if (item.change.comment or "").strip()}
+        )
+        wording = {unit: _paragraph_view(units[unit], first_id) for unit in dirty}
         comments: List[Tuple[str, str]] = []
         summaries: Dict[int, str] = {}
         # Right to left within a paragraph, so earlier offsets stay valid.
         for item in sorted(located, key=lambda x: (x.paragraph.unit, -x.edit_start, -x.start)):
             summaries[item.index] = _apply(item, ids, comments)
+        summaries.update(_apply_deletions(deletions, ids, comments))
         extras: Dict[int, Tuple[List[ElementTree.Element], List[ElementTree.Element]]] = {}
         if insertions and parents is not None:
             summaries.update(_apply_insertions(insertions, parents, units, extras, ids, comments))
 
-        changed = [
-            unit
-            for unit in dirty
-            if _rejected_wording(units[unit], first_id) != wording[unit]
-            or any(_rejected_wording(p, first_id) for side in extras.get(unit, ([], [])) for p in side)
-        ]
-        if changed:  # a bug, never the user's input
+        def rejected_view(unit: int) -> str:
+            before, after = extras.get(unit, ([], []))
+            return "".join(_paragraph_view(p, first_id) for p in [*before, units[unit], *after])
+
+        # Reject All must give back every edited paragraph, marks and
+        # properties included, and Accept All must keep nothing of a deleted one.
+        if any(_live_wording(p.element) for item in deletions for p in item.paragraphs):  # a bug
+            raise RedlineError(["The redline would have kept wording it marked as deleted, so nothing was saved."])
+        if any(rejected_view(unit) != wording[unit] for unit in dirty):  # a bug, never the user's input
             raise RedlineError(["The redline would have changed wording it did not mark, so nothing was saved."])
 
         new_xml = _serialize_units(xml, namespaces, units, dirty, extras)

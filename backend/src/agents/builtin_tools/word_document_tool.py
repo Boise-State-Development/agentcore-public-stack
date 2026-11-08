@@ -873,6 +873,22 @@ def _parse_changes(changes: Any) -> Tuple[List[Change], List[str]]:
         if occurrence is not None and (isinstance(occurrence, bool) or not isinstance(occurrence, int)):
             problems.append(f"{label}: `occurrence` must be a whole number.")
             continue
+        if raw.get("delete") is not None or raw.get("through") is not None:
+            delete, through = raw.get("delete"), raw.get("through")
+            if raw.get("insert") is not None or raw.get("paragraphs") is not None:
+                problems.append(f"{label}: give `insert` or `delete`, not both.")
+                continue
+            if delete is not None and not isinstance(delete, str):
+                problems.append(f'{label}: `delete` must be "paragraph".')
+                continue
+            if through is not None and not isinstance(through, str):
+                problems.append(f"{label}: `through` must be text.")
+                continue
+            if isinstance(delete, str):
+                delete = delete.strip().lower()
+                delete = "paragraph" if delete == "paragraphs" else delete
+            parsed.append(Change(find, replace, comment, occurrence, delete=delete, through=through))
+            continue
         if raw.get("insert") is None and raw.get("paragraphs") is None:
             parsed.append(Change(find, replace, comment, occurrence))
             continue
@@ -989,7 +1005,8 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
     Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on
     (``docs/specs/word-tracked-changes.md`` §3). ``user_name`` is the default
     author of each revision: a redline goes back to the counterparty as the
-    user's. Changes can also insert whole paragraphs (§3a).
+    user's. Changes can also insert whole paragraphs (§3a) and delete them,
+    paragraph marks included (§3b).
     """
 
     @tool
@@ -1040,6 +1057,16 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
                   last paragraph>", "insert": "after", "paragraphs":
                   [{"text": "Survival", "like": "<words of a section
                   heading>"}, {"text": "Sections 4 and 5 survive..."}]}
+                To remove whole paragraphs, give instead of `replace`:
+                - delete: "paragraph" removes the paragraph `find` is in,
+                  paragraph mark included, so the list items or sections
+                  after it renumber once accepted. Prefer it to replace ""
+                  when a whole item, clause or section goes.
+                - through: optional wording from a later paragraph in the
+                  same part of the document (body, cell); every paragraph
+                  from `find`'s through the first after it containing this
+                  is removed, e.g. a section from heading to last paragraph.
+                  A `comment` is placed beside the deletion.
             author: Name shown on each change. Defaults to the user's name.
             output_name: File name for the redline, without extension.
                 Defaults to "<document_name>-redline".
