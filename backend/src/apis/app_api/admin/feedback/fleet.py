@@ -50,6 +50,9 @@ COMPACTION_BUCKETS: Tuple[str, ...] = ("never", "same call", "1-3 calls", "4+ ca
 #: "same call" arm.
 COMPACTION_APPLIED_KIND = "applied"
 
+#: The version arm's key for a cost row written before PR-1's stamps.
+UNSTAMPED = "unstamped"
+
 
 def minimum_n() -> int:
     """The coverage floor, env-tunable."""
@@ -170,6 +173,10 @@ def build_fleet_report(
         "agentSwitch": {},
         "callsSinceCompaction": {},
         "turnClass": {},
+        # Release ledger D6 / §5.3: the fifth arm. Keyed by the `appVersion`
+        # stamp on the joined cost row; a row written before the stamps
+        # existed is `unstamped`, never guessed from its date.
+        "version": {},
     }
     joined = 0
     sessions_seen = set()
@@ -207,6 +214,7 @@ def build_fleet_report(
         klass = turn_class(record)
         if klass is not None:
             arms["turnClass"].setdefault(klass, ArmCounts()).add(value)
+        arms["version"].setdefault(str(record.get("appVersion") or UNSTAMPED), ArmCounts()).add(value)
 
     n_thumbs = totals.n
     return {
@@ -248,3 +256,64 @@ def _as_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+#: Concurrent per-session cost-row reads.
+SESSION_FETCH_CONCURRENCY = 16
+
+
+async def load_session_records(storage: Any, session_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """Cost rows for each session, in bounded-concurrency batches. A session
+    that fails to read is dropped, not fatal: its thumbs then count toward
+    `coverage.unjoined`, which is the honest result."""
+    import asyncio
+
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for offset in range(0, len(session_ids), SESSION_FETCH_CONCURRENCY):
+        batch = session_ids[offset:offset + SESSION_FETCH_CONCURRENCY]
+        results = await asyncio.gather(
+            *(storage.get_session_cost_records(sid) for sid in batch),
+            return_exceptions=True,
+        )
+        for sid, result in zip(batch, results):
+            if isinstance(result, Exception):
+                continue
+            out[sid] = list(result or [])
+    return out
+
+
+def build_day_key(record: Dict[str, Any]) -> str:
+    """``"<appVersion>#<build>|<date>"`` for a cost row: what the release readout
+    attributes a thumb (or a provenance verdict) to, so a side counts only the
+    ones that fell inside its own window."""
+    version = str(record.get("appVersion") or UNSTAMPED)
+    build = str(record.get("build") or UNSTAMPED)
+    return f"{version}#{build}|{str(record.get('timestamp') or '')[:10]}"
+
+
+def thumbs_by_build_day(
+    thumbs: Sequence[Dict[str, Any]],
+    records_by_session: Dict[str, Sequence[Dict[str, Any]]],
+) -> Dict[str, Dict[str, int]]:
+    """Explicit thumbs counted per :func:`build_day_key` of the cost row they
+    landed on: ``{key: {up, down, retries}}``. ``retries`` counts down-thumbs
+    the user followed with a retry-with-correction. Unjoined thumbs are not
+    counted (the caller reports coverage). Pure, content-free: counts only."""
+    indexes = {sid: index_session(rows) for sid, rows in records_by_session.items()}
+    out: Dict[str, Dict[str, int]] = {}
+    for row in thumbs:
+        if row.get("signal") not in (None, "explicit"):
+            continue
+        value = _as_int(row.get("value"))
+        if value not in (1, -1):
+            continue
+        index = indexes.get(str(row.get("sessionId") or ""))
+        message_id = _as_int(row.get("messageId"))
+        record = index.by_message.get(message_id) if index and message_id is not None else None
+        if record is None:
+            continue
+        counts = out.setdefault(build_day_key(record), {"up": 0, "down": 0, "retries": 0})
+        counts["up" if value == 1 else "down"] += 1
+        if value == -1 and row.get("retryMessageId") is not None:
+            counts["retries"] += 1
+    return out

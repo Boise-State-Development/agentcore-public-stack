@@ -25,7 +25,11 @@ Subcommands:
             prints every flipped case with both answers and, best-effort,
             each sample's model calls from its session's C# cost rows (cache
             and compaction status, prompt hashes); that read is the only AWS
-            call, and --no-cost-rows skips it.
+            call, and --no-cost-rows skips it. --publish also writes the
+            comparison as one LEDGER#EVAL row into the deployment's
+            system-cost-rollup table (release-ledger spec §5.2), keyed by the
+            Runtime build that served the turns; best-effort, idempotent per
+            run, and it never changes the exit code.
   baseline  Promote --out to baselines/<model>.json. Refuses unless every case
             in the golden set ran at the run's full k. No AWS.
   cleanup   Delete the sessions and fixture uploads recorded in --out.
@@ -807,6 +811,17 @@ async def _family_calls(
     for the run's account; without them every sample prints "unavailable"
     and ``score``'s result is unchanged.
     """
+    session_ids = [str(r.get("session_id")) for r in rows if r.get("family") == family and r.get("session_id")]
+    found = await _session_calls(meta, session_ids)
+    if found is not None:
+        print(f"cost rows: read {len(found)} of {len(set(session_ids))} sessions in {family}", file=sys.stderr)
+    return found
+
+
+async def _session_calls(
+    meta: Dict[str, Any], session_ids: Sequence[str]
+) -> Optional[Dict[str, Sequence[Dict[str, Any]]]]:
+    """``{session_id: C# rows}`` for ``session_ids``; ``None`` without a prefix, ``{}`` without access."""
     prefix, region = meta.get("prefix"), meta.get("region")
     if not prefix:
         print("cost rows: the run's meta.json names no prefix; skipped", file=sys.stderr)
@@ -819,15 +834,61 @@ async def _family_calls(
     os.environ["DYNAMODB_SESSIONS_METADATA_TABLE_NAME"] = table.derive(prefix, None) or ""
     if region:
         os.environ.setdefault("AWS_DEFAULT_REGION", region)
-    session_ids = [str(r.get("session_id")) for r in rows if r.get("family") == family and r.get("session_id")]
     try:
         storage = DynamoDBStorage()
     except Exception as exc:  # noqa: BLE001 — a diagnostic never fails score
         print(f"cost rows: unavailable ({exc})", file=sys.stderr)
         return {}
-    found = await fetch_session_calls(session_ids, storage)
-    print(f"cost rows: read {len(found)} of {len(set(session_ids))} sessions in {family}", file=sys.stderr)
-    return found
+    return await fetch_session_calls(session_ids, storage)
+
+
+def _publish_eval(
+    meta: Dict[str, Any],
+    rows: Sequence[Dict[str, Any]],
+    comparisons: Sequence[Any],
+    judge_comparisons: Sequence[Any],
+    judge_model: Optional[str],
+) -> bool:
+    """Write the comparison as a ``LEDGER#EVAL`` row (release-ledger spec §5.2). Best-effort.
+
+    The row is keyed by the build that served the turns: the Runtime's, read
+    from the run's own ``C#`` rows, else ``imageTags["inference-api"]``. Never
+    the meta's top-level ``build``, which is app-api's (``/health``).
+    """
+    from smoke_turns import _looks_like_prod
+
+    from apis.shared.costs import ledger_publish as lp
+
+    prefix, region = meta.get("prefix"), meta.get("region")
+    if not prefix or _looks_like_prod(None, str(prefix)):
+        print(f"ledger: not published (prefix {prefix!r} is missing or looks like production)", file=sys.stderr)
+        return False
+    ids = lp.session_ids(rows)
+    found = asyncio.run(_session_calls(meta, ids)) or {}
+    calls = [c for sid in ids for c in found.get(sid, ())]
+    image_tag = lp.runtime_image_tag(meta.get("imageTags"))
+    served = lp.served_build(calls, image_tag=image_tag, app_version=meta.get("appVersion"))
+    if served is None:
+        print("ledger: not published (no C# row carries a build and meta.json has no inference-api image tag)",
+              file=sys.stderr)
+        return False
+    if served.source == lp.BUILD_FROM_COST_ROWS and image_tag and image_tag != served.build:
+        print(f"ledger: the Runtime's image tag at run start was {image_tag}; the turns ran on {served.build}",
+              file=sys.stderr)
+    try:
+        row = lp.eval_ledger_row(
+            meta, comparisons, served=served, result_rows=rows, judge_comparisons=judge_comparisons,
+            judge_model=judge_model, call_rows=calls,
+        )
+        lp.assert_content_free(row, lp.EVAL_ROW_FIELDS, forbidden=[*ids, meta.get("user_id") or ""])
+    except lp.PublishError as exc:
+        print(f"ledger: not published ({exc})", file=sys.stderr)
+        return False
+    if not lp.put_ledger_row(row, prefix=str(prefix), region=region):
+        print("ledger: publish failed; see the log line above. The score stands.", file=sys.stderr)
+        return False
+    print(f"ledger: published {lp.describe(row)}")
+    return True
 
 
 def cmd_score(args: argparse.Namespace) -> int:
@@ -847,6 +908,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     print(format_table(comparisons))
     judgements = read_rows(out / JUDGEMENTS_FILE)
     judge_comparisons = []
+    models: List[str] = []
     if judgements:
         models = sorted({str(j.get("judge_model")) for j in judgements})
         try:
@@ -881,6 +943,9 @@ def cmd_score(args: argparse.Namespace) -> int:
             + "\n",
             encoding="utf-8",
         )
+    if args.publish:
+        print()
+        _publish_eval(meta, rows, comparisons, judge_comparisons, models[0] if len(models) == 1 else None)
     failed = any_gate_failed(comparisons)
     print("\nGATE: " + ("FAIL — a gating family regressed; run with --explain <family>" if failed else "pass"))
     return 1 if failed else 0
@@ -967,6 +1032,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--no-cost-rows", action="store_true",
                    help="with --explain, skip reading the samples' C# cost rows (no AWS)")
     s.add_argument("--json", help="also write the comparison as JSON to this path")
+    s.add_argument("--publish", action="store_true",
+                   help="also write the comparison as a LEDGER#EVAL row (release-ledger spec §5.2; needs AWS "
+                        "credentials for the run's account); best-effort, never changes the exit code")
 
     s = sub.add_parser("baseline", help="promote a complete run to baselines/<model>.json")
     s.add_argument("--out", required=True)

@@ -1,6 +1,6 @@
 # Release ledger — cost and quality by version
 
-**Status:** Written 2026-11-06. PR-1 (provenance) BUILT the same day: the build args, `VERSION` in every image's hash manifest, `apis/shared/build_info.py`, the stamps on both cost-row writers, both EMF emitters, the `turn_prelude` / `turn_first_token` lines, the turn-timing report (`spaVersion`) and the eval run's `meta.json`, and the `LEDGER#DEPLOY` marker (`apis/shared/costs/deploy_marker.py`). PR-2 (weight) BUILT the same day: `resultChars` / `inputChars` / `durationMs` (+ `timedCalls`) per tool in the census (`ToolCensusHook`), `outcome` and `emptyAnswer` on every turn's `C#` rows (`StreamCoordinator`), both in `CALL_ROW_PROJECTION` and the cost anatomy (a "Tools by payload" table and the call detail), and the committed per-tool spec tokens (`backend/evals/tool_spec_tokens.json`, generator `backend/scripts/measure_tool_spec_tokens.py`, staleness test `tests/test_tool_spec_tokens.py`). PR-3 (ledger writes) BUILT the same day, behind `RELEASE_LEDGER_ENABLED` (off everywhere): the `LEDGER#VERSION/MODEL/TOOL/AGENT/PROJECT` bumps (`apis/shared/sessions/ledger_rollups.py`, called from `_update_system_rollups_async`), the KPI module (`apis/shared/costs/ledger_kpis.py`), and the backfill (`backend/scripts/release_ledger_backfill.py`), run on dev on 2026-11-07 over every `C#` row before 2026-11-07 00:00 UTC (§7.1). Building it corrected §5.2, §6.2, §7 and §10 Q1; each correction says so where it is. §9 is the build order; §10 holds the answers to the open questions.
+**Status:** Written 2026-11-06. PR-1 (provenance) BUILT the same day: the build args, `VERSION` in every image's hash manifest, `apis/shared/build_info.py`, the stamps on both cost-row writers, both EMF emitters, the `turn_prelude` / `turn_first_token` lines, the turn-timing report (`spaVersion`) and the eval run's `meta.json`, and the `LEDGER#DEPLOY` marker (`apis/shared/costs/deploy_marker.py`). PR-2 (weight) BUILT the same day: `resultChars` / `inputChars` / `durationMs` (+ `timedCalls`) per tool in the census (`ToolCensusHook`), `outcome` and `emptyAnswer` on every turn's `C#` rows (`StreamCoordinator`), both in `CALL_ROW_PROJECTION` and the cost anatomy (a "Tools by payload" table and the call detail), and the committed per-tool spec tokens (`backend/evals/tool_spec_tokens.json`, generator `backend/scripts/measure_tool_spec_tokens.py`, staleness test `tests/test_tool_spec_tokens.py`). PR-3 (ledger writes) BUILT the same day, behind `RELEASE_LEDGER_ENABLED` (off everywhere): the `LEDGER#VERSION/MODEL/TOOL/AGENT/PROJECT` bumps (`apis/shared/sessions/ledger_rollups.py`, called from `_update_system_rollups_async`), the KPI module (`apis/shared/costs/ledger_kpis.py`), and the backfill (`backend/scripts/release_ledger_backfill.py`), run on dev on 2026-11-07 over every `C#` row before 2026-11-07 00:00 UTC (§7.1), then gap-filled up to the first live write after the flag went on in dev. The `ledgered` mark on each live-counted `C#` row (§7) followed, because the gap-fill showed that a time alone double-counts the first live turn. Building it corrected §5.2, §6.2, §7 and §10 Q1; each correction says so where it is. PR-4 (ledger API) BUILT 2026-11-07, behind the same flag: the eight `/admin/costs/ledger/*` routes (`apis/app_api/admin/costs/ledger_routes.py`), the readers they share with the PR-7 script (`apis/shared/costs/ledger_reader.py`, `ledger_readout.py`, `ledger_latency.py`, `ledger_provenance.py`), the `version` arm on `/admin/feedback/fleet`, and one IAM statement; verified on dev the same day (§6.6). Its corrections are in §6.1 and §6.3. PR-6 (the Releases tab) BUILT 2026-11-07 behind `features.releaseLedger`, verified in the browser against dev's ledger the same day (§6.4). PR-7 (Claude's side) BUILT 2026-11-08: `backend/scripts/release_readout.py`, the `/release-readout` skill and the `cutting-a-release` step (§6.5), run against dev for 1.34.0 vs 1.33.0 the same day; the prod backfill is written as a runbook (§7.2) and not yet run. §9 is the build order; §10 holds the answers to the open questions.
 **Refs:** `docs/one-pagers/cost-effectiveness-roadmap.md` (the arc this instruments; its north-star "unexplained-waste share" becomes a per-version number here), `docs/specs/admin-cost-drilldown.md` (the content-free contract every reader below inherits), `docs/specs/eval-harness.md` (§8 report shape, §12 phase 3 "admin readout" — this spec is where that readout lands), `docs/specs/response-feedback.md` §7 and §9 (fleet attribution and the `n` floor), `docs/specs/turn-path-ttft.md` §6E (the three latency instruments), `docs/specs/platform-cost-visibility.md` (the `system-cost-rollup` table and the "scheduled, never live" rule), `docs/one-pagers/conversation-usage-patterns.md` ("Data to collect next": two of its six items ship here), `docs/testing/smoke-regression.md`.
 
 ## 1. Problem
@@ -106,11 +106,11 @@ All counters are `ADD`ed; all are integers or `Decimal` dollars. `<v>` is `appVe
 | `LEDGER#AGENT#<month>` | `<date>#<v>#<b>#<agentId>` | `calls`, `turns`, `cost`, `wastedUsd`, `toolCalls`, `toolErrors`, `agentSwitched` |
 | `LEDGER#PROJECT#<month>` | `<date>#<v>#<b>#<projectId>` | `calls`, `turns`, `cost`, `wastedUsd`, `toolCalls`, `documentReads` |
 | `LEDGER#DEPLOY` | `<service>#<build>` | `service`, `appVersion`, `build`, `firstSeenAt` — a conditional put, so the second task of a build and every restart after it write nothing. app-api writes it in a thread after startup; the Runtime's first `LEDGER#VERSION` row for a `(v, b)` pair is its marker, since it starts a microVM per session |
-| `LEDGER#EVAL` | `<startedAt>` | `appVersion`, `build`, `gitCommit`, `modelId`, `k`, `target`, `families: {name: {n, base, run, gained, lost, p, gate}}`, `judgeMeans`, `costUsd`, `durationS` — the §8 table, nothing from any answer |
-| `LEDGER#SMOKE` | `<startedAt>` | `appVersion`, `build`, `pass`, `fail`, `skip`, `firstTokenMsMedian`, `secondTurnCacheRead`, `secondTurnCacheWrite` |
+| `LEDGER#EVAL` | `<startedAt>` | `appVersion`, `build`, `buildSource`, `gitCommit`, `modelId`, `k`, `target`, `families: {name: {n, base, run, gained, lost, p, gate, gating}}`, `gateFailed`, `judgeMeans: {family: {evaluator: {n, base, run}}}`, `judgeModel`, `samples`, `calls`, `costUsd`, `durationS` — the §8 table, nothing from any answer (§5.4) |
+| `LEDGER#SMOKE` | `<startedAt>` | `appVersion`, `build`, `buildSource`, `gitCommit`, `target`, `pass`, `fail`, `skip`, `observed`, `rows: {row: status}`, `firstTokenMsMedian`, `firstTokenTurns`, `secondTurnCacheRead`, `secondTurnCacheWrite`, `calls`, `costUsd`, `durationS` (§5.4) |
 | `LEDGER#BACKFILL` | `<from>#<to>` | `from`, `to`, `rows`, `ledgerRows`, `startedAt`, `completedAt`, `status` — one per backfill run (§7), so a second run over the same range is refused |
 
-Every row of the five per-call families also `SET`s its labels (`date`, `appVersion`, `build`, and `modelId` / `toolId` / `agentId` / `projectId`), so a reader never parses a sort key. The live writer adds `firstLiveAt = if_not_exists(firstLiveAt, :now)` on the same write, and the backfill sets `backfilledAt`: the earliest `firstLiveAt` is where live counting began, which is where the backfill must stop.
+Every row of the five per-call families also `SET`s its labels (`date`, `appVersion`, `build`, and `modelId` / `toolId` / `agentId` / `projectId`), so a reader never parses a sort key. The live writer adds `firstLiveAt = if_not_exists(firstLiveAt, :now)` on the same write, and the backfill sets `backfilledAt`: the earliest `firstLiveAt` is where live counting began, which is where the backfill must stop. The `C#` row itself carries `ledgered: true`, set on its own `put_item` while the live writer is on, so the backfill can tell a row already counted from one that is not (§7).
 
 **Corrections made while building PR-3.**
 
@@ -132,6 +132,19 @@ Per call the writer issues one `VERSION` update, one `MODEL` update, one per dis
 - **Thumbs per version.** `F#` rows are joined to `C#` rows by `(sessionId, messageId)` at read time, the way `/admin/feedback/fleet` already does for its four dimensions; version becomes its fifth arm. Capped and reported as `coverage.truncated` like the others.
 - **The history carry of a tool result** (how much a result costs every later re-write of the prefix). A real number, derivable from `resultChars` and the session's later `cacheWriteInputTokens`, and a follow-up: the first version of the tools table reports the payload at intake and says so.
 
+### 5.4 Quality rows (PR-5)
+
+`backend/scripts/eval_harness.py score --publish` and `backend/scripts/smoke_turns.py --publish --prefix <p>` each write one row through `apis/shared/costs/ledger_publish.py`, which holds the row builders, the content guard and the write. Found while building it:
+
+- **The build is the one that served the turns, read from the turns themselves.** An eval run's `meta.json` has a top-level `build` from app-api's `/health`, and app-api does not serve a turn: on dev on 2026-11-07 it read `8b13e8ba31d32a80` while every call of the run ran on the Runtime's `078ac8998e8e88d2`. Keyed by it, the row would sit under a unit that `LEDGER#VERSION` never has, and the quality route would show it nowhere. So the key comes from the run's own `C#` rows, which the Runtime stamps (D1): the `(appVersion, build)` most of its calls carry, with `otherBuildCalls` counting any that ran on another (a deploy mid-run), and `buildSource: "cost_rows"`. The rows survive the run's cleanup (a deleted session keeps its cost rows), and they are already read for `score --explain`. Only when none can be read does it fall back to the Runtime's image tag (`imageTags["inference-api"]` for an eval, `/<prefix>/inference-api/image-tag` read before the first turn for a smoke run), labelled with app-api's version (`buildSource: "image_tag"`); the tag is `APP_BUILD`, so it names the same build. With neither, nothing is published. The same reading also gives `calls` and an exact `costUsd`.
+- **A publish is a `PutItem`, so a re-run is the same row.** The key is the run's `startedAt` (microseconds), which a resumed run and a re-score keep; publishing one run twice leaves one item, and a re-score after a new baseline replaces it with the newer comparison. Nothing is `ADD`ed.
+- **Content-free by an allowlist, checked before the write.** `assert_content_free` refuses an attribute outside `EVAL_ROW_FIELDS` / `SMOKE_ROW_FIELDS`, any string that is not id-shaped (the ledger reader's export pattern, so a published row reads back whole: the test round-trips both rows through PR-4's `LedgerStore` and `export_row`), and any string containing one of the run's own session or user ids. A family comparison's `reason` and its flipped case ids stay out (they are prose and the cases a failure names; `score --explain` on the run directory has them), though `eval-harness.md` §16 (D20, proposed 2026-11-07) adds per-case outcomes back as synthetic case ids and failure codes, still no prose, so the Evaluations page can show trends and case history, as do a smoke row's detail and warnings: each row keeps its name and status only.
+- **The smoke row reads the second turn's cache tokens from the table.** The matrix reads them from the admin cost anatomy, which a non-admin runner gets 403 from, so the row falls back to the shared session's last `C#` row, the same number. `firstTokenMsMedian` is the true median of the client-clock first token over the run's turns.
+- **Best-effort.** A failed write is printed and logged; neither script's exit status moves.
+- **The nightly smoke that publishes runs on dev.** The e2e track's smoke matrix runs on an ephemeral stack that is torn down with its ledger, so a row written there is read by nobody. `nightly.yml`'s eval job now runs the matrix against dev as the eval user (`smoke_turns.py --auth eval-user`, credentials from the SSM parameter `seed_eval_user.py` writes) right after the eval, and both publish when the environment has `CDK_RELEASE_LEDGER_ENABLED=true`. The e2e track's smoke run is unchanged and does not publish.
+
+Verified on dev, 2026-11-07, from the branch: a `tool_selection` eval run (9/9, gate pass) and a smoke run as the eval user (11 pass, 0 fail, 6 skip, 1 observed) each wrote one row keyed `1.33.0#078ac8998e8e88d2` from their cost rows ($0.0075 over 17 calls, $0.0055 over 20); a second `score --publish` left one item; and PR-4's quality route, run against dev's tables, returned both under that build and under `1.33.0`.
+
 ## 6. The readers
 
 ### 6.1 Admin API (`admin.costs` scope, `require_costs_admin`)
@@ -147,6 +160,14 @@ Per call the writer issues one `VERSION` update, one `MODEL` update, one per dis
 | `GET /admin/costs/ledger/export?from&to` | NDJSON of the raw ledger rows for the range, for offline work |
 
 TTFT percentiles come from one `cloudwatch:GetMetricData` call per request over `AgentCoreStack/TurnLatency` and the client and probe metrics, cached for an hour in the existing config-cache pattern; the IAM statement is added to app-api's role (no new resource). Everything else is DynamoDB queries: `LEDGER#VERSION` is one range query; the month-partitioned families are one query per month in range.
+
+**Corrections made while building PR-4.**
+
+- **Eight routes, not seven:** `agents` and `projects` are two. Every route is `require_ledger_admin`, which chains through the `admin.costs` cookie-session dependency and only then 404s while the flag is off, so a signed-out caller gets 401 and a scope-less admin 403 either way (`test_auth_is_checked_before_the_flag`). The admin-scope coverage test now walks the whole dependency tree to see the scope beneath that guard.
+- **A unit is a version or a build.** Every `version` / `baseline` parameter takes `<appVersion>` (all of its builds) or `<appVersion>#<build>`; `series` and `quality` take `unit=version|build`. On dev the version is constant between releases, so a build-against-build readout is the normal case there.
+- **The latency join is by time, not by stamp.** `appVersion` and `build` are EMF *properties*, which `GetMetricData` cannot group by (only Logs Insights can), so a window's percentiles are over every sample in it: one call per window, one period spanning the window, `None` under 20 samples, cached an hour per window (five minutes for a failed read). A window that contains a deploy mixes builds, and the readout says so (`latency_mixed_window`).
+- **Provenance is joined the way thumbs are, gated by the ledger.** `SRCV#` rows have no fleet index and no stamp. The join reads nothing unless `LEDGER#TOOL` shows `verify_sources` calls in range; then it walks the range's top-cost users (`PeriodCostIndex`, the top-sessions fan-out), queries their `SRCV#` rows projecting each claim's `state` by list index (`PROVENANCE_STATE_PROJECTION`: never a quote, value or filename), and attributes each verdict to the cost row of its session nearest before it. Capped at 200 users and 300 sessions, reported in `coverage`.
+- **An unstamped item is attributed by the ledger, only where that is unambiguous.** A thumb or verdict whose cost row predates PR-1's stamps cannot be matched by stamp, while the ledger attributed that row by the deploy-time map, which is not stored. Such an item counts for a unit only on a date when that unit is the only one in `LEDGER#VERSION`; on a shared date it is left out.
 
 ### 6.2 Derived KPIs (computed in one place, `apis/shared/costs/ledger_kpis.py`, pure)
 
@@ -185,7 +206,7 @@ Built in PR-3 (`version_kpis`, `tool_kpis`, `group_kpis`, `relative_delta`). Eve
 }
 ```
 
-Every pair is `[baseline, candidate]`; every `delta` is relative; `null` is a value below its floor, never a zero. `caveats` is generated, not free text: each line is one of a fixed set of conditions the endpoint detects (short window, mix shift, floor, estimated rows, a deploy inside the window, a model with no catalog row), because the reader of this bundle may be a page, a script or a model, and all three need the same warnings in the same words.
+Every pair is `[baseline, candidate]`; every `delta` is relative; `null` is a value below its floor, never a zero. **Built in PR-4** (`apis/shared/costs/ledger_readout.py`) with three corrections: each caveat is `{code, message}`, the code from a fixed set (`CAVEAT_CODES`: `no_baseline`, `no_full_day`, `short_window`, `deploy_in_window`, `mix_shift`, `below_floor`, `thumbs_below_floor`, `estimated_rows`, `unmetered_rows`, `commit_attributed`, `payload_not_measured`, `latency_unavailable`, `latency_mixed_window`, `coverage_truncated`), so a page can style one and a model can match one; a **full day** is a UTC date before today on which the unit was the only one of its granularity to write a row, and a unit with none (a dev build that lived an hour) falls back to its observed days with `no_full_day`; and the mix-shift test is relative (a model's call share or the mean daily active users moving by more than 20% of the larger side), ignoring models under 5% of calls in both windows. `caveats` is generated, not free text: each line is one of a fixed set of conditions the endpoint detects (short window, mix shift, floor, estimated rows, a deploy inside the window, a model with no catalog row), because the reader of this bundle may be a page, a script or a model, and all three need the same warnings in the same words.
 
 ### 6.4 The Releases tab
 
@@ -197,16 +218,43 @@ A sixth tab on `/admin/costs` (`CostTab` gains `'releases'`), gated by `features
 4. **Trend chart.** The daily series with shaded version bands, selectable by KPI; the same `CostTrendsChart` component with bands added.
 5. **Tools table.** Sorted by estimated input dollars; error rate, payload per call and latency as deltas; the spec-token column from the committed measurement.
 6. **Agents and projects tables.** Same shape, cost and waste per turn, top twenty.
-7. **Quality panel.** The eval table for each version (the §8 table, verbatim), smoke pass/fail, the thumbs arm, empty answers, interrupted share, provenance share, forced compactions.
+7. **Quality panel.** The eval table for each version (the §8 table, verbatim, linking to the Evaluations page of `eval-harness.md` §16), smoke pass/fail, the thumbs arm, empty answers, interrupted share, provenance share, forced compactions.
 8. **Export.** The readout JSON and the NDJSON range, as downloads.
 
 No fleet-wide quality score appears anywhere on the tab (D6). A delta whose `n` is under floor renders as "—" with the `n`, never as a number.
+
+**Built in PR-6** (`frontend/ai.client/src/app/admin/costs/releases/`), with four decisions the list above left open:
+
+- **The tab computes no delta.** The readout gives the tools table pairs, not deltas, so the table prints `baseline → candidate`; a relative delta computed in the SPA would be the second computation D10 forbids.
+- **The trend chart sums totals and leaves rates blank on shared days.** The series is per unit, so an additive total (cost, calls) is summed across the units on a date, while a rate on a date two builds share is a gap: a rate across builds is neither build's, and computing one would re-derive a KPI outside `ledger_kpis`.
+- **A tool window whose payload was not measured reads "—"** in the tools table (from the readout's per-side `payloadMeasured`), not the `0` its counters hold. The version-level `toolPayloadPerCall` card has no such flag and still reads `0 chars` for a pre-census window; the `payload_not_measured` caveat above it is what says so.
+- **The mix-shift box lists models at 5% of calls or more in either window** (the readout's own `MIX_SHIFT_MIN_SHARE`) and counts the rest; on dev fourteen models were in the mix and twelve were under 1%.
+
+Verified on dev's ledger 2026-11-07, from this branch's app-api against dev's tables: the default version readout (1.33.0 against 1.32.0, 13 caveats, mix shift on Haiku 5.5 and Haiku 4.5) and the §6.6 build pair (`1.33.0#d5ead33e05f3e229` against `1.33.0#f200a6a3514248d3`, chosen in the strip and the baseline picker: `no_full_day` ×2, `deploy_in_window` ×2, `latency_mixed_window`, the floors, `thumbs_below_floor` ×2) render in light and dark with every visible text node at WCAG AA; the quality panel shows PR-5's published eval and smoke rows under 1.33.0. Signed out, `/admin/costs` goes to sign-in; with no `admin.costs` the route sends the user home and every ledger route answers 403.
 
 ### 6.5 Claude's side
 
 - `backend/scripts/release_readout.py --profile <p> --prefix <prefix> [--version --baseline --days]` reads the same DynamoDB rows and CloudWatch metrics the endpoint reads, through the same `ledger_kpis` module, and writes `readout.json` and `readout.md` to a directory. It exists so the readout works from a terminal with an AWS profile and no sign-in, the way the usage-patterns skill does; it never reads a `C#` row directly.
 - `.claude/skills/release-readout/` runs the script and interprets the bundle with the traps written down: a mix shift is read before any delta; `agentSwitched` and `modelSwitched` misses are explained, not waste; an `estimated` row is attribution, not measurement; a thumbs arm under floor says nothing; a cost delta on a deploy day is a boundary, not a change; a TTFT delta under the probe's daily-median noise is "no evidence", not "unchanged". It ends with a recommendation in one of three words — ship, watch, investigate — and names the KPI that decided it.
 - The `cutting-a-release` skill gains one step: run the readout for the *outgoing* release and paste its KPI table into the release PR, so each release PR carries the previous release's verdict and a reviewer can see a trend before the next one ships.
+
+**Built in PR-7**, with three corrections to the list above:
+
+- **The script runs the route's own handler, not a re-implementation of it.** With `--profile` and `--prefix` it sets `PROJECT_PREFIX`, applies the derived environment (`hydrate_derived_environment`), and calls `ledger_routes.get_ledger_readout` in process with a `LedgerStore` and `DynamoDBStorage` on the deployment's tables. So the thumbs and provenance joins, the CloudWatch latency and the platform line are the route's, and the bundle is the one the Releases tab renders, not a second assembly of the same readers that could drift from it. The script computes no KPI and no delta. Three other sources produce the same bundle: `--base-url` (the deployed route, with a signed-in admin's cookie in `RELEASE_READOUT_COOKIE`), `--readout-json` (a saved response), and `--export` (offline: `select_windows` + `build_readout` over `/export`'s NDJSON, which holds ledger rows only, so latency, thumbs, provenance, active users and the platform line are absent and the markdown's *Source* line names them). On dev on 2026-11-08 the export path's KPIs matched the AWS path's exactly.
+- **`/quality` and `/tools` are not fetched.** The readout bundle already carries each side's eval and smoke rows, the outcome shares, provenance and thumbs (`quality`), and the top 30 tools with spec tokens (`tools`), so a second request would add nothing the readout lacks.
+- **The markdown leaves agent and project ids out.** The bundle is ids and numbers (D7), but an agent or project id names something a user made, and the readout is meant for a public PR body, so those rows print by rank (`agent 1`) unless `--show-ids` is given for a local read. Model, tool and build ids stay.
+
+The markdown is caveats first: windows, then every caveat, then the mix shift, then the KPI table (`—` for a value under its floor), per-model cost per turn, a *Moved* line, latency, tools, agents, projects and quality, thumbs last. *Moved* lists the KPIs whose bundle `delta` is at least 10% with both sides over their floor, with a mechanical worse/better word from a fixed polarity table. It is a reading aid for the skill, which weighs it against the caveats and `n` and ends in ship, watch or investigate.
+
+Run on dev 2026-11-08, `--version 1.34.0 --baseline 1.33.0`: the candidate had one partial day (1.34.0 reached dev that morning) and the baseline two full days. Ten caveats came back: `no_full_day`, `short_window`, `commit_attributed`, `mix_shift` ×2 (Haiku 5.5 0.64 → 1.00 of calls; mean daily active users 3.5 → 1.0), `below_floor` ×2, `payload_not_measured` and `thumbs_below_floor` ×2. The skill's verdict was **watch**: every delta sits behind a one-day candidate window with one model and one active user.
+
+### 6.6 PR-4 on dev, 2026-11-07
+
+Run from the PR branch against dev's own tables and CloudWatch (the route handlers called directly with dev's DynamoDB and metrics, the same code the deployed routes run), before merge deployed them.
+
+- **Export round-trips the backfilled range.** `export?from=2026-06-23&to=2026-11-06` returned 424 `LEDGER#VERSION`, 585 `MODEL`, 671 `TOOL`, 190 `AGENT` and 48 `PROJECT` rows (1,918, the backfill's count), plus the deploy and backfill markers. Summed, the version lines and the model lines each give 10,095 calls and $83.174091, §7.1's figures, and the export's id-only filter dropped no attribute of any row.
+- **Readout, versions.** Default candidate 1.33.0 (window 2026-11-06, its one full day) against 1.32.0 (2026-11-01 to 11-04, three full days): cost per turn $0.00865 → $0.01226 (n 956 / 117), server first-token p50 2,030 → 2,714 ms; caveats `short_window` ×2, `commit_attributed` ×2, `mix_shift` (Haiku 4.5 0.51 → 0.00 of calls, Haiku 5.5 0.45 → 0.92: the model change, not the code, is the first explanation), `below_floor`, `estimated_rows`, `payload_not_measured`, `thumbs_below_floor` ×2. The provenance join found 101 verdicts on 91 sessions; 55 baseline claims (6 `quote_unsupported`, 0.109) and 9 candidate claims, under the floor.
+- **Readout, builds.** `version=1.33.0#d5ead33e05f3e229&baseline=1.33.0#f200a6a3514248d3`, the first live-ledger Runtime build and the pre-flag build before it: both windows are the one shared, still-open day, so `no_full_day` ×2 (including today), `deploy_in_window` ×2, `latency_mixed_window`, six `below_floor` and `thumbs_below_floor` ×2 come back with the numbers.
 
 ## 7. Backfill
 
@@ -216,6 +264,7 @@ No fleet-wide quality score appears anywhere on the tab (D6). A delta whose `n` 
 
 - A row stamped with `appVersion` / `build` is attributed by its own stamp. An older row is attributed by a deploy-time map, `build-map --branch develop|main`: each successful `backend.yml` run on the branch, at its completion time, labelled with the `VERSION` at its commit and a build of `git-<sha12>`. The image's content hash was never recorded for those runs, so the label says it is a commit, not a hash. A row older than the map's first entry is `unknown`.
 - The script refuses a `--to` past the earliest `firstLiveAt` on `LEDGER#VERSION` (those calls are already counted), and with no `--to` it stops exactly there, or at now if the flag has never been on.
+- **A time cannot separate counted rows from uncounted ones, so a mark does.** A row's `timestamp` is when the call ran, earlier than when it was stored and counted, so the first live turn's rows sit just *before* `firstLiveAt`. On dev, four rows (two turns) were timestamped 03:35:39.197–.767 UTC against a `firstLiveAt` of 03:35:39.875, and the default end would have added them a second time. While the live writer is on, `_store_message_metadata_cloud` sets `ledgered: true` on the `C#` item in the same `put_item` (`live_ledger_writes_on()`, the same two conditions the writer checks), and the backfill never adds a marked row. A marked row still counts toward the per-day reconciliation, because it is in the ledger. PR-3's own build wrote live rows without the mark; the `firstLiveAt` ceiling keeps the backfill clear of them.
 - Each run writes a `LEDGER#BACKFILL` marker first, and a run that overlaps any marker is refused, because `ADD` is not idempotent. An interrupted run leaves its marker at `status: started`, which blocks a rerun until someone repairs it by hand.
 - So the procedure on an environment is: backfill up to now, turn the flag on, then run once more with no `--to` to fill the gap up to the first live write.
 - **Known gap at the cutover.** Turning the flag on redeploys the Runtime, but a microVM already serving a session keeps its old environment until the session ends, so a few minutes of calls after `firstLiveAt` can be written by a process with the flag still off. The per-day reconciliation shows it on the cutover day.
@@ -235,6 +284,53 @@ Against `ROLLUP#DAILY` over the 117 full days: **115 days agree exactly** on cal
 
 In total the ledger reads $83.174091 against `ROLLUP#DAILY`'s $83.504559, a difference of −$0.330468 (0.40%), all of it those two days.
 
+**Cutover gap-fill.** The flag went on at the Runtime build `d5ead33e05f3e229`; its first live write set `firstLiveAt` to 2026-11-07 03:35:39.875 UTC. That build wrote unmarked rows, so the gap-fill was cut by hand at its earliest row, 03:35:39.197: 31 rows from the two earlier builds, 11 ledger rows. For 2026-11-07 up to the check, the ledger (backfill plus live) read 49 calls and $0.52556141, the same as `ROLLUP#DAILY`.
+
+### 7.2 Prod runbook (not yet run)
+
+The prod backfill waits on two decisions that are Phil's, not a script's: turning `RELEASE_LEDGER_ENABLED` on in prod, and the evening to do it (about 22:00 Mountain, prod's quiet hour, §10 Q1). Nothing here has been run against prod.
+
+**Preconditions.** Check each before starting; stop if any fails.
+
+1. **Prod runs a release carrying #1904** (the `ledgered` mark) and PR-4 through PR-7. 1.34.0 does not: it has PR-3's writer but no mark, so a live write on it would leave rows the gap-fill cannot tell from uncounted ones. `git grep -c ledgered origin/main -- backend/src/apis/shared/sessions/ledger_rollups.py` must be non-zero, and `/health` on prod must report that release.
+2. **PR-1's stamps have been live on prod for at least one deploy** (§10 Q1), so the map only has to cover the history before them.
+3. **The flag is off on prod and has never been on:** `gh variable get CDK_RELEASE_LEDGER_ENABLED --env production` is unset or `false`, and `LEDGER#VERSION` has no row with `firstLiveAt` (the dry run below prints `first live write None`).
+4. **No earlier backfill marker:** the dry run prints no `refusing: overlaps` line.
+5. Credentials: an SSO session for the `prod-ai` profile; prefix `boisestateai-v2`.
+
+**Step 1 — backfill up to now (flag off).** Prod deploys from `main`, so the map is built from `main`'s `backend.yml` runs. Pick `T0`, an exact instant a few minutes in the past, and use it in every command below.
+
+```bash
+cd backend
+T0=2026-11-XXT05:00:00Z   # set once: where the backfill ends and the gap-fill starts
+.venv/bin/python scripts/release_ledger_backfill.py build-map --branch main --out /tmp/prod-versions.json
+AWS_PROFILE=prod-ai .venv/bin/python scripts/release_ledger_backfill.py backfill \
+    --profile prod-ai --region us-west-2 --prefix boisestateai-v2 \
+    --version-map /tmp/prod-versions.json --to "$T0" --report /tmp/prod-backfill-dry.json
+```
+
+Read the dry run before writing. Every row must be attributed (`unknown` is zero, or explained by rows older than the map's first deploy), and each full day must reconcile with `ROLLUP#DAILY`; a day that does not is explained by its `C#` rows, as §7.1's two dev days were, or the run stops there. Then write with the same arguments plus `--yes`, and read it back: `release_readout.py --profile prod-ai --prefix boisestateai-v2` returns a readout for the latest two versions, and an `/export` over the range sums to the dry run's calls and cost.
+
+**Step 2 — turn the flag on.** Set `CDK_RELEASE_LEDGER_ENABLED=true` on the `production` GitHub environment and run `platform.yml` on `main` (the variable alone deploys nothing). If the Releases tab should show on prod, `features.releaseLedger: true` in `environment.production.ts` ships in a PR with a frontend deploy, and that PR adds the flag to #1798 (on in prod, off by default) so the release gate sees it. Wait for the first live write, a `LEDGER#VERSION` row with `firstLiveAt` set:
+
+```bash
+AWS_PROFILE=prod-ai aws dynamodb query --table-name boisestateai-v2-system-cost-rollup \
+    --key-condition-expression "PK = :pk AND begins_with(SK, :d)" \
+    --expression-attribute-values '{":pk":{"S":"LEDGER#VERSION"},":d":{"S":"'"$(date -u +%F)"'"}}' \
+    --projection-expression "SK, firstLiveAt" --output text
+```
+
+**Step 3 — gap-fill from `T0` to the first live write.** Same map, `--from "$T0"` (so it starts exactly where step 1 stopped and the marker check passes) and **no `--to`**, which ends at the first live write. Rows the live writer counted carry `ledgered` and are skipped, so the first live turn's rows that sit just before `firstLiveAt` are not added twice.
+
+```bash
+AWS_PROFILE=prod-ai .venv/bin/python scripts/release_ledger_backfill.py backfill \
+    --profile prod-ai --region us-west-2 --prefix boisestateai-v2 \
+    --version-map /tmp/prod-versions.json --from "$T0" --report /tmp/prod-gapfill-dry.json
+# then the same command with --yes
+```
+
+**Check.** The cutover day's ledger (backfill plus live) matches `ROLLUP#DAILY` for that day, apart from the known microVM gap (§7): sessions that started before the Runtime redeploy keep writing with the flag off until they end, so their calls appear in `ROLLUP#DAILY` and in neither ledger path. Record the totals, the reconciliation and any gap here as §7.3, the way §7.1 records dev. If a run is interrupted, its marker stays `started` and blocks a rerun: repair it by hand (read the rows it wrote, then set the marker `complete` or delete it and the rows), never by rerunning over it.
+
 ## 8. Guards
 
 - **TTFT:** no new work before the first token. The census change is a `len()` on strings already in memory at `AfterToolCallEvent`; the rollup writes are in `_update_system_rollups_async`, after the stream. `tests/agents/main_agent/test_turn_path_invariants` (or its equivalent) asserts no new `Before*` hook work.
@@ -253,10 +349,10 @@ Each PR lands on its own and is useful alone; later ones read what earlier ones 
 | **1 — Provenance** | `--build-arg APP_VERSION/APP_BUILD` in `build-one.sh`, `VERSION` in each image's hash manifest, `ARG APP_BUILD` in the Dockerfiles; `appVersion` + `build` on `C#` rows, `turn_prelude`, both EMF emitters, the turn-timing report (SPA sends `VERSION`), eval `meta.json`; the `LEDGER#DEPLOY` marker on app-api startup | `/health` on dev reports the version; a dev turn's `C#` row carries both fields; Logs Insights can group `FirstTokenMs` by `appVersion` |
 | **2 — Weight** | `resultChars`, `inputChars`, `durationMs` in the census; `outcome` and `emptyAnswer` on the row | the session cost anatomy shows payload per tool; the usage-patterns one-pager's "tool-result tokens per tool" item is closed |
 | **3 — Ledger writes** (built) | the flag, `LEDGER#VERSION/MODEL/TOOL/AGENT/PROJECT` bumps in `_update_system_rollups_async`, the KPI module, the backfill script run on dev | dev rows accumulate; backfilled dev range matches `ROLLUP#DAILY` totals within rounding (§7.1: 115 of 117 days exact, the other two explained by the `C#` rows themselves) |
-| **4 — Ledger API** | the seven routes, the CloudWatch join and cache, the thumbs version arm added to `/admin/feedback/fleet`, content-policy coverage | the readout for two dev builds returns with caveats; export round-trips the backfilled range |
-| **5 — Publish** | `eval_harness.py score --publish`, `smoke_turns.py --publish`, both nightly tracks publish; the eval spec's §12 phase 3 marked as landing here | a nightly run on dev writes `LEDGER#EVAL` and `LEDGER#SMOKE` and the quality route returns them |
-| **6 — Tab** | the Releases tab, bands on the trend chart, the quality panel, exports | browser-verified on dev against two builds; signed-out and `admin.costs`-less users see nothing |
-| **7 — Claude** | `release_readout.py`, the `/release-readout` skill, the release-skill step, the docs-site flag row, a CLAUDE.md line under the cost tenet ("verify a release against the ledger, not a smoke run") | the outgoing release's readout appears in the next release PR; a prod backfill is run once the flag is on there |
+| **4 — Ledger API** (built) | the seven routes, the CloudWatch join and cache, the thumbs version arm added to `/admin/feedback/fleet`, content-policy coverage | the readout for two dev builds returns with caveats; export round-trips the backfilled range |
+| **5 — Publish** (built) | `eval_harness.py score --publish`, `smoke_turns.py --publish`, both nightly tracks publish (the smoke one on dev, §5.4); the eval spec's §12 phase 3 marked as landing here | a nightly run on dev writes `LEDGER#EVAL` and `LEDGER#SMOKE` and the quality route returns them |
+| **6 — Tab** (built) | the Releases tab, bands on the trend chart, the quality panel, exports | browser-verified on dev against two builds; signed-out and `admin.costs`-less users see nothing |
+| **7 — Claude** (built; prod backfill pending, §7.2) | `release_readout.py`, the `/release-readout` skill, the release-skill step, the docs-site flag row, a CLAUDE.md line under the cost tenet ("verify a release against the ledger, not a smoke run") | the outgoing release's readout appears in the next release PR; a prod backfill is run once the flag is on there |
 
 PR-1 and PR-2 are safe for prod on merge (attributes only). PR-3 onward wait on the flag.
 

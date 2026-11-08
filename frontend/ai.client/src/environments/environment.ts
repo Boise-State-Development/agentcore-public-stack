@@ -31,5 +31,6 @@ export const environment = {
         projectFileReadiness: false,
         awsLimits: false,
         knowledgeBaseMode: false,
+        releaseLedger: false,
     } satisfies FeatureFlags,
 };

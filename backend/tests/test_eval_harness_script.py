@@ -122,6 +122,112 @@ def test_explain_reads_cost_rows_unless_told_not_to(tmp_path, golden, capsys, mo
     assert "calls:" not in capsys.readouterr().out
 
 
+class TestScorePublish:
+    """``score --publish`` writes one LEDGER#EVAL row keyed by the Runtime build (release-ledger §5.2)."""
+
+    RUNTIME = "d5ead33e05f3e229"
+    APP_API = "0a0b0c0d0e0f1011"
+
+    def _runs(self, tmp_path, golden):
+        flags, _ = golden
+        run1 = tmp_path / "run1"
+        _write_run(run1)
+        assert eval_harness.main(flags + ["baseline", "--out", str(run1)]) == 0
+        run2 = tmp_path / "run2"
+        _write_run(run2, failing="abc")
+        meta = json.loads((run2 / "meta.json").read_text())
+        meta.update({"startedAt": "2026-11-07T04:00:00.000001Z", "prefix": "dev-example", "region": "us-west-2",
+                     "appVersion": "1.33.0", "build": self.APP_API,
+                     "imageTags": {"inference-api": self.RUNTIME, "app-api": self.APP_API}})
+        (run2 / "meta.json").write_text(json.dumps(meta))
+        return flags, run2
+
+    @pytest.fixture
+    def published(self, monkeypatch):
+        from apis.shared.costs import ledger_publish
+
+        rows = []
+
+        def fake_put(row, **kwargs):
+            rows.append(dict(row))
+            return True
+
+        monkeypatch.setattr(ledger_publish, "put_ledger_row", fake_put)
+        return rows
+
+    def test_keys_the_row_by_the_cost_rows_build_and_keeps_the_exit_code(self, tmp_path, golden, capsys,
+                                                                        monkeypatch, published):
+        flags, run2 = self._runs(tmp_path, golden)
+
+        async def calls(meta, session_ids):
+            return {"s": [{"appVersion": "1.33.0", "build": self.RUNTIME, "cost": {"total": 0.01}}]}
+
+        monkeypatch.setattr(eval_harness, "_session_calls", calls)
+        with (run2 / "results.jsonl").open() as fh:
+            rows = [json.loads(line) for line in fh]
+        with (run2 / "results.jsonl").open("w") as fh:
+            for r in rows:
+                fh.write(json.dumps({**r, "session_id": "s"}) + "\n")
+
+        assert eval_harness.main(flags + ["score", "--out", str(run2), "--publish"]) == 1
+        assert len(published) == 1
+        row = published[0]
+        assert (row["PK"], row["SK"]) == ("LEDGER#EVAL", "2026-11-07T04:00:00.000001Z")
+        assert (row["build"], row["buildSource"]) == (self.RUNTIME, "cost_rows")
+        assert row["families"]["tool_selection"]["lost"] == 3 and row["gateFailed"] is True
+        assert "ledger: published LEDGER#EVAL" in capsys.readouterr().out
+
+    def test_without_cost_rows_it_falls_back_to_the_runtime_image_tag_never_app_apis_build(
+        self, tmp_path, golden, monkeypatch, published
+    ):
+        flags, run2 = self._runs(tmp_path, golden)
+
+        async def no_calls(meta, session_ids):
+            return {}
+
+        monkeypatch.setattr(eval_harness, "_session_calls", no_calls)
+        eval_harness.main(flags + ["score", "--out", str(run2), "--publish"])
+        assert published[0]["build"] == self.RUNTIME and published[0]["buildSource"] == "image_tag"
+
+    def test_a_failed_write_never_changes_the_exit_code(self, tmp_path, golden, capsys, monkeypatch):
+        from apis.shared.costs import ledger_publish
+
+        flags, _ = golden
+        run1 = tmp_path / "run1"
+        _write_run(run1)
+        assert eval_harness.main(flags + ["baseline", "--out", str(run1)]) == 0
+        meta = json.loads((run1 / "meta.json").read_text())
+        meta.update({"startedAt": "2026-11-07T04:00:00Z", "prefix": "dev-example",
+                     "appVersion": "1.33.0", "imageTags": {"inference-api": self.RUNTIME}})
+        (run1 / "meta.json").write_text(json.dumps(meta))
+
+        async def no_calls(meta, session_ids):
+            return {}
+
+        monkeypatch.setattr(eval_harness, "_session_calls", no_calls)
+        monkeypatch.setattr(ledger_publish, "put_ledger_row", lambda row, **kw: False)
+        assert eval_harness.main(flags + ["score", "--out", str(run1), "--publish"]) == 0
+        assert "publish failed" in capsys.readouterr().err
+
+    def test_a_run_with_no_build_anywhere_is_not_published(self, tmp_path, golden, capsys, monkeypatch, published):
+        flags, run2 = self._runs(tmp_path, golden)
+        meta = json.loads((run2 / "meta.json").read_text())
+        meta.pop("imageTags")
+        (run2 / "meta.json").write_text(json.dumps(meta))
+
+        async def no_calls(meta, session_ids):
+            return {}
+
+        monkeypatch.setattr(eval_harness, "_session_calls", no_calls)
+        assert eval_harness.main(flags + ["score", "--out", str(run2), "--publish"]) == 1
+        assert published == [] and "not published" in capsys.readouterr().err
+
+    def test_score_without_publish_writes_nothing(self, tmp_path, golden, published):
+        flags, run2 = self._runs(tmp_path, golden)
+        eval_harness.main(flags + ["score", "--out", str(run2)])
+        assert published == []
+
+
 def test_baseline_refuses_a_partial_run(tmp_path, golden, capsys):
     flags, baselines = golden
     run = tmp_path / "run"

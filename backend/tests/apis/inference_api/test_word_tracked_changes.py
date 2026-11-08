@@ -116,7 +116,7 @@ class TestInjection:
         assert _names(["create_word_document"]) == WORD_TOOLS
 
     def test_on_the_family_gains_the_redline_tool(self, on):
-        assert _names(["create_word_document"]) == WORD_TOOLS + ["redline_word_document"]
+        assert _names(["create_word_document"]) == WORD_TOOLS + ["redline_word_document", "compare_word_documents"]
 
     def test_on_it_still_needs_the_word_grant(self, on):
         assert _names(["web_search"]) == []

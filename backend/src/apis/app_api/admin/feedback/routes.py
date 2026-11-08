@@ -11,7 +11,6 @@ ingestion; minutes, not milliseconds) and 404s while
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -23,7 +22,7 @@ from apis.shared.feature_flags import feedback_eval_sampling_enabled
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.storage.dynamodb_storage import DynamoDBStorage
 
-from .fleet import build_fleet_report
+from .fleet import build_fleet_report, load_session_records
 
 from .models import (
     DownThumbQueueItem,
@@ -55,8 +54,6 @@ def get_judge():
 #: `sessionsOmitted` rather than silently under-counted.
 MAX_THUMBS_PER_WINDOW = 2000
 MAX_SESSIONS_JOINED = 300
-#: Concurrent per-session cost-row reads.
-SESSION_FETCH_CONCURRENCY = 16
 
 
 @router.get("/fleet", response_model=FleetFeedbackResponse, response_model_by_alias=True)
@@ -66,7 +63,8 @@ async def get_fleet_feedback(
     storage: DynamoDBStorage = Depends(get_storage),
 ):
     """Down-thumb rate by config arm across the fleet — model, agent switch,
-    distance from a compaction cut, document turn class.
+    distance from a compaction cut, document turn class, and the version
+    that wrote the joined cost row (release-ledger spec §5.3).
 
     Content-free end to end: the thumbs arrive through the projected reader
     (no user id), the cost rows through the anatomy's own projection, and
@@ -113,22 +111,7 @@ async def get_fleet_feedback(
 async def _load_session_records(
     storage: DynamoDBStorage, session_ids: List[str]
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Cost rows for each session, in bounded-concurrency batches. A session
-    that fails to read is dropped, not fatal: its thumbs then count toward
-    `coverage.unjoined`, which is the honest result."""
-    out: Dict[str, List[Dict[str, Any]]] = {}
-    for offset in range(0, len(session_ids), SESSION_FETCH_CONCURRENCY):
-        batch = session_ids[offset:offset + SESSION_FETCH_CONCURRENCY]
-        results = await asyncio.gather(
-            *(storage.get_session_cost_records(sid) for sid in batch),
-            return_exceptions=True,
-        )
-        for sid, result in zip(batch, results):
-            if isinstance(result, Exception):
-                logger.debug("Fleet join: session rows unavailable")
-                continue
-            out[sid] = list(result or [])
-    return out
+    return await load_session_records(storage, session_ids)
 
 
 @router.get("/evaluations", response_model=DownThumbQueueResponse, response_model_by_alias=True)

@@ -16,6 +16,9 @@ Tools
 * ``redline_word_document`` — propose edits as tracked changes and comments.
   Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on; stdlib, no Code
   Interpreter (``office/docx_redline.py``).
+* ``compare_word_documents`` — write a revised copy's differences into the
+  original as tracked changes. Built with the redline tool, while
+  ``WORD_TRACKED_CHANGES_ENABLED`` is on; stdlib (``office/docx_compare.py``).
 
 (A page-screenshot/preview tool is intentionally omitted: rasterizing a
 .docx requires LibreOffice/poppler, which the Python-only Code Interpreter
@@ -46,7 +49,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
 
-from agents.builtin_tools.office.docx_redline import Change, RedlineError, redline
+from agents.builtin_tools.office.docx_compare import DEFAULT_AUTHOR, NoDifferences, compare
+from agents.builtin_tools.office.docx_redline import (
+    IF_UNPLACED,
+    Change,
+    NewParagraph,
+    RedlineError,
+    RedlineResult,
+    redline,
+)
 from agents.main_agent.skills.skill_scripts import (
     SkillScript,
     SkillScriptError,
@@ -873,11 +884,58 @@ def _parse_changes(changes: Any) -> Tuple[List[Change], List[str]]:
         if occurrence is not None and (isinstance(occurrence, bool) or not isinstance(occurrence, int)):
             problems.append(f"{label}: `occurrence` must be a whole number.")
             continue
-        parsed.append(Change(find, replace, comment, occurrence))
+        if raw.get("delete") is not None or raw.get("through") is not None:
+            delete, through = raw.get("delete"), raw.get("through")
+            if raw.get("insert") is not None or raw.get("paragraphs") is not None:
+                problems.append(f"{label}: give `insert` or `delete`, not both.")
+                continue
+            if delete is not None and not isinstance(delete, str):
+                problems.append(f'{label}: `delete` must be "paragraph".')
+                continue
+            if through is not None and not isinstance(through, str):
+                problems.append(f"{label}: `through` must be text.")
+                continue
+            if isinstance(delete, str):
+                delete = delete.strip().lower()
+                delete = "paragraph" if delete == "paragraphs" else delete
+            parsed.append(Change(find, replace, comment, occurrence, delete=delete, through=through))
+            continue
+        if raw.get("insert") is None and raw.get("paragraphs") is None:
+            parsed.append(Change(find, replace, comment, occurrence))
+            continue
+        insert = raw.get("insert")
+        new, problem = _parse_new_paragraphs(raw.get("paragraphs"), label)
+        if problem:
+            problems.append(problem)
+            continue
+        if not isinstance(insert, str):
+            problems.append(f'{label}: `insert` must be "after" or "before".')
+            continue
+        parsed.append(Change(find, replace, comment, occurrence, insert.strip().lower(), new))
     return parsed, problems
 
 
-def _default_redline_name(source_base: str) -> str:
+def _parse_new_paragraphs(raw: Any, label: str) -> Tuple[Tuple[NewParagraph, ...], Optional[str]]:
+    """``paragraphs`` as :class:`NewParagraph` objects; a bare string is its ``text``."""
+    if not isinstance(raw, list) or not raw:
+        return (), f"{label}: `paragraphs` must be a non-empty list of {{text, like?, lead?}}."
+    out: List[NewParagraph] = []
+    for number, item in enumerate(raw, 1):
+        if isinstance(item, str):
+            item = {"text": item}
+        if not isinstance(item, dict):
+            return (), f"{label}: new paragraph {number} must be an object with `text`."
+        text, like, lead = item.get("text"), item.get("like"), item.get("lead")
+        if not isinstance(text, str):
+            return (), f"{label}: new paragraph {number} needs `text`."
+        for name, value in (("like", like), ("lead", lead)):
+            if value is not None and not isinstance(value, str):
+                return (), f"{label}: new paragraph {number}'s `{name}` must be text."
+        out.append(NewParagraph(text, like, lead))
+    return tuple(out), None
+
+
+def _default_redline_name(source_base: str, suffix: str = "redline") -> str:
     """``<source>-redline``, reduced to what ``_validate_document_name`` accepts.
 
     Real file names carry spaces and punctuation ("Q3 Budget (draft)"), and
@@ -888,7 +946,87 @@ def _default_redline_name(source_base: str) -> str:
     """
     ascii_base = unicodedata.normalize("NFKD", source_base).encode("ascii", "ignore").decode()
     safe = re.sub(r"[^A-Za-z0-9_]+", "-", ascii_base).strip("-")
-    return f"{safe or 'document'}-redline"
+    return f"{safe or 'document'}-{suffix}"
+
+
+async def _redline_word_document(
+    session_id: str,
+    user_id: str,
+    user_name: Optional[str],
+    document_name: str,
+    changes: Any,
+    author: Optional[str],
+    output_name: Optional[str],
+    if_unplaced: Any = "fail",
+) -> Any:
+    if not _storage_configured():
+        return _error(_NO_STORAGE_MESSAGE)
+
+    parsed, problems = _parse_changes(changes)
+    mode = if_unplaced.strip().lower() if isinstance(if_unplaced, str) else None
+    if mode not in IF_UNPLACED:
+        problems.append('`if_unplaced` must be "fail" or "comment".')
+    if problems:
+        return _error("❌ Nothing was changed:\n" + "\n".join(f"- {p}" for p in problems))
+
+    source = await _find_word_document(user_id, session_id, document_name)
+    if source is None:
+        return _error(
+            f"❌ No Word document named '{document_name}' was found in this "
+            "chat. Use list_word_documents to see what's available."
+        )
+
+    source_base = source.filename[: -len(".docx")] if source.filename.lower().endswith(".docx") else source.filename
+    out_base = output_name or _default_redline_name(source_base)
+    if out_base.lower().endswith(".docx"):
+        out_base = out_base[: -len(".docx")]
+    is_valid, error_msg = _validate_document_name(out_base)
+    if not is_valid:
+        return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
+    output_filename = f"{out_base}.docx"
+    reviewer = (author or user_name or "").strip() or "Reviewer"
+
+    try:
+        source_bytes = await asyncio.to_thread(
+            _download_s3_bytes, source.s3_bucket, source.s3_key
+        )
+        result = await asyncio.to_thread(redline, source_bytes, parsed, reviewer, None, mode)
+    except RedlineError as exc:
+        return _error(
+            f"❌ Nothing was changed in '{source.filename}':\n"
+            + "\n".join(f"- {p}" for p in exc.problems)
+        )
+    except Exception as exc:  # noqa: BLE001 - surface any read/parse error
+        logger.error(f"redline_word_document error: {exc}")
+        return _error(f"❌ Failed to redline '{source.filename}': {exc}")
+
+    try:
+        upload_id, size_kb = await _store_document(
+            user_id, session_id, output_filename, result.docx, _DOCX_MIME
+        )
+    except Exception as exc:  # noqa: BLE001 - storage failure is terminal
+        logger.error(f"redline_word_document storage error: {exc}")
+        return _error(
+            f"❌ Redlined '{source.filename}' but failed to save it: {exc}"
+        )
+
+    return _download_card(output_filename, upload_id, size_kb, "Redlined", _redline_details(reviewer, result))
+
+
+def _redline_details(reviewer: str, result: RedlineResult) -> str:
+    """What the call did: the applied changes, then (``if_unplaced="comment"``)
+    the ones left as ACTION NEEDED comments, so a read-back fixes only those."""
+    if not result.commented:
+        return f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
+    applied = (
+        f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
+        if result.applied
+        else "No change could be placed."
+    )
+    return (
+        f"{applied} Not placed, left as ACTION NEEDED comments ({len(result.commented)}): "
+        + "; ".join(result.commented)
+    )
 
 
 def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Optional[str]):
@@ -897,7 +1035,10 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
     Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on
     (``docs/specs/word-tracked-changes.md`` §3). ``user_name`` is the default
     author of each revision: a redline goes back to the counterparty as the
-    user's.
+    user's. Changes can also insert whole paragraphs (§3a) and delete them,
+    paragraph marks included (§3c), and ``if_unplaced="comment"`` leaves the
+    ones it cannot place as ACTION NEEDED comments (§3b); its default keeps the
+    all-or-nothing call.
     """
 
     @tool
@@ -906,6 +1047,7 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
         changes: List[Dict[str, Any]],
         author: Optional[str] = None,
         output_name: Optional[str] = None,
+        if_unplaced: str = "fail",
     ) -> Any:
         """Propose edits to a Word (.docx) document as tracked changes and comments.
 
@@ -915,8 +1057,11 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
         Reviewing pane and can be accepted or rejected. The original is kept;
         the redline is saved as a new file and returned as a download card.
 
-        All or nothing: if any change cannot be placed, nothing is saved and
-        the error names each problem, so fix those changes and call again.
+        All or nothing by default: if any change cannot be placed, nothing is
+        saved and the error names each problem, so fix those changes and call
+        again. With if_unplaced="comment", each change that cannot be placed
+        becomes an "ACTION NEEDED" comment on the paragraph it most likely
+        meant, and the rest are saved.
 
         Args:
             document_name: The document to mark up (with or without .docx),
@@ -933,65 +1078,195 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
                 - comment: optional comment on the change, or on `find` alone
                   when there is no `replace`.
                 - occurrence: 1-based, only when `find` appears more than once.
+                To add whole paragraphs (a new section, list item or clause),
+                give these instead of `replace`:
+                - insert: "after" or "before" the paragraph `find` is in.
+                - paragraphs: the new paragraphs in order, each {"text": ...,
+                  "like"?: ..., "lead"?: ...}. `like` is wording from the
+                  paragraph whose style, numbering and font to copy (default:
+                  the `find` paragraph), so one like a numbered heading or
+                  list item takes the next number; where numbers are typed,
+                  write the number in `text`. `lead` is an inline heading
+                  such as "Survival." in that paragraph's lead-in format.
+                  A `comment` goes on the `find` paragraph. Example, a new
+                  section after section 7: {"find": "<words from section 7's
+                  last paragraph>", "insert": "after", "paragraphs":
+                  [{"text": "Survival", "like": "<words of a section
+                  heading>"}, {"text": "Sections 4 and 5 survive..."}]}
+                To remove whole paragraphs, give instead of `replace`:
+                - delete: "paragraph" removes the paragraph `find` is in,
+                  paragraph mark included, so the list items or sections
+                  after it renumber once accepted. Prefer it to replace ""
+                  when a whole item, clause or section goes.
+                - through: optional wording from a later paragraph in the
+                  same part of the document (body, cell); every paragraph
+                  from `find`'s through the first after it containing this
+                  is removed, e.g. a section from heading to last paragraph.
+                  A `comment` is placed beside the deletion.
             author: Name shown on each change. Defaults to the user's name.
             output_name: File name for the redline, without extension.
                 Defaults to "<document_name>-redline".
+            if_unplaced: "fail" (default) or "comment". Prefer "comment" for
+                more than a few changes, so one wrong `find` costs no re-send
+                of the rest. To fix a commented change, call again on the saved
+                redline with just that change.
 
         Returns:
-            A download card for the redline and one line per change applied.
+            A download card for the redline, one line per change applied and,
+            with "comment", one per change left as a comment.
         """
-        if not _storage_configured():
-            return _error(_NO_STORAGE_MESSAGE)
-
-        parsed, problems = _parse_changes(changes)
-        if problems:
-            return _error("❌ Nothing was changed:\n" + "\n".join(f"- {p}" for p in problems))
-
-        source = await _find_word_document(user_id, session_id, document_name)
-        if source is None:
-            return _error(
-                f"❌ No Word document named '{document_name}' was found in this "
-                "chat. Use list_word_documents to see what's available."
-            )
-
-        source_base = source.filename[: -len(".docx")] if source.filename.lower().endswith(".docx") else source.filename
-        out_base = output_name or _default_redline_name(source_base)
-        if out_base.lower().endswith(".docx"):
-            out_base = out_base[: -len(".docx")]
-        is_valid, error_msg = _validate_document_name(out_base)
-        if not is_valid:
-            return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
-        output_filename = f"{out_base}.docx"
-        reviewer = (author or user_name or "").strip() or "Reviewer"
-
-        try:
-            source_bytes = await asyncio.to_thread(
-                _download_s3_bytes, source.s3_bucket, source.s3_key
-            )
-            result = await asyncio.to_thread(redline, source_bytes, parsed, reviewer)
-        except RedlineError as exc:
-            return _error(
-                f"❌ Nothing was changed in '{source.filename}':\n"
-                + "\n".join(f"- {p}" for p in exc.problems)
-            )
-        except Exception as exc:  # noqa: BLE001 - surface any read/parse error
-            logger.error(f"redline_word_document error: {exc}")
-            return _error(f"❌ Failed to redline '{source.filename}': {exc}")
-
-        try:
-            upload_id, size_kb = await _store_document(
-                user_id, session_id, output_filename, result.docx, _DOCX_MIME
-            )
-        except Exception as exc:  # noqa: BLE001 - storage failure is terminal
-            logger.error(f"redline_word_document storage error: {exc}")
-            return _error(
-                f"❌ Redlined '{source.filename}' but failed to save it: {exc}"
-            )
-
-        details = f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
-        return _download_card(output_filename, upload_id, size_kb, "Redlined", details)
+        return await _redline_word_document(
+            session_id, user_id, user_name, document_name, changes, author, output_name, if_unplaced
+        )
 
     return redline_word_document
+
+
+#: The comparison's change list reaches the model and stays in history, so it
+#: is bounded; the redline itself holds every change.
+_MAX_COMPARE_LINES = 40
+_MAX_COMPARE_CHARS = 4_000
+
+
+def _compare_details(original: str, reviewer: str, result: Any) -> str:
+    """What the model is told: counts, then one line per change, bounded."""
+    counts = f"{result.reworded} reworded, {result.added} added and {result.removed} removed paragraph(s)"
+    head = f"Tracked changes by {reviewer} against '{original}': {counts}."
+    lines = list(result.changes) + list(result.unmarked)
+    kept: List[str] = []
+    used = len(head)
+    for line in lines[:_MAX_COMPARE_LINES]:
+        if used + len(line) + 3 > _MAX_COMPARE_CHARS:
+            break
+        kept.append(line)
+        used += len(line) + 3
+    more = len(lines) - len(kept)
+    tail = f" …and {more} more; the redline has every change." if more else ""
+    note = (
+        " Differences that could not be marked are comments in the document."
+        if result.unmarked else ""
+    )
+    return head + (" Changes: " + " | ".join(kept) + "." if kept else "") + tail + note
+
+
+async def _compare_word_documents(
+    session_id: str,
+    user_id: str,
+    original_name: str,
+    revised_name: str,
+    author: Optional[str],
+    output_name: Optional[str],
+) -> Any:
+    if not _storage_configured():
+        return _error(_NO_STORAGE_MESSAGE)
+
+    found = []
+    for name in (original_name, revised_name):
+        meta = await _find_word_document(user_id, session_id, name)
+        if meta is None:
+            return _error(
+                f"❌ No Word document named '{name}' was found in this "
+                "chat. Use list_word_documents to see what's available."
+            )
+        found.append(meta)
+    original, revised = found
+    if (original.s3_bucket, original.s3_key) == (revised.s3_bucket, revised.s3_key):
+        return _error(f"❌ '{original_name}' and '{revised_name}' are the same document. Name two different files.")
+
+    source_base = (
+        original.filename[: -len(".docx")] if original.filename.lower().endswith(".docx") else original.filename
+    )
+    out_base = output_name or _default_redline_name(source_base, "compared")
+    if out_base.lower().endswith(".docx"):
+        out_base = out_base[: -len(".docx")]
+    is_valid, error_msg = _validate_document_name(out_base)
+    if not is_valid:
+        return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
+    output_filename = f"{out_base}.docx"
+    reviewer = (author or "").strip() or DEFAULT_AUTHOR
+
+    try:
+        original_bytes, revised_bytes = await asyncio.gather(
+            asyncio.to_thread(_download_s3_bytes, original.s3_bucket, original.s3_key),
+            asyncio.to_thread(_download_s3_bytes, revised.s3_bucket, revised.s3_key),
+        )
+        result = await asyncio.to_thread(compare, original_bytes, revised_bytes, reviewer)
+    except NoDifferences:
+        return {
+            "content": [{"text": (
+                f"'{original.filename}' and '{revised.filename}' have the same wording, so there is "
+                "nothing to mark. Formatting-only changes are not compared."
+            )}],
+            "status": "success",
+        }
+    except RedlineError as exc:
+        return _error(
+            f"❌ Could not compare '{original.filename}' with '{revised.filename}':\n"
+            + "\n".join(f"- {p}" for p in exc.problems)
+        )
+    except Exception as exc:  # noqa: BLE001 - surface any read/parse error
+        logger.error(f"compare_word_documents error: {exc}")
+        return _error(f"❌ Failed to compare '{original.filename}' with '{revised.filename}': {exc}")
+
+    try:
+        upload_id, size_kb = await _store_document(
+            user_id, session_id, output_filename, result.docx, _DOCX_MIME
+        )
+    except Exception as exc:  # noqa: BLE001 - storage failure is terminal
+        logger.error(f"compare_word_documents storage error: {exc}")
+        return _error(f"❌ Compared the documents but failed to save the redline: {exc}")
+
+    details = _compare_details(original.filename, reviewer, result)
+    return _download_card(output_filename, upload_id, size_kb, "Compared", details)
+
+
+def make_compare_word_documents_tool(session_id: str, user_id: str):
+    """Create a ``compare_word_documents`` tool bound to the given identity.
+
+    Built beside ``redline_word_document``, while ``WORD_TRACKED_CHANGES_ENABLED``
+    is on (``docs/specs/word-tracked-changes.md`` §3b). Its spec is a constant: the default author is ``Counterparty``, not the
+    user, because the revisions being marked are someone else's.
+    """
+
+    @tool
+    async def compare_word_documents(
+        original_name: str,
+        revised_name: str,
+        author: Optional[str] = None,
+        output_name: Optional[str] = None,
+    ) -> Any:
+        """Compare two versions of a Word (.docx) document and mark the differences as tracked changes.
+
+        Use this when the user has an original and a revised copy without
+        tracked changes (such as a counterparty's clean return of a contract)
+        and asks what changed, for a comparison or for a redline between them.
+        The revised wording is written into a copy of the original as tracked
+        changes, so each one can be accepted or rejected in Word. Neither file
+        is changed; the comparison is saved as a new file and returned as a
+        download card with a list of the changes to summarize for the user.
+
+        Compares wording, not formatting, headers, footers or footnotes. A
+        table whose rows or columns changed, and a change inside a hyperlink or
+        field, become comments instead. A document that already has tracked
+        changes is refused: read it instead.
+
+        Args:
+            original_name: The earlier version (with or without .docx). Use
+                list_word_documents if unsure.
+            revised_name: The later version to compare with it.
+            author: Name shown on each change: whoever made the revisions.
+                Defaults to "Counterparty".
+            output_name: File name for the comparison, without extension.
+                Defaults to "<original_name>-compared".
+
+        Returns:
+            A download card for the redline and the list of changes.
+        """
+        return await _compare_word_documents(
+            session_id, user_id, original_name, revised_name, author, output_name
+        )
+
+    return compare_word_documents
 
 
 def make_list_word_documents_tool(session_id: str, user_id: str):

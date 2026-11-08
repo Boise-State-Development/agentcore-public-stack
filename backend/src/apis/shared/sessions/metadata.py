@@ -32,6 +32,7 @@ from dataclasses import dataclass
 
 from apis.shared.aws_clients import get_dynamodb_table
 from apis.shared.build_info import build_stamp
+from apis.shared.sessions.ledger_rollups import LEDGERED, live_ledger_writes_on
 from typing import Iterable, List, Literal, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
@@ -352,6 +353,11 @@ async def _store_message_metadata_cloud(
         # turn's index would hand that answer's thumb to the brief (handoffs spec §4.5.1).
         if message_id is not None:
             item["messageId"] = message_id
+
+        # Release ledger: mark a row the live writer will count, on this same put, so the
+        # backfill can skip it whatever range it is given (docs/specs/release-ledger.md §7).
+        if live_ledger_writes_on():
+            item[LEDGERED] = True
 
         # Store in DynamoDB
         table.put_item(Item=item)

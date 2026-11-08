@@ -183,4 +183,13 @@ export interface FeatureFlags {
    * In development, so `false` locally and in prod.
    */
   knowledgeBaseMode: boolean;
+
+  /**
+   * Release ledger (docs/specs/release-ledger.md §6.4): the Releases tab on
+   * `/admin/costs`, which compares a version or build with the one before it
+   * (cost, cache, waste, tools, agents, projects and the quality panel) from
+   * `GET /admin/costs/ledger/*`. Backend: RELEASE_LEDGER_ENABLED (app-api; the
+   * ledger routes 404 while off). In development, so `false` locally and in prod.
+   */
+  releaseLedger: boolean;
 }

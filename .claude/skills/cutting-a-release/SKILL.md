@@ -388,6 +388,34 @@ done
 Re-promote the baseline (`eval_harness.py baseline`) only on purpose — after a
 deliberate model or prompt change — in its own PR with the score output.
 
+**Ledger readout of the outgoing release.** The smoke pass and the eval say
+whether this branch works; the release ledger says whether the release *now
+being replaced* quietly cost more or answered worse than the one before it,
+over every real turn. Run the `/release-readout` skill for the outgoing release
+against its predecessor (cutting `1.35.0`: candidate `1.34.0`, baseline
+`1.33.0`) and paste its `readout.md` plus the one-word verdict (ship / watch /
+investigate) into the release PR body under a **Ledger readout** heading. So
+each release PR carries the previous release's verdict, and a reviewer sees a
+trend before the next one ships.
+
+```bash
+cd backend
+AWS_PROFILE=dev-ai .venv/bin/python scripts/release_readout.py \
+    --profile dev-ai --prefix dev-boisestateai-v2 \
+    --version <outgoing> --baseline <the release before it> --out /tmp/readout-<outgoing>
+```
+
+- **Which environment.** Prod's ledger once `RELEASE_LEDGER_ENABLED` is on there
+  and backfilled (`docs/specs/release-ledger.md` §7.2), since prod is where the
+  outgoing release actually ran as itself; until then, dev, and say so in the
+  PR. On dev the outgoing version label covers every `develop` merge since it
+  was cut, not one image.
+- **Content-free.** The markdown already labels agents and projects by rank;
+  never add a session id, user id or title to it. Don't pass `--show-ids` for
+  a PR body.
+- **Not a gate.** An **investigate** verdict is a reason to look before
+  merging, not a CI failure: read the skill's §4 and decide with the user.
+
 ---
 
 ## 3. Version bump
@@ -509,8 +537,9 @@ don't use them; prefer plain text over fragile intra-doc anchors.
 
 **Before finalizing:** `sync-version.sh --check` passes, the three gate scripts
 pass (§1–§1c), the notes carry a **Feature flags** table and a **Manual steps**
-section (each may say "none"), and both docs lead with the new version above the
-untouched previous entries.
+section (each may say "none"), both docs lead with the new version above the
+untouched previous entries, and the PR body carries the outgoing release's
+**Ledger readout** (§2).
 
 ---
 
