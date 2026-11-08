@@ -55,6 +55,7 @@ from apis.shared.files.models import (
     INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
     MAX_FILES_PER_MESSAGE,
     TEXT_ONLY_DOCUMENTS_MAX_CHARS,
+    is_presentation_file,
     is_tabular_file,
 )
 from apis.shared.files.folder_attachments import FOLDERS_PER_MESSAGE, FolderAttachment
@@ -1484,6 +1485,51 @@ async def _session_has_tabular(
     return present
 
 
+#: Sessions known to hold a PowerPoint deck. Same contract as
+#: ``_TABULAR_SESSIONS``: positives memoized, negatives never.
+_PRESENTATION_SESSIONS: "OrderedDict[str, bool]" = OrderedDict()
+_PRESENTATION_SESSIONS_MAX = 10_000
+
+
+def _remember_presentation_session(session_id: str) -> None:
+    _PRESENTATION_SESSIONS[session_id] = True
+    _PRESENTATION_SESSIONS.move_to_end(session_id)
+    while len(_PRESENTATION_SESSIONS) > _PRESENTATION_SESSIONS_MAX:
+        _PRESENTATION_SESSIONS.popitem(last=False)
+
+
+async def _session_has_presentation(
+    session_id: str,
+    user_id: str,
+    turn_has_presentation: bool = False,
+) -> bool:
+    """Whether this session's turns need the PowerPoint tools to read a deck.
+
+    The deck counterpart of ``_session_has_tabular``: True when this turn
+    attaches a .pptx (already partitioned, no query), when the session was
+    seen holding one earlier in this process, or when the session's READY
+    uploads include one. Sticky for the same reason (the answer feeds the
+    agent-cache key) and fail-closed on error.
+    """
+    if turn_has_presentation:
+        _remember_presentation_session(session_id)
+        return True
+    if _PRESENTATION_SESSIONS.get(session_id):
+        return True
+    if not session_id or not user_id:
+        return False
+    try:
+        from apis.shared.files.document_read import session_has_presentation_files
+
+        present = await session_has_presentation_files(user_id, session_id)
+    except Exception:  # noqa: BLE001 - the gate must never fail a turn
+        logger.warning("presentation auto-enable lookup failed; tools not injected this turn", exc_info=True)
+        return False
+    if present:
+        _remember_presentation_session(session_id)
+    return present
+
+
 def _with_auto_enabled_tools(enabled_tools: list | None, auto_ids: list[str]) -> list | None:
     """``enabled_tools`` plus ``auto_ids`` not already present.
 
@@ -1501,21 +1547,86 @@ async def _auto_enabled_attachment_tool_ids(
     user_id: str,
     turn_has_tabular: bool = False,
     kb_assistant_id: Optional[str] = None,
+    turn_has_presentation: bool = False,
+    enabled_tools: list | None = None,
 ) -> list[str]:
-    """The Spreadsheet Analysis ids this turn should carry regardless of the
-    picker, in a fixed order: every id in ``SPREADSHEET_TOOL_IDS`` the
-    caller's RBAC grant admits, when the session holds a spreadsheet (or,
-    given ``kb_assistant_id``, when that assistant's knowledge base does).
+    """The attachment-driven tool ids this turn should carry regardless of the
+    picker, in a fixed order: the Spreadsheet Analysis ids for a session that
+    holds a spreadsheet, then the PowerPoint id for one that holds a deck.
 
-    Enables, never grants: ``can_access_tool`` is the same predicate the
-    picker and Agent bindings answer to (role grant ∪ public tools). A user
-    whose roles do not carry the tool gets today's behavior — the attachment
-    note tells them the tool is not available to their account.
+    Enables, never grants: every id passes ``can_access_tool``, the same
+    predicate the picker and Agent bindings answer to (role grant ∪ public
+    tools). A user whose roles do not carry the tool gets today's behavior —
+    the attachment note tells them the tool is not available to their
+    account.
+
+    The two gates run concurrently, so a session with neither memoized pays
+    one DynamoDB round trip of wall time, as it did before decks had a gate.
     """
     from apis.shared.feature_flags import attachment_tool_autoenable_enabled
 
     if not attachment_tool_autoenable_enabled():
         return []
+    spreadsheet_ids, presentation_ids = await asyncio.gather(
+        _auto_enabled_spreadsheet_tool_ids(
+            current_user, session_id, user_id, turn_has_tabular, kb_assistant_id
+        ),
+        _auto_enabled_presentation_tool_ids(
+            current_user, session_id, user_id, turn_has_presentation, enabled_tools
+        ),
+    )
+    return spreadsheet_ids + presentation_ids
+
+
+async def _auto_enabled_presentation_tool_ids(
+    current_user: User,
+    session_id: str,
+    user_id: str,
+    turn_has_presentation: bool,
+    enabled_tools: list | None,
+) -> list[str]:
+    """``POWERPOINT_PRESENTATION_TOOL_IDS`` the caller's grant admits, when the
+    session holds a deck.
+
+    Decks never go inline, and the PowerPoint read tools are provisioned only
+    by the ``create_powerpoint_presentation`` toggle, which ships off — so on
+    the default tool set an attached deck was a dead end, and the note sent
+    the user to a sidebar toggle. Unlike the spreadsheet gate, the cheap
+    checks come first: an id already on, or one the role does not admit,
+    needs no session query, which keeps the query off turns it cannot change.
+    """
+    wanted = sorted(POWERPOINT_PRESENTATION_TOOL_IDS.difference(enabled_tools or ()))
+    if not wanted:
+        return []
+    role_service = get_app_role_service()
+    allowed: list[str] = []
+    for tool_id in wanted:
+        try:
+            if await role_service.can_access_tool(current_user, tool_id):
+                allowed.append(tool_id)
+        except Exception:  # noqa: BLE001 - an RBAC lookup failure must not fail the turn
+            logger.warning("RBAC check for %s failed; not auto-enabling", tool_id, exc_info=True)
+    if not allowed:
+        return []
+    if not await _session_has_presentation(session_id, user_id, turn_has_presentation):
+        return []
+    logger.info(
+        "Auto-enabled %s for a session with a presentation attachment (session=%s)",
+        allowed, scrub_log(session_id),
+    )
+    return allowed
+
+
+async def _auto_enabled_spreadsheet_tool_ids(
+    current_user: User,
+    session_id: str,
+    user_id: str,
+    turn_has_tabular: bool,
+    kb_assistant_id: Optional[str],
+) -> list[str]:
+    """Every id in ``SPREADSHEET_TOOL_IDS`` the caller's RBAC grant admits,
+    when the session holds a spreadsheet (or, given ``kb_assistant_id``, when
+    that assistant's knowledge base does)."""
     if not await _session_has_tabular(session_id, user_id, turn_has_tabular, kb_assistant_id):
         return []
     role_service = get_app_role_service()
@@ -1541,18 +1652,22 @@ async def _apply_attachment_tool_autoenable(
     user_id: str,
     turn_has_tabular: bool = False,
     kb_assistant_id: Optional[str] = None,
+    turn_has_presentation: bool = False,
 ) -> list | None:
     """``enabled_tools`` for this turn with the attachment auto-enable applied.
 
     The single seam every ``get_agent`` caller on the invocation path goes
     through, so the main turn and the MCP App dispatch paths compute the same
     effective list — and therefore the same agent-cache slot — for a session
-    holding a spreadsheet. ``kb_assistant_id`` extends the gate to that
-    assistant's knowledge base; only an Agent that binds no tools passes it.
+    holding a spreadsheet or a deck. ``kb_assistant_id`` extends the
+    spreadsheet gate to that assistant's knowledge base; only an Agent that
+    binds no tools passes it.
     """
     auto_ids = await _auto_enabled_attachment_tool_ids(
         current_user, session_id, user_id, turn_has_tabular=turn_has_tabular,
         kb_assistant_id=kb_assistant_id,
+        turn_has_presentation=turn_has_presentation,
+        enabled_tools=enabled_tools,
     )
     return _with_auto_enabled_tools(enabled_tools, auto_ids)
 
@@ -1974,11 +2089,16 @@ def _build_attachment_guidance(
                 f"`create_powerpoint_presentation` to build on its layouts._"
             )
         else:
+            # Reached only when the auto-enable did not apply: the caller's
+            # roles do not carry the tool, or the kill switch is set. Same
+            # wording contract as the spreadsheet note above.
             parts.append(
-                f"_Attached presentation(s) {names} can't be read inline. To "
-                f"work with them, enable **PowerPoint Presentations** under "
-                f"Customize → Tools in the sidebar, then re-send your "
-                f"message._"
+                f"_Attached presentation(s) {names} can't be read inline. "
+                f"Reading them needs the **PowerPoint Presentations** tool, "
+                f"which isn't available in this conversation — if it is listed "
+                f"under Customize → Tools in the sidebar, enable it and re-send "
+                f"your message; if it isn't, your account doesn't have access "
+                f"to it._"
             )
 
     if oversized_inline:
@@ -3725,13 +3845,14 @@ async def _resolve_effective_tools(
     agent_tools_override,
     *,
     turn_has_tabular: bool,
+    turn_has_presentation: bool = False,
 ) -> Optional[list]:
     """Map stage B11 (in ``tools``): the tool ids this turn actually carries.
 
     On an Agent turn, the Agent's bindings — empty when it binds none, never
     the request's picker; on a plain chat, the request's picker. Then the
-    spreadsheet auto-enable for a session holding a spreadsheet (or an unbound
-    Agent whose knowledge base holds one), then the admin's always-on set
+    attachment auto-enable for a session holding a spreadsheet (or an unbound
+    Agent whose knowledge base holds one) or a deck, then the admin's always-on set
     unless the Agent binds its own tools, then the platform's system tools.
     One value, so the cache key, every builder, the attachment guidance and
     the paused-turn snapshot all see the same list.
@@ -3763,8 +3884,8 @@ async def _resolve_effective_tools(
     # tools, which the picker used to supply.
     agent_unbound = agent_tools_override is not None and not agent_tools_override.owns_toolset
     # A session holding a spreadsheet gets the Spreadsheet Analysis
-    # tools whether or not the picker has them on, gated on the
-    # caller's RBAC grant. Applied to the *effective* list so it
+    # tools, and one holding a deck the PowerPoint tools, whether or
+    # not the picker has them on, gated on the caller's RBAC grant. Applied to the *effective* list so it
     # flows into the cache key, every builder below, the attachment
     # guidance and the paused-turn snapshot as one value. Sticky
     # across the session (see `_session_has_tabular`), so the key
@@ -3776,6 +3897,7 @@ async def _resolve_effective_tools(
         user_id,
         turn_has_tabular=turn_has_tabular,
         kb_assistant_id=input_data.rag_assistant_id if agent_unbound else None,
+        turn_has_presentation=turn_has_presentation,
     )
 
     # Tools an admin pinned are unioned in for users whose roles grant
@@ -5793,6 +5915,8 @@ async def _run_invocation(
                 agent_tools_override,
                 turn_has_tabular=bool(attachments.diverted_tabular)
                 or _folders_have(attachments.folders, is_tabular_file),
+                turn_has_presentation=bool(attachments.diverted_presentations)
+                or _folders_have(attachments.folders, is_presentation_file),
             )
 
             # Reassigning these function-scope locals here (before the main-turn

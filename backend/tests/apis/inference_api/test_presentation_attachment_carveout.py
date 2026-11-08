@@ -170,6 +170,9 @@ class TestAttachmentGuidance:
 
         assert "PowerPoint Presentations" in guidance
         assert "read_powerpoint_presentation" not in guidance
+        # Reached only when the auto-enable could not apply, so the note must
+        # not promise a toggle the user's roles may not carry.
+        assert "your account doesn't have access" in guidance
 
     @pytest.mark.parametrize("enabled_tools", [None, []])
     def test_no_enabled_tools_is_treated_as_disabled(self, enabled_tools):

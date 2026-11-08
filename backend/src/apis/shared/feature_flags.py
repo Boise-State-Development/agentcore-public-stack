@@ -312,15 +312,18 @@ def document_read_enabled() -> bool:
 def attachment_tool_autoenable_enabled() -> bool:
     """Whether a turn that carries (or a session that holds) a spreadsheet
     attachment gets the Spreadsheet Analysis tools injected for that session
-    even when the picker has them off — gated on the caller's RBAC grant, so
-    it enables, never grants. **Default ON with a kill switch** (house style):
+    even when the picker has them off, and one holding a PowerPoint deck gets
+    ``create_powerpoint_presentation`` (which provisions the deck read tools)
+    — gated on the caller's RBAC grant, so it enables, never grants. **Default ON with a kill switch** (house style):
     unset or empty resolves to enabled; only the literal ``"false"`` disables.
 
     Why: CSV/XLSX never go inline (``_partition_attachments``), and the
     analysis tools are opt-in in the picker, so on the default tool set an
     attached spreadsheet was a dead end — the model told the user to go find a
     sidebar toggle (docs/specs/load-test-assessment-2026-09.md §1 fix 5). The
-    user's own attachment is the governing intent.
+    user's own attachment is the governing intent. Decks had the same dead end
+    (no pptx document format, ``document_read`` refuses them, the PowerPoint
+    toggle ships off) until the eval harness's attachment cases found it.
     """
     return os.environ.get("ATTACHMENT_TOOL_AUTOENABLE_ENABLED", "").strip().lower() != "false"
 

@@ -291,6 +291,20 @@ async def session_has_tabular_files(user_id: str, session_id: str) -> bool:
     return any(meta.user_id == user_id and is_tabular_file(meta.filename, meta.mime_type) for meta in files)
 
 
+async def session_has_presentation_files(user_id: str, session_id: str) -> bool:
+    """Whether the session has at least one READY PowerPoint deck (.pptx).
+
+    The PowerPoint auto-enable gate, the deck counterpart of
+    :func:`session_has_tabular_files`: same one-query cost, same "memoize the
+    positive answer" contract. Decks never go inline (Bedrock has no pptx
+    document format) and this module refuses them, so a session holding one
+    is a session whose turns need the PowerPoint tools to read it at all.
+    """
+    _require_identity(user_id, session_id)
+    files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
+    return any(meta.user_id == user_id and is_presentation_file(meta.filename, meta.mime_type) for meta in files)
+
+
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
