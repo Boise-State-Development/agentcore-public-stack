@@ -258,7 +258,7 @@
         ]
       }
     },
-    "notes": "A section title retrieval by wording would not find; project_files reads the file by name."
+    "notes": "A section title retrieval by wording would not find; project_files reads the file by name. Fails on dev at baseline (2026-11-08): project_files returns a dict, which the tool-result offloader stores as one JSON line with escaped newlines, so retrieve_offloaded_content's line patterns cannot reach Section 7 (document_read and skills are exempt from offload; project_files and knowledge_files are not). A fix shows here as a gain."
   },
   {
     "id": "project_kb.large_list_files",

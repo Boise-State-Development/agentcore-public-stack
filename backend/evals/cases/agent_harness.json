@@ -59,7 +59,7 @@
       "agent": "agent_bound_tools",
       "enabled_tools": [
         "calculator",
-        "whoami"
+        "create_visualization"
       ]
     },
     "expect": {
@@ -76,28 +76,28 @@
     "notes": "The agent is bound to calculator only."
   },
   {
-    "id": "agent_harness.unbound_tool_unavailable",
+    "id": "agent_harness.unbound_user_tool_unavailable",
     "family": "agent_harness",
     "turns": [
       {
-        "prompt": "Which account am I signed in as right now?"
+        "prompt": "Make a bar chart of quarterly sales: Q1 120, Q2 135, Q3 128, Q4 160."
       }
     ],
     "run": {
       "agent": "agent_bound_tools",
       "enabled_tools": [
         "calculator",
-        "whoami"
+        "create_visualization"
       ]
     },
     "expect": {
       "tools": {
         "must_not_call": [
-          "whoami"
+          "create_visualization"
         ]
       }
     },
-    "notes": "The request offers whoami, but an agent's bound tools replace the request's, so it must not be callable."
+    "notes": "The request offers create_visualization, but an agent's tool bindings replace the request's, so it must not be callable. Not whoami: platform system tools (whoami, get_my_quota) join every turn, agent-bound ones included, by design (_apply_admin_always_on_tools)."
   },
   {
     "id": "agent_harness.knowledge_fact",

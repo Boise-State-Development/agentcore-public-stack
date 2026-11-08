@@ -6,6 +6,8 @@
     "tool_selection",
     "document_qa",
     "attachment_tools",
+    "project_kb",
+    "agent_harness",
     "retention",
     "instruction_following",
     "refusal",
@@ -337,6 +339,167 @@
       "passes": 3,
       "samples": 3,
       "answer": "Based on the attached files:\n\n- **Pilot sites:** The deck lists **14 pilot sites** this quarter (with two sites joining in March).\n\n- **Last weekday shuttle departure:** According to the shuttle timetable, the last weekday shuttle leaves at **21:40** from the Library stop."
+    },
+    "project_kb.small_literal_training_deadline": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "10\n\nSource: project files"
+    },
+    "project_kb.small_word_table_blank_cell": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "7\n\nSource: project files"
+    },
+    "project_kb.small_pdf_spring_trip": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "April 22\n\nSource: project files"
+    },
+    "project_kb.small_mixed_format_spreadsheet_value": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$1940\n\nSource: project files"
+    },
+    "project_kb.small_absent_fact": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "NOT IN PROJECT FILES\n\nSource: project files"
+    },
+    "project_kb.small_synthesis_across_files": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Based on the project files:\n\n- **Safety training deadline:** New lab members must complete the safety training within **10 working days** of their start date (from `onboarding_policy.md`).\n\n- **Spring field trip departure:** The spring field trip departs on **April 22 from the north lot at 07:00** (from `field_trips.pdf`).\n\nSource: project files"
+    },
+    "project_kb.small_project_instructions_followed": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "According to the equipment loans information in the knowledge base, a camera is loaned out for **3 days**.\n\nSource: project files"
+    },
+    "project_kb.large_literal_international_travel": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "45"
+    },
+    "project_kb.large_paraphrase_quotes": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Based on the procurement handbook in the knowledge base:\n\n**You need three written quotes from different vendors.**\n\nAny purchase above $7,500 requires three written quotes from different vendors. Since your $9,000 instrument exceeds that threshold, you'll need to collect quotes from three separate vendors before proceeding with the purchase."
+    },
+    "project_kb.large_same_field_two_files": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Tuesday"
+    },
+    "project_kb.large_replaced_file_new_value": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "30"
+    },
+    "project_kb.large_read_file_by_name": {
+      "family": "project_kb",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "I don't see a Section 7 in the excerpt provided. The knowledge base excerpt shows only Section 1 of the HR handbook. The full document may contain additional sections, but I can only see what was retrieved by the search.\n\nTo answer your question accurately, I'd need to check the complete HR handbook file. Would you like me to read the full hr_handbook.md file from the project's Files to find Section 7?"
+    },
+    "project_kb.large_list_files": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "This project contains **6 files**:\n\n1. **facilities_handbook.md** (95 KB)\n2. **grants_handbook.md** (95 KB)\n3. **hr_handbook.md** (95 KB)\n4. **it_handbook.md** (95 KB)\n5. **procurement_handbook.md** (95 KB)\n6. **travel_handbook.md** (95 KB)\n\nAll files are ready to read. Would you like me to examine any of these handbooks?"
+    },
+    "agent_harness.format_instructions_json": {
+      "family": "agent_harness",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "```json\n{\"answer\": \"The capital of France is Paris.\"}\n```"
+    },
+    "agent_harness.format_instructions_hold_on_a_list_question": {
+      "family": "agent_harness",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "```json\n{\"answer\": \"The three primary colours are red, blue, and yellow. These are the foundational colours from which all other colours can theoretically be mixed in traditional colour theory.\"}\n```"
+    },
+    "agent_harness.bound_tool_used": {
+      "family": "agent_harness",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "The exact figure is **39,168,090,127**."
+    },
+    "agent_harness.unbound_user_tool_unavailable": {
+      "family": "agent_harness",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I apologize—the calculator tool doesn't support plotting. Let me create that chart using Mermaid instead:\n\n```mermaid\nbar\n    title Quarterly Sales\n    x-axis Q1, Q2, Q3, Q4\n    y-axis Sales, 0, 170\n    bar 120, 135, 128, 160\n```\n\nThis bar chart shows your quarterly sales:\n- **Q1**: $120\n- **Q2**: $135\n- **Q3**: $128\n- **Q4**: $160 (strongest quarter)\n\nQ4 had the highest sales at $160, while Q3 was the lowest at $128. Overall, there's an upward trend from Q3 to Q4."
+    },
+    "agent_harness.knowledge_fact": {
+      "family": "agent_harness",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "07:30"
+    },
+    "agent_harness.knowledge_absent_fact": {
+      "family": "agent_harness",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "NOT IN KNOWLEDGE\n\nThe front desk hours in my knowledge base only specify weekday and Saturday hours, but don't mention Sunday. You may want to contact the front desk directly or check the main campus website for their Sunday schedule."
+    },
+    "agent_harness.loader_reads_named_file": {
+      "family": "agent_harness",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "Based on the excerpts provided and my review of the travel handbook, **the document does not contain an explicit statement of its overall purpose**. The handbook consists entirely of procedural sections that describe specific tasks, responsibilities, and workflows for various roles (program leads, coordinators, approvers, staff, etc.) related to travel-related processes.\n\nThe procedures focus on:\n- Managing approval trails\n- Tracking shared calendars and documentation\n- Recording request histories and supporting records\n- Maintaining audit copies\n- Coordinating between multiple departments and"
+    },
+    "agent_harness.long_instructions_last_rule": {
+      "family": "agent_harness",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "12 times 12 is **144**.\n\nZQ-END"
+    },
+    "agent_harness.long_instructions_last_rule_again": {
+      "family": "agent_harness",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Jupiter is the largest planet in the solar system. It's a gas giant with a mass more than twice that of all other planets combined.\n\nZQ-END"
+    },
+    "agent_harness.bound_skill_loads": {
+      "family": "agent_harness",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Based on the content fetched from https://example.com, here are the key points with citations:\n\n## Notes from Example Domain\n\n- **Purpose**: This domain is designated for use in documentation examples and does not require permission to reference. *(Example Domain, https://example.com)*\n\n- **Not a Service**: Users should avoid relying on this domain for testing and monitoring purposes. *(Example Domain, https://example.com)*\n\n---\n\n*Note: This page contains minimal content—it's a placeholder domain designed for documentation use rather than a substantive information resource.*"
     },
     "retention.project_code_recalled": {
       "family": "retention",
