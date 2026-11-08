@@ -94,6 +94,24 @@ def test_plan_keeps_the_range_half_open_and_reconciles_full_days_only():
     assert rec["daysWithCallDiff"] == {}
 
 
+def test_a_row_the_live_writer_counted_is_never_added_again():
+    """The first live turn's rows are timestamped just before `firstLiveAt` (a row's
+    timestamp is when the call ran, not when it was stored), so only the mark can
+    keep a range that reaches them from counting them twice."""
+    deploys = [backfill.Deploy(backfill.parse_instant(d["at"]), d["appVersion"], d["build"]) for d in DEPLOYS]
+    rows = [
+        _cost_row("2026-10-01T13:00:00+00:00", "0.10"),
+        _cost_row("2026-10-01T13:00:01+00:00", "0.20", ledgered=True),
+    ]
+    updates, summary = backfill.plan(rows, deploys, backfill.parse_instant("2026-10-01"),
+                                     backfill.parse_instant("2026-10-02"))
+    (version,) = [u for u in updates if u.pk == "LEDGER#VERSION"]
+    assert version.add["calls"] == 1 and version.add["cost"] == Decimal("0.10")
+    assert summary["attribution"] == {"mapped": 1, "live": 1}
+    # Still in the day's total: the live writer put it in the ledger.
+    assert summary["byDay"]["2026-10-01"] == {"cost": Decimal("0.30"), "calls": Decimal(2)}
+
+
 @pytest.fixture
 def aws(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")

@@ -936,3 +936,16 @@ async def test_the_cost_summary_gets_the_stored_item_for_the_ledger(monkeypatch)
 
     handed = [c.kwargs["ledger_row"] for c in recorded.cost_summary.await_args_list]
     assert handed == recorded.cost_rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag, marked", [("true", True), ("", False), ("false", False)])
+async def test_a_row_the_live_ledger_counts_is_marked_on_its_own_put(monkeypatch, flag, marked):
+    """The backfill skips a marked row (release-ledger §7): the mark rides the same
+    put as the row, so a row is marked exactly when the live writer will count it."""
+    monkeypatch.setenv("RELEASE_LEDGER_ENABLED", flag)
+    monkeypatch.setenv("DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME", "fake-rollups")
+    recorded = await _run([*_completed_call("one"), *_final_answer("two")], monkeypatch)
+
+    assert len(recorded.cost_rows) == 2
+    assert [row.get("ledgered") for row in recorded.cost_rows] == ([True, True] if marked else [None, None])
