@@ -1,4 +1,4 @@
-"""Whole-paragraph deletions in the redline engine (docs/specs/word-tracked-changes.md §3b).
+"""Whole-paragraph deletions in the redline engine (docs/specs/word-tracked-changes.md §3c).
 
 The invariants: **Accept All removes the deleted paragraphs outright, marks
 included, so the list items and sections after them renumber; Reject All gives
@@ -261,19 +261,22 @@ class TestComments:
         assert _paragraph_with(result.docx, "consequential damages").find(W + "commentRangeStart") is None
         kept = _paragraph_with(result.docx, "supersedes all prior")
         assert not _mark(kept, "del") and kept.find(W + "commentRangeStart") is not None
+        # A point after the struck wording: Word drops a comment whose whole
+        # range is deleted text when the deletion is accepted.
+        _assert_no_comment_wraps_only_deleted_wording(result.docx)
         assert result.applied[0].endswith('"This Agreement is the entire agreement …", with a comment')
         assert rejected(result.docx) == ORIGINAL
 
-    def test_a_comment_cannot_land_on_a_paragraph_another_change_deletes(self):
-        problems = _problems(
+    def test_a_comment_whose_next_paragraph_is_deleted_too_moves_on_to_one_that_stays(self):
+        out = _redline(
             FIXTURE,
             Change("ninety (90) days past due", delete="paragraph", comment="Drop."),
             Change("has given written notice", delete="paragraph"),
         )
-        assert problems == [
-            "Change 1's comment would go on the next paragraph, which change 2 deletes. Delete them in one "
-            "change with `through`."
-        ]
+        for wording in ("ninety (90) days past due", "has given written notice"):
+            assert _paragraph_with(out, wording).find(W + "commentRangeStart") is None
+        assert _paragraph_with(out, "has not cured").find(W + "commentRangeStart") is not None
+        assert rejected(out) == ORIGINAL
 
 
 # ── Combinations ─────────────────────────────────────────────────────────────
@@ -400,9 +403,17 @@ class TestProblems:
             Change("consequential damages", insert="after", paragraphs=(NewParagraph("x"),)),
         )
         assert problems == [
-            'Change 2 inserts after "Neither party shall be liable for indirect, incidental or c…", whose paragraph '
-            "mark change 1 deletes. Insert before the next paragraph that stays."
+            'Change 2 inserts next to "Neither party shall be liable for indirect, incidental or c…", whose '
+            "paragraph mark change 1 deletes. Insert before the next paragraph that stays."
         ]
+
+    def test_a_comment_on_an_edit_in_the_paragraph_whose_mark_a_deletion_takes_is_refused(self):
+        (problem,) = _problems(
+            FIXTURE,
+            Change("Entire Agreement", delete="paragraph", through="supersedes"),
+            Change("consequential", replace="special", comment="Narrower."),
+        )
+        assert problem.startswith("Change 2's comment would sit in \"Neither party shall be liable")
 
 
 # ── The self-check ───────────────────────────────────────────────────────────
@@ -432,3 +443,135 @@ def test_a_paragraph_property_changed_outside_a_revision_is_refused(monkeypatch)
     assert _problems(FIXTURE, Change("has given written notice", delete="paragraph")) == [
         "The redline would have changed wording it did not mark, so nothing was saved."
     ]
+
+
+# ── With unplaced changes left as comments (§3b) ─────────────────────────────
+
+
+def _comment_paragraphs(docx: bytes) -> List[str]:
+    """The wording (deleted wording included) of each paragraph holding a comment range."""
+    root = ElementTree.fromstring(part(docx))
+    return [_text(p, "ins") for p in root.iter(W + "p") if p.find(W + "commentRangeStart") is not None]
+
+
+def _commented(docx: bytes, *changes: Change):
+    return redline(docx, list(changes), "Contract Assistant", now=NOW, if_unplaced="comment")
+
+
+class TestWithUnplacedComments:
+    def test_an_unplaced_change_meant_for_a_deleted_paragraph_comments_on_the_next_one(self):
+        # The missing wording most resembles the item being deleted; its ACTION
+        # NEEDED comment must not sit in that paragraph, whose mark is deleted.
+        result = _commented(
+            FIXTURE,
+            Change("has given written notice", delete="paragraph"),
+            Change("Contractor has given notice in writing of the amount", replace="x"),
+        )
+        assert result.applied[0].startswith("1. deleted the paragraph")
+        assert len(result.commented) == 1 and result.commented[0].startswith("2.")
+        assert _mark(_paragraph_with(result.docx, "has given written notice"), "del")
+        assert _paragraph_with(result.docx, "has given written notice").find(W + "commentRangeStart") is None
+        assert _comment_paragraphs(result.docx) == [
+            "University has not cured within thirty (30) days after that notice."
+        ]
+        assert accepted(result.docx) == accepted(_redline(FIXTURE, Change("has given written notice", delete="paragraph")))
+        assert rejected(result.docx) == ORIGINAL
+
+    def test_where_the_mark_merges_backwards_it_goes_where_the_mark_survives(self):
+        # "consequential damages" is ambiguous nowhere but misspelt here; its
+        # likely paragraph is the one whose mark the section deletion takes.
+        result = _commented(
+            FIXTURE,
+            Change("Entire Agreement", delete="paragraph", through="supersedes"),
+            Change("indirect, incidental or consequental damages", replace="x"),
+        )
+        assert _paragraph_with(result.docx, "consequential damages").find(W + "commentRangeStart") is None
+        kept = _paragraph_with(result.docx, "supersedes all prior")
+        assert not _mark(kept, "del") and kept.find(W + "commentRangeStart") is not None
+        _assert_no_comment_wraps_only_deleted_wording(result.docx)
+        assert rejected(result.docx) == ORIGINAL
+
+    def test_a_deletion_the_document_defeats_becomes_its_comment(self):
+        result = _commented(
+            FIXTURE,
+            Change("supersedes all prior", delete="paragraph"),
+            Change("has given written notice", delete="paragraph"),
+        )
+        assert result.applied == ['2. deleted the paragraph "Contractor has given written notice of the overdue amount; …"']
+        (line,) = result.commented
+        assert line.startswith('1. "supersedes all prior": The last paragraph to delete comes right before a table')
+        comment = _comments_text(result.docx)
+        assert any(t.endswith("Find: \"supersedes all prior\"\nDelete that paragraph.") for t in comment)
+        assert _comment_paragraphs(result.docx) == [
+            "This Agreement is the entire agreement of the parties and supersedes all prior agreements."
+        ]
+
+    def test_a_through_found_nowhere_names_the_span_in_the_comment(self):
+        result = _commented(FIXTURE, Change("Payment", delete="paragraph", through="nowhere at all"))
+        (text,) = [t for t in _comments_text(result.docx)]
+        assert text.splitlines()[-1] == (
+            'Delete that paragraph and every one after it through the one containing: "nowhere at all"'
+        )
+
+    def test_of_a_deletion_and_an_edit_in_its_paragraph_the_later_is_the_comment(self):
+        result = _commented(
+            FIXTURE,
+            Change("Payment", delete="paragraph", through="except as follows"),
+            Change("thirty (30) days of receipt", replace="sixty (60) days of receipt"),
+        )
+        assert result.applied[0].startswith("1. deleted 3 paragraphs")
+        assert result.commented == ['2. "thirty (30) days of receipt": It changes a paragraph another change deletes.']
+        # Its comment would have sat in the deleted Invoices paragraph; it moves on.
+        assert _comment_paragraphs(result.docx) == ["the invoice is more than ninety (90) days past due;"]
+        assert rejected(result.docx) == ORIGINAL
+
+    def test_the_edit_first_keeps_the_edit_and_comments_the_deletion(self):
+        result = _commented(
+            FIXTURE,
+            Change("thirty (30) days of receipt", replace="sixty (60) days of receipt"),
+            Change("Payment", delete="paragraph", through="except as follows"),
+        )
+        assert result.applied == ['1. deleted "thirty (30)", inserted "sixty (60)"']
+        assert result.commented == ['2. "Payment": It changes a paragraph another change deletes.']
+
+    def test_a_deletion_an_insertion_and_an_unplaced_change_in_one_call(self):
+        result = _commented(
+            FIXTURE,
+            Change("has given written notice", delete="paragraph", comment="Not acceptable."),
+            Change("has not cured", insert="after", paragraphs=(NewParagraph("University has disputed the invoice."),)),
+            Change("Entire Agreement", delete="paragraph", through="supersedes"),
+            Change("a sentence that is in no paragraph at all", replace="x"),
+        )
+        assert [line[:2] for line in result.applied] == ["1.", "2.", "3."]
+        assert len(result.commented) == 1
+        root = ElementTree.fromstring(part(result.docx))
+        for p in root.iter(W + "p"):
+            if _mark(p, "del"):
+                assert p.find(W + "commentRangeStart") is None, _text(p, "ins")
+        assert rejected(result.docx) == ORIGINAL
+        _assert_no_comment_wraps_only_deleted_wording(result.docx)
+        texts = _texts(accepted(result.docx))
+        assert "Contractor has given written notice of the overdue amount; and" not in texts
+        assert "Entire Agreement" not in texts
+        assert "University has disputed the invoice." in texts
+
+
+def _comments_text(docx: bytes) -> List[str]:
+    root = ElementTree.fromstring(part(docx, "word/comments.xml"))
+    return [
+        "\n".join("".join(t.text or "" for t in p.iter(W + "t")) for p in c.iter(W + "p"))
+        for c in root.iter(W + "comment")
+    ]
+
+
+def _assert_no_comment_wraps_only_deleted_wording(docx: bytes) -> None:
+    """In a paragraph whose wording is all struck, a comment starts after it."""
+    for p in ElementTree.fromstring(part(docx)).iter(W + "p"):
+        children = list(p)
+        struck = [i for i, c in enumerate(children) if c.tag == W + "del"]
+        live = [t for c in children if c.tag == W + "r" for t in c.iter(W + "t")]
+        if not struck or live:
+            continue
+        for i, c in enumerate(children):
+            if c.tag == W + "commentRangeStart":
+                assert i > struck[-1], _text(p, "ins")

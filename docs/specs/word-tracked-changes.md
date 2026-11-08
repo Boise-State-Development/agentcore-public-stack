@@ -1,7 +1,8 @@
 # Word tracked changes: reading redlines and writing them
 
 Status: shipped, behind `WORD_TRACKED_CHANGES_ENABLED` (on by default); whole-paragraph insertions
-(§3a) ship with the tool, with no flag of their own (§4a).
+(§3a), the opt-in `if_unplaced` argument (§3b) and whole-paragraph deletions (§3c)
+ship with the tool, with no flag of their own (§4a, §4b, §4c).
 
 ## 1. Problem
 
@@ -186,7 +187,7 @@ same in the margin.
   kept as the document spells them.
 - **Self-check.** Before saving, every edited paragraph is read with this
   call's insertions dropped and its deletions kept, and must equal its original
-  wording, paragraph marks and properties included (§3b widened it from
+  wording, paragraph marks and properties included (§3c widened it from
   wording alone). A failure raises and nothing is written. This is the edit-in-place
   check a hand-written engine would run, done on every call.
 
@@ -211,15 +212,83 @@ a team's python-docx engine that a contract-review Agent was retyping each run:
 | **Font and heading formatting for new text** | **§3a**, copied from a named paragraph rather than inferred from document-wide statistics |
 | **New list item that takes the list's numbering** | **§3a** |
 | Validation gate: reject-view equals the input | The self-check above, on every call |
-| Never fail: unplaceable edits become ACTION NEEDED comments | Deliberately different: all or nothing with one line per problem. The agent fixes those or turns them into comments |
+| Never fail: unplaceable edits become ACTION NEEDED comments | Opt-in, §3b: `if_unplaced: "comment"`. The default stays all or nothing with one line per problem |
 | Topic-aware placement, the heading-style heuristics, typed-vs-automatic numbering notes, seam and capitalization repair, `[RESERVED]` notes | The agent's drafting judgment. It picks `find`, `like` and the wording |
-| Whole-paragraph deletion (removing the paragraph mark) | The engine does not: it strikes the text and leaves the mark. **§3b** deletes the mark too, so later items and sections renumber |
+| Whole-paragraph deletion (removing the paragraph mark) | The engine does not: it strikes the text and leaves the mark. **§3c** deletes the mark too, so later items and sections renumber |
 | Moves, formatting-only revisions, headers, footers, footnotes | Neither does it |
 
-## 3b. Deleting whole paragraphs
+## 3b. Unplaced changes as comments: `if_unplaced`
 
-No flag of its own, like §3a (§4a): it is on wherever `WORD_TRACKED_CHANGES_ENABLED`
-builds the tool.
+**Problem.** All or nothing (§3) costs a long review several full rounds. One
+change whose `find` is slightly off fails the whole call, so the model re-sends
+every change, each with its full clause text: a 40-change contract review can
+spend two or three full rounds of output tokens and minutes on Opus before it
+gives up on the stragglers. The hand-written engine it replaced never failed: it
+left each unplaceable change as an ACTION NEEDED margin comment.
+
+**Shape.** One top-level argument, `if_unplaced`: `"fail"` (the default, §3
+unchanged) or `"comment"`. Under `"comment"`, every change the *document*
+defeats becomes a comment instead of a failure, the rest are applied, and the
+call saves. Its result lists the two sets apart:
+
+```
+Tracked changes by Pat Reviewer: 1. deleted "thirty (30)", inserted "sixty (60)";
+3. deleted "one year", inserted "two years". Not placed, left as ACTION NEEDED
+comments (1): 2. "force majeure": The wording to change was not found in the document.
+```
+
+so the model reads back once and fixes only what needs it, by calling again on
+the saved redline with just those changes.
+
+**What becomes a comment, and where it goes.** The comment covers the whole
+paragraph the change most likely meant:
+
+| Problem (the `"fail"` line is unchanged) | Comment on |
+|---|---|
+| `find` not found | the paragraph of a match ignoring capitalization; else the paragraph holding at least half of its words (3+ letters; the first on a tie); else the first paragraph with any wording |
+| `find` spans paragraphs | the same ladder, matching the first line |
+| `find` appears N times, no `occurrence` | the first candidate |
+| `occurrence` out of range | the last candidate (the first, for one below 1) |
+| runs into a hyperlink, field, content control or existing revision | its paragraph |
+| overlaps another change | its paragraph. The **later change in request order** is the comment, whatever its position, so the result is deterministic |
+| `like` found nowhere, or in several paragraphs | the anchor |
+| an insertion point that cannot take one (mark already revised; last paragraph of a cell, the document or before a table with a different `like`) | the anchor. Only the offending change of a group drops, and the group is re-checked |
+
+The comment begins `ACTION NEEDED —`, gives the reason in one plain sentence for
+a reader of the document, then quotes the requested `find` in full and gives the
+full `replace` ("Delete it." for `""`) or each new paragraph, and the change's own
+`comment`, one line each.
+
+**What still fails.** Problems with the request itself, which no document would
+place: an empty `find`; neither `replace` nor `comment`; `replace` equal to
+`find` with no comment; a malformed insertion (`insert` not after/before, both
+`replace` and `insert`, no `paragraphs`, a paragraph with no `text` or an empty
+`lead`); malformed arguments; an unknown `if_unplaced`. Then only those
+problems are listed and nothing is saved.
+
+**Guarantees kept.**
+
+- **Placed changes are byte-identical to `"fail"`.** The ACTION NEEDED comments
+  are written after every placed change and insertion, so each placed change
+  takes the revision and comment ids it would take in a `"fail"` run of the
+  placed changes alone. Taking the three comment markers out of the body gives
+  that run's `word/document.xml` exactly (tested).
+- **Narrow re-serialization.** A paragraph that only receives an ACTION NEEDED
+  comment is now re-serialized, the one paragraph each such comment adds.
+  Its wording is untouched, and every other paragraph keeps its bytes.
+- **Self-check.** The reject-view check runs over every re-serialized paragraph,
+  the commented ones included.
+- With nothing unplaced, `"comment"` writes the same file as `"fail"`.
+
+**Cost.** The spec grows 853 → 1004 tokens (+151, Bedrock CountTokens;
+`evals/tool_spec_tokens.json`), one deliberate `toolConfig` rewrite at the deploy
+for users with the Word tools, never per session. Against that, a long review
+stops paying a full re-send of every change for each `find` that misses.
+
+## 3c. Deleting whole paragraphs
+
+No flag of its own, like §3a and §3b (§4c): it is on wherever
+`WORD_TRACKED_CHANGES_ENABLED` builds the tool.
 
 **Why.** `replace: ""` strikes a paragraph's wording but leaves its paragraph
 mark, so after Accept All an empty paragraph remains. In a numbered list or a
@@ -287,6 +356,23 @@ change deletes (the fix is one change with `through`). Bookmarks,
 proofing marks and comment ranges inside a deleted paragraph are allowed and
 stay where they are.
 
+**With `if_unplaced: "comment"` (§3b).** A deletion the document defeats (its
+`find` or `through` not found, a locked paragraph, an end it cannot take) is an
+ACTION NEEDED comment like any other miss, on its `find` paragraph, and the
+comment says "Delete that paragraph." or names the `through` wording. Two
+changes that cannot both be made (a deletion and an edit, an insertion or
+another deletion in the same paragraph) resolve by request order: the later
+one becomes the comment. **No comment, placed or ACTION NEEDED, ever sits in a
+paragraph whose mark this call deletes**: one that would (a miss whose likely
+paragraph is being deleted, a deletion's comment whose next paragraph is
+deleted too) moves to the paragraph that takes that mark over, following the
+chain to one whose mark survives; where that paragraph's own wording is deleted
+(it keeps the mark of a backwards merge), the comment is a point after the
+struck wording, since Word drops a comment whose whole range is deleted text
+when the deletion is accepted. A comment on a text edit inside the paragraph
+whose mark a backwards merge takes cannot move with its edit, so that pair is
+refused (or, partial, the later one commented).
+
 **Where the comment goes.** Measured headless (LibreOffice
 26.2, 2026-11-08): a comment anchored around the deleted wording, as Word itself
 places one, survives Accept All in LibreOffice and keeps the deleted paragraph
@@ -305,8 +391,8 @@ removed. That view must equal the original. Separately, every deleted paragraph
 must hold no wording outside `w:del`. Either failure is a bug, and nothing is
 written.
 
-**Cost.** The spec gains 148 tokens by Bedrock CountTokens on Haiku 4.5 (853 →
-1001, `evals/tool_spec_tokens.json`; 767 → 904 in cl100k). The deploy that
+**Cost.** The spec gains 148 tokens by Bedrock CountTokens on Haiku 4.5 (1004 →
+1152 on top of §3a and §3b, `evals/tool_spec_tokens.json`). The deploy that
 ships it rewrites the cached `toolConfig` prefix once, for users who have the
 Word tools, never per session. Deleting a section costs one short change
 instead of one `replace: ""` per paragraph and a manual clean-up.
@@ -324,7 +410,7 @@ flag: the redline comes back on the existing download card.
 It is a **feature switch**, not a rollout switch: it changes what users'
 documents read like and adds a tool.
 
-### 4a. Why §3a and §3b have no flag
+### 4a. Why §3a has no flag
 
 It was built behind an in-development flag while the new markup (paragraph-mark
 revisions, and the anchor's own mark becoming the inserted one) was unproven in
@@ -334,12 +420,23 @@ appears only when a change gives `insert`. A flag would only have postponed the
 one `toolConfig` rewrite and doubled the tool's spec, wiring and tests. The kill
 switch is `WORD_TRACKED_CHANGES_ENABLED`, which removes the tool.
 
-§3b followed the same reasoning without a flag at all: deletion is optional on
+### 4b. Why §3b has no flag
+
+`if_unplaced` is an optional argument whose default, `"fail"`, is the call as it
+was: a model that never passes it gets exactly the old behaviour, so the
+argument is its own switch. A flag would have doubled the spec, its pins and its
+tests to postpone one `toolConfig` rewrite. Before merge it was checked in Word
+for Mac (§6) and its spec cost measured (§3b). The kill switch is
+`WORD_TRACKED_CHANGES_ENABLED`, which removes the tool.
+
+### 4c. Why §3c has no flag
+
+§3c followed the same reasoning as §3a without a flag at all: deletion is optional on
 a tool the deployment already chose, old calls are unchanged, and its markup
 appears only when a change gives `delete`. Evidence took the flag's place
 before merge: Word for Mac and LibreOffice read-backs of fixture redlines
 (§6), and the spec's measured growth, one deliberate `toolConfig` rewrite at
-deploy (§3b, Cost).
+deploy (§3c, Cost).
 
 ## 5. Tests
 
@@ -361,7 +458,7 @@ deploy (§3b, Cost).
 - `tests/apis/inference_api/test_word_redline_paragraphs.py`: the tool's spec
   (digest-pinned), an end-to-end call read back through `docx_paragraphs`, and
   malformed `insert` / `paragraphs` arguments changing nothing.
-- `tests/agents/builtin_tools/test_docx_redline_deletions.py`: §3b (the engine) on the same
+- `tests/agents/builtin_tools/test_docx_redline_deletions.py`: §3c (the engine) on the same
   fixture with the same Word-semantics views (a deleted mark joins the next
   paragraph on Accept All). Covers deleting a lettered item (the next item takes
   its letter), a whole numbered section with `through`, nearest-first `through`,
@@ -377,6 +474,16 @@ deploy (§3b, Cost).
   delete read back through `docx_paragraphs` as `[deleted: …]` with the comment
   on the next paragraph; `through` through the tool; malformed `delete` /
   `through` changing nothing.
+- `tests/agents/builtin_tools/test_docx_redline_unplaced.py`: §3b. Each kind of
+  miss lands as its comment on the right paragraph; the comment's wording; the
+  caller's own problems still failing; overlaps resolved by request order; and a
+  mixed list whose placed edits equal a `"fail"` run of just those edits, byte
+  for byte once the action comments are taken out, insertions included.
+- Read surfaces: `docx_paragraphs` with the flag on and off, R3 swapping only a
+  redlined `.docx`, and R2 annotating before the sandbox.
+- Flag and tool injection: the tool is built only with the flag on and the Word
+  gate granted.
+- CDK: the env var is opt-in and set only while on, on both services.
 
 ## 6. Validation
 
@@ -409,7 +516,7 @@ identical to the original document: the same paragraphs, list labels and table
 cells, with no empty paragraph where an insertion had been. Accept All gave the
 intended text and numbering.
 
-§3b, locally, 2026-11-08, LibreOffice 26.2 headless (a Python macro run inside
+§3c, locally, 2026-11-08, LibreOffice 26.2 headless (a Python macro run inside
 `soffice`, since its standalone Python is killed on this Mac): the fixture was
 redlined with a lettered item deleted (with and without a comment), the Payment
 section deleted heading-to-list and heading-to-intro, the only paragraph of a
@@ -430,9 +537,39 @@ included. Accept All gave old (c) as (b), the headings after the Payment section
 as 2. and 3., the Entire Agreement section gone with no empty paragraph before
 the table, the emptied cell with one empty paragraph, and the backwards-merged
 cell and document end with no stray paragraph; the paragraph that took over a
-deleted mark kept its own style. (Word refuses scripted opens outside its
+deleted mark kept its own style.
+
+§3c with §3b, 2026-11-08, after both merged: one call with
+`if_unplaced: "comment"` that deletes a lettered item (with a comment),
+inserts a list item, deletes the Entire Agreement section up to the table (with
+a comment, so on the backwards-merged paragraph), edits a figure and leaves a
+change with no match as an ACTION NEEDED comment; and a second whose two misses
+most resemble paragraphs being deleted. In Word for Mac both opened with no
+repair prompt, Reject All equalled the original exactly (list labels and
+styles), and Accept All gave (a), (b) = old (c), (c) = the new item, the
+sections after renumbered, no empty paragraph, and **every comment kept** (3
+of 3, 2 of 2). That last needed one change: a comment on a paragraph whose
+wording is all deleted but whose mark survives is anchored as a point after the
+struck wording, because Word drops a comment whose whole range is deleted text
+when the deletion is accepted (a first run, with the range around the struck
+wording, lost one comment per file). LibreOffice headless gave the same views,
+comments kept in both. (Word refuses scripted opens outside its
 sandbox with a Grant File Access prompt; copies in
 `~/Library/Containers/com.microsoft.Word/Data/tmp/` open without one.)
+
+§3b in **Microsoft Word for Mac**, 2026-11-08: the same fixture was redlined with
+nine changes and `if_unplaced: "comment"`. Four placed (a commented replacement,
+a new numbered section, two surgical edits) and five became ACTION NEEDED
+comments (two not found, one ambiguous, one capitalization-only, and an
+insertion at a table cell's end asking for another paragraph's format). Word
+opened it with no repair prompt and reported 7 revisions and 6 comments. Read
+back through its AppleScript, each ACTION NEEDED comment's scope was the intended
+paragraph: the title for the two misses with no words in common, the first
+candidate for the ambiguous one, the `Kickoff` cell, and the signature line for
+the capitalization one. The placed change's own comment stayed on its edit.
+Reject All was identical to the original document read the same way (27
+paragraphs, text and list labels), and Accept All gave the edits, with the new
+section numbered `4.` and the next renumbered `5.`.
 
 On dev, once the flag is on:
 

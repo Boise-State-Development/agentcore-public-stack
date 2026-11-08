@@ -1,4 +1,4 @@
-"""``redline_word_document`` deleting whole paragraphs (docs/specs/word-tracked-changes.md §3b).
+"""``redline_word_document`` deleting whole paragraphs (docs/specs/word-tracked-changes.md §3c).
 
 The spec documents ``delete`` / ``through`` and is pinned with the rest of it in
 ``test_word_redline_paragraphs.py`` (``SPEC_DIGEST``). Calls here go through the
