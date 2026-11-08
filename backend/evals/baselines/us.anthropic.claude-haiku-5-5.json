@@ -9,6 +9,7 @@
     "project_kb",
     "agent_harness",
     "project_memory",
+    "skill_outcome",
     "retention",
     "instruction_following",
     "refusal",
@@ -572,6 +573,76 @@
       "samples": 3,
       "answer": "`site-date-instrument`"
     },
+    "skill_outcome.web_research_cites_each_point": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**Note 1: Purpose of the page**\nThe page states that its domain is reserved for use in documentation examples and doesn't require permission to use. (Source: \"Example Domain\", https://example.com)\n\n**Note 2: Usage warning**\nThe page says it is not a service and should not be relied on for testing or monitoring. (Source: \"Example Domain\", https://example.com)"
+    },
+    "skill_outcome.web_research_iana_notes": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Here are notes from one source. The page is short, so every point cites the same page.\n\n**Source:** \"Example Domains,\" IANA. https://www.iana.org/help/example-domains\n\n- **Purpose of the domains:** Domains such as example.com and example.org are maintained for documentation purposes and may be used as illustrative examples in documents without prior coordination with IANA. (Source: \"Example Domains,\" IANA, https://www.iana.org/help/example-domains)\n- **Not for registration:** These domains are not available for registration or transfer. (Source: \"Example Domains,\" IANA, https://www.iana.org/he"
+    },
+    "skill_outcome.web_research_summary_with_source": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "The page states that its domain is reserved for use in documentation examples and doesn't require permission to use. It also notes that the domain is not a service and should not be relied on for testing or monitoring.\n\nSource: \"Example Domain,\" https://example.org"
+    },
+    "skill_outcome.web_research_two_pages_each_cited": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Both pages returned the same text, so there's little to compare. Here are the notes, each cited to its source:\n\n- **Page title:** Both pages are titled \"Example Domain.\" ([example.com](https://example.com); [example.org](https://example.org))\n- **Stated purpose:** Both say the domain is for use in documentation examples without needing permission. ([example.com](https://example.com); [example.org](https://example.org))\n- **Not a service:** Both state that the domain is not a service and that it should not be relied on for testing or monitoring. ([example.com](https://example.com); [example.org"
+    },
+    "skill_outcome.skill_creator_drafts_valid_frontmatter": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Here's a complete first draft. I haven't saved it anywhere. This session doesn't have the skill-saving tools turned on, so you'd add it yourself.\n\n````markdown\n---\nname: meeting-action-items\ndescription: Turn meeting notes, transcripts, minutes or call recaps into a clear list of action items with owners, due dates and status. Use this whenever the user pastes or uploads meeting notes or a transcript and asks for action items, next steps, to-dos, follow-ups, who owns what, or a recap of what was decided, even if they only say \"what do we need to do from this\" or \"recap this meeting\".\n---\n\n# Me"
+    },
+    "skill_outcome.skill_creator_weekly_status": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 2,
+      "samples": 3,
+      "answer": "I can't save the skill from this session because the skill-saving tools aren't active. Below is a draft you can add yourself. I haven't seen your actual email yet, so the sections are generic. If you paste a recent example, I'll match your exact headings, tone, and sign-off.\n\n```markdown\n---\nname: weekly-status-email\ndescription: Write my weekly Friday status email from my notes, bullet points or updates in my standard format. Use this whenever I ask for a weekly status update, Friday update, progress report email, or team or supervisor update, even if I don't say weekly or status.\n---\n\n# Week"
+    },
+    "skill_outcome.skill_creator_trigger_description": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Here's a draft SKILL.md. The skill tools aren't enabled in this session, so I can't save it for you. The copy steps are at the end.\n\n```markdown\n---\nname: APA Reference Formatter\ndescription: Format reference list entries and in-text citations in APA 7th edition style from the author, date, title and source details the user provides. Use this whenever the user asks to cite a source, format a reference list or bibliography, fix or check APA citations, or turn a book, journal article, report, web page, DOI or URL into an APA reference, even if they only say \"cite this\" or \"make my references.\" U"
+    },
+    "skill_outcome.agent_bound_skill_shapes_the_answer": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Here are the notes from the page. It's very short, so there are only two points.\n\n- The domain is reserved for use in documentation examples, so you don't need permission to use it in examples. (*Source: \"Example Domain\", https://example.com*)\n- The page states that the domain is not a service and should not be relied on for testing or monitoring. (*Source: \"Example Domain\", https://example.com*)"
+    },
+    "skill_outcome.ungranted_skill_never_loads": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I can't fetch that page right now. The URL fetch tool isn't enabled in this session, and I don't have a web browsing tool available.\n\nTo enable it, open **Customize → Tools** in the sidebar, turn on the URL fetch tool, and send the request again. I'll then pull the page content and write short notes with a citation for each point.\n\nIf you'd rather not enable it, copy the page text and paste it here. I'll turn it into short notes, citing the relevant passage for each point."
+    },
+    "skill_outcome.plain_question_loads_no_skill": {
+      "family": "skill_outcome",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Lima"
+    },
     "retention.project_code_recalled": {
       "family": "retention",
       "passed": true,
@@ -923,6 +994,99 @@
     },
     "tool_selection.usage_question_uses_quota_tool": {
       "tool_selection": 1.0
+    },
+    "document_qa.policy_booking_lead_time": {
+      "grounded": 1.0
+    },
+    "document_qa.policy_room_capacity_paraphrase": {
+      "grounded": 1.0
+    },
+    "document_qa.policy_after_hours_form": {
+      "grounded": 1.0
+    },
+    "document_qa.policy_late_cancellation_fee": {
+      "grounded": 1.0
+    },
+    "document_qa.budget_submission_deadline": {
+      "grounded": 1.0
+    },
+    "document_qa.budget_indirect_rate": {
+      "grounded": 1.0
+    },
+    "document_qa.log_highest_temperature": {
+      "grounded": 1.0
+    },
+    "document_qa.log_sensor_replacement_date": {
+      "grounded": 1.0
+    },
+    "document_qa.absent_fact_is_not_invented": {
+      "grounded": 1.0
+    },
+    "document_qa.word_table_blank_cell_column": {
+      "grounded": 1.0
+    },
+    "document_qa.word_tracked_change_current_value": {
+      "grounded": 1.0
+    },
+    "document_qa.native_pdf_weekday_shuttle": {
+      "grounded": 1.0
+    },
+    "document_qa.html_semester_permit_fee": {
+      "grounded": 1.0
+    },
+    "document_qa.two_attachments_pick_the_right_year": {
+      "grounded": 1.0
+    },
+    "document_qa.inline_budget_overflow_by_reference": {
+      "grounded": 1.0
+    },
+    "document_qa.follow_up_turn_same_document": {
+      "grounded": 1.0
+    },
+    "project_kb.small_literal_training_deadline": {
+      "grounded": 1.0
+    },
+    "project_kb.small_word_table_blank_cell": {
+      "grounded": 1.0
+    },
+    "project_kb.small_pdf_spring_trip": {
+      "grounded": 1.0
+    },
+    "project_kb.small_mixed_format_spreadsheet_value": {
+      "grounded": 0.6667
+    },
+    "project_kb.small_absent_fact": {
+      "grounded": 0.5
+    },
+    "project_kb.small_synthesis_across_files": {
+      "grounded": 1.0
+    },
+    "project_kb.small_project_instructions_followed": {
+      "grounded": 1.0
+    },
+    "skill_outcome.web_research_cites_each_point": {
+      "skill_following": 0.3333
+    },
+    "skill_outcome.web_research_iana_notes": {
+      "skill_following": 0.3333
+    },
+    "skill_outcome.web_research_summary_with_source": {
+      "skill_following": 0.5
+    },
+    "skill_outcome.web_research_two_pages_each_cited": {
+      "skill_following": 0.5
+    },
+    "skill_outcome.skill_creator_drafts_valid_frontmatter": {
+      "skill_following": 1.0
+    },
+    "skill_outcome.skill_creator_weekly_status": {
+      "skill_following": 0.75
+    },
+    "skill_outcome.skill_creator_trigger_description": {
+      "skill_following": 0.9167
+    },
+    "skill_outcome.agent_bound_skill_shapes_the_answer": {
+      "skill_following": 0.3333
     }
   }
 }

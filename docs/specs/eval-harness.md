@@ -439,6 +439,27 @@ Each PR re-promotes the baselines its families touch, for every model with a com
 - **`project_memory` (10).** Save to `mine` on request; that preference applied in a second session; a team fact to `project`; a personal preference that leaves `project` unchanged; small talk that saves nothing; a correction that replaces the seeded entry; the second member reading project memory; the eval user's personal memory never reaching the second member (with a check that it was saved, so a pass is never vacuous); a viewer's change becoming a proposal; and an index line answering without a read.
 - **Dev, k=3.** Haiku 5.5 passes all 10 (30 of 30 samples). Haiku 4.5 passes 8: as a viewer it calls `memory_save` and is refused rather than proposing, and it reads the entry an index line already answers. Both baselines carry the family; cleanup deleted every sample's sessions as their owners.
 
+**EH-7 as built (2026-11-08).** Skill outcomes and the two advisory judges:
+
+- **Open question 2, answered.** strands-evals 1.7.0 carries a reference as `EvaluationData.expected_output`, which its case prompt renders as `<ExpectedOutput>`. So `grounded` is an `OutputEvaluator` on a fixed rubric, and only that evaluator is built with the reference: a case's own rubric judge never sees it. The reference comes from the fixtures, never the session (`scripts/eval_fixtures/references.py`):
+  - text formats are used as they are, Word through `docx_markdown`, PDF through pypdfium2, and a workbook as comma-separated rows per sheet
+  - images and decks have none, and `kb_large` and the large documents are over the 60,000-character cap
+  - a case with no reference reports "no reference" and spends nothing
+  - `grounded` is on the 23 `document_qa` and `project_kb` cases that have one
+- **`skill_following`** is strands-evals' `SkillInstructionFollowingEvaluator`, which reads the `skills` call in the session. The scrub caps a tool result at 2,000 characters, so it sees a long SKILL.md only in part.
+- **Not applicable is not zero.** `summarize_outputs` drops outputs labelled `not_applicable` before averaging, as strands-evals' own aggregator does. A verdict made only of them reports "not applicable" with no score. Before that, a skill judge on a turn that rightly loaded no skill read as a failure.
+- **`skill_outcome` (10).**
+  - Four `web_research` cases whose answers must cite each source's URL.
+  - Three `skill_creator` cases whose drafts must carry frontmatter with a name and a description.
+  - An agent bound to `web_research`.
+  - A turn with no skills enabled that must not load one, and a plain question that loads none.
+  - Like `skill_selection`, a case names its skills in `run.enabled_skills`. On the headless path an absent list enables none, and the first run, which left it out, measured nothing.
+- **Dev, k=3.**
+  - Haiku 5.5 passes all 10. `skill_following` averages 0.58 over the 24 samples where a skill loaded, rating its `web_research` answers "Partially followed".
+  - Haiku 4.5 passes 5: it does not load `web_research` and fetches and cites directly, as `skill_selection` already showed.
+  - `grounded` averages 1.00 on the `document_qa` cases for both models, and on `kb_small` 1.00 for Haiku 4.5 and 0.88 for Haiku 5.5.
+- **Found while building it.** On a `kb_small` turn, Haiku 5.5's `analyze_spreadsheet` calls on the project's workbook used `glob` to look for the file and were refused by the tool's code policy. It then told the user the analysis was blocked, which was true. `grounded` cannot see tool results, so it scored that caveat as unsupported. Whether the tool should tell the model where a project workbook lives is worth a look outside this harness.
+
 ### 15.8 Open questions
 
 1. **Does an empty project provision anything beyond rows?** If creating one stands up a data source or an index, D14 falls back to a seeded pool, and PR-6 measures that before choosing.
