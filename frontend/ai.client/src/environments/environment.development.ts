@@ -41,5 +41,7 @@ export const environment = {
         // Reads app-api's knowledge-base mode, which follows the Runtime's
         // CDK_ASSISTANT_KB_FULL_CONTEXT_* variables in the `development` environment.
         knowledgeBaseMode: true,
+        // CDK_RELEASE_LEDGER_ENABLED is on in the `development` GitHub environment.
+        releaseLedger: true,
     } satisfies FeatureFlags,
 };
