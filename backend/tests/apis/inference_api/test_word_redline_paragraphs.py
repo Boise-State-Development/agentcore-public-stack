@@ -1,7 +1,10 @@
 """``redline_word_document`` inserting whole paragraphs (docs/specs/word-tracked-changes.md §3a).
 
-The spec documents ``insert`` / ``paragraphs`` and is pinned below: it sits in
-the cached ``toolConfig``, so any change to it is a deliberate prefix rewrite.
+Deleting them (§3b) is covered in ``test_word_redline_paragraph_deletions.py``.
+
+The spec documents ``insert`` / ``paragraphs`` and ``delete`` / ``through``, and
+is pinned below: it sits in the cached ``toolConfig``, so any change to it is a
+deliberate prefix rewrite.
 """
 
 from __future__ import annotations
@@ -18,10 +21,11 @@ from apis.shared.files.document_read import docx_paragraphs
 
 FIXTURE = (Path(__file__).parents[2] / "agents" / "builtin_tools" / "fixtures" / "contract-numbered.docx").read_bytes()
 
-#: The spec with ``insert`` / ``paragraphs`` (§3a: 568 → 853 Bedrock CountTokens)
-#: and ``if_unplaced`` (§3b: 853 → 1004). A change here is a deliberate toolConfig
-#: rewrite; update the pin with it, and re-run ``scripts/measure_tool_spec_tokens.py``.
-SPEC_DIGEST = "f61604ba2ae5b7d2b3c09775f53130797f3b6fd496e95365e1162bb192358ff2"
+#: The spec with ``insert`` / ``paragraphs`` (§3a: 568 → 853 Bedrock CountTokens),
+#: ``if_unplaced`` (§3b: 853 → 1004) and ``delete`` / ``through`` (§3c: 1004 →
+#: 1152). A change here is a deliberate toolConfig rewrite; update the
+#: pin with it, and re-run ``scripts/measure_tool_spec_tokens.py``.
+SPEC_DIGEST = "e0c40e50f4ee3fba5b10f8c7ac7e4c97c66a56b4da43f224546a1235ae13cc65"
 
 
 def _digest(tool) -> str:
