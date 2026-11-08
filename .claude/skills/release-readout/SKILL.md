@@ -123,13 +123,21 @@ name the next place to look:
 
 | KPI moved | Look at |
 |---|---|
-| `unexplainedWasteShare`, `partialMissShare`, `cacheEfficiency` down | The candidate's costliest sessions (`GET /admin/costs/top-sessions?period=YYYY-MM`), then `GET /admin/costs/sessions/{id}/calls` for each: find a `miss_avoidable` or `partial_miss` row and diff its `toolConfigHash` / `systemPromptHash` / `historyHash` with the call before it. The hash that flipped names the cache-buster (CLAUDE.md, prompt-cache contract). Rule out `agentSwitched` / `modelSwitched` on the row first |
+| `unexplainedWasteShare`, `partialMissShare`, `cacheEfficiency` down | The candidate's costliest sessions (below), then `GET /admin/costs/sessions/{id}/calls` for each: find a `miss_avoidable` or `partial_miss` row and diff its `prefixFingerprints` (`toolConfigHash` / `systemPromptHash` / `historyHash`, nested in that object, not top-level fields) with the call before it. The hash that flipped names the cache-buster (CLAUDE.md, prompt-cache contract). Rule out `agentSwitched` / `modelSwitched` on the row first |
 | `costPerTurn` (per model, no mix shift) | Cost per call vs calls per turn: more calls per turn is the agent looping (tool errors, `meanTurnDurationMs`); a higher cost per call is a bigger prefix or payload (`toolPayloadPerCall`, `documentTurnShare`) |
 | `toolPayloadPerCall`, a tool's `resultCharsPerCall` or `estInputUsd` | The tools table in `readout.json`: which tool's chars per call moved. Then the change to that tool's result shape in the release's diff (`git log <baseline>..<candidate> -- backend/src/agents/main_agent/tools/`) |
 | `toolErrorRate`, a tool's `errorRate` | The tool's line in `toolCensus` on the candidate's costliest sessions (`GET /admin/costs/sessions/{id}/profile`: calls, errors and payload per tool), and the Runtime logs for that tool name |
 | `emptyAnswerShare`, `interruptedShare` | The turn outcomes in `quality.outcomes`; then the stream path (`docs/specs/turn-path-ttft.md`) and the smoke rows |
 | `meanFirstTokenMs`, server TTFT p50/p90 | The TurnLatency dashboard by `appVersion` in Logs Insights, and `docs/specs/turn-path-ttft.md` §6 for the stage that moved |
 | An eval family `fail` or a smoke `FAIL` | `eval_harness.py score --explain` on that run, or the smoke run's own output |
+
+**The candidate's costliest sessions.** `GET /admin/costs/top-sessions?period=YYYY-MM`
+ranks the whole month, not one version, so its top rows can belong to the
+baseline or to a build before either. Walk its list in order and keep a
+session only when its `/calls` rows carry the candidate's `appVersion` (and
+`build`, for a build readout); a session that spans a deploy has rows on both
+sides, so read only the candidate's rows. Rows written before the version
+stamps shipped have `appVersion: null` and belong to neither side.
 
 Never paste a session id, user id, title or message into the readout or a PR
 body. Ids you look up stay in the terminal.
