@@ -118,6 +118,8 @@ INJECTED_TOOL_IDS = frozenset(
 #     also closes over the user's display name, as `redline_word_document`'s
 #     default revision author. That names the same identity as `user_id`, the
 #     equivalence SKILL_AUTHORING's email rests on below. With
+#     `WORD_TRACKED_CHANGES_ENABLED` on, `compare_word_documents` closes over
+#     `(session_id, user_id)` only. With
 #     `WORD_SKILL_SCRIPTS_ENABLED` on, create/modify also hold a
 #     `TurnSkillRecords` holder, filled by the agent build from the turn's
 #     skill records; those derive from `accessible_skill_ids`, a key element

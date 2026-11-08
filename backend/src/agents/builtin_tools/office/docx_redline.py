@@ -66,7 +66,7 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
 
@@ -149,6 +149,10 @@ class NewParagraph:
     text: str
     like: Optional[str] = None
     lead: Optional[str] = None
+    #: Runs to write instead of ``lead`` / ``text``, each ``(wording, w:rPr)``:
+    #: a paragraph copied from another document keeps its own run formatting
+    #: (``docx_compare``). Empty for a paragraph the model words.
+    runs: Tuple[Tuple[str, Optional[ElementTree.Element]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -856,6 +860,13 @@ def _new_paragraph(
     paragraph = ElementTree.Element(_W + "p")
     if len(ppr):
         paragraph.append(ppr)
+    if new.runs or not new.text:
+        written = [_new_run(wording, copy.deepcopy(rpr) if rpr is not None else None) for wording, rpr in new.runs if wording]
+        if written:
+            ins = ids.revision("ins")
+            ins.extend(written)
+            paragraph.append(ins)
+        return paragraph
     lead_run, body_run = _run_templates(like)
     ins = ids.revision("ins")
     text = new.text
@@ -1142,21 +1153,22 @@ def _max_id(package: zipfile.ZipFile) -> int:
     return highest
 
 
-def redline(
-    docx_bytes: bytes,
-    changes: Sequence[Change],
-    author: str,
-    now: Optional[datetime] = None,
-) -> RedlineResult:
-    """Apply ``changes`` to a .docx as tracked changes by ``author``."""
-    if not changes:
-        raise RedlineError(["No changes were given."])
+@dataclass
+class _Document:
+    """An opened package and its parsed body. ``package`` must be closed."""
+
+    package: zipfile.ZipFile
+    xml: str
+    body: ElementTree.Element
+    namespaces: _Namespaces
+
+
+def _open_document(docx_bytes: bytes) -> _Document:
     try:
         package = zipfile.ZipFile(io.BytesIO(docx_bytes))
     except (zipfile.BadZipFile, ValueError):
         raise RedlineError(["The file is not a Word document."])
-
-    with package:
+    try:
         try:
             xml = package.read(_DOCUMENT_PART).decode("utf-8")
         except (KeyError, UnicodeDecodeError):
@@ -1169,89 +1181,131 @@ def redline(
         body = root.find(_W + "body")
         if body is None:
             raise RedlineError(["The file has no Word document body."])
+        return _Document(package, xml, body, _Namespaces.of(xml))
+    except Exception:
+        package.close()
+        raise
 
-        namespaces = _Namespaces.of(xml)
-        paragraphs, units = _paragraphs(body)
+
+#: Extra edits a caller applies after the located changes and insertions:
+#: ``(ids, comments, extras)``, writing only into ``more_dirty`` units.
+_ApplyMore = Callable[
+    [_Ids, List[Tuple[str, str]], Dict[int, Tuple[List[ElementTree.Element], List[ElementTree.Element]]]], None
+]
+
+
+def _write(
+    doc: _Document,
+    units: Sequence[ElementTree.Element],
+    located: Sequence[_Located],
+    insertions: Sequence[_Insertion],
+    parents: Optional[Dict[ElementTree.Element, ElementTree.Element]],
+    author: str,
+    now: Optional[datetime],
+    more_dirty: Sequence[int] = (),
+    apply_more: Optional[_ApplyMore] = None,
+) -> RedlineResult:
+    """Apply located edits and insertions (and ``apply_more``), self-check the
+    reject view, and write the package with only the edited paragraphs spliced."""
+    package, xml, namespaces = doc.package, doc.xml, doc.namespaces
+    stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ids = _Ids(_max_id(package) + 1, author, stamp)
+    first_id = ids.next_id
+    dirty = sorted(
+        {item.paragraph.unit for item in located} | {item.anchor.unit for item in insertions} | set(more_dirty)
+    )
+    wording = {unit: _rejected_wording(units[unit], first_id) for unit in dirty}
+    comments: List[Tuple[str, str]] = []
+    summaries: Dict[int, str] = {}
+    # Right to left within a paragraph, so earlier offsets stay valid.
+    for item in sorted(located, key=lambda x: (x.paragraph.unit, -x.edit_start, -x.start)):
+        summaries[item.index] = _apply(item, ids, comments)
+    extras: Dict[int, Tuple[List[ElementTree.Element], List[ElementTree.Element]]] = {}
+    if insertions and parents is not None:
+        summaries.update(_apply_insertions(insertions, parents, units, extras, ids, comments))
+    if apply_more is not None:
+        apply_more(ids, comments, extras)
+
+    changed = [
+        unit
+        for unit in dirty
+        if _rejected_wording(units[unit], first_id) != wording[unit]
+        or any(_rejected_wording(p, first_id) for side in extras.get(unit, ([], [])) for p in side)
+    ]
+    if changed:  # a bug, never the user's input
+        raise RedlineError(["The redline would have changed wording it did not mark, so nothing was saved."])
+
+    new_xml = _serialize_units(xml, namespaces, units, dirty, extras)
+    try:
+        ElementTree.fromstring(new_xml)
+    except ElementTree.ParseError as exc:  # pragma: no cover - a bug, never the user's input
+        raise RedlineError([f"The edited document failed to parse ({exc}), so nothing was saved."])
+
+    replaced: Dict[str, bytes] = {_DOCUMENT_PART: new_xml.encode("utf-8")}
+    added: Dict[str, bytes] = {}
+    if comments:
+        part_name, rels = _comments_part(package)
+        if part_name in package.namelist():
+            existing = package.read(part_name).decode("utf-8")
+            w = next((p for p, u in _declarations(existing) if u == W_NS), namespaces.w)
+            entries = "".join(_comment_xml(cid, author, stamp, text, w) for cid, text in comments)
+            close = existing.rfind(f"</{w}:comments>")
+            if close < 0:
+                raise RedlineError(["The document's comments part could not be extended."])
+            replaced[part_name] = (existing[:close] + entries + existing[close:]).encode("utf-8")
+        else:
+            w = namespaces.w
+            entries = "".join(_comment_xml(cid, author, stamp, text, w) for cid, text in comments)
+            added[part_name] = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+                f'<{w}:comments xmlns:{w}="{W_NS}">{entries}</{w}:comments>'
+            ).encode("utf-8")
+        target = part_name.removeprefix("word/")
+        if rels is None:
+            added[_DOCUMENT_RELS] = (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                f'<Relationship Id="rIdComments" Type="{_COMMENTS_REL_TYPE}" Target="{target}"/>'
+                "</Relationships>"
+            ).encode("utf-8")
+        elif _COMMENTS_REL_TYPE not in rels:
+            taken = set(re.findall(r"\bId\s*=\s*[\"']([^\"']+)[\"']", rels))
+            rid = next(f"rIdComments{n or ''}" for n in range(len(taken) + 2) if f"rIdComments{n or ''}" not in taken)
+            close = rels.rfind("</Relationships>")
+            relationship = f'<Relationship Id="{rid}" Type="{_COMMENTS_REL_TYPE}" Target="{target}"/>'
+            replaced[_DOCUMENT_RELS] = (rels[:close] + relationship + rels[close:]).encode("utf-8")
+        content_types = package.read(_CONTENT_TYPES).decode("utf-8")
+        if f'PartName="/{part_name}"' not in content_types:
+            close = content_types.rfind("</Types>")
+            override = f'<Override PartName="/{part_name}" ContentType="{_COMMENTS_CONTENT_TYPE}"/>'
+            replaced[_CONTENT_TYPES] = (content_types[:close] + override + content_types[close:]).encode("utf-8")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as target_zip:
+        for info in package.infolist():
+            data = replaced.get(info.filename)
+            target_zip.writestr(info, data if data is not None else package.read(info.filename))
+        for name, data in added.items():
+            target_zip.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
+    return RedlineResult(buffer.getvalue(), [summaries[i] for i in sorted(summaries)])
+
+
+def redline(
+    docx_bytes: bytes,
+    changes: Sequence[Change],
+    author: str,
+    now: Optional[datetime] = None,
+) -> RedlineResult:
+    """Apply ``changes`` to a .docx as tracked changes by ``author``."""
+    if not changes:
+        raise RedlineError(["No changes were given."])
+    doc = _open_document(docx_bytes)
+    with doc.package:
+        paragraphs, units = _paragraphs(doc.body)
         inserting = any(c.insert is not None or c.paragraphs for c in changes)
-        parents = {child: node for node in body.iter() for child in node} if inserting else None
+        parents = {child: node for node in doc.body.iter() for child in node} if inserting else None
         located, insertions = _locate(changes, paragraphs, parents)
-
-        stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        ids = _Ids(_max_id(package) + 1, author, stamp)
-        first_id = ids.next_id
-        dirty = sorted({item.paragraph.unit for item in located} | {item.anchor.unit for item in insertions})
-        wording = {unit: _rejected_wording(units[unit], first_id) for unit in dirty}
-        comments: List[Tuple[str, str]] = []
-        summaries: Dict[int, str] = {}
-        # Right to left within a paragraph, so earlier offsets stay valid.
-        for item in sorted(located, key=lambda x: (x.paragraph.unit, -x.edit_start, -x.start)):
-            summaries[item.index] = _apply(item, ids, comments)
-        extras: Dict[int, Tuple[List[ElementTree.Element], List[ElementTree.Element]]] = {}
-        if insertions and parents is not None:
-            summaries.update(_apply_insertions(insertions, parents, units, extras, ids, comments))
-
-        changed = [
-            unit
-            for unit in dirty
-            if _rejected_wording(units[unit], first_id) != wording[unit]
-            or any(_rejected_wording(p, first_id) for side in extras.get(unit, ([], [])) for p in side)
-        ]
-        if changed:  # a bug, never the user's input
-            raise RedlineError(["The redline would have changed wording it did not mark, so nothing was saved."])
-
-        new_xml = _serialize_units(xml, namespaces, units, dirty, extras)
-        try:
-            ElementTree.fromstring(new_xml)
-        except ElementTree.ParseError as exc:  # pragma: no cover - a bug, never the user's input
-            raise RedlineError([f"The edited document failed to parse ({exc}), so nothing was saved."])
-
-        replaced: Dict[str, bytes] = {_DOCUMENT_PART: new_xml.encode("utf-8")}
-        added: Dict[str, bytes] = {}
-        if comments:
-            part_name, rels = _comments_part(package)
-            if part_name in package.namelist():
-                existing = package.read(part_name).decode("utf-8")
-                w = next((p for p, u in _declarations(existing) if u == W_NS), namespaces.w)
-                entries = "".join(_comment_xml(cid, author, stamp, text, w) for cid, text in comments)
-                close = existing.rfind(f"</{w}:comments>")
-                if close < 0:
-                    raise RedlineError(["The document's comments part could not be extended."])
-                replaced[part_name] = (existing[:close] + entries + existing[close:]).encode("utf-8")
-            else:
-                w = namespaces.w
-                entries = "".join(_comment_xml(cid, author, stamp, text, w) for cid, text in comments)
-                added[part_name] = (
-                    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
-                    f'<{w}:comments xmlns:{w}="{W_NS}">{entries}</{w}:comments>'
-                ).encode("utf-8")
-            target = part_name.removeprefix("word/")
-            if rels is None:
-                added[_DOCUMENT_RELS] = (
-                    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
-                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                    f'<Relationship Id="rIdComments" Type="{_COMMENTS_REL_TYPE}" Target="{target}"/>'
-                    "</Relationships>"
-                ).encode("utf-8")
-            elif _COMMENTS_REL_TYPE not in rels:
-                taken = set(re.findall(r"\bId\s*=\s*[\"']([^\"']+)[\"']", rels))
-                rid = next(f"rIdComments{n or ''}" for n in range(len(taken) + 2) if f"rIdComments{n or ''}" not in taken)
-                close = rels.rfind("</Relationships>")
-                relationship = f'<Relationship Id="{rid}" Type="{_COMMENTS_REL_TYPE}" Target="{target}"/>'
-                replaced[_DOCUMENT_RELS] = (rels[:close] + relationship + rels[close:]).encode("utf-8")
-            content_types = package.read(_CONTENT_TYPES).decode("utf-8")
-            if f'PartName="/{part_name}"' not in content_types:
-                close = content_types.rfind("</Types>")
-                override = f'<Override PartName="/{part_name}" ContentType="{_COMMENTS_CONTENT_TYPE}"/>'
-                replaced[_CONTENT_TYPES] = (content_types[:close] + override + content_types[close:]).encode("utf-8")
-
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w") as target_zip:
-            for info in package.infolist():
-                data = replaced.get(info.filename)
-                target_zip.writestr(info, data if data is not None else package.read(info.filename))
-            for name, data in added.items():
-                target_zip.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
-        return RedlineResult(buffer.getvalue(), [summaries[i] for i in sorted(summaries)])
+        return _write(doc, units, located, insertions, parents, author, now)
 
 
 __all__ = ["Change", "NewParagraph", "RedlineError", "RedlineResult", "redline"]
