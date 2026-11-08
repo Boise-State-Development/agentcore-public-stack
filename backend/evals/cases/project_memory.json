@@ -183,12 +183,12 @@
             "March 10"
           ],
           "absent": [
-            "March 3"
+            "due on March 3"
           ]
         }
       ]
     },
-    "notes": "The seeded entry says March 3. A correction rewrites it; an appended second line leaves the stale date behind."
+    "notes": "The seeded entry says 'due on March 3'. A correction rewrites it, so no line may still say so; '(corrected from March 3)' is provenance, not a stale fact, and passes."
   },
   {
     "id": "project_memory.member2_reads_project_memory",

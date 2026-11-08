@@ -57,11 +57,15 @@ class FakeApi:
             return 200, {}
         if parts[0] == "memory" and parts[3:] == ["entries"]:
             return 200, {"entries": [{"slug": k, "description": v.get("description", "")}
-                                     for k, v in w["spaces"][parts[2]].items()]}
+                                     for k, v in w["spaces"][parts[2]].items() if k != "__index__"]}
         if parts[0] == "memory" and parts[3:4] == ["entries"]:
             return 200, {"slug": parts[4], "content": w["spaces"][parts[2]][parts[4]]["body"]}
+        if parts[0] == "memory" and parts[3:] == ["index"] and method == "PUT":
+            w["spaces"][parts[2]]["__index__"] = {"content": json_body["content"]}
+            return 200, {}
         if parts[0] == "memory" and parts[3:] == ["index"]:
-            return 404, None
+            idx = w["spaces"][parts[2]].get("__index__")
+            return (200, idx) if idx else (404, None)
         if parts[0] == "projects" and len(parts) == 2 and method == "PATCH":
             w["projects"][parts[1]]["status"] = json_body["status"]
             return 200, {}
@@ -100,6 +104,8 @@ def test_setup_adds_member2_seeds_memory_and_reads_it_back():
     project = asyncio.run(epm.EphemeralProject.create(_accounts(world), case, 0))
     assert world["members"][project.project_id] == {"m2@example.invalid": "viewer"}
     assert "Files are site-date" in project.before["project"] and project.before["mine"] == ""
+    # The seed links the file from MEMORY.md, as memory_save would, or no conversation could see it.
+    assert "- [[naming]] — naming" in project.before["project"]
     state = asyncio.run(project.inspect())
     assert state["project"] == project.before["project"] and state["proposals"] == 0
     asyncio.run(project.purge())

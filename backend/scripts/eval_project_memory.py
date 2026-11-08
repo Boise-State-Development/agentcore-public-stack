@@ -30,6 +30,12 @@ logger = logging.getLogger("eval_project_memory")
 TMP_PREFIX = "[eval-tmp] "
 
 
+def _index_line(slug: str, description: str) -> str:
+    """``apis/shared/memory/service._index_line``: ``- [[slug]] — description``."""
+    summary = " ".join((description or "").split())
+    return f"- [[{slug}]] — {summary}" if summary else f"- [[{slug}]]"
+
+
 class ProjectMemoryError(RuntimeError):
     pass
 
@@ -135,6 +141,16 @@ class EphemeralProject:
                     json_body={"body": entry["body"], "description": entry.get("description", "")},
                 )
                 _ok(status, body, 200, 201, what=f"seed {scope}/{slug}")
+            # The entries route does not link a file into MEMORY.md (only the
+            # service's add_index_link does, which memory_save calls), and an
+            # unlinked file is invisible to every conversation. Write the index
+            # as add_index_link leaves it: the heading, then one line per file.
+            lines = [_index_line(slug, entry.get("description", "")) for slug, entry in entries.items()]
+            status, body = await main.call(
+                "PUT", f"/memory/spaces/{self.spaces[scope]}/index",
+                json_body={"content": "# Memory\n\n" + "\n".join(lines) + "\n"},
+            )
+            _ok(status, body, 200, what=f"index {scope}")
         self.before = {scope: await self._read(scope) for scope in self.spaces}
 
     async def _read(self, scope: str) -> str:
