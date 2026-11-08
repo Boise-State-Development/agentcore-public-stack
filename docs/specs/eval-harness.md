@@ -1,6 +1,6 @@
 # Evaluation harness — phase 1, the release-gate script
 
-**Status:** PR-1 merged and validated on dev (2026-10-30). PR-3 BUILT (2026-10-30): the eval user, its sign-in, the first Haiku 4.5 baseline, and the release and nightly wiring; see §13. PR-2 BUILT (2026-10-30): the judges, pinned to strands-agents-evals 1.7.0, and a re-promoted Haiku baseline with judge scores (54 of 57 cases pass). Phase 1 of a three-phase plan; §12 names the other two so nobody designs phase 1 in a way that blocks them.
+**Status:** PR-1 merged and validated on dev (2026-10-30). PR-3 BUILT (2026-10-30): the eval user, its sign-in, the first Haiku 4.5 baseline, and the release and nightly wiring; see §13. PR-2 BUILT (2026-10-30): the judges, pinned to strands-agents-evals 1.7.0, and a re-promoted Haiku baseline with judge scores (54 of 57 cases pass). Phase 1 of a four-phase plan; §12 names the others so nobody designs phase 1 in a way that blocks them. Phase 2 (coverage across Projects, project memory, Agents, documents, non-document uploads, skills and the terminal client, §15) and phase 3's Evaluations page (§16) were proposed 2026-11-07.
 **Refs:** `docs/specs/agentcore-evaluations-spike-findings.md` (the judge spike and its hybrid recommendation), `docs/specs/response-feedback.md` §2 and §11 PR-4 (thumbs as a sampler, the managed-judge adapter), `docs/testing/smoke-regression.md` (the pass this slots into), `backend/scripts/compaction_quality_harness.py` and `backend/scripts/large_document_quality_harness.py` (the two harnesses whose method this generalises), `docs/specs/turn-path-ttft.md` §6 (the regression plan this is the quality half of), `docs/kaizen/scoping/2026-09-21-quality-veto-harness.md` (the scoping that built the compaction harness as slice 1 and deferred the live-arm slices; its §2.3 on what the runner can and cannot vary is load-bearing for §11 here), `docs/kaizen/review-queue.md` [2026-09-21] "The cheap quality veto does not exist".
 
 ## 1. Problem
@@ -247,9 +247,11 @@ As built, `scripts/nightly/eval-harness.sh` re-seeds the eval user (idempotent: 
 - Chaos and red-team evaluators. The package has them; nothing here precludes them; nothing here needs them.
 - Persisting results anywhere but the run directory and the committed baseline. Phase 3 decides the row.
 
-## 12. The two later phases, so phase 1 does not block them
+## 12. The later phases, so phase 1 does not block them
 
-**Phase 3 — an admin readout.** A read-only Evaluations page listing runs and per-family trends, then a "run now" background task, the way `POST /admin/feedback/evaluations/run` works. It needs phase 1's run report written somewhere durable with a stable shape; §8's report is that shape, and it must not grow fields a page cannot render. Not before the script has run a dozen times. **Lands in the release ledger** (`docs/specs/release-ledger.md` §5.2, §5.4, PR-5): `score --publish` writes §8's table as a `LEDGER#EVAL` row keyed by the Runtime build that served the run, the nightly dev track publishes every night, and `GET /admin/costs/ledger/quality` and the readout read them per version and build. The page is the release ledger's quality panel (its PR-6), not a separate Evaluations page; the "run now" task is still open.
+**Phase 2 — coverage across surfaces.** Projects (their Files in both delivery modes, and project memory), Agents, more document formats, images, spreadsheets and decks, skill outcomes and the terminal client, each measured only where it changes what the model sees. Designed in §15.
+
+**Phase 3 — an admin readout.** A read-only Evaluations page listing runs and per-family trends, then a "run now" background task, the way `POST /admin/feedback/evaluations/run` works. It needs phase 1's run report written somewhere durable with a stable shape; §8's report is that shape, and it must not grow fields a page cannot render. Not before the script has run a dozen times. **Lands in the release ledger** (`docs/specs/release-ledger.md` §5.2, §5.4, PR-5): `score --publish` writes §8's table as a `LEDGER#EVAL` row keyed by the Runtime build that served the run, the nightly dev track publishes every night, and `GET /admin/costs/ledger/quality` and the readout read them per version and build. The page is the release ledger's quality panel (its PR-6), not a separate Evaluations page; the "run now" task is still open. §16 adds per-case outcomes to that row and an Evaluations page for trends and case history, linked from the panel.
 
 **Phase 4 — per-agent test sets.** An owner attaches cases to an Agent or Project in the Designer, runs them as themself against the draft and the published version, and sees the flips. Same runner, same mapper, same judges; the cases carry `agent_id` and spend lands on the owner's quota. It needs its own RBAC, a judge-model choice, UX and a feature flag defaulting off. §5's format already has room for `run.rag_assistant_id` and `run.agent_type` because the runner does.
 
@@ -297,3 +299,163 @@ As built, `scripts/nightly/eval-harness.sh` re-seeds the eval user (idempotent: 
 
    The two agree on pass/fail for 89 of 96 real verdicts, with a mean score gap of 0.06. Both misses are noise rather than blind spots. Haiku's one disagreement is a refusal followed by lawful alternatives, which it read as "not a genuine refusal". Sonnet's two are one planted sample on which it described a "recovery response" that is not in the session; re-judged three times, it scored helpfulness 1.0 once and 0.0 twice, and faithfulness 0.0 all three times. Accuracy is a tie at this sample size. What separates them is where judgement is softest: Haiku scored Haiku's own answers higher than Sonnet did on conciseness (+0.17) and on the case rubrics (+0.09), the direction a judge favouring its own model's output would move, though nine verdicts each cannot prove it. The default model under test is Haiku, and the cost gap is under a dollar per release run, so the default judge stays Sonnet 4.6. `judge` now warns when the judge and the model under test are the same model (ignoring the `us.` / `global.` prefix). A run of a different model under test should pick a judge that is neither.
 3. ~~**Should `score` read the `C#` rows?**~~ Yes, best-effort, behind `--explain` (§8). The coupling to the table shape is the admin cost anatomy's reader and projection, not a second one, so a change to the row is made in one place.
+
+## 15. Phase 2 — coverage across surfaces
+
+**Status:** Proposed 2026-11-07. Nothing built. It extends phase 1's runner, format and gate. Nothing in it changes the turn path (D12 still holds).
+
+### 15.1 Problem
+
+Phase 1 measures one surface: a plain chat turn with a fixed tool list. Several shipped paths put a different prompt in front of the model, and nothing measures them:
+
+- **Shared Projects** have been on by default since 1.28.0. A project turn runs its harness Agent (`harnessAgentId` on Project META). Its Files reach the model in one of two ways. Under the full-context budget, the whole knowledge base goes into the system prompt (`apis/shared/assistants/kb_full_context.py`). The code default is 50,000 estimated tokens; dev and prod set `CDK_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` to 75,000 (#1915). Over the budget, passages are retrieved by the member's wording (`_search_and_augment`), and `project_files` lists the files and reads one by name. Since #1915 the full-context block is mixed-format: spreadsheets and decks are skipped rather than disqualifying. They are named in the block, retrieval still runs filtered to them, and the spreadsheet tools read them. Before that, a single `.xlsx` sent a whole small knowledge base to retrieval. Project memory has two scopes: `project`, the shared space, and `mine`, the member's `personal_in_project` space. It is reached through `memory_list` / `memory_read` / `memory_query` / `memory_save` / `memory_propose` (`agents/builtin_tools/memory_spaces/project_tools.py`), with each space's `MEMORY.md` in the prompt.
+- **Agents** add instructions, bound tools that *replace* the request's tools (`agent_binding_resolver.py`), bound knowledge and bound skills. Since #1915, an Agent's knowledge can also be listed and read by file name with `knowledge_files` (`AGENT_KNOWLEDGE_FILES_ENABLED`, in development, on in dev and prod).
+- **Documents.** Only PDFs still reach the model as native document blocks. `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` has been on in dev and, since 1.34.0, in prod. With it on, the per-request projection in `apis/shared/models/document_cap.py` renders every other document the deployment can read as text: Word through `docx_markdown`, HTML through `html_markdown`, text and Markdown as UTF-8. The stored message keeps its document block. A turn's inline attachments share a 7 MB first-fit budget (`INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`). Since #1912, an uploaded document that does not fit goes by reference, read through `document_read`, instead of being dropped with a footnote. Today's 9 small document cases are all Markdown and plain text, so they measure only the simplest rendering. Nothing covers a Word file (whose known failure is reading a table's values from the wrong column), a PDF, HTML, two attachments in one turn, the by-reference overflow, a follow-up turn on the same document, or an absent fact in a large document.
+- **Uploads that are never document blocks.** Three classes are routed elsewhere before the prompt is built (`apis/shared/files/models.py`, the route's diversion). Images (png, jpeg, gif, webp) become image blocks, and a text-only model drops them with a note. Spreadsheets (csv, xls, xlsx) go to `list_spreadsheets` / `analyze_spreadsheet`, which run Python on the real file. PowerPoint files (pptx) go to the PowerPoint tools, because Bedrock has no pptx document format. Each class's routing is unit-tested (`test_image_handler.py`, `test_presentation_attachment_carveout.py`, `test_attachment_tool_autoenable.py`). The smoke matrix has one CSV row, which requires the spreadsheet tools but only warns on a wrong answer. Nothing checks that a deployed turn reads a value off an image, gets an aggregation right, or finds a fact on a slide.
+- **Where these gaps showed up.** The DRED assistant inventory review (2026-11-07) found several of them from the outside, in production. A 4 MB PDF fell out of the 7 MB inline budget with only a footnote the model relayed (fixed by #1912). An Agent told to read a Knowledge file by name could not, because its knowledge base was over budget and retrieval has no file names, so it searched the user's Drive instead (fixed by `knowledge_files` and mixed-format full context, #1915). Both fixes are dev-validated and in 1.34.0, and neither is measured by anything that would catch a regression.
+- **Skills** are measured only on routing (`skill_selection`): whether a skill loaded, never whether the answer followed it.
+- **The terminal client** sends `client_surface: "terminal"`, which changes the prompt guidance, and declares `client_tools`. The runner passes neither field.
+- **Personal long-term memory** is off for the eval user (D7). That remains true; see §15.6.
+
+### 15.2 Principle: a surface gets cases where it changes what the model sees
+
+Running all of phase 1 through every surface would multiply the cost and mostly re-measure the same Runtime path. A surface earns cases only for what it changes: the prompt, the tools, the retrieval path or memory. A project turn's arithmetic is the plain chat turn's arithmetic. Its knowledge base and its memory are not.
+
+| Surface | What it changes | Measured by |
+|---|---|---|
+| Project | the harness instructions, the Files (full context or retrieval plus `project_files`), project memory | `project_kb`, `project_memory` |
+| Agent | the instructions, bound tools replacing the request's, bound knowledge, bound skills | `agent_harness` |
+| Attachment | the document's format and delivery (native PDF, rendered as text, digest, by-reference overflow, `document_read`, the attachments KB) | `document_qa`, expanded |
+| Non-document upload | an image block, the spreadsheet tools, the PowerPoint tools | `attachment_tools` |
+| Skill | the body it loads and the output it shapes | `skill_outcome`; `skill_selection` stays |
+| Terminal client | the prompt guidance, and the `local_*` tools | `terminal` |
+
+### 15.3 Decisions
+
+**D13 — Fixture entities are seeded once, persist, and are keyed by content hash.** `scripts/seed_eval_fixtures.py` is idempotent like `seed_eval_user.py`. Signed in as the eval user, it creates the fixture projects and agents of §15.4, uploads their files, and waits until every file is ready. Each one's name is `[eval] <fixture name>`, and its description carries the hash of its definition and files. A case names a fixture by its logical name, and the harness resolves the name to an id by listing the eval user's own projects and agents. Nothing is written to SSM. When a hash no longer matches, the seed deletes that fixture and creates it again, and the families that use it re-promote their baselines, because a fixture change is a case change. They must persist because a new project file waits up to one dispatcher tick (0–15 minutes) and then for knowledge-base ingestion. Creating them per run would add that wait to every run and churn the managed knowledge base. During a run they are read-only.
+
+**D14 — Memory cases get a project of their own per sample.** A persistent project would carry one sample's saves into the next, and k parallel samples would write into each other. Each `project_memory` sample creates an empty project (no files, so there is no ingestion wait), seeds any memory the case declares, runs, reads the result back, and deletes the project in cleanup. Open question 1 asks whether an empty project costs anything beyond rows. If it does, the fallback is a seeded pool with its memory reset per sample.
+
+**D15 — The format grows by run fields, turn fields and two check types. Parsing stays strict.**
+
+- `run.project` or `run.agent` names a fixture (§15.4), and a case may name only one. The harness sends the resolved harness Agent id as `rag_assistant_id`, which `run_agent_headless` already carries. `run.project: "@ephemeral"` is D14's per-sample project, and `run.project_memory` seeds its spaces: `{"project": {slug: text}, "mine": {slug: text}}`.
+- `run.client_surface` mirrors `InvocationRequest.client_surface`, and `run.client_tools` declares tool specs with canned results. The runner gains the passthrough, as it gained `file_upload_ids` in PR-1.
+- A turn may carry `session` (an integer, default 1) and `as` (`"eval"` or `"member2"`). A new session number starts a fresh session in the same project, as a member opening a new conversation would. Only the last turn is scored, as before.
+- `expect.memory` is read after the sample through app-api's memory-space routes (`GET /memory/spaces/{id}/entries`, then each entry): `{"scope": "project" | "mine", "contains_any", "contains_all", "absent", "unchanged": bool}`. `expect.proposals` counts the pending proposals at `GET /projects/{id}/memory/proposals`. These are deterministic and gate like any other check.
+- `expect.tools.max_calls` bounds the total tool calls on the last turn, which catches a search spree. The loader rejects it if it is lower than `must_call`'s length.
+
+**D16 — A second eval user, for the cases that need two people.** `seed_eval_user.py --member2` seeds `eval-harness-2` with the same role, the same SSM pattern (`/<prefix>/eval-harness-2/credentials`), long-term memory off, and the email `eval-harness-2@example.invalid`. Only turns marked `"as": "member2"` use it, after the seed or D14 has added it to the project with the role the case states (`run.member2_role`: `editor` or `viewer`). `--auth cognito` signs both users in. Cleanup removes both users' sessions.
+
+**D17 — The grounding judge reads the fixture, never the session's document text.** Scrubbing stays as §6.4 has it, because it keeps the delivery path blind. A new advisory evaluator, `grounded`, scores whether every claim in the answer is supported by the case's *source*. The source is the fixture file, or for a large document the planted page that `large_document_quality/fixtures.py` already records. It is passed as the judge's reference material, so it is the same text whichever delivery path produced the answer. The corpus is synthetic (D6), so this exposes nothing. The deterministic planted-fact checks remain the gate, and `grounded` is advisory under D5.
+
+**D18 — A gating family has at least ten cases.** Below six changed cases the exact test cannot reach 0.05 at all (§8), so a small family can gate only through the "lost a third" clause. Every new gating family starts at ten or more. `terminal` starts advisory and gates once it reaches ten. That needs `JUDGED_FAMILIES` in `cases.py` to become an advisory-families set, since today only judged families are non-gating.
+
+**D19 — A case may depend on a flag only if dev has it on.** The baseline describes dev, so a flag that dev turns on is part of what it measures. Documents-as-text and `knowledge_files` are on in dev and prod, and their cases name the flag in `notes`. Turning such a flag off on dev re-promotes the families that name it, because the change is deliberate, not a regression. Features dev does not turn on (`document_extract`, `verify_sources`, the project readiness note) would pass or fail on a deployment's configuration rather than its code, so they join when dev turns them on. Word skill scripts are on in dev but held from prod, and join with the rest.
+
+### 15.4 Families and fixtures
+
+Fixtures (D13). Every file is synthetic and generated by a builder in `backend/evals/fixtures/build.py`, pinned by a test the way `LARGE_DOCUMENTS` is, so the repo carries no binaries. The conversation-upload fixtures for `attachment_tools` come from the same builder: images drawn with Pillow and workbooks with openpyxl (both already pinned), and the deck written as a minimal OOXML package with `zipfile`. python-pptx is not a backend dependency, because the deck tools run it inside Code Interpreter, and adding it would need its own approval.
+
+| Fixture | What it is | Mode it exercises |
+|---|---|---|
+| `kb_small` | A project with four files totalling about 15k tokens: a Markdown policy, a Word file with a table and blank cells, a PDF with a text layer, and an `.xlsx` | mixed-format full context (#1915): the three text files in the block, the spreadsheet skipped, named and read by the spreadsheet tools |
+| `kb_large` | A project with about 120k tokens across six files, over dev's 75,000-token budget. One file is uploaded twice, v1 then v2, so the replace path runs and the v1 value is the distractor | retrieval plus `project_files` |
+| `agent_format` | An Agent whose instructions set an exact reply format | instructions |
+| `agent_bound_tools` | An Agent bound to `calculator` only | bound tools replace the request's |
+| `agent_knowledge` | An Agent with a small bound knowledge base | an Agent's knowledge path |
+| `agent_loader` | An Agent whose knowledge base is over budget and whose instructions say to read one named file in full before answering, the pattern the DRED assistants use | `knowledge_files` read by name instead of retrieval (#1915) |
+| `agent_long_instructions` | An Agent with instructions over 8 KiB and a rule only at the end | instructions kept whole |
+| `agent_skill` | An Agent bound to `web_research` | an Agent's skill binding |
+
+| Family | Cases | Catches | Scorer | Gates |
+|---|---|---|---|---|
+| `project_kb` | 12 | Retrieval or full-context changes that lose a fact, invent one, or pick the stale value: literal and paraphrased lookups in both fixtures; the same field with different values in two files; synthesis across files (`contains_all`); an absent fact (`NOT IN PROJECT FILES`); the replaced file's v1 value forbidden; reading a file by name and listing the files (`must_call: project_files`, in `kb_large` only); a question under the project's own instructions; a value only `kb_small`'s spreadsheet holds, answered while its text files stay in full context (the check is the value, not the path); a `max_calls` bound | `contains_*`, `forbidden`, `regex`, `tools`; `grounded` advisory | yes |
+| `project_memory` | 10 | Memory behaviour, scored on what was written: a "for me" request saved to `mine`; that preference applied in session 2; a team fact saved to `project`, not `mine`; a personal preference that leaves `project` unchanged; small talk that saves nothing (`must_not_call: memory_save`, `unchanged`); a correction that replaces the entry instead of duplicating it; member2 recalling a project fact; member2 never seeing member1's `mine` (its code word is `forbidden`); a viewer's team note that becomes a proposal (`must_call: memory_propose`, `must_not_call: memory_save`, `proposals: 1`); a fact seeded into `MEMORY.md` answered with no tool call | `memory`, `proposals`, `tools`, `contains_*`, `forbidden` | yes |
+| `document_qa` | 17 → 31 | Small files: a Word table lookup in a column next to blank cells, answered from its `docx_markdown` rendering; Word tracked changes (the `[deleted: …]` value forbidden); a native PDF; HTML; two attachments with the distractor in the other one; three PDFs over the 7 MB budget together, with the fact in the one that goes by reference (`must_call: document_read`, #1912); a follow-up turn on the same document. Large files: two absent facts, a multi-hop question, a table, an attachments-KB `query` against a direct read | as today; `grounded` advisory | yes |
+| `skill_outcome` | 10 | A skill that loads and is then ignored: `web_research` answers that carry each source's URL and title (`regex`); `skill_creator` drafts with valid frontmatter (`regex` on `name:` and `description:`); a project-bound skill loaded on a project turn and not outside it; `agent_skill`'s binding; a skill that is not granted never loads | `skill`, `regex`, `contains_*`; a per-skill `rubric` advisory | yes |
+| `agent_harness` | 10 | The Agent path: `agent_format`'s exact format; `agent_bound_tools` refusing a tool it does not have (`must_not_call: whoami`) while still using `calculator`; `agent_knowledge` facts and an absent fact; `agent_long_instructions`' last rule followed; `agent_loader` reading its named file (`must_call: knowledge_files`, `must_not_call: search_files`); an Agent turn and a plain turn of the same question both passing | `regex`, `tools`, `contains_*`, `forbidden` | yes |
+| `attachment_tools` | 12 | Uploads routed away from document blocks. Images (4): a value read off a bar chart, text in a screenshot, two images compared, one image next to a document. Spreadsheets (4): a column total on an `.xlsx`, a filtered count, a value on the second sheet, a CSV; each `must_call: analyze_spreadsheet`, `must_not_call: document_read`, with a lookalike wrong total forbidden. PowerPoint (2): a fact on one slide and one only in the speaker notes, through the PowerPoint tools. Mixed (2): a turn carrying a document, an image and a spreadsheet, where each answer needs its own path. An image case is reported "not applicable", not failed, when the catalog row of the model under test has no `IMAGE` input (both Haiku baselines have it) | `contains_*`, `forbidden`, `tools` | yes |
+| `terminal` | 6 | `client_surface: "terminal"`: format cases that still pass under the terminal guidance; a `local_read_file` call the harness answers from a fixture and resumes, then a correct answer from it; a declined call (`{declined: true}`) handled gracefully | `tools`, `contains_*`, `regex` | advisory (D18) |
+
+That is 73 new cases, 138 in all. `skill_selection` keeps its routing cases. The two project-bound skill cases join it only if `skill_outcome` would otherwise exceed its fixtures.
+
+### 15.5 Cost and time
+
+Estimated the way `run` estimates (§10: 4,000 base-equivalent input and 200 output tokens per turn, about a third above what the first run measured). Judge calls use 2,500 input and 300 output tokens, except `grounded` at about 6,000 input, because it carries the reference.
+
+| | today (65 cases) | after phase 2 (138 cases) |
+|---|---|---|
+| turns per sample | 87 | about 184. Memory cases average 2.5 turns, and a `terminal` client-tool case is two invocations |
+| agent spend, k=3, Haiku 4.5 | $1.44 (261 turns) | about $3.30, including about $0.25 for `kb_small`'s full-context turns |
+| agent spend, k=3, Haiku 5.5 | $0.14 | about $0.33 |
+| judge spend, k=3, Sonnet 4.6 | $1.31 (99 calls) | about $4.90 (adds 129 `grounded` calls and 30 `skill_outcome` rubric calls) |
+| release pass, judged | about $2.75 on Haiku 4.5 | about $8.20 on Haiku 4.5, $5.25 on Haiku 5.5 (judge-dominated) |
+| nightly, k=1, gating families, no judge | about $0.45 on Haiku 4.5 | about $1.00 on Haiku 4.5, $0.10 on Haiku 5.5 |
+
+The spreadsheet and PowerPoint cases also start Code Interpreter sessions, which the token estimate does not price. PR-4 measures them on its first run. Otherwise, infrastructure adds nothing worth a line. The persistent fixtures hold well under 1 MB in managed knowledge bases, ephemeral projects are deleted per run, and the second user is one Cognito user. Wall clock grows less than spend, because cases run in parallel (`--workers`) and a case's turns do not. Expect about 12 minutes for a release pass, plus the large-document wait, which is unchanged. The one-time `seed_eval_fixtures.py` waits up to about 20 minutes for the fixture files. All of these are estimates until the first run, and §10 is updated with the measured numbers as it was for phase 1.
+
+### 15.6 Non-goals for phase 2
+
+- **Personal long-term memory (AgentCore Memory).** Extraction is asynchronous (about 60 seconds) and actor-scoped, and the eval user keeps it off so retention cases stay honest (D7). Measuring it needs a third user with memory on and its own advisory family. It is worth doing once project memory is measured, not before.
+- **Unattended project turns.** A headless-prefixed session turns a memory save into a proposal (`execute.py`). Eval sessions deliberately measure the attended path, so the scheduled path stays with the scheduled-runs tests.
+- **Handoffs, `@`-mentions, rewind and fork.** These are turn-shape features with smoke rows of their own. A quality case adds nothing a smoke row does not already assert.
+- **Owner-authored test sets** remain phase 4.
+- **Production**, still (D8).
+
+### 15.7 Punch list
+
+- **PR-4 — format, runner and documents.** D15's fields and checks with their loader validation; the `client_surface` and `client_tools` passthroughs on `run_agent_headless` with a test; the fixture builder; the 14 new `document_qa` cases and `attachment_tools`, neither of which needs a seeded entity; an image row and a pptx row in the smoke matrix beside its CSV row, so the wire is proven cheaply wherever the family is too costly to run; both baselines re-promoted for both families.
+- **PR-5 — seeded fixtures.** `seed_eval_fixtures.py` (D13); `project_kb` and `agent_harness`; `required_grants` extended to the fixtures' bindings; the nightly step seeds fixtures before it runs; baselines.
+- **PR-6 — project memory.** The second user (D16); ephemeral projects (D14); `expect.memory` and `expect.proposals` read-back; `project_memory`; cleanup covering both users and every ephemeral project, including `--orphans`.
+- **PR-7 — skills and grounding.** `skill_outcome`; the `grounded` evaluator (D17) and its reference plumbing; `grounded` on `document_qa` and `project_kb`.
+- **PR-8 — terminal.** Client-tool interrupt answering in the harness; `terminal`.
+
+Each PR re-promotes the baselines its families touch, for every model with a committed baseline (Haiku 4.5 and Haiku 5.5 today), and reruns the planted-bad check of §14 question 2 for any new evaluator.
+
+### 15.8 Open questions
+
+1. **Does an empty project provision anything beyond rows?** If creating one stands up a data source or an index, D14 falls back to a seeded pool, and PR-6 measures that before choosing.
+2. **Which strands-evals field carries a reference?** D17 needs the source text to reach the judge as reference material, not as part of the session. PR-7 spikes it against 1.7.0 before writing the evaluator.
+3. **Does `kb_large` stay over the full-context budget?** `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` is read per call, and a deployment can raise it, as dev and prod did to 75,000 in #1915. The seed records the budget it saw. If the target's budget covers `kb_large`, the retrieval cases report "not measured" rather than passing a full-context run as retrieval.
+
+## 16. Phase 3 — the Evaluations page
+
+**Status:** Proposed 2026-11-07. It refines §12's phase 3 and depends on the release ledger's PR-5 (built: `score --publish` and `LEDGER#EVAL`).
+
+### 16.1 What the ledger panel already shows, and what it cannot
+
+The release ledger's quality panel (`release-ledger.md` §6.4, item 7) puts the §8 table next to each version. That answers "is this version as good as the last one". It cannot answer the questions someone reading eval results asks next:
+
+- **Trend.** How has `document_qa` moved over the last 30 nightly runs, on one model?
+- **Which cases.** Which cases flipped, and is this one a regression or a case that always flips?
+- **Judges over time.** Where are the judge means heading, per family and evaluator?
+- **The run itself.** What did the run cost, how long did it take, and did documents settle before it started?
+
+Most of this needs per-case outcomes, and the ledger row deliberately leaves out flipped case ids (`release-ledger.md` §5.4). So this phase adds them, content-free, and one page to read them.
+
+### 16.2 Decisions
+
+**D20 — Per-case outcomes join the `LEDGER#EVAL` row, as ids and codes.** `score --publish` adds `cases: {caseId: {pass, passes, samples, base, codes}}` and `track` (`nightly`, `release` or `manual`, from `--track`). `codes` are the failure kinds `score_sample` already produces, mapped to a closed vocabulary (`missing_value`, `forbidden_value`, `tool_missing`, `tool_forbidden`, `tool_order`, `max_calls`, `format`, `refusal_missed`, `over_refusal`, `skill_missing`, `skill_unexpected`, `memory`, `status`, `empty`), and a tool's or skill's name goes in a separate `names` list. Case ids are synthetic and stable (D6, §5), and every one passes `ID_TEXT`, so `assert_content_free` keeps its allowlist, gaining only the new field names. Answers, prompts and failure prose stay out, exactly as today. At 138 cases a row grows by about 13 KB, far under DynamoDB's 400 KB item limit. This reverses one line of `release-ledger.md` §5.4 (flipped case ids stay out), and that spec gets a note saying so, with the reason: an id that names a synthetic case reveals nothing, and a failure's reader needs it.
+
+**D21 — One page, reading the ledger's rows. No second store.** The page is `/admin/evaluations` in the admin console (`data.chrome: 'admin'` inherited from `/admin`), gated by `features.releaseLedger` (which the Releases tab adds) and the `admin.costs` scope, because it reads `LEDGER#EVAL` rows through the ledger's store. Its one new route is `GET /admin/costs/ledger/evals?from&to&modelId&track`, which returns the rows in range, newest first. The release ledger's quality panel links each version's eval line to the page, filtered to that build.
+
+**D22 — Never a pooled score, never two models on one line.** As the release ledger's D6 says, no number on the page averages across families. A baseline is per model (D10), so every chart is drawn for one model id at a time, chosen in the page header. A judge mean is shown with its `n`, and a family under the floor of D18 is labelled with its `n`, not hidden.
+
+### 16.3 The page
+
+1. **Header.** Model and track selectors, the date range, and the latest run per track: its gate verdict, build, `k`, cases, cost, duration, and when it ran.
+2. **Gate history.** One row per family, one cell per run: pass, fail, advisory, or not run. This is the first thing to read, because a failed gate is the one decision the page exists for. Hovering a cell shows that run's §8 row.
+3. **Family trends.** Small multiples, one chart per family: the run's pass count out of `n` over time, with the baseline as a flat reference line and version bands shaded from `LEDGER#VERSION` (the same bands the Releases tab draws, through the same chart component).
+4. **Case flip matrix.** For the selected family, one row per case and one column per run, coloured pass or fail. A case that failed against a passing baseline is marked, and its codes appear on hover. A case that flips at least three times in ten runs on one build is tagged **noisy**. A noisy case is a case to fix, as `instruction_following.word_limit` was in PR-2, not a regression.
+5. **Judge trends.** One line per evaluator for the selected family, with `n` on hover. It is advisory, and the section's heading says so.
+6. **Run cost and time.** Spend, call count and duration per run. These are the run's own costs, not the platform's.
+7. **Run detail.** Choosing a run shows its §8 table verbatim and its failed cases with their codes and names. Answers stay where they live today: the run directory, and the baseline file for the baseline's answer. The page says so, rather than implying it has them.
+
+The page is read-only. Starting a run from the page is still open (§12); it is an action that spends, and it needs its own confirmation and audit.
+
+### 16.4 Punch list
+
+- **PR-9 — data.** `--track` on `score --publish`, `cases` and `names` with the code mapping in `ledger_publish.py`, the allowlist test extended, and the nightly and release callers passing their track. The `release-ledger.md` §5.4 note.
+- **PR-10 — page.** `GET /admin/costs/ledger/evals`, the page, the panel link, specs for the gate grid and the noisy-case rule, and verification in the browser on dev against at least ten nightly rows.
+
+A trend needs history, so PR-9 should land as soon as possible: every nightly run before it publishes a row without per-case outcomes, and that history cannot be backfilled. The run directories that would hold it go with the nightly runner.
