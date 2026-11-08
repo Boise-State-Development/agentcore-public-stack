@@ -76,12 +76,20 @@ table, exit 1 on any FAIL.
 |---|---|---|---|
 | **Local stack** | `uv run python scripts/smoke_turns.py --base-url http://127.0.0.1:8000` | everything incl. 409 / Stop / steer | app-api on :8000 with `SKIP_AUTH=true` in `backend/src/.env`, inference-api on :8001. `SKIP_AUTH_ROLES=system_admin` to read cache rows. Local code, **dev data**. |
 | **Deployed, through app-api** | `SMOKE_USERNAME=… SMOKE_PASSWORD=… uv run python scripts/smoke_turns.py --base-url https://<host>/api --auth cognito` | everything | a Cognito user with a permanent password on a Hosted UI pool (the nightly pipeline's E2E users qualify; managed login v2 cannot be scripted) |
+| **Deployed, through app-api, as the eval user** | `AWS_PROFILE=dev-ai uv run python scripts/smoke_turns.py --base-url https://dev.boisestate.ai/api --auth eval-user --prefix dev-boisestateai-v2` | everything the user's grants reach (no admin: the cache-row and empty-final-call rows read 403 and pass or skip) | the eval user seeded by `scripts/seed_eval_user.py`; its credentials are read from that script's SSM parameter, so nothing goes on the command line |
 | **Local inference-api with a dev bearer** | `AWS_PROFILE=dev-ai uv run python scripts/smoke_turns.py --auth headless-grant --user-id <sub> --prefix dev-boisestateai-v2 --invocations-url http://127.0.0.1:8001` | the Runtime rows, against the **branch's** inference-api code (dev data, dev model calls) | inference-api running locally from the branch checkout; same grant as below. The fastest way to prove a turn-path change before it is deployed |
 | **Deployed, straight at the Runtime** | `AWS_PROFILE=dev-ai uv run python scripts/smoke_turns.py --auth headless-grant --user-id <sub> --prefix dev-boisestateai-v2` | frame contract, resume, restore, cache rows | an **active headless grant** for `--user-id` (enable headless runs / "Run now" once while signed in; lapses 30 days after that login) and an AWS profile for the account. Skips the app-api-only rows; reads and deletes in-process through the shared services. |
 
 Run from `backend/` so `apis.shared` imports. The script refuses a target that
 looks like production unless `--allow-prod` is passed; the prod account also
 has a read-only guard, and nothing here is worth running there.
+
+`--publish --prefix <prefix>` also writes the run's result into that
+deployment's release ledger as one `LEDGER#SMOKE` row: counts, each row's
+status, the first-token median and the second turn's cache tokens, keyed by
+the Runtime build that served the turns (`docs/specs/release-ledger.md` §5.4).
+It is best-effort and never changes the exit status; the eval harness's
+`score --publish` does the same for an eval run.
 
 Every run spends real model dollars as the user it runs as and writes real
 session rows. Prompts are a few words, the model is the user's default unless
@@ -266,9 +274,16 @@ first look, not the whole proof.
   waits for them to become searchable (about 3 minutes on dev). The step is `continue-on-error`, shows a regression as
   "partial" in the nightly summary, and uploads `eval-harness-report-dev`
   (kept 90 days); one sample per case is a smoke signal, and the gate is the
-  k=3 release run. Like every track it is opt-in: add `eval-develop` to the
-  `NIGHTLY_TRACKS` repository variable once the eval user is seeded. `all`
-  leaves it out because it spends against a real environment.
+  k=3 release run. The same job then runs L1 against dev as the eval user
+  (`turn-smoke.sh` with `TURN_SMOKE_AUTH=eval-user`, `continue-on-error`,
+  uploads `turn-smoke-report-dev`). Where the environment has
+  `CDK_RELEASE_LEDGER_ENABLED=true`, both steps publish into dev's release
+  ledger (`score --publish`, `smoke_turns.py --publish`), which is where the
+  ledger's quality route reads them; the ephemeral e2e track never publishes,
+  since its ledger is deleted with the stack. Like every track it is opt-in:
+  add `eval-develop` to the `NIGHTLY_TRACKS` repository variable once the eval
+  user is seeded. `all` leaves it out because it spends against a real
+  environment.
 - L2 is agent-run, not CI.
 
 ---
