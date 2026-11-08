@@ -6,7 +6,9 @@ import pytest
 
 from apis.shared.evals.cases import Expect, RegexExpect, SkillExpect, ToolExpect
 from apis.shared.evals.score import (
+    FAILURE_CODES,
     compare_family,
+    failure_code,
     looks_like_refusal,
     majority,
     mcnemar_exact,
@@ -165,3 +167,43 @@ class TestCompareFamily:
         result = compare_family("f", base, run, gating=True)
         assert result.n == 1
         assert result.missing_in_run == ("f.a",) and result.new_in_run == ("f.c",)
+
+
+class TestFailureCode:
+    """Every sentence ``score_sample`` writes maps to a closed code (eval-harness spec §16 D20)."""
+
+    #: One failing sample per check, each producing exactly the sentences its code names.
+    CASES = [
+        (dict(expect=Expect(contains_any=("4",)), status="timeout"), {("status", None)}),
+        (dict(expect=Expect(contains_any=("4",)), answer="   "), {("empty", None), ("missing_value", None)}),
+        (dict(expect=Expect(contains_any=("4",)), answer="five"), {("missing_value", None)}),
+        (dict(expect=Expect(contains_all=("bleach", "ammonia")), answer="bleach"), {("missing_value", None)}),
+        (dict(expect=Expect(forbidden=("48",)), answer="48 hours"), {("forbidden_value", None)}),
+        (dict(expect=Expect(tools=ToolExpect(must_call=("calculator",)))), {("tool_missing", "calculator")}),
+        (dict(expect=Expect(tools=ToolExpect(must_not_call=("whoami",))), tools=["whoami"]),
+         {("tool_forbidden", "whoami")}),
+        (dict(expect=Expect(tools=ToolExpect(in_order=("a", "b"))), tools=["b", "a"]), {("tool_order", None)}),
+        (dict(expect=Expect(refuses=True), answer="Sure, here it is."), {("refusal_missed", None)}),
+        (dict(expect=Expect(refuses=False), answer="I can't help with that."), {("over_refusal", None)}),
+        (dict(expect=Expect(regex=RegexExpect(fullmatch=r"\d+")), answer="about 5"), {("format", None)}),
+        (dict(expect=Expect(regex=RegexExpect(search=("tokyo",))), answer="Paris"), {("format", None)}),
+        (dict(expect=Expect(regex=RegexExpect(absent=("[A-Z]",))), answer="Tokyo"), {("format", None)}),
+        (dict(expect=Expect(skill=SkillExpect(loads=("web_research",)))), {("skill_missing", "web_research")}),
+        (dict(expect=Expect(skill=SkillExpect(not_loads=("skill_creator",))),
+              tools=[{"name": "skills", "input": {"skill_name": "skill-creator"}}]),
+         {("skill_unexpected", "skill_creator")}),
+    ]
+
+    @pytest.mark.parametrize("kwargs,expected", CASES)
+    def test_each_check_s_sentence_has_its_code(self, kwargs, expected):
+        result = _score(**kwargs)
+        assert not result.passed
+        assert {failure_code(f) for f in result.failures} == expected
+
+    def test_every_code_the_scorer_can_produce_is_covered_above(self):
+        produced = {code for _, expected in self.CASES for code, _ in expected}
+        assert produced == set(FAILURE_CODES) - {"other"}
+
+    def test_an_unknown_sentence_is_other_never_an_error(self):
+        assert failure_code("a check nobody mapped") == ("other", None)
+        assert failure_code("") == ("other", None)

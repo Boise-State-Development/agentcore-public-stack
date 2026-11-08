@@ -80,11 +80,12 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from apis.shared.costs.ledger_publish import EVAL_TRACKS  # noqa: E402
 from apis.shared.evals.cases import FAMILIES, CaseError, EvalCase, load_cases, required_grants  # noqa: E402
 from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
@@ -92,6 +93,7 @@ from apis.shared.evals.report import (  # noqa: E402
     any_gate_failed,
     baseline_filename,
     build_baseline,
+    case_ledger_entries,
     case_outcomes,
     compare_judges,
     compare_run,
@@ -848,8 +850,15 @@ def _publish_eval(
     comparisons: Sequence[Any],
     judge_comparisons: Sequence[Any],
     judge_model: Optional[str],
+    *,
+    baseline: Mapping[str, Any],
+    track: str,
 ) -> bool:
     """Write the comparison as a ``LEDGER#EVAL`` row (release-ledger spec §5.2). Best-effort.
+
+    The row carries each case's outcome as ids and failure codes
+    (``case_ledger_entries``, eval-harness spec §16 D20) and the run's
+    ``track``, so the Evaluations page can draw trends and a flip matrix.
 
     The row is keyed by the build that served the turns: the Runtime's, read
     from the run's own ``C#`` rows, else ``imageTags["inference-api"]``. Never
@@ -879,6 +888,7 @@ def _publish_eval(
         row = lp.eval_ledger_row(
             meta, comparisons, served=served, result_rows=rows, judge_comparisons=judge_comparisons,
             judge_model=judge_model, call_rows=calls,
+            cases=case_ledger_entries(rows, baseline.get("cases")), track=track,
         )
         lp.assert_content_free(row, lp.EVAL_ROW_FIELDS, forbidden=[*ids, meta.get("user_id") or ""])
     except lp.PublishError as exc:
@@ -945,7 +955,8 @@ def cmd_score(args: argparse.Namespace) -> int:
         )
     if args.publish:
         print()
-        _publish_eval(meta, rows, comparisons, judge_comparisons, models[0] if len(models) == 1 else None)
+        _publish_eval(meta, rows, comparisons, judge_comparisons, models[0] if len(models) == 1 else None,
+                      baseline=baseline, track=args.track)
     failed = any_gate_failed(comparisons)
     print("\nGATE: " + ("FAIL — a gating family regressed; run with --explain <family>" if failed else "pass"))
     return 1 if failed else 0
@@ -1035,6 +1046,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--publish", action="store_true",
                    help="also write the comparison as a LEDGER#EVAL row (release-ledger spec §5.2; needs AWS "
                         "credentials for the run's account); best-effort, never changes the exit code")
+    s.add_argument("--track", choices=EVAL_TRACKS, default="manual",
+                   help="with --publish, which pass this run was; the Evaluations page draws one trend per "
+                        "track (eval-harness spec §16)")
 
     s = sub.add_parser("baseline", help="promote a complete run to baselines/<model>.json")
     s.add_argument("--out", required=True)

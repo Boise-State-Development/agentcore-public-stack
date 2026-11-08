@@ -175,7 +175,20 @@ class TestScorePublish:
         assert (row["PK"], row["SK"]) == ("LEDGER#EVAL", "2026-11-07T04:00:00.000001Z")
         assert (row["build"], row["buildSource"]) == (self.RUNTIME, "cost_rows")
         assert row["families"]["tool_selection"]["lost"] == 3 and row["gateFailed"] is True
+        assert row["track"] == "manual"
+        assert row["cases"]["tool_selection.a"] == {
+            "pass": False, "passes": 0, "samples": 3, "base": True,
+            "codes": ["tool_missing"], "names": ["calculator"],
+        }
+        assert row["cases"]["tool_selection.d"] == {"pass": True, "passes": 3, "samples": 3, "base": True}
         assert "ledger: published LEDGER#EVAL" in capsys.readouterr().out
+
+    def test_track_names_the_pass(self, tmp_path, golden, monkeypatch, published):
+        flags, run2 = self._runs(tmp_path, golden)
+        eval_harness.main(flags + ["score", "--out", str(run2), "--publish", "--track", "nightly"])
+        assert published[0]["track"] == "nightly"
+        with pytest.raises(SystemExit):
+            eval_harness.main(flags + ["score", "--out", str(run2), "--publish", "--track", "hourly"])
 
     def test_without_cost_rows_it_falls_back_to_the_runtime_image_tag_never_app_apis_build(
         self, tmp_path, golden, monkeypatch, published

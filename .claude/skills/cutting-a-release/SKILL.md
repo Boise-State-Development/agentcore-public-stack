@@ -381,9 +381,15 @@ for model in us.anthropic.claude-haiku-5-5 us.anthropic.claude-haiku-4-5-2025100
   AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-release-x.y.z-${model} \
       --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
       --model-id "${model}" --yes
-  uv run python scripts/eval_harness.py score --out /tmp/eval-release-x.y.z-${model}
+  AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py score --out /tmp/eval-release-x.y.z-${model} \
+      --publish --track release
 done
 ```
+
+`--publish --track release` writes the run into dev's release ledger as a
+`LEDGER#EVAL` row with each case's outcome, so the Evaluations page can draw
+the release pass as its own trend, apart from the k=1 nightly runs. It is
+best-effort and never changes the exit code.
 
 Re-promote the baseline (`eval_harness.py baseline`) only on purpose — after a
 deliberate model or prompt change — in its own PR with the score output.

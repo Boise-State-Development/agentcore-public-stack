@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from apis.shared.evals.calls import summarize_calls
 from apis.shared.evals.cases import FAMILIES, JUDGED_FAMILIES, EvalCase
-from apis.shared.evals.score import FamilyComparison, compare_family, majority
+from apis.shared.evals.score import FamilyComparison, compare_family, failure_code, majority
 
 BASELINE_SCHEMA_VERSION = 1
 #: A baseline keeps one answer per case for ``--explain``. The corpus is
@@ -83,6 +83,48 @@ def case_outcomes(rows: Iterable[Mapping[str, Any]]) -> Dict[str, CaseOutcome]:
         )
     return outcomes
 
+
+def case_ledger_entries(
+    rows: Iterable[Mapping[str, Any]],
+    baseline_cases: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Each case's outcome as the ledger row carries it: ids, counts and codes only (spec §16 D20).
+
+    ``{case_id: {pass, passes, samples, base?, codes?, names?}}``. ``pass`` is
+    the majority outcome :func:`case_outcomes` gives, ``base`` the baseline's
+    outcome for the case (absent for a case the baseline does not have),
+    ``codes`` every failure code any of the case's samples produced, and
+    ``names`` the tools and skills those failures are about, both sorted. No
+    answer, prompt or failure sentence: ``--explain`` on the run directory
+    has those, and the ledger row must hold nothing else.
+    """
+    rows = list(rows)
+    grouped: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["case_id"])].append(row)
+    outcomes = case_outcomes(rows)
+    base = baseline_cases or {}
+
+    entries: Dict[str, Dict[str, Any]] = {}
+    for case_id in sorted(grouped):
+        outcome = outcomes[case_id]
+        codes: set = set()
+        names: set = set()
+        for sample in grouped[case_id]:
+            for failure in sample.get("failures") or ():
+                code, name = failure_code(str(failure))
+                codes.add(code)
+                if name:
+                    names.add(name)
+        entry: Dict[str, Any] = {"pass": outcome.passed, "passes": outcome.passes, "samples": outcome.samples}
+        if case_id in base:
+            entry["base"] = bool(base[case_id].get("passed"))
+        if codes:
+            entry["codes"] = sorted(codes)
+        if names:
+            entry["names"] = sorted(names)
+        entries[case_id] = entry
+    return entries
 
 def build_baseline(
     rows: Sequence[Mapping[str, Any]],
