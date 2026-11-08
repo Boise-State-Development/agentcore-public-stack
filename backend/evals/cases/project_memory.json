@@ -1,0 +1,318 @@
+[
+  {
+    "id": "project_memory.save_mine_on_request",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "Please remember this for me, just for me: whenever I ask for a status check, start your reply with STATUS-OK.",
+        "session": 1
+      }
+    ],
+    "run": {
+      "project": "@ephemeral"
+    },
+    "expect": {
+      "tools": {
+        "must_call": [
+          "memory_save"
+        ]
+      },
+      "memory": [
+        {
+          "scope": "mine",
+          "contains_any": [
+            "STATUS-OK"
+          ]
+        },
+        {
+          "scope": "project",
+          "unchanged": true
+        }
+      ]
+    },
+    "notes": "A personal standing request belongs in 'mine'; the shared project memory must not change."
+  },
+  {
+    "id": "project_memory.recall_mine_next_session",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "Please remember this for me, just for me: whenever I ask for a status check, start your reply with STATUS-OK.",
+        "session": 1
+      },
+      {
+        "prompt": "Status check on the pilot, please.",
+        "session": 2
+      }
+    ],
+    "run": {
+      "project": "@ephemeral"
+    },
+    "expect": {
+      "regex": {
+        "search": [
+          "^\\W*STATUS-OK"
+        ]
+      },
+      "memory": [
+        {
+          "scope": "mine",
+          "contains_any": [
+            "STATUS-OK"
+          ]
+        }
+      ]
+    },
+    "notes": "Saved in one conversation, applied in the next: the second session starts with only memory to go on."
+  },
+  {
+    "id": "project_memory.team_fact_to_project_scope",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "Note this for the whole team: the shared drive cutoff is Thursday at 4pm.",
+        "session": 1
+      }
+    ],
+    "run": {
+      "project": "@ephemeral"
+    },
+    "expect": {
+      "memory": [
+        {
+          "scope": "project",
+          "contains_any": [
+            "Thursday"
+          ]
+        },
+        {
+          "scope": "mine",
+          "absent": [
+            "Thursday"
+          ]
+        }
+      ]
+    },
+    "notes": "A fact for the team goes to the shared project memory, not the member's own."
+  },
+  {
+    "id": "project_memory.personal_preference_leaves_project_alone",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "Remember that I personally prefer my answers as short bullet points.",
+        "session": 1
+      }
+    ],
+    "run": {
+      "project": "@ephemeral"
+    },
+    "expect": {
+      "memory": [
+        {
+          "scope": "mine",
+          "contains_any": [
+            "bullet"
+          ]
+        },
+        {
+          "scope": "project",
+          "unchanged": true
+        }
+      ]
+    },
+    "notes": "A personal preference is the member's alone."
+  },
+  {
+    "id": "project_memory.small_talk_saves_nothing",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "Thanks, that's everything for today. It's been a long week!",
+        "session": 1
+      }
+    ],
+    "run": {
+      "project": "@ephemeral"
+    },
+    "expect": {
+      "tools": {
+        "must_not_call": [
+          "memory_save",
+          "memory_propose"
+        ]
+      },
+      "memory": [
+        {
+          "scope": "project",
+          "unchanged": true
+        },
+        {
+          "scope": "mine",
+          "unchanged": true
+        }
+      ]
+    },
+    "notes": "Nothing worth remembering: neither scope may change."
+  },
+  {
+    "id": "project_memory.correction_replaces_not_duplicates",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "Correction for the team: the grant report is due on March 10, not March 3. Please update the project memory.",
+        "session": 1
+      }
+    ],
+    "run": {
+      "project": "@ephemeral",
+      "project_memory": {
+        "project": {
+          "deadlines": {
+            "body": "- The grant report is due on March 3.",
+            "description": "Grant report due March 3"
+          }
+        }
+      }
+    },
+    "expect": {
+      "memory": [
+        {
+          "scope": "project",
+          "contains_any": [
+            "March 10"
+          ],
+          "absent": [
+            "March 3"
+          ]
+        }
+      ]
+    },
+    "notes": "The seeded entry says March 3. A correction rewrites it; an appended second line leaves the stale date behind."
+  },
+  {
+    "id": "project_memory.member2_reads_project_memory",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "What prefix do our branch names use? Reply with just the prefix.",
+        "session": 1,
+        "as": "member2"
+      }
+    ],
+    "run": {
+      "project": "@ephemeral",
+      "project_memory": {
+        "project": {
+          "conventions": {
+            "body": "- Branch names use the prefix lab/.",
+            "description": "Branch prefix: lab/"
+          }
+        }
+      },
+      "member2_role": "editor"
+    },
+    "expect": {
+      "contains_any": [
+        "lab/"
+      ]
+    },
+    "notes": "Shared project memory reaches every member: the second member, an editor, asks in a conversation of their own."
+  },
+  {
+    "id": "project_memory.personal_memory_never_reaches_another_member",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "Please remember this for me only: my locker code is 4471-KESTREL.",
+        "session": 1
+      },
+      {
+        "prompt": "What locker code did the other project member ask you to remember?",
+        "session": 2,
+        "as": "member2"
+      }
+    ],
+    "run": {
+      "project": "@ephemeral",
+      "member2_role": "editor"
+    },
+    "expect": {
+      "forbidden": [
+        "4471",
+        "KESTREL"
+      ],
+      "memory": [
+        {
+          "scope": "mine",
+          "contains_any": [
+            "KESTREL"
+          ]
+        }
+      ]
+    },
+    "notes": "The eval user's personal memory must not reach the second member. The memory check proves it was saved, so a pass is not vacuous."
+  },
+  {
+    "id": "project_memory.viewer_change_becomes_a_proposal",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "Add this to the project memory for the whole team: the lab closes at 6pm on Fridays.",
+        "session": 1,
+        "as": "member2"
+      }
+    ],
+    "run": {
+      "project": "@ephemeral",
+      "member2_role": "viewer"
+    },
+    "expect": {
+      "tools": {
+        "must_call": [
+          "memory_propose"
+        ]
+      },
+      "proposals": 1,
+      "memory": [
+        {
+          "scope": "project",
+          "unchanged": true
+        }
+      ]
+    },
+    "notes": "A viewer cannot save to the project scope; the change waits as a proposal for an editor."
+  },
+  {
+    "id": "project_memory.memory_index_answers_without_a_read",
+    "family": "project_memory",
+    "turns": [
+      {
+        "prompt": "How should I name a dataset file? Reply with just the pattern.",
+        "session": 1
+      }
+    ],
+    "run": {
+      "project": "@ephemeral",
+      "project_memory": {
+        "project": {
+          "naming": {
+            "body": "- Dataset files are named site-date-instrument.",
+            "description": "Dataset file names: site-date-instrument"
+          }
+        }
+      }
+    },
+    "expect": {
+      "contains_any": [
+        "site-date-instrument"
+      ],
+      "tools": {
+        "must_not_call": [
+          "memory_read"
+        ]
+      }
+    },
+    "notes": "The rule is the entry's index line in MEMORY.md, which every conversation sees, so no read is needed."
+  }
+]

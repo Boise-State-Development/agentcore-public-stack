@@ -55,12 +55,30 @@ USERNAME = "eval-harness"
 #: ``.invalid`` is reserved (RFC 2606): nothing is ever delivered there, and
 #: the pool's required ``email`` attribute is satisfied without a real address.
 EMAIL = "eval-harness@example.invalid"
+
+
+@dataclasses.dataclass(frozen=True)
+class Account:
+    """One seeded eval account: its Cognito username, email and SSM parameter name."""
+
+    username: str
+    email: str
+    parameter: str
+
+
+#: The eval user, and the second member the project-memory cases need (spec
+#: D16): a project shared with someone else, a viewer's proposal, and a
+#: personal memory that must not leak to another member. Same group, same
+#: role, long-term memory off for both.
+MAIN = Account(USERNAME, EMAIL, "eval-harness")
+MEMBER2 = Account("eval-harness-2", "eval-harness-2@example.invalid", "eval-harness-2")
+ACCOUNTS = (MAIN, MEMBER2)
 DEFAULT_MODELS = ["*"]
 CASES_DIR = Path(__file__).resolve().parent.parent / "evals" / "cases"
 
 
-def credentials_parameter(prefix: str) -> str:
-    return f"/{prefix}/eval-harness/credentials"
+def credentials_parameter(prefix: str, account: Account = MAIN) -> str:
+    return f"/{prefix}/{account.parameter}/credentials"
 
 
 def grants_from_golden_set(cases_dir: Path = CASES_DIR) -> Dict[str, List[str]]:
@@ -113,22 +131,22 @@ def generate_password(length: int = 32) -> str:
             return candidate
 
 
-def read_credentials(ssm, prefix: str) -> Optional[Dict[str, str]]:
+def read_credentials(ssm, prefix: str, account: Account = MAIN) -> Optional[Dict[str, str]]:
     try:
-        value = ssm.get_parameter(Name=credentials_parameter(prefix), WithDecryption=True)["Parameter"]["Value"]
+        value = ssm.get_parameter(Name=credentials_parameter(prefix, account), WithDecryption=True)["Parameter"]["Value"]
     except ssm.exceptions.ParameterNotFound:
         return None
     return json.loads(value)
 
 
-def ensure_credentials(ssm, prefix: str) -> Dict[str, str]:
+def ensure_credentials(ssm, prefix: str, account: Account = MAIN) -> Dict[str, str]:
     """The stored credentials, created on first run. Never logged."""
-    stored = read_credentials(ssm, prefix)
-    if stored and stored.get("username") == USERNAME and stored.get("password"):
+    stored = read_credentials(ssm, prefix, account)
+    if stored and stored.get("username") == account.username and stored.get("password"):
         return stored
-    creds = {"username": USERNAME, "password": generate_password()}
+    creds = {"username": account.username, "password": generate_password()}
     ssm.put_parameter(
-        Name=credentials_parameter(prefix),
+        Name=credentials_parameter(prefix, account),
         Value=json.dumps(creds),
         Type="SecureString",
         Overwrite=True,
@@ -137,7 +155,7 @@ def ensure_credentials(ssm, prefix: str) -> Dict[str, str]:
     return creds
 
 
-def ensure_cognito_user(idp, pool_id: str, password: str) -> str:
+def ensure_cognito_user(idp, pool_id: str, password: str, account: Account = MAIN) -> str:
     """Create or confirm the user with a permanent password, in the group. Returns its ``sub``."""
     try:
         idp.get_group(UserPoolId=pool_id, GroupName=GROUP)
@@ -148,22 +166,22 @@ def ensure_cognito_user(idp, pool_id: str, password: str) -> str:
             Description="Eval harness account (maps to the eval_harness app role)",
         )
     try:
-        idp.admin_get_user(UserPoolId=pool_id, Username=USERNAME)
+        idp.admin_get_user(UserPoolId=pool_id, Username=account.username)
     except idp.exceptions.UserNotFoundException:
         idp.admin_create_user(
             UserPoolId=pool_id,
-            Username=USERNAME,
+            Username=account.username,
             MessageAction="SUPPRESS",
             UserAttributes=[
-                {"Name": "email", "Value": EMAIL},
+                {"Name": "email", "Value": account.email},
                 {"Name": "email_verified", "Value": "true"},
             ],
         )
     # Permanent, so the scripted login never meets a forced password change;
     # re-applying the stored password keeps the user and the parameter in step.
-    idp.admin_set_user_password(UserPoolId=pool_id, Username=USERNAME, Password=password, Permanent=True)
-    idp.admin_add_user_to_group(UserPoolId=pool_id, Username=USERNAME, GroupName=GROUP)
-    attrs = idp.admin_get_user(UserPoolId=pool_id, Username=USERNAME)["UserAttributes"]
+    idp.admin_set_user_password(UserPoolId=pool_id, Username=account.username, Password=password, Permanent=True)
+    idp.admin_add_user_to_group(UserPoolId=pool_id, Username=account.username, GroupName=GROUP)
+    attrs = idp.admin_get_user(UserPoolId=pool_id, Username=account.username)["UserAttributes"]
     return next(a["Value"] for a in attrs if a["Name"] == "sub")
 
 
@@ -227,16 +245,20 @@ async def main_async(args: argparse.Namespace) -> int:
     from apis.shared.user_settings.repository import UserSettingsRepository
 
     outcome = await upsert_role(role, AppRoleRepository(table_name=roles_table))
-    creds = ensure_credentials(ssm, prefix)
-    user_id = ensure_cognito_user(idp, pool_id, creds["password"])
-    await turn_memory_off(user_id, UserSettingsRepository(table_name=settings_table))
+    users = {}
+    for account in ACCOUNTS:
+        creds = ensure_credentials(ssm, prefix, account)
+        users[account.username] = ensure_cognito_user(idp, pool_id, creds["password"], account)
+        await turn_memory_off(users[account.username], UserSettingsRepository(table_name=settings_table))
 
     logger.info("%s role %s: group=%s", outcome, ROLE_ID, GROUP)
     logger.info("  tools:  %s", ", ".join(role.granted_tools))
     logger.info("  skills: %s", ", ".join(role.granted_skills))
     logger.info("  models: %s", ", ".join(role.granted_models))
-    logger.info("user %s (user id %s) is in group %s, long-term memory off", USERNAME, user_id, GROUP)
-    logger.info("credentials: SSM SecureString %s", credentials_parameter(prefix))
+    for account in ACCOUNTS:
+        logger.info("user %s (user id %s) is in group %s, long-term memory off", account.username,
+                    users[account.username], GROUP)
+        logger.info("credentials: SSM SecureString %s", credentials_parameter(prefix, account))
     return 0
 
 
