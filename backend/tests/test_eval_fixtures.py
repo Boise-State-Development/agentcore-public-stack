@@ -192,7 +192,7 @@ class TestEntities:
         from eval_fixtures import entities
 
         for case in load_cases(CASES_DIR):
-            if case.run.project:
+            if case.run.project and case.run.project != "@ephemeral":
                 assert case.run.project in entities.PROJECTS, case.id
             if case.run.agent:
                 assert case.run.agent in entities.AGENTS, case.id

@@ -122,12 +122,19 @@ def score_sample(
     final_message: str,
     tool_calls: Sequence[Mapping[str, Any]],
     status: str = "completed",
+    memory_state: Optional[Mapping[str, Any]] = None,
 ) -> SampleScore:
     """Score one sample's last turn against its case's expectations.
 
     ``tool_calls`` are the last turn's ``{"name", "input"}`` mappings in call
     order. Earlier turns of a retention case are setup, not the thing under
     test, so their tool calls are not scored.
+
+    ``memory_state`` is the project memory read back after the sample, for a
+    case that checks it (``expect.memory`` / ``expect.proposals``):
+    ``{"project": text, "mine": text, "before": {scope: text}, "proposals": n}``.
+    Each scope's text is every entry and the index, so a check matches wherever
+    the model wrote the fact.
     """
     failures: List[str] = []
     if status != "completed":
@@ -186,7 +193,31 @@ def score_sample(
             if _skill_matches(skill_id, loaded):
                 failures.append(f"loaded skill {skill_id}")
 
+    if expect.memory or expect.proposals is not None:
+        failures.extend(_memory_failures(expect, memory_state))
+
     return SampleScore(not failures, tuple(failures))
+
+
+def _memory_failures(expect: "Expect", state: Optional[Mapping[str, Any]]) -> List[str]:
+    if state is None:
+        return ["memory: not read back"]
+    failures: List[str] = []
+    before = state.get("before") or {}
+    for check in expect.memory:
+        text = str(state.get(check.scope) or "")
+        if check.contains_any and not contains_any(text, check.contains_any):
+            failures.append(f"memory {check.scope}: missing expected value")
+        for value in check.contains_all:
+            if not contains_any(text, (value,)):
+                failures.append(f"memory {check.scope}: missing {value!r}")
+        if check.absent and contains_any(text, check.absent):
+            failures.append(f"memory {check.scope}: contains a forbidden value")
+        if check.unchanged and text != str(before.get(check.scope) or ""):
+            failures.append(f"memory {check.scope}: changed")
+    if expect.proposals is not None and int(state.get("proposals") or 0) != expect.proposals:
+        failures.append(f"proposals: {int(state.get('proposals') or 0)}, expected {expect.proposals}")
+    return failures
 
 
 def majority(passes: Sequence[bool]) -> bool:

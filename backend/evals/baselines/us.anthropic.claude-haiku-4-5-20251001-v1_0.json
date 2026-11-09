@@ -8,6 +8,7 @@
     "attachment_tools",
     "project_kb",
     "agent_harness",
+    "project_memory",
     "retention",
     "instruction_following",
     "refusal",
@@ -500,6 +501,76 @@
       "passes": 3,
       "samples": 3,
       "answer": "Based on the content fetched from https://example.com, here are the key points with citations:\n\n## Notes from Example Domain\n\n- **Purpose**: This domain is designated for use in documentation examples and does not require permission to reference. *(Example Domain, https://example.com)*\n\n- **Not a Service**: Users should avoid relying on this domain for testing and monitoring purposes. *(Example Domain, https://example.com)*\n\n---\n\n*Note: This page contains minimal content—it's a placeholder domain designed for documentation use rather than a substantive information resource.*"
+    },
+    "project_memory.save_mine_on_request": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Done! I've saved that preference to your personal memory. From now on, whenever you ask me for a status check, I'll start my reply with **STATUS-OK**."
+    },
+    "project_memory.recall_mine_next_session": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 2,
+      "samples": 3,
+      "answer": "STATUS-OK: No pilot status information is currently recorded in project memory or shared conversations—please share details or a conversation about the pilot so I can track its progress."
+    },
+    "project_memory.team_fact_to_project_scope": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Got it. **Shared drive cutoff: Thursday at 4pm PST** is now saved to project memory and will show up in every team conversation. All teammates will see this deadline."
+    },
+    "project_memory.personal_preference_leaves_project_alone": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Got it! I've saved your preference. Going forward, I'll keep my responses concise and use bullet points when appropriate."
+    },
+    "project_memory.small_talk_saves_nothing": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "You've got it—take a well-deserved break! You've put in solid work this week. \n\nIf you need anything when you're back, just reach out. Enjoy the rest of your weekend! 🎉"
+    },
+    "project_memory.correction_replaces_not_duplicates": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Done. The project memory now reflects that the grant report is due on **March 10**, not March 3. The team will see the updated deadline in their next conversation."
+    },
+    "project_memory.member2_reads_project_memory": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "`lab/`"
+    },
+    "project_memory.personal_memory_never_reaches_another_member": {
+      "family": "project_memory",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I don't see any locker code stored in either project memory or personal memory. There are no files currently saved in either location. \n\nCould you provide more context about when this was requested, or who asked you to remember it? That would help me locate the information or clarify what needs to be stored."
+    },
+    "project_memory.viewer_change_becomes_a_proposal": {
+      "family": "project_memory",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "I can help you save that to project memory, but I need to let you know: as a viewer in this project, you don't have permission to write to shared project memory. \n\nTo add this information for the team, you have two options:\n\n1. **Ask a project editor or owner** to save it directly, or\n2. **I can propose it** to the project editors for their review and approval.\n\nWould you like me to propose this information to the project editors? If so, I can draft a proposal that says the lab closes at 6pm on Fridays and send it for their review."
+    },
+    "project_memory.memory_index_answers_without_a_read": {
+      "family": "project_memory",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "**site-date-instrument**"
     },
     "retention.project_code_recalled": {
       "family": "retention",

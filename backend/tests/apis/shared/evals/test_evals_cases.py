@@ -232,3 +232,60 @@ class TestMaxCalls:
     def test_rejects_a_non_integer(self):
         with pytest.raises(CaseError, match="max_calls"):
             parse_case(_case(expect={"contains_any": ["4"], "tools": {"max_calls": "3"}}), family="tool_selection")
+
+
+def _memory_case(**overrides):
+    raw = {
+        "id": "project_memory.example",
+        "family": "project_memory",
+        "turns": [{"prompt": "Remember X."}],
+        "run": {"project": "@ephemeral"},
+        "expect": {"memory": [{"scope": "mine", "contains_any": ["X"]}]},
+    }
+    raw.update(overrides)
+    return raw
+
+
+class TestProjectMemoryFormat:
+    def test_a_memory_case_parses(self):
+        case = parse_case(_memory_case(), family="project_memory")
+        assert case.run.project == "@ephemeral" and case.expect.memory[0].scope == "mine"
+        assert case.meta_for(0).session == 1 and case.meta_for(0).as_user == "eval"
+
+    def test_memory_checks_need_a_project_of_their_own(self):
+        with pytest.raises(CaseError, match="project of its own"):
+            parse_case(_memory_case(run={"project": "kb_small"}), family="project_memory")
+
+    def test_an_empty_memory_check_is_refused(self):
+        with pytest.raises(CaseError, match="must check something"):
+            parse_case(_memory_case(expect={"memory": [{"scope": "mine"}]}), family="project_memory")
+
+    def test_an_unknown_scope_is_refused(self):
+        with pytest.raises(CaseError, match="scope"):
+            parse_case(_memory_case(expect={"memory": [{"scope": "team", "contains_any": ["X"]}]}), family="project_memory")
+
+    def test_a_member2_turn_needs_a_role(self):
+        turns = [{"prompt": "Hi", "as": "member2"}]
+        with pytest.raises(CaseError, match="member2_role"):
+            parse_case(_memory_case(turns=turns), family="project_memory")
+
+    def test_a_session_belongs_to_one_user(self):
+        turns = [{"prompt": "A"}, {"prompt": "B", "as": "member2"}]
+        with pytest.raises(CaseError, match="already belongs"):
+            parse_case(_memory_case(turns=turns, run={"project": "@ephemeral", "member2_role": "editor"}),
+                       family="project_memory")
+
+    def test_seeded_memory_has_a_body(self):
+        run = {"project": "@ephemeral", "project_memory": {"project": {"a": {"description": "x"}}}}
+        with pytest.raises(CaseError, match="body"):
+            parse_case(_memory_case(run=run), family="project_memory")
+
+    def test_the_memory_tools_need_no_grant(self):
+        case = parse_case(_memory_case(expect={"tools": {"must_call": ["memory_save"]}}), family="project_memory")
+        assert required_grants([case])["tools"] == []
+
+    def test_an_ephemeral_project_is_not_a_seeded_fixture(self):
+        from apis.shared.evals.cases import fixture_key, fixture_keys
+
+        case = parse_case(_memory_case(), family="project_memory")
+        assert fixture_keys([case]) == [] and fixture_key(case) is None

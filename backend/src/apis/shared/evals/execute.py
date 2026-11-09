@@ -103,11 +103,18 @@ async def run_sample(
     fixtures_dir: Optional[Path] = None,
     staged: Optional[StagedSample] = None,
     assistant_id: Optional[str] = None,
+    inspect: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Run every turn of ``case`` in one fresh session and score the last.
 
     ``assistant_id`` is the seeded fixture the case runs against (a project's
     harness Agent or an Agent), sent as ``rag_assistant_id`` on every turn.
+
+    A turn's ``session`` number picks its session (session 1 is the sample's
+    own id, each other number a fresh one) and its user (``as_user``, passed to
+    ``run_turn`` only when it is not the eval user). ``inspect`` is awaited
+    after the last turn and returns the project memory a memory check scores
+    (``score_sample``'s ``memory_state``); it runs even when a turn failed.
 
     ``staged`` is a session whose large documents were uploaded and prepared
     ahead of the run (``StagedSample``): the turns run in that session and
@@ -133,11 +140,16 @@ async def run_sample(
     status = "completed"
     error: Optional[str] = None
     extra: Dict[str, Any] = {"rag_assistant_id": assistant_id} if assistant_id else {}
+    sessions: Dict[int, str] = {1: session_id}
     for index, prompt in enumerate(case.turns):
+        meta = case.meta_for(index)
+        turn_session = sessions.setdefault(meta.session, new_session_id())
+        per_user: Dict[str, Any] = {"as_user": meta.as_user} if meta.as_user != "eval" else {}
         result = await run_turn(
             **extra,
+            **per_user,
             prompt=prompt,
-            session_id=session_id,
+            session_id=turn_session,
             title=f"[eval] {case.id}",
             model_id=model_id,
             enabled_tools=list(case.run.enabled_tools) if case.run.enabled_tools is not None else None,
@@ -154,6 +166,8 @@ async def run_sample(
             error = result.error
             break
 
+    memory_state = await inspect() if inspect is not None else None
+
     last = turns[-1]
     tool_calls = [
         {"name": entry.get("name"), "input": entry.get("input"), "is_error": entry.get("is_error", False)}
@@ -164,6 +178,7 @@ async def run_sample(
         final_message=str(last.get("final_message") or ""),
         tool_calls=tool_calls,
         status=status,
+        memory_state=memory_state,
     )
 
     return {
@@ -172,6 +187,12 @@ async def run_sample(
         "sample": sample,
         "model_id": model_id,
         "session_id": session_id,
+        **({"sessions": [
+            {"session_id": sid, "as_user": next(
+                (case.meta_for(i).as_user for i in range(len(case.turns)) if case.meta_for(i).session == n), "eval")}
+            for n, sid in sorted(sessions.items())
+        ]} if len(sessions) > 1 or any(case.meta_for(i).as_user != "eval" for i in range(len(case.turns))) else {}),
+        **({"memory": memory_state} if memory_state is not None else {}),
         "upload_ids": upload_ids,
         **({"documents": list(staged.documents)} if staged is not None else {}),
         "status": status,

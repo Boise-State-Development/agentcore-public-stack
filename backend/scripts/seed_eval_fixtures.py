@@ -182,10 +182,43 @@ async def seed_agent(transport, fixture: entities.AgentFixture, timeout_s: float
     return aid
 
 
+#: A per-sample project (``eval_project_memory``) older than this is a leftover
+#: of a run stopped before its own purge.
+EPHEMERAL_MAX_AGE_S = 3600
+
+
+async def sweep_ephemeral(transport, *, dry_run: bool, now: Optional[float] = None) -> List[str]:
+    """Purge ``[eval-tmp] `` projects over an hour old; a run in progress is never touched."""
+    from datetime import datetime
+
+    from eval_project_memory import TMP_PREFIX
+
+    now = time.time() if now is None else now
+    status, body = await transport.call("GET", "/projects")
+    swept: List[str] = []
+    for p in (_expect(status, body, 200, what="GET /projects") or {}).get("projects", []):
+        if not str(p.get("name", "")).startswith(TMP_PREFIX):
+            continue
+        try:
+            created = datetime.fromisoformat(str(p["createdAt"]).replace("Z", "+00:00")).timestamp()
+        except (KeyError, ValueError):
+            continue
+        if now - created < EPHEMERAL_MAX_AGE_S:
+            continue
+        if not dry_run:
+            if p.get("status") != "archived":
+                status, body = await transport.call("PATCH", f"/projects/{p['projectId']}", json_body={"status": "archived"})
+                _expect(status, body, 200, what=f"archive leftover {p['projectId']}")
+            status, body = await transport.call("DELETE", f"/projects/{p['projectId']}")
+            _expect(status, body, 204, what=f"purge leftover {p['projectId']}")
+        swept.append(f"leftover {p['name']}: {'would purge' if dry_run else 'purged'}")
+    return swept
+
+
 async def seed(transport, *, dry_run: bool, timeout_s: float) -> List[str]:
     """Bring every fixture to its current definition; returns one line per fixture."""
+    report: List[str] = await sweep_ephemeral(transport, dry_run=dry_run)
     projects, agents = await list_fixtures(transport)
-    report: List[str] = []
     work = []
     for name, fixture in entities.PROJECTS.items():
         have = projects.get(name)

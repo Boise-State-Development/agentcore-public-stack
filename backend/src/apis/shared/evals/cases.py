@@ -27,6 +27,7 @@ FAMILIES: Tuple[str, ...] = (
     "attachment_tools",
     "project_kb",
     "agent_harness",
+    "project_memory",
     "retention",
     "instruction_following",
     "refusal",
@@ -51,6 +52,12 @@ PROVISIONED_TOOLS: Dict[str, Optional[str]] = {
     "document_read": None,
     "project_files": None,
     "knowledge_files": None,
+    # A project harness's memory tools (agents/builtin_tools/memory_spaces/project_tools.py).
+    "memory_list": None,
+    "memory_read": None,
+    "memory_query": None,
+    "memory_save": None,
+    "memory_propose": None,
     "list_powerpoint_presentations": "create_powerpoint_presentation",
     "read_powerpoint_presentation": "create_powerpoint_presentation",
 }
@@ -87,6 +94,23 @@ class SkillExpect:
     not_loads: Tuple[str, ...] = ()
 
 
+#: The project memory scopes a check can read: the project's shared space and
+#: the eval user's own space in that project (spec D15).
+MEMORY_SCOPES = ("project", "mine")
+
+
+@dataclass(frozen=True)
+class MemoryExpect:
+    """What one memory scope holds after the sample, read back through app-api."""
+
+    scope: str
+    contains_any: Tuple[str, ...] = ()
+    contains_all: Tuple[str, ...] = ()
+    absent: Tuple[str, ...] = ()
+    #: The scope is exactly as the sample found it (``run.project_memory``'s seed, or empty).
+    unchanged: bool = False
+
+
 @dataclass(frozen=True)
 class Expect:
     contains_any: Tuple[str, ...] = ()
@@ -96,6 +120,9 @@ class Expect:
     refuses: Optional[bool] = None
     regex: Optional[RegexExpect] = None
     skill: Optional[SkillExpect] = None
+    memory: Tuple[MemoryExpect, ...] = ()
+    #: How many proposals are pending on the project after the sample.
+    proposals: Optional[int] = None
 
     def is_empty(self) -> bool:
         return not (
@@ -106,6 +133,8 @@ class Expect:
             or self.refuses is not None
             or self.regex
             or self.skill
+            or self.memory
+            or self.proposals is not None
         )
 
 
@@ -125,6 +154,27 @@ class RunConfig:
     #: ``rag_assistant_id``. At most one of the two.
     project: Optional[str] = None
     agent: Optional[str] = None
+    #: With ``project == EPHEMERAL_PROJECT``: memory to seed before the first turn,
+    #: ``{scope: {slug: {"body": "- item\\n…", "description": "…"}}}``.
+    project_memory: Optional[Mapping[str, Mapping[str, Mapping[str, str]]]] = None
+    #: With ``project == EPHEMERAL_PROJECT``: the second eval member's role, which
+    #: a turn ``"as": "member2"`` needs (spec D16).
+    member2_role: Optional[str] = None
+
+
+#: A project of the sample's own, created before its first turn and purged after
+#: it (spec D14): what the memory cases run in, so no sample sees another's saves.
+EPHEMERAL_PROJECT = "@ephemeral"
+MEMBER_ROLES = ("editor", "viewer")
+TURN_USERS = ("eval", "member2")
+
+
+@dataclass(frozen=True)
+class TurnMeta:
+    """Where one turn runs: which numbered session, as which eval user."""
+
+    session: int = 1
+    as_user: str = "eval"
 
 
 #: The generated reference documents a case may attach (``large_documents``).
@@ -154,6 +204,11 @@ class EvalCase:
     #: Generated reference documents (``LARGE_DOCUMENTS``), attached by reference
     #: and prepared by the deployed pipeline before the first turn.
     large_documents: Tuple[str, ...] = ()
+    #: One per turn, parallel to ``turns``.
+    turn_meta: Tuple[TurnMeta, ...] = ()
+
+    def meta_for(self, index: int) -> TurnMeta:
+        return self.turn_meta[index] if index < len(self.turn_meta) else TurnMeta()
 
     @property
     def gating(self) -> bool:
@@ -190,7 +245,10 @@ def _compile(pattern: str, where: str) -> None:
 
 
 def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
-    _check_keys(raw, ("contains_any", "contains_all", "forbidden", "tools", "refuses", "regex", "skill"), where)
+    _check_keys(
+        raw, ("contains_any", "contains_all", "forbidden", "tools", "refuses", "regex", "skill", "memory", "proposals"),
+        where,
+    )
 
     tools = None
     if raw.get("tools") is not None:
@@ -239,6 +297,30 @@ def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
     if refuses is not None and not isinstance(refuses, bool):
         raise CaseError(f"{where}.refuses: expected true, false or null")
 
+    memory: List[MemoryExpect] = []
+    memory_raw = raw.get("memory")
+    if memory_raw is not None:
+        if not isinstance(memory_raw, list) or not memory_raw:
+            raise CaseError(f"{where}.memory: expected a list of checks")
+        for i, m in enumerate(memory_raw):
+            at = f"{where}.memory[{i}]"
+            _check_keys(m, ("scope", "contains_any", "contains_all", "absent", "unchanged"), at)
+            if m.get("scope") not in MEMORY_SCOPES:
+                raise CaseError(f"{at}.scope: expected one of {', '.join(MEMORY_SCOPES)}")
+            check = MemoryExpect(
+                scope=m["scope"],
+                contains_any=_str_tuple(m.get("contains_any"), f"{at}.contains_any"),
+                contains_all=_str_tuple(m.get("contains_all"), f"{at}.contains_all"),
+                absent=_str_tuple(m.get("absent"), f"{at}.absent"),
+                unchanged=bool(m.get("unchanged", False)),
+            )
+            if not (check.contains_any or check.contains_all or check.absent or check.unchanged):
+                raise CaseError(f"{at}: a memory check must check something")
+            memory.append(check)
+    proposals = raw.get("proposals")
+    if proposals is not None and (not isinstance(proposals, int) or isinstance(proposals, bool) or proposals < 0):
+        raise CaseError(f"{where}.proposals: expected a non-negative integer")
+
     return Expect(
         contains_any=_str_tuple(raw.get("contains_any"), f"{where}.contains_any"),
         contains_all=_str_tuple(raw.get("contains_all"), f"{where}.contains_all"),
@@ -247,6 +329,8 @@ def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
         refuses=refuses,
         regex=regex,
         skill=skill,
+        memory=tuple(memory),
+        proposals=proposals,
     )
 
 
@@ -265,29 +349,67 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     if not isinstance(turns_raw, list) or not turns_raw:
         raise CaseError(f"{where}.turns: expected at least one turn")
     turns: List[str] = []
+    turn_meta: List[TurnMeta] = []
+    session_users: Dict[int, str] = {}
     for i, turn in enumerate(turns_raw):
-        _check_keys(turn, ("prompt",), f"{where}.turns[{i}]")
+        _check_keys(turn, ("prompt", "session", "as"), f"{where}.turns[{i}]")
         prompt = turn.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise CaseError(f"{where}.turns[{i}].prompt: expected text")
+        session = turn.get("session", 1)
+        if not isinstance(session, int) or isinstance(session, bool) or session < 1:
+            raise CaseError(f"{where}.turns[{i}].session: expected a positive integer")
+        as_user = turn.get("as", "eval")
+        if as_user not in TURN_USERS:
+            raise CaseError(f"{where}.turns[{i}].as: expected one of {', '.join(TURN_USERS)}")
+        # A conversation belongs to one user; a second member opens their own.
+        if session_users.setdefault(session, as_user) != as_user:
+            raise CaseError(f"{where}.turns[{i}]: session {session} already belongs to {session_users[session]}")
         turns.append(prompt)
+        turn_meta.append(TurnMeta(session=session, as_user=as_user))
 
     run_raw = raw.get("run") or {}
-    _check_keys(run_raw, ("enabled_tools", "enabled_skills", "project", "agent"), f"{where}.run")
+    _check_keys(
+        run_raw, ("enabled_tools", "enabled_skills", "project", "agent", "project_memory", "member2_role"), f"{where}.run"
+    )
     for key in ("project", "agent"):
         value = run_raw.get(key)
+        if key == "project" and value == EPHEMERAL_PROJECT:
+            continue
         if value is not None and (not isinstance(value, str) or not _FIXTURE_RE.match(value)):
             raise CaseError(f"{where}.run.{key}: expected a fixture name like 'kb_small'")
     if run_raw.get("project") and run_raw.get("agent"):
         raise CaseError(f"{where}.run: name a project or an agent, not both")
+    ephemeral = run_raw.get("project") == EPHEMERAL_PROJECT
+    project_memory = run_raw.get("project_memory")
+    if project_memory is not None:
+        if not ephemeral:
+            raise CaseError(f"{where}.run.project_memory: only a project of its own ('{EPHEMERAL_PROJECT}') can be seeded")
+        _check_keys(project_memory, MEMORY_SCOPES, f"{where}.run.project_memory")
+        for scope, entries in project_memory.items():
+            if not isinstance(entries, Mapping) or not entries:
+                raise CaseError(f"{where}.run.project_memory.{scope}: expected {{slug: {{body, description}}}}")
+            for slug, entry in entries.items():
+                _check_keys(entry, ("body", "description"), f"{where}.run.project_memory.{scope}.{slug}")
+                if not isinstance(entry.get("body"), str) or not entry["body"].strip():
+                    raise CaseError(f"{where}.run.project_memory.{scope}.{slug}.body: expected text")
+    member2_role = run_raw.get("member2_role")
+    if member2_role is not None and (not ephemeral or member2_role not in MEMBER_ROLES):
+        raise CaseError(f"{where}.run.member2_role: one of {', '.join(MEMBER_ROLES)}, on a '{EPHEMERAL_PROJECT}' project")
+    if any(m.as_user == "member2" for m in turn_meta) and member2_role is None:
+        raise CaseError(f"{where}: a turn as member2 needs run.member2_role")
     run = RunConfig(
         enabled_tools=_optional_str_tuple(run_raw.get("enabled_tools"), f"{where}.run.enabled_tools"),
         enabled_skills=_optional_str_tuple(run_raw.get("enabled_skills"), f"{where}.run.enabled_skills"),
         project=run_raw.get("project"),
         agent=run_raw.get("agent"),
+        project_memory=project_memory,
+        member2_role=member2_role,
     )
 
     expect = _parse_expect(raw.get("expect") or {}, f"{where}.expect")
+    if (expect.memory or expect.proposals is not None) and not ephemeral:
+        raise CaseError(f"{where}.expect: memory and proposals are read from a project of its own ('{EPHEMERAL_PROJECT}')")
 
     judge_raw = raw.get("judge") or {}
     _check_keys(judge_raw, ("evaluators", "rubric"), f"{where}.judge")
@@ -338,6 +460,7 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         files=_str_tuple(raw.get("files"), f"{where}.files"),
         notes=notes,
         large_documents=large_documents,
+        turn_meta=tuple(turn_meta),
     )
 
 
@@ -397,7 +520,7 @@ def fixture_keys(cases: Iterable[EvalCase]) -> List[str]:
     """``"project:<name>"`` / ``"agent:<name>"`` for every seeded fixture these cases run against."""
     keys = set()
     for case in cases:
-        if case.run.project:
+        if case.run.project and case.run.project != EPHEMERAL_PROJECT:
             keys.add(f"project:{case.run.project}")
         if case.run.agent:
             keys.add(f"agent:{case.run.agent}")
@@ -405,7 +528,7 @@ def fixture_keys(cases: Iterable[EvalCase]) -> List[str]:
 
 
 def fixture_key(case: EvalCase) -> Optional[str]:
-    if case.run.project:
+    if case.run.project and case.run.project != EPHEMERAL_PROJECT:
         return f"project:{case.run.project}"
     if case.run.agent:
         return f"agent:{case.run.agent}"
