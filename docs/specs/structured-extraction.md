@@ -1,8 +1,9 @@
 # Structured extraction: a named field set over a document, as rows that carry their own verdict
 
-**Status:** PR-1 and PR-2 implemented (slice one), behind `DOCUMENT_EXTRACT_ENABLED`
-(off by default; only the literal `"true"` enables). PR-3 (the SPA render) is not
-built. Source-provenance verification (G2) merged to `develop` on 2026-10-20, which
+**Status:** PR-1, PR-2 and PR-3 implemented, behind `DOCUMENT_EXTRACT_ENABLED`
+(off by default; only the literal `"true"` enables) and `features.documentExtract`
+(on in the deployed dev build only). PR-3 renders the rows under the answer: a field
+list for one document, a documents × fields grid for several (§8.1, §17). Source-provenance verification (G2) merged to `develop` on 2026-10-20, which
 unblocked this. **§16 records where this spec was wrong** — it was written before the
 code, and five of its decisions needed correcting on contact. Decisions recorded in §11. Revised 2026-10-20 after
 reading `strands-agents==1.57.2`: the constrained call is
@@ -833,7 +834,7 @@ is **not** on the collision list, because this feature does not touch it (§2.1,
 | PR-0 | This spec. One new file | **No** — open now |
 | PR-1 | The pure layer: the field-set markdown parser, the field model, the `create_model` builder with its per-`(set, version)` cache, and unit tests (the subset rules of §6.3, nullable optionals staying in `required`, enum fields, `currency` as string, the authored-order guarantee, schema equality across two builds of one fixture, malformed-table errors). Plus the flag, the CDK wiring, the CDK tests and the SPA flag field. **Nothing wired to a turn** | Yes — flag and CDK files |
 | PR-2 | `document_extract` mounted in `ChatAgent._create_agent`; field-set resolution through the skill resource store; the dedicated `BedrockModel(strict_tools=True)` and its `structured_output` call, with the marked unenforced fallback; the `verify_claims` integration; the backend-authored artifact and the in-process `.xlsx`; the `document_extraction` SSE event and its broker; the `EXTR#` store and its `GET /messages` replay; the `C#` metering row; the content-free EMF record; the D15 single-call-site test. Backend complete and dev-verifiable by reading the stream | Yes — imports G2 |
-| PR-3 | SPA render behind `features.documentExtract`: the rows table with per-cell provenance in G2's vocabulary, the `schemaEnforced` disclosure, and reload replay | Yes — follows G2's PR-3 vocabulary |
+| PR-3 ✅ | SPA render behind `features.documentExtract`: the rows table with per-cell provenance in G2's vocabulary, the `schemaEnforced` disclosure, and reload replay | Yes — follows G2's PR-3 vocabulary |
 
 PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
 
@@ -1144,6 +1145,27 @@ exceeds a capacity limit — which the measurements above show is an easy mistak
 to make — and (b) no N-fold redundant compilation, which matters against a
 deployment that already has a Bedrock throttle alarm. It is not a latency
 optimization and the spec should not claim it is.
+
+**16.12 Exact ids and exact set names cost a wasted round on most first
+calls.** §5 assumed the model would pass upload ids and the set's own name. In
+two live runs on dev (2026-11-08, Haiku 4.5, two small `.md` attachments) it did
+neither on its first try. A small attachment reaches the model as an inline
+block named by filename, with no upload id anywhere in the conversation, so it
+sent the filenames. In the other run it named the **skill** the user picked
+(`nsf-solicitation-review-test`) where the set inside it is called
+`nsf-solicitation`. Each mistake cost one or two failed calls and a
+`document_read` listing before the table appeared.
+
+Both are now resolved rather than refused. Documents go through
+`apis.shared.files.session_documents`, shared with `verify_sources` (#1784):
+an exact id, else a unique filename match, else the session's only document
+when exactly one is asked for. The tool lists the session's documents once per
+call to do this, after the set resolves. Set names go through
+`resolve_field_set`: the same name punctuated differently, else a turn skill
+that declares exactly one set. Neither ever picks between candidates: an
+ambiguous document or a skill with several sets is answered with the real
+choices. The `upload_ids` description now says filenames are accepted, which
+shortened the spec by 6 tokens.
 
 ---
 

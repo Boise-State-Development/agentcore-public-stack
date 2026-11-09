@@ -86,7 +86,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from apis.shared.costs.ledger_publish import EVAL_TRACKS  # noqa: E402
-from apis.shared.evals.cases import FAMILIES, CaseError, EvalCase, load_cases, required_grants  # noqa: E402
+from apis.shared.evals.cases import (  # noqa: E402
+    ADVISORY_FAMILIES,
+    FAMILIES,
+    CaseError,
+    EPHEMERAL_PROJECT,
+    EvalCase,
+    fixture_key,
+    fixture_keys,
+    load_cases,
+    required_grants,
+)
+from eval_fixtures.build import GENERATED  # noqa: E402
+from eval_fixtures.build import build as build_fixture  # noqa: E402
+from eval_fixtures.references import reference_for  # noqa: E402
 from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
     ReportError,
@@ -204,57 +217,81 @@ def estimate(todo: Sequence[Tuple[EvalCase, int]], model_id: str) -> Tuple[int, 
 
 
 class CachedBearerAuth:
-    """Reuse one minted bearer for many turns instead of a Cognito exchange per turn."""
+    """Reuse a minted bearer for many turns instead of a Cognito exchange per turn.
+
+    One bearer per user: a project-memory case runs turns as the second eval
+    member too, and a single cached token would send that member's turns as
+    the eval user, which is exactly the boundary those cases test.
+    """
 
     def __init__(self, inner: Any) -> None:
         self._inner = inner
-        self._token: Optional[str] = None
-        self._minted_at = 0.0
+        self._tokens: Dict[str, Tuple[str, float]] = {}
         self._lock = asyncio.Lock()
 
     async def mint_bearer_for_user(self, user_id: str) -> str:
         async with self._lock:
-            if self._token is None or time.monotonic() - self._minted_at > BEARER_REUSE_SECONDS:
-                self._token = await self._inner.mint_bearer_for_user(user_id)
-                self._minted_at = time.monotonic()
-            return self._token
+            cached = self._tokens.get(user_id)
+            if cached is None or time.monotonic() - cached[1] > BEARER_REUSE_SECONDS:
+                cached = (await self._inner.mint_bearer_for_user(user_id), time.monotonic())
+                self._tokens[user_id] = cached
+            return cached[0]
 
 
-async def sign_in_eval_user(base_url: str, prefix: str, region: str) -> str:
+def _eval_credentials(prefix: str, region: str, account: Any = None) -> Tuple[str, str]:
+    """An eval account's username and password (the eval user unless ``account`` names another).
+
+    For the eval user, ``EVAL_USERNAME`` / ``EVAL_PASSWORD`` win when set; else
+    the SSM SecureString ``seed_eval_user.py`` wrote. Never logged.
+    """
+    from seed_eval_user import MAIN, credentials_parameter
+
+    account = account or MAIN
+    username = os.environ.get("EVAL_USERNAME") if account is MAIN else None
+    password = os.environ.get("EVAL_PASSWORD") if account is MAIN else None
+    if username and password:
+        return username, password
+    import boto3
+
+    ssm = boto3.client("ssm", region_name=region)
+    parameter = credentials_parameter(prefix, account)
+    try:
+        raw = ssm.get_parameter(Name=parameter, WithDecryption=True)["Parameter"]["Value"]
+    except ssm.exceptions.ParameterNotFound as exc:
+        raise ReportError(
+            f"no eval user credentials at {parameter}; run scripts/seed_eval_user.py for this environment first"
+        ) from exc
+    creds = json.loads(raw)
+    return creds["username"], creds["password"]
+
+
+async def sign_in_eval_user(
+    base_url: str, prefix: str, region: str, *, resolve_fixtures: bool = False
+) -> Tuple[str, Dict[str, str]]:
     """Sign in as the eval user, renew its headless grant, and return its user id.
 
-    Credentials come from ``EVAL_USERNAME`` / ``EVAL_PASSWORD`` when set, else
-    from the SSM SecureString ``seed_eval_user.py`` wrote. They are never logged.
+    With ``resolve_fixtures``, also returns the seeded fixtures' ids
+    (``seed_eval_fixtures.resolve``: ``"project:<name>"`` / ``"agent:<name>"``),
+    read in the same session; otherwise an empty map.
     """
-    from seed_eval_user import credentials_parameter
     from smoke_turns import AppApiTransport
 
-    username = os.environ.get("EVAL_USERNAME")
-    password = os.environ.get("EVAL_PASSWORD")
-    if not (username and password):
-        import boto3
-
-        ssm = boto3.client("ssm", region_name=region)
-        try:
-            raw = ssm.get_parameter(Name=credentials_parameter(prefix), WithDecryption=True)["Parameter"]["Value"]
-        except ssm.exceptions.ParameterNotFound as exc:
-            raise ReportError(
-                f"no eval user credentials at {credentials_parameter(prefix)}; "
-                "run scripts/seed_eval_user.py for this environment first"
-            ) from exc
-        creds = json.loads(raw)
-        username, password = creds["username"], creds["password"]
-
+    username, password = _eval_credentials(prefix, region)
     transport = AppApiTransport(base_url, label="eval")
+    fixtures: Dict[str, str] = {}
     try:
         await transport.login_cognito(username, password, "")
         await transport.enable_headless_grant()
+        if resolve_fixtures:
+            from seed_eval_fixtures import resolve
+
+            fixtures = await resolve(transport)
     finally:
         await transport.close()
     user_id = transport.user.get("user_id")
     if not user_id:
         raise ReportError("signed in, but GET /auth/session named no user_id")
-    return str(user_id)
+    return str(user_id), fixtures
 
 
 # --------------------------------------------------------------------------- cases
@@ -262,7 +299,7 @@ async def sign_in_eval_user(base_url: str, prefix: str, region: str) -> str:
 
 def cmd_cases(args: argparse.Namespace) -> int:
     try:
-        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir))
+        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
     except CaseError as exc:
         print(f"invalid case set: {exc}", file=sys.stderr)
         return 2
@@ -273,7 +310,7 @@ def cmd_cases(args: argparse.Namespace) -> int:
     print(f"{'family':<22} {'cases':>5} {'turns':>5}  gate")
     for family in FAMILIES:
         if counts.get(family):
-            gate = "advisory" if family == "general_chat" else "gating"
+            gate = "advisory" if family in ADVISORY_FAMILIES else "gating"
             print(f"{family:<22} {counts[family]:>5} {turns[family]:>5}  {gate}")
     print(f"{'total':<22} {len(cases):>5} {sum(turns.values()):>5}")
     grants = required_grants(cases)
@@ -347,7 +384,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
     try:
-        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir))
+        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
     except CaseError as exc:
         print(f"invalid case set: {exc}", file=sys.stderr)
         return 2
@@ -374,18 +411,57 @@ async def cmd_run(args: argparse.Namespace) -> int:
     from smoke_turns import resolve_runtime_env
 
     from apis.shared.evals.execute import EVAL_TRIGGER, OAuthRequiredError, run_sample
-    from apis.shared.evals.fixtures import FixtureError, load_fixture, register_upload
+    from apis.shared.evals.fixtures import FixtureError, load_fixture, mime_type_for, register_upload
     from apis.shared.harness.auth import CognitoRefreshBearerAuth, HeadlessAuthError
     from apis.shared.harness.runner import run_agent_headless
 
     resolve_runtime_env(args.prefix, args.region)
-    if args.auth == "cognito":
+    needed = fixture_keys(cases)
+    fixture_ids: Dict[str, str] = {}
+    ephemeral = any(c.run.project == EPHEMERAL_PROJECT for c in cases)
+    accounts = None
+    if (needed or ephemeral) and args.auth != "cognito":
+        print("cases run against seeded or per-sample projects or agents, which need --auth cognito", file=sys.stderr)
+        return 2
+    if ephemeral:
+        # Memory cases create, join and read back projects for the whole run, as
+        # both eval users, so their sessions stay open until the run ends.
+        from eval_project_memory import EvalAccounts, ProjectMemoryError
+
         try:
-            args.user_id = await sign_in_eval_user(args.base_url, args.prefix, args.region)
+            accounts = await EvalAccounts.open(
+                args.base_url, args.prefix, args.region,
+                member2=any(c.run.member2_role for c in cases),
+            )
+            if needed:
+                from seed_eval_fixtures import resolve
+
+                fixture_ids = await resolve(accounts.main)
+        except (ReportError, RuntimeError, ProjectMemoryError) as exc:
+            print(f"could not sign in the eval users: {exc}", file=sys.stderr)
+            return 2
+        args.user_id = accounts.main_user_id
+        print("signed in as the eval users; headless grants renewed")
+        missing = [key for key in needed if key not in fixture_ids]
+        if missing:
+            print(f"fixtures not seeded: {', '.join(missing)}; run scripts/seed_eval_fixtures.py first",
+                  file=sys.stderr)
+            await accounts.close()
+            return 2
+    elif args.auth == "cognito":
+        try:
+            args.user_id, fixture_ids = await sign_in_eval_user(
+                args.base_url, args.prefix, args.region, resolve_fixtures=bool(needed)
+            )
         except (ReportError, RuntimeError) as exc:
             print(f"could not sign in as the eval user: {exc}", file=sys.stderr)
             return 2
         print("signed in as the eval user; headless grant renewed")
+        missing = [key for key in needed if key not in fixture_ids]
+        if missing:
+            print(f"fixtures not seeded: {', '.join(missing)}; run scripts/seed_eval_fixtures.py first",
+                  file=sys.stderr)
+            return 2
     out.mkdir(parents=True, exist_ok=True)
     families = sorted({case.family for case in cases}, key=FAMILIES.index)
     try:
@@ -403,9 +479,9 @@ async def cmd_run(args: argparse.Namespace) -> int:
     auth = CachedBearerAuth(CognitoRefreshBearerAuth())
     fixtures_dir = Path(args.fixtures_dir)
 
-    async def run_turn(**kwargs: Any) -> Any:
+    async def run_turn(as_user: str = "eval", **kwargs: Any) -> Any:
         return await run_agent_headless(
-            user_id=args.user_id,
+            user_id=accounts.user_id(as_user) if accounts is not None else args.user_id,
             auth=auth,
             invocations_base_url=args.invocations_url,
             trigger=EVAL_TRIGGER,
@@ -414,7 +490,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
         )
 
     async def register_fixture(session_id: str, filename: str) -> str:
-        data, mime_type = load_fixture(fixtures_dir, filename)
+        if filename in GENERATED:
+            data, mime_type = build_fixture(filename), mime_type_for(filename)
+        else:
+            data, mime_type = load_fixture(fixtures_dir, filename)
         return await register_upload(args.user_id, session_id, filename, mime_type, data)
 
     try:
@@ -436,7 +515,12 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 case, sample = queue.get_nowait()
             except asyncio.QueueEmpty:
                 return
+            project = None
             try:
+                if case.run.project == EPHEMERAL_PROJECT:
+                    from eval_project_memory import EphemeralProject
+
+                    project = await EphemeralProject.create(accounts, case, sample)
                 row = await run_sample(
                     case,
                     sample=sample,
@@ -445,10 +529,20 @@ async def cmd_run(args: argparse.Namespace) -> int:
                     register_fixture=register_fixture,
                     fixtures_dir=fixtures_dir,
                     staged=staged.get((case.id, sample)),
+                    assistant_id=project.harness_agent_id if project else fixture_ids.get(fixture_key(case) or ""),
+                    inspect=project.inspect if project else None,
                 )
             except (OAuthRequiredError, HeadlessAuthError, FixtureError) as exc:
                 fatal.append(f"{type(exc).__name__}: {exc}")
                 return
+            except Exception as exc:  # noqa: BLE001 — a project that cannot be set up stops the run
+                if project is None and case.run.project == EPHEMERAL_PROJECT:
+                    fatal.append(f"could not set up {case.id}'s project: {exc}")
+                    return
+                raise
+            finally:
+                if project is not None:
+                    await project.purge()
             with results_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(row) + "\n")
             new_rows.append(row)
@@ -460,8 +554,14 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     if not args.keep:
         unrun = _unrun_staged(out, read_rows(results_path))
-        await _cleanup(new_rows + unrun, args.user_id)
+        await _cleanup(new_rows + unrun, args.user_id,
+                       member2_user_id=accounts.member2_user_id if accounts is not None else None)
         _forget_staged(out, unrun)
+    if accounts is not None:
+        if accounts.member2_user_id and meta.get("member2_user_id") != accounts.member2_user_id:
+            meta["member2_user_id"] = accounts.member2_user_id
+            (out / META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        await accounts.close()
 
     if fatal:
         print(f"\nrun stopped: {fatal[0]}", file=sys.stderr)
@@ -589,7 +689,9 @@ async def _stage_large_documents(
 # --------------------------------------------------------------------------- cleanup
 
 
-async def _cleanup(rows: Sequence[Dict[str, Any]], user_id: str) -> Tuple[int, int]:
+async def _cleanup(
+    rows: Sequence[Dict[str, Any]], user_id: str, *, member2_user_id: Optional[str] = None
+) -> Tuple[int, int]:
     from apis.app_api.sessions.services.session_service import SessionService
     from apis.shared.evals.fixtures import delete_upload
 
@@ -602,11 +704,18 @@ async def _cleanup(rows: Sequence[Dict[str, Any]], user_id: str) -> Tuple[int, i
                 uploads += 1 if await delete_upload(user_id, upload_id) else 0
             except Exception as exc:  # noqa: BLE001 — cleanup reports, never aborts
                 logger.warning("could not delete upload %s: %s", upload_id, exc)
-        try:
-            if await service.delete_session(user_id=user_id, session_id=row["session_id"]):
-                sessions += 1
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("could not delete session %s: %s", row.get("session_id"), exc)
+        # A memory case's turns span sessions, some of them the second member's.
+        owned = [(s["session_id"], member2_user_id if s.get("as_user") == "member2" else user_id)
+                 for s in row.get("sessions") or [{"session_id": row["session_id"]}]]
+        for session_id, owner in owned:
+            if not owner:
+                logger.warning("no user to delete session %s as", session_id)
+                continue
+            try:
+                if await service.delete_session(user_id=owner, session_id=session_id):
+                    sessions += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not delete session %s: %s", session_id, exc)
     print(f"cleanup: deleted {sessions} session(s) and {uploads} fixture upload(s)")
     return sessions, uploads
 
@@ -625,7 +734,7 @@ async def cmd_cleanup(args: argparse.Namespace) -> int:
     resolve_runtime_env(meta["prefix"], meta.get("region") or args.region)
     rows = read_rows(out / RESULTS_FILE)
     unrun = _unrun_staged(out, rows)
-    await _cleanup(rows + unrun, meta["user_id"])
+    await _cleanup(rows + unrun, meta["user_id"], member2_user_id=meta.get("member2_user_id"))
     _forget_staged(out, unrun)
     return 0
 
@@ -789,6 +898,7 @@ async def cmd_judge(args: argparse.Namespace) -> int:
             results = await asyncio.to_thread(
                 judge_row, row, evaluators=case.judge.evaluators, rubric=case.judge.rubric,
                 judge=judge, judge_model=args.judge_model, expected_refusal=case.expect.refuses,
+                reference=reference_for(case, Path(args.fixtures_dir)) if "grounded" in case.judge.evaluators else None,
             )
         async with lock:
             with judgements_path.open("a", encoding="utf-8") as fh:
@@ -966,7 +1076,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
         meta = _read_meta(out)
-        cases = load_cases(Path(args.cases_dir), fixtures_dir=Path(args.fixtures_dir))
+        cases = load_cases(Path(args.cases_dir), fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
         baseline = build_baseline(
             read_rows(out / RESULTS_FILE), cases=cases, meta=meta,
             judgements=read_rows(out / JUDGEMENTS_FILE),

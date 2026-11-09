@@ -52,7 +52,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
 from strands import tool
@@ -64,6 +63,11 @@ from apis.shared.files.document_read import (
     list_session_documents,
 )
 from apis.shared.files.provenance_broker import queue_provenance
+from apis.shared.files.session_documents import (
+    MAX_LISTED_DOCUMENTS,
+    document_choices,
+    match_session_document,
+)
 from apis.shared.files.source_provenance import (
     STATE_QUOTE_UNSUPPORTED,
     STATE_SUPPORTED,
@@ -88,10 +92,6 @@ VERIFY_SOURCES_TOOL_NAME = "verify_sources"
 #: one document should verify them in batches, which costs one extra tool round
 #: and keeps both the stored row and the tool result bounded.
 MAX_CLAIMS_PER_CALL = 12
-
-#: Documents named in the "which document?" error. A session past this many is
-#: told to call ``document_read`` for the full listing instead.
-MAX_LISTED_DOCUMENTS = 20
 
 #: Refused outright rather than scanned. A passage longer than this is not a
 #: passage, and the quote is model-controlled input.
@@ -168,56 +168,29 @@ def _parse_claims(claims: Any) -> List[Claim]:
     return parsed
 
 
-def _name_key(name: str) -> str:
-    """A filename reduced to what survives Bedrock's document-name sanitizer.
-
-    The inline block for ``facilities_policy.md`` is named
-    ``facilities_policy_md``, the ``[Attached files: …]`` marker says
-    ``facilities_policy.md``, and a model may drop the extension or the case.
-    All of them reduce to the same key.
-    """
-    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-
-
-def _filename_keys(filename: str) -> set:
-    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
-    return {_name_key(filename), _name_key(stem)} - {""}
-
-
 async def _resolve_session_document(user_id: str, session_id: str, requested: str) -> str:
     """The upload id of the session document ``requested`` names, or raise.
 
     ``requested`` is whatever the model sent that is not an upload id: a
-    filename, a guess, or nothing. A unique filename match wins; otherwise a
-    session with exactly one document means that document, because there is
-    nothing else the model can have meant. Anything still ambiguous raises with
-    the session's documents listed, so the next call can name one.
+    filename, a guess, or nothing. The rules are shared with
+    ``document_extract`` (``apis.shared.files.session_documents``). Anything
+    still ambiguous raises with the session's documents listed, so the next
+    call can name one.
     """
     listing = await list_session_documents(user_id, session_id)
     documents = listing.get("documents") or []
 
-    key = _name_key(requested)
-    if key:
-        named = [d for d in documents if key in _filename_keys(d["filename"])]
-        if len(named) == 1:
-            return named[0]["upload_id"]
-    if len(documents) == 1:
-        return documents[0]["upload_id"]
+    upload_id = match_session_document(documents, requested)
+    if upload_id:
+        return upload_id
 
     if not documents:
         raise DocumentReadError(
             "This conversation has no readable document to verify a quote against."
         )
-    shown = documents[:MAX_LISTED_DOCUMENTS]
-    choices = ", ".join(f"'{d['upload_id']}' ({d['filename']})" for d in shown)
-    more = (
-        f" and {len(documents) - len(shown)} more (call document_read with no arguments for all)"
-        if len(documents) > len(shown)
-        else ""
-    )
     lead = f"No document matches '{requested}'." if requested else "Say which document."
     raise DocumentReadError(
-        f"{lead} Pass one of these as upload_id: {choices}{more}."
+        f"{lead} Pass one of these as upload_id: {document_choices(documents)}."
     )
 
 

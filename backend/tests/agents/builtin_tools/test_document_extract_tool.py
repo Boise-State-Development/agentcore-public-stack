@@ -62,7 +62,15 @@ class FakeToolContext:
 @pytest.fixture
 def wired(monkeypatch):
     """Everything outside the tool faked at its own seam."""
-    state: Dict[str, Any] = {"persisted": [], "queued": [], "extract_text": None}
+    state: Dict[str, Any] = {
+        "persisted": [],
+        "queued": [],
+        "extract_text": None,
+        # The session's documents, as ``list_session_documents`` returns them.
+        # Empty by default, so an id passes through exactly as before.
+        "documents": [],
+        "listings": 0,
+    }
 
     monkeypatch.setenv("DOCUMENT_EXTRACT_ENABLED", "true")
     monkeypatch.setenv("DOCUMENT_EXTRACT_MODEL_ID", "us.test-model")
@@ -80,6 +88,10 @@ def wired(monkeypatch):
             from apis.shared.files.document_read import DocumentReadError
 
             raise DocumentReadError("no such document")
+        if upload_id.startswith("ghost") or upload_id.endswith((".md", ".pdf")):
+            from apis.shared.files.workspace import WorkspaceFileNotFoundError
+
+            raise WorkspaceFileNotFoundError(f"No file with id '{upload_id}'")
         meta = FakeMeta()
         meta.upload_id = upload_id
         meta.filename = (
@@ -88,6 +100,14 @@ def wired(monkeypatch):
         return meta, "pdf", list(PAGES)
 
     monkeypatch.setattr(tool_module, "document_provenance_units", fake_units)
+
+    async def fake_listing(user_id, session_id):
+        state["listings"] += 1
+        if state.get("listing_raises"):
+            raise state["listing_raises"]
+        return {"documents": list(state["documents"]), "count": len(state["documents"])}
+
+    monkeypatch.setattr(tool_module, "list_session_documents", fake_listing)
 
     from apis.shared.extraction.extractor import ExtractionResult
 
@@ -515,10 +535,12 @@ class TestNDocumentsPerCall:
         assert [d["uploadId"] for d in payload["documents"]] == ["a", "b", "c"]
 
     @pytest.mark.asyncio
-    async def test_no_ids_is_refused(self, wired) -> None:
+    async def test_no_ids_in_a_conversation_without_documents_is_refused(
+        self, wired
+    ) -> None:
         result = await self.run([])
         assert result["status"] == "error"
-        assert "upload_ids is required" in result["content"][0]["text"]
+        assert "no readable document" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
     async def test_too_many_documents_is_refused_with_the_count(self, wired) -> None:
@@ -578,3 +600,161 @@ class TestNDocumentsPerCall:
         serialized = json.dumps(payload["documents"])
         for leaked in ("up to $500,000 in total costs", "p. 2", "measured", "literal"):
             assert leaked not in serialized
+
+
+def _doc(upload_id: str, filename: str) -> Dict[str, Any]:
+    return {"upload_id": upload_id, "filename": filename, "format": "md"}
+
+
+class TestWhichDocuments:
+    """The model often has no upload id to give.
+
+    A small attachment reaches it as an inline block named by filename, so it
+    sends the filename — on dev it did exactly that, failed, listed the
+    documents, and only then ran. The rules are shared with ``verify_sources``
+    (``apis.shared.files.session_documents``).
+    """
+
+    @staticmethod
+    async def run(ids: Any) -> Dict[str, Any]:
+        tool = make_document_extract_tool("s1", "u1", [FakeRecord()])
+        fn = getattr(tool, "original_function", None) or tool
+        return await fn(
+            upload_ids=ids, field_set="nsf-solicitation", tool_context=FakeToolContext()
+        )
+
+    @staticmethod
+    def extracted(result: Dict[str, Any]) -> List[str]:
+        return [d["uploadId"] for d in result["content"][0]["json"]["documents"]]
+
+    @pytest.mark.asyncio
+    async def test_filenames_resolve_to_their_documents(self, wired) -> None:
+        wired["documents"] = [
+            _doc("up-a", "arid-lands-water-solicitation.md"),
+            _doc("up-c", "coastal-resilience-solicitation.md"),
+        ]
+        result = await self.run(
+            ["arid-lands-water-solicitation.md", "coastal-resilience-solicitation.md"]
+        )
+        assert self.extracted(result) == ["up-a", "up-c"]
+
+    @pytest.mark.asyncio
+    async def test_the_inline_block_name_resolves_too(self, wired) -> None:
+        """Bedrock's sanitizer turns ``coastal.md`` into ``coastal_md``."""
+        wired["documents"] = [_doc("up-c", "coastal.md"), _doc("up-a", "arid.md")]
+        assert self.extracted(await self.run(["coastal_md", "Arid"])) == ["up-c", "up-a"]
+
+    @pytest.mark.asyncio
+    async def test_a_real_id_resolves_as_itself(self, wired) -> None:
+        wired["documents"] = [_doc("up-a", "a.md"), _doc("up-b", "b.md")]
+        assert self.extracted(await self.run(["up-b"])) == ["up-b"]
+
+    @pytest.mark.asyncio
+    async def test_an_id_and_its_filename_are_one_document(self, wired) -> None:
+        """Extracting one document twice doubles its cost and its comparison row."""
+        wired["documents"] = [_doc("up-a", "a.md"), _doc("up-b", "b.md")]
+        assert self.extracted(await self.run(["up-a", "a.md", "b.md"])) == [
+            "up-a",
+            "up-b",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_ids_in_a_one_document_conversation_means_that_one(
+        self, wired
+    ) -> None:
+        wired["documents"] = [_doc("up-only", "solicitation.md")]
+        assert self.extracted(await self.run([])) == ["up-only"]
+
+    @pytest.mark.asyncio
+    async def test_no_ids_among_several_documents_asks_which(self, wired) -> None:
+        """Never "all of them": the cost of a run scales with each document."""
+        wired["documents"] = [_doc("up-a", "a.md"), _doc("up-b", "b.md")]
+        result = await self.run([])
+        text = result["content"][0]["text"]
+        assert result["status"] == "error"
+        assert "'up-a' (a.md)" in text and "'up-b' (b.md)" in text
+
+    @pytest.mark.asyncio
+    async def test_one_wrong_name_in_a_one_document_conversation_is_that_one(
+        self, wired
+    ) -> None:
+        wired["documents"] = [_doc("up-only", "solicitation.md")]
+        assert self.extracted(await self.run(["nsf23603"])) == ["up-only"]
+
+    @pytest.mark.asyncio
+    async def test_several_wrong_names_are_not_all_the_only_document(
+        self, wired
+    ) -> None:
+        """Three names in a one-document session did not mean it three times."""
+        wired["documents"] = [_doc("up-only", "solicitation.md")]
+        result = await self.run(["ghost-1", "ghost-2"])
+        assert result["status"] == "error"
+        assert "'up-only' (solicitation.md)" in result["content"][0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_an_ambiguous_filename_is_not_guessed(self, wired) -> None:
+        wired["documents"] = [
+            _doc("up-1", "budget.md"),
+            _doc("up-2", "budget.md"),
+            _doc("up-3", "other.md"),
+        ]
+        result = await self.run(["budget.md", "other.md"])
+        payload = result["content"][0]["json"]
+        assert [d["uploadId"] for d in payload["documents"]] == ["up-3"]
+        # The failure names the real documents, once, so the next call can pick.
+        assert payload["note"].count("This conversation's documents are") == 1
+        assert "'up-1' (budget.md)" in payload["note"]
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_lists_the_documents_in_the_note(self, wired) -> None:
+        wired["documents"] = [_doc("up-a", "a.md"), _doc("up-b", "b.md")]
+        result = await self.run(["a.md", "ghost"])
+        note = result["content"][0]["json"]["note"]
+        assert self.extracted(result) == ["up-a"]
+        assert "ghost: no document with that id or filename" in note
+        assert "'up-b' (b.md)" in note
+
+    @pytest.mark.asyncio
+    async def test_the_listing_is_asked_once_per_call(self, wired) -> None:
+        wired["documents"] = [_doc("up-a", "a.md"), _doc("up-b", "b.md")]
+        await self.run(["a.md", "b.md"])
+        assert wired["listings"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failed_listing_passes_ids_through(self, wired) -> None:
+        """The listing is a convenience; losing it must not cost the run."""
+        wired["listing_raises"] = RuntimeError("dynamodb down")
+        assert self.extracted(await self.run(["a", "b"])) == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_a_skill_name_runs_its_only_field_set(self, wired) -> None:
+        """Seen on dev: the model named the skill, not the set inside it."""
+        tool = make_document_extract_tool("s1", "u1", [FakeRecord()])
+        fn = getattr(tool, "original_function", None) or tool
+        result = await fn(
+            upload_ids=["up-1"], field_set="grants", tool_context=FakeToolContext()
+        )
+        assert result["status"] == "success"
+        assert result["content"][0]["json"]["fieldSet"] == "nsf-solicitation"
+
+
+#: The agent-facing spec sits in the cacheable ``toolConfig``, ahead of the
+#: system prompt and the whole restored history. A change here is a deliberate
+#: prefix rewrite at deploy: update the pin with it and state the token delta
+#: in the PR. Last changed when ``upload_ids`` started accepting filenames
+#: (666 tokens on Haiku 4.5, 6 fewer than before).
+SPEC_DIGEST = "0b778cd9490d355c19099a78ee5961bc97b91c8447347b80dde195fd9630ca8e"
+
+
+def test_the_spec_is_pinned_and_constant_per_deployment() -> None:
+    """Neither the identity nor the turn's skills reach the spec (D1)."""
+    import hashlib
+
+    def digest(tool: Any) -> str:
+        return hashlib.sha256(
+            json.dumps(tool.tool_spec, sort_keys=True).encode()
+        ).hexdigest()
+
+    one = make_document_extract_tool("s1", "u1", [FakeRecord()])
+    other = make_document_extract_tool("s2", "u2", [])
+    assert digest(one) == digest(other) == SPEC_DIGEST

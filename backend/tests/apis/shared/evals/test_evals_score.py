@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from apis.shared.evals.cases import Expect, RegexExpect, SkillExpect, ToolExpect
+from apis.shared.evals.cases import Expect, MemoryExpect, RegexExpect, SkillExpect, ToolExpect
 from apis.shared.evals.score import (
     FAILURE_CODES,
     compare_family,
@@ -17,9 +17,9 @@ from apis.shared.evals.score import (
 )
 
 
-def _score(expect: Expect, answer: str = "ok", tools=(), status: str = "completed"):
+def _score(expect: Expect, answer: str = "ok", tools=(), status: str = "completed", memory_state=None):
     calls = [{"name": t, "input": {}} if isinstance(t, str) else t for t in tools]
-    return score_sample(expect, final_message=answer, tool_calls=calls, status=status)
+    return score_sample(expect, final_message=answer, tool_calls=calls, status=status, memory_state=memory_state)
 
 
 class TestScoreSample:
@@ -169,6 +169,33 @@ class TestCompareFamily:
         assert result.missing_in_run == ("f.a",) and result.new_in_run == ("f.c",)
 
 
+def test_max_calls_fails_a_search_spree():
+    expect = Expect(contains_any=("ok",), tools=ToolExpect(max_calls=2))
+    assert _score(expect, tools=["a", "b"]).passed
+    result = _score(expect, tools=["a", "b", "a"])
+    assert not result.passed and result.failures == ("too many tool calls: 3 > 2",)
+
+
+class TestMemoryChecks:
+    def _expect(self, **kw):
+        from apis.shared.evals.cases import MemoryExpect
+
+        return Expect(memory=(MemoryExpect(scope="project", **kw),))
+
+    def test_contains_absent_and_unchanged(self):
+        state = {"project": "- The report is due March 10.", "mine": "", "before": {"project": "- due March 3."}}
+        assert _score(self._expect(contains_any=("March 10",), absent=("March 3",)), memory_state=state).passed
+        failures = _score(self._expect(unchanged=True), memory_state=state).failures
+        assert failures == ("memory project: changed",)
+
+    def test_proposals_are_counted(self):
+        result = _score(Expect(proposals=1), memory_state={"proposals": 0, "before": {}})
+        assert result.failures == ("proposals: 0, expected 1",)
+
+    def test_no_read_back_is_a_failure(self):
+        assert _score(self._expect(contains_any=("x",))).failures == ("memory: not read back",)
+
+
 class TestFailureCode:
     """Every sentence ``score_sample`` writes maps to a closed code (eval-harness spec §16 D20)."""
 
@@ -192,6 +219,12 @@ class TestFailureCode:
         (dict(expect=Expect(skill=SkillExpect(not_loads=("skill_creator",))),
               tools=[{"name": "skills", "input": {"skill_name": "skill-creator"}}]),
          {("skill_unexpected", "skill_creator")}),
+        (dict(expect=Expect(contains_any=("ok",), tools=ToolExpect(max_calls=1)), tools=["a", "b"]),
+         {("max_calls", None)}),
+        (dict(expect=Expect(memory=(MemoryExpect(scope="project", contains_any=("x",)),)),
+              memory_state={"project": "", "before": {}}), {("memory", None)}),
+        (dict(expect=Expect(memory=(MemoryExpect(scope="mine", contains_any=("x",)),))), {("memory", None)}),
+        (dict(expect=Expect(proposals=1), memory_state={"proposals": 0, "before": {}}), {("proposals", None)}),
     ]
 
     @pytest.mark.parametrize("kwargs,expected", CASES)

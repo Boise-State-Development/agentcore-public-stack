@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from apis.shared.files.session_documents import name_key
 from apis.shared.skills.resource_store import (
     SkillResourceStoreError,
     get_skill_resource_store,
@@ -128,21 +129,72 @@ class FieldSetNotFound(LookupError):
     that mistypes a set name should be corrected, not left to guess again.
     """
 
-    def __init__(self, name: str, available: List[str]) -> None:
+    def __init__(
+        self, name: str, available: List[str], *, skill_sets: bool = False
+    ) -> None:
         self.name = name
         self.available = available
         listing = ", ".join(available) or "(none)"
-        super().__init__(
-            f"No field set '{name}' is available in this conversation. "
-            f"Available field sets: {listing}"
-        )
+        if skill_sets:
+            message = (
+                f"The skill '{name}' declares several field sets: {listing}. "
+                "Name the one to run."
+            )
+        else:
+            message = (
+                f"No field set '{name}' is available in this conversation. "
+                f"Available field sets: {listing}"
+            )
+        super().__init__(message)
+
+
+def _resolve_name(index: Dict[str, Tuple[Any, Any]], wanted: str) -> Optional[str]:
+    """The declared set ``wanted`` means when it is not a set name verbatim.
+
+    Two near-misses, both seen on dev with a real model, each of which cost a
+    wasted tool round before this existed:
+
+    * the set's own name punctuated differently (``nsf_solicitation`` for
+      ``nsf-solicitation``);
+    * the **skill's** name (``nsf-solicitation-review-test``), which is what the
+      user picked and what the model has in front of it, where the set inside
+      it is called something else. When that skill declares exactly one set,
+      there is nothing else the model can have meant.
+
+    A skill declaring several sets raises with just that skill's sets, so the
+    next call can name one. Nothing here picks between candidates, and only
+    the turn's own skills are searched, so access stays structural.
+    """
+    key = name_key(wanted)
+    if not key:
+        return None
+    same = [name for name in index if name_key(name) == key]
+    if len(same) == 1:
+        return same[0]
+
+    owned = sorted(
+        name
+        for name, (record, _) in index.items()
+        if key
+        in {
+            name_key(getattr(record, "skill_id", "") or ""),
+            name_key(getattr(record, "display_name", "") or ""),
+        }
+    )
+    if len(owned) == 1:
+        return owned[0]
+    if len(owned) > 1:
+        raise FieldSetNotFound(wanted, owned, skill_sets=True)
+    return None
 
 
 def resolve_field_set(records: Iterable[Any], name: str) -> FieldSet:
     """Read and parse one named field set from the turn's skills.
 
     Raises:
-        FieldSetNotFound: the name is not declared by any active skill.
+        FieldSetNotFound: the name is neither a declared set, the same name
+            punctuated differently, nor an active skill declaring exactly one
+            set.
         FieldSetError: the file is there but cannot be parsed. Both are
             conversational errors from the tool, never a 500 — the first is the
             model's mistake and the second is the author's, and each needs a
@@ -155,7 +207,11 @@ def resolve_field_set(records: Iterable[Any], name: str) -> FieldSet:
     index = declared_field_sets(records)
     entry = index.get(wanted)
     if entry is None:
-        raise FieldSetNotFound(wanted, sorted(index))
+        resolved_name = _resolve_name(index, wanted)
+        if resolved_name is None:
+            raise FieldSetNotFound(wanted, sorted(index))
+        wanted = resolved_name
+        entry = index[wanted]
 
     _, ref = entry
     try:

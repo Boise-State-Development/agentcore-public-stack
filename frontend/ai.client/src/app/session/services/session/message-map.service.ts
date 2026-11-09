@@ -589,6 +589,14 @@ export class MessageMapService {
         messagesResponse.sourceProvenance ?? [],
       );
 
+      // Structured-extraction rows: the `document_extraction` event never
+      // re-streams either, and a reloaded conversation without them would
+      // show the model's prose summary of a table the user can no longer see.
+      this.toolInsight.seedExtractionsFromHydration(
+        sessionId,
+        messagesResponse.extractions ?? [],
+      );
+
       // Handoffs (spec §4.3): the rows this thread sent, and where this
       // conversation came from if a handoff started it. Neither re-streams.
       this.handoffState.hydrate(

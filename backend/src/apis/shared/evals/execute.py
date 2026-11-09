@@ -42,6 +42,7 @@ class TurnRunner(Protocol):
         enabled_tools: Optional[List[str]],
         enabled_skills: Optional[List[str]],
         file_upload_ids: Optional[List[str]],
+        rag_assistant_id: Optional[str] = None,
     ) -> Awaitable[RunResult]: ...
 
 
@@ -73,6 +74,47 @@ class OAuthRequiredError(RuntimeError):
     """
 
 
+#: The most client-tool pauses one turn may answer before the harness gives up:
+#: a model that keeps calling the same tool is a failure, not an infinite loop.
+MAX_CLIENT_TOOL_ROUNDS = 4
+
+
+def client_tool_specs(case: EvalCase) -> Optional[List[Dict[str, Any]]]:
+    """The case's client tools as ``InvocationRequest.client_tools`` takes them (camelCase schema)."""
+    if not case.run.client_tools:
+        return None
+    return [
+        {"name": t["name"], "description": t["description"],
+         "inputSchema": t.get("input_schema") or {"type": "object", "properties": {}}}
+        for t in case.run.client_tools
+    ]
+
+
+def client_tool_responses(case: EvalCase, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The case's canned answer to each paused call, keyed by its interrupt id. Never null."""
+    by_name = {t["name"]: t.get("respond") or {} for t in (case.run.client_tools or ())}
+    responses = []
+    for call in calls:
+        respond = by_name.get(str(call.get("toolName") or "")) or {"output": "unknown tool", "is_error": True}
+        response = (
+            {"declined": True} if respond.get("declined")
+            else {"output": str(respond.get("output", "")), "isError": bool(respond.get("is_error", False))}
+        )
+        responses.append({"interruptId": call.get("interruptId"), "response": response})
+    return responses
+
+
+def _merge_rounds(rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """One logical turn from its invocations: every round's tool calls, the last round's answer."""
+    merged = dict(rounds[-1])
+    merged["tool_trace"] = [entry for r in rounds for entry in (r.get("tool_trace") or [])]
+    merged["client_tool_calls"] = [call for r in rounds for call in (r.get("client_tool_calls") or [])]
+    if len(rounds) > 1:
+        merged["rounds"] = len(rounds)
+        merged["usage"] = {"usage": sum_usage(rounds)}
+    return merged
+
+
 def new_session_id() -> str:
     return f"{EVAL_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
 
@@ -101,8 +143,19 @@ async def run_sample(
     register_fixture: Optional[FixtureRegistrar] = None,
     fixtures_dir: Optional[Path] = None,
     staged: Optional[StagedSample] = None,
+    assistant_id: Optional[str] = None,
+    inspect: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Run every turn of ``case`` in one fresh session and score the last.
+
+    ``assistant_id`` is the seeded fixture the case runs against (a project's
+    harness Agent or an Agent), sent as ``rag_assistant_id`` on every turn.
+
+    A turn's ``session`` number picks its session (session 1 is the sample's
+    own id, each other number a fresh one) and its user (``as_user``, passed to
+    ``run_turn`` only when it is not the eval user). ``inspect`` is awaited
+    after the last turn and returns the project memory a memory check scores
+    (``score_sample``'s ``memory_state``); it runs even when a turn failed.
 
     ``staged`` is a session whose large documents were uploaded and prepared
     ahead of the run (``StagedSample``): the turns run in that session and
@@ -127,10 +180,22 @@ async def run_sample(
     turns: List[Dict[str, Any]] = []
     status = "completed"
     error: Optional[str] = None
+    extra: Dict[str, Any] = {"rag_assistant_id": assistant_id} if assistant_id else {}
+    if case.run.client_surface:
+        extra["client_surface"] = case.run.client_surface
+    specs = client_tool_specs(case)
+    if specs:
+        extra["client_tools"] = specs
+    sessions: Dict[int, str] = {1: session_id}
     for index, prompt in enumerate(case.turns):
+        meta = case.meta_for(index)
+        turn_session = sessions.setdefault(meta.session, new_session_id())
+        per_user: Dict[str, Any] = {"as_user": meta.as_user} if meta.as_user != "eval" else {}
         result = await run_turn(
+            **extra,
+            **per_user,
             prompt=prompt,
-            session_id=session_id,
+            session_id=turn_session,
             title=f"[eval] {case.id}",
             model_id=model_id,
             enabled_tools=list(case.run.enabled_tools) if case.run.enabled_tools is not None else None,
@@ -138,7 +203,29 @@ async def run_sample(
             # Files arrive with the first turn, as a user attaching them would.
             file_upload_ids=(upload_ids or None) if index == 0 else None,
         )
-        turns.append(result.to_dict())
+        rounds = [result.to_dict()]
+        # A client tool pauses the turn; the harness is the client, so it
+        # answers from the case and resumes in the same session, as the
+        # terminal client does after the user approves the call.
+        while result.status == "client_tool_call" and len(rounds) <= MAX_CLIENT_TOOL_ROUNDS:
+            result = await run_turn(
+                **extra,
+                **per_user,
+                prompt="",
+                session_id=turn_session,
+                title=f"[eval] {case.id}",
+                model_id=model_id,
+                enabled_tools=list(case.run.enabled_tools) if case.run.enabled_tools is not None else None,
+                enabled_skills=list(case.run.enabled_skills) if case.run.enabled_skills is not None else None,
+                file_upload_ids=None,
+                interrupt_responses=client_tool_responses(case, result.client_tool_calls),
+            )
+            rounds.append(result.to_dict())
+        turns.append(_merge_rounds(rounds))
+        if result.status == "client_tool_call":
+            status = "client_tool_loop"
+            error = f"still calling client tools after {MAX_CLIENT_TOOL_ROUNDS} answers"
+            break
         if result.status == "oauth_required":
             providers = ", ".join(o.provider_id for o in result.oauth_required) or "unknown"
             raise OAuthRequiredError(f"{case.id}: the eval user needs consent for {providers}")
@@ -146,6 +233,8 @@ async def run_sample(
             status = result.status
             error = result.error
             break
+
+    memory_state = await inspect() if inspect is not None else None
 
     last = turns[-1]
     tool_calls = [
@@ -157,6 +246,7 @@ async def run_sample(
         final_message=str(last.get("final_message") or ""),
         tool_calls=tool_calls,
         status=status,
+        memory_state=memory_state,
     )
 
     return {
@@ -165,6 +255,12 @@ async def run_sample(
         "sample": sample,
         "model_id": model_id,
         "session_id": session_id,
+        **({"sessions": [
+            {"session_id": sid, "as_user": next(
+                (case.meta_for(i).as_user for i in range(len(case.turns)) if case.meta_for(i).session == n), "eval")}
+            for n, sid in sorted(sessions.items())
+        ]} if len(sessions) > 1 or any(case.meta_for(i).as_user != "eval" for i in range(len(case.turns))) else {}),
+        **({"memory": memory_state} if memory_state is not None else {}),
         "upload_ids": upload_ids,
         **({"documents": list(staged.documents)} if staged is not None else {}),
         "status": status,

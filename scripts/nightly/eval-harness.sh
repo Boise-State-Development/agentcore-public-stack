@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Script: Run the eval harness once per case against the development deployment
-# Description: Seeds the eval user (backend/scripts/seed_eval_user.py), signs in
-#              as it through the deployment's app-api, runs the six gating
+# Description: Seeds the eval user (backend/scripts/seed_eval_user.py) and its
+#              fixture projects and agents (seed_eval_fixtures.py), signs in
+#              as it through the deployment's app-api, runs the gating
 #              families of the golden set once per case, and scores them
 #              against the committed Haiku baseline. See
 #              docs/specs/eval-harness.md §10 and docs/testing/smoke-regression.md §5.
@@ -87,7 +88,7 @@ main() {
     base_url=$(get_base_url) || exit 2
     local api_url="${base_url}/api"
     local model="${EVAL_MODEL_ID:-us.anthropic.claude-haiku-5-5}"
-    local families="${EVAL_FAMILIES:-tool_selection,document_qa,retention,instruction_following,refusal,skill_selection}"
+    local families="${EVAL_FAMILIES:-tool_selection,document_qa,attachment_tools,project_kb,agent_harness,project_memory,skill_outcome,terminal,retention,instruction_following,refusal,skill_selection}"
     local report="${EVAL_REPORT:-${PROJECT_ROOT}/eval-harness-report.json}"
     local out="${PROJECT_ROOT}/eval-harness-run"
 
@@ -97,6 +98,17 @@ main() {
     log_info "Seeding the eval user for ${CDK_PROJECT_PREFIX}..."
     if ! uv run python scripts/seed_eval_user.py --prefix "${CDK_PROJECT_PREFIX}" --region "${CDK_AWS_REGION}"; then
         log_error "Could not seed the eval user"
+        exit 2
+    fi
+
+    # The fixture projects and agents the project_kb and agent_harness families
+    # run against (eval-harness spec D13). Idempotent and digest-keyed: a night
+    # with no fixture change costs a few list calls, and one with a change
+    # waits for the new files to be ingested (minutes) before the run.
+    log_info "Seeding the eval fixture projects and agents..."
+    if ! uv run python scripts/seed_eval_fixtures.py --prefix "${CDK_PROJECT_PREFIX}" \
+            --region "${CDK_AWS_REGION}" --base-url "${api_url}"; then
+        log_error "Could not seed the eval fixtures"
         exit 2
     fi
 
