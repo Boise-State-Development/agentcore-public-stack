@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import io
 import random
+import re
+import zipfile
 from typing import Callable, Dict, List
 
 from large_document_quality import pdf
@@ -183,6 +185,32 @@ def it_runbook() -> bytes:
     ).encode("utf-8")
 
 
+def stable_xlsx(book) -> bytes:
+    """``book`` saved with fixed properties and zip dates, so the same workbook is the same bytes.
+
+    openpyxl stamps the current time into ``docProps/core.xml`` (on save, over
+    whatever ``modified`` says) and into every zip entry, which would give a
+    seeded fixture a new digest on every run.
+    """
+    from datetime import datetime
+
+    book.properties.creator = "eval-fixtures"
+    book.properties.created = book.properties.modified = datetime(2026, 1, 5)
+    raw = io.BytesIO()
+    book.save(raw)
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(raw.getvalue())) as source, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "docProps/core.xml":
+                # The writer sets ``modified`` to now on save, whatever the properties say.
+                data = re.sub(rb"(<dcterms:modified[^>]*>)[^<]*(</dcterms:modified>)", rb"\g<1>2026-01-05T00:00:00Z\g<2>", data)
+            info = zipfile.ZipInfo(item.filename, date_time=(2026, 1, 5, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            target.writestr(info, data)
+    return out.getvalue()
+
+
 def grant_expenses() -> bytes:
     from openpyxl import Workbook
 
@@ -201,10 +229,7 @@ def grant_expenses() -> bytes:
     approvals.append(["Line", "Approver code"])
     for line, _, _ in lines:
         approvals.append([line, APPROVER_CODE if line == APPROVER_LINE else f"AP-{10 + int(line[-2:])}"])
-    book.properties.creator = "eval-fixtures"
-    out = io.BytesIO()
-    book.save(out)
-    return out.getvalue()
+    return stable_xlsx(book)
 
 
 def sensor_readings() -> bytes:

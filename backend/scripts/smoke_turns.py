@@ -426,6 +426,21 @@ class AppApiTransport:
             h["X-CSRF-Token"] = self._csrf
         return h
 
+    async def call(
+        self, method: str, path: str, *, json_body: Any = None, params: Optional[Dict[str, Any]] = None
+    ) -> Tuple[int, Any]:
+        """One JSON request to app-api as the signed-in user: ``(status, body or None)``.
+
+        For the eval harness's fixture seeding and lookup (``seed_eval_fixtures.py``),
+        which create and list the eval user's own projects and agents.
+        """
+        r = await self._client.request(method, path, json=json_body, params=params, headers=self._headers())
+        try:
+            body = r.json() if r.content else None
+        except ValueError:
+            body = None
+        return r.status_code, body
+
     # -- turn path ----------------------------------------------------------
 
     async def stream_turn(

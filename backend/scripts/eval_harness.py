@@ -85,7 +85,15 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from apis.shared.evals.cases import FAMILIES, CaseError, EvalCase, load_cases, required_grants  # noqa: E402
+from apis.shared.evals.cases import (  # noqa: E402
+    FAMILIES,
+    CaseError,
+    EvalCase,
+    fixture_key,
+    fixture_keys,
+    load_cases,
+    required_grants,
+)
 from eval_fixtures.build import GENERATED  # noqa: E402
 from eval_fixtures.build import build as build_fixture  # noqa: E402
 from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
@@ -220,41 +228,58 @@ class CachedBearerAuth:
             return self._token
 
 
-async def sign_in_eval_user(base_url: str, prefix: str, region: str) -> str:
-    """Sign in as the eval user, renew its headless grant, and return its user id.
+def _eval_credentials(prefix: str, region: str) -> Tuple[str, str]:
+    """The eval user's username and password: ``EVAL_USERNAME`` / ``EVAL_PASSWORD``, else SSM.
 
-    Credentials come from ``EVAL_USERNAME`` / ``EVAL_PASSWORD`` when set, else
-    from the SSM SecureString ``seed_eval_user.py`` wrote. They are never logged.
+    The SSM SecureString is the one ``seed_eval_user.py`` wrote. Never logged.
     """
     from seed_eval_user import credentials_parameter
-    from smoke_turns import AppApiTransport
 
     username = os.environ.get("EVAL_USERNAME")
     password = os.environ.get("EVAL_PASSWORD")
-    if not (username and password):
-        import boto3
+    if username and password:
+        return username, password
+    import boto3
 
-        ssm = boto3.client("ssm", region_name=region)
-        try:
-            raw = ssm.get_parameter(Name=credentials_parameter(prefix), WithDecryption=True)["Parameter"]["Value"]
-        except ssm.exceptions.ParameterNotFound as exc:
-            raise ReportError(
-                f"no eval user credentials at {credentials_parameter(prefix)}; "
-                "run scripts/seed_eval_user.py for this environment first"
-            ) from exc
-        creds = json.loads(raw)
-        username, password = creds["username"], creds["password"]
+    ssm = boto3.client("ssm", region_name=region)
+    try:
+        raw = ssm.get_parameter(Name=credentials_parameter(prefix), WithDecryption=True)["Parameter"]["Value"]
+    except ssm.exceptions.ParameterNotFound as exc:
+        raise ReportError(
+            f"no eval user credentials at {credentials_parameter(prefix)}; "
+            "run scripts/seed_eval_user.py for this environment first"
+        ) from exc
+    creds = json.loads(raw)
+    return creds["username"], creds["password"]
 
+
+async def sign_in_eval_user(
+    base_url: str, prefix: str, region: str, *, resolve_fixtures: bool = False
+) -> Tuple[str, Dict[str, str]]:
+    """Sign in as the eval user, renew its headless grant, and return its user id.
+
+    With ``resolve_fixtures``, also returns the seeded fixtures' ids
+    (``seed_eval_fixtures.resolve``: ``"project:<name>"`` / ``"agent:<name>"``),
+    read in the same session; otherwise an empty map.
+    """
+    from smoke_turns import AppApiTransport
+
+    username, password = _eval_credentials(prefix, region)
     transport = AppApiTransport(base_url, label="eval")
+    fixtures: Dict[str, str] = {}
     try:
         await transport.login_cognito(username, password, "")
         await transport.enable_headless_grant()
+        if resolve_fixtures:
+            from seed_eval_fixtures import resolve
+
+            fixtures = await resolve(transport)
     finally:
         await transport.close()
     user_id = transport.user.get("user_id")
     if not user_id:
         raise ReportError("signed in, but GET /auth/session named no user_id")
-    return str(user_id)
+    return str(user_id), fixtures
 
 
 # --------------------------------------------------------------------------- cases
@@ -379,13 +404,26 @@ async def cmd_run(args: argparse.Namespace) -> int:
     from apis.shared.harness.runner import run_agent_headless
 
     resolve_runtime_env(args.prefix, args.region)
+    needed = fixture_keys(cases)
+    fixture_ids: Dict[str, str] = {}
+    if needed and args.auth != "cognito":
+        print("cases run against seeded projects or agents, which need --auth cognito: "
+              + ", ".join(needed), file=sys.stderr)
+        return 2
     if args.auth == "cognito":
         try:
-            args.user_id = await sign_in_eval_user(args.base_url, args.prefix, args.region)
+            args.user_id, fixture_ids = await sign_in_eval_user(
+                args.base_url, args.prefix, args.region, resolve_fixtures=bool(needed)
+            )
         except (ReportError, RuntimeError) as exc:
             print(f"could not sign in as the eval user: {exc}", file=sys.stderr)
             return 2
         print("signed in as the eval user; headless grant renewed")
+        missing = [key for key in needed if key not in fixture_ids]
+        if missing:
+            print(f"fixtures not seeded: {', '.join(missing)}; run scripts/seed_eval_fixtures.py first",
+                  file=sys.stderr)
+            return 2
     out.mkdir(parents=True, exist_ok=True)
     families = sorted({case.family for case in cases}, key=FAMILIES.index)
     try:
@@ -448,6 +486,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
                     register_fixture=register_fixture,
                     fixtures_dir=fixtures_dir,
                     staged=staged.get((case.id, sample)),
+                    assistant_id=fixture_ids.get(fixture_key(case) or ""),
                 )
             except (OAuthRequiredError, HeadlessAuthError, FixtureError) as exc:
                 fatal.append(f"{type(exc).__name__}: {exc}")

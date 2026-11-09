@@ -52,11 +52,24 @@ def test_every_generated_fixture_is_an_uploadable_type_with_a_pinned_mime(name):
     assert b.build(name)
 
 
-@pytest.mark.parametrize("name", sorted(n for n in b.GENERATED if not n.endswith(".xlsx")))
+@pytest.mark.parametrize("name", sorted(b.GENERATED))
 def test_generated_bytes_are_deterministic(name):
-    # openpyxl stamps its zip entries with the current time, so a workbook is
-    # pinned by content (below) rather than by bytes.
     assert b.GENERATED[name]() == b.GENERATED[name]()
+
+
+def test_a_workbook_is_the_same_bytes_a_second_later(monkeypatch):
+    # openpyxl writes the current time into core.xml on save; stable_xlsx pins it.
+    import datetime as real_datetime
+
+    first = b.grant_expenses()
+
+    class _Later(real_datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real_datetime.datetime(2031, 6, 1, 12, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr("openpyxl.writer.excel.datetime.datetime", _Later)
+    assert b.grant_expenses() == first
 
 
 class TestWord:
@@ -172,3 +185,51 @@ def test_the_images_are_pngs():
     for name in ("enrollment_chart.png", "sync_error.png", "harvest_week1.png", "harvest_week2.png"):
         with Image.open(io.BytesIO(b.build(name))) as image:
             assert image.format == "PNG" and image.size[0] >= 800
+
+
+class TestEntities:
+    def test_every_case_names_a_defined_fixture(self):
+        from eval_fixtures import entities
+
+        for case in load_cases(CASES_DIR):
+            if case.run.project:
+                assert case.run.project in entities.PROJECTS, case.id
+            if case.run.agent:
+                assert case.run.agent in entities.AGENTS, case.id
+
+    def test_digests_are_stable_and_distinct(self):
+        from eval_fixtures import entities
+
+        fixtures = [*entities.PROJECTS.values(), *entities.AGENTS.values()]
+        digests = [entities.digest(f) for f in fixtures]
+        assert digests == [entities.digest(f) for f in fixtures]
+        assert len(set(digests)) == len(digests)
+
+    def test_the_full_context_fixtures_sit_either_side_of_the_deployed_budget(self):
+        from eval_fixtures import entities
+
+        from apis.shared.files.document_tokens import CHARS_PER_TOKEN
+
+        def tokens(fx):
+            return sum(len(f.build()) for f in fx.files) // CHARS_PER_TOKEN
+
+        # Dev and prod set the budget to 75,000 (#1915); the code default is 50,000.
+        assert tokens(entities.PROJECTS["kb_small"]) < 50_000
+        assert tokens(entities.PROJECTS["kb_large"]) > 75_000
+        assert tokens(entities.AGENTS["agent_loader"]) > 75_000
+
+    def test_the_large_handbooks_carry_their_planted_facts(self):
+        from eval_fixtures import entities as e
+
+        text = {f.name: f.build().decode() for f in e.PROJECTS["kb_large"].files}
+        assert f"at least {e.INTL_TRAVEL_DAYS} days" in text["travel_handbook.md"]
+        assert f"every {e.ACCESS_CODE_ROTATION_V2} days" in text["facilities_handbook.md"]
+        assert f"every {e.ACCESS_CODE_ROTATION_V1} days" not in text["facilities_handbook.md"]
+        assert f"## Section 7: {e.HR_SECTION_7_TITLE}" in text["hr_handbook.md"]
+        old = e.PROJECTS["kb_large"].superseded[0].build().decode()
+        assert f"every {e.ACCESS_CODE_ROTATION_V1} days" in old
+
+    def test_long_instructions_are_over_8_kib(self):
+        from eval_fixtures import entities
+
+        assert len(entities.AGENTS["agent_long_instructions"].instructions.encode()) > 8 * 1024

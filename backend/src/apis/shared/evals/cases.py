@@ -25,6 +25,8 @@ FAMILIES: Tuple[str, ...] = (
     "tool_selection",
     "document_qa",
     "attachment_tools",
+    "project_kb",
+    "agent_harness",
     "retention",
     "instruction_following",
     "refusal",
@@ -37,6 +39,7 @@ JUDGED_FAMILIES = frozenset({"general_chat"})
 JUDGE_EVALUATORS = frozenset(EVALUATOR_CLASSES)
 
 _ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
+_FIXTURE_RE = re.compile(r"^[a-z0-9_]+$")
 
 #: Tools a case may require that are not catalog ids, and the catalog id that
 #: provisions each (``apis/shared/tools/injected.py``). ``None`` means the turn
@@ -46,6 +49,8 @@ _ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 #: catalog row has.
 PROVISIONED_TOOLS: Dict[str, Optional[str]] = {
     "document_read": None,
+    "project_files": None,
+    "knowledge_files": None,
     "list_powerpoint_presentations": "create_powerpoint_presentation",
     "read_powerpoint_presentation": "create_powerpoint_presentation",
 }
@@ -65,6 +70,8 @@ class ToolExpect:
     must_call: Tuple[str, ...] = ()
     must_not_call: Tuple[str, ...] = ()
     in_order: Optional[Tuple[str, ...]] = None
+    #: The most tool calls the last turn may make, which catches a search spree.
+    max_calls: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +120,11 @@ class RunConfig:
 
     enabled_tools: Optional[Tuple[str, ...]] = None
     enabled_skills: Optional[Tuple[str, ...]] = None
+    #: A seeded fixture project or agent the turns run against (spec D13, D15),
+    #: by its short name; the harness resolves it to the id sent as
+    #: ``rag_assistant_id``. At most one of the two.
+    project: Optional[str] = None
+    agent: Optional[str] = None
 
 
 #: The generated reference documents a case may attach (``large_documents``).
@@ -183,12 +195,18 @@ def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
     tools = None
     if raw.get("tools") is not None:
         t = raw["tools"]
-        _check_keys(t, ("must_call", "must_not_call", "in_order"), f"{where}.tools")
+        _check_keys(t, ("must_call", "must_not_call", "in_order", "max_calls"), f"{where}.tools")
+        max_calls = t.get("max_calls")
+        if max_calls is not None and (not isinstance(max_calls, int) or isinstance(max_calls, bool) or max_calls < 0):
+            raise CaseError(f"{where}.tools.max_calls: expected a non-negative integer")
         tools = ToolExpect(
             must_call=_str_tuple(t.get("must_call"), f"{where}.tools.must_call"),
             must_not_call=_str_tuple(t.get("must_not_call"), f"{where}.tools.must_not_call"),
             in_order=_optional_str_tuple(t.get("in_order"), f"{where}.tools.in_order"),
+            max_calls=max_calls,
         )
+        if max_calls is not None and max_calls < len(set(tools.must_call)):
+            raise CaseError(f"{where}.tools.max_calls: lower than the number of tools it must call")
         clash = set(tools.must_call) & set(tools.must_not_call)
         if clash:
             raise CaseError(f"{where}.tools: {sorted(clash)} is both required and forbidden")
@@ -255,10 +273,18 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         turns.append(prompt)
 
     run_raw = raw.get("run") or {}
-    _check_keys(run_raw, ("enabled_tools", "enabled_skills"), f"{where}.run")
+    _check_keys(run_raw, ("enabled_tools", "enabled_skills", "project", "agent"), f"{where}.run")
+    for key in ("project", "agent"):
+        value = run_raw.get(key)
+        if value is not None and (not isinstance(value, str) or not _FIXTURE_RE.match(value)):
+            raise CaseError(f"{where}.run.{key}: expected a fixture name like 'kb_small'")
+    if run_raw.get("project") and run_raw.get("agent"):
+        raise CaseError(f"{where}.run: name a project or an agent, not both")
     run = RunConfig(
         enabled_tools=_optional_str_tuple(run_raw.get("enabled_tools"), f"{where}.run.enabled_tools"),
         enabled_skills=_optional_str_tuple(run_raw.get("enabled_skills"), f"{where}.run.enabled_skills"),
+        project=run_raw.get("project"),
+        agent=run_raw.get("agent"),
     )
 
     expect = _parse_expect(raw.get("expect") or {}, f"{where}.expect")
@@ -365,6 +391,25 @@ def load_cases(
                 if name not in generated and not (fixtures_dir / name).is_file():
                     raise CaseError(f"{case.id}: fixture file '{name}' not found in {fixtures_dir}")
     return cases
+
+
+def fixture_keys(cases: Iterable[EvalCase]) -> List[str]:
+    """``"project:<name>"`` / ``"agent:<name>"`` for every seeded fixture these cases run against."""
+    keys = set()
+    for case in cases:
+        if case.run.project:
+            keys.add(f"project:{case.run.project}")
+        if case.run.agent:
+            keys.add(f"agent:{case.run.agent}")
+    return sorted(keys)
+
+
+def fixture_key(case: EvalCase) -> Optional[str]:
+    if case.run.project:
+        return f"project:{case.run.project}"
+    if case.run.agent:
+        return f"agent:{case.run.agent}"
+    return None
 
 
 def required_grants(cases: Iterable[EvalCase]) -> Dict[str, List[str]]:
