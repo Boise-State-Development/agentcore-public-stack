@@ -183,7 +183,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Surface**: backend
 - **Effort × Impact**: M × M
 - **Subtracts**: no — addition only; justified only if `C#` rows show material post-gap re-write spend
-- **Status**: open
+- **Status**: open — **cost gate PASSED 2026-11-04** (`scoping/2026-11-04-idle-compaction-cost-replay.md`). Post-gap re-writes are 32.4% of prod spend; replaying 30 days through `backend/scripts/compaction_cost_replay.py`, an idle job at TTL expiry cutting 50k → 20k saves ~$268/month (−8.1%) and stays positive at 4× job cost, while a 1h TTL loses 3.1%. **Quality veto PASSED 2026-11-04** (same doc §5.2–5.3, ~$14 total): with production's summarizer, neither idle arm is worse than production in any family (paired McNemar, every p ≥ 0.25); `idle_50_30` is out (thrashes, 11.8 cuts/session). **Candidate: 75k trigger, 25k floor, ~$227/month (−6.9%).** Next is the build: an off-turn-path idle job behind an in-development flag.
 
 ### [2026-11-03] Plan the MCP SDK path past Strands' `mcp<2.2` cap
 - **Source**: research/2026-11-03.md
