@@ -1,9 +1,11 @@
 import { Injectable, signal } from '@angular/core';
-import type {
-  AgentStatusEvent,
-  ToolGroupSummaryEvent,
-  SourceProvenanceEvent,
-  SourceProvenanceClaim,
+import {
+  normalizeDocumentExtractionRun,
+  type AgentStatusEvent,
+  type ToolGroupSummaryEvent,
+  type SourceProvenanceEvent,
+  type SourceProvenanceClaim,
+  type DocumentExtractionRun,
 } from '../../../shared/utils/stream-parser';
 
 /** What we know about one tool invocation beyond its raw input/result. */
@@ -26,6 +28,13 @@ export interface ToolInsight {
    * merging them would attribute a passage to the wrong file.
    */
   provenance?: readonly SourceProvenanceClaim[];
+  /**
+   * Structured-extraction rows, when this call was a `document_extract` —
+   * one run per document, in arrival order. A call over N documents emits N
+   * events sharing this tool-use id, so they accumulate here (keyed by
+   * upload id) rather than replacing each other.
+   */
+  extractions?: readonly DocumentExtractionRun[];
 }
 
 /** One tool the runtime has started and not yet reported finishing. */
@@ -168,6 +177,14 @@ export class ToolInsightService {
     toolUseId: string,
   ): readonly SourceProvenanceClaim[] | undefined {
     return this.bySession().get(sessionId)?.get(toolUseId)?.provenance;
+  }
+
+  /** Extraction runs for one `document_extract` call, one per document. */
+  extractionsFor(
+    sessionId: string,
+    toolUseId: string,
+  ): readonly DocumentExtractionRun[] | undefined {
+    return this.bySession().get(sessionId)?.get(toolUseId)?.extractions;
   }
 
   /**
@@ -330,6 +347,55 @@ export class ToolInsightService {
         ...next.get(event.toolUseId),
         provenance: event.claims,
       });
+      return new Map(map).set(sessionId, next);
+    });
+  }
+
+  /**
+   * Record one document's extraction (live `document_extraction`). A second
+   * event for the same upload in the same call replaces the first, so a
+   * re-delivered frame never shows a document twice.
+   */
+  recordExtraction(sessionId: string, run: DocumentExtractionRun): void {
+    if (!run.toolUseId || !run.fields.length) return;
+
+    this.bySession.update(map => {
+      const next = new Map(map.get(sessionId) ?? []);
+      const current = next.get(run.toolUseId);
+      const runs = [...(current?.extractions ?? [])];
+      const at = runs.findIndex(r => r.uploadId === run.uploadId);
+      if (at >= 0) runs[at] = run;
+      else runs.push(run);
+      next.set(run.toolUseId, { ...current, extractions: runs });
+      return new Map(map).set(sessionId, next);
+    });
+  }
+
+  /**
+   * Seed extraction runs persisted server-side, replayed on the `GET /messages`
+   * `extractions` sidecar at conversation load. Every row goes through the
+   * same validator as the live event.
+   *
+   * Non-clobbering per `(toolUseId, uploadId)`: a live run already on screen
+   * carries its quotes, and a stored row may have dropped them to fit the
+   * item limit, so the live one must win.
+   */
+  seedExtractionsFromHydration(sessionId: string, rows: readonly unknown[]): void {
+    if (!rows.length) return;
+
+    this.bySession.update(map => {
+      const next = new Map(map.get(sessionId) ?? []);
+      let changed = false;
+      for (const raw of rows) {
+        const run = normalizeDocumentExtractionRun(raw);
+        if (!run) continue;
+        const current = next.get(run.toolUseId);
+        const runs = current?.extractions ?? [];
+        if (runs.some(r => r.uploadId === run.uploadId)) continue;
+        next.set(run.toolUseId, { ...current, extractions: [...runs, run] });
+        changed = true;
+      }
+      if (!changed) return map;
       return new Map(map).set(sessionId, next);
     });
   }

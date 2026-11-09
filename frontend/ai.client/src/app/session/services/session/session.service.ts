@@ -149,6 +149,14 @@ export interface MessagesListResponse {
    */
   sourceProvenance?: { toolUseId?: string; claims?: SourceProvenanceClaim[] }[];
   /**
+   * Persisted structured-extraction runs, one per document, each shaped like
+   * the live `document_extraction` SSE event plus `quotesOmitted` when the
+   * stored row dropped its quotes. Raw on purpose: ToolInsightService
+   * validates each row through the same normalizer as the live event.
+   * Present only on the first page.
+   */
+  extractions?: unknown[];
+  /**
    * Handoffs sent from this conversation (handoffs spec §4.3), each shaped like
    * `GET /sessions/{id}/handoffs/{handoffId}`. Rendered as handoff rows after their
    * `sourceMessageIndex`. Present only on the first page, and empty while the backend

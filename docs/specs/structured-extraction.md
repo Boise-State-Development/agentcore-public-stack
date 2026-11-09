@@ -1,8 +1,9 @@
 # Structured extraction: a named field set over a document, as rows that carry their own verdict
 
-**Status:** PR-1 and PR-2 implemented (slice one), behind `DOCUMENT_EXTRACT_ENABLED`
-(off by default; only the literal `"true"` enables). PR-3 (the SPA render) is not
-built. Source-provenance verification (G2) merged to `develop` on 2026-10-20, which
+**Status:** PR-1, PR-2 and PR-3 implemented, behind `DOCUMENT_EXTRACT_ENABLED`
+(off by default; only the literal `"true"` enables) and `features.documentExtract`
+(on in the deployed dev build only). PR-3 renders the rows under the answer: a field
+list for one document, a documents × fields grid for several (§8.1, §17). Source-provenance verification (G2) merged to `develop` on 2026-10-20, which
 unblocked this. **§16 records where this spec was wrong** — it was written before the
 code, and five of its decisions needed correcting on contact. Decisions recorded in §11. Revised 2026-10-20 after
 reading `strands-agents==1.57.2`: the constrained call is
@@ -833,7 +834,7 @@ is **not** on the collision list, because this feature does not touch it (§2.1,
 | PR-0 | This spec. One new file | **No** — open now |
 | PR-1 | The pure layer: the field-set markdown parser, the field model, the `create_model` builder with its per-`(set, version)` cache, and unit tests (the subset rules of §6.3, nullable optionals staying in `required`, enum fields, `currency` as string, the authored-order guarantee, schema equality across two builds of one fixture, malformed-table errors). Plus the flag, the CDK wiring, the CDK tests and the SPA flag field. **Nothing wired to a turn** | Yes — flag and CDK files |
 | PR-2 | `document_extract` mounted in `ChatAgent._create_agent`; field-set resolution through the skill resource store; the dedicated `BedrockModel(strict_tools=True)` and its `structured_output` call, with the marked unenforced fallback; the `verify_claims` integration; the backend-authored artifact and the in-process `.xlsx`; the `document_extraction` SSE event and its broker; the `EXTR#` store and its `GET /messages` replay; the `C#` metering row; the content-free EMF record; the D15 single-call-site test. Backend complete and dev-verifiable by reading the stream | Yes — imports G2 |
-| PR-3 | SPA render behind `features.documentExtract`: the rows table with per-cell provenance in G2's vocabulary, the `schemaEnforced` disclosure, and reload replay | Yes — follows G2's PR-3 vocabulary |
+| PR-3 ✅ | SPA render behind `features.documentExtract`: the rows table with per-cell provenance in G2's vocabulary, the `schemaEnforced` disclosure, and reload replay | Yes — follows G2's PR-3 vocabulary |
 
 PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
 

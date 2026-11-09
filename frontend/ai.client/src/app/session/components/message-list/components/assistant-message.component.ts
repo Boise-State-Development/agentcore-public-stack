@@ -4,8 +4,12 @@ import { ToolUseComponent } from './tool-use';
 import { ToolRailComponent } from './tool-rail';
 import { ToolCallGroup, ToolCallDisplay, ToolCallBatch } from './tool-rail/tool-rail.model';
 import { SourceProvenanceComponent } from './source-provenance/source-provenance.component';
+import { DocumentExtractionComponent } from './document-extraction/document-extraction.component';
 import { FEATURES } from '../../../../services/features';
-import type { SourceProvenanceClaim } from '../../../../shared/utils/stream-parser';
+import type {
+  DocumentExtractionRun,
+  SourceProvenanceClaim,
+} from '../../../../shared/utils/stream-parser';
 import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
@@ -125,12 +129,15 @@ interface DisplayBlock {
     | 'reasoningContent'
     | 'oauth_required'
     | 'browser_page'
-    | 'source_provenance';
+    | 'source_provenance'
+    | 'document_extraction';
   data?: ContentBlock;
   // For browser page cards: where a rail's browse_web calls left the browser.
   browserPage?: BrowserPageSummary;
   // For source-provenance panels: one `verify_sources` call's verdicts.
   provenance?: readonly SourceProvenanceClaim[];
+  // For extraction tables: one `document_extract` call's runs, one per document.
+  extractions?: readonly DocumentExtractionRun[];
   // For tool groups (inline rail)
   group?: ToolCallGroup;
   // For promoted visuals
@@ -169,6 +176,7 @@ interface DisplayBlock {
     McpAppFrameComponent,
     BrowserPageCardComponent,
     SourceProvenanceComponent,
+    DocumentExtractionComponent,
   ],
   template: `
     <div class="block-container">
@@ -259,6 +267,14 @@ interface DisplayBlock {
                 class="flex w-full justify-start"
                 [claims]="block.provenance!"
               />
+            </div>
+          }
+          @case ('document_extraction') {
+            <div
+              class="message-block"
+              [style.animation-delay]="$index * 0.1 + 's'"
+            >
+              <app-document-extraction class="w-full" [runs]="block.extractions!" />
             </div>
           }
           @case ('browser_page') {
@@ -413,6 +429,7 @@ export class AssistantMessageComponent {
     const insights = this.toolInsight;
     // Compile-time switch: while off, no panel is built and nothing is read.
     const provenanceEnabled = this.features.sourceProvenance;
+    const extractionEnabled = this.features.documentExtract;
 
     /**
      * Segment a rail's calls by the backend batch that produced them.
@@ -480,6 +497,18 @@ export class AssistantMessageComponent {
           const verdicts = insights.provenanceFor(sessionId, call.id);
           if (verdicts?.length) {
             result.push({ type: 'source_provenance', provenance: verdicts });
+          }
+        }
+      }
+      // Extraction tables follow the same placement, for the same reason:
+      // the model is told the table is already on screen, so it must not be
+      // folded inside a collapsed rail. One table per call; a call over N
+      // documents is one table with N rows.
+      if (extractionEnabled) {
+        for (const call of calls) {
+          const runs = insights.extractionsFor(sessionId, call.id);
+          if (runs?.length) {
+            result.push({ type: 'document_extraction', extractions: runs });
           }
         }
       }
