@@ -71,11 +71,22 @@ PREFILTER_RATIO = 0.5
 #   A preview plus a retrieval handle quietly degrades skill-following: nothing
 #   makes the model pull the rest before it acts on the head.
 #   The skill author bounds its size; no external payload does.
+# - ``project_files`` / ``knowledge_files`` (one tool, two voices, in
+#   ``builtin_tools/project_files_tool.py``) read a knowledge-base file the
+#   model named, one ``WORKSPACE_READ_MAX_BYTES`` (48 KB) page per call,
+#   continued with ``offset``: the tool already pages, so offloading a page
+#   pages it twice. A full page measured 9,149 tokens on Haiku 4.5
+#   (CountTokens, 2026-11-08). Offloaded, the result was worse than a preview:
+#   it is a ``json`` block, which the plugin stores as one ``json.dumps`` line
+#   with the file's newlines escaped, so line-pattern retrieval returned only
+#   the head of that line and the model could not reach a section past the
+#   preview (eval case ``project_kb.large_read_file_by_name``). A listing is
+#   bounded at 100 entries, under the gate either way.
 #
 # ``read_skill_file`` is deliberately NOT here: reference files run up to
 # 1 MiB of arbitrary text (schemas, data, inert scripts), which is exactly
 # the payload a preview plus pattern/line-range retrieval exists for.
-OFFLOAD_EXEMPT_TOOLS = frozenset({"document_read", "skills"})
+OFFLOAD_EXEMPT_TOOLS = frozenset({"document_read", "skills", "project_files", "knowledge_files"})
 
 
 def tool_result_offload_enabled() -> bool:
