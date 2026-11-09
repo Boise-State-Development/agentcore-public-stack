@@ -45,7 +45,8 @@ works: resolution, access, the mount gate, the constrained call, provenance, per
 
 ### 1.2 Two things the same run surfaced, neither in this scope
 
-* **The rows are not rendered.** The thread shows the model's prose summary and nothing
+* **The rows are not rendered.** *(Since fixed: structured extraction's PR-3 renders
+  them under the answer.)* The thread shows the model's prose summary and nothing
   else; the typed table reaches the SPA on the `document_extraction` event and in the
   `extractions` sidecar, and nothing reads either. The model, having no way to know,
   told the user the table "is already displayed in your chat files". Structured

@@ -624,6 +624,11 @@ export class StreamParserService {
       onSourceProvenance: (data) =>
         this.toolInsight.recordProvenance(state.sessionId, data),
 
+      // One document's structured-extraction rows. Same scoping as the
+      // verdicts above; N documents in one call arrive as N events.
+      onDocumentExtraction: (data) =>
+        this.toolInsight.recordExtraction(state.sessionId, data),
+
       onModelRetry: (data: ModelRetryEvent) => {
         // Not viewed-session-scoped on purpose: this signal is read per
         // session id, so a background conversation's retry stays with that

@@ -2,9 +2,9 @@
 
 **Status:** In development, behind `SOURCE_PROVENANCE_ENABLED` (off by default; only
 the literal `"true"` enables). Spec approved 2026-10-20. PR-1 (the pure module, its
-tests, the flag) and PR-2 (`verify_sources`, the SSE event, the `SRCV#` store and its
-replay) implemented; not yet dev-validated. PR-3 (the SPA render) not started, so the
-states are backend-observable only. Decisions recorded in §9.
+tests, the flag), PR-2 (`verify_sources`, the SSE event, the `SRCV#` store and its
+replay) and PR-3 (the SPA render, `SourceProvenanceComponent`) implemented, and on in
+dev on both sides. Off in prod. Decisions recorded in §9.
 **Author:** Phil Merrell (with Claude Code)
 **Date:** 2026-10-20
 **Targets:** `develop`

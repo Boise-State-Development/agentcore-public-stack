@@ -95,9 +95,9 @@ export interface FeatureFlags {
    * the typed schema was requested rather than guaranteed. Backend:
    * DOCUMENT_EXTRACT_ENABLED (the Runtime mounts `document_extract`, extracts,
    * verifies and emits `document_extraction`; app-api replays the `EXTR#`
-   * rows). In development, so `false` everywhere until a deployment turns both
-   * sides on. Carried from slice one so the two sides can land independently;
-   * the table render is slice three.
+   * rows). The SPA renders those rows as a table under the answer, with each
+   * value's provenance state. In development: on only in the deployed dev
+   * build, whose backend is on; off locally and in prod.
    */
   documentExtract: boolean;
 
