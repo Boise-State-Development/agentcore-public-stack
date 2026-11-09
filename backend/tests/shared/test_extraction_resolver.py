@@ -228,3 +228,79 @@ class TestResolution:
         assert resolve_field_set(records, "  nsf-solicitation  ").name == (
             "nsf-solicitation"
         )
+
+
+class TestNearMissNames:
+    """Two names a real model sent on dev where the set's own name was wanted.
+
+    Each cost a wasted tool round before the resolver accepted it. Both are
+    unambiguous, and neither widens what the turn can reach: only the turn's
+    own skills are searched.
+    """
+
+    @pytest.fixture
+    def store(self, monkeypatch) -> List[str]:
+        import apis.shared.extraction.resolver as resolver
+
+        read: List[str] = []
+
+        class Store:
+            def get(self, key: str) -> bytes:
+                read.append(key)
+                return GOOD.encode("utf-8")
+
+        monkeypatch.setattr(resolver, "get_skill_resource_store", lambda: Store())
+        return read
+
+    def test_the_skill_name_finds_its_only_set(self, store) -> None:
+        """The skill is what the user picked; the set inside it has another name."""
+        record = FakeRecord(
+            "nsf_solicitation_review_test", ["field-set.nsf-solicitation.md"]
+        )
+        record.display_name = "NSF Solicitation Review (test)"
+        resolved = resolve_field_set([record], "nsf-solicitation-review-test")
+        assert resolved.name == "nsf-solicitation"
+        assert store == ["skills/x/references/field-set.nsf-solicitation.md"]
+
+    def test_the_display_name_finds_it_too(self, store) -> None:
+        record = FakeRecord("grants_review", ["field-set.nsf-solicitation.md"])
+        record.display_name = "Grants Review"
+        assert resolve_field_set([record], "Grants Review").name == "nsf-solicitation"
+
+    def test_a_skill_with_several_sets_asks_which(self, store) -> None:
+        """Picking one would run a schema nobody chose."""
+        record = FakeRecord("grants", ["field-set.awards.md", "field-set.deadlines.md"])
+        with pytest.raises(FieldSetNotFound) as exc:
+            resolve_field_set([record], "grants")
+        assert exc.value.available == ["awards", "deadlines"]
+        assert "several field sets" in str(exc.value)
+        assert store == []
+
+    def test_only_that_skills_sets_are_offered(self, store) -> None:
+        records = [
+            FakeRecord("grants", ["field-set.awards.md", "field-set.deadlines.md"]),
+            FakeRecord("hr", ["field-set.offer-letter.md"]),
+        ]
+        with pytest.raises(FieldSetNotFound) as exc:
+            resolve_field_set(records, "grants")
+        assert "offer-letter" not in str(exc.value)
+
+    def test_the_set_name_punctuated_differently_resolves(self, store) -> None:
+        records = [FakeRecord("grants", ["field-set.nsf-solicitation.md"])]
+        assert resolve_field_set(records, "nsf_solicitation").name == "nsf-solicitation"
+        assert resolve_field_set(records, "NSF Solicitation").name == "nsf-solicitation"
+
+    def test_an_exact_set_name_wins_over_a_skill_of_the_same_name(self, store) -> None:
+        records = [
+            FakeRecord("awards", ["field-set.deadlines.md"]),
+            FakeRecord("other", ["field-set.awards.md"]),
+        ]
+        assert resolve_field_set(records, "awards").name == "awards"
+
+    def test_a_skill_the_turn_lacks_is_still_absent(self, store) -> None:
+        """Access stays structural: a skill name outside ``records`` is unknown."""
+        records = [FakeRecord("grants", ["field-set.awards.md"])]
+        with pytest.raises(FieldSetNotFound) as exc:
+            resolve_field_set(records, "confidential_review")
+        assert exc.value.available == ["awards"]
+        assert store == []
