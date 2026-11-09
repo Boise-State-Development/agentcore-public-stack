@@ -1,3 +1,127 @@
+# Release Notes — v1.35.0
+
+**Release Date:** November 8, 2026
+**Previous Release:** v1.34.0 (November 7, 2026)
+
+---
+
+## Highlights
+
+This release finishes two things 1.34.0 started. **Contract redlining in the Word tools now covers what a reviewer actually does to a contract**: `redline_word_document` inserts and deletes whole tracked paragraphs (numbering and formatting kept, nothing empty left behind after Accept All), can leave the changes it cannot place as ACTION NEEDED comments instead of failing the whole call, and a new `compare_word_documents` turns a counterparty's clean revised copy into a redline of the original. That replaces the 20,000-token redline engine a contract-review Agent was retyping on every run. All four ship under the existing `WORD_TRACKED_CHANGES_ENABLED` switch, with no new flag. **The release ledger is complete**: admins get read-only ledger routes and a **Releases** tab on `/admin/costs` that compares a version's cost, cache, tools and quality with the one before it, eval and smoke runs publish into the same ledger, and a terminal readout plus a `/release-readout` skill put the outgoing release's verdict in each release PR. One new SPA flag (`features.releaseLedger`, in development, default off). **No manual steps are required**, no GSI changes, no dependency changes. This is the first release from which prod can turn the ledger on (Deployment notes).
+
+---
+
+## Word tools: paragraph-level redlines, unplaced changes as comments, and document comparison
+
+A research-administration contract-review Agent carried its own python-docx redline engine, about 20K tokens, that the model retyped into `modify_word_document.python_code` on every run: roughly 20K output tokens and several minutes on Opus 5.5. It existed because `redline_word_document` could only change wording inside a paragraph that already existed, failed the whole call when one `find` missed, and had no answer for a clean copy that came back from the other side. This release builds each missing piece into the platform's own reviewed, stdlib-only engine (#1922, #1924, #1927, #1929; `docs/specs/word-tracked-changes.md` §3a–§3d).
+
+### Backend
+- **Whole-paragraph insertions** (#1922). A change can give `insert` (`"after"` / `"before"`) and `paragraphs` instead of `replace`. Each new paragraph copies the full `w:pPr` (style, `w:numPr`, indentation, spacing) of the paragraph its `like` names, or of the anchor, so a new numbered section or list item takes the next number; the body takes the dominant run's formatting and an optional `lead` keeps a bold inline heading bold. Runs sit in `w:ins` and the paragraph mark is a tracked insertion too, so Reject All leaves no empty paragraph. Every call now also checks that its edited paragraphs read exactly as before once its own revisions are rejected.
+- **Unplaced changes as comments** (#1924). An optional top-level `if_unplaced`: `"fail"` (the default) keeps the all-or-nothing call; `"comment"` turns each change the document defeats (wording not found or ambiguous, a span across paragraphs, a hyperlink, field, content control or revision in the way, an overlap) into an `ACTION NEEDED —` comment on the paragraph it most likely meant, saves the rest, and lists applied and commented changes apart. A 40-change review no longer pays for two or three full rounds of output tokens because one `find` missed.
+- **Whole-paragraph deletions** (#1927). `delete: "paragraph"`, optionally with `through` (wording in a later paragraph of the same container, nearest first), moves every run into `w:del` and marks each paragraph mark as a deletion, so Accept All removes the paragraphs and the list items or sections after them renumber instead of leaving "(b) [empty]". Where nothing follows (end of a cell or document, before a table) the deletion takes the previous paragraph's mark when the two are formatted alike, and refuses otherwise; a fully deleted cell keeps one empty paragraph, as Word requires. The self-check now compares paragraph marks and properties as well as wording, and no ACTION NEEDED comment ever lands in a paragraph whose mark the call deletes.
+- **`compare_word_documents(original_name, revised_name, author?, output_name?)`** (#1929). Writes the revised copy's differences into a copy of the **original** as tracked changes by `Counterparty` (or a name the user gives) and returns a bounded list of the changes (at most 40 lines / 4,000 characters) for the model to summarize. Each container is aligned with `difflib.SequenceMatcher` plus a similarity-weighted pairing; reworded paragraphs are marked word by word in the original's runs and formatting, removed and added paragraphs reuse the deletion and insertion writers above, tables with an unchanged grid are compared cell by cell, and what cannot be marked (a changed grid, an edit inside a hyperlink or field) becomes a comment. Documents that already carry tracked changes are refused. `redline()` was split into `_open_document` + `_write` so both engines share one writer and its guarantees: only changed paragraphs are re-serialized, every other package part is copied byte for byte, and an added accept-view check requires Accept All to read as the revised copy. Built in `_build_word_document_tools` beside `redline_word_document`, under the same condition.
+
+### Cost
+The four changes grow the Word family's tool spec by about 1,000 tokens (Bedrock CountTokens): `redline_word_document` 568 → 853 → 1,004 → 1,152, and `compare_word_documents` adds 419 (family 2,928 → 3,347). That is **one deliberate rewrite of the cached `toolConfig` prefix at deploy** for users with the Word tools, then a cache read each turn (about $0.00005 a turn on Haiku 4.5). Each spec digest is pinned. Against that, a contract review no longer makes the model write a ~20K-token program.
+
+### Why no flag
+CLAUDE.md now says when a change does not need a flag of its own (#1925): a finished, additive change to something already gated (a new optional argument, a mode whose default is unchanged, a new kind of change a tool can write) ships under the existing gate and is proven before merge instead, with a pinned spec digest, the token growth measured on dev and stated in the PR, and a check in the real app for anything that writes a file a user opens. Each of these four was opened in Word for Mac and LibreOffice. `WORD_TRACKED_CHANGES_ENABLED` remains the kill switch for all of them.
+
+### Test Coverage
+About 2,400 lines of new engine and tool tests: `test_docx_redline_paragraphs.py`, `test_docx_redline_unplaced.py`, `test_docx_redline_deletions.py`, `test_docx_compare.py`, and the inference-API tool tests `test_word_redline_paragraphs.py`, `test_word_redline_unplaced.py`, `test_word_compare_documents.py` (spec digests, both self-checks, refusal paths, numbering and renumbering).
+
+---
+
+## Release ledger: the Releases tab, admin API, quality rows and readout
+
+1.34.0 stamped every image and cost row with its version and build and rolled each row into `LEDGER#` counters. This release adds everything that reads them, so an operator can see whether a release quietly cost more or answered worse than the one before it, over every real turn rather than a smoke run (#1904, #1906, #1908, #1921, #1923, #1930; `docs/specs/release-ledger.md`).
+
+### Backend
+- **Admin API** (#1906). Read-only routes under `/admin/costs/ledger/*`, scope `admin.costs`: `versions`, `series` (by version, model, tool, agent or project, per version or per build), `tools` (with spec tokens from `tool_spec_tokens.json` and what the census does not measure), `agents`, `projects`, `quality`, `readout` (the §6.3 comparison bundle) and `export` (NDJSON of the raw ledger rows). `version` and `baseline` take `<appVersion>` or `<appVersion>#<build>`, because on dev the build is the unit. `require_ledger_admin` answers 401 / 403 **before** the flag's 404, whichever way the flag is set. Shared readers in `apis/shared/costs/`: `ledger_reader` (known partitions only; never scans, never reads `C#`), `ledger_readout`, `ledger_latency` (TTFT p50 / p90 from CloudWatch at read time, `null` under 20 samples, cached for an hour) and `ledger_provenance` (the `SRCV#` join, states only). Caveats are `{code, message}` from a fixed set, and the content-policy test walks every response and export line for ids, quotes and arguments. `/admin/feedback/fleet` gains a `version` arm.
+- **Quality rows** (#1908). `eval_harness.py score --publish` writes one `LEDGER#EVAL` row (the family table, gate, judge means, exact cost and calls) and `smoke_turns.py --publish --prefix <p>` one `LEDGER#SMOKE` row (pass / fail / skip / observed, first-token median, second-turn cache read and write, cost), keyed by the Runtime build that served the run's own `C#` rows. A publish is one idempotent `PutItem`, refused by a content guard if any field falls outside its allowlist, and best-effort: a failed write never changes either script's exit status. `smoke_turns.py --auth eval-user` signs in as the user `seed_eval_user.py` seeds. Row builders in `apis/shared/costs/ledger_publish.py`.
+- **No double count on backfill** (#1904). A `C#` row's `timestamp` is when the call ran, which precedes `firstLiveAt`, so the first live turn's rows sat just before the backfill's ceiling and a run without `--to` would have counted them twice. While live writes are on, `_store_message_metadata_cloud` sets `ledgered: true` in the same `put_item` (decided by `live_ledger_writes_on()`, the same two conditions as the write), and `release_ledger_backfill.py` never adds a marked row while still reconciling it against `ROLLUP#DAILY`.
+- **Readout script** (#1923, #1930). `backend/scripts/release_readout.py` writes a caveats-first `readout.md` and `readout.json` and computes no KPI or delta itself: it calls the readout route's own handler in process against a deployment's tables (`--profile/--prefix`), or fetches a deployed route, renders a saved response, or works offline from an export. Agents and projects are labelled by rank so the output can go in a public PR body. The `/release-readout` skill reads it in a fixed order (windows, caveats, mix shift, numbers), flags a regression only when `n` clears its floor and no caveat explains it, points each KPI at where to look next, and ends with ship, watch or investigate. The release skill now asks for the outgoing release's readout in each release PR.
+
+### Frontend
+- **Releases tab on `/admin/costs`** (#1921, SPA `features.releaseLedger`). A version strip (one chip per version, or per build on dev), a compare header that shows the mix-shift warning and every caveat before any number, KPI cards reading `baseline → candidate (Δ)` with their `n` (a side under its floor shows "—"), `CostTrendsChart` with version bands, sortable tools / agents / projects tables, a quality panel (eval table, smoke counts, outcome shares, provenance `quote_unsupported` share, thumbs last) with **no composite quality score anywhere**, and JSON / NDJSON exports. The tab formats what the readout returns and computes nothing. State lives in a root `ReleaseLedgerStateService` with generation-numbered loads, so a slow older readout never overwrites a newer one.
+
+### Infrastructure
+- One IAM statement, `ReleaseLedgerMetricsRead` (`cloudwatch:GetMetricData`, which has no resource-level permissions), on the **existing** app-api managed policy, only while `CDK_RELEASE_LEDGER_ENABLED` is on. No new resources. `release-ledger.test.ts` pins exactly one added statement; `platform-ceilings` (everything on) stays under the 6,144-character policy limit. `backend/evals/tool_spec_tokens.json` is copied into the app-api image and its hash manifest.
+
+### Test Coverage
+About 2,000 lines of new tests: `tests/shared/test_ledger_readers.py`, `test_ledger_publish.py`, `app_api/admin/costs/test_ledger_routes.py`, `test_release_readout.py`, `test_smoke_turns_publish.py`, the backfill mark tests, and SPA specs for the tab's utilities and panels (143 tests across 13 files under `src/app/admin/costs`).
+
+---
+
+## 🐛 Bug fixes
+
+- **The release-ledger backfill could count a live turn twice** at the cutover, because a cost row's timestamp precedes `firstLiveAt`; live-ledgered rows are now marked and skipped (#1904). Dev was gap-filled by hand with `--to` before the fix; prod has not been backfilled.
+
+## 🔒 Security
+
+No CVE patches. The ledger routes and exports are content-free by test: no session, user, message or tool-use ids, quotes or arguments, and the readout script labels agents and projects by rank unless `--show-ids` is passed locally (#1906, #1923).
+
+## ⚠️ Breaking changes
+
+None. No API contract changes, removals, migrations or GSI operations. `redline_word_document` keeps its existing behaviour when none of the new arguments are given (`if_unplaced` defaults to `"fail"`).
+
+## 🏗️ Infrastructure
+
+- **IAM:** `ReleaseLedgerMetricsRead` on the app-api policy while `CDK_RELEASE_LEDGER_ENABLED` is on (#1906). Nothing at defaults.
+- No new tables, GSIs, queues, Lambdas, alarms, SSM parameters or environment variables; `gsi-inventory.json` is unchanged. Nothing new is written to the AgentCore Runtime's environment.
+
+## 🔧 CI/CD
+
+- **Nightly** (`.github/workflows/nightly.yml`): the dev eval job now also runs the turn smoke matrix as the eval user (`scripts/nightly/turn-smoke.sh`), non-blocking, and both publish into dev's ledger where `CDK_RELEASE_LEDGER_ENABLED` is on; the summary gains a "Turn Smoke (dev)" row. The ephemeral e2e smoke run does not publish, since its ledger is deleted with the stack (#1908).
+
+## 📦 Dependencies
+
+None. Every manifest and lockfile carries only the version bump.
+
+## 🧪 Test coverage
+
+4,600+ lines of new tests across 31 files, split between the Word engine and tools (about 2,400) and the release ledger's readers, routes, publish path, readout and Releases tab (about 2,000); details in each spotlight.
+
+## 📚 Docs
+
+- `docs/specs/word-tracked-changes.md` §3a–§3d (insertions, unplaced comments, deletions, comparison) and §4a–§4d (why each has no flag).
+- `docs/specs/eval-harness.md` §15, phase 2 coverage across surfaces (65 → 138 cases, about $8.20 per judged release pass on Haiku 4.5), and §16, the phase 3 Evaluations page (#1926).
+- `docs/specs/release-ledger.md` §5.4 (quality rows), §6.5 (the readout), §7.1 (dev gap-fill) and §7.2 (the prod runbook); `docs/testing/smoke-regression.md` documents the eval-user target and the nightly smoke step.
+- CLAUDE.md: when a change does not need its own feature flag (#1925), and "verify a release against the ledger, not a smoke run".
+- Docs-site `configuration/feature-flags.md`: the ledger row names `features.releaseLedger` and the readout.
+
+## 🚩 Feature flags
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| SPA `features.releaseLedger` (backend: the existing `RELEASE_LEDGER_ENABLED` / `CDK_RELEASE_LEDGER_ENABLED`, from 1.34.0) | **OFF** (in development): `false` in `environment.ts` and `environment.production.ts`, `true` in `environment.development.ts` | SPA build for the tab; app-api serves `/admin/costs/ledger/*` (404 while off) and writes the ledger on app-api and the AgentCore Runtime (Runtime copy only while on). Keep both sides the same, or the tab shows and its API 404s | Feature switch once finished, permanent | The **Releases** tab on `/admin/costs`, comparing a version or build with the one before it |
+
+The Word changes add no flag: they ship under the existing `WORD_TRACKED_CHANGES_ENABLED` (default on since 1.28.0; `=false` turns off every Word redline and compare tool).
+
+**Default changes:** none. **Retired:** none. **Still opt-in, on in our prod** (#1798): `sessionRewind` and `sessionFork` (promote to default-on after two weeks in production; neither flipped since 1.32.0), `sessionPrewarm` (waits on the Runtime V2 readout of what turnless warms cost), `attachmentKb` and `CONVERSATION_INDEX_ENABLED` (a cost and retention decision each deployment makes), `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED` (on in prod since 2026-11-05; promote after two weeks), and, turned on in prod with 1.34.0 and each to promote after two weeks there with no flip, `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`. `RELEASE_LEDGER_ENABLED` / `releaseLedger` and `WORD_SKILL_SCRIPTS_ENABLED` stay on in our `development` environment only.
+
+## 🛠️ Manual steps
+
+### Backfill
+
+None required, and no new `backfill_*.py`. The optional release-ledger history backfill is unchanged in shape from 1.34.0, but now skips live-marked rows (#1904); for prod, follow the runbook below rather than the 1.34.0 note.
+
+### Re-seed
+
+None. `seed_bootstrap_data.py` is unchanged.
+
+### Environment variables to set
+
+None required. **Optional, prod only, after this release is live there:** turning the ledger on in prod is a deliberate, one-evening procedure (`docs/specs/release-ledger.md` §7.2): confirm prod's `/health` reports 1.35.0 and that `git grep -c ledgered origin/main -- backend/src/apis/shared/sessions/ledger_rollups.py` is non-zero, backfill history up to a time `T0` with the flag still off, set `CDK_RELEASE_LEDGER_ENABLED=true` on the `production` GitHub environment and run `platform.yml`, wait for `firstLiveAt`, then gap-fill from `T0` with no `--to` and reconcile against `ROLLUP#DAILY`. Set `releaseLedger: true` in `environment.production.ts` in the same change so the tab appears with its API. Do not turn it on in prod on 1.34.0: it has no `ledgered` mark, so a live write there would leave rows the gap-fill cannot tell from uncounted ones.
+
+## 🚀 Deployment notes
+
+Standard order: `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`. At defaults the Platform deploy changes nothing (the only new IAM statement exists only while the ledger flag is on), and every image rebuilds because the version is in each hash manifest. For users with the Word tools, the first turn after the deploy rewrites the cached `toolConfig` prefix once (about 1,000 more spec tokens), which is expected and shows as a `toolConfigHash` change on that call's `C#` row. Nothing else is required; see Feature flags and Manual steps for the optional prod ledger enablement.
+
+**Ledger readout of the outgoing release** goes in the release PR body, from dev, since the ledger is not on in prod yet.
+
+---
+
 # Release Notes — v1.34.0
 
 **Release Date:** November 7, 2026
