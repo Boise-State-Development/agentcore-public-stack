@@ -5,6 +5,7 @@
   "families": [
     "tool_selection",
     "document_qa",
+    "attachment_tools",
     "retention",
     "instruction_following",
     "refusal",
@@ -203,6 +204,139 @@
       "passes": 3,
       "samples": 3,
       "answer": "Perfect! I found the information. According to the member handbook:\n\n**12**"
+    },
+    "document_qa.word_table_blank_cell_column": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "6"
+    },
+    "document_qa.word_tracked_change_current_value": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$58"
+    },
+    "document_qa.native_pdf_weekday_shuttle": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "21:40"
+    },
+    "document_qa.html_semester_permit_fee": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$118"
+    },
+    "document_qa.two_attachments_pick_the_right_year": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$240"
+    },
+    "document_qa.inline_budget_overflow_by_reference": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "RX-4417"
+    },
+    "document_qa.follow_up_turn_same_document": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "19:15"
+    },
+    "attachment_tools.image_chart_value": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "1,315"
+    },
+    "attachment_tools.image_screenshot_error_code": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "0x80070AB3"
+    },
+    "attachment_tools.two_images_compared": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Plums"
+    },
+    "attachment_tools.image_with_document": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "STEP-K9"
+    },
+    "attachment_tools.spreadsheet_category_total": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "4815"
+    },
+    "attachment_tools.spreadsheet_filtered_count": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "3"
+    },
+    "attachment_tools.spreadsheet_second_sheet": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "AP-77"
+    },
+    "attachment_tools.csv_max_reading": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "41.7"
+    },
+    "attachment_tools.deck_slide_fact": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "14"
+    },
+    "attachment_tools.deck_speaker_notes": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "7.5"
+    },
+    "attachment_tools.mixed_image_and_spreadsheet": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**Summary:**\n\n1. **2024 Fall Enrollment:** 1,315 students (from the enrollment chart)\n2. **Total Amount of Travel lines on the Expenses sheet:** $4,815.00\n\nThe Travel expenses consist of three line items:\n- EXP-0040: $1,210\n- EXP-0042: $905\n- EXP-0045: $2,700"
+    },
+    "attachment_tools.mixed_deck_and_pdf": {
+      "family": "attachment_tools",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Based on the attached files:\n\n- **Pilot sites:** The deck lists **14 pilot sites** this quarter (with two sites joining in March).\n\n- **Last weekday shuttle departure:** According to the shuttle timetable, the last weekday shuttle leaves at **21:40** from the Library stop."
     },
     "retention.project_code_recalled": {
       "family": "retention",

@@ -427,5 +427,191 @@
       "handbook"
     ],
     "notes": "Word handbook, literal wording. Question docx-fines."
+  },
+  {
+    "id": "document_qa.word_table_blank_cell_column",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Using the table in the attached inventory: what is the Quantity for microscopes? Reply with just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "6"
+      ],
+      "forbidden": [
+        "14"
+      ]
+    },
+    "files": [
+      "lab_equipment_inventory.docx"
+    ],
+    "notes": "Word table whose Benches cell is blank for microscopes. A renderer that drops blank cells shifts Quantity one column left, and the answer then reads the Spare parts count (14). Documents-as-text renders it with docx_markdown (CONVERSE_DOCUMENTS_AS_TEXT_ENABLED, on in dev)."
+  },
+  {
+    "id": "document_qa.word_tracked_change_current_value",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "The attached travel policy has tracked changes. With the changes accepted, what is the dinner allowance per day? Reply with just the amount."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "$58",
+        "58"
+      ],
+      "forbidden": [
+        "52"
+      ]
+    },
+    "files": [
+      "travel_policy_redline.docx"
+    ],
+    "notes": "52 is struck and 58 inserted; the model reads them as [deleted: 52][inserted: 58] (WORD_TRACKED_CHANGES_ENABLED, default on)."
+  },
+  {
+    "id": "document_qa.native_pdf_weekday_shuttle",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "According to the attached timetable, when does the last weekday shuttle leave the Library stop? Reply with just the time."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "21:40"
+      ],
+      "forbidden": [
+        "19:15"
+      ]
+    },
+    "files": [
+      "shuttle_schedule.pdf"
+    ],
+    "notes": "A PDF, which stays a native document block under documents-as-text. 19:15 is the weekend departure."
+  },
+  {
+    "id": "document_qa.html_semester_permit_fee",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "What does the attached notice say a semester parking permit costs? Reply with just the amount."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "$118",
+        "118"
+      ],
+      "forbidden": [
+        "181"
+      ]
+    },
+    "files": [
+      "parking_notice.html"
+    ],
+    "notes": "HTML, rendered as text through html_markdown under documents-as-text. $181 is the annual permit, in the same sentence."
+  },
+  {
+    "id": "document_qa.two_attachments_pick_the_right_year",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Two rate sheets are attached. What day rate does the 2026 sheet give for the Lakeview room? Reply with just the amount."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "$240",
+        "240"
+      ],
+      "forbidden": [
+        "210"
+      ]
+    },
+    "files": [
+      "room_rates_2025.html",
+      "room_rates_2026.html"
+    ],
+    "notes": "The same table in two files; $210 is the 2025 rate. Catches an answer from the wrong attachment."
+  },
+  {
+    "id": "document_qa.inline_budget_overflow_by_reference",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Three parts of the records archive handbook are attached. What retention code do records under this policy carry? Reply with just the code."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "RX-4417"
+      ],
+      "tools": {
+        "must_call": [
+          "document_read"
+        ]
+      }
+    },
+    "files": [
+      "overflow_part_a.pdf",
+      "overflow_part_b.pdf",
+      "overflow_part_c.pdf"
+    ],
+    "notes": "Each part is about 2.45 MB of padding (a noise image, not text), so parts A and B fill the 7 MB inline budget and part C, which holds the code, goes by reference and is read with document_read (#1912). Before #1912 it was dropped with a footnote the model relayed (the DRED review's 4 MB PDF)."
+  },
+  {
+    "id": "document_qa.follow_up_turn_same_document",
+    "family": "document_qa",
+    "turns": [
+      {
+        "prompt": "Summarize the attached shuttle timetable in one sentence."
+      },
+      {
+        "prompt": "And what time is the last departure from the Library stop on weekends? Reply with just the time."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "19:15"
+      ],
+      "forbidden": [
+        "21:40"
+      ]
+    },
+    "files": [
+      "shuttle_schedule.pdf"
+    ],
+    "notes": "The PDF arrives on turn 1; turn 2 must still read it from the restored history."
   }
 ]

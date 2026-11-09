@@ -86,6 +86,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from apis.shared.evals.cases import FAMILIES, CaseError, EvalCase, load_cases, required_grants  # noqa: E402
+from eval_fixtures.build import GENERATED  # noqa: E402
+from eval_fixtures.build import build as build_fixture  # noqa: E402
 from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
     ReportError,
@@ -260,7 +262,7 @@ async def sign_in_eval_user(base_url: str, prefix: str, region: str) -> str:
 
 def cmd_cases(args: argparse.Namespace) -> int:
     try:
-        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir))
+        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
     except CaseError as exc:
         print(f"invalid case set: {exc}", file=sys.stderr)
         return 2
@@ -345,7 +347,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
     try:
-        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir))
+        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
     except CaseError as exc:
         print(f"invalid case set: {exc}", file=sys.stderr)
         return 2
@@ -372,7 +374,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
     from smoke_turns import resolve_runtime_env
 
     from apis.shared.evals.execute import EVAL_TRIGGER, OAuthRequiredError, run_sample
-    from apis.shared.evals.fixtures import FixtureError, load_fixture, register_upload
+    from apis.shared.evals.fixtures import FixtureError, load_fixture, mime_type_for, register_upload
     from apis.shared.harness.auth import CognitoRefreshBearerAuth, HeadlessAuthError
     from apis.shared.harness.runner import run_agent_headless
 
@@ -412,7 +414,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
         )
 
     async def register_fixture(session_id: str, filename: str) -> str:
-        data, mime_type = load_fixture(fixtures_dir, filename)
+        if filename in GENERATED:
+            data, mime_type = build_fixture(filename), mime_type_for(filename)
+        else:
+            data, mime_type = load_fixture(fixtures_dir, filename)
         return await register_upload(args.user_id, session_id, filename, mime_type, data)
 
     try:
@@ -955,7 +960,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
         meta = _read_meta(out)
-        cases = load_cases(Path(args.cases_dir), fixtures_dir=Path(args.fixtures_dir))
+        cases = load_cases(Path(args.cases_dir), fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
         baseline = build_baseline(
             read_rows(out / RESULTS_FILE), cases=cases, meta=meta,
             judgements=read_rows(out / JUDGEMENTS_FILE),

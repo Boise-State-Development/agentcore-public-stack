@@ -24,6 +24,7 @@ from apis.shared.evals.judges import EVALUATOR_CLASSES
 FAMILIES: Tuple[str, ...] = (
     "tool_selection",
     "document_qa",
+    "attachment_tools",
     "retention",
     "instruction_following",
     "refusal",
@@ -36,6 +37,23 @@ JUDGED_FAMILIES = frozenset({"general_chat"})
 JUDGE_EVALUATORS = frozenset(EVALUATOR_CLASSES)
 
 _ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
+
+#: Tools a case may require that are not catalog ids, and the catalog id that
+#: provisions each (``apis/shared/tools/injected.py``). ``None`` means the turn
+#: provisions it itself: ``document_read`` is injected whenever a turn carries
+#: a document. Without this a case requiring ``read_powerpoint_presentation``
+#: would fail the reachability check and ask the eval role for a grant no
+#: catalog row has.
+PROVISIONED_TOOLS: Dict[str, Optional[str]] = {
+    "document_read": None,
+    "list_powerpoint_presentations": "create_powerpoint_presentation",
+    "read_powerpoint_presentation": "create_powerpoint_presentation",
+}
+
+
+def grant_for_tool(name: str) -> Optional[str]:
+    """The catalog id that makes ``name`` reachable, or ``None`` when no grant is needed."""
+    return PROVISIONED_TOOLS[name] if name in PROVISIONED_TOOLS else name
 
 
 class CaseError(ValueError):
@@ -265,7 +283,10 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         raise CaseError(f"{where}: a gating family's case must declare at least one deterministic check")
 
     if run.enabled_tools is not None and expect.tools is not None:
-        unreachable = sorted(set(expect.tools.must_call) - set(run.enabled_tools))
+        unreachable = sorted(
+            name for name in expect.tools.must_call
+            if grant_for_tool(name) is not None and grant_for_tool(name) not in run.enabled_tools
+        )
         if unreachable:
             raise CaseError(f"{where}: must_call {unreachable} is not in run.enabled_tools")
     if run.enabled_skills is not None and expect.skill is not None:
@@ -312,12 +333,15 @@ def load_cases(
     *,
     families: Optional[Sequence[str]] = None,
     fixtures_dir: Optional[Path] = None,
+    generated: Iterable[str] = (),
 ) -> List[EvalCase]:
     """Every case under ``cases_dir`` (optionally only ``families``), in family then file order.
 
     Ids must be unique across the whole set. With ``fixtures_dir``, every file a
-    case names must exist there.
+    case names must exist there or be one of ``generated``, the fixtures the
+    harness builds rather than reads (``scripts/eval_fixtures``).
     """
+    generated = frozenset(generated)
     wanted = set(families) if families else None
     if wanted:
         unknown = sorted(wanted - set(FAMILIES))
@@ -338,7 +362,7 @@ def load_cases(
     if fixtures_dir is not None:
         for case in cases:
             for name in case.files:
-                if not (fixtures_dir / name).is_file():
+                if name not in generated and not (fixtures_dir / name).is_file():
                     raise CaseError(f"{case.id}: fixture file '{name}' not found in {fixtures_dir}")
     return cases
 
@@ -350,7 +374,7 @@ def required_grants(cases: Iterable[EvalCase]) -> Dict[str, List[str]]:
     for case in cases:
         tools.update(case.run.enabled_tools or ())
         if case.expect.tools is not None:
-            tools.update(case.expect.tools.must_call)
+            tools.update(g for g in map(grant_for_tool, case.expect.tools.must_call) if g)
         skills.update(case.run.enabled_skills or ())
         if case.expect.skill is not None:
             skills.update(case.expect.skill.loads)

@@ -13,7 +13,9 @@ import pytest
 
 from apis.shared.evals.cases import (
     FAMILIES,
+    PROVISIONED_TOOLS,
     CaseError,
+    grant_for_tool,
     load_cases,
     parse_case,
     required_grants,
@@ -21,7 +23,6 @@ from apis.shared.evals.cases import (
 
 BACKEND = Path(__file__).resolve().parents[4]
 CASES_DIR = BACKEND / "evals" / "cases"
-FIXTURES_DIR = BACKEND / "evals" / "fixtures"
 
 
 def _case(**overrides):
@@ -38,8 +39,10 @@ def _case(**overrides):
 
 
 class TestCommittedGoldenSet:
-    def test_every_committed_case_loads_with_its_fixtures(self):
-        cases = load_cases(CASES_DIR, fixtures_dir=FIXTURES_DIR)
+    def test_every_committed_case_loads(self):
+        # That every fixture a case names exists, committed or generated, is
+        # pinned in tests/test_eval_fixtures.py, which can import the builder.
+        cases = load_cases(CASES_DIR)
         assert len(cases) >= 40
         assert len({c.id for c in cases}) == len(cases)
 
@@ -60,6 +63,44 @@ class TestCommittedGoldenSet:
         grants = required_grants(load_cases(CASES_DIR))
         assert "calculator" in grants["tools"]
         assert set(grants["skills"]) == {"web_research", "skill_creator"}
+
+    def test_required_grants_hold_catalog_ids_never_provisioned_tool_names(self):
+        tools = set(required_grants(load_cases(CASES_DIR))["tools"])
+        assert not tools & set(PROVISIONED_TOOLS), "a provisioned tool name is not a catalog id the role can grant"
+        assert "create_powerpoint_presentation" in tools
+
+
+class TestProvisionedTools:
+    """Tools a case requires that a gate or another catalog id provisions."""
+
+    def test_a_deck_tool_is_reachable_through_the_id_that_provisions_it(self):
+        raw = _case(run={"enabled_tools": ["create_powerpoint_presentation"]},
+                    expect={"contains_any": ["14"], "tools": {"must_call": ["read_powerpoint_presentation"]}})
+        assert parse_case(raw, family="tool_selection").expect.tools.must_call == ("read_powerpoint_presentation",)
+
+    def test_without_that_id_it_is_unreachable(self):
+        raw = _case(run={"enabled_tools": []},
+                    expect={"contains_any": ["14"], "tools": {"must_call": ["read_powerpoint_presentation"]}})
+        with pytest.raises(CaseError, match="not in run.enabled_tools"):
+            parse_case(raw, family="tool_selection")
+
+    def test_document_read_needs_no_grant(self):
+        raw = _case(run={"enabled_tools": []},
+                    expect={"contains_any": ["x"], "tools": {"must_call": ["document_read"]}})
+        case = parse_case(raw, family="tool_selection")
+        assert grant_for_tool("document_read") is None
+        assert required_grants([case])["tools"] == []
+
+    def test_a_catalog_tool_grants_itself(self):
+        assert grant_for_tool("analyze_spreadsheet") == "analyze_spreadsheet"
+
+
+class TestGeneratedFixtures:
+    def test_a_generated_name_satisfies_the_fixture_check(self, tmp_path):
+        (tmp_path / "tool_selection.json").write_text(json.dumps([{**_case(), "files": ["built.png"]}]))
+        with pytest.raises(CaseError, match="not found"):
+            load_cases(tmp_path, fixtures_dir=tmp_path)
+        assert len(load_cases(tmp_path, fixtures_dir=tmp_path, generated=["built.png"])) == 1
 
 
 class TestParseCase:
