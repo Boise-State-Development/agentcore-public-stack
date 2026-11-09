@@ -142,7 +142,7 @@ removing it).
 | `BROWSER_TOOL_ENABLED` | ON | Feature | usage-based | The `browse_web` tool itself (AgentCore Browser sessions bill while active) |
 | `WORKSPACE_TOOLS_ENABLED` | ON | Feature | none | `workspace_list` / `read` / `write` file tools |
 | `DOCUMENT_READ_ENABLED` | ON | Feature | none | `document_read` tool for sessions carrying a readable attachment |
-| `ATTACHMENT_TOOL_AUTOENABLE_ENABLED` | ON | Feature | none | Auto-injects spreadsheet-analysis tools when a spreadsheet is attached |
+| `ATTACHMENT_TOOL_AUTOENABLE_ENABLED` | ON | Feature | none | Auto-injects spreadsheet-analysis tools when a spreadsheet is attached, and the PowerPoint tools when a .pptx deck is, for users whose roles grant them |
 | `ATTACHMENT_TURN_GUARD_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | none | Enforces per-message file count + inline-byte budget |
 | `ADMIN_ALWAYS_ON_TOOLS_ENABLED` | ON | Feature | none | Unions admin-flagged `alwaysOn` tools into every turn (inert with no data) |
 | `COST_DIAGNOSTICS_ENABLED` | ON | Feature | none | Content-free behavioral counters for the admin session profile |
