@@ -432,9 +432,13 @@ export class CostTrendsChartComponent {
  * adjacent builds stay distinguishable, with the band's label at the top when
  * it fits. The x axis is a category axis of the points' dates, so a band's
  * edges are its first and last date's ticks, widened by half a step.
+ *
+ * Exported for the Evaluations page's per-run charts (eval-harness spec §16.3),
+ * whose x axis is one category per run: several runs on one date sit inside
+ * that date's band, so the same plugin shades them.
  */
-function versionBandsPlugin(
-  points: readonly TrendChartPoint[],
+export function versionBandsPlugin(
+  points: readonly { date: string }[],
   bands: readonly TrendChartBand[],
   isDarkMode: boolean,
 ): Plugin<'line'> {
@@ -453,6 +457,9 @@ function versionBandsPlugin(
       const step = dates.length > 1 ? x.getPixelForValue(1) - x.getPixelForValue(0) : area.right - area.left;
       const ctx = chart.ctx;
       ctx.save();
+      // Two builds deployed on one day share that day's slot, so their bands
+      // overlap; a label that would overprint the one before it is left off.
+      let labelEnd = -Infinity;
       bands.forEach((band, i) => {
         const first = dates.findIndex(d => d >= band.from);
         let last = -1;
@@ -469,9 +476,10 @@ function versionBandsPlugin(
         ctx.fillRect(left, area.top, right - left, area.bottom - area.top);
         ctx.font = '500 11px ui-sans-serif, system-ui, sans-serif';
         const width = ctx.measureText(band.label).width;
-        if (width + 8 <= right - left) {
+        if (width + 8 <= right - left && left + 4 >= labelEnd) {
           ctx.fillStyle = text;
           ctx.fillText(band.label, left + 4, area.top + 12);
+          labelEnd = left + 4 + width + 8;
         }
       });
       ctx.restore();

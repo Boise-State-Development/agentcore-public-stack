@@ -40,6 +40,7 @@ import {
   heroBookmark,
   heroSquares2x2,
   heroServerStack,
+  heroBeaker,
 } from '@ng-icons/heroicons/outline';
 
 interface NavItem {
@@ -111,6 +112,7 @@ interface NavGroup {
       heroBookmark,
       heroSquares2x2,
       heroServerStack,
+      heroBeaker,
     }),
   ],
   host: { class: 'flex min-h-0 flex-1 flex-col' },
@@ -189,6 +191,11 @@ export class AdminNav implements OnInit {
         // against the cost rows they join to, and there is no separate signal
         // to delegate independently.
         { label: 'Feedback', icon: 'heroHandThumbDown', route: '/admin/feedback', scope: 'admin.costs' },
+        // Evaluations (eval-harness spec §16), only in a build with the release
+        // ledger on: it reads the ledger's eval rows, under the ledger's scope.
+        ...(this.features.releaseLedger
+          ? [{ label: 'Evaluations', icon: 'heroBeaker', route: '/admin/evaluations', scope: 'admin.costs' as const }]
+          : []),
         { label: 'Quotas', icon: 'heroScale', route: '/admin/quota', scope: 'admin.quota' },
         // Quota requests (quota-requests spec §6), only in a build with the
         // feature on. Its own scope, so an approver can hold the queue without

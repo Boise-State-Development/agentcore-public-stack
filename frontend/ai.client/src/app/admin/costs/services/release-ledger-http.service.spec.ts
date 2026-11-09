@@ -51,6 +51,16 @@ describe('ReleaseLedgerHttpService', () => {
     req.flush({});
   });
 
+  it('reads the eval runs for a range, sending only the filters chosen', () => {
+    service.getEvals({ from: '2026-10-10', to: '2026-11-08', modelId: 'us.anthropic.claude-haiku-5-5', unit: 'build' }).subscribe();
+    const req = http.expectOne(r => r.url === `${base}/evals`);
+    expect(req.request.params.get('from')).toBe('2026-10-10');
+    expect(req.request.params.get('modelId')).toBe('us.anthropic.claude-haiku-5-5');
+    expect(req.request.params.get('unit')).toBe('build');
+    expect(req.request.params.has('track')).toBe(false);
+    req.flush({});
+  });
+
   it('lets the endpoint pick the comparison when nothing is chosen', () => {
     service.getReadout().subscribe();
     http.expectOne(`${base}/readout`).flush({});

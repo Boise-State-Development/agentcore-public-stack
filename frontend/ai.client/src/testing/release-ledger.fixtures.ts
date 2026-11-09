@@ -81,6 +81,9 @@ export function readoutFixture(overrides: Partial<LedgerReadout> = {}): LedgerRe
         candidate: [
           {
             startedAt: '2026-11-07T16:14:56.397504Z',
+            appVersion: '1.33.0',
+            build: 'd5ead33e05f3e229',
+            track: 'nightly',
             modelId: 'us.anthropic.claude-haiku-5-5',
             target: 'dev',
             gateFailed: false,

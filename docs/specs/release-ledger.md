@@ -158,6 +158,7 @@ Verified on dev, 2026-11-07, from the branch: a `tool_selection` eval run (9/9, 
 | `GET /admin/costs/ledger/quality?from&to` | Per version: eval rows, smoke rows, thumbs arm (with `n`), retry count, empty-answer share, provenance share, forced compactions, outcome shares |
 | `GET /admin/costs/ledger/readout?version&baseline?&days=7` | The comparison bundle of §6.3 |
 | `GET /admin/costs/ledger/export?from&to` | NDJSON of the raw ledger rows for the range, for offline work |
+| `GET /admin/costs/ledger/evals?from&to&modelId?&track?&unit=build` | `LEDGER#EVAL` rows newest first, with the models and tracks in range and the version bands, for the Evaluations page (`eval-harness.md` §16) |
 
 TTFT percentiles come from one `cloudwatch:GetMetricData` call per request over `AgentCoreStack/TurnLatency` and the client and probe metrics, cached for an hour in the existing config-cache pattern; the IAM statement is added to app-api's role (no new resource). Everything else is DynamoDB queries: `LEDGER#VERSION` is one range query; the month-partitioned families are one query per month in range.
 

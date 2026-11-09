@@ -143,6 +143,30 @@ export interface LedgerEvalFamily {
   gating?: boolean;
 }
 
+/**
+ * One case's outcome on a `LEDGER#EVAL` row (eval-harness spec §16 D20): a
+ * synthetic case id's majority outcome, counts and closed failure codes.
+ * `base` is the baseline's outcome, absent for a case the baseline lacks.
+ */
+export interface LedgerEvalCase {
+  pass: boolean;
+  passes: number;
+  samples: number;
+  base?: boolean;
+  codes?: string[];
+  names?: string[];
+}
+
+/** A judge's mean for one family and evaluator, with the baseline's. */
+export interface LedgerEvalJudgeMean {
+  n: number;
+  base: number;
+  run: number;
+}
+
+/** Which pass a run was; `untracked` is a row published before `--track` existed. */
+export type LedgerEvalTrack = 'nightly' | 'release' | 'manual' | 'untracked';
+
 export interface LedgerEvalRun {
   startedAt?: string;
   appVersion?: string;
@@ -156,6 +180,33 @@ export interface LedgerEvalRun {
   samples?: number;
   costUsd?: number;
   durationS?: number;
+  calls?: number;
+  track?: Exclude<LedgerEvalTrack, 'untracked'>;
+  cases?: Record<string, LedgerEvalCase>;
+  judgeMeans?: Record<string, Record<string, LedgerEvalJudgeMean>>;
+  judgeModel?: string;
+  otherBuildCalls?: number;
+}
+
+/** `GET /admin/costs/ledger/evals` (eval-harness spec §16 D21): runs newest first. */
+export interface LedgerEvalsResponse {
+  from: string;
+  to: string;
+  modelId: string | null;
+  track: LedgerEvalTrack | null;
+  unit: LedgerUnitKind;
+  runs: LedgerEvalRun[];
+  /** Every model with a run in the range, before the model and track filters, most runs first. */
+  models: { modelId: string; runs: number }[];
+  /** Runs per track in the range, before the filters. */
+  tracks: Partial<Record<LedgerEvalTrack, number>>;
+  bands: LedgerVersionBand[];
+}
+
+export interface LedgerEvalsOptions extends LedgerRangeOptions {
+  modelId?: string;
+  track?: LedgerEvalTrack;
+  unit?: LedgerUnitKind;
 }
 
 /** A `LEDGER#SMOKE` row as published (PR-5). */
