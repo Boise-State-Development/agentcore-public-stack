@@ -7,6 +7,7 @@
     GET /admin/costs/ledger/projects   the projects table
     GET /admin/costs/ledger/quality    per-version quality panel
     GET /admin/costs/ledger/readout    candidate vs baseline (§6.3)
+    GET /admin/costs/ledger/evals      LEDGER#EVAL rows for the Evaluations page (eval-harness §16)
     GET /admin/costs/ledger/export     NDJSON of the raw ledger rows
 
 Scope ``admin.costs``, read-only. **404 while ``RELEASE_LEDGER_ENABLED`` is
@@ -58,6 +59,7 @@ from apis.shared.files.source_provenance import (
 from apis.shared.storage.dynamodb_storage import DynamoDBStorage
 
 from .ledger_models import (
+    LedgerEvalsResponse,
     LedgerGroupsResponse,
     LedgerQualityResponse,
     LedgerReadout,
@@ -414,6 +416,64 @@ async def get_ledger_readout(
 
 async def _none() -> None:
     return None
+
+
+#: The ``track`` a row published before EH-9 lacks (eval-harness spec §16
+#: D20). Its own choice on the page, because it is neither a nightly nor a
+#: release measurement as far as anyone can now tell.
+UNTRACKED = "untracked"
+_ID = r"^[A-Za-z0-9_.:#@/+\-]{1,160}$"
+
+
+def _track_of(row: Dict[str, Any]) -> str:
+    return str(row.get("track") or UNTRACKED)
+
+
+@router.get("/evals", response_model=LedgerEvalsResponse, response_model_by_alias=True)
+async def get_ledger_evals(
+    from_date: Optional[str] = FromQ,
+    to_date: Optional[str] = ToQ,
+    model_id: Optional[str] = Query(None, alias="modelId", pattern=_ID, description="Only this model's runs"),
+    track: Optional[Literal["nightly", "release", "manual", "untracked"]] = Query(
+        None, description="Only this track's runs; untracked is a row published before --track existed",
+    ),
+    unit: Literal["version", "build"] = Query("build", description="What the version bands shade"),
+    _: User = Depends(require_ledger_admin),
+    store: LedgerStore = Depends(get_ledger_store),
+):
+    """``LEDGER#EVAL`` rows in range for the Evaluations page, newest first (eval-harness spec §16 D21).
+
+    Content-free as the rows are: per-case entries are synthetic case ids,
+    counts and closed failure codes, and no answer exists in any row. The page
+    draws one model at a time (D22), so the counts of models and tracks come
+    back with the filtered runs, and the version bands are the ones the
+    Releases tab shades, from ``LEDGER#VERSION``.
+    """
+    start, end = _range(from_date, to_date)
+    rows = await _read(store.eval_rows, start, end)
+    version_rows = await _read(store.version_rows, start, end)
+
+    model_counts: Dict[str, int] = {}
+    track_counts: Dict[str, int] = {}
+    for row in rows:
+        model = str(row.get("modelId") or "")
+        if model:
+            model_counts[model] = model_counts.get(model, 0) + 1
+        track_counts[_track_of(row)] = track_counts.get(_track_of(row), 0) + 1
+
+    runs = [
+        r for r in rows
+        if (model_id is None or str(r.get("modelId") or "") == model_id)
+        and (track is None or _track_of(r) == track)
+    ]
+    runs.sort(key=lambda r: str(r.get("startedAt") or r.get("SK") or ""), reverse=True)
+    return LedgerEvalsResponse.model_validate({
+        "from": start, "to": end, "modelId": model_id, "track": track, "unit": unit,
+        "runs": [export_row(r) for r in runs],
+        "models": [{"modelId": m, "runs": n} for m, n in sorted(model_counts.items(), key=lambda kv: (-kv[1], kv[0]))],
+        "tracks": dict(sorted(track_counts.items())),
+        "bands": version_bands(version_rows, unit == "build"),
+    })
 
 
 def _ndjson(rows: Sequence[Dict[str, Any]]) -> Iterator[str]:

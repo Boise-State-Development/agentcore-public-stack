@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { Type } from '@angular/core';
+import { provideRouter } from '@angular/router';
 import { ReleaseKpiCardsComponent } from './release-kpi-cards.component';
 import { ReleaseCompareHeaderComponent } from './release-compare-header.component';
 import { ReleaseQualityPanelComponent } from './release-quality-panel.component';
@@ -11,7 +12,7 @@ import { readoutFixture, versionsFixture } from '../../../../testing/release-led
 
 function render<T>(component: Type<T>, inputs: Record<string, unknown>) {
   TestBed.resetTestingModule();
-  TestBed.configureTestingModule({});
+  TestBed.configureTestingModule({ providers: [provideRouter([])] });
   const fixture = TestBed.createComponent(component);
   for (const [name, value] of Object.entries(inputs)) fixture.componentRef.setInput(name, value);
   fixture.detectChanges();
@@ -110,6 +111,17 @@ describe('ReleaseQualityPanelComponent', () => {
     const thumbs = text(el.querySelector('[data-testid="thumbs"]'));
     expect(thumbs).toContain('Baseline: 3 up, 1 down, below floor (n=4)');
     expect(thumbs).not.toMatch(/down rate/);
+  });
+
+  it('links each eval run to the Evaluations page, filtered to its build', () => {
+    const fixture = render(ReleaseQualityPanelComponent, { readout: readoutFixture() });
+    const link = fixture.nativeElement.querySelector('[data-testid="eval-link"]') as HTMLAnchorElement;
+    const url = new URL(link.href);
+    expect(url.pathname).toBe('/admin/evaluations');
+    const run = readoutFixture().quality.eval.candidate[0];
+    expect(url.searchParams.get('build')).toBe(run.build);
+    expect(url.searchParams.get('model')).toBe(run.modelId);
+    expect(url.searchParams.get('run')).toBe(run.startedAt);
   });
 
   it('has no overall quality score anywhere (D6)', () => {

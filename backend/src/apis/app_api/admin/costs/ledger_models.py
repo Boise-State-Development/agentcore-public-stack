@@ -182,6 +182,30 @@ class LedgerQualityResponse(_Model):
     provenance_coverage: Dict[str, Any] = Field(default_factory=dict, alias="provenanceCoverage")
 
 
+class LedgerEvalModelCount(_Model):
+    model_id: str = Field(..., alias="modelId")
+    runs: int = 0
+
+
+class LedgerEvalsResponse(_Model):
+    """``GET /admin/costs/ledger/evals`` (eval-harness spec §16 D21): ``LEDGER#EVAL`` rows, newest first.
+
+    ``runs`` are the rows as :func:`export_row` exports them (ids and numbers
+    only). ``models`` and ``tracks`` count every run in the date range before
+    the model and track filters, so the page's selectors can offer what exists.
+    """
+
+    from_date: str = Field(..., alias="from")
+    to_date: str = Field(..., alias="to")
+    model_id: Optional[str] = Field(None, alias="modelId")
+    track: Optional[str] = None
+    unit: str = "build"
+    runs: List[Dict[str, Any]] = Field(default_factory=list)
+    models: List[LedgerEvalModelCount] = Field(default_factory=list)
+    tracks: Dict[str, int] = Field(default_factory=dict)
+    bands: List[LedgerVersionBand] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Readout (§6.3)
 # ---------------------------------------------------------------------------

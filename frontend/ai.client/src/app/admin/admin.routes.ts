@@ -11,6 +11,9 @@ import { FEATURES } from '../services/features';
 /** Matches only in a build with quota requests on (compile-time; see environments/feature-flags.ts). */
 const quotaRequestsEnabled = () => inject(FEATURES).quotaRequests;
 
+/** Matches only in a build with the release ledger on (compile-time; see environments/feature-flags.ts). */
+const releaseLedgerEnabled = () => inject(FEATURES).releaseLedger;
+
 /** Matches only in a build with AWS Limits on (compile-time; see environments/feature-flags.ts). */
 const awsLimitsEnabled = () => inject(FEATURES).awsLimits;
 
@@ -54,6 +57,16 @@ export const adminRoutes: Routes = [
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.costs' } satisfies AdminScopeRouteData,
     loadComponent: () => import('./feedback/fleet-feedback.page').then(m => m.FleetFeedbackPage),
+  },
+  {
+    // The eval harness's published runs over time (eval-harness spec §16). It
+    // reads `LEDGER#EVAL` rows through the release ledger's store, so it takes
+    // the ledger's scope and flag; unmatched in a build with the ledger off.
+    path: 'evaluations',
+    canMatch: [releaseLedgerEnabled],
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.costs' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./evaluations/evaluations.page').then(m => m.EvaluationsPage),
   },
   {
     path: 'quota',
