@@ -140,6 +140,13 @@ class TestRead:
         payload = _payload(_call(filename="process.txt"))
         assert payload["mode"] == "text" and payload["filename"] == "Process.txt" and payload["content"] == "Step 1."
 
+    def test_a_read_is_never_offloaded(self, knowledge):
+        # Same bound and the same exemption as project_files: one voice must not offload what the other keeps.
+        from agents.main_agent.core.tool_result_offload import OFFLOAD_EXEMPT_TOOLS
+
+        assert make_knowledge_files_tool(AGENT, USER).tool_name in OFFLOAD_EXEMPT_TOOLS
+        assert KNOWLEDGE_FILES_TOOL_NAME in OFFLOAD_EXEMPT_TOOLS
+
     def test_an_unknown_name_says_knowledge_is_not_in_the_users_storage(self, knowledge):
         knowledge.add(_doc("d1", "Process.txt", content_type="text/plain"))
         text = _error(_call(filename="Process"))

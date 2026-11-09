@@ -47,6 +47,11 @@ Design notes
   extracted once per process (``kb_documents.kb_document_text``'s cache) so
   paging does not re-download. A document past
   :data:`PROJECT_FILE_TEXT_MAX_CHARS` is reported, not sampled.
+* **Never offloaded.** Both voices are in the tool-result offloader's
+  ``OFFLOAD_EXEMPT_TOOLS``, as ``document_read`` is: the page is the bound
+  (a full one measured 9,149 tokens on Haiku 4.5), and an offloaded page came
+  back as a preview of one escaped JSON line that line search could not split,
+  so a section past the preview was unreachable.
 * **Costs nothing before the first token.** The builder makes closures; the
   DynamoDB Query, the membership read and the S3 fetch run only when the model
   calls the tool.
