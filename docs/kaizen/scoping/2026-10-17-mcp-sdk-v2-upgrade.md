@@ -1,9 +1,27 @@
-# Scoping — `mcp` Python SDK 1.30.0 → 2.1.1 (protocol 2026-07-28)
+# Scoping — `mcp` Python SDK 1.30.0 → 2.x (protocol 2026-07-28)
 
 > Status: **Implemented** on `feature/mcp-sdk-v2` (approved by Phil 2026-10-17). The scope below is kept as written. "As built" lists where the implementation differs from it.
 > Owner: Phil Merrell
 > Source: PR #1662 (MCP App "form shown, nothing written yet" result shows as Failed). Its text-match fallback retires after this upgrade.
 > Base: `develop` at `e87a40d3` (after #1657, #1659, #1660, #1661), with #1662 read from `fix/mcp-app-awaiting-user-submission`.
+
+## Rebased onto develop, moved to 2.3.0 (2026-11-09)
+
+The PR sat for three weeks. `develop` moved Strands to 1.63.0, which declares `mcp>=1.23.0,<2.4`, so 2.2.0 (2026-09-07) and 2.3.0 (2026-10-02) came into range. Phil approved moving to **2.3.0**.
+
+- **Pins:** `mcp==2.3.0` and `mcp-types==2.3.0`. 2.3.0 raises its floor to `httpx2>=2.10.0`, which the approved `httpx2`/`httpcore2==2.13.1` already meet, so those pins and `truststore==0.10.4` / `idna==3.20` are unchanged. The lock adds nothing else beyond what 2.1.1 added. The scheduled-runs Lambda files carry the same set, on Strands 1.63.0.
+- **`ReleasesCallsOnSessionEnd` is gone.** `develop` deleted it after the upstream fix (strands-agents #4499, in 1.58.0). The heal-hook tripwire now drives the plain `MCPClient` against `_dropping_server()` (the 2.x session-death shape) rather than a 503, which on 2.x leaves the session up.
+- **Our seams, checked against 2.3.0's source:**
+  - `StreamableHTTPTransport` still answers a non-2xx POST with the `Server returned an error response` stand-in that `mcp_transport` rewrites;
+  - `create_mcp_http_client(headers, timeout, auth)` is unchanged;
+  - `SessionMessage` is still a dataclass, and `JSONRPCError` is still a model class after #3470 replaced the `RootModel` wrappers;
+  - `ClientSession(extensions=…)`, `send_discover`, `initialize`, `adopt` and `server_info` are unchanged. `negotiate_auto` still falls back to `initialize()` on any MCPError from the probe, which is what the legacy-verdict refusal relies on. Strands 1.63.0 imports it from `mcp.client.client`, which re-exports it.
+- **2.2.0 / 2.3.0 behaviour changes that reach us:**
+  - **Redirects are followed only within the endpoint's origin** (#3397). A cross-origin redirect now fails the call with `MCPError` and keeps the session. A 3xx is under our status hook's 400 floor, so it is not rewritten. Dev check: every configured MCP server and the Gateway connect without a redirect error.
+  - **Legacy connections no longer send an empty `_meta` / `params`, and `initialize` omits an unset `experimental`** (#3628, #3614). We read neither.
+  - **The SDK's OAuth providers validate `issuer`** (#3398). We don't use them; our auth is our own `httpx2.Auth`.
+  - **The probe to a legacy server now records one `ERROR` client span** (#3629). The legacy verdict skips the probe for an hour, so that is one span per server per process per hour. Spans still carry no content.
+  - **Idle legacy sessions on an SDK *server* expire after 30 minutes** (#3395). This is server-side: a third-party legacy server built on 2.2+ answers a cached agent's next call after 30 idle minutes with a 404. Not yet verified: whether that surfaces as session death (which `MCPSessionHealHook` reconnects) or as a plain failed call. Dev check: a GitHub or Excalidraw call after 30+ idle minutes on a cached agent.
 
 ## As built (2026-10-17)
 
