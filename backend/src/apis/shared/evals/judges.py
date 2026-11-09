@@ -27,9 +27,28 @@ EVALUATOR_CLASSES: Dict[str, str] = {
     "tool_selection": "ToolSelectionAccuracyEvaluator",
     "refusal": "RefusalEvaluator",
     "conciseness": "ConcisenessEvaluator",
+    #: How fully the answer followed the skill it loaded (EH-7). strands-evals
+    #: reads the ``skills`` call in the session; the scrub caps each tool result
+    #: at 2,000 characters, so it sees a long SKILL.md body only in part.
+    "skill_following": "SkillInstructionFollowingEvaluator",
 }
 #: The verdict name a case's ``judge.rubric`` is reported under (``OutputEvaluator``).
 RUBRIC_EVALUATOR = "rubric"
+#: Whether every claim in the answer is supported by the case's source (spec D17).
+#: An ``OutputEvaluator`` on a fixed rubric, the only judge given the source: it
+#: reaches it as the case's ``expected_output`` (``<ExpectedOutput>`` in the
+#: judge's prompt), built from the fixture files, never from the session, so a
+#: blinded comparison of two delivery paths stays blind (§6.4).
+GROUNDED_EVALUATOR = "grounded"
+GROUNDED_RUBRIC = (
+    "The expected output is the source document the user asked about, not a model answer. Score 1.0 when every "
+    "factual claim in the response is stated in or follows directly from that source, or when the response says "
+    "the source does not contain what was asked and it does not. Score 0.5 when the main answer is supported but "
+    "the response adds a claim the source does not support. Score 0.0 when the main answer contradicts the source "
+    "or states something the source does not contain. Do not reward or penalise length, tone or formatting."
+)
+#: Every evaluator name a case may list.
+CASE_EVALUATORS = frozenset(EVALUATOR_CLASSES) | {GROUNDED_EVALUATOR}
 #: Measured against Haiku 4.5 as judge on 2026-10-31 (spec §14, question 2): the
 #: two were equally accurate at that sample size, and Haiku scored Haiku's own
 #: answers higher where judgement is softest. The default model under test is
@@ -75,8 +94,12 @@ class Judge(Protocol):
         *,
         evaluators: Sequence[str],
         rubric: Optional[str] = None,
+        reference: Optional[str] = None,
     ) -> List[JudgeVerdict]:
-        """Score one scrubbed session with each named evaluator (and the rubric, when given)."""
+        """Score one scrubbed session with each named evaluator (and the rubric, when given).
+
+        ``reference`` is the case's source text, which only ``grounded`` reads.
+        """
 
 
 def same_base_model(a: str, b: str) -> bool:
@@ -100,8 +123,23 @@ def last_turn(session: Mapping[str, Any]) -> tuple:
     return "", ""
 
 
+#: The label strands-evals gives an output it had nothing to judge (``types.evaluation.NOT_APPLICABLE``),
+#: such as a skill-following judge on a turn that loaded no skill. Its score is 0.0, not a verdict.
+NOT_APPLICABLE_LABEL = "not_applicable"
+
+
 def summarize_outputs(evaluator: str, outputs: Sequence[Any]) -> JudgeVerdict:
-    """Collapse an evaluator's outputs (one per tool call for a tool-level judge) to one verdict."""
+    """Collapse an evaluator's outputs (one per tool call for a tool-level judge) to one verdict.
+
+    Not-applicable outputs are dropped before averaging, as strands-evals'
+    own aggregator drops them: counted as 0.0 they would read as a failure on
+    every case where the judged behaviour rightly did not happen.
+    """
+    applicable = [o for o in outputs if getattr(o, "label", None) != NOT_APPLICABLE_LABEL]
+    if outputs and not applicable:
+        return JudgeVerdict(evaluator=evaluator, score=None, passed=None, label=NOT_APPLICABLE_LABEL,
+                            error="not applicable")
+    outputs = applicable
     if not outputs:
         return JudgeVerdict(evaluator=evaluator, score=None, passed=None, error="nothing to judge")
     scores = [float(o.score) for o in outputs]
@@ -136,6 +174,8 @@ class StrandsEvalsJudge:
         evaluators = self._import("strands_evals.evaluators")
         if name == RUBRIC_EVALUATOR:
             return evaluators.OutputEvaluator(rubric=rubric, model=self.model_id, include_inputs=True)
+        if name == GROUNDED_EVALUATOR:
+            return evaluators.OutputEvaluator(rubric=GROUNDED_RUBRIC, model=self.model_id, include_inputs=True)
         return getattr(evaluators, EVALUATOR_CLASSES[name])(model=self.model_id)
 
     def judge(
@@ -144,10 +184,11 @@ class StrandsEvalsJudge:
         *,
         evaluators: Sequence[str],
         rubric: Optional[str] = None,
+        reference: Optional[str] = None,
     ) -> List[JudgeVerdict]:
-        unknown = sorted(set(evaluators) - set(EVALUATOR_CLASSES))
+        unknown = sorted(set(evaluators) - CASE_EVALUATORS)
         if unknown:
-            raise ValueError(f"unknown evaluator(s) {unknown}; known: {sorted(EVALUATOR_CLASSES)}")
+            raise ValueError(f"unknown evaluator(s) {unknown}; known: {sorted(CASE_EVALUATORS)}")
 
         trace_types = self._import("strands_evals.types.trace")
         evaluation = self._import("strands_evals.types.evaluation")
@@ -162,8 +203,20 @@ class StrandsEvalsJudge:
         names = list(evaluators) + ([RUBRIC_EVALUATOR] if rubric else [])
         verdicts: List[JudgeVerdict] = []
         for name in names:
+            if name == GROUNDED_EVALUATOR and not reference:
+                verdicts.append(JudgeVerdict(evaluator=name, score=None, passed=None, error="no reference"))
+                continue
+            case_data = data
+            if name == GROUNDED_EVALUATOR:
+                case_data = evaluation.EvaluationData(
+                    input=prompt,
+                    actual_output=answer,
+                    expected_output=reference,
+                    actual_trajectory=trace_types.Session.model_validate(dict(session)),
+                    name=str(session.get("session_id") or ""),
+                )
             try:
-                outputs = self._evaluator(name, rubric).evaluate(data)
+                outputs = self._evaluator(name, rubric).evaluate(case_data)
             except Exception as exc:  # noqa: BLE001 — one failed judge must not lose the others
                 verdicts.append(
                     JudgeVerdict(evaluator=name, score=None, passed=None, error=f"{type(exc).__name__}: {exc}"[:300])
@@ -196,7 +249,8 @@ def orient_refusal(verdict: JudgeVerdict, expected_refusal: Optional[bool]) -> J
 
 
 def judge_row(row: Mapping[str, Any], *, evaluators: Sequence[str], rubric: Optional[str], judge: Judge,
-              judge_model: str, expected_refusal: Optional[bool] = None) -> List[Dict[str, Any]]:
+              judge_model: str, expected_refusal: Optional[bool] = None,
+              reference: Optional[str] = None) -> List[Dict[str, Any]]:
     """Scrub one result row's session, judge it, and return one judgement row per evaluator.
 
     The scrub happens here, not in the judge, so no judge implementation can
@@ -207,7 +261,10 @@ def judge_row(row: Mapping[str, Any], *, evaluators: Sequence[str], rubric: Opti
 
     verdicts = [
         orient_refusal(v, expected_refusal)
-        for v in judge.judge(scrub_session(row["session"]), evaluators=evaluators, rubric=rubric)
+        for v in judge.judge(
+            scrub_session(row["session"]), evaluators=evaluators, rubric=rubric,
+            **({"reference": reference} if reference else {}),
+        )
     ]
     return [
         {

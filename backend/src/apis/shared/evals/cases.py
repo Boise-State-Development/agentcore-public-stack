@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from apis.shared.evals.judges import EVALUATOR_CLASSES
+from apis.shared.evals.judges import CASE_EVALUATORS
 
 #: Families in report order. ``general_chat`` is judged, so it never gates
 #: (spec D5); every other family is scored by a pure function and does.
@@ -28,6 +28,7 @@ FAMILIES: Tuple[str, ...] = (
     "project_kb",
     "agent_harness",
     "project_memory",
+    "skill_outcome",
     "retention",
     "instruction_following",
     "refusal",
@@ -37,7 +38,7 @@ FAMILIES: Tuple[str, ...] = (
 JUDGED_FAMILIES = frozenset({"general_chat"})
 
 #: The strands-evals evaluators a case may name: exactly the ones the judge adapter maps.
-JUDGE_EVALUATORS = frozenset(EVALUATOR_CLASSES)
+JUDGE_EVALUATORS = CASE_EVALUATORS
 
 _ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 _FIXTURE_RE = re.compile(r"^[a-z0-9_]+$")

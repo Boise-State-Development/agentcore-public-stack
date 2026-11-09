@@ -260,3 +260,39 @@ def test_a_refusal_judge_without_an_expectation_is_rejected():
     with pytest.raises(CaseError, match="orient"):
         parse_case({"id": "general_chat.x", "family": "general_chat", "turns": [{"prompt": "q"}],
                     "judge": {"evaluators": ["refusal"]}}, family="general_chat")
+
+
+class TestGrounded:
+    """``grounded`` reads the case's source as its expected output; nothing else does (spec D17)."""
+
+    def test_the_reference_reaches_only_the_grounded_judge(self):
+        pkg = FakePackage({"OutputEvaluator": [_output(1.0)], "HelpfulnessEvaluator": [_output(0.9)]})
+        verdicts = StrandsEvalsJudge("m", import_module=pkg.import_module).judge(
+            _session(), evaluators=["helpfulness", "grounded"], reference="## policy.md\nThe fee is $35."
+        )
+        assert [v.evaluator for v in verdicts] == ["helpfulness", "grounded"]
+        helpful, grounded = pkg.seen
+        assert "expected_output" not in helpful
+        assert grounded["expected_output"] == "## policy.md\nThe fee is $35."
+        assert any(b["class"] == "OutputEvaluator" and "source document" in b["rubric"] for b in pkg.built)
+
+    def test_without_a_reference_it_reports_why_and_spends_nothing(self):
+        pkg = FakePackage({"OutputEvaluator": [_output(1.0)]})
+        [verdict] = StrandsEvalsJudge("m", import_module=pkg.import_module).judge(_session(), evaluators=["grounded"])
+        assert verdict.score is None and verdict.error == "no reference" and pkg.built == []
+
+
+def test_skill_following_maps_to_the_strands_evaluator():
+    pkg = FakePackage({"SkillInstructionFollowingEvaluator": [_output(0.75)]})
+    [verdict] = StrandsEvalsJudge("m", import_module=pkg.import_module).judge(_session(), evaluators=["skill_following"])
+    assert verdict.score == 0.75 and pkg.built[0]["class"] == "SkillInstructionFollowingEvaluator"
+
+
+def test_not_applicable_outputs_are_not_scored_as_failures():
+    from apis.shared.evals.judges import summarize_outputs
+
+    na = _output(0.0, passed=False, label="not_applicable")
+    only_na = summarize_outputs("skill_following", [na, na])
+    assert only_na.score is None and only_na.error == "not applicable"
+    mixed = summarize_outputs("skill_following", [na, _output(0.75, label="Mostly Followed")])
+    assert mixed.score == 0.75 and mixed.metadata == {"outputs": 1}

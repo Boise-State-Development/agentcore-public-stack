@@ -233,3 +233,36 @@ class TestEntities:
         from eval_fixtures import entities
 
         assert len(entities.AGENTS["agent_long_instructions"].instructions.encode()) > 8 * 1024
+
+
+class TestReferences:
+    def _case(self, case_id):
+        return next(c for c in load_cases(CASES_DIR) if c.id == case_id)
+
+    def test_a_word_table_reference_is_the_docx_markdown_rendering(self):
+        from eval_fixtures.references import reference_for
+
+        ref = reference_for(self._case("document_qa.word_table_blank_cell_column"), FIXTURES_DIR)
+        assert "## lab_equipment_inventory.docx" in ref and f"| {b.MICROSCOPE_QUANTITY} | {b.MICROSCOPE_SPARE_PARTS} |" in ref
+
+    def test_a_project_case_reads_its_fixture_files(self):
+        from eval_fixtures.references import reference_for
+
+        ref = reference_for(self._case("project_kb.small_pdf_spring_trip"), FIXTURES_DIR)
+        assert "April 22" in ref and "## onboarding_policy.md" in ref
+        # The workbook is a source too: the Glassware lines the spreadsheet case asks about.
+        assert "[sheet Budget]" in ref and "Glassware,Flasks,1300" in ref
+
+    def test_images_large_documents_and_kb_large_have_none(self):
+        from eval_fixtures.references import reference_for
+
+        assert reference_for(self._case("attachment_tools.image_chart_value"), FIXTURES_DIR) is None
+        assert reference_for(self._case("document_qa.large_manual_notice_period"), FIXTURES_DIR) is None
+        assert reference_for(self._case("project_kb.large_literal_international_travel"), FIXTURES_DIR) is None
+
+    def test_every_grounded_case_has_a_reference(self):
+        from eval_fixtures.references import reference_for
+
+        for case in load_cases(CASES_DIR):
+            if "grounded" in case.judge.evaluators:
+                assert reference_for(case, FIXTURES_DIR), case.id

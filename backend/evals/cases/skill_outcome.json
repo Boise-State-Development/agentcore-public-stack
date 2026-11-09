@@ -1,0 +1,355 @@
+[
+  {
+    "id": "skill_outcome.web_research_cites_each_point",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "Fetch https://example.com and write two short notes about it, each citing the page title and URL."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ]
+      },
+      "regex": {
+        "search": [
+          "https?://(www\\.)?example\\.com"
+        ]
+      },
+      "contains_any": [
+        "Example Domain"
+      ]
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "web_research's rule: every note carries its source's title and URL."
+  },
+  {
+    "id": "skill_outcome.web_research_iana_notes",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "Start from https://www.iana.org/help/example-domains and give me accurate notes, with the source for each point."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ]
+      },
+      "regex": {
+        "search": [
+          "iana\\.org"
+        ]
+      }
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "Notes from a second site, cited by URL."
+  },
+  {
+    "id": "skill_outcome.web_research_summary_with_source",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "Read https://example.org and write a two-sentence summary that cites where it came from."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ]
+      },
+      "regex": {
+        "search": [
+          "https?://(www\\.)?example\\.org"
+        ]
+      }
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "A summary is still cited."
+  },
+  {
+    "id": "skill_outcome.web_research_two_pages_each_cited",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "Compare https://example.com and https://example.org in a few notes, citing which page each note comes from."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ]
+      },
+      "contains_all": [
+        "example.com",
+        "example.org"
+      ]
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "Two sources, each named where it is used."
+  },
+  {
+    "id": "skill_outcome.skill_creator_drafts_valid_frontmatter",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "Draft the full SKILL.md for a skill that turns meeting notes into a list of action items. Show me the whole file."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "skill_creator"
+        ]
+      },
+      "regex": {
+        "search": [
+          "^---\\s*$",
+          "(?m)^name:\\s*\\S",
+          "(?m)^description:\\s*\\S"
+        ]
+      }
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "skill_creator's output is a SKILL.md: frontmatter with a name and a description, then the body."
+  },
+  {
+    "id": "skill_outcome.skill_creator_weekly_status",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "I write the same weekly status email every Friday. Turn that into a reusable skill and show me the SKILL.md."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "skill_creator"
+        ]
+      },
+      "regex": {
+        "search": [
+          "^---\\s*$",
+          "(?m)^name:\\s*\\S",
+          "(?m)^description:\\s*\\S"
+        ]
+      }
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "From a described routine to a valid skill file."
+  },
+  {
+    "id": "skill_outcome.skill_creator_trigger_description",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "Write the SKILL.md for a skill that formats references in APA style. Make the description say when to use it."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "skill_creator"
+        ]
+      },
+      "regex": {
+        "search": [
+          "^---\\s*$",
+          "(?m)^name:\\s*\\S",
+          "(?m)^description:\\s*\\S"
+        ]
+      },
+      "contains_any": [
+        "APA"
+      ]
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "The description is what makes a skill load, so it must say when to use it."
+  },
+  {
+    "id": "skill_outcome.agent_bound_skill_shapes_the_answer",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "Fetch https://example.com and turn it into short notes with a citation (page title and URL) for each point."
+      }
+    ],
+    "run": {
+      "agent": "agent_skill"
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "web_research"
+        ]
+      },
+      "regex": {
+        "search": [
+          "https?://(www\\.)?example\\.com"
+        ]
+      }
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "The same rule through an agent bound to web_research (agent_skill)."
+  },
+  {
+    "id": "skill_outcome.ungranted_skill_never_loads",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "Fetch https://example.com and turn it into short notes with a citation for each point."
+      }
+    ],
+    "run": {
+      "enabled_skills": []
+    },
+    "expect": {
+      "skill": {
+        "not_loads": [
+          "web_research"
+        ]
+      }
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "With no skills enabled for the turn, web_research must not load even when its description matches."
+  },
+  {
+    "id": "skill_outcome.plain_question_loads_no_skill",
+    "family": "skill_outcome",
+    "turns": [
+      {
+        "prompt": "What is the capital of Peru? Reply with just the city."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": [
+        "web_research",
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "contains_any": [
+        "Lima"
+      ],
+      "skill": {
+        "not_loads": [
+          "web_research",
+          "skill_creator"
+        ]
+      }
+    },
+    "judge": {
+      "evaluators": [
+        "skill_following"
+      ]
+    },
+    "notes": "A question no skill is for."
+  }
+]

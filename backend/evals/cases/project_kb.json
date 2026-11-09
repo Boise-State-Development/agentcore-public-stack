@@ -18,7 +18,12 @@
         "2"
       ]
     },
-    "notes": "kb_small sits inside the full-context budget, so the whole knowledge base is in the system prompt. 2 is the visitors' orientation."
+    "notes": "kb_small sits inside the full-context budget, so the whole knowledge base is in the system prompt. 2 is the visitors' orientation.",
+    "judge": {
+      "evaluators": [
+        "grounded"
+      ]
+    }
   },
   {
     "id": "project_kb.small_word_table_blank_cell",
@@ -39,7 +44,12 @@
         "$3"
       ]
     },
-    "notes": "A Word table in project files whose Deposit cell is blank for the tripod; a column shift reads the late fee."
+    "notes": "A Word table in project files whose Deposit cell is blank for the tripod; a column shift reads the late fee.",
+    "judge": {
+      "evaluators": [
+        "grounded"
+      ]
+    }
   },
   {
     "id": "project_kb.small_pdf_spring_trip",
@@ -61,7 +71,12 @@
         "October 9"
       ]
     },
-    "notes": "A PDF in the full-context block."
+    "notes": "A PDF in the full-context block.",
+    "judge": {
+      "evaluators": [
+        "grounded"
+      ]
+    }
   },
   {
     "id": "project_kb.small_mixed_format_spreadsheet_value",
@@ -80,7 +95,12 @@
         "1940"
       ]
     },
-    "notes": "The .xlsx is skipped from the full-context block, named in it, and reached by the filtered retrieval or the spreadsheet tools (mixed-format full context, #1915). Checks the value, not the path."
+    "notes": "The .xlsx is skipped from the full-context block, named in it, and reached by the filtered retrieval or the spreadsheet tools (mixed-format full context, #1915). Checks the value, not the path.",
+    "judge": {
+      "evaluators": [
+        "grounded"
+      ]
+    }
   },
   {
     "id": "project_kb.small_absent_fact",
@@ -104,7 +124,12 @@
         "$181"
       ]
     },
-    "notes": "No project file mentions parking. The forbidden values are the attachment fixtures' permit fees."
+    "notes": "No project file mentions parking. The forbidden values are the attachment fixtures' permit fees.",
+    "judge": {
+      "evaluators": [
+        "grounded"
+      ]
+    }
   },
   {
     "id": "project_kb.small_synthesis_across_files",
@@ -123,7 +148,12 @@
         "April 22"
       ]
     },
-    "notes": "Two facts from two files (Markdown and PDF) in one answer."
+    "notes": "Two facts from two files (Markdown and PDF) in one answer.",
+    "judge": {
+      "evaluators": [
+        "grounded"
+      ]
+    }
   },
   {
     "id": "project_kb.small_project_instructions_followed",
@@ -146,7 +176,12 @@
         ]
       }
     },
-    "notes": "The project's instructions say to end every answer with 'Source: project files'."
+    "notes": "The project's instructions say to end every answer with 'Source: project files'.",
+    "judge": {
+      "evaluators": [
+        "grounded"
+      ]
+    }
   },
   {
     "id": "project_kb.large_literal_international_travel",

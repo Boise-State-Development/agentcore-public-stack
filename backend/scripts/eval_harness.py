@@ -97,6 +97,7 @@ from apis.shared.evals.cases import (  # noqa: E402
 )
 from eval_fixtures.build import GENERATED  # noqa: E402
 from eval_fixtures.build import build as build_fixture  # noqa: E402
+from eval_fixtures.references import reference_for  # noqa: E402
 from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
     ReportError,
@@ -894,6 +895,7 @@ async def cmd_judge(args: argparse.Namespace) -> int:
             results = await asyncio.to_thread(
                 judge_row, row, evaluators=case.judge.evaluators, rubric=case.judge.rubric,
                 judge=judge, judge_model=args.judge_model, expected_refusal=case.expect.refuses,
+                reference=reference_for(case, Path(args.fixtures_dir)) if "grounded" in case.judge.evaluators else None,
             )
         async with lock:
             with judgements_path.open("a", encoding="utf-8") as fh:
