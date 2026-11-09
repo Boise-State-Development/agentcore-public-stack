@@ -141,7 +141,7 @@ main() {
 
     local publish_args=()
     if [ "${EVAL_PUBLISH:-}" = "true" ]; then
-        publish_args=(--publish)
+        publish_args=(--publish --track nightly)
         log_info "Publishing the score to the release ledger"
     fi
 

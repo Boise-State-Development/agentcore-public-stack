@@ -12,6 +12,7 @@ from apis.shared.evals.report import (
     ReportError,
     baseline_filename,
     build_baseline,
+    case_ledger_entries,
     case_outcomes,
     compare_run,
     explain_family,
@@ -145,3 +146,38 @@ def test_read_rows_skips_blank_lines_and_tolerates_a_missing_file(tmp_path):
     path = tmp_path / "r.jsonl"
     path.write_text(json.dumps(_row("a", 0, True)) + "\n\n", encoding="utf-8")
     assert len(read_rows(path)) == 1
+
+
+class TestCaseLedgerEntries:
+    """Per-case outcomes as the LEDGER#EVAL row carries them (eval-harness spec §16 D20)."""
+
+    def _rows(self):
+        flaky = [_row("a", 0, True), _row("a", 1, False, answer="secret answer text"), _row("a", 2, True)]
+        flaky[1]["failures"] = ["did not call calculator", "contains a forbidden value"]
+        broken = [_row("b", s, False) for s in range(3)]
+        broken[2]["failures"] = ["did not load skill web_research"]
+        return flaky + broken + [_row("c", 0, True)]
+
+    def test_majority_counts_base_and_every_samples_codes(self):
+        entries = case_ledger_entries(self._rows(), {"tool_selection.a": {"passed": True},
+                                                     "tool_selection.b": {"passed": True}})
+        assert entries["tool_selection.a"] == {
+            "pass": True, "passes": 2, "samples": 3, "base": True,
+            "codes": ["forbidden_value", "tool_missing"], "names": ["calculator"],
+        }
+        assert entries["tool_selection.b"] == {
+            "pass": False, "passes": 0, "samples": 3, "base": True,
+            "codes": ["missing_value", "skill_missing"], "names": ["web_research"],
+        }
+
+    def test_a_case_the_baseline_lacks_has_no_base_and_a_clean_case_no_codes(self):
+        entries = case_ledger_entries(self._rows(), {})
+        assert entries["tool_selection.c"] == {"pass": True, "passes": 1, "samples": 1}
+
+    def test_carries_no_answer_and_no_failure_sentence(self):
+        text = json.dumps(case_ledger_entries(self._rows(), {}))
+        assert "secret answer text" not in text and "did not call" not in text and "forbidden value" not in text
+
+    def test_case_ids_are_sorted_for_a_stable_row(self):
+        assert list(case_ledger_entries(list(reversed(self._rows())))) == [
+            "tool_selection.a", "tool_selection.b", "tool_selection.c"]

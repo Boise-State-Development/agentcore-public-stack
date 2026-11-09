@@ -392,7 +392,7 @@ Estimated the way `run` estimates (§10: 4,000 base-equivalent input and 200 out
 | release pass, judged | about $2.75 on Haiku 4.5 | about $8.20 on Haiku 4.5, $5.25 on Haiku 5.5 (judge-dominated) |
 | nightly, k=1, gating families, no judge | about $0.45 on Haiku 4.5 | about $1.00 on Haiku 4.5, $0.10 on Haiku 5.5 |
 
-The spreadsheet and PowerPoint cases also start Code Interpreter sessions, which the token estimate does not price. PR-4 measures them on its first run. Otherwise, infrastructure adds nothing worth a line. The persistent fixtures hold well under 1 MB in managed knowledge bases, ephemeral projects are deleted per run, and the second user is one Cognito user. Wall clock grows less than spend, because cases run in parallel (`--workers`) and a case's turns do not. Expect about 12 minutes for a release pass, plus the large-document wait, which is unchanged. The one-time `seed_eval_fixtures.py` waits up to about 20 minutes for the fixture files. All of these are estimates until the first run, and §10 is updated with the measured numbers as it was for phase 1.
+The spreadsheet and PowerPoint cases also start Code Interpreter sessions, which the token estimate does not price. EH-4 measures them on its first run. Otherwise, infrastructure adds nothing worth a line. The persistent fixtures hold well under 1 MB in managed knowledge bases, ephemeral projects are deleted per run, and the second user is one Cognito user. Wall clock grows less than spend, because cases run in parallel (`--workers`) and a case's turns do not. Expect about 12 minutes for a release pass, plus the large-document wait, which is unchanged. The one-time `seed_eval_fixtures.py` waits up to about 20 minutes for the fixture files. All of these are estimates until the first run, and §10 is updated with the measured numbers as it was for phase 1.
 
 ### 15.6 Non-goals for phase 2
 
@@ -404,11 +404,13 @@ The spreadsheet and PowerPoint cases also start Code Interpreter sessions, which
 
 ### 15.7 Punch list
 
-- **PR-4 — format, runner and documents.** D15's fields and checks with their loader validation; the `client_surface` and `client_tools` passthroughs on `run_agent_headless` with a test; the fixture builder; the 14 new `document_qa` cases and `attachment_tools`, neither of which needs a seeded entity; an image row and a pptx row in the smoke matrix beside its CSV row, so the wire is proven cheaply wherever the family is too costly to run; both baselines re-promoted for both families.
-- **PR-5 — seeded fixtures.** `seed_eval_fixtures.py` (D13); `project_kb` and `agent_harness`; `required_grants` extended to the fixtures' bindings; the nightly step seeds fixtures before it runs; baselines.
-- **PR-6 — project memory.** The second user (D16); ephemeral projects (D14); `expect.memory` and `expect.proposals` read-back; `project_memory`; cleanup covering both users and every ephemeral project, including `--orphans`.
-- **PR-7 — skills and grounding.** `skill_outcome`; the `grounded` evaluator (D17) and its reference plumbing; `grounded` on `document_qa` and `project_kb`.
-- **PR-8 — terminal.** Client-tool interrupt answering in the harness; `terminal`.
+Phase 2 and 3 steps are labelled **EH-4** to **EH-10**, carrying on from phase 1's PR-1 to PR-3 (§13). They are not the release ledger's PR-1 to PR-7 (`release-ledger.md` §9), which this spec also cites, and always by that name.
+
+- **EH-4 — format, runner and documents.** D15's fields and checks with their loader validation; the `client_surface` and `client_tools` passthroughs on `run_agent_headless` with a test; the fixture builder; the 14 new `document_qa` cases and `attachment_tools`, neither of which needs a seeded entity; an image row and a pptx row in the smoke matrix beside its CSV row, so the wire is proven cheaply wherever the family is too costly to run; both baselines re-promoted for both families.
+- **EH-5 — seeded fixtures.** `seed_eval_fixtures.py` (D13); `project_kb` and `agent_harness`; `required_grants` extended to the fixtures' bindings; the nightly step seeds fixtures before it runs; baselines.
+- **EH-6 — project memory.** The second user (D16); ephemeral projects (D14); `expect.memory` and `expect.proposals` read-back; `project_memory`; cleanup covering both users and every ephemeral project, including `--orphans`.
+- **EH-7 — skills and grounding.** `skill_outcome`; the `grounded` evaluator (D17) and its reference plumbing; `grounded` on `document_qa` and `project_kb`.
+- **EH-8 — terminal.** Client-tool interrupt answering in the harness; `terminal`.
 
 Each PR re-promotes the baselines its families touch, for every model with a committed baseline (Haiku 4.5 and Haiku 5.5 today), and reruns the planted-bad check of §14 question 2 for any new evaluator.
 
@@ -469,13 +471,13 @@ Each PR re-promotes the baselines its families touch, for every model with a com
 
 ### 15.8 Open questions
 
-1. **Does an empty project provision anything beyond rows?** If creating one stands up a data source or an index, D14 falls back to a seeded pool, and PR-6 measures that before choosing.
-2. **Which strands-evals field carries a reference?** D17 needs the source text to reach the judge as reference material, not as part of the session. PR-7 spikes it against 1.7.0 before writing the evaluator.
+1. **Does an empty project provision anything beyond rows?** If creating one stands up a data source or an index, D14 falls back to a seeded pool, and EH-6 measures that before choosing.
+2. **Which strands-evals field carries a reference?** D17 needs the source text to reach the judge as reference material, not as part of the session. EH-7 spikes it against 1.7.0 before writing the evaluator.
 3. **Does `kb_large` stay over the full-context budget?** `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` is read per call, and a deployment can raise it, as dev and prod did to 75,000 in #1915. The seed records the budget it saw. If the target's budget covers `kb_large`, the retrieval cases report "not measured" rather than passing a full-context run as retrieval.
 
 ## 16. Phase 3 — the Evaluations page
 
-**Status:** Proposed 2026-11-07. It refines §12's phase 3. Both of its release-ledger dependencies are built: PR-5 (`score --publish` and `LEDGER#EVAL`) and PR-6 (the Releases tab and its quality panel, `frontend/ai.client/src/app/admin/costs/releases/`, #1921).
+**Status:** Proposed 2026-11-07. It refines §12's phase 3. Both of its release-ledger dependencies are built: release-ledger PR-5 (`score --publish` and `LEDGER#EVAL`) and release-ledger PR-6 (the Releases tab and its quality panel, `frontend/ai.client/src/app/admin/costs/releases/`, #1921).
 
 ### 16.1 What the ledger panel already shows, and what it cannot
 
@@ -490,7 +492,7 @@ Most of this needs per-case outcomes, and the ledger row deliberately leaves out
 
 ### 16.2 Decisions
 
-**D20 — Per-case outcomes join the `LEDGER#EVAL` row, as ids and codes.** `score --publish` adds `cases: {caseId: {pass, passes, samples, base, codes}}` and `track` (`nightly`, `release` or `manual`, from `--track`). `codes` are the failure kinds `score_sample` already produces, mapped to a closed vocabulary (`missing_value`, `forbidden_value`, `tool_missing`, `tool_forbidden`, `tool_order`, `max_calls`, `format`, `refusal_missed`, `over_refusal`, `skill_missing`, `skill_unexpected`, `memory`, `status`, `empty`), and a tool's or skill's name goes in a separate `names` list. Case ids are synthetic and stable (D6, §5), and every one passes `ID_TEXT`, so `assert_content_free` keeps its allowlist, gaining only the new field names. Answers, prompts and failure prose stay out, exactly as today. At 138 cases a row grows by about 13 KB, far under DynamoDB's 400 KB item limit. This reverses one line of `release-ledger.md` §5.4 (flipped case ids stay out), and that spec gets a note saying so, with the reason: an id that names a synthetic case reveals nothing, and a failure's reader needs it.
+**D20 — Per-case outcomes join the `LEDGER#EVAL` row, as ids and codes.** `score --publish` adds `cases: {caseId: {pass, passes, samples, base?, codes?, names?}}` and `track` (`nightly`, `release` or `manual`, from `--track`, default `manual`). `pass` is the case's majority outcome, `base` the baseline's (absent for a case the baseline lacks), and `codes` every code any of the case's samples produced. Codes come from a closed vocabulary, `FAILURE_CODES` in `apis/shared/evals/score.py`: `status`, `empty`, `missing_value`, `forbidden_value`, `tool_missing`, `tool_forbidden`, `tool_order`, `refusal_missed`, `over_refusal`, `format`, `skill_missing`, `skill_unexpected`, and `other` for a sentence no pattern knows. `failure_code()` maps each of `score_sample`'s sentences to its code, beside the code that writes them, and a test pins every sentence to a code other than `other`. Phase 2's checks add theirs (`max_calls`, `memory`) in the change that adds the check. A tool's or skill's name goes in a separate `names` list. Case ids are synthetic and stable (D6, §5), and every one passes `ID_TEXT`, so `assert_content_free` keeps its allowlist, gaining only the new field names. Answers, prompts and failure prose stay out, exactly as today. At 138 cases a row grows by about 13 KB, far under DynamoDB's 400 KB item limit. This reverses one line of `release-ledger.md` §5.4 (flipped case ids stay out), and that spec gets a note saying so, with the reason: an id that names a synthetic case reveals nothing, and a failure's reader needs it.
 
 **D21 — One page, reading the ledger's rows. No second store.** The page is `/admin/evaluations` in the admin console (`data.chrome: 'admin'` inherited from `/admin`), gated by `features.releaseLedger` (on in `environment.development.ts`, off by default and in prod), because it reads `LEDGER#EVAL` rows through the ledger's store. Its one new route is `GET /admin/costs/ledger/evals?from&to&modelId&track` on the ledger router (`app_api/admin/costs/ledger_routes.py`), behind `require_ledger_admin` like every other ledger route: `admin.costs` first, then the flag, so a 404 never hides a 401 or 403. It returns the rows in range, newest first. The release ledger's quality panel links each version's eval line to the page, filtered to that build.
 
@@ -510,7 +512,7 @@ The page is read-only. Starting a run from the page is still open (§12); it is 
 
 ### 16.4 Punch list
 
-- **PR-9 — data.** `--track` on `score --publish`, `cases` and `names` with the code mapping in `ledger_publish.py`, the allowlist test extended, and the nightly and release callers passing their track. The `release-ledger.md` §5.4 note.
-- **PR-10 — page.** `GET /admin/costs/ledger/evals`, the page, the link from `release-quality-panel.component.ts`, specs for the gate grid and the noisy-case rule, and verification in the browser on dev against at least ten nightly rows.
+- **EH-9 — data. BUILT 2026-11-08.** `--track` on `score --publish`; `failure_code()` in `score.py`, `case_ledger_entries()` in `report.py`, and `cases` / `track` on `eval_ledger_row` and `EVAL_ROW_FIELDS`, so the guard is unchanged except for the two names; the nightly script publishes with `--track nightly`, and the release skill's eval step with `--publish --track release`; the `release-ledger.md` §5.2 and §5.4 notes. Tests pin every scorer sentence to a code, the guard refusing prose inside a case entry, and a published row read back whole by the ledger reader, `cases` included.
+- **EH-10 — page.** `GET /admin/costs/ledger/evals`, the page, the link from `release-quality-panel.component.ts`, specs for the gate grid and the noisy-case rule, and verification in the browser on dev against at least ten nightly rows.
 
-A trend needs history, so PR-9 should land as soon as possible: every nightly run before it publishes a row without per-case outcomes, and that history cannot be backfilled. The run directories that would hold it go with the nightly runner.
+A trend needs history, so EH-9 should land as soon as possible: every nightly run before it publishes a row without per-case outcomes, and that history cannot be backfilled. The run directories that would hold it go with the nightly runner.
