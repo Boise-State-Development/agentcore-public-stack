@@ -1145,6 +1145,27 @@ to make — and (b) no N-fold redundant compilation, which matters against a
 deployment that already has a Bedrock throttle alarm. It is not a latency
 optimization and the spec should not claim it is.
 
+**16.12 Exact ids and exact set names cost a wasted round on most first
+calls.** §5 assumed the model would pass upload ids and the set's own name. In
+two live runs on dev (2026-11-08, Haiku 4.5, two small `.md` attachments) it did
+neither on its first try. A small attachment reaches the model as an inline
+block named by filename, with no upload id anywhere in the conversation, so it
+sent the filenames. In the other run it named the **skill** the user picked
+(`nsf-solicitation-review-test`) where the set inside it is called
+`nsf-solicitation`. Each mistake cost one or two failed calls and a
+`document_read` listing before the table appeared.
+
+Both are now resolved rather than refused. Documents go through
+`apis.shared.files.session_documents`, shared with `verify_sources` (#1784):
+an exact id, else a unique filename match, else the session's only document
+when exactly one is asked for. The tool lists the session's documents once per
+call to do this, after the set resolves. Set names go through
+`resolve_field_set`: the same name punctuated differently, else a turn skill
+that declares exactly one set. Neither ever picks between candidates: an
+ambiguous document or a skill with several sets is answered with the real
+choices. The `upload_ids` description now says filenames are accepted, which
+shortened the spec by 6 tokens.
+
 ---
 
 ## 17. N documents per call (Amendment 2026-10-20)
