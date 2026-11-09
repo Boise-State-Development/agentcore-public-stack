@@ -216,7 +216,7 @@ runtime (the feature flag decides whether the surface exists at all, §12):
 | `standingDefaultCap` | `100` | Pre-filled per-period cap on the standing form (0 = form starts at *No cap*) |
 | `fiscalYearEnd` | `12-31` | `MM-DD`; default `validUntil` for a standing extension is the next occurrence |
 | `reportGroupField` | unset | One `fundingFields` key the charge ledger indexes for roll-ups (§7.3), for example `org` |
-| `notifyEmails` | `[]` | Admins who get an in-app notification on each new request |
+| `notifyEmails` | `[]` | Admins who get an in-app notification on each new request. Settings warns while it is empty (§15.4) |
 
 ---
 
@@ -1083,41 +1083,48 @@ Each PR targets `develop`, defaults off, and is independently mergeable.
 | **PR-2 SPA user side** | `features.quotaRequests`; dialog; the three entry points; Usage page split bar + *Your requests*; `info_requested` flow; bell gate change; notification rendering | Browser-verified on a local stack with `SKIP_AUTH` and a seeded tier |
 | **PR-3 SPA admin side** | Requests tab with badge, detail panel, approve/info/deny; Extensions tab with revoke and the *Standing* filter; direct *Extend quota* on the user detail page with a user picker and the one-time / standing switch; policy settings form with schema editor and the standing fields | Browser-verified against PR-1 on `:8010`; no raw-id inputs; the no-cap warning and the standing confirmation sentence are present |
 | **PR-4 chargeback** | `fundingKey` stamping (PR-1 writes the attribute; PR-4 adds the index use), charge-ledger model, lazy close + re-close, report route with filters and CSV, funds listing, Chargeback view with range, fund and grouping pickers, provisional/closed labelling, `baseLimitSnapshot` ambiguity marker | A seeded month with central, capped chargeback and standing extensions reproduces §9.1 by hand; closing twice writes once; a re-close after a revoke changes exactly the affected fund's total and leaves an audit row |
-| **Phase 2 (separate specs)** | Fiscal-authorizer confirmation; funding-source catalogue/allowlist; auto-approve rules (for example ≤ `$10` once per period); approver routing by funding source or department; `rollover` extensions; `windowAmount` once cooldown windows exist; dashboard widget | |
+| **Phase 2 (separate specs)** | Fiscal-authorizer confirmation; funding-source catalogue/allowlist; auto-approve rules (for example ≤ `$10` once per period); approver routing by funding source or department; `rollover` extensions; `windowAmount` once cooldown windows exist; dashboard widget; a funding-source threshold with a hint in the dialog (§15.3); group standing arrangements (§15.7) | |
 
 Turn on in the `development` GitHub environment after PR-3; production after
 one release cycle with the report (PR-4) in hand.
 
 ---
 
-## 15. Open questions
+## 15. Open questions, decided (2026-11-09)
 
-1. **Cooldown after a denial?** v1 allows an immediate resubmission (the admin
-   sees history). If repeat requests become noise, add `resubmitAfterDays`
-   to the policy.
-2. **Stale pending requests.** Should a request auto-expire (say 30 days) with
-   a notification, or stay until decided? Leaning: stay, and surface age in
-   the queue, until a deployment reports a problem.
-3. **Policy visibility to users.** Should the dialog show *"requests over $50
-   usually need a funding source"*? Cheap once `fundingSourceMode` has a
-   threshold variant; not in v1.
-4. **Admin notification fan-out.** `notifyEmails` is explicit. Deriving the
-   list from "everyone holding `admin.quota_requests`" needs a reverse lookup
-   roles → users that does not exist yet; revisit with the scope's PR-3 holder
-   counts.
-5. **Daily tiers.** An extension on a daily tier adds `amount` per day. Rare;
-   the copy handles it, but confirm nobody wants "per month on a daily tier".
-6. **Should the user acknowledge a standing arrangement?** v1 notifies and
-   displays the terms; it does not require a click. If an institution's
-   policy says the person whose fund is charged must consent in-app, add an
-   `acknowledgedAt` on the extension and hold the funding notice's wording
-   until it is set. The fiscal-authorizer confirmation in Phase 2 is the
-   stronger version of the same idea.
-7. **Standing arrangements for a group.** "Everyone in this department
-   charges to this cost center after their allowance" is a tier-level or
-   AppRole-level standing extension. The model supports it (an extension
-   keyed by role instead of user, resolved beside the user's), but it needs
-   its own report grouping; defer until a deployment asks.
+All seven were decided before production (#1827). Six keep v1 as built; one
+adds a warning in Settings. Two deferred items join Phase 2 (§14).
+
+1. **Cooldown after a denial: none.** A denied user may resubmit at once. The
+   one-open-request rule already stops a pile-up, and the admin sees the
+   user's history on the request. `resubmitAfterDays` is added to the policy
+   only if a deployment reports repeat requests as noise.
+2. **Stale pending requests: they stay pending.** No auto-expiry. The queue
+   already shows each request's age, oldest first (§6.2), which is what an
+   admin needs to catch one that was missed. Revisit only if a deployment
+   reports a problem; expiry would need a new state, a scheduled sweep and a
+   user notification.
+3. **Policy hints in the dialog: deferred.** The dialog does not say "requests
+   over $50 usually need a funding source". It would need a threshold variant
+   of `fundingSourceMode` that does not exist yet. Phase 2.
+4. **Admin notification fan-out: the explicit list, with a warning.**
+   `notifyEmails` stays the only fan-out. Deriving recipients from every
+   holder of `admin.quota_requests` would need a roles → users reverse lookup
+   that does not exist. Instead, Settings shows a warning while the list is
+   empty: requests still reach the queue and the badge, but nobody gets an
+   inbox entry, so a deployment should add at least one person before users
+   can ask.
+5. **Daily tiers: per day is right.** An extension on a daily tier adds its
+   `amount` per day, and the copy says so. Nobody needs "+$X per month" on a
+   daily tier; it would change both the checker arithmetic and the waterfall.
+6. **Acknowledging a standing arrangement: no click in v1.** The user is
+   notified and sees the terms; nothing waits on their consent.
+   Fiscal-authorizer confirmation in Phase 2 is the stronger form of consent,
+   because the person who controls the fund is the one who should confirm.
+   `acknowledgedAt` is not added.
+7. **Standing arrangements for a group: deferred until a deployment asks.**
+   The model supports an extension keyed by role or tier, resolved beside the
+   user's, but it needs its own report grouping. Phase 2.
 
 ---
 
