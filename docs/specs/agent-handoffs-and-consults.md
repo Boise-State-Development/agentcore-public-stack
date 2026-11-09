@@ -34,6 +34,14 @@ is the source's last turn, byte for byte, with one instruction appended. So the 
 cache-read rate (0.1× on our models) rather than re-sent, and nothing is written back to the source (§4.5). The
 deterministic excerpt stays as the fallback. PR-0.1, PR-0.2 and PR-0.3 (merged) use the excerpt;
 this changes what fills the card, not how a handoff is sent or accepted.
+**Amendment (2026-11-08): files by reference, the linked workspace.** Linked conversations now share files as
+well as text and artifacts. A file stays in the conversation that made it, and the receiving conversation gets a
+**reference row** in the user-files table that points at it. That row is read-only, counts against no quota and
+never deletes bytes. The existing file tools read it with no change, and the model sees one `<file …/>` line in
+the wrapper. Files go out on the review sheet and come back on a delivery, and in both directions the user chooses
+what crosses. No bytes are copied, and none enter a prompt. Strands' Swarm `SharedContext` was considered and is
+not used, because it lasts one in-process run and is written into every prompt. The design keeps the shape of
+Strands' sandbox instead: the workspace is an environment, and sharing it is a deliberate choice (§4.9).
 **Targets branch:** `develop`
 **Related:**
 - `docs/specs/agent-marketplace.md` §D11 — the 2026-09-14 revision that made a mention *bind* (#1115)
@@ -44,6 +52,7 @@ this changes what fills the card, not how a handoff is sent or accepted.
 - `docs/specs/ask-user-question.md` — the model for a constant, kill-switched tool spec in `toolConfig`
 - `docs/specs/scheduled-agent-runs.md` — the headless run entrypoint (F1) and the unread dot
 - `CLAUDE.md` — prompt-cache contract, token cost tenet, "one session can be served by more than one agent"
+- `docs/specs/session-workspace-tools.md` — the user-files table as the file substrate, user-scoped reads and session-scoped writes, which §4.9 builds on
 - `docs/specs/multi-agent-patterns.md` — brainstorm: how Agents as Tools, Swarm, Graph, Workflow and A2A map onto this spec's layers, and why Phase 1's plumbing should be built pattern-agnostic
 
 ---
@@ -92,7 +101,7 @@ send-back is a row we can count. **§7 turns those counts into the go/no-go for 
 | Phase | What the user gets | New plumbing | Status |
 |---|---|---|---|
 | **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | In progress: PR-0.1–0.3 built (§11) |
-| **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8) | Proposed |
+| **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8); file reference rows in both directions (§4.9) | Proposed |
 | **0c — Suggested handoffs** | The model can offer a chip ("Hand off to Rubric Builder →") without stopping its turn; Start opens the same review sheet | `suggest_handoff` tool, `handoff_suggested` SSE event | Proposed, opt-in |
 | **Gate** | — | — | §7 |
 | **1 — Consult** | A mid-thread mention runs the Agent **in place** and its report comes back automatically | Hidden consult sessions, nested streaming, agent-resolution refactor | Only if the gate passes |
@@ -200,6 +209,7 @@ User-facing copy: "Hand off to *Rubric Builder*", "Handed off to *Rubric Builder
 | Linking | The target session records `spawnedFrom: {sessionId, handoffId}`. The source's `HANDOFF#` row records `targetSessionId` and `status` |
 | When the target needs the user | Its prompt (consent, approval, question) is **relayed** into the source thread under the handoff row and can be answered there, resuming the target in the background. A browser sign-in links to the target instead. The relay is built from the pending interrupt by the platform, never written by a model, and never enters the source's history (§4.3) |
 | How a result goes back | A **delivery** (§4.8): a persisted `DELIVERY#` row on the receiving conversation, shown as a card on its composer and carried by the user's next send. It can reference artifacts the sending conversation made. It never starts a turn and never enters a running one |
+| How files move | **By reference** (§4.9): a read-only reference row in the receiving conversation, pointing at the file where it was made. Out on the review sheet, back on a delivery, chosen by the user each way. Never copied, never inlined |
 | Flags | Backend `HANDOFFS_ENABLED`, SPA `FEATURES.handoffs` (both default **off** in development); `suggest_handoff` separately gated by `HANDOFF_SUGGESTIONS_ENABLED` |
 
 ### 4.2 Phase 0a — Handoff with context
@@ -285,7 +295,8 @@ own sentence and could be sent half-edited by accident. A card keeps the request
 context editable as a document, and lets the SPA show "Context from *Course planning*" on the sent bubble without
 parsing the prompt.
 
-**Attachments** in the *source* thread are named in the card (the brief or the excerpt), not carried over (§4.5).
+**Attachments** in the *source* thread are named in the card (the brief or the excerpt), and the ones the user
+ticks on the review sheet are carried over by reference: never copied, never inlined (§4.9).
 
 **Cancelled handoffs.** Cancel calls `POST /sessions/{id}/handoffs/{handoffId}/dismiss`, and no session is created.
 If the user navigates away with the sheet open, the handoff stays `open`, and one older than 24h reads as
@@ -837,6 +848,10 @@ EMF, under the existing PromptCache namespace so the cost dashboard can show it:
   before answering
 - `RelayedPromptConflict`: an answer refused because the other surface answered first
 - `DeliveryArtifacts`: references per delivery, and `DeliveryArtifactOpened` from the card or the sent bubble
+- `HandoffFiles` and `DeliveryFiles`: files per handoff and per delivery. `HandoffFilesUnticked`: files listed on
+  the review sheet and not sent, which feeds §13 Q20
+- `LinkedFileRead` by reader (`document_read`, `word`, `spreadsheet`, `powerpoint`, `workspace_read`), and
+  `LinkedFileGone`: a reference read after its original was deleted
 - `SendBack` by origin (`row` for Bring back result, `target` for Send to *{title}*), with `openedTargetFirst`
 - `DeliveryCreated` / `DeliveryAttached` / `DeliveryDismissed` by `origin` (`user`, later `agent`), and
   `DeliveryEdited`
@@ -958,6 +973,186 @@ and leaves the rubric behind. So a delivery can carry **references** to artifact
 - **Shared Projects.** Unchanged: a delivery into a project task is refused in v1, so an artifact can't reach other
   members this way. Sharing an artifact with a project stays the existing share flow.
 
+### 4.9 The linked workspace: files by reference
+
+*Added 2026-11-08.* Deliveries move text and artifacts between linked conversations, but files don't move at all.
+A handoff names the source's attachments in the card and doesn't carry them (§4.2). The brief lists them by name
+only (`brief.py`: "what is in play, by name"), so the target can't open the syllabus it was asked about. Nothing
+comes back either: a Word document the target writes stays in the target. When the work is a document, the work
+product is exactly what gets left behind.
+
+**The tenet: linked conversations share their work products by reference, never by copy, and never by putting
+them in each other's prompts.** A handoff or delivery says in text what the work is. The files stay where they
+were made, and the receiver reads them on demand, in bounded pieces, with the tools that already read files.
+
+**What Strands offers, and why we keep the shape and not the code.** Checked against the pinned
+`strands-agents==1.63.0`:
+
+- **Swarm's `SharedContext`** is a JSON key/value store that agents add to. `Swarm._build_node_input` writes all
+  of it into each next agent's input as "Shared knowledge from previous agents". It lasts for one `Swarm` run in one
+  process. Our conversations are separate sessions and separate `Agent` instances. They often run in separate
+  microVMs, because affinity pins per `(user, session)`, and days can pass between turns. Writing the whole store
+  into every prompt is also the unbounded pass-through the cost tenet rules out (`multi-agent-patterns.md` counts
+  the same cost for Swarm).
+- **`Agent(sandbox=…)`** treats the workspace as an environment, not as prompt text. Sandbox tools reach files
+  through `context.agent.sandbox`, never through a root path the model supplies. Each agent gets its own sandbox
+  unless it is given a shared one, so sharing is a deliberate choice. That is the shape this section keeps. The
+  sandboxes Strands ships (Docker, SSH and the host) don't suit a multi-tenant Runtime, and a `Sandbox` instance
+  can't be shared across microVMs. So the substrate is the one we already have: the user-files table, with identity
+  injected by closure.
+- **`GraphState`, `invocation_state` and the `subagent` tool's shared history** last for one run or are
+  conversation history. None of them is a place for files.
+
+| Question | Decision |
+|---|---|
+| What is shared | Rows in the user-files table: uploads, Word documents, workspace writes, generated images. Artifacts keep their own store and their own references (§4.8) |
+| Where a shared file lives | In the conversation that made it. A **reference row** in the receiving conversation points at it. Bytes are never copied |
+| Who decides what crosses | The user: on the review sheet going out, and on the delivery card coming back. In Phase 2, the agent, by id, through the same checks |
+| What the receiving model sees | One `<file …/>` line per file inside the existing wrapper, and the file in its conversation's file listing. Never the bytes in the message |
+| How it is read | With the tools that already read a conversation's files: `document_read`, the Word, spreadsheet and PowerPoint tools, and `workspace_read` where granted. No new tool |
+| Can one side change the other's file | No. A reference is read-only. A revision is a new file in the reviser's own conversation |
+| Reach | Linked conversations of one user only (§9.2). Never into or out of a Shared Project task |
+| Flag | Rides `HANDOFFS_ENABLED`, as deliveries do. No switch of its own |
+
+**The reference row.** It is a `FileMetadata` row in the receiving conversation (`GSI1PK = CONV#{receiving}`) with
+a new upload id. It carries:
+
+- `linkedFrom: {sessionId, uploadId, fromTitle}`, naming the original. `fromTitle` is captured at creation, as a
+  delivery's is.
+- The original's `s3Key`, `s3Bucket`, `filename`, `mimeType`, `sizeBytes` and `ttl`.
+- `source: "linked"` and `delivery: "reference"`.
+- `status: READY`. A reference is only ever made from a `READY` original.
+
+It carries no `digest`, `preparation` or `kbIndex`. Derived state belongs to the original and is read from there
+(rule 4). A reference to a reference is resolved to the original when it is made, so no chain is longer than one
+hop.
+
+The row is an ordinary file row in the receiving conversation, so everything that lists "this conversation's
+files" sees it unchanged:
+
+- `document_read`'s listing, and the gate that decides whether the tool exists: `session_has_documents` runs the
+  same `SessionIndex` query (`GSI1PK = CONV#{sessionId}`)
+- `workspace_list`'s session scope
+- the Word tools' lookup
+- the SPA's Files panel
+
+That is why it is a row and not a list of ids on the handoff. With a list, every gate that decides whether a tool
+exists would need a second read before the first token. Without that read, the tool would come and go as microVMs
+recycle. Each flip rotates `toolConfigHash`, which is the prefix re-write the `document_read` gate's docstring
+measured in prod.
+
+**Rules a reference row keeps.** Each one is a test (§10).
+
+1. **No quota.** Creating a reference increments nothing, and deleting one decrements nothing. The bytes are counted
+   once, on the original.
+2. **Deleting a reference never deletes bytes.** Today `FileUploadService.delete_file` and
+   `FileUploadService.delete_session_files` (`apis/app_api/files/service.py`) delete each row's S3 object, its
+   thumbnail and its large-document sidecars under `derived_prefix(s3_key)`, and then decrement quota. A reference
+   shares its original's `s3Key`, so for a row with `linkedFrom` set, both remove the row only. The repository's
+   own `delete_session_files` cascade stays row-only, as it is today. Without this rule, deleting the target would
+   delete the source's syllabus and its prepared pages. One predicate decides it, `is_linked_reference(meta)`, in
+   `apis/shared/files/models.py` beside `is_reference_document`.
+3. **Read-only.** A tool that would change a file in place (`modify_word_document`, `redline_word_document`, any
+   later one) writes its result as a new file in its own conversation when its input is a reference. It never writes
+   to the original's key.
+4. **Derived state comes from the original.** A reader that needs the digest, the large-document sidecars or the
+   attachments-KB index first resolves the reference to its original through one function, `resolve_linked_file`.
+   So nothing is prepared or indexed twice.
+5. **A deleted original reads as gone.** Deleting the source deletes the bytes in its cascade, and its references
+   then resolve to nothing. Listings mark such a file "No longer available (deleted from *{fromTitle}*)", and readers
+   say the same instead of raising `NoSuchKey`. The original's delete does not look for its references. Each
+   reference row is removed with its own conversation.
+6. **Never inlined.** A reference reaches the model only as its `<file>` line and through the readers. It is never
+   in a turn's `file_upload_ids`, so the inline-attachment path never sees it. Its `delivery: "reference"` makes
+   `is_reference_document` agree for document-class files.
+
+⚠️ **Verify first, before PR-0.4a's code.** List every reader of `FileMetadata` outside the workspace service.
+Mark which ones need `resolve_linked_file` (rule 4) and which ones write in place (rule 3). Put the list in the PR.
+At least:
+
+- `document_read`, including its `query` search: that checks the row's `session_id` and then calls
+  `search_attachments` by upload id, while the attachments-KB index is keyed on the original's
+- the Word, spreadsheet and PowerPoint tools
+- `document_offload` and `document_rehydration`
+- large-document preparation
+- the attachments-KB reconcile
+- the Files panel's delete route
+
+**Going out: files on a handoff.** The review sheet (§4.2) lists the source conversation's files from the list the
+SPA already holds, each with a checkbox. Files attached in the source's last five user turns are ticked, up to
+`HANDOFF_MAX_FILES = 5`. The invocation carries them as `handoff_context.file_ids`.
+
+At acceptance, on the target's first turn, the server:
+
+1. checks that each id is the user's, `READY`, and in the source conversation (`session_id == sourceSessionId`).
+   This is §4.8's sender rule for artifacts, applied to files. An id that fails is dropped with a warning
+2. writes the reference rows in one `BatchWriteItem`, in the same phase as the acceptance read
+3. adds one line per file to the wrapper:
+
+```
+<handoff_context from_conversation="{source title}">
+The user brought this context from another of their conversations.
+…brief or excerpt…
+<file upload_id="…" name="syllabus.pdf" type="application/pdf" size="412 KB"/>
+</handoff_context>
+```
+
+This replaces "named in the card, not carried over" (§4.2). The brief still names files. The line is what makes
+them readable. Acceptance has already classified the files, so it passes `turn_has_document` to the
+`document_read` gate, and the tool is there on the first turn without a query. The target is a new conversation,
+so the tool is in its `toolConfig` from its first model call, and no prefix is re-written.
+
+**Coming back: files on a delivery.** A delivery gains `files`: up to `DELIVERY_MAX_FILES = 5` references
+`{uploadId, filename, mimeType, sizeBytes}`.
+
+- **Which files.** Bring back result offers the files the target created after the handoff was accepted. Reference
+  rows are left out. File rows don't record which message made them, unlike artifact HEAD rows, so `createdAt` is
+  the boundary.
+- **Checks.** §4.8's sender rule applies: each file must be the user's, `READY`, and in the sending conversation. A
+  reference the sender holds is resolved to its original first. If that original is in the receiving conversation,
+  the delivery's line points at it and no row is written, so a file can be handed back to where it came from.
+- **When rows are written.** At attach, in the same phase as the delivery's conditional flip, and only by the
+  request whose flip succeeds. Two tabs attaching one card write one set of rows. Until then the files exist only
+  in the `DELIVERY#` row's `files`, which is what the card shows.
+
+**The source's cache.** A file coming back can add `document_read` to the source's `toolConfig` if the source had
+no document of its own. That is the same one-time change as attaching a document mid-conversation. It happens only
+on a send the user makes, and it doesn't flap: the row persists, and the gate's query finds it after a restart. The
+target can never cause it alone, because nothing is written into the source until the user attaches.
+
+**What the user sees.**
+
+- A shared file appears in the receiving conversation's Files panel marked "From *{fromTitle}*", on the delivery
+  card before it is attached, and as a chip on the sent bubble.
+- The handoff row in the source lists the target's new files as they appear, each with Bring back. The list comes
+  from the target's file listing, which the SPA reads, and it is display only, like the row's live status line.
+
+So the user can watch the shared work grow, and nothing reaches the source's model until they choose.
+
+**Trust.** A shared file may be content another conversation's agent produced after reading a web page.
+
+- In Phase 0 a file crosses only when the user acts. In Phase 2 it crosses by id, through the same checks.
+- A file brings no capability. No tool, grant or skill travels with it, and the receiver reads it with its own tools.
+- Its line names the conversation it came from, inside the wrapper's existing framing ("the user brought", "the
+  user chose to include it"). What a reader returns from the file is a tool result: untrusted data, like any other.
+- Filenames are attribute values. The renderer escapes them and neutralises wrapper tags, the rule §9.6 item 5 sets
+  for titles.
+- A reference allows no read that wasn't already possible. `read_document` checks that the user owns the file, not
+  which conversation it is in, and `workspace_read` is user-scoped by design. What a reference adds is a pointer and
+  a listing entry, both inside conversations the user linked.
+
+**TTFT and cost.** A handoff or delivery that carries files pays one `BatchWriteItem`, in the phase that already
+pays the acceptance or delivery round trip. Measure it at five files and put the number in the PR. A send without
+files pays nothing. Each file costs the receiving model about 20 tokens, after the history cachePoint. Reading is
+on demand and bounded by the readers' existing caps.
+
+**Not in Phase 0.**
+
+- An agent-facing listing of the linked conversations' files that weren't handed over (§13 Q20).
+- A Code Interpreter session shared by a linked pair (§13 Q19).
+- Files between two targets of the same source. They aren't linked to each other (§9.2), so a file reaches one from
+  the other only through the source.
+
 ---
 
 ## 5. Goals and non-goals, by phase
@@ -967,6 +1162,8 @@ and leaves the rubric behind. So a delivery can carry **references** to artifact
   user out of the thread they were in.
 - The user can see whether a handoff is running, needs them, or is done, from the original thread.
 - A handoff's result can go back to the original thread in **one action**.
+- The files the work needs, and the files it produces, cross with it by reference: not copied, not pasted into a
+  prompt, and read-only on the receiving side.
 - The model can suggest a handoff without derailing its turn.
 - No prefix is ever re-written; no session is ever served by two configurations.
 - Every handoff, review action, completion and send-back is counted.
@@ -1004,6 +1201,8 @@ and leaves the rubric behind. So a delivery can carry **references** to artifact
 | `CONVERSATION_MESSAGE_WAKE_ENABLED` | backend | off | yes; off = a message to an idle conversation stays pending (2a) |
 
 Deliveries (§4.8) ride `HANDOFFS_ENABLED`; they have no switch of their own because Phase 0 has no other way back.
+File references (§4.9) ride it too. They extend the handoff and the delivery without adding a tool or changing a
+tool spec, and with the flag off, `handoff_context.file_ids` is ignored like the rest of that field.
 The two Phase 2 landing flags only matter with `CONVERSATION_MESSAGES_ENABLED` on, and each one falls back to 2a, so
 turning either off loses no message.
 
@@ -1313,7 +1512,8 @@ per-conversation "allow messages from…" setting is the way to widen this later
     "properties": {
       "to":      {"type": "string", "description": "\"parent\" for the conversation this one was handed off from, or the title or Agent name of a conversation handed off from this one"},
       "message": {"type": "string", "maxLength": 8000, "description": "Self-contained text. The other conversation has not seen this one"},
-      "artifact_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "Optional: ids of artifacts you made in this conversation to send with the message"}
+      "artifact_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "Optional: ids of artifacts you made in this conversation to send with the message"},
+      "file_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "Optional: upload ids of files in this conversation to share with the message. They are shared by reference, not copied"}
     },
     "required": ["to", "message"]
   }
@@ -1325,6 +1525,9 @@ per-conversation "allow messages from…" setting is the way to widen this later
 - **Artifacts by reference.** `artifact_ids` go through §4.8's checks: each must be the user's and made in *this*
   conversation. An id that fails is dropped and named in the result ("Sent without *{id}*: it wasn't made in this
   conversation"), rather than failing the whole message.
+- **Files by reference.** `file_ids` go through §4.9's checks and become a delivery's `files`. Reference rows are
+  written only when the user attaches the card (2a), or when the delivery is claimed (2b, 2c), never before. An id
+  that fails is dropped and named in the result, as for artifacts.
 - **Not for pauses.** A paused turn can't call tools, and the pause is relayed by the platform (§4.3). The tool is
   for results and progress the agent chooses to send: a finished draft, an artifact, or "I've drafted the rubric;
   I'll need Canvas access to post it", sent before the tool call that will need it.
@@ -1427,8 +1630,9 @@ has started", and the only one that spends money while nobody is watching.
 1. **One user, linked conversations.** `create_delivery` checks both sessions on `(session, user)` and the link. A
    Shared Project task is refused as a target and as a sender.
 2. **The receiver keeps its own grants.** The sender's tools, model, skills and grants never travel. A message is
-   text plus artifact references (§4.8): no attachments, no tool calls, and no artifact bodies. The user can open a
-   referenced artifact from the card; the receiving model can act on it only with its own tools.
+   text plus artifact references (§4.8) and read-only file references (§4.9): no inlined attachments, no tool calls,
+   and no artifact or file bodies. The user can open a referenced artifact or file from the card. The receiving
+   model can act on either only with its own tools, and it can never change the sender's file (§4.9 rule 3).
 3. **Nothing answers for the user.** A delivery is never an `interrupt_responses` entry, is never attached to a
    resume, is never steered into a paused turn, and is never carried over by `seed_steer_queue`. Tool approvals in a
    woken turn still pause. This is our version of Claude Code's rule against permission laundering: no conversation
@@ -1522,6 +1726,27 @@ has started", and the only one that spends money while nobody is watching.
   conversation (`SessionIndex` key ≠ the sender's), keeps the version pinned at send, and stops at
   `DELIVERY_MAX_ARTIFACTS`. The rendered block carries one line per artifact and no body, and an artifact title
   containing a wrapper tag can't close the block.
+- **File references (§4.9).**
+  - `handoff_context.file_ids` and a delivery's `files` refuse another user's file, a file from a conversation
+    other than the sender, a non-`READY` file, and any file into or out of a Shared Project task. Each stops at its
+    cap of 5.
+  - A reference to a reference is written pointing at the original. A file handed back to the conversation it
+    came from writes no row.
+  - Quota is unchanged by creating a reference and by deleting one.
+  - Deleting the receiving conversation, or deleting one reference from the Files panel, removes only the reference
+    rows. The original's row, S3 object, thumbnail and `derived_prefix` sidecars stay in place. Assert it against a
+    moto bucket, through `FileUploadService.delete_session_files` and `FileUploadService.delete_file`.
+  - `modify_word_document` and `redline_word_document` on a reference write a new file in the calling
+    conversation, and the original's object is byte-identical afterwards.
+  - With the original deleted, the listing marks the reference "No longer available" and `document_read` answers
+    with that, not with an exception.
+  - Two concurrent sends attaching one delivery with files write one set of rows.
+  - A filename containing `"` or a wrapper tag renders escaped and can't close the block.
+  - The target's first turn carries `document_read` with no gate query. On a fresh process, the next turn still
+    carries it, with the same `toolConfigHash`.
+  - On dev: hand off a conversation with a PDF and a `.docx` attached. The target reads both with `document_read`
+    and the Word tools. Then bring back a Word document the target wrote. The source's next turn after attaching it
+    is one `toolConfigHash` change if the source had no document of its own, and none if it had one.
 - **Deliveries.**
   - `create_delivery` refuses a session another user owns, and a Shared Project task, on either end.
   - Replay returns pending deliveries only, in `createdAt` order.
@@ -1834,6 +2059,18 @@ has started", and the only one that spends money while nobody is watching.
   `handoff_context`; replay as `deliveries`; the dismiss route. Bring back result on a `done` row; Send to
   *{title}* through the review sheet, without navigating; delivery cards on the composer. Artifact references on
   both paths, with the sender-conversation check and chips on the card and the sent bubble.
+- **PR-0.4a — Files by reference (§4.9).** Settle §4.9's verify-first (the inventory of `FileMetadata` readers)
+  first. Then:
+  - `linkedFrom` on `FileMetadata`, which is additive, plus `is_linked_reference` and `resolve_linked_file`
+  - the delete, quota and write-in-place rules in the repository and the tools the inventory names
+  - `handoff_context.file_ids` and the rows written at acceptance
+  - a delivery's `files` and the rows written at attach
+  - the `<file>` line in the wrapper renderer
+  - the review sheet's file checkboxes, the "From *{title}*" marking in the Files panel, and the handoff row's list
+    of the target's files
+  - the §4.7 metrics
+
+  It can land after PR-0.4, or with it: the handoff half needs only PR-0.2's acceptance.
 - **PR-0.5 — `suggest_handoff`.** Tool, `handoff_suggested` event, chip UI that opens the review sheet, replay,
   `CLAUDE.md` SSE table. Marginal CountTokens measured and recorded in the PR.
 - **Dev validation.**
@@ -1942,6 +2179,23 @@ has started", and the only one that spends money while nobody is watching.
 - **P. Inline artifact bodies in a delivery.** The model could read the artifact without a tool, but a whole
   document would enter the receiver's history permanently, at model rates on every later turn, whether or not the
   conversation needs it again. Rejected for references plus, if needed, a bounded `read_artifact` (§13 Q14).
+- **T. Strands Swarm's `SharedContext` as the workspace.** It is the SDK's built-in shared state. But it lasts one
+  in-process `Swarm` run, and `_build_node_input` writes all of it into every next agent's prompt. Our linked
+  conversations are separate sessions in separate microVMs, so it can't reach across them, and writing the store
+  into every prompt is the unbounded pass-through the cost tenet rules out. Rejected (§4.9).
+- **U. A shared folder per handoff that both sides write**, for example a `WORKSPACE#<handoffId>` namespace. It is
+  closest to "a workspace" as a word. But two writers on one file need a conflict rule, and the folder has no owner
+  once one side is deleted. It also brings back a second key convention, the one `session-workspace-tools.md`
+  dropped from the reference repo. Rejected: each file stays with its writer, and a reference shares it.
+- **V. Copy the bytes into the receiving conversation.** Simple and fully isolated. But it counts the quota twice,
+  and after a revision on one side, the other side holds a stale copy that looks like the original. Rejected for
+  references.
+- **W. Put a list of upload ids on the `HANDOFF#` or `DELIVERY#` row, and have readers accept them.** No new rows.
+  But every gate that asks "does this conversation have a document" would need a second read before the first token,
+  or the tool would flap across microVMs and rotate `toolConfigHash`. Rejected for a row the existing query finds.
+- **X. Show the model every linked file automatically.** It would put files the user never chose in front of a
+  model that may have read an injected page. It would also make the source's `toolConfig` depend on what the target
+  does. Rejected: the user decides what crosses, and the handoff row shows them the rest.
 
 ## 13. Open questions
 
@@ -1992,6 +2246,18 @@ has started", and the only one that spends money while nobody is watching.
     what the user typed?
 18. **Phase 1 reuse.** A consult needs the same "what does the other Agent need to know" step. Should the consult's
     context be this brief, written from the parent's cache, instead of an excerpt?
+19. **A shared Code Interpreter session.** A linked pair could share one Code Interpreter session, which is the case
+    Strands' shareable `Sandbox` fits best. Three things are open: its lifetime (an idle timeout, against a handoff
+    that runs for days), who pays for it, and which microVM owns it. Until then, a file made in one conversation's
+    sandbox crosses only once it is saved to the user-files table, and §4.9 covers it from there.
+20. **An agent-facing linked listing.** Should `workspace_list` gain `scope: "linked"`, listing the user's files in
+    this conversation's linked conversations and bounded like the other scopes, so a target can find a file the user
+    didn't tick? It would ride the `workspace_files` grant, which no prod role holds, so it would reach few users
+    until that changes. Decide from `HandoffFilesUnticked`, and from whether targets ask the user for files the
+    source had.
+21. **Warn before deleting a shared file.** Deleting an original leaves references that read as gone (§4.9 rule 5).
+    Should the Files panel warn "Used in 2 linked conversations" first? That needs a lookup by `linkedFrom` on
+    delete, which means a GSI or a query per linked conversation.
 
 **Decided (2026-10-22):** the context card is a brief written by the source conversation's own model from its own
 prompt cache, as a non-persisting side call; the deterministic excerpt is the fallback.
