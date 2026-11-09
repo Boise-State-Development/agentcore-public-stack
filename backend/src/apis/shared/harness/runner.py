@@ -171,6 +171,9 @@ async def run_agent_headless(
     inference_params: Optional[Dict[str, Any]] = None,
     file_upload_ids: Optional[List[str]] = None,
     enabled_skills: Optional[List[str]] = None,
+    client_surface: Optional[str] = None,
+    client_tools: Optional[List[Dict[str, Any]]] = None,
+    interrupt_responses: Optional[List[Dict[str, Any]]] = None,
     trigger: str = "manual",
     invocations_base_url: Optional[str] = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
@@ -253,6 +256,15 @@ async def run_agent_headless(
         payload["file_upload_ids"] = file_upload_ids
     if enabled_skills is not None:
         payload["enabled_skills"] = enabled_skills
+    # The terminal client's request fields (TUI_WEB_PARITY_SPEC), sent only when
+    # given: ``client_tools`` declares tools the caller executes, and a resume
+    # answers their ``client_tool_call`` pauses with ``interrupt_responses``.
+    if client_surface is not None:
+        payload["client_surface"] = client_surface
+    if client_tools is not None:
+        payload["client_tools"] = client_tools
+    if interrupt_responses is not None:
+        payload["interrupt_responses"] = interrupt_responses
 
     acc = InvocationStreamAccumulator()
     try:
@@ -294,6 +306,7 @@ async def run_agent_headless(
     result.tool_trace = acc.tool_trace
     result.usage = acc.finalize_usage()
     result.oauth_required = acc.oauth_required
+    result.client_tool_calls = acc.client_tool_calls
     result.title = acc.title
     result.events_seen = acc.events_seen
     result.error = result.error or acc.error
@@ -302,6 +315,8 @@ async def run_agent_headless(
             result.status = "error"
         elif acc.oauth_required:
             result.status = "oauth_required"
+        elif acc.client_tool_calls:
+            result.status = "client_tool_call"
         elif acc.done:
             result.status = "completed"
         else:

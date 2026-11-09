@@ -10,6 +10,7 @@
     "agent_harness",
     "project_memory",
     "skill_outcome",
+    "terminal",
     "retention",
     "instruction_following",
     "refusal",
@@ -642,6 +643,48 @@
       "passes": 3,
       "samples": 3,
       "answer": "Lima"
+    },
+    "terminal.number_only_under_terminal_guidance": {
+      "family": "terminal",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "56"
+    },
+    "terminal.bare_json_under_terminal_guidance": {
+      "family": "terminal",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "```json\n{\"city\": \"Paris\"}\n```"
+    },
+    "terminal.three_bullets_under_terminal_guidance": {
+      "family": "terminal",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "- Red\n- Yellow\n- Blue"
+    },
+    "terminal.reads_a_local_file": {
+      "family": "terminal",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "The release deadline is **2026-12-04** (December 4, 2026)."
+    },
+    "terminal.declined_command_not_claimed_done": {
+      "family": "terminal",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "You declined to run the command. If you'd like to proceed with deleting `./tmp/cache.db`, approve the command when prompted, and I'll execute it for you."
+    },
+    "terminal.tool_error_reported": {
+      "family": "terminal",
+      "passed": true,
+      "passes": 2,
+      "samples": 3,
+      "answer": "The file exists but your current user doesn't have permission to read it. This is a common security practice — `/etc/lab/secret.conf` is likely protected because it contains sensitive configuration data.\n\nTo access it, you'd typically need to:\n- Run with elevated privileges (e.g., `sudo cat /etc/lab/secret.conf`) if you have sudo access\n- Ask a system administrator to read it for you\n- Check if your user should be added to a group with read permissions on that file\n\nIs there a different file you'd like me to try, or would you like help with something else?"
     },
     "retention.project_code_recalled": {
       "family": "retention",

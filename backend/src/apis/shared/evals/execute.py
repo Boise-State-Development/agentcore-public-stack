@@ -74,6 +74,47 @@ class OAuthRequiredError(RuntimeError):
     """
 
 
+#: The most client-tool pauses one turn may answer before the harness gives up:
+#: a model that keeps calling the same tool is a failure, not an infinite loop.
+MAX_CLIENT_TOOL_ROUNDS = 4
+
+
+def client_tool_specs(case: EvalCase) -> Optional[List[Dict[str, Any]]]:
+    """The case's client tools as ``InvocationRequest.client_tools`` takes them (camelCase schema)."""
+    if not case.run.client_tools:
+        return None
+    return [
+        {"name": t["name"], "description": t["description"],
+         "inputSchema": t.get("input_schema") or {"type": "object", "properties": {}}}
+        for t in case.run.client_tools
+    ]
+
+
+def client_tool_responses(case: EvalCase, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The case's canned answer to each paused call, keyed by its interrupt id. Never null."""
+    by_name = {t["name"]: t.get("respond") or {} for t in (case.run.client_tools or ())}
+    responses = []
+    for call in calls:
+        respond = by_name.get(str(call.get("toolName") or "")) or {"output": "unknown tool", "is_error": True}
+        response = (
+            {"declined": True} if respond.get("declined")
+            else {"output": str(respond.get("output", "")), "isError": bool(respond.get("is_error", False))}
+        )
+        responses.append({"interruptId": call.get("interruptId"), "response": response})
+    return responses
+
+
+def _merge_rounds(rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """One logical turn from its invocations: every round's tool calls, the last round's answer."""
+    merged = dict(rounds[-1])
+    merged["tool_trace"] = [entry for r in rounds for entry in (r.get("tool_trace") or [])]
+    merged["client_tool_calls"] = [call for r in rounds for call in (r.get("client_tool_calls") or [])]
+    if len(rounds) > 1:
+        merged["rounds"] = len(rounds)
+        merged["usage"] = {"usage": sum_usage(rounds)}
+    return merged
+
+
 def new_session_id() -> str:
     return f"{EVAL_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
 
@@ -140,6 +181,11 @@ async def run_sample(
     status = "completed"
     error: Optional[str] = None
     extra: Dict[str, Any] = {"rag_assistant_id": assistant_id} if assistant_id else {}
+    if case.run.client_surface:
+        extra["client_surface"] = case.run.client_surface
+    specs = client_tool_specs(case)
+    if specs:
+        extra["client_tools"] = specs
     sessions: Dict[int, str] = {1: session_id}
     for index, prompt in enumerate(case.turns):
         meta = case.meta_for(index)
@@ -157,7 +203,29 @@ async def run_sample(
             # Files arrive with the first turn, as a user attaching them would.
             file_upload_ids=(upload_ids or None) if index == 0 else None,
         )
-        turns.append(result.to_dict())
+        rounds = [result.to_dict()]
+        # A client tool pauses the turn; the harness is the client, so it
+        # answers from the case and resumes in the same session, as the
+        # terminal client does after the user approves the call.
+        while result.status == "client_tool_call" and len(rounds) <= MAX_CLIENT_TOOL_ROUNDS:
+            result = await run_turn(
+                **extra,
+                **per_user,
+                prompt="",
+                session_id=turn_session,
+                title=f"[eval] {case.id}",
+                model_id=model_id,
+                enabled_tools=list(case.run.enabled_tools) if case.run.enabled_tools is not None else None,
+                enabled_skills=list(case.run.enabled_skills) if case.run.enabled_skills is not None else None,
+                file_upload_ids=None,
+                interrupt_responses=client_tool_responses(case, result.client_tool_calls),
+            )
+            rounds.append(result.to_dict())
+        turns.append(_merge_rounds(rounds))
+        if result.status == "client_tool_call":
+            status = "client_tool_loop"
+            error = f"still calling client tools after {MAX_CLIENT_TOOL_ROUNDS} answers"
+            break
         if result.status == "oauth_required":
             providers = ", ".join(o.provider_id for o in result.oauth_required) or "unknown"
             raise OAuthRequiredError(f"{case.id}: the eval user needs consent for {providers}")

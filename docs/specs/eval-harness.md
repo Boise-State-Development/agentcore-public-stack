@@ -460,6 +460,13 @@ Each PR re-promotes the baselines its families touch, for every model with a com
   - `grounded` averages 1.00 on the `document_qa` cases for both models, and on `kb_small` 1.00 for Haiku 4.5 and 0.88 for Haiku 5.5.
 - **Found while building it.** On a `kb_small` turn, Haiku 5.5's `analyze_spreadsheet` calls on the project's workbook used `glob` to look for the file and were refused by the tool's code policy. It then told the user the analysis was blocked, which was true. `grounded` cannot see tool results, so it scored that caveat as unsupported. Whether the tool should tell the model where a project workbook lives is worth a look outside this harness.
 
+**EH-8 as built (2026-11-08).** The terminal client:
+
+- **Runner.** `run_agent_headless` passes `client_surface`, `client_tools` and `interrupt_responses` through, each only when given, so a scheduled run's request is unchanged. A `client_tool_call` frame is collected into `RunResult.client_tool_calls` with the new status `client_tool_call`.
+- **Answering the pause.** A case's `run.client_tools` declares each tool with the answer the harness gives as the client: `{output, is_error}`, or `{declined: true}`, never null. `run_sample` answers a pause and resumes in the same session with an empty message and the same request fields, as the terminal client does after the user approves a call. It merges the invocations into one logical turn, so the scored tool calls include the paused call. A model still calling after four answers fails with `client_tool_loop`. A tool named `local_<name>` is declared by the request, so it needs no grant.
+- **`terminal` (6, advisory under D18).** Three format cases under the terminal guidance (number only, bare JSON, three bullets); reading a local file; a declined command the answer must not claim was done; and a failed read the answer must report. `ADVISORY_FAMILIES` holds `terminal` beside the judged families; it gates once it reaches ten cases.
+- **Dev, k=3.** Haiku 5.5 passes all 6 (18 of 18 samples). Haiku 4.5 passes 5: it fences the bare JSON, as it does on the web surface.
+
 ### 15.8 Open questions
 
 1. **Does an empty project provision anything beyond rows?** If creating one stands up a data source or an index, D14 falls back to a seeded pool, and PR-6 measures that before choosing.

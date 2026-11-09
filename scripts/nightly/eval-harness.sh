@@ -88,7 +88,7 @@ main() {
     base_url=$(get_base_url) || exit 2
     local api_url="${base_url}/api"
     local model="${EVAL_MODEL_ID:-us.anthropic.claude-haiku-5-5}"
-    local families="${EVAL_FAMILIES:-tool_selection,document_qa,attachment_tools,project_kb,agent_harness,project_memory,skill_outcome,retention,instruction_following,refusal,skill_selection}"
+    local families="${EVAL_FAMILIES:-tool_selection,document_qa,attachment_tools,project_kb,agent_harness,project_memory,skill_outcome,terminal,retention,instruction_following,refusal,skill_selection}"
     local report="${EVAL_REPORT:-${PROJECT_ROOT}/eval-harness-report.json}"
     local out="${PROJECT_ROOT}/eval-harness-run"
 
