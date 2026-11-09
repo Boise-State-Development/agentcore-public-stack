@@ -283,13 +283,21 @@ jobs:
             backend/.venv
           key: uv-packages-${{ hashFiles('backend/uv.lock') }}
 
+      # The pinned action, not `curl | sh` from GitHub releases: a single 504
+      # on that download failed this job (and so skipped the backend tests)
+      # with no retry. The action's download retries; its own cache stays off
+      # because the restore/save steps around it own ~/.cache/uv.
+      - name: Set up uv
+        if: steps.cache-backend.outputs.cache-hit != 'true'
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: false
+
       - name: Install Python dependencies
         if: steps.cache-backend.outputs.cache-hit != 'true'
-        run: |
-          curl -LsSf https://astral.sh/uv/0.7.12/install.sh | sh
-          export PATH="$HOME/.local/bin:$PATH"
-          cd backend
-          uv sync --frozen --extra agentcore --extra dev
+        working-directory: backend
+        run: uv sync --frozen --extra agentcore --extra dev
 
       - name: Save Python packages cache
         if: steps.cache-backend.outputs.cache-hit != 'true'
@@ -359,6 +367,14 @@ jobs:
             ~/.cache/uv
             backend/.venv
           key: uv-packages-${{ hashFiles('backend/uv.lock') }}
+
+      # The cache carries the venv but not the uv binary; installing it here
+      # keeps test.sh off its `curl | sh` fallback.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: false
 
       - name: Run backend tests with coverage
         id: run-tests
