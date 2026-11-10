@@ -488,3 +488,22 @@ def test_pattern_mode_reaches_every_match_in_a_minified_html_page():
     found = str(result.payload)
     assert "WO-58779" in found and "WO-58797" in found
     assert "<p>" not in found
+
+
+def test_pdf_pattern_finds_a_phrase_the_layout_wrapped_across_two_lines():
+    """A PDF page's lines are layout wraps, so a phrase can be split by one."""
+    import re as _re
+
+    from apis.shared.files.document_read import _grep_lines
+
+    lines = [
+        "Staff reviewed the shift roster and confirmed it matched the posted procedure. Major",
+        "incident: at Thorn Flats, a lightning strike tripped the intake screens; crews restored",
+        "service the same day. Major incident: at Wren Crossing, a contractor breached a main.",
+    ]
+    regex = _re.compile("Major incident", _re.IGNORECASE)
+    hits = _grep_lines(lines, regex, 10, across_wraps=True)
+    assert [h["line"] for h in hits] == [1, 3]
+    assert "Thorn Flats" in hits[0]["text"]
+    # Line-oriented formats keep matching one line at a time.
+    assert [h["line"] for h in _grep_lines(lines, regex, 10)] == [3]
