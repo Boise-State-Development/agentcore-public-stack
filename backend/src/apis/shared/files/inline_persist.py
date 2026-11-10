@@ -44,9 +44,6 @@ from apis.shared.files.models import (
     FileMetadata,
     FileStatus,
     is_allowed_mime_type,
-    is_presentation_file,
-    is_tabular_file,
-    spreadsheet_max_file_size,
 )
 from apis.shared.files.repository import FileUploadRepository, get_file_upload_repository
 
@@ -72,15 +69,17 @@ class PersistFailure:
     reason: str
 
 
-# Same env names and defaults as ``apis.app_api.files.service.FileUploadService``.
-# The inference container cannot import app-api (``tests/architecture``), so the
-# limits are read here under the same contract rather than imported.
 def _max_size_for(filename: str, mime_type: str) -> int:
-    if is_presentation_file(filename, mime_type):
-        return int(os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION", 25 * 1024 * 1024))
-    if is_tabular_file(filename, mime_type):
-        return spreadsheet_max_file_size()
-    return int(os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES", 4 * 1024 * 1024))
+    """The planner's upload ceiling for this file, as app-api admission reads it.
+
+    Never the large-document ceiling: bytes that arrive inline on a turn are
+    held to the inline classes, so a reference-class file comes by upload id.
+    """
+    from dataclasses import replace
+
+    from apis.shared.files.attachment_plan import upload_limits, upload_size_limit
+
+    return upload_size_limit(filename, mime_type, replace(upload_limits(), large_document_max_bytes=None))
 
 
 def _user_quota_bytes() -> int:

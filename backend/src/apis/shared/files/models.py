@@ -698,6 +698,46 @@ class QuotaResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class AttachmentClassMaxBytes(BaseModel):
+    """Per-class upload ceilings in bytes. ``largeDocument`` is null while off."""
+
+    document: int
+    image: int
+    spreadsheet: int
+    presentation: int
+    large_document: Optional[int] = Field(None, alias="largeDocument")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AttachmentFolderLimits(BaseModel):
+    enabled: bool
+    per_message: Optional[int] = Field(None, alias="perMessage")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AttachmentLimitsResponse(BaseModel):
+    """Response for GET /files/limits (unified-attachment-delivery §4.4).
+
+    Built by ``attachment_plan.client_limits`` from the active limits profile.
+    A null limit means none applies. ``imagesPerMessage`` and ``pdfMaxPages``
+    belong to the ``token`` profile and are null under ``legacy``.
+    """
+
+    profile: str
+    files_per_message: Optional[int] = Field(None, alias="filesPerMessage")
+    images_per_message: Optional[int] = Field(None, alias="imagesPerMessage")
+    pdf_max_pages: Optional[int] = Field(None, alias="pdfMaxPages")
+    inline_document_max_bytes: int = Field(..., alias="inlineDocumentMaxBytes")
+    inline_budget_bytes: Optional[int] = Field(None, alias="inlineBudgetBytes")
+    max_bytes: AttachmentClassMaxBytes = Field(..., alias="maxBytes")
+    large_documents: bool = Field(..., alias="largeDocuments")
+    folders: AttachmentFolderLimits
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class QuotaExceededError(BaseModel):
     """Error response when quota is exceeded."""
 

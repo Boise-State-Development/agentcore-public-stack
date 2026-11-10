@@ -58,11 +58,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from apis.shared.files.document_read import document_format_for
+from apis.shared.files.document_read import document_format_for, is_document_class
 from apis.shared.files.models import (
     DELIVERY_OVERRIDE_VALUES,
     INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
     INLINE_DOCUMENT_MAX_BYTES,
+    LARGE_DOCUMENT_MAX_BYTES,
     MAX_FILES_PER_MESSAGE,
     TEXT_ONLY_DOCUMENTS_MAX_CHARS,
     is_presentation_file,
@@ -335,6 +336,114 @@ def current_limits_profile() -> LimitsProfile:
     nowhere else. Until then every turn is ``legacy``.
     """
     return legacy_profile()
+
+
+# ---------------------------------------------------------------------------
+# Upload limits (admission and ``GET /files/limits``, §4.4)
+# ---------------------------------------------------------------------------
+
+#: Defaults for the per-class upload ceilings. The environment overrides are read
+#: in :func:`upload_limits` and nowhere else.
+UPLOAD_GENERAL_MAX_BYTES = 4 * 1024 * 1024
+UPLOAD_PRESENTATION_MAX_BYTES = 25 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class UploadLimits:
+    """What an upload may be, by class: the admission side of the profile.
+
+    app-api admission (``FileUploadService.max_size_for``), the inline persist
+    path and ``GET /files/limits`` all read this, so the SPA and the TUI are told
+    exactly what presign will accept.
+    """
+
+    #: Images, and documents when large-document attachments are off.
+    general_max_bytes: int
+    presentation_max_bytes: int
+    spreadsheet_max_bytes: int
+    #: A document-class file (pdf, docx, txt, md, html) attached by reference;
+    #: ``None`` while ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED`` is off.
+    large_document_max_bytes: Optional[int] = None
+    #: Folders one message may carry; ``None`` while folder attachments are off.
+    folders_per_message: Optional[int] = None
+
+
+def upload_limits() -> UploadLimits:
+    """The per-class upload ceilings, with the two flags that widen admission."""
+    import os
+
+    from apis.shared.feature_flags import (
+        folder_attachments_enabled,
+        large_document_attachments_enabled,
+    )
+    from apis.shared.files.folder_attachments import FOLDERS_PER_MESSAGE
+    from apis.shared.files.models import spreadsheet_max_file_size
+
+    return UploadLimits(
+        general_max_bytes=int(os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES", UPLOAD_GENERAL_MAX_BYTES)),
+        presentation_max_bytes=int(
+            os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION", UPLOAD_PRESENTATION_MAX_BYTES)
+        ),
+        spreadsheet_max_bytes=spreadsheet_max_file_size(),
+        large_document_max_bytes=LARGE_DOCUMENT_MAX_BYTES if large_document_attachments_enabled() else None,
+        folders_per_message=FOLDERS_PER_MESSAGE if folder_attachments_enabled() else None,
+    )
+
+
+def upload_size_limit(filename: str, mime_type: str, limits: UploadLimits) -> int:
+    """The upload ceiling for one file: decks, then spreadsheets, then large documents."""
+    if is_presentation_file(filename, mime_type):
+        return limits.presentation_max_bytes
+    if is_tabular_file(filename, mime_type):
+        return limits.spreadsheet_max_bytes
+    if limits.large_document_max_bytes is not None and is_document_class(mime_type, filename):
+        return limits.large_document_max_bytes
+    return limits.general_max_bytes
+
+
+def upload_download_ceiling(limits: UploadLimits) -> int:
+    """The widest class ceiling: what a server-side import may download before sizing."""
+    caps = [limits.general_max_bytes, limits.presentation_max_bytes, limits.spreadsheet_max_bytes]
+    if limits.large_document_max_bytes is not None:
+        caps.append(limits.large_document_max_bytes)
+    return max(caps)
+
+
+def client_limits(
+    profile: Optional[LimitsProfile] = None,
+    uploads: Optional[UploadLimits] = None,
+) -> Dict[str, Any]:
+    """The limits a client enforces before it uploads (``GET /files/limits``).
+
+    Built from the active profile and the upload ceilings, so what the composer
+    refuses is what admission and the turn would refuse. Fields the ``token``
+    profile adds (``imagesPerMessage``, ``pdfMaxPages``) are in the shape now and
+    ``None`` until a profile sets them; ``None`` always means "no limit".
+    """
+    profile = profile or current_limits_profile()
+    uploads = uploads or upload_limits()
+    count = profile.max_files_per_message if profile.turn_guard else profile.resolver_backstop_without_guard
+    budget = profile.inline_total_max_bytes if profile.turn_guard else 0
+    return {
+        "profile": profile.name,
+        "filesPerMessage": count if count > 0 else None,
+        "imagesPerMessage": None,
+        "pdfMaxPages": None,
+        "inlineDocumentMaxBytes": profile.inline_document_max_bytes,
+        "inlineBudgetBytes": budget if budget > 0 else None,
+        "maxBytes": {
+            "document": uploads.general_max_bytes,
+            "image": uploads.general_max_bytes,
+            "spreadsheet": uploads.spreadsheet_max_bytes,
+            "presentation": uploads.presentation_max_bytes,
+            "largeDocument": uploads.large_document_max_bytes,
+        },
+        "largeDocuments": uploads.large_document_max_bytes is not None,
+        "folders": {
+            "enabled": uploads.folders_per_message is not None,
+            "perMessage": uploads.folders_per_message,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

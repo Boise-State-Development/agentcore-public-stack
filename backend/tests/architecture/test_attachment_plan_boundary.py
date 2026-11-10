@@ -17,8 +17,13 @@ the SPA came to disagree about the same file (§1.2, §1.3). Same shape as
   The modules that do so today are listed below with why; a new one fails here
   until it is reviewed and added. **No turn-path module is on the list**: the chat
   route and the file resolver ask the planner.
-* **The SPA's mirrored limits are known too**, for the same reason; the next wave
-  replaces them with ``GET /files/limits``.
+* **App-api admission asks the planner.** ``FileUploadService.max_size_for``
+  calls ``upload_size_limit``; the service reads no limit constant and no class
+  predicate except ``is_reference_document``, which decides *preparation* at
+  upload, not admission.
+* **The SPA mirrors no limit.** It reads ``GET /files/limits`` at load and keeps
+  one built-in fallback object (``attachment-limits.ts``) that names none of the
+  server's constants.
 
 Docstrings and comments do not count: only code (names, attributes, imports).
 """
@@ -60,27 +65,47 @@ _DELIVERY_INPUTS = {
 }
 
 #: Modules allowed to read a delivery input, and why. None of them chooses a mode
-#: on the turn path. Entries marked "next wave" are the app-api admission rules
-#: that restate the turn's; they move to the planner's limits with
-#: ``GET /files/limits`` (§9.1 removal table, phase 1, second and fourth rows).
+#: on the turn path, and none restates an upload limit (§9.1 removal table,
+#: phase 1: admission and the SPA read the planner's limits).
 _KNOWN: Dict[str, str] = {
     _PLANNER: "the planner",
     "src/apis/shared/files/models.py": "defines the constants and the class predicates",
     "src/apis/shared/files/__init__.py": "re-exports the constants and predicates",
     "src/apis/shared/feature_flags.py": "defines the flag readers the legacy profile reads",
-    # Next wave: app-api admission (max_size_for, the count check, preparation at upload).
-    "src/apis/app_api/files/service.py": "next wave: upload admission and preparation (reads the planner's limits after GET /files/limits)",
+    # Admission reads the planner (upload_size_limit); this is preparation only.
+    "src/apis/app_api/files/service.py": "which ready uploads to prepare (is_reference_document only; see _ONLY)",
     # Not a delivery decision: what a tool or a pipeline does with a file it already has.
     "src/apis/shared/files/document_read.py": "the document_read tool: which files it can read, its own batch cap",
     "src/apis/shared/files/attachment_index.py": "attachments-KB indexing eligibility (after upload, off the turn path)",
     "src/lambdas/large_document_prepare/handler.py": "preparation Lambda: which uploads to prepare (off the turn path)",
     "src/apis/shared/files/folder_manifest.py": "the folder manifest's wording about sheets and decks",
-    "src/apis/shared/files/inline_persist.py": "the MIME to store an inline sheet or deck under",
     "src/apis/shared/assistants/kb_tabular.py": "a project knowledge base's spreadsheet inventory",
     "src/agents/builtin_tools/spreadsheet_analysis/analyze_tool.py": "the spreadsheet tool finding its file",
     "src/agents/builtin_tools/spreadsheet_analysis/list_spreadsheets_tool.py": "the spreadsheet tool listing its files",
     # Phase 6 (§9.1): the per-call projection's own selection retires with the flag.
     "src/agents/main_agent/core/agent_factory.py": "phase 6: installs the document-cap projection in its as-text mode",
+}
+
+#: Modules on ``_KNOWN`` held to a narrower set of names than ``_DELIVERY_INPUTS``.
+_ONLY: Dict[str, Set[str]] = {
+    "src/apis/app_api/files/service.py": {"is_reference_document"},
+}
+
+#: Environment variables that set an upload limit. Read in the planner
+#: (``upload_limits``) or in ``models.py``'s constants, nowhere else.
+_LIMIT_ENV = {
+    "FILE_UPLOAD_MAX_SIZE_BYTES",
+    "FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION",
+    "FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET",
+    "FILE_UPLOAD_MAX_FILES_PER_MESSAGE",
+    "LARGE_DOCUMENT_MAX_BYTES",
+    "INLINE_DOCUMENT_MAX_BYTES",
+    "INLINE_ATTACHMENTS_MAX_TOTAL_BYTES",
+}
+_LIMIT_ENV_READERS = {
+    _PLANNER,
+    "src/apis/shared/files/models.py",
+    "src/apis/shared/files/__init__.py",  # ``__all__`` names the constants
 }
 
 #: Modules on the turn path. They may not appear in ``_KNOWN``.
@@ -89,19 +114,13 @@ _TURN_PATH_PREFIXES = (
     "src/apis/shared/files/file_resolver.py",
 )
 
-#: SPA files that mirror a server limit today. Next wave: read ``GET /files/limits``
-#: at load, keeping one built-in fallback object (§9.1 removal table, phase 1).
+#: SPA files that may mirror a server limit by name. None: the SPA reads
+#: ``GET /files/limits`` at load (§9.1 removal table, phase 1).
 _SPA_ROOT = _REPO / "frontend" / "ai.client" / "src"
 _SPA_LIMIT_NAMES = re.compile(
     r"\b(MAX_FILES_PER_MESSAGE|INLINE_ATTACHMENTS_MAX_TOTAL_BYTES|INLINE_DOCUMENT_MAX_BYTES|MAX_FILE_SIZE_BYTES)\b"
 )
-_SPA_KNOWN = {
-    "app/services/file-upload/file-upload.service.ts",
-    "app/services/file-upload/inline-attachment-budget.ts",
-    "app/session/components/chat-input/composer-add-menu.component.ts",
-    "app/session/components/chat-input/chat-input.component.ts",
-    "app/session/components/chat-input/inline-budget-notice.component.ts",
-}
+_SPA_KNOWN: Set[str] = set()
 
 
 def _python_files() -> Iterator[Path]:
@@ -180,6 +199,37 @@ def test_the_known_list_has_no_stale_entries():
     referencing = set(_references())
     stale = sorted(p for p in _KNOWN if p not in referencing)
     assert not stale, f"no longer reads a delivery input; remove from _KNOWN: {stale}"
+
+
+def test_narrowed_modules_read_only_their_names():
+    refs = _references()
+    wider = {p: sorted(refs.get(p, set()) - allowed) for p, allowed in _ONLY.items() if refs.get(p, set()) - allowed}
+    assert not wider, f"reads a limit or class predicate it should ask the planner for: {wider}"
+
+
+def test_upload_limit_env_is_read_in_one_place():
+    offenders = {}
+    for path in _python_files():
+        rel = _rel(path)
+        if rel in _LIMIT_ENV_READERS:
+            continue
+        tree = _parse(path)
+        if tree is None:
+            continue
+        found = sorted(
+            node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and node.value in _LIMIT_ENV
+        )
+        if found:
+            offenders[rel] = found
+    assert not offenders, f"an upload limit is restated outside the planner: {offenders}"
+
+
+def test_admission_asks_the_planner():
+    tree = _parse(_BACKEND / "src/apis/app_api/files/service.py")
+    assert tree is not None
+    assert {"upload_size_limit", "upload_limits", "upload_download_ceiling"} <= _names_in_code(
+        tree, {"upload_size_limit", "upload_limits", "upload_download_ceiling"}
+    )
 
 
 def test_the_route_asks_the_planner():
