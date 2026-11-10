@@ -3436,6 +3436,7 @@ async def _carry_out_forced_modes(attachments: TurnAttachments, turn_model: "Tur
         if entries[i].mode == MODE_TEXT and not (renders and ext(f) in DOCUMENTS_AS_TEXT_EXTENSIONS)
     ]
     if not to_extract:
+        logger.info("forced delivery: %d native pinned, 0 converted to text", len(pins))
         return
     results = await asyncio.gather(
         *(asyncio.to_thread(_extract_document_text, f, fmt, FORCED_TEXT_MAX_CHARS) for _, f, fmt in to_extract),
