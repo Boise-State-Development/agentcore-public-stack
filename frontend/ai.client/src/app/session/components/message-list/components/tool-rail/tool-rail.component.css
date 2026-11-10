@@ -18,6 +18,15 @@
   flex-shrink: 0;
 }
 
+/* A thinking step's marker: a ring where a call has a filled dot. */
+.thinking-dot {
+  box-shadow: inset 0 0 0 1px var(--color-gray-400);
+}
+
+:host-context(.dark) .thinking-dot {
+  box-shadow: inset 0 0 0 1px var(--color-gray-500);
+}
+
 /* Chevron rotation */
 .chevron {
   transition: transform 0.2s ease-out;

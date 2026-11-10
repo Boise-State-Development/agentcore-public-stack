@@ -7,7 +7,7 @@ import {
 } from '@angular/core';
 import { KeyValuePipe } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroExclamationTriangle, heroLightBulb } from '@ng-icons/heroicons/outline';
+import { heroExclamationTriangle } from '@ng-icons/heroicons/outline';
 import { JsonSyntaxHighlightPipe } from '../tool-use/json-syntax-highlight.pipe';
 import {
   ToolCallGroup,
@@ -35,7 +35,7 @@ import { ToolResultContent } from '../../../../services/models/message.model';
   styleUrl: './tool-rail.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [JsonSyntaxHighlightPipe, KeyValuePipe, PinScrollToBottomDirective, NgIcon],
-  providers: [provideIcons({ heroLightBulb, heroExclamationTriangle })],
+  providers: [provideIcons({ heroExclamationTriangle })],
 })
 export class ToolRailComponent {
   /** The grouped tool calls to display */

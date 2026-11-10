@@ -76,7 +76,7 @@
       @for (step of steps(); track step.key) {
         @if (step.kind === 'thinking') {
         <!-- A reasoning span, in the order the model did it. Same row shape
-             as a call — icon, one line, time, chevron — so the list reads as
+             as a call — dot, one line, time, chevron — so the list reads as
              one sequence; the full reasoning is folded behind the row like a
              call's input and result. -->
         <div class="bg-white/40 dark:bg-transparent">
@@ -87,12 +87,9 @@
             [attr.aria-expanded]="isThinkingOpen(step.thinking)"
             aria-label="Toggle thinking details"
           >
-            <!-- Size and colour go through the icon's own input and a
-                 wrapper: ng-icon's host styles out-rank Tailwind's size-* and
-                 text-* utilities set on the icon itself. -->
-            <span class="flex shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true">
-              <ng-icon name="heroLightBulb" size="0.75rem" />
-            </span>
+            <!-- A hollow dot: the same size as a call's status dot, so the
+                 rows line up, but unfilled, since a thought has no outcome. -->
+            <span class="status-dot thinking-dot" aria-hidden="true"></span>
             <span
               class="min-w-0 truncate text-xs italic text-gray-500 dark:text-gray-400 group-hover/call:text-gray-800 dark:group-hover/call:text-gray-100"
               [class.text-shimmer]="step.thinking.active"
