@@ -69,6 +69,9 @@ class RunResult:
     #: coordinator's time to first token. ``None`` when the frame never came.
     turn_duration_ms: Optional[int] = None
     first_token_ms: Optional[int] = None
+    #: The stream carried ``quota_exceeded``: the "answer" is the quota message,
+    #: not the model's. The status stays ``completed``, as the turn did.
+    quota_exceeded: bool = False
     #: The caller's view of the same turn: from sending the request to the
     #: first streamed text delta, and to the stream's end. These include the
     #: network and the Runtime's session routing, which the frame cannot see.

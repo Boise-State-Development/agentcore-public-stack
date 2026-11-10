@@ -175,3 +175,9 @@ def test_accumulator_timing_ignores_malformed_values():
     acc = InvocationStreamAccumulator()
     acc.handle("metadata", {"metrics": {"timeToFirstByteMs": "soon"}, "turnDurationMs": True})
     assert acc.turn_duration_ms is None and acc.first_token_ms is None
+
+
+def test_accumulator_notes_a_quota_exceeded_frame():
+    acc = InvocationStreamAccumulator()
+    acc.handle("quota_exceeded", {"message": "over"})
+    assert acc.quota_exceeded

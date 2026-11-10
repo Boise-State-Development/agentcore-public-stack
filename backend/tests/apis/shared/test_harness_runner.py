@@ -215,6 +215,24 @@ async def test_the_runtime_and_client_timing_are_reported(monkeypatch, delivery_
 
 
 @pytest.mark.asyncio
+async def test_a_quota_exceeded_frame_is_flagged_and_the_status_is_unchanged(monkeypatch, delivery_spy):
+    stream = _sse(
+        ("message_start", '{"role": "assistant"}'),
+        ("content_block_delta", '{"contentBlockIndex": 0, "type": "text", "text": "limit reached"}'),
+        ("message_stop", '{"stopReason": "quota_exceeded"}'),
+        ("quota_exceeded", '{"type": "quota_exceeded"}'),
+        ("done", "{}"),
+    )
+    _mock_http(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=stream))
+    result = await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=SpyBearerAuth("b"),
+        invocations_base_url="http://localhost:8001", governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+    assert result.quota_exceeded and result.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_scheduled_completion_marks_session_unread(monkeypatch, delivery_spy):
     """An unattended (schedule) run flags the session unread on completion."""
     def handler(request: httpx.Request) -> httpx.Response:

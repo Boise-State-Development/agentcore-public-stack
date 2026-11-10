@@ -67,6 +67,14 @@ class StagedSample:
     documents: Tuple[Dict[str, Any], ...] = ()
 
 
+class QuotaExceededError(RuntimeError):
+    """The eval user is over its quota, so every later turn answers with the quota message.
+
+    Like a missing consent, this is the environment, not the model: scored,
+    it would read as every remaining case regressing. It stops the run.
+    """
+
+
 class OAuthRequiredError(RuntimeError):
     """A case reached a connector the eval user has not consented to.
 
@@ -255,6 +263,8 @@ async def run_sample(
             status = "client_tool_loop"
             error = f"still calling client tools after {MAX_CLIENT_TOOL_ROUNDS} answers"
             break
+        if result.quota_exceeded:
+            raise QuotaExceededError(f"{case.id}: the eval user is over its quota; raise it or wait for the period")
         if result.status == "oauth_required":
             providers = ", ".join(o.provider_id for o in result.oauth_required) or "unknown"
             raise OAuthRequiredError(f"{case.id}: the eval user needs consent for {providers}")

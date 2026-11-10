@@ -100,6 +100,9 @@ class InvocationStreamAccumulator:
     #: ``None`` when the frame never arrived (an error or a cut stream).
     turn_duration_ms: Optional[int] = None
     first_token_ms: Optional[int] = None
+    #: A ``quota_exceeded`` frame: the user is over their limit, so the turn's
+    #: "answer" is the quota message streamed as text, not the model's.
+    quota_exceeded: bool = False
 
     _current: List[str] = field(default_factory=list)
     _messages: List[str] = field(default_factory=list)
@@ -247,6 +250,8 @@ class InvocationStreamAccumulator:
             self.error = str(
                 payload.get("message") or payload.get("error") or payload
             )[:2000]
+        elif name == "quota_exceeded":
+            self.quota_exceeded = True
         elif name == "done":
             self.done = True
 

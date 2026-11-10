@@ -323,3 +323,17 @@ async def test_rows_outside_the_delivery_family_carry_no_arm_and_missing_timing_
     assert "arm" not in row and "upload_ms" not in row
     assert row["timing"][0] == {"firstTokenMs": None, "turnDurationMs": None,
                                 "clientFirstTokenMs": None, "clientDurationMs": None}
+
+
+@pytest.mark.asyncio
+async def test_a_quota_exceeded_turn_stops_the_run_instead_of_scoring():
+    from apis.shared.evals.execute import QuotaExceededError
+
+    class OverQuota(FakeRunner):
+        async def __call__(self, **kwargs):
+            result = await super().__call__(**kwargs)
+            result.quota_exceeded = True
+            return result
+
+    with pytest.raises(QuotaExceededError, match="over its quota"):
+        await run_sample(_retention_case(), sample=0, model_id="m", run_turn=OverQuota(["a", "b", "c"]))

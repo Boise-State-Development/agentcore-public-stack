@@ -425,7 +425,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     from smoke_turns import resolve_runtime_env
 
-    from apis.shared.evals.execute import EVAL_TRIGGER, OAuthRequiredError, run_sample
+    from apis.shared.evals.execute import EVAL_TRIGGER, OAuthRequiredError, QuotaExceededError, run_sample
     from apis.shared.evals.fixtures import (
         FixtureError,
         load_fixture,
@@ -567,7 +567,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
                     assistant_id=project.harness_agent_id if project else fixture_ids.get(fixture_key(case) or ""),
                     inspect=project.inspect if project else None,
                 )
-            except (OAuthRequiredError, HeadlessAuthError, FixtureError) as exc:
+            except (OAuthRequiredError, QuotaExceededError, HeadlessAuthError, FixtureError) as exc:
                 fatal.append(f"{type(exc).__name__}: {exc}")
                 return
             except Exception as exc:  # noqa: BLE001 — a project that cannot be set up stops the run
