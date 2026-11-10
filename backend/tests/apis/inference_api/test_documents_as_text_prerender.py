@@ -55,8 +55,22 @@ def flag_on(monkeypatch):
     monkeypatch.setenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "true")
 
 
-def _attachments(*files) -> TurnAttachments:
-    return TurnAttachments(files_to_send=list(files), marker_names=[f.filename for f in files])
+def _attachments(*files, profile=None) -> TurnAttachments:
+    """The inline set as `_resolve_turn_attachments` plans it (model not yet known)."""
+    from apis.shared.files.attachment_plan import MODE_NATIVE, current_limits_profile, plan_attachments
+
+    profile = profile or current_limits_profile()
+    facts = [routes._file_facts(f, {}) for f in files]
+    plan = plan_attachments(facts, None, profile=profile)
+    inline = plan.indices(MODE_NATIVE)
+    return TurnAttachments(
+        files_to_send=[files[i] for i in inline],
+        marker_names=[f.filename for f in files],
+        plan=plan,
+        plan_facts=facts,
+        inline_indices=inline,
+        profile=profile,
+    )
 
 
 @pytest.mark.asyncio
@@ -79,9 +93,10 @@ async def test_renders_each_renderable_attachment_in_a_worker_thread(flag_on, re
         _File("old.doc", "application/msword"),
     ]
     await _prerender_documents_as_text(_attachments(*files), _model())
-    # Threads finish in any order.
+    # Threads finish in any order. A CSV is tabular: the planner sends it to
+    # the spreadsheet tools, so it is never inline and never pre-rendered.
     assert sorted((fmt, raw) for fmt, raw, _ in rendered) == [
-        ("csv", b"c"), ("docx", b"d"), ("html", b"h"), ("md", b"m"), ("txt", b"t"),
+        ("docx", b"d"), ("html", b"h"), ("md", b"m"), ("txt", b"t"),
     ]
     assert not any(on_main for *_, on_main in rendered), "the parse never runs on the event loop's thread"
 
@@ -96,9 +111,12 @@ async def test_renders_each_renderable_attachment_in_a_worker_thread(flag_on, re
         _model(provider=None, model_id="gemini-2.5-pro"),
     ],
 )
-async def test_not_for_a_model_that_is_not_converse(flag_on, rendered, model):
+async def test_a_model_off_converse_is_rendered_whatever_the_flag(monkeypatch, rendered, model):
+    """Every other provider's projection renders non-PDF documents as text
+    (``agent_factory``), so the route renders them in worker threads too."""
+    monkeypatch.delenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", raising=False)
     await _prerender_documents_as_text(_attachments(_File("a.txt", "text/plain")), model)
-    assert rendered == []
+    assert [(fmt, on_main) for fmt, _, on_main in rendered] == [("txt", False)]
 
 
 @pytest.mark.asyncio

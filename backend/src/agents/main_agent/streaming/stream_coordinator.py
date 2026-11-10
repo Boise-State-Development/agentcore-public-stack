@@ -343,6 +343,7 @@ class StreamCoordinator:
         original_message: Optional[str] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
@@ -372,6 +373,10 @@ class StreamCoordinator:
             turn_project_id: The Shared Project whose harness ran this turn (None for any
                 other turn). Recorded on each cost row as ``projectId``; the metadata writer
                 also adds the call to the project's monthly ``COST#`` rollup.
+            turn_attachment_plan: The turn's ``AttachmentPlan.to_row()`` (per file: mode,
+                class, tokens, reason, upload id; ``docs/specs/unified-attachment-delivery.md``
+                §8.2), or None for a turn with no attachments. Written as ``attachmentPlan``
+                on the turn's last cost row, after the stream. Per turn, like turn_agent_id.
             turn_lease: This turn's single-flight ``SessionLease``, which doubles as the
                 mid-turn steering inbox. Stamped onto the session manager for the life of
                 the turn so ``SteeringHook`` can read it at each tool boundary — and
@@ -1436,6 +1441,7 @@ class StreamCoordinator:
                         citations=citations,
                         turn_agent_id=turn_agent_id,
                         turn_project_id=turn_project_id,
+                        turn_attachment_plan=turn_attachment_plan,
                     )
 
                     # Skip the original error event and exit the loop - we've handled the error
@@ -1694,6 +1700,7 @@ class StreamCoordinator:
                     citations=citations,
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
+                    turn_attachment_plan=turn_attachment_plan,
                     outcome=turn_outcome,
                     empty_answer=empty_answer,
                 )
@@ -1832,6 +1839,7 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
                 meter_usage=meter_usage,
                 model_retries=model_retries_seen,
             )
@@ -1883,6 +1891,7 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
                 meter_usage=meter_usage,
                 model_retries=model_retries_seen,
             )
@@ -1960,6 +1969,7 @@ class StreamCoordinator:
                     citations=citations,
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
+                    turn_attachment_plan=turn_attachment_plan,
                 )
         finally:
             # The first model output was the stream's last event (or the turn
@@ -2125,6 +2135,7 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
         meter_usage: bool = True,
         model_retries: int = 0,
         original_message: Optional[str] = None,
@@ -2364,6 +2375,7 @@ class StreamCoordinator:
                             citations=citations,
                             turn_agent_id=turn_agent_id,
                             turn_project_id=turn_project_id,
+                            turn_attachment_plan=turn_attachment_plan,
                             # The breakdown describes the call in flight, so
                             # only a row for that call may carry it.
                             attach_context_breakdown=metered[-1] == in_flight_idx,
@@ -4112,6 +4124,7 @@ class StreamCoordinator:
         citations: Optional[List],
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
         attach_context_breakdown: bool = True,
         outcome: Optional[str] = None,
         empty_answer: bool = False,
@@ -4219,6 +4232,8 @@ class StreamCoordinator:
                     include_context_breakdown=attach_context_breakdown and is_last,
                     turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
                     turn_project_id=turn_project_id,
+                    # The turn's attachment plan, on its last row only (a turn counts once there).
+                    turn_attachment_plan=turn_attachment_plan if is_last else None,
                     turn_outcome=outcome,
                     empty_answer=empty_answer and is_last,
                     tool_calls=(
@@ -4262,6 +4277,7 @@ class StreamCoordinator:
         citations: Optional[List],
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Meter the model calls a failed turn made before it failed.
 
@@ -4325,6 +4341,7 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
                 attach_context_breakdown=False,
                 outcome="error",
             )
@@ -4400,6 +4417,7 @@ class StreamCoordinator:
         call_index: Optional[int] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
         tool_calls: Optional[Dict[str, Dict[str, int]]] = None,
         context_ledger: Optional[Dict[str, Any]] = None,
         turn_duration_ms: Optional[int] = None,
@@ -4657,6 +4675,13 @@ class StreamCoordinator:
                 # writer reads it back to bump PROJECT#{id}/COST#{YYYY-MM}.
                 if turn_project_id:
                     metadata_kwargs["projectId"] = turn_project_id
+                # How each of the turn's attachments was delivered (the planner's
+                # decision: modes, classes, reason codes, token estimates and
+                # upload ids — never a filename). Turn-level, so only the last
+                # row carries it. Written here, after the stream, never before
+                # the first token.
+                if turn_attachment_plan:
+                    metadata_kwargs["attachmentPlan"] = turn_attachment_plan
 
                 # Content-free tool census for this call (tool name → calls /
                 # errors), another extra field. Read by the admin session

@@ -317,7 +317,7 @@ def attachment_tool_autoenable_enabled() -> bool:
     — gated on the caller's RBAC grant, so it enables, never grants. **Default ON with a kill switch** (house style):
     unset or empty resolves to enabled; only the literal ``"false"`` disables.
 
-    Why: CSV/XLSX never go inline (``_partition_attachments``), and the
+    Why: CSV/XLSX never go inline (the attachment planner sends them to their tools), and the
     analysis tools are opt-in in the picker, so on the default tool set an
     attached spreadsheet was a dead end — the model told the user to go find a
     sidebar toggle (docs/specs/load-test-assessment-2026-09.md §1 fix 5). The
@@ -752,9 +752,9 @@ def attachment_turn_guard_enabled() -> bool:
     """Whether a turn's attachments are held to the per-message file count and
     the aggregate inline-bytes budget before the message is built.
 
-    Covers ``_apply_message_file_cap`` and ``_apply_inline_byte_budget`` in
-    the inference API chat route (docs/specs/document-context-offload.md §4E,
-    PR-6). **Default ON with a kill switch** (house style): unset or empty
+    Read as an input of the attachment planner's ``legacy`` profile
+    (``apis.shared.files.attachment_plan``: its count cap and its combined
+    budget; docs/specs/document-context-offload.md §4E, PR-6). **Default ON with a kill switch** (house style): unset or empty
     resolves to enabled; only the literal ``"false"`` (case-insensitive)
     disables.
 
@@ -772,8 +772,9 @@ def inline_budget_by_reference_enabled() -> bool:
     """Whether an uploaded document that does not fit in a turn's combined
     inline budget goes by reference instead of being dropped.
 
-    ``_apply_inline_byte_budget`` holds a turn's inline attachments to
-    ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` first-fit; with this on, a
+    The attachment planner's ``legacy`` profile holds a turn's inline
+    attachments to ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` first-fit and reads
+    this as an input; with this on, a
     document-class *upload* it moves out becomes a ``ReferenceAttachment``
     (``over_budget=True``): its stored digest (or a ``status="ready"`` stub) in
     the user message and ``document_read`` to read it from the original, from the

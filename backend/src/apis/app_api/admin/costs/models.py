@@ -221,6 +221,29 @@ class CompactionEvent(BaseModel):
     slice_tokens: Optional[int] = Field(None, alias="sliceTokens")
 
 
+class AttachmentPlanFile(BaseModel):
+    """How one attachment was delivered on a turn (the planner's decision,
+    ``apis.shared.files.attachment_plan``). Codes, an estimate and an id; never
+    a filename."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    mode: str
+    file_class: str = Field(..., alias="class")
+    tokens: int = 0
+    reason: str
+    upload_id: Optional[str] = Field(None, alias="uploadId")
+
+
+class AttachmentPlanRecord(BaseModel):
+    """``attachmentPlan`` on a turn's last cost row
+    (``docs/specs/unified-attachment-delivery.md`` §8.2)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    profile: str
+    files: List[AttachmentPlanFile] = Field(default_factory=list)
+    dropped_over_count: int = Field(0, alias="droppedOverCount")
+
+
 class DocumentReads(BaseModel):
     """``document_read`` retrievals one model call requested: calls, pages
     returned as native document blocks, and their byte size."""
@@ -323,6 +346,9 @@ class SessionCallRow(BaseModel):
     document_slice_tokens: Optional[int] = Field(None, alias="documentSliceTokens")
     document_mime: Optional[Dict[str, int]] = Field(None, alias="documentMime")
     document_reads: Optional[DocumentReads] = Field(None, alias="documentReads")
+    # How the turn's attachments were delivered (on the turn's last row only;
+    # absent on rows written before it shipped and on turns without one).
+    attachment_plan: Optional[AttachmentPlanRecord] = Field(None, alias="attachmentPlan")
 
 
 class SessionCostAnatomy(BaseModel):

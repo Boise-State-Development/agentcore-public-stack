@@ -10,9 +10,12 @@ worse than pandas would. A pptx is diverted because Bedrock's Converse
 
 So an inline deck is an unconditional ValidationException that kills the turn,
 at any size, forever — not a threshold we tune. That is why
-``is_presentation_file`` is checked BEFORE the size gate: routing a small deck
-to the "oversized" bucket would produce a note that misdescribes why it was
-skipped, and routing it to `inline` at all is simply broken.
+the planner (``attachment_plan``) classifies a deck BEFORE the size gate:
+routing a small deck to the "oversized" bucket would produce a note that
+misdescribes why it was skipped, and routing it to `inline` at all is simply
+broken. Those cases are rows of the planner's table
+(``tests/apis/shared/files/test_attachment_plan.py``); this file keeps the
+predicate, the upload allowlist, and the marker and guidance the route builds.
 
 The upload path and this carve-out are one feature. `.pptx` is in the backend
 and frontend upload allowlists only because these tools can receive it; if a
@@ -25,7 +28,6 @@ import pytest
 from apis.inference_api.chat.routes import (
     _attachment_marker_names,
     _build_attachment_guidance,
-    _partition_attachments,
 )
 from apis.shared.files.models import ALLOWED_MIME_TYPES, is_presentation_file
 
@@ -34,7 +36,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class _Attachment:
-    """Minimal stand-in for FileContent — the partition only reads these three."""
+    """Minimal stand-in for FileContent — the route reads these three."""
 
     def __init__(self, filename: str, content_type: str, bytes_: str = ""):
         self.filename = filename
@@ -64,46 +66,6 @@ class TestIsPresentationFile:
     def test_pptx_is_uploadable(self):
         # The carve-out is unreachable if the upload gate rejects the file.
         assert ALLOWED_MIME_TYPES.get(PPTX_MIME) == "pptx"
-
-
-class TestPartitionAttachments:
-    def test_pptx_is_diverted_not_inlined(self):
-        deck = _Attachment("deck.pptx", PPTX_MIME)
-        inline, tabular, presentations, oversized, _ = _partition_attachments([deck])
-
-        assert presentations == [deck]
-        assert inline == []
-        assert tabular == []
-        assert oversized == []
-
-    def test_tiny_pptx_still_diverted_never_oversized(self):
-        # The size gate must not get a vote: a 12-byte deck is still a deck,
-        # and "too big" would be the wrong explanation for skipping it.
-        deck = _Attachment("small.pptx", PPTX_MIME, bytes_="AAAA")
-        inline, _, presentations, oversized, _ = _partition_attachments([deck])
-
-        assert presentations == [deck]
-        assert oversized == []
-        assert inline == []
-
-    def test_ordinary_documents_still_inline(self):
-        pdf = _Attachment("report.pdf", "application/pdf", bytes_="AAAA")
-        _, _, presentations, _, _ = _partition_attachments([pdf])
-        assert presentations == []
-
-    def test_mixed_batch_lands_in_the_right_buckets(self):
-        pdf = _Attachment("report.pdf", "application/pdf", bytes_="AAAA")
-        sheet = _Attachment("data.xlsx", XLSX_MIME)
-        deck = _Attachment("deck.pptx", PPTX_MIME)
-
-        inline, tabular, presentations, oversized, _ = _partition_attachments(
-            [pdf, sheet, deck]
-        )
-
-        assert inline == [pdf]
-        assert tabular == [sheet]
-        assert presentations == [deck]
-        assert oversized == []
 
 
 class TestAttachmentMarkerNames:

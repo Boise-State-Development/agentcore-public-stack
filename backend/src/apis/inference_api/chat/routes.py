@@ -39,10 +39,8 @@ from apis.shared.feature_flags import (
     agents_enabled,
     assistant_kb_full_context_enabled,
     attachment_kb_enabled,
-    attachment_turn_guard_enabled,
     folder_attachments_enabled,
     inline_attachment_persist_enabled,
-    inline_budget_by_reference_enabled,
     memory_spaces_enabled,
     mid_turn_steering_enabled,
     project_file_readiness_enabled,
@@ -51,12 +49,32 @@ from apis.shared.feature_flags import (
 from apis.shared.files.document_read import is_document_class
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.files.inline_persist import get_inline_attachment_persister
-from apis.shared.files.models import (
-    INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
-    MAX_FILES_PER_MESSAGE,
-    TEXT_ONLY_DOCUMENTS_MAX_CHARS,
-    is_presentation_file,
-    is_tabular_file,
+from apis.shared.files.attachment_plan import (
+    CLASS_PRESENTATION,
+    CLASS_TABULAR,
+    MODE_NATIVE,
+    MODE_ON_DEMAND,
+    REASON_DOCUMENTS_AS_TEXT,
+    REASON_PROVIDER_NEEDS_TEXT,
+    REASON_OVER_BUDGET,
+    REASON_OVER_BUDGET_REFERENCE,
+    REASON_OVERSIZED,
+    REASON_PERSIST_FAILED,
+    REASON_PRESENTATION,
+    REASON_TABULAR,
+    REASON_TEXT_ONLY_IMAGE,
+    REASON_TEXT_ONLY_MODEL,
+    REASON_TEXT_ONLY_UNREADABLE,
+    REASON_TEXT_UNAVAILABLE,
+    AttachmentPlan,
+    FileFacts,
+    LimitsProfile,
+    ModelFacts,
+    cap_message_attachments,
+    current_limits_profile,
+    file_class,
+    plan_attachments,
+    refine_for_model,
 )
 from apis.shared.files.folder_attachments import FOLDERS_PER_MESSAGE, FolderAttachment
 from apis.shared.files.folder_manifest import (
@@ -1739,166 +1757,39 @@ def _estimate_decoded_size(file: "FileContent") -> int:
         return 0
 
 
-def _partition_attachments(
-    all_files: list,
-) -> tuple[list, list, list, list, list]:
-    """Split attachments into
-    (inline_for_bedrock, tabular, presentations, oversized_non_tabular, reference).
+def _file_facts(file, upload_rows: dict) -> FileFacts:
+    """The planner's facts for one resolved attachment, from what is already in hand.
 
-    - Reference files (``ReferenceAttachment``: a reference-class upload the
-      resolver returned without its bytes, large-document spec §4B.2) are
-      never inline. They carry no bytes, so they add nothing to the inline
-      byte budget, and they reach the model as a digest or a stub in the user
-      message. Only an upload row can be one: direct ``files`` bytes over the
-      inline limit stay oversized (§4B.6).
-    - Tabular files (csv/xlsx) are never sent inline — they route through
-      the spreadsheet analysis tools. Keeps Bedrock's 4.5MB document limit
-      from exploding on XLSX files that expand during internal parsing.
-    - Presentations (pptx) are never sent inline either, but for a harder
-      reason: Bedrock's document-block format enum has no `pptx`, so an
-      inline deck is a guaranteed ValidationException. They route through
-      the PowerPoint tools (see `is_presentation_file`).
-    - Non-tabular files larger than INLINE_DOCUMENT_MAX_BYTES are dropped
-      from the inline set with a user-facing note, to prevent mid-stream
-      ValidationException on the raw AWS error path.
-    - Everything else rides along as a regular document/image content block.
-
-    Both diverted classes are checked before the size gate: they never go
-    inline at any size, so an oversized note would misdescribe them.
+    A reference (``ReferenceAttachment``) carries its row; an inline file is
+    sized from the base64 it already holds and paired with the row the resolver
+    read for it, if it came from an upload. No read, no parse.
     """
-    from apis.shared.files.models import (
-        INLINE_DOCUMENT_MAX_BYTES,
-        is_presentation_file,
-        is_tabular_file,
+    if isinstance(file, ReferenceAttachment):
+        meta = file.meta
+        pages = meta.preparation.get("pageCount") if isinstance(meta.preparation, dict) else None
+        try:
+            page_count = int(pages) if pages is not None else None
+        except (TypeError, ValueError):
+            page_count = None
+        return FileFacts(
+            filename=file.filename,
+            mime_type=file.content_type,
+            size_bytes=int(meta.size_bytes or 0),
+            upload_id=meta.upload_id,
+            by_reference=True,
+            has_row=True,
+            forced_mode=meta.delivery_override,
+            page_count=page_count,
+        )
+    row = upload_rows.get(id(file))
+    return FileFacts(
+        filename=file.filename,
+        mime_type=file.content_type,
+        size_bytes=_estimate_decoded_size(file),
+        upload_id=row.upload_id if row is not None else None,
+        has_row=row is not None,
+        forced_mode=getattr(row, "delivery_override", None),
     )
-
-    inline: list = []
-    tabular: list = []
-    presentations: list = []
-    oversized: list = []
-    reference: list = []
-
-    for file in all_files:
-        if isinstance(file, ReferenceAttachment):
-            reference.append(file)
-            continue
-        if is_tabular_file(file.filename, file.content_type):
-            tabular.append(file)
-            continue
-        if is_presentation_file(file.filename, file.content_type):
-            presentations.append(file)
-            continue
-        # Only size-gate non-image documents. Images have their own Bedrock
-        # limits (much larger) and the prompt builder reroutes them as
-        # image blocks, which are not affected by the document-size cap.
-        content_type = (file.content_type or "").lower()
-        is_image = content_type.startswith("image/")
-        if not is_image and _estimate_decoded_size(file) > INLINE_DOCUMENT_MAX_BYTES:
-            oversized.append(file)
-            continue
-        inline.append(file)
-
-    return inline, tabular, presentations, oversized, reference
-
-
-def _apply_message_file_cap(
-    direct_files: list,
-    upload_ids: list,
-    max_files: int,
-) -> tuple[list, list, list, int]:
-    """Hold a message to ``max_files`` attachments across both request paths.
-
-    Returns ``(direct_files, upload_ids, dropped_names, dropped_total)``.
-    Direct ``files`` come first (they are already in the request body), then
-    ``file_upload_ids`` fill whatever budget remains. Attachment order is
-    kept, so the first N the user attached are the N that survive.
-
-    The cap is applied to the upload IDs *before* they are resolved: the old
-    resolver default truncated silently after the fact, and letting every ID
-    through just to name the losers would fan out one S3 read per ID a client
-    chose to send. IDs beyond the budget are therefore counted, not named —
-    ``dropped_names`` holds the direct files (names known) and
-    ``dropped_total`` counts both. ``max_files <= 0`` disables the cap.
-    """
-    if max_files <= 0:
-        return direct_files, upload_ids, [], 0
-
-    kept_direct = direct_files[:max_files]
-    dropped_names = [f.filename for f in direct_files[max_files:]]
-    id_budget = max(0, max_files - len(kept_direct))
-    kept_ids = upload_ids[:id_budget]
-    dropped_total = len(dropped_names) + (len(upload_ids) - len(kept_ids))
-    return kept_direct, kept_ids, dropped_names, dropped_total
-
-
-def _apply_inline_byte_budget(
-    inline: list,
-    max_total_bytes: int,
-) -> tuple[list, list, int]:
-    """Hold the inline set (documents *and* images) to one message's byte
-    budget. Returns ``(kept, over_budget, requested_bytes)``.
-
-    Why this exists: the turn's inline attachments are persisted as one
-    AgentCore Memory event, and past ~7.5 MB of raw bytes that write fails
-    with ``SessionException`` — a hole in history, not a degraded turn. See
-    ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` for the derivation.
-
-    Policy — first-fit in attachment order: walk the files as the user
-    attached them, keep each one that still fits, and move any that would
-    push the running total over the budget to ``over_budget``. Earlier
-    attachments win, and a later, smaller file that still fits rides along
-    rather than being punished for a large neighbour. Order within both
-    lists is the attachment order, so the marker text and the guidance note
-    are deterministic (they land in the cacheable prefix on later turns).
-
-    Images count toward the budget: they are part of the same message and
-    the same event, even though the per-file document gate skips them.
-    ``max_total_bytes <= 0`` disables the budget.
-    """
-    requested = sum(_estimate_decoded_size(f) for f in inline)
-    if max_total_bytes <= 0:
-        return list(inline), [], requested
-
-    kept: list = []
-    over: list = []
-    running = 0
-    for file in inline:
-        size = _estimate_decoded_size(file)
-        if running + size > max_total_bytes:
-            over.append(file)
-            continue
-        running += size
-        kept.append(file)
-    return kept, over, requested
-
-
-def _over_budget_as_references(
-    over_budget: list,
-    upload_rows: dict,
-) -> tuple[list, list]:
-    """Split the files ``_apply_inline_byte_budget`` moved out into the ones
-    that can go by reference and the ones that are still dropped.
-
-    Returns ``(references, dropped)``, both in attachment order; each reference
-    is paired with the file it replaces, so the caller can place it among the
-    turn's other references in attachment order. A file goes by
-    reference when it is a document ``document_read`` can read *and* it came
-    from an upload, so the resolver has its row (``upload_rows``, keyed by the
-    ``FileContent``'s identity): the reference renders from that row and the
-    tool reads the original, so nothing is fetched, prepared or built here.
-    Images have nothing ``document_read`` could return, and direct ``files``
-    bytes have no row to read later (large-document spec §4B.6): both stay
-    dropped with the "combined size limit" note.
-    """
-    references: list = []
-    dropped: list = []
-    for file in over_budget:
-        row = upload_rows.get(id(file))
-        if row is not None and is_document_class(row.mime_type, row.filename):
-            references.append((file, ReferenceAttachment(meta=row, over_budget=True)))
-        else:
-            dropped.append(file)
-    return references, dropped
 
 
 def _emit_attachment_over_quota_metric(
@@ -2017,7 +1908,7 @@ def _build_attachment_guidance(
         over_budget_ref = getattr(ref, "over_budget", False)
         if over_budget_ref:
             # Each file fits on its own; together they exceed what one message
-            # can carry in full (`_over_budget_as_references`).
+            # can carry in full (the planner's ``over_budget_reference``).
             lead = (
                 f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached, but this "
                 f"message's attachments together exceed the combined size limit for a "
@@ -2865,6 +2756,19 @@ class TurnAttachments:
     extracted_documents: list = field(default_factory=list)
     unreadable_images: list = field(default_factory=list)
     unreadable_documents: list = field(default_factory=list)
+    # The planner's decision for every resolved file (``attachment_plan``), the
+    # facts it was made from and the profile it used. ``inline_indices[k]`` is
+    # the plan entry of ``files_to_send[k]``: the two lists stay aligned, since
+    # nothing after the plan reorders the inline set. Written on the turn's
+    # ``C#`` row after the stream (``AttachmentPlan.to_row``).
+    plan: Optional[AttachmentPlan] = None
+    plan_facts: list = field(default_factory=list)
+    inline_indices: list = field(default_factory=list)
+    profile: Optional[LimitsProfile] = None
+
+    @property
+    def max_files_per_message(self) -> int:
+        return (self.profile or current_limits_profile()).max_files_per_message
 
 
 async def _persist_inline_diverted(
@@ -3050,38 +2954,30 @@ async def _resolve_turn_attachments(
     all_files = list(input_data.files) if input_data.files else []
     upload_ids_to_resolve = list(input_data.file_upload_ids or [])
 
-    # Per-message file count (spec §4E / PR-6). Applied here, before the
-    # S3 fetch, so a sixth file is reported to the user instead of silently
-    # truncated by the resolver — and so a client cannot fan out unbounded
-    # S3 reads. With the guard off, the resolver's own backstop (5) applies
-    # exactly as it did before.
-    turn_guard_on = attachment_turn_guard_enabled()
-    dropped_over_count_names: list[str] = []
-    dropped_over_count_total = 0
-    if turn_guard_on:
-        (
-            all_files,
-            upload_ids_to_resolve,
-            dropped_over_count_names,
-            dropped_over_count_total,
-        ) = _apply_message_file_cap(all_files, upload_ids_to_resolve, MAX_FILES_PER_MESSAGE)
-
-    # Folders (drive-folder spec §4.4, §9 D1): each one counts ONE against the
-    # same cap, after the files, whatever its file count. Never on a resume or
-    # a continuation: those replay a turn whose message was already built.
+    # Per-message file count (spec §4E / PR-6), decided by the planner on the
+    # request's ids before the S3 fetch, so a sixth file is reported to the user
+    # instead of silently truncated by the resolver, and so a client cannot fan
+    # out unbounded S3 reads. Folders (drive-folder spec §4.4, §9 D1) count ONE
+    # each, after the files. Never on a resume or a continuation: those replay a
+    # turn whose message was already built.
+    profile = current_limits_profile()
     folder_ids: list[str] = []
+    dropped_folders = 0
     if not is_resume and not is_continuation:
         folder_ids, dropped_folders = _requested_folder_ids(input_data)
-        dropped_over_count_total += dropped_folders
-        if turn_guard_on and MAX_FILES_PER_MESSAGE > 0:
-            budget = max(0, MAX_FILES_PER_MESSAGE - len(all_files) - len(upload_ids_to_resolve))
-            dropped_over_count_total += max(0, len(folder_ids) - budget)
-            folder_ids = folder_ids[:budget]
-    if turn_guard_on and dropped_over_count_total:
+    count = cap_message_attachments(
+        all_files, upload_ids_to_resolve, folder_ids, profile, folders_dropped=dropped_folders
+    )
+    all_files = count.direct_files
+    upload_ids_to_resolve = count.upload_ids
+    folder_ids = count.folder_ids
+    dropped_over_count_names = count.dropped_names
+    dropped_over_count_total = count.dropped_total
+    if profile.turn_guard and dropped_over_count_total:
         logger.warning(
             "Dropped %d attachment(s) over the %d-per-message cap",
             dropped_over_count_total,
-            MAX_FILES_PER_MESSAGE,
+            profile.max_files_per_message,
         )
     # Started now so its GetItems overlap the uploads' S3 reads below.
     folders_task = (
@@ -3108,9 +3004,11 @@ async def _resolve_turn_attachments(
                 upload_ids=upload_ids_to_resolve,
                 # Already capped above when the guard is on; the resolver's
                 # own backstop is the pre-guard behaviour.
-                max_files=None if turn_guard_on else 5,
+                max_files=count.resolver_max_files,
             )
             for rf in resolved_files:
+                # The resolver asked the planner (``delivers_by_reference``)
+                # before any S3 read: a reference comes back as its row alone.
                 reference_meta = getattr(rf, "reference", None)
                 if reference_meta is not None:
                     all_files.append(ReferenceAttachment(meta=reference_meta))
@@ -3164,13 +3062,24 @@ async def _resolve_turn_attachments(
             )
         all_files = deduped_files
 
-    (
-        files_to_send,
-        diverted_tabular,
-        diverted_presentations,
-        oversized_inline,
-        reference_documents,
-    ) = _partition_attachments(all_files)
+    # One decision for every file, by the planner (``attachment_plan``): which
+    # go inline, which by reference, which to their tools and which are dropped
+    # with a note. The model is not known yet (stage B11), so this plans the
+    # byte rules; `_plan_for_model` refines the inline set once it is.
+    plan_facts = [_file_facts(f, upload_rows) for f in all_files]
+    plan = plan_attachments(
+        plan_facts, None, profile=profile, dropped_over_count=dropped_over_count_total
+    )
+
+    def _planned(*reasons: str) -> list:
+        return [all_files[i] for i in plan.with_reason(*reasons)]
+
+    inline_indices = plan.indices(MODE_NATIVE)
+    files_to_send = [all_files[i] for i in inline_indices]
+    diverted_tabular = _planned(REASON_TABULAR)
+    diverted_presentations = _planned(REASON_PRESENTATION)
+    oversized_inline = _planned(REASON_OVERSIZED)
+    reference_documents = [all_files[i] for i in plan.indices(MODE_ON_DEMAND) if isinstance(all_files[i], ReferenceAttachment)]
     if reference_documents:
         logger.info(
             "Attached %d large document(s) by reference (no S3 read on the turn path)",
@@ -3197,52 +3106,49 @@ async def _resolve_turn_attachments(
     diverted_tabular, diverted_presentations, unpersisted_inline = await _persist_inline_diverted(
         input_data, user_id, diverted_tabular, diverted_presentations
     )
+    if unpersisted_inline:
+        position = {id(f): i for i, f in enumerate(all_files)}
+        for failure in unpersisted_inline:
+            plan = plan.with_outcome(position[id(failure.file)], REASON_PERSIST_FAILED)
 
-    # Aggregate budget for the turn (spec §4E / PR-6): the inline set is one
-    # persisted message, and a message over ~7.5 MB raw fails the AgentCore
-    # Memory write with SessionException. Trim first-fit in attachment order;
-    # the trimmed files join the oversized note path, never the exception.
-    over_budget_inline: list = []
-    if turn_guard_on and files_to_send:
-        files_to_send, over_budget_inline, requested_inline_bytes = _apply_inline_byte_budget(
-            files_to_send, INLINE_ATTACHMENTS_MAX_TOTAL_BYTES
+    # The combined budget (spec §4E / PR-6): the inline set is one persisted
+    # message, and a message over ~7.5 MB raw fails the AgentCore Memory write
+    # with SessionException. The planner trimmed it first-fit in attachment
+    # order; an uploaded document that did not fit goes by reference (its
+    # digest or a ready stub, rendered from the row the resolver already read,
+    # so no I/O before the first token), anything else is dropped with a note.
+    over_budget_inline = _planned(REASON_OVER_BUDGET)
+    over_budget_indices = plan.with_reason(REASON_OVER_BUDGET, REASON_OVER_BUDGET_REFERENCE)
+    if over_budget_indices:
+        logger.warning(
+            "Attachment turn over quota: requested_bytes=%d cap_bytes=%d "
+            "inline_files=%d dropped_files=%d",
+            plan.requested_inline_bytes,
+            profile.inline_total_max_bytes,
+            len(files_to_send) + len(over_budget_indices),
+            len(over_budget_indices),
         )
-        if over_budget_inline:
-            logger.warning(
-                "Attachment turn over quota: requested_bytes=%d cap_bytes=%d "
-                "inline_files=%d dropped_files=%d",
-                requested_inline_bytes,
-                INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
-                len(files_to_send) + len(over_budget_inline),
-                len(over_budget_inline),
-            )
-            _emit_attachment_over_quota_metric(
-                requested_bytes=requested_inline_bytes,
-                cap_bytes=INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
-                inline_count=len(files_to_send) + len(over_budget_inline),
-                dropped_count=len(over_budget_inline),
-            )
-        # An uploaded document that did not fit goes by reference instead of
-        # being dropped: its digest (or a ready stub) in the message and
-        # `document_read` on the original. Rendered from the row the resolver
-        # already read, so it adds no I/O before the first token. A turn within
-        # the budget never reaches this, so its message is unchanged.
-        if over_budget_inline and inline_budget_by_reference_enabled():
-            budget_references, over_budget_inline = _over_budget_as_references(
-                over_budget_inline, upload_rows
-            )
-            if budget_references:
-                logger.info(
-                    "Attached %d over-budget document(s) by reference instead of dropping them",
-                    len(budget_references),
-                )
-                record_reference_attachments([ref for _, ref in budget_references])
-                # One list in attachment order, so the message's reference
-                # blocks read in the order the user attached the files.
-                position = {id(f): i for i, f in enumerate(all_files)}
-                placed = [(position[id(ref)], ref) for ref in reference_documents]
-                placed += [(position[id(src)], ref) for src, ref in budget_references]
-                reference_documents = [ref for _, ref in sorted(placed, key=lambda pair: pair[0])]
+        _emit_attachment_over_quota_metric(
+            requested_bytes=plan.requested_inline_bytes,
+            cap_bytes=profile.inline_total_max_bytes,
+            inline_count=len(files_to_send) + len(over_budget_indices),
+            dropped_count=len(over_budget_indices),
+        )
+    budget_indices = plan.with_reason(REASON_OVER_BUDGET_REFERENCE)
+    if budget_indices:
+        budget_references = [
+            ReferenceAttachment(meta=upload_rows[id(all_files[i])], over_budget=True) for i in budget_indices
+        ]
+        logger.info(
+            "Attached %d over-budget document(s) by reference instead of dropping them",
+            len(budget_references),
+        )
+        record_reference_attachments(budget_references)
+        # One list in attachment order, so the message's reference blocks read
+        # in the order the user attached the files.
+        by_index = {i: all_files[i] for i in plan.indices(MODE_ON_DEMAND)}
+        by_index.update(zip(budget_indices, budget_references))
+        reference_documents = [by_index[i] for i in sorted(by_index)]
 
     # All three classes were dropped from the turn entirely; the marker must
     # not promise a card for any of them.
@@ -3266,6 +3172,10 @@ async def _resolve_turn_attachments(
         unpersisted_inline=unpersisted_inline,
         reference_documents=reference_documents,
         folders=folders,
+        plan=plan,
+        plan_facts=plan_facts,
+        inline_indices=inline_indices,
+        profile=profile,
     )
 
 
@@ -3332,11 +3242,6 @@ class ExtractedDocument:
     count: int
 
 
-#: Floor on one document's share of ``TEXT_ONLY_DOCUMENTS_MAX_CHARS``, so five
-#: attachments still get a useful excerpt each.
-_TEXT_ONLY_DOCUMENT_MIN_CHARS = 4_000
-
-
 def _extract_document_text(file, fmt: str, limit: int) -> Optional[ExtractedDocument]:
     """Decode one inline file and pull its text layer. Blocking (PDF parsing)."""
     import base64
@@ -3355,59 +3260,87 @@ def _extract_document_text(file, fmt: str, limit: int) -> Optional[ExtractedDocu
     )
 
 
+def _plan_for_model(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Refine the turn's plan with what its model reads (map stage B11).
+
+    ``_resolve_turn_attachments`` plans before the model is known; the byte
+    decisions do not depend on it, and this applies the model's rules to the
+    inline set: documents as text for a TEXT-only model (and its images
+    dropped), renderable non-PDF documents as text for a Converse model with
+    ``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED``. Pure; no I/O. Idempotent, so
+    each stage that carries out a model rule calls it first.
+    """
+    if attachments.plan is None or attachments.profile is None:
+        return
+    attachments.plan = refine_for_model(
+        attachments.plan,
+        attachments.plan_facts,
+        ModelFacts(text_only=turn_model.text_only, converse=_is_converse_model(turn_model)),
+        profile=attachments.profile,
+    )
+
+
+def _inline_by_reason(attachments: TurnAttachments, *reasons: str) -> list:
+    """``(index, file)`` of the inline files the plan gave one of ``reasons``, in attachment order."""
+    if attachments.plan is None:
+        return []
+    chosen = set(attachments.plan.with_reason(*reasons))
+    return [
+        (index, file)
+        for index, file in zip(attachments.inline_indices, attachments.files_to_send)
+        if index in chosen
+    ]
+
+
 async def _adapt_attachments_for_model(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
-    """Fit the inline set to what the turn's model can read (map stage B11).
+    """Carry out the plan's TEXT-only decisions (map stage B11).
 
     A model whose catalog row declares TEXT input only (``zai.glm-5``, and the
     text-only Mantle rows) rejects every document and image block with a
     ValidationException — measured on dev 2026-10-06, "This model doesn't
     support documents." for pdf *and* txt — so a turn that inlined one failed
-    outright. Runs after `_resolve_turn_model` because `_resolve_turn_attachments`
-    runs before the model is known. For such a model only:
+    outright. The planner (``refine_for_model``) chose, for such a model only:
 
-    - documents become text (``ExtractedDocument``), bounded by
-      ``TEXT_ONLY_DOCUMENTS_MAX_CHARS`` across the turn and rendered into the
-      user message by `_build_extracted_documents_section`;
-    - images, and documents with no text layer to extract (a scan, legacy
-      ``.doc``), are dropped and named in the attachment guidance, exactly like
-      oversized files, and leave the marker for the same reason.
+    - documents become text (``ExtractedDocument``), each held to the plan's
+      per-document share of ``text_only_max_chars`` and rendered into the user
+      message by `_build_extracted_documents_section`;
+    - images, and documents with no format to extract, are dropped and named in
+      the attachment guidance, exactly like oversized files, and leave the
+      marker for the same reason. A document whose extraction finds no text
+      layer (a scan, legacy ``.doc``) is dropped the same way, and recorded on
+      the plan as ``text_unavailable``.
 
     Mutates ``attachments`` in place. Every other turn returns on the first
-    line, so it costs nothing before the first token there; the extraction
+    lines, so it costs nothing before the first token there; the extraction
     itself runs off the event loop, and only on a turn that used to fail.
     """
-    if not attachments.files_to_send or not turn_model.text_only:
+    _plan_for_model(attachments, turn_model)
+    if not attachments.files_to_send:
+        return
+    planned_text = _inline_by_reason(attachments, REASON_TEXT_ONLY_MODEL)
+    images = [f for _, f in _inline_by_reason(attachments, REASON_TEXT_ONLY_IMAGE)]
+    unreadable = [f for _, f in _inline_by_reason(attachments, REASON_TEXT_ONLY_UNREADABLE)]
+    if not planned_text and not images and not unreadable:
         return
 
     from apis.shared.files.document_read import document_format_for
 
-    images: list = []
-    documents: list = []
-    unreadable: list = []
-    for file in attachments.files_to_send:
-        if (file.content_type or "").lower().startswith("image/"):
-            images.append(file)
-            continue
-        fmt = document_format_for(file.content_type or "", file.filename or "")
-        if fmt is None:
-            unreadable.append(file)
-            continue
-        documents.append((file, fmt))
-
+    documents = [(i, f, document_format_for(f.content_type or "", f.filename or "")) for i, f in planned_text]
     extracted: list = []
     if documents:
-        limit = max(_TEXT_ONLY_DOCUMENT_MIN_CHARS, TEXT_ONLY_DOCUMENTS_MAX_CHARS // len(documents))
+        limit = attachments.plan.text_char_limit
         results = await asyncio.gather(
-            *(asyncio.to_thread(_extract_document_text, f, fmt, limit) for f, fmt in documents),
+            *(asyncio.to_thread(_extract_document_text, f, fmt, limit) for _, f, fmt in documents),
             return_exceptions=True,
         )
-        for (file, fmt), result in zip(documents, results):
+        for (index, file, fmt), result in zip(documents, results):
             if isinstance(result, ExtractedDocument):
                 extracted.append(result)
                 continue
             if isinstance(result, BaseException):
                 logger.warning("Text extraction failed for a %s attachment: %s", fmt, result)
             unreadable.append(file)
+            attachments.plan = attachments.plan.with_outcome(index, REASON_TEXT_UNAVAILABLE)
 
     logger.info(
         "Text-only model: %d document(s) converted to text (%d sampled), "
@@ -3423,6 +3356,7 @@ async def _adapt_attachments_for_model(attachments: TurnAttachments, turn_model:
     unreadable = [f for f in attachments.files_to_send if id(f) in unreadable_ids]
     dropped_names = {f.filename for f in images + unreadable}
     attachments.files_to_send = []
+    attachments.inline_indices = []
     attachments.extracted_documents = extracted
     attachments.unreadable_images = images
     attachments.unreadable_documents = unreadable
@@ -3442,18 +3376,6 @@ def _is_converse_model(turn_model: "TurnModel") -> bool:
     model_id = (turn_model.model_id or "").lower()
     # ``ModelConfig.get_provider`` routes these ids away from Converse.
     return not model_id.startswith(("gpt-", "o1-", "gemini-"))
-
-
-def _renderable_format(file) -> Optional[str]:
-    """The document format ``PromptBuilder`` gives ``file``'s block, when it is
-    one ``document_cap`` renders as text (docx, txt, md, csv, html)."""
-    from apis.shared.models.document_cap import RENDERABLE_FORMATS
-
-    if (file.content_type or "").lower().startswith("image/"):
-        return None
-    name = (file.filename or "").lower()
-    ext = name.rsplit(".", 1)[-1] if "." in name else ""
-    return ext if ext in RENDERABLE_FORMATS else None
 
 
 def _prerender_one(fmt: str, encoded: str) -> bool:
@@ -3476,17 +3398,17 @@ async def _prerender_documents_as_text(attachments: TurnAttachments, turn_model:
     are already written out by ``_write_out_tracked_changes``, so the text
     renders the same bytes the block carries.
 
-    Returns at once with the flag off, for any other model, and on a turn with
-    no such attachment. A failure here only means the projection renders the
-    file itself.
+    Which files: the plan's ``documents_as_text`` entries (a Converse model with
+    the flag on) and ``provider_needs_text`` entries (any other provider, whose
+    projection always renders; ``refine_for_model``). None on a Converse model
+    with the flag off, or on a turn with no such attachment. A failure here only
+    means the projection renders the file itself.
     """
-    if not attachments.files_to_send or not _is_converse_model(turn_model):
-        return
-    from apis.shared.feature_flags import converse_documents_as_text_enabled
-
-    if not converse_documents_as_text_enabled():
-        return
-    jobs = [(fmt, f.bytes) for f in attachments.files_to_send if (fmt := _renderable_format(f))]
+    _plan_for_model(attachments, turn_model)
+    jobs = [
+        ((f.filename or "").lower().rsplit(".", 1)[-1], f.bytes)
+        for _, f in _inline_by_reason(attachments, REASON_DOCUMENTS_AS_TEXT, REASON_PROVIDER_NEEDS_TEXT)
+    ]
     if not jobs:
         return
     started = time.perf_counter()
@@ -5904,8 +5826,9 @@ async def _run_invocation(
             )
 
             # A model whose row declares TEXT input only rejects document and
-            # image blocks; convert or drop them now that the model is known.
-            # Returns immediately for every other model.
+            # image blocks; convert or drop them as planned (the plan's model
+            # rules apply first, `_plan_for_model`). Returns immediately for
+            # every other model.
             await _adapt_attachments_for_model(attachments, turn_model)
             # With documents-as-text on, render the turn's non-PDF attachments
             # now, in worker threads, so the per-call projection finds them.
@@ -5919,9 +5842,9 @@ async def _run_invocation(
                 user_id,
                 agent_tools_override,
                 turn_has_tabular=bool(attachments.diverted_tabular)
-                or _folders_have(attachments.folders, is_tabular_file),
+                or _folders_have(attachments.folders, lambda n, m: file_class(n, m) == CLASS_TABULAR),
                 turn_has_presentation=bool(attachments.diverted_presentations)
-                or _folders_have(attachments.folders, is_presentation_file),
+                or _folders_have(attachments.folders, lambda n, m: file_class(n, m) == CLASS_PRESENTATION),
             )
 
             # Reassigning these function-scope locals here (before the main-turn
@@ -6163,7 +6086,7 @@ async def _run_invocation(
                 over_budget=attachments.over_budget_inline,
                 dropped_over_count_names=attachments.dropped_over_count_names,
                 dropped_over_count_total=attachments.dropped_over_count_total,
-                max_files=MAX_FILES_PER_MESSAGE,
+                max_files=attachments.max_files_per_message,
                 unpersisted=attachments.unpersisted_inline,
                 unreadable_images=attachments.unreadable_images,
                 unreadable_documents=attachments.unreadable_documents,
@@ -6332,6 +6255,10 @@ async def _run_invocation(
                 # The project whose harness ran this turn, for the same cost row and the
                 # project's monthly rollup. Per turn for the same reason as turn_agent_id.
                 turn_project_id=turn_project_id,
+                # How each attachment was delivered (the planner's decision),
+                # for the turn's cost row. Ids, codes and numbers only; the
+                # coordinator writes it after the stream.
+                turn_attachment_plan=attachments.plan.to_row() if attachments.plan else None,
                 # This turn's lease doubles as the mid-turn steering inbox
                 # (docs/specs/mid-turn-steering.md). Passed per turn for the
                 # same reason as turn_agent_id — the agent is cached, the lease
