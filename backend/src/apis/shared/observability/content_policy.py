@@ -208,6 +208,12 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "documentSliceTokens",
     "documentMime",
     "documentReads",
+    # The turn's wall time, on its last row only: what tells one turn's calls
+    # from the next (release-ledger spec §5.1). A number.
+    "turnDurationMs",
+    # The delivery decision per file (unified-attachment-delivery §8.2):
+    # mode, class, tokens, reason. Ids and numbers only.
+    "attachmentPlan",
 )
 
 #: C# rows as the release ledger reads them (``apis.shared.sessions.ledger_rollups``):

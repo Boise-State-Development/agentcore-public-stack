@@ -131,6 +131,16 @@ def test_case_answers_are_the_planted_values():
     by_id = {c["id"]: c for c in json.loads((CASES_DIR / "attachment_delivery.json").read_text())}
     fact = d.prose("delivery_prose_300k.md").facts["late"]
     assert by_id["attachment_delivery.lookup_md_300k"]["expect"] == {
-        "contains_any": [fact.value], "forbidden": [fact.lookalike]}
-    absent = d.prose("delivery_prose_150k.md").absent
-    assert by_id["attachment_delivery.absent_fact_150k"]["expect"]["forbidden"] == [absent.lookalike]
+        "contains_any": [fact.value], "regex": {"search": [delivery_cases.leads(fact.value, [fact.lookalike])]}}
+
+
+@pytest.mark.parametrize("answer,passes", [
+    ("WP-51759", True),
+    ("**WP-51759**\n\nThe document also lists WP-51795 as the backup permit, kept for audit only.", True),
+    ("WP-51795", False),
+    ("The backup permit is WP-51795; the operating permit is WP-51759.", False),
+    ("x" * 200 + " WP-51759", False),
+])
+def test_the_right_value_must_lead_the_answer_and_a_lookalike_after_it_is_fine(answer, passes):
+    pattern = delivery_cases.leads("WP-51759", ["WP-51795"])
+    assert bool(re.search(pattern, answer, re.MULTILINE)) is passes

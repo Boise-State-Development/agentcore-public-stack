@@ -17,9 +17,11 @@
    "contains_any": [
     "WO-96625"
    ],
-   "forbidden": [
-    "WO-96652"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-96652)[\\s\\S]){0,160}?WO\\-96625"
+    ]
+   }
   },
   "files": [
    "delivery_prose_5k.md"
@@ -44,9 +46,11 @@
    "contains_any": [
     "WO-78096"
    ],
-   "forbidden": [
-    "WO-78069"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-78069)[\\s\\S]){0,160}?WO\\-78096"
+    ]
+   }
   },
   "files": [
    "delivery_prose_30k.md"
@@ -71,9 +75,11 @@
    "contains_any": [
     "WO-66685"
    ],
-   "forbidden": [
-    "WO-66658"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66658)[\\s\\S]){0,160}?WO\\-66685"
+    ]
+   }
   },
   "files": [
    "delivery_prose_80k.md"
@@ -98,9 +104,11 @@
    "contains_any": [
     "WO-24282"
    ],
-   "forbidden": [
-    "WO-24228"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-24228)[\\s\\S]){0,160}?WO\\-24282"
+    ]
+   }
   },
   "files": [
    "delivery_prose_150k.md"
@@ -125,9 +133,11 @@
    "contains_any": [
     "WO-77180"
    ],
-   "forbidden": [
-    "WO-77108"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-77108)[\\s\\S]){0,160}?WO\\-77180"
+    ]
+   }
   },
   "files": [
    "delivery_prose_300k.md"
@@ -152,9 +162,11 @@
    "contains_any": [
     "WO-39741"
    ],
-   "forbidden": [
-    "WO-39714"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-39714)[\\s\\S]){0,160}?WO\\-39741"
+    ]
+   }
   },
   "files": [
    "delivery_log_30k.txt"
@@ -179,9 +191,11 @@
    "contains_any": [
     "WO-60930"
    ],
-   "forbidden": [
-    "WO-60903"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
   },
   "files": [
    "delivery_report_30k.pdf"
@@ -206,9 +220,11 @@
    "contains_any": [
     "WO-58797"
    ],
-   "forbidden": [
-    "WO-58779"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
   },
   "files": [
    "delivery_report_80k.pdf"
@@ -233,9 +249,11 @@
    "contains_any": [
     "WO-66350"
    ],
-   "forbidden": [
-    "WO-66305"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66305)[\\s\\S]){0,160}?WO\\-66350"
+    ]
+   }
   },
   "files": [
    "delivery_report_150k.pdf"
@@ -260,9 +278,11 @@
    "contains_any": [
     "WO-25778"
    ],
-   "forbidden": [
-    "WO-25787"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-25787)[\\s\\S]){0,160}?WO\\-25778"
+    ]
+   }
   },
   "files": [
    "delivery_memo_30k.docx"
@@ -287,9 +307,11 @@
    "contains_any": [
     "WO-28557"
    ],
-   "forbidden": [
-    "WO-28575"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-28575)[\\s\\S]){0,160}?WO\\-28557"
+    ]
+   }
   },
   "files": [
    "delivery_bulletin_30k.html"
@@ -316,9 +338,11 @@
    "contains_any": [
     "WO-95665"
    ],
-   "forbidden": [
-    "WO-95656"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-95656)[\\s\\S]){0,160}?WO\\-95665"
+    ]
+   }
   },
   "files": [
    "delivery_briefing_30k.pptx"
@@ -346,9 +370,11 @@
    "contains_any": [
     "WO-20975"
    ],
-   "forbidden": [
-    "WO-20957"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-20957)[\\s\\S]){0,160}?WO\\-20975"
+    ]
+   }
   },
   "files": [
    "delivery_ledger_30k.csv"
@@ -376,9 +402,11 @@
    "contains_any": [
     "WO-97893"
    ],
-   "forbidden": [
-    "WO-97839"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-97839)[\\s\\S]){0,160}?WO\\-97893"
+    ]
+   }
   },
   "files": [
    "delivery_ledger_30k.xlsx"
@@ -403,9 +431,11 @@
    "contains_any": [
     "WP-60418"
    ],
-   "forbidden": [
-    "WP-60481"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WP\\-60481)[\\s\\S]){0,160}?WP\\-60418"
+    ]
+   }
   },
   "files": [
    "delivery_permit_card.png"
@@ -431,10 +461,12 @@
     "WP-51759",
     "CC-73502"
    ],
-   "forbidden": [
-    "WP-51795",
-    "CC-73520"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WP\\-51795)[\\s\\S]){0,160}?WP\\-51759",
+     "\\A(?:(?!CC\\-73520)[\\s\\S]){0,160}?CC\\-73502"
+    ]
+   }
   },
   "files": [
    "delivery_prose_30k.md",
@@ -461,10 +493,12 @@
     "WP-38313",
     "CC-80537"
    ],
-   "forbidden": [
-    "WP-38331",
-    "CC-80573"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WP\\-38331)[\\s\\S]){0,160}?WP\\-38313",
+     "\\A(?:(?!CC\\-80573)[\\s\\S]){0,160}?CC\\-80537"
+    ]
+   }
   },
   "files": [
    "delivery_prose_80k.md",
@@ -489,17 +523,14 @@
   "expect": {
    "regex": {
     "search": [
-     "NOT IN DOCUMENT"
+     "\\A(?:(?!WP\\-23562)[\\s\\S]){0,160}?NOT\\ IN\\ DOCUMENT"
     ]
-   },
-   "forbidden": [
-    "WP-23562"
-   ]
+   }
   },
   "files": [
    "delivery_prose_30k.md"
   ],
-  "notes": "Hallucination guard at ~30k: the backup permit is there and must not be offered as the operating one."
+  "notes": "Hallucination guard at ~30k: the backup permit is there and must not be offered as the operating one. The refusal must lead; naming the backup after it is fine."
  },
  {
   "id": "attachment_delivery.absent_fact_150k",
@@ -518,17 +549,14 @@
   "expect": {
    "regex": {
     "search": [
-     "NOT IN DOCUMENT"
+     "\\A(?:(?!WP\\-19441)[\\s\\S]){0,160}?NOT\\ IN\\ DOCUMENT"
     ]
-   },
-   "forbidden": [
-    "WP-19441"
-   ]
+   }
   },
   "files": [
    "delivery_prose_150k.md"
   ],
-  "notes": "Hallucination guard at ~150k: the backup permit is there and must not be offered as the operating one."
+  "notes": "Hallucination guard at ~150k: the backup permit is there and must not be offered as the operating one. The refusal must lead; naming the backup after it is fine."
  },
  {
   "id": "attachment_delivery.follow_up_30k",
@@ -551,9 +579,11 @@
    "contains_any": [
     "WO-78096"
    ],
-   "forbidden": [
-    "WO-78069"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-78069)[\\s\\S]){0,160}?WO\\-78096"
+    ]
+   }
   },
   "files": [
    "delivery_prose_30k.md"
@@ -581,9 +611,11 @@
    "contains_any": [
     "WO-24282"
    ],
-   "forbidden": [
-    "WO-24228"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-24228)[\\s\\S]){0,160}?WO\\-24282"
+    ]
+   }
   },
   "files": [
    "delivery_prose_150k.md"
@@ -608,13 +640,11 @@
    "contains_any": [
     "CC-63136"
    ],
-   "forbidden": [
-    "CC-63163",
-    "CC-70074",
-    "CC-33846",
-    "CC-11897",
-    "CC-22404"
-   ]
+   "regex": {
+    "search": [
+     "\\A(?:(?!CC\\-63163)(?!CC\\-70074)(?!CC\\-33846)(?!CC\\-11897)(?!CC\\-22404)[\\s\\S]){0,160}?CC\\-63136"
+    ]
+   }
   },
   "files": [
    "delivery_prose_5k.md",

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -53,8 +54,25 @@ def _case(
     }
 
 
+#: How far into the answer the asked-for value must appear.
+LEAD_CHARS = 160
+
+
+def leads(value: str, lookalikes: Sequence[str]) -> str:
+    """A pattern: ``value`` within the answer's first ``LEAD_CHARS`` characters, no lookalike before it.
+
+    Not ``forbidden``: a model that answers correctly and then says why it
+    rejected the backup permit ("WP-51759; the document also lists WP-51795
+    as the backup") read the document right, and a check that fails it
+    measures phrasing, not delivery. What a misreading produces is the
+    lookalike given as the answer, which puts it first.
+    """
+    guard = "".join(f"(?!{re.escape(v)})" for v in lookalikes)
+    return rf"\A(?:{guard}[\s\S]){{0,{LEAD_CHARS}}}?{re.escape(value)}"
+
+
 def _lookup(fact: d.Fact) -> Dict[str, Any]:
-    return {"contains_any": [fact.value], "forbidden": [fact.lookalike]}
+    return {"contains_any": [fact.value], "regex": {"search": [leads(fact.value, [fact.lookalike])]}}
 
 
 def cases() -> List[Dict[str, Any]]:
@@ -89,7 +107,7 @@ def cases() -> List[Dict[str, Any]]:
         cell = d.table_fact(name)
         out.append(_case(
             f"lookup_{label}", [cell.question()], [name],
-            {"contains_any": [cell.value], "forbidden": [cell.lookalike]},
+            {"contains_any": [cell.value], "regex": {"search": [leads(cell.value, [cell.lookalike])]}},
             f"A ~30k-token table ({label.split('_')[0]}). The lookalike ticket is the same site one week later.",
             _SPREADSHEET_TOOLS,
         ))
@@ -98,7 +116,8 @@ def cases() -> List[Dict[str, Any]]:
             f"According to the attached image, what is the operating permit number for {d.PERMIT_CARD_SUBJECT}? "
             "Reply with just the number."
         ], ["delivery_permit_card.png"],
-        {"contains_any": [d.PERMIT_CARD_VALUE], "forbidden": [d.PERMIT_CARD_LOOKALIKE]},
+        {"contains_any": [d.PERMIT_CARD_VALUE],
+         "regex": {"search": [leads(d.PERMIT_CARD_VALUE, [d.PERMIT_CARD_LOOKALIKE])]}},
         "A fact that exists only in pixels, beside its backup-permit lookalike.",
     ))
 
@@ -111,7 +130,8 @@ def cases() -> List[Dict[str, Any]]:
                 f"Two documents are attached. What is the {first.attribute} for {first.subject}, and what is "
                 f"the {second.attribute} for {second.subject}? Reply as: <permit>; <certificate>"
             ], [f"delivery_prose_{size}.md", f"delivery_report_{size}.pdf"],
-            {"contains_all": [first.value, second.value], "forbidden": [first.lookalike, second.lookalike]},
+            {"contains_all": [first.value, second.value],
+             "regex": {"search": [leads(first.value, [first.lookalike]), leads(second.value, [second.lookalike])]}},
             f"Each answer is in a different ~{size}-token document (Markdown and PDF).",
         ))
 
@@ -120,9 +140,9 @@ def cases() -> List[Dict[str, Any]]:
         doc = d.prose(f"delivery_prose_{size}.md")
         out.append(_case(
             f"absent_fact_{size}", [doc.absent.question()], [f"delivery_prose_{size}.md"],
-            {"regex": {"search": ["NOT IN DOCUMENT"]}, "forbidden": [doc.absent.lookalike]},
+            {"regex": {"search": [leads("NOT IN DOCUMENT", [doc.absent.lookalike])]}},
             f"Hallucination guard at ~{size}: the backup permit is there and must not be offered as the "
-            "operating one.",
+            "operating one. The refusal must lead; naming the backup after it is fine.",
         ))
 
     # Follow-up: the document arrives on turn 1; turn 2 asks a fact turn 1 did not.
@@ -145,7 +165,7 @@ def cases() -> List[Dict[str, Any]]:
             f"Five site notes are attached. What is the {target.attribute} for {target.subject}? "
             "Reply with just the number."
         ], ["delivery_prose_5k.md", *notes],
-        {"contains_any": [target.value], "forbidden": [target.lookalike, *others]},
+        {"contains_any": [target.value], "regex": {"search": [leads(target.value, [target.lookalike, *others])]}},
         "Five ~5k-token documents, today's per-message cap. Each holds a certificate; only one is the subject's.",
     ))
     return out
