@@ -323,11 +323,12 @@ This subsection is the riskiest change in the spec and is verified separately (�
 
 | Change | Flag | Why |
 |---|---|---|
-| Phase 0 telemetry, phase 1 extraction, `GET /files/limits`, the fixes in §1.3 | none | No behaviour change, or a fix |
+| Phase 0 telemetry, phase 1 extraction, `GET /files/limits`, the fixes in §1.3, phase 6 removal | none | No behaviour change, or a fix |
 | Prepare every document at upload | `LARGE_DOCUMENT_ATTACHMENTS_ENABLED` (existing) | Same pipeline, same resources; more invocations |
 | Token-based selection, raised limits, handles in persisted messages | `ATTACHMENT_PLAN_ENABLED`, in development, default off; SPA `features.attachmentPlan` | Widens what users can do and what a turn can cost |
 
-Whether the last row is one flag or two is the driving developer's call.
+Whether the last row is one flag or two is the driving developer's call. Either way
+the flag selects a limits profile and retires in phase 6 (§9.1).
 
 ## 8. Measurement
 
@@ -420,8 +421,75 @@ for the affected cells, and the cost and first-token deltas are stated in the PR
 | 3. Tokens | The ladder in §4.3 and the document budget in §5.2 behind `ATTACHMENT_PLAN_ENABLED`; values from the phase 0 readout | Yes, flagged |
 | 4. Limits | Handles in persisted messages; 20 files; PDF page rules; image downscale | Yes, flagged |
 | 5. Overflow | Over-budget sets indexed and steered to `search` | Yes, flagged |
+| 6. Retire | Delete the legacy profile, the flags and knobs it absorbed, and their tests and docs (§9.1) | None intended |
 
 Phases 3 to 5 each end with an `attachment_delivery` run and a release-ledger readout.
+
+### 9.1 Removal
+
+A consolidation that only adds leaves two systems. Three rules keep this one from
+doing that.
+
+1. **The flag selects a limits profile, never a code path.** From phase 1 the planner
+   is the only selector. `ATTACHMENT_PLAN_ENABLED` off means the planner runs the
+   `legacy` profile (today's byte rules, expressed as planner inputs); on means the
+   `token` profile. There is no second selector to keep alive, and the table test in
+   §8.3 covers both profiles.
+2. **A phase is not done until its rows below are done.** Removal ships in the same
+   PR as the replacement, or in the phase's last PR.
+3. **One place decides.** An architecture test, modelled on
+   `test_attachment_kb_retrieve_boundary.py`, fails if anything outside
+   `apis/shared/files/attachment_plan.py` chooses a delivery mode or reads a limit
+   constant directly.
+
+Usage counts are from `develop` at e39c6a9d1.
+
+| What goes | Where it is today | Phase | Condition |
+|---|---|---|---|
+| `_apply_message_file_cap`, `_apply_inline_byte_budget`, `_partition_attachments` | `inference_api/chat/routes.py`; pinned by 4 test files | 1 | Planner's `legacy` profile passes the table test with the same outcomes |
+| Admission rules that restate the turn's rules | `app_api/files/service.py` (`max_size_for`, the count check) | 1 | They call the planner's limits |
+| `test_inline_budget_by_reference.py`, `test_attachment_turn_guard.py`, `test_large_document_turn_path.py`, `test_presentation_attachment_carveout.py` | `backend/tests/apis/inference_api/` | 1 | Selection cases move to the table test; what remains tests the route's wiring only |
+| SPA limit constants and the per-rule checks | `file-upload.service.ts`, `inline-attachment-budget.ts` and its spec, `chat-input.component.ts`, `composer-add-menu.component.ts` | 1 | `GET /files/limits` is read at load. One built-in fallback object remains, so the composer can judge a drop before the fetch answers |
+| The bytes/4 document estimate | `_bytes_tokens` for document blocks, `compaction_policy.py` | 2 | Compaction reads row facts |
+| `estimate_document_tokens` as a primary source | `apis/shared/files/document_tokens.py`; 3 callers in `agents/main_agent/session/` | 2 | Callers read row facts. The function stays as the fallback for a file row written before phase 2 |
+| The ceiling-subtraction fixture arm | Built in phase 0 behind the eval fixture | 3 | It becomes §5.2's production code, or is deleted if the readout drops §5.2 |
+| `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` and `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` | 5 source files, 4 test files, `config.ts`, two constructs, `config.test.ts`, `platform.yml`, `.env.example` | 6 | Text is the `token` profile's rule. The `legacy` profile reads the flag until then |
+| `_prerender_documents_as_text` and the per-call projection's own selection | `routes.py`, `apis/shared/models/document_cap.py` | 6 | The planner names the files to render; the projection keeps only the rendering |
+| `INLINE_DOCUMENT_MAX_BYTES`, `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` | `apis/shared/files/models.py`; 4 and 5 source files, 8 and 5 test files | 6 | Their causes are gone: text removes the 4.5 MB limit, handles remove the 10 MB event limit |
+| `inline-budget-notice.component.ts` | SPA | 6 | No per-message byte budget remains to explain |
+| `MAX_FILES_PER_MESSAGE`, `LARGE_DOCUMENT_MAX_BYTES`, `TEXT_ONLY_DOCUMENTS_MAX_CHARS` as module constants | `models.py`, read in 6, 2 and 3 source files | 6 | They become fields of the limits profile. The environment overrides stay, read in one place |
+| The `legacy` profile and `ATTACHMENT_PLAN_ENABLED` itself | Planner, `feature_flags.py`, CDK, `platform.yml`, three environment files | 6 | See below |
+
+**What stays, on purpose.**
+
+- `LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `ATTACHMENT_KB_ENABLED`, `FOLDER_ATTACHMENTS_ENABLED`
+  and `FOLDER_SYNC_ENABLED`. Each gates resources or spend a deployment may not want.
+  The planner takes them as inputs (which modes exist), and nothing else branches on them.
+- The `DOCUMENT_OFFLOAD_*` values. Offload is unchanged by this spec.
+- The fixture-only `delivery` value. It is permanent eval surface. A test pins that no
+  request field can set it.
+- **Reading document bytes from a persisted message.** Messages written before phase 4
+  carry bytes, and no backfill is proposed. The read path can go once AgentCore Memory's
+  event retention has passed since phase 4 reached production; confirm the retention
+  period before deleting it.
+
+**The flag's kind.** `ATTACHMENT_PLAN_ENABLED` is promoted as a **rollout switch**, not
+a feature switch. What a deployment may reasonably want to choose is the limits, and
+those are the profile's overridable values. Keeping the flag would keep the `legacy`
+profile, its tests and its absorbed knobs alive for ever. Its retirement condition is
+the default: shipped in a production release, two weeks there never flipped, and the
+readout recorded. It gets a line in #1798 when it is turned on in prod and in #1422
+when it is promoted.
+
+**Phase 6 also updates:**
+
+- `CHANGELOG.md`, a `Removed` entry naming every variable above, with the profile
+  value that replaces it.
+- The docs-site flag table, the flag paragraph in `CLAUDE.md` and `.env.example`.
+- A superseded note at the top of `large-document-attachments.md`,
+  `document-context-offload.md` and `drive-folder-attachments.md` for the sections
+  this spec replaces, and `docs/feature-summaries/FILE_UPLOAD_IMPLEMENTATION.md`.
+- The Runtime's environment: removing the text flag frees its bytes of the V2 budget.
 
 ## 10. Risks
 
@@ -445,10 +513,12 @@ Phases 3 to 5 each end with an `attachment_delivery` run and a release-ledger re
    Set from the ceiling arms in phase 0. If holding a document never beats
    `on_demand` on the late question, §5.2 is dropped and the budget stays under the
    ceiling.
-7. **Growth inside one turn.** Compaction acts between turns, so `document_read`
-   slices can take a turn past the ceiling across tool rounds. Not addressed here.
 4. **Bedrock's PDF page and payload ceilings for 1M-context models.** Probe on dev in phase 0.
 5. **Per-conversation count.** The Claude apps cap a chat at 20 files. This spec caps
    a message at 20 and lets the budget and `on_demand` govern the conversation.
 6. **Small CSVs.** They could go `text` under the budget instead of always `tool`.
    Left as `tool` until an arm measures it.
+7. **Growth inside one turn.** Compaction acts between turns, so `document_read`
+   slices can take a turn past the ceiling across tool rounds. Not addressed here.
+8. **Memory event retention.** §9.1 lets the bytes-reading restore path go once it has
+   passed since phase 4. The period needs confirming.
