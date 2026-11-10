@@ -1,7 +1,8 @@
 # Unified attachment delivery: one planner, decided in tokens, measured by evals
 
-**Status:** Proposed 2026-11-09. Nothing built. Phase 0 (measurement) is the only
-phase that should start before the open questions in §11 are answered.
+**Status:** Proposed 2026-11-09. Phases 0–2 built and validated on dev (2026-11-10).
+§11 Q3 resolved 2026-11-10 from the phase 0 readout: the document budget is half the
+chat ceiling and the chat ceiling keeps counting documents (§5.2). Phase 3 is next.
 **Motivating gap:** users report that they cannot attach documents that are large
 enough, or enough of them, to a conversation. The limits they hit (4 MB per file,
 5 files per message, 7 MB per message) are mostly ours, not the model's, and they
@@ -121,18 +122,33 @@ records each refusal verbatim. Pages: a PDF of N near-empty pages at 10, 100, 10
 31, 31.8, 32.2, 32.6 and 33 MB on the wire, sent both as one PDF and split into
 PDFs under 4 MB.
 
-- **Each PDF page costs about 1,560 input tokens** whatever its text: 15,650 for 10
-  near-empty pages and 936,051 for 600 on Sonnet 4.6. The page images dominate. So
-  the 600-page ceiling is a context ceiling too: 600 pages leave about 64k tokens of
-  a 1M window for everything else. On a 200k model, 100 pages already take 156k.
+- **Each PDF page image costs about 1,565 input tokens** on every model probed:
+  15,650 for 10 near-empty pages and 936,051 for 600 on Sonnet 4.6, and 15,639 for
+  10 on Haiku 5.5. So the 600-page ceiling is a context ceiling too: 600 pages leave
+  about 64k tokens of a 1M window for everything else. On a 200k model, 100 pages
+  already take 156k.
+- **The page's text is billed on top, at the model's own tokenizer.** Measured on dev
+  on 2026-11-10 with the 32-page `delivery_report_30k.pdf` fixture, whose row facts
+  say `tokens.text` 30,779 (characters / 4):
+
+  | Model | 10 empty pages | The 32-page PDF | Its text alone | Text ÷ `tokens.text` |
+  |---|---|---|---|---|
+  | Haiku 4.5, Sonnet 4.6 | 15,624 | 78,966 | 29,298 | **0.95** |
+  | Haiku 5.5, Opus 4.7, Opus 5.5 | 15,639 | 92,896 | 43,225 | **1.40** |
+
+  The PDF is the page images plus the text, to within 0.1%, on every model. A .docx
+  costs its text (42,152 against 43,225 for the same prose sent as text). So the
+  per-model difference is the tokenizer, not the page: a prose page is about 2.5k
+  tokens on Sonnet 4.6 and 2.9k on Haiku 5.5. (The phase 0 readout's "~128k on
+  Haiku 5.5" for the 85-page fixture was the pages × 1,500 estimate; its
+  whole-document rows, about 2.9k a page, are the measurement.)
 - **The payload refusal is misleading.** Over 32 MB, Bedrock answers `Input is too
   long for requested model`, the same text as a context overflow, although the
   request held about 1,600 tokens. Anything that maps that error to "too many
   tokens" will misreport a payload overflow.
 - CountTokens refuses document input (`Document input not supported for token
   counting`), so a PDF's page-image cost cannot be measured before sending. The
-  planner's estimate stays `PDF_PAGE_TOKEN_ESTIMATE` per page (1,500 today, about
-  4% low).
+  planner's estimate is per page plus the text at the model's factor (§5.2).
 
 ## 3. Goals and non-goals
 
@@ -282,38 +298,53 @@ a 100k ceiling against $105.30 at 200k, because a prefix is re-written whole aft
 compresses into a summary. A document does not. It says nothing about answer quality
 with a document held or dropped.
 
-### 5.2 A separate budget for documents
+### 5.2 The document budget (adopted 2026-11-10)
 
-Documents get their own number, and the ceiling goes back to governing conversation.
+The phase 0 ceiling arms answered §11 Q3
+(`docs/testing/attachment-delivery-arms-2026-11.md`). Holding a document never beat
+reading it `on_demand`: not on the late question, and not on the whole-document
+questions (list and count, compare two distant sections, summarise), at any size or
+ceiling measured, on Haiku 5.5 or Sonnet 4.6. `on_demand` answered the same questions
+with 3–66× fewer input tokens and an equal or faster first token. The one failure
+mode was a document held and then cut. So documents get a budget **inside** the chat
+ceiling, and the ceiling keeps counting them:
 
 ```
-document_budget   = min(document_share × context_window, price_tier − chat_ceiling)
-chat_ceiling      applies to: last input − held document tokens
-hard_ceiling      applies to: last input, unchanged
+document_budget = 0.5 × chat_ceiling          per model
+chat_ceiling    = CompactionPolicy.resolve(window).ceiling, compared with the whole input
 ```
 
-- **`document_budget`** is what the planner spends in `native` and `text` modes across
-  the conversation. A file that does not fit goes to `on_demand`.
-- **`price_tier`** is the input size above which the model's rate rises, a catalog
-  field. A model with no tier omits the term.
-- **The chat ceiling stops counting held documents.** Compaction and the
-  `over_ceiling` offload trigger subtract the held document tokens (from row facts)
-  before comparing. A document inside its budget no longer triggers the cut that
-  removes it.
-- **The hard ceiling still counts everything.** It is the bound against the window
-  and against a turn that grows across tool rounds.
-- **The cold-cache offload is unchanged.** After a pause longer than the cache TTL
-  the re-write is already being paid, and unpinned documents become digests then, as
-  today. So the budget's cost is warm-turn cache reads plus the first write, never a
-  repeated cold re-write of the document.
-- **A cut that passes a held document's turn** drops it to its digest, as today.
-  Carrying held documents across a cut is not proposed: it would enlarge the one
-  re-write a cut causes, and `on_demand` already covers the case.
-- A catalog field can override the budget per model.
+| Model | Catalog window | Chat ceiling | `document_budget` |
+|---|---|---|---|
+| Haiku 5.5 | 100k (its price tier) | 50k | 25k |
+| Sonnet 4.6, and any model with a window of 200k or more | ≥ 200k | 100k | 50k |
 
-The values are not chosen here. §8.4's ceiling arms measure them, and the budget is
-set from that readout (§11, Q3). Until then the planner runs with a budget that
-reproduces today's byte rules, and the chat ceiling counts documents as it does now.
+- **`document_budget`** is what the `token` profile spends in `native` and `text`
+  modes. A file that does not fit what is left goes `on_demand`. Half the ceiling
+  leaves the other half for the conversation, so a document under the budget survives
+  the turns that matter instead of being cut at turn 3–5.
+- **Each file is costed in the model's tokens**, from its row facts (§4.1) and two
+  measured constants (§2.1): a native PDF is `pages × 1,565 + tokens.text × f`, and a
+  document sent as text is `tokens.text × f`, where `f` is the model's tokenizer
+  factor (0.95 for Haiku 4.5 and Sonnet 4.6, 1.40 otherwise). The factor is a table
+  in the planner keyed by model id, so it reads nothing on the turn path; an unlisted
+  model takes 1.40, which over-counts a legacy tokenizer by about 45% and so errs
+  towards the cheaper mode. Without facts the planner falls back to the bytes, as
+  compaction does.
+- **What the budget is spent against.** Phase 3 spends it per turn: the conversation's
+  earlier attachments are already governed by compaction and the offload, which count
+  them. Counting the documents a warm conversation still holds needs the live message
+  list, which the route does not have before the agent is resolved; that is left to
+  phase 5, which steers the conversation's on-demand set to `search`.
+- **The compaction ceiling, the hard ceiling and the offload are unchanged.** A
+  document over the ceiling is cut or offloaded exactly as today; the budget only
+  makes that rarer by not holding a document the ceiling cannot keep.
+- **Not adopted:** subtracting held documents from the chat ceiling. It held Sonnet
+  4.6's 80k document to turn 6 at 28× the tokens of `on_demand` for the same answers,
+  and on Haiku 5.5 it changed nothing, because the hard ceiling still counted the
+  document. The measurement switch that implemented it is deleted (§9.1).
+- A catalog field could override the budget per model. Not built in phase 3; the
+  formula is the only source until a readout asks for an override.
 
 ## 6. Persistence and the prompt cache
 
@@ -404,7 +435,7 @@ separated from the document's.
 | Count | 1, 5, 20 |
 | Question | Lookup, cross-document, absent fact, visual, follow-up after the cache expires |
 | Arm | `native`, `text`, `on_demand`, `search`, and `auto` (the planner) |
-| Ceiling | 100k (today), 200k, and 100k with documents excluded (§5.2) |
+| Ceiling | 100k (today) and 200k. Phase 0 also ran 100k with documents excluded; that arm was deleted with §5.2's subtraction |
 | Model | The default Haiku and one larger model |
 
 Not every cell is run. The gating set is the cells where two arms are both legal for
@@ -418,8 +449,9 @@ on demand, and at what size. They run only the cells that can tell the arms apar
   not asked before, after the document's turn has left the protected tail.
 - Two paces: every turn inside the cache TTL, and one pause past it before turn 5.
 - Each ceiling is set per run through the existing `COMPACTION_CEILING_CAP_TOKENS`,
-  on a local stack or a dev session pinned to the run. The third arm needs the
-  subtraction in §5.2, built behind the fixture and off everywhere else.
+  on a local stack or a dev session pinned to the run. Phase 0's third arm, 100k with
+  held documents subtracted from the chat ceiling, ran behind a measurement switch that
+  was deleted once the readout dropped the subtraction (§5.2).
 - A model with a price tier at 100k runs the 100k arms only.
 
 The late question is the one that matters. It passes under `on_demand` whatever the
@@ -445,7 +477,7 @@ for the affected cells, and the cost and first-token deltas are stated in the PR
 | 0. Measure | §8.2 and §8.4, including the ceiling arms; baseline today's behaviour on dev; the two Bedrock probes (§2.1) | None |
 | 1. Extract | `plan_attachments` reproducing today's rules, with §8.3; `GET /files/limits`; SPA and TUI read it; the fixes in §1.3 | Fixes only |
 | 2. Facts | Prepare every document at upload; one estimator; compaction and offload read row facts | Estimates change |
-| 3. Tokens | The ladder in §4.3 and the document budget in §5.2 behind `ATTACHMENT_PLAN_ENABLED`; values from the phase 0 readout | Yes, flagged |
+| 3. Tokens | The ladder in §4.3 and the document budget in §5.2 behind `ATTACHMENT_PLAN_ENABLED`; values from the phase 0 readout (half the chat ceiling, per-model tokenizer factors) | Yes, flagged |
 | 4. Limits | Handles in persisted messages; 20 files; PDF page rules; image downscale | Yes, flagged |
 | 5. Overflow | Over-budget sets indexed and steered to `search` | Yes, flagged |
 | 6. Retire | Delete the legacy profile, the flags and knobs it absorbed, and their tests and docs (§9.1) | None intended |
@@ -479,7 +511,7 @@ Usage counts are from `develop` at e39c6a9d1.
 | SPA limit constants and the per-rule checks | `file-upload.service.ts`, `inline-attachment-budget.ts` and its spec, `chat-input.component.ts`, `composer-add-menu.component.ts` | 1 | `GET /files/limits` is read at load. One built-in fallback object remains, so the composer can judge a drop before the fetch answers. **Done:** `AttachmentLimitsService` and `FALLBACK_ATTACHMENT_LIMITS` (`attachment-limits.ts`); the inline-budget notice and the folder count read it as well, and the TUI checks the same numbers before `/attach` |
 | The bytes/4 document estimate | `_bytes_tokens` for document blocks, `compaction_policy.py` | 2 | Compaction reads row facts. **Done:** `_bytes_tokens` is gone; every document block goes through `DocumentIndex.block_tokens` (`agents/main_agent/session/document_estimate.py`) |
 | `estimate_document_tokens` as a primary source | `apis/shared/files/document_tokens.py`; 3 callers in `agents/main_agent/session/` | 2 | Callers read row facts. The function stays as the fallback for a file row written before phase 2. **Done:** offload, slice ageing, rehydration and the cost row's footprint read `apis/shared/files/document_estimate.py`, which falls back to it |
-| The ceiling-subtraction fixture arm | Built in phase 0 behind the eval fixture | 3 | It becomes §5.2's production code, or is deleted if the readout drops §5.2 |
+| The ceiling-subtraction measurement switch (`AGENTCORE_MEMORY_COMPACTION_CEILING_EXCLUDES_DOCUMENTS`, `chat_input_tokens`, `held_document_tokens`) and the `100k_documents_excluded` eval ceiling | `compaction_policy.py`, `compaction_models.py`, the session manager, `evals/cases.py`; one test file | 3 | **Done:** deleted, because the readout dropped the subtraction (§5.2) |
 | `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` and `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` | 5 source files, 4 test files, `config.ts`, two constructs, `config.test.ts`, `platform.yml`, `.env.example` | 6 | Text is the `token` profile's rule. The `legacy` profile reads the flag until then |
 | `_prerender_documents_as_text` and the per-call projection's own selection | `routes.py`, `apis/shared/models/document_cap.py` | 6 | The planner names the files to render; the projection keeps only the rendering |
 | `INLINE_DOCUMENT_MAX_BYTES`, `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` | `apis/shared/files/models.py`; 4 and 5 source files, 8 and 5 test files | 6 | Their causes are gone: text removes the 4.5 MB limit, handles remove the 10 MB event limit |
@@ -522,9 +554,9 @@ when it is promoted.
 
 | Risk | Mitigation |
 |---|---|
-| A larger in-context budget raises spend | The cold-cache offload is unchanged, so a held document is never re-written after a pause; the budget stops below a model's price tier; the hard ceiling still counts everything; cold-turn cost is a reported measure |
-| Excluding documents from the chat ceiling lets total input grow past the size the 2026-09 replay priced | The ceiling arms report cost per sample at each setting; the chat ceiling itself does not move |
-| The subtraction uses a wrong document size | It reads row facts (phase 2), never bytes/4; phase 3 does not start before phase 2 |
+| The budget lets more be held than today | It sits inside the chat ceiling, which still counts documents, so total input stays under the size the 2026-09 replay priced. The cold-cache offload is unchanged, so a held document is never re-written after a pause; cold-turn cost is a reported measure |
+| The budget compares a wrong document size | It reads row facts (phase 2), never bytes/4, at the model's measured tokenizer factor (§2.1); an unlisted model is over-counted, which only sends a file `on_demand` sooner |
+| A per-turn budget lets several turns each attach up to it | Compaction and the offload still govern what the conversation holds; phase 5's `search` steering covers a large on-demand set |
 | Text mode loses layout a native docx block kept | The docx and html arms compare `native` and `text` in phase 0 before the rule changes |
 | Image restore from S3 adds first-token latency | Measured at realistic scale and accepted explicitly, or images keep bytes in Memory with a lower count |
 | Preparing every upload raises Lambda invocations and KB ingest | Small files skip sharding; KB eligibility stays as it is until phase 5 |
@@ -536,10 +568,11 @@ when it is promoted.
    path says no; share, handoff and fork views have not been checked.
 2. **Per-file cap.** This spec holds 50 MB, which the prepare pipeline is measured for.
    500 MB is a different pipeline (streaming preparation, memory, shard counts).
-3. **The document budget per model, and whether the chat ceiling excludes documents.**
-   Set from the ceiling arms in phase 0. If holding a document never beats
-   `on_demand` on the late question, §5.2 is dropped and the budget stays under the
-   ceiling.
+3. ~~**The document budget per model, and whether the chat ceiling excludes documents.**~~
+   Resolved 2026-11-10 by the phase 0 readout
+   (`docs/testing/attachment-delivery-arms-2026-11.md`): holding a document never beat
+   `on_demand`, so the chat ceiling keeps counting documents and `document_budget =
+   0.5 × chat_ceiling` per model, costed in that model's tokens (§5.2).
 4. ~~**Bedrock's PDF page and payload ceilings for 1M-context models.**~~ Resolved by
    the phase 0 probe (§2.1). The page ceiling is per model, set by its window: 100
    at 200k and 600 at 1M. The planner reads it from the model's facts, not from one

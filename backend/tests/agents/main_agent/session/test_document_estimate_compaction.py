@@ -25,7 +25,7 @@ import pypdfium2 as pdfium
 import pytest
 
 from agents.main_agent.session.compaction_models import CompactionConfig, CompactionState
-from agents.main_agent.session.compaction_policy import choose_checkpoint, estimate_message_tokens, held_document_tokens
+from agents.main_agent.session.compaction_policy import choose_checkpoint, estimate_message_tokens
 from agents.main_agent.session.document_context import summarize_document_context
 from agents.main_agent.session.document_estimate import DocumentIndex
 from agents.main_agent.session.document_offload import age_document_slices, candidate_documents
@@ -158,10 +158,6 @@ class TestBlockEstimates:
         assert DocumentIndex([docx]).block_tokens(block["document"]) == 40_000
         assert DocumentIndex().block_tokens(block["document"]) == 7_500  # bytes/4, the documented fallback
 
-    def test_held_documents_count_attachments_not_slices(self):
-        index = DocumentIndex([FACTS])
-        assert held_document_tokens(_conversation(), index) == 65_954
-
     def test_the_cost_row_footprint_reads_the_same_numbers(self):
         footprint = summarize_document_context(_conversation(), DocumentIndex([FACTS]))
         assert footprint["documentTokens"] == 65_954
@@ -177,7 +173,6 @@ class TestBlockEstimates:
         index = DocumentIndex([FACTS])
         for message in messages:
             estimate_message_tokens(message, index)
-        held_document_tokens(messages, index)
         assert json.dumps(messages, default=repr, sort_keys=True) == before
 
 

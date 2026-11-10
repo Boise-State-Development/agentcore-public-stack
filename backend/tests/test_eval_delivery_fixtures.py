@@ -69,7 +69,7 @@ def test_every_case_parses_and_names_only_delivery_fixtures():
     cases = load_cases(CASES_DIR, families=["attachment_delivery"])
     assert len(cases) >= 20
     assert {c.run.arm for c in cases} == {"auto", "native", "text", "on_demand"}
-    assert {c.run.ceiling for c in cases} == {"default", "200k", "100k_documents_excluded"}
+    assert {c.run.ceiling for c in cases} == {"default", "200k"}
     assert {f for c in cases for f in c.files} == set(d.GENERATED)
 
 
@@ -83,8 +83,8 @@ def test_each_gating_file_runs_every_legal_arm():
 def test_a_ceiling_case_asks_the_late_fact_on_turn_six_after_the_tail_moves_on():
     cases = load_cases(CASES_DIR, families=["attachment_delivery"])
     ceiling = [c for c in cases if c.id.split(".", 1)[1].startswith("ceiling_")]
-    # Three PDFs: native at three ceilings and on_demand at one, each at two paces.
-    assert len(ceiling) == 3 * 4 * 2
+    # Three PDFs: native at two ceilings and on_demand at one, each at two paces.
+    assert len(ceiling) == 3 * 3 * 2
     for case in ceiling:
         assert len(case.turns) == 6 and len(case.files) == 1 and case.files[0].endswith(".pdf")
         late = d.prose(case.files[0]).facts["late"]
