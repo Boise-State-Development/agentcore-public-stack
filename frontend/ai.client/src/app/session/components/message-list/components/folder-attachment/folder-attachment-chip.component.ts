@@ -1,19 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
-import { Dialog } from '@angular/cdk/dialog';
-import { Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowPath, heroChevronDown, heroFolder, heroRectangleStack } from '@ng-icons/heroicons/outline';
-import { firstValueFrom } from 'rxjs';
-import {
-  SaveFolderAsProjectDialogComponent,
-  SaveFolderAsProjectDialogData,
-  SaveFolderAsProjectDialogResult,
-} from '../../../../../projects/components/save-folder-as-project-dialog.component';
 import { TooltipDirective } from '../../../../../components/tooltip';
 import type { FolderAttachmentData } from '../../../../services/models/message.model';
-import { FEATURES } from '../../../../../services/features';
-import { FolderAttachmentError, FolderRefreshService } from '../../../../../services/folder-attachments';
-import { ToastService } from '../../../../../services/toast/toast.service';
+import { FolderAttachmentActionsService } from './folder-attachment-actions.service';
 
 /**
  * A Drive folder on a sent user message (drive-folder spec §4.7): one chip,
@@ -101,29 +91,20 @@ import { ToastService } from '../../../../../services/toast/toast.service';
 })
 export class FolderAttachmentChipComponent {
   private static nextId = 0;
-  private readonly folderRefresh = inject(FolderRefreshService);
-  private readonly toast = inject(ToastService);
-  private readonly dialog = inject(Dialog);
-  private readonly router = inject(Router);
-  private readonly features = inject(FEATURES);
+  private readonly actions = inject(FolderAttachmentActionsService);
 
   readonly folder = input.required<FolderAttachmentData>();
 
   /** Refresh is part of the folder feature; without it the chip only lists files. */
-  protected readonly canRefresh = this.features.folderAttachments;
+  protected readonly canRefresh = this.actions.canRefresh;
   /** The folder's row comes from the folder routes, and the project from Projects: both must be on. */
-  protected readonly canSaveAsProject = this.features.folderAttachments && this.features.projects;
+  protected readonly canSaveAsProject = this.actions.canSaveAsProject;
   protected readonly refreshing = signal(false);
 
   protected readonly expanded = signal(false);
   protected readonly listId = `folder-files-${FolderAttachmentChipComponent.nextId++}`;
 
-  protected readonly subtitle = computed(() => {
-    const folder = this.folder();
-    const count = `${folder.fileCount} ${folder.fileCount === 1 ? 'file' : 'files'}`;
-    const lead = folder.status === 'expanding' ? `${count} so far` : count;
-    return folder.source ? `${lead} · ${folder.source}` : lead;
-  });
+  protected readonly subtitle = computed(() => folderSubtitle(this.folder()));
 
   protected toggle(): void {
     this.expanded.update((open) => !open);
@@ -133,42 +114,20 @@ export class FolderAttachmentChipComponent {
     if (this.refreshing()) return;
     this.refreshing.set(true);
     try {
-      await this.folderRefresh.refresh(this.folder());
-      this.toast.info('Refreshing folder', `${this.folder().name} will go with your next message, as it is now.`);
-    } catch (err) {
-      const message =
-        err instanceof FolderAttachmentError && err.status === 409
-          ? "It's still being read, or Google Drive needs reconnecting. Try again in a moment."
-          : err instanceof Error
-            ? err.message
-            : "Couldn't refresh the folder.";
-      this.toast.error('Folder', message);
+      await this.actions.refresh(this.folder());
     } finally {
       this.refreshing.set(false);
     }
   }
 
-  /**
-   * Open "Save as project". On success the person stays in the conversation;
-   * the toast opens the new project.
-   */
-  protected async saveAsProject(): Promise<void> {
-    const ref = this.dialog.open<SaveFolderAsProjectDialogResult, SaveFolderAsProjectDialogData>(
-      SaveFolderAsProjectDialogComponent,
-      { data: { folder: this.folder() } },
-    );
-    const result = await firstValueFrom(ref.closed);
-    if (!result) return;
-    const projectId = result.project.projectId;
-    const open = { label: 'Open project', handler: () => void this.router.navigate(['/projects', projectId]) };
-    if (result.error) {
-      void this.router.navigate(['/projects', projectId]);
-      return;
-    }
-    this.toast.success(
-      'Saved as project',
-      `${result.project.name}: ${result.imported} ${result.imported === 1 ? 'file is' : 'files are'} being added to its Files.`,
-      { action: open },
-    );
+  protected saveAsProject(): Promise<void> {
+    return this.actions.saveAsProject(this.folder());
   }
+}
+
+/** "12 files · Google Drive", or "12 files so far" while it is still being read. */
+export function folderSubtitle(folder: FolderAttachmentData): string {
+  const count = `${folder.fileCount} ${folder.fileCount === 1 ? 'file' : 'files'}`;
+  const lead = folder.status === 'expanding' ? `${count} so far` : count;
+  return folder.source ? `${lead} · ${folder.source}` : lead;
 }

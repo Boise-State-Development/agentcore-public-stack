@@ -16,11 +16,12 @@ preparation writes, beside ``preparation`` and ``digest``, one ``facts`` map::
 Numbers and enums only, never content. Written once per set of bytes: a
 replaced file drops its facts with its digest and is prepared again.
 
-**Nothing on the turn path reads this yet.** Phase 2b has compaction and offload
-read ``tokens.native`` instead of re-estimating; until then the facts are only
-written. A row without facts (written before this, the flag off, or a
-preparation still queued) keeps today's behaviour, and a turn never waits for
-them.
+**Who reads it.** Compaction and offload estimate a document from these facts
+(``apis.shared.files.document_estimate``, phase 2b). Version 1's
+``tokens.native`` is the page images only, so that reader adds ``tokens.text``
+for a native PDF (§4.1). A row without facts (written before this, the flag
+off, or a preparation still queued) falls back to the bytes, and a turn never
+waits for them.
 
 How each fact is derived:
 

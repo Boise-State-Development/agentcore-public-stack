@@ -8,6 +8,8 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ### ✨ Added
 
+- **Attachment cards draw images and Drive folders too (`features.attachmentCards`, on in dev only).** A sent message's documents, images and folders now share one layout: one card, a pair, a mosaic for 3 to 5, and a "+N more" tile past five. An image card shows the image full-bleed and opens the message's images in the existing lightbox. A folder card shows its first files with type icons and `Folder · N files · source`. Its **Files** button opens the whole list, and its menu offers Refresh and Save as project. The composer's folder card is drawn the same way and keeps its progress, Connect, Retry and Remove. The folder actions moved into `FolderAttachmentActionsService`, which the old chip now uses too.
+
 - **Attachment cards show the real contents of Word, spreadsheet, CSV and deck files.** The prepare Lambda writes `_derived/preview.json`, at most 4 KB, when a file is uploaded (`apis/shared/files/attachment_preview.py`, standard library only, so the Lambda image gains no dependency):
   - a Word file's opening paragraphs;
   - a workbook's sheet names and first rows, or a CSV's first rows;

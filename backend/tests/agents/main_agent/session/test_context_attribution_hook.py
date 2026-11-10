@@ -48,10 +48,25 @@ class FakeModel:
         self.calls.append({"n_messages": len(messages), "has_tools": bool(tool_specs)})
         if self.raise_on_count:
             raise RuntimeError("count failed")
+        if _holds_attachment(messages):
+            # Bedrock's CountTokens: "Document input not supported for token counting".
+            raise RuntimeError("Document input not supported for token counting")
         total = self.system if (system_prompt or system_prompt_content) else 0
         total += len(messages) * self.per_msg
         total += self.tool_overhead if tool_specs else 0
         return total
+
+
+def _holds_attachment(messages):
+    def has(block):
+        if not isinstance(block, dict):
+            return False
+        if "document" in block or "image" in block:
+            return True
+        inner = (block.get("toolResult") or {}).get("content") if isinstance(block.get("toolResult"), dict) else None
+        return any(has(b) for b in inner or [])
+
+    return any(has(b) for m in messages for b in (m.get("content") or []) if isinstance(m.get("content"), list))
 
 
 class FakeToolRegistry:
@@ -330,9 +345,14 @@ class TestInlineAttachmentGuard:
 
     Measured on dev 2026-09-16 (session ``61de2256``), when one side was
     Strands' projection: ``toolTokens`` of 106,756 where the session's real
-    tools prefix was 12,516 — the entire document attributed to tools. Both
-    sides are now native counts of one snapshot, but the split stays deferred
-    while inline bytes are in context until a document turn proves it safe.
+    tools prefix was 12,516 — the entire document attributed to tools. And
+    CountTokens refuses document input outright. So the split is counted over
+    a snapshot whose attachments are a text stand-in: system and tools do not
+    depend on them, and the messages partition is the billed residual.
+
+    Until 2026-11-10 the split was skipped instead, so a session whose document
+    arrived on turn 1 never had one and compaction calibrated against the
+    whole input (dev, 2026-11-07).
     """
 
     def _doc_message(self):
@@ -345,48 +365,60 @@ class TestInlineAttachmentGuard:
         }
 
     @pytest.mark.asyncio
-    async def test_no_split_is_computed_while_a_document_is_inline(self):
-        model = FakeModel()
-        agent = FakeAgent(model, messages=[self._doc_message()])
+    async def test_a_split_is_counted_over_a_stand_in_while_a_document_is_inline(self):
+        model = FakeModel(system=100, per_msg=10, tool_overhead=500)
+        message = self._doc_message()
+        agent = FakeAgent(model, messages=[message])
         await _call(ContextAttributionHook(), agent, billed=100_000)
 
-        assert get_context_breakdown(agent) is None, "a contaminated split must not be published"
-        assert model.calls == [], "and it must not pay for CountTokens to compute one"
+        assert _parts(get_context_breakdown(agent)) == {"system": 100, "tools": 500, "messages": 99_400}
+        assert len(model.calls) == 4, "every count saw the stand-in, which CountTokens accepts"
+        assert "document" in message["content"][1], "the agent's own message is never touched"
 
     @pytest.mark.asyncio
-    async def test_an_image_counts_too(self):
-        model = FakeModel()
-        agent = FakeAgent(model, messages=[{
-            "role": "user",
-            "content": [{"image": {"format": "png", "source": {"bytes": b"\x89PNG"}}}],
-        }])
+    async def test_an_image_and_a_document_read_slice_are_stood_in_too(self):
+        model = FakeModel(system=100, per_msg=10, tool_overhead=500)
+        agent = FakeAgent(model, messages=[
+            {"role": "user", "content": [{"image": {"format": "png", "source": {"bytes": b"\x89PNG"}}}]},
+            {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "document_read", "input": {}}}]},
+            {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [
+                {"json": {"upload_id": "u1", "pages_returned": 8}},
+                {"document": {"format": "pdf", "name": "d_p1-8", "source": {"bytes": b"%PDF"}}},
+            ]}}]},
+        ])
         await _call(ContextAttributionHook(), agent, billed=50_000)
-        assert get_context_breakdown(agent) is None
+        assert _parts(get_context_breakdown(agent)) == {"system": 100, "tools": 500, "messages": 49_400}
+
+    def test_the_stand_in_copy_shares_untouched_messages(self):
+        from agents.main_agent.session.hooks.context_attribution import _without_attachments
+
+        plain = {"role": "user", "content": [{"text": "hi"}]}
+        doc = self._doc_message()
+        out = _without_attachments([plain, doc])
+        assert out[0] is plain
+        assert out[1] is not doc and out[1]["content"][1] == {"text": "[attachment]"}
+        assert out[1]["content"][0] is doc["content"][0]
+
+    @pytest.mark.asyncio
+    async def test_a_stand_in_split_is_not_the_exact_request_count(self):
+        """The interrupted-turn fallback reads the full count as the request's
+        size; a stand-in snapshot is not the request, so it is never kept."""
+        from agents.main_agent.session.hooks.context_attribution import get_projected_input_tokens
+
+        model = FakeModel(system=100, per_msg=10, tool_overhead=500)
+        agent = FakeAgent(model, messages=[self._doc_message()])
+        await _call(ContextAttributionHook(), agent, billed=100_000)
+        assert get_projected_input_tokens(agent) != 610
 
     @pytest.mark.asyncio
     async def test_a_digest_is_not_an_attachment_so_the_split_is_taken(self):
-        """The offload turns the document into text, which counts normally —
-        so an attachment session still gets ``prefixTokens`` from turn 2."""
+        """The offload turns the document into text, which counts normally."""
         model = FakeModel(system=100, per_msg=10, tool_overhead=500)
         agent = FakeAgent(model, messages=[{
             "role": "user",
             "content": [{"text": '<document-digest name="d.pdf" upload_id="u1" pages="60">'}],
         }])
         await _call(ContextAttributionHook(), agent, billed=650)
-        assert _parts(get_context_breakdown(agent)) == {"system": 100, "tools": 500, "messages": 50}
-
-    @pytest.mark.asyncio
-    async def test_a_later_clean_call_computes_the_split(self):
-        """Deferred, not abandoned: the same agent takes the split once the
-        attachment has left the live context."""
-        model = FakeModel(system=100, per_msg=10, tool_overhead=500)
-        agent = FakeAgent(model, messages=[self._doc_message()])
-        hook = ContextAttributionHook()
-        await _call(hook, agent, billed=100_000)
-        assert get_context_breakdown(agent) is None
-
-        agent.messages = [{"role": "user", "content": [{"text": "follow-up"}]}]
-        await _call(hook, agent, billed=650)
         assert _parts(get_context_breakdown(agent)) == {"system": 100, "tools": 500, "messages": 50}
 
     @pytest.mark.asyncio
@@ -468,17 +500,17 @@ class TestSessionSplitMemo:
         assert len(again.calls) == 4
 
     @pytest.mark.asyncio
-    async def test_a_deferred_split_is_not_memoised(self):
-        # Inline attachment → the split is skipped, so nothing must be stored
-        # for a later clean agent to adopt.
+    async def test_a_stand_in_split_is_memoised_like_any_other(self):
+        # System and tools do not depend on the attachment, so a later agent
+        # for the same session and configuration adopts the split.
         pdf = {"role": "user", "content": [{"document": {"format": "pdf", "name": "d", "source": {"bytes": b"%PDF"}}}]}
-        skipped = FakeModel()
-        await _call(ContextAttributionHook(session_id="s1"), FakeAgent(skipped, messages=[pdf]), billed=650)
-        assert skipped.calls == []
+        measured = FakeModel()
+        await _call(ContextAttributionHook(session_id="s1"), FakeAgent(measured, messages=[pdf]), billed=650)
+        assert len(measured.calls) == 4
 
-        clean = FakeModel()
-        await _call(ContextAttributionHook(session_id="s1"), FakeAgent(clean, messages=[HI]), billed=650)
-        assert len(clean.calls) == 4
+        adopted = FakeModel()
+        await _call(ContextAttributionHook(session_id="s1"), FakeAgent(adopted, messages=[HI]), billed=650)
+        assert adopted.calls == []
 
     def test_memo_is_bounded(self):
         from agents.main_agent.session.hooks import context_attribution as ca

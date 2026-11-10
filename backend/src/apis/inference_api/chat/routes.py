@@ -49,6 +49,7 @@ from apis.shared.feature_flags import (
 from apis.shared.files.document_read import is_document_class
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.files.inline_persist import get_inline_attachment_persister
+from apis.shared.files.document_estimate import remember_session_documents
 from apis.shared.files.attachment_plan import (
     CLASS_PRESENTATION,
     CLASS_TABULAR,
@@ -3026,6 +3027,14 @@ async def _resolve_turn_attachments(
                 all_files.append(content)
             turn_has_document = _resolved_files_include_a_document(resolved_files)
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
+            # Keep the rows' token facts for this session's compaction and
+            # offload estimates (unified-attachment-delivery §9.1, phase 2).
+            # In memory only: the rows are already read, so this adds no I/O.
+            remember_session_documents(
+                user_id,
+                input_data.session_id,
+                [getattr(rf, "reference", None) or getattr(rf, "meta", None) for rf in resolved_files],
+            )
         except Exception:
             logger.warning("Failed to resolve file upload IDs", exc_info=True)
             # Continue without files rather than failing the request

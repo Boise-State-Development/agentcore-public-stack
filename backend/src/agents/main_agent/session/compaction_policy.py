@@ -32,6 +32,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
+from .document_estimate import EMPTY_INDEX, DocumentIndex, slice_reference
+
 if TYPE_CHECKING:
     from .compaction_models import CompactionConfig
 
@@ -141,16 +143,7 @@ def _json_tokens(value: Any) -> int:
         return 0
 
 
-def _bytes_tokens(source: Any) -> int:
-    if not isinstance(source, dict):
-        return 0
-    raw = source.get("bytes")
-    if isinstance(raw, (bytes, bytearray)):
-        return len(raw) // CHARS_PER_TOKEN
-    return 0
-
-
-def _block_tokens(block: Any) -> int:
+def _block_tokens(block: Any, documents: "DocumentIndex") -> int:
     if not isinstance(block, dict):
         return _text_tokens(block) if isinstance(block, str) else 0
     if "text" in block:
@@ -158,8 +151,9 @@ def _block_tokens(block: Any) -> int:
     if "image" in block:
         return IMAGE_TOKEN_ESTIMATE
     if "document" in block:
-        doc = block.get("document") or {}
-        return _bytes_tokens(doc.get("source")) if isinstance(doc, dict) else 0
+        # The row's facts, or the bytes when there are none — never bytes/4
+        # for a PDF, which missed the page images (§1.3 of the spec).
+        return documents.block_tokens(block.get("document"))
     if "toolUse" in block:
         tool_use = block.get("toolUse") or {}
         return _json_tokens(tool_use.get("input")) + 8
@@ -167,7 +161,7 @@ def _block_tokens(block: Any) -> int:
         result = block.get("toolResult") or {}
         content = result.get("content") if isinstance(result, dict) else None
         if isinstance(content, list):
-            return sum(_block_tokens(inner) for inner in content) + 8
+            return _tool_result_tokens(content, documents) + 8
         return _json_tokens(content) + 8
     if "json" in block:
         return _json_tokens(block.get("json"))
@@ -180,61 +174,53 @@ def _block_tokens(block: Any) -> int:
     return _json_tokens(block)
 
 
-def estimate_message_tokens(message: Dict[str, Any]) -> int:
-    """Heuristic token estimate for one Converse message (never raises)."""
+def _tool_result_tokens(content: List[Any], documents: "DocumentIndex") -> int:
+    """A tool result's blocks. A ``document_read`` slice is estimated as its
+    pages' share of the whole document, which its JSON payload names."""
+    upload_id, pages = slice_reference(content)
+    total = 0
+    for inner in content:
+        if isinstance(inner, dict) and "document" in inner:
+            total += documents.block_tokens(inner.get("document"), upload_id=upload_id, pages_covered=pages)
+        else:
+            total += _block_tokens(inner, documents)
+    return total
+
+
+def estimate_message_tokens(message: Dict[str, Any], documents: Optional["DocumentIndex"] = None) -> int:
+    """Heuristic token estimate for one Converse message (never raises).
+
+    ``documents`` holds the row facts the conversation's documents are
+    estimated from; without it every document falls back to its bytes.
+    """
     if not isinstance(message, dict):
         return 0
+    index = documents if documents is not None else EMPTY_INDEX
     content = message.get("content")
     if isinstance(content, str):
         return _text_tokens(content) + MESSAGE_OVERHEAD_TOKENS
     if not isinstance(content, list):
         return MESSAGE_OVERHEAD_TOKENS
-    return sum(_block_tokens(block) for block in content) + MESSAGE_OVERHEAD_TOKENS
+    return sum(_block_tokens(block, index) for block in content) + MESSAGE_OVERHEAD_TOKENS
 
 
 # ---------------------------------------------------------------------------
 # Held documents (unified-attachment-delivery §5.2, measurement only)
 # ---------------------------------------------------------------------------
 
-#: ``estimate_document_tokens`` by ``(format, hash of the bytes)``: a PDF's
-#: estimate parses its page count, so each held document is measured once per
-#: process, not once per turn.
-_DOCUMENT_TOKENS: Dict[Tuple[str, int], int] = {}
-_DOCUMENT_TOKENS_MAX = 64
 
-
-def _document_block_tokens(document: Any) -> int:
-    if not isinstance(document, dict):
-        return 0
-    source = document.get("source")
-    raw = source.get("bytes") if isinstance(source, dict) else None
-    if not isinstance(raw, (bytes, bytearray)):
-        return 0
-    fmt = str(document.get("format") or "").strip().lower()
-    key = (fmt, hash(bytes(raw)))
-    cached = _DOCUMENT_TOKENS.get(key)
-    if cached is not None:
-        return cached
-    try:
-        from apis.shared.files.document_tokens import estimate_document_tokens
-
-        tokens = int(estimate_document_tokens(fmt, raw))
-    except Exception:  # noqa: BLE001 - estimator must never raise
-        tokens = len(raw) // CHARS_PER_TOKEN
-    if len(_DOCUMENT_TOKENS) >= _DOCUMENT_TOKENS_MAX:
-        _DOCUMENT_TOKENS.clear()
-    _DOCUMENT_TOKENS[key] = tokens
-    return tokens
-
-
-def held_document_tokens(messages: Optional[Sequence[Dict[str, Any]]]) -> int:
+def held_document_tokens(
+    messages: Optional[Sequence[Dict[str, Any]]],
+    documents: Optional["DocumentIndex"] = None,
+) -> int:
     """Estimated tokens of the document blocks the conversation holds in context.
 
     Only the user-attached blocks (top level of a message): a ``document_read``
-    slice is a tool result and counts as conversation. The estimate is
-    ``estimate_document_tokens`` (pages × 1,500 for a PDF, bytes/4 otherwise)
-    until phase 2's row facts exist. Never raises.
+    slice is a tool result and counts as conversation. The estimate is the
+    row's facts, or ``estimate_document_tokens`` on the bytes for a row without
+    them. Never raises.
     """
+    index = documents if documents is not None else EMPTY_INDEX
     total = 0
     for message in messages or ():
         content = message.get("content") if isinstance(message, dict) else None
@@ -242,7 +228,7 @@ def held_document_tokens(messages: Optional[Sequence[Dict[str, Any]]]) -> int:
             continue
         for block in content:
             if isinstance(block, dict) and "document" in block:
-                total += _document_block_tokens(block.get("document"))
+                total += index.block_tokens(block.get("document"))
     return total
 
 
@@ -250,6 +236,7 @@ def chat_input_tokens(
     config: "CompactionConfig",
     input_tokens: int,
     messages: Optional[Sequence[Dict[str, Any]]],
+    documents: Optional["DocumentIndex"] = None,
 ) -> Tuple[int, int]:
     """``(tokens the chat ceiling compares, held document tokens subtracted)``.
 
@@ -259,7 +246,7 @@ def chat_input_tokens(
     """
     if not getattr(config, "ceiling_excludes_documents", False):
         return int(input_tokens), 0
-    held = held_document_tokens(messages)
+    held = held_document_tokens(messages, documents)
     return max(0, int(input_tokens) - held), held
 
 
@@ -274,6 +261,7 @@ def choose_checkpoint(
     floor_tokens: int,
     history_tokens: Optional[int],
     tail_bound_tokens: Optional[int] = None,
+    documents: Optional[DocumentIndex] = None,
 ) -> Tuple[int, Optional[int]]:
     """Pick the cut (index into ``messages``) that lands retained history at or
     below ``floor_tokens`` while keeping as much as fits.
@@ -308,6 +296,10 @@ def choose_checkpoint(
     ``history_tokens`` is the measured size of the conversation portion of
     the prompt this turn; per-message estimates are rescaled to sum to it so
     only their ratios matter. ``None`` leaves the raw estimates as-is.
+
+    ``documents`` holds the row facts the document blocks are estimated from
+    (``document_estimate``). It only changes estimates, so it only moves where
+    a cut lands, never the bytes of what the cut keeps.
     """
     protected_turns = max(0, int(protected_turns))
     if not cutoffs:
@@ -323,7 +315,7 @@ def choose_checkpoint(
     if n == 0:
         return (0, None) if young else (int(newest_allowed), None)
 
-    estimates = [estimate_message_tokens(m) for m in messages]
+    estimates = [estimate_message_tokens(m, documents) for m in messages]
     raw_total = sum(estimates)
     scale = 1.0
     if history_tokens is not None and history_tokens > 0 and raw_total > 0:
