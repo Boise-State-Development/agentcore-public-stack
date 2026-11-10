@@ -90,18 +90,18 @@ class TestUnpreparedDocuments:
         assert texts == ["one", "two"]
 
     @pytest.mark.asyncio
-    async def test_a_text_file_comes_back_as_lines_without_html_stripping(
+    async def test_an_html_file_comes_back_as_the_rendered_lines_pattern_mode_searches(
         self, monkeypatch, owned
     ):
-        """Verified against exactly what document_read's pattern mode searches,
-        not a second, differently-cleaned rendering of the same file."""
+        """Verified against exactly what document_read's pattern mode searches
+        (``text_lines``), not a second, differently-cleaned rendering."""
         owned(_meta(filename="notes.html", mime_type="text/html"))
         monkeypatch.setattr(mod.large_document, "is_prepared", lambda meta: False)
         monkeypatch.setattr(mod, "_fetch_bytes", AsyncMock(return_value=b"<p>a</p>\n<p>b</p>"))
 
         _, fmt, texts = await document_provenance_units("u1", "s1", "up-1")
         assert fmt == "html"
-        assert texts == ["<p>a</p>", "<p>b</p>"]
+        assert texts == ["a", "", "b"] == mod.text_lines("html", b"<p>a</p>\n<p>b</p>")
 
     @pytest.mark.asyncio
     async def test_an_oversized_unprepared_document_is_refused(self, monkeypatch, owned):
@@ -136,4 +136,4 @@ def test_units_text_uses_the_same_extractors_as_the_retrieval_modes():
     source = inspect.getsource(mod._units_text)
     assert "_pdf_page_text" in source
     assert "docx_paragraphs" in source
-    assert "splitlines" in source
+    assert "text_lines" in source

@@ -72,7 +72,7 @@ from apis.shared.aws_clients import get_client
 from apis.shared.feature_flags import attachment_kb_enabled
 from apis.shared.files import file_facts, large_document
 from apis.shared.files.document_digest import build_digest, document_digest_enabled, record_digest
-from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs
+from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs, text_lines
 from apis.shared.files.models import FileMetadata, FileStatus, is_reference_document
 from apis.shared.files.pdfium_lock import serialized_pdfium
 from apis.shared.files.repository import FileUploadRepository, get_file_upload_repository
@@ -171,7 +171,7 @@ def _units(fmt: str, raw: bytes) -> List[str]:
     try:
         if fmt == "docx":
             return docx_paragraphs(raw)
-        return raw.decode("utf-8", errors="replace").splitlines()
+        return text_lines(fmt, raw)
     except Exception as e:  # noqa: BLE001
         raise PreparationFailed(e) from e
 

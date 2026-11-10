@@ -127,7 +127,7 @@ class TestPrepare:
         [
             ("memo.docx", DOCX, build_docx(["One", "Two", "Three"]), ["One", "Two", "Three"]),
             ("notes.txt", "text/plain", b"a\r\nb\n\nc", ["a", "b", "", "c"]),
-            ("page.html", "text/html", b"<h1>A</h1>\n<p>b</p>", ["<h1>A</h1>", "<p>b</p>"]),
+            ("page.html", "text/html", b"<h1>A</h1>\n<p>b</p>", ["# A", "", "b"]),
         ],
         # Fixed ids: the default id embeds the raw bytes, and a .docx zip carries the
         # time it was built, so xdist workers collecting a second apart disagreed on
