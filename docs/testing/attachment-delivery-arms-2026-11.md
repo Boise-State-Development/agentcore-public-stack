@@ -23,8 +23,25 @@ AWS_PROFILE=dev-ai PYTHONPATH=src .venv/bin/python scripts/eval_harness.py reado
 
 ## Recommendation on §11 Q3
 
-**Holding a document never beat `on_demand` on the late question, at any size or ceiling
-measured. Drop §5.2's subtraction and keep the document budget under the chat ceiling.**
+**Final (second round, 2026-11-10): holding a document never beat `on_demand`, neither on the
+late question nor on the whole-document questions (list and count, compare two distant
+sections, summarise), at any size or ceiling measured. Drop §5.2's subtraction and keep the
+document budget under the chat ceiling: `document_budget = 0.5 × chat_ceiling`.**
+
+What the second round added:
+
+- **Whole-document questions, Haiku 5.5, k=3: 54/54.** Both arms passed every list, compare
+  and summarise question at ~30k, ~80k and ~150k, and `on_demand` used **10–50× fewer input
+  tokens** (9–25k against 100–470k). Its first token on the file's turn was faster (3.4–7.7 s
+  against 7.0–30.7 s), and its turn duration was within the same 18–55 s range. The Sonnet 4.6
+  whole-document arm is still owed (quota), but it would have to reverse a 54/54 tie to
+  change this answer.
+- **Sonnet 4.6's 80k cells at k=3** make the held-then-lost failure stable: **0/6 at today's
+  ceiling**, 2/3 at 100k with documents excluded (cold) and 2/3 at 200k (cold), against
+  **6/6 for `on_demand`**. Every failure is the same answer: the document had left context
+  (cut or offloaded), the model listed both work orders with the cancelled one first, and it
+  asked which was meant. A document that is held and then dropped is the worst arm on
+  quality, and the most expensive one.
 
 - **Quality is equal.** `on_demand` passed the late question in every sample: Haiku 18/18 and
   Sonnet 4/4. Where a held document was still in context on turn 6, it also passed, but it
@@ -65,9 +82,32 @@ faster first token on the turn that carries the file (Haiku 1.7–8.2 s against 
 +5–15 s for its tool round. So the budget should be a per-model catalog value read by the
 `token` profile, defaulting to `0.5 × chat_ceiling`.
 
-This only covers prose PDFs with planted single-value facts. It does not cover a question that
-needs the whole document at once (summarise, compare sections), where holding may matter.
-That case is worth one arm before phase 3 ships the budget.
+The whole-document questions use planted marker phrases, which a pattern search finds
+directly. That favours `on_demand`. A free-form summary of unmarked prose is the one case
+still unmeasured, and it needs a judge, which stays advisory.
+
+## Whole-document questions (Haiku 5.5, k=3, default ceiling)
+
+A ~30k, ~80k or ~150k-token PDF (`delivery_yearbook_*`). **List** must name six boil-water
+notice sites and say six: a seventh site, where a notice was considered and not issued, would
+make it seven. **Compare** must give the change in a gauge level read at ~10% and ~88% depth,
+and its direction. **Summarise** must name four incident sites, one per quarter. "Reads" is
+the mean number of `document_read` calls.
+
+| Question | Size | `native`: pass · tokens · reads | `on_demand`: pass · tokens · reads |
+|---|---|---|---|
+| list | 30k | 3/3 · 100k · 0.3 | 3/3 · 10k · 1.7 |
+| list | 80k | 3/3 · 254k · 1.0 | 3/3 · 25k · 6.3 |
+| list | 150k | 3/3 · 470k · 3.3 | 3/3 · 10k · 1.7 |
+| compare | 30k | 3/3 · 100k · 0 | 3/3 · 11k · 1.3 |
+| compare | 80k | 3/3 · 253k · 0 | 3/3 · 17k · 3.3 |
+| compare | 150k | 3/3 · 468k · 0.3 | 3/3 · 9k · 1.3 |
+| summarise | 30k | 3/3 · 100k · 0 | 3/3 · 16k · 3.3 |
+| summarise | 80k | 3/3 · 254k · 0.3 | 3/3 · 18k · 4.0 |
+| summarise | 150k | 3/3 · 468k · 0 | 3/3 · 16k · 3.7 |
+
+At 150k the held model also called `document_read` to list items (3.3 reads). It held the
+document and still searched it.
 
 ## Forced arms: the gating cells (Haiku 5.5, k=3, default ceiling)
 
@@ -126,12 +166,15 @@ its held arms cost more than their dollar columns show.
 | 30k | native | 200k | 1/1 · 506k · yes | 1/1 · 350k · offloaded |
 | 30k | native | 100k excl. docs | 1/1 · 506k · yes | 1/1 · 350k · offloaded |
 | 30k | on_demand | default | 1/1 · 42k | 1/1 · 67k |
-| 80k / ~128k | native | default | **0/1** · 454k · no (cut) | **0/1** · 454k · no (cut) |
-| 80k | native | 200k | 1/1 · 663k · no (offloaded) | 1/1 · 663k · offloaded |
-| 80k | native | 100k excl. docs | 1/1 · 1,288k · yes | 1/1 · 872k · offloaded |
-| 80k | on_demand | default | 1/1 · 45k | 1/1 · 45k |
+| 80k / ~214k on Sonnet | native | default | **0/3** · 454k · no (cut) | **0/3** · 454k · no (cut) |
+| 80k | native | 200k | 3/3 · 663k · no (offloaded, `over_ceiling`) | 2/3 · 663k · offloaded |
+| 80k | native | 100k excl. docs | 3/3 · 1,288k · yes | 2/3 · 871k · offloaded |
+| 80k | on_demand | default | 3/3 · 44k | 3/3 · 44k |
 
-The two failures found the right value. Both answers read "a cancelled one (WO-…79) and an
+The 80k rows are k=3: the first run plus a two-sample top-up. The top-up's 200k samples ran
+with #1978's offload fix. The 30k rows stay k=1.
+
+Every failure found the right value. They all read "a cancelled one (WO-…79) and an
 active one (WO-…97). Could you clarify which you're looking for?", which fails because the
 lookalike leads. This held-then-cut path is the only one that failed. `on_demand`, which never
 held the document, read the same slices and answered directly.
@@ -158,8 +201,11 @@ held the document, read the same slices and answered directly.
   system prompt) has a 1-hour TTL, so the first call of turn 5 reads it while re-writing the
   history behind it. The offload reason (`cache_expired`) is the cold signal. Don't use
   turn-5 `cacheStatus` for this.
-- **Sonnet is k=1.** That gives a direction, not a rate. A k=3 rerun of the 80k cells
-  (about $8) would say whether the held-then-cut failure is stable.
+- **Sonnet's 30k cells are k=1**, and its 80k cells are k=3. The held-then-lost failure is
+  stable at 80k (0/6 at today's ceiling).
+- **A PDF's tokens depend on the model.** The "80k" fixture (82 pages) is about 128k tokens
+  on Haiku 5.5 but about 214k input on Sonnet 4.6 (about 2.3k per page against 1.56k). A
+  `document_budget` in tokens has to come from per-model facts, not one per-page constant.
 - **Held document tokens come from `estimate_document_tokens`** (pages × 1,500), not row
   facts (#1966 had not merged). Each fixture page measures about 1,560 tokens, so the
   subtraction was about 4% low on a PDF.
@@ -241,11 +287,12 @@ Generated by `eval_harness.py readout`, one per run directory.
 
 ## Left open
 
-- The Sonnet 4.6 80k warm sample at a 200k ceiling offloaded the document while warm and
-  under the ceiling. The readout shows `document_offload` but not its reason, so it should
-  be checked against that session's `compactionEvents` before anyone relies on "200k holds
-  an 80k document".
-- A whole-document question arm (summarise or compare), the one case where holding might
-  beat reading slices.
+- ~~The Sonnet 80k warm offload at a 200k ceiling.~~ Explained: it was a real
+  `over_ceiling` (214k input against a 200k ceiling), and it is the same with #1978. #1978
+  fixes a separate bug the investigation found: before a conversation's first cut, the
+  offload judged a window-less 100k threshold instead of the model's own ceiling.
+- The Sonnet 4.6 whole-document arm (about $21 at k=3) and the owed Sonnet 4.6 `auto`
+  baseline (about $22) wait for quota; they land in a follow-up.
+- A free-form summary of unmarked prose (judge-scored, advisory).
 - Phase 2b should swap `held_document_tokens` to row facts if the switch is kept. With this
   readout, the recommendation is to delete it instead.

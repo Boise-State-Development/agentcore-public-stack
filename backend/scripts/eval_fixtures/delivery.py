@@ -416,10 +416,125 @@ def _table_builder(filename: str) -> Callable[[], bytes]:
 for _name in list(_PROSE) + list(_TABLES):
     _SLOTS.setdefault(_PROSE[_name][0] if _name in _PROSE else _TABLES[_name][0], len(_SLOTS))
 
+# --------------------------------------------------------------------------- whole-document questions
+
+
+@dataclass(frozen=True)
+class WholeFacts:
+    """What a whole-document question needs: facts spread over the whole document.
+
+    - ``notices``: every site that got a boil-water notice (list and count),
+      beside one ``decoy`` site where a notice was considered and not issued;
+    - ``gauge``: one reservoir gauge read at the spring survey early in the
+      document and at the autumn survey late in it (compare two sections);
+    - ``incidents``: the major incidents, one per quarter of the document
+      (summarise).
+
+    The filler never writes "boil-water", "gauge level" or "Major incident",
+    so nothing else answers these.
+    """
+
+    notices: Tuple[str, ...]
+    decoy: str
+    gauge: str
+    spring_level: str
+    autumn_level: str
+    change: str
+    incidents: Tuple[Tuple[str, str], ...]
+
+
+_INCIDENTS = (
+    "a main burst flooded the access road",
+    "a chlorine dosing pump failed overnight",
+    "a lightning strike tripped the intake screens",
+    "a contractor breached a raw-water main",
+)
+#: Where each planted item sits, as a fraction of the document.
+_NOTICE_DEPTHS = (0.05, 0.22, 0.4, 0.58, 0.76, 0.95)
+_INCIDENT_DEPTHS = (0.08, 0.35, 0.63, 0.91)
+
+
+def _site_names(name: str, count: int) -> List[str]:
+    """``count`` site names no other document uses (one slot per four)."""
+    sites: List[str] = []
+    part = 0
+    while len(sites) < count:
+        slot = _SLOTS.setdefault(f"{name}#{part}", len(_SLOTS))
+        sites.extend(_SITE_POOL[slot * _SITES_PER_SLOT + i] for i in range(_SITES_PER_SLOT))
+        part += 1
+    return sites[:count]
+
+
+def whole_document(name: str, tokens: int, *, title: str) -> Tuple[Document, WholeFacts]:
+    """A document about ``tokens`` long with the whole-document facts planted. Deterministic."""
+    rng = random.Random(f"whole:{name}")
+    sites = _site_names(name, len(_NOTICE_DEPTHS) + 1 + 1 + len(_INCIDENTS))
+    notices = tuple(sites[: len(_NOTICE_DEPTHS)])
+    decoy = sites[len(_NOTICE_DEPTHS)]
+    gauge = sites[len(_NOTICE_DEPTHS) + 1]
+    incident_sites = sites[len(_NOTICE_DEPTHS) + 2:]
+    spring = rng.randint(380, 460) / 10
+    fall = rng.randint(12, 48) / 10
+    autumn = round(spring - fall, 1)
+
+    budget = tokens * CHARS_PER_TOKEN - len(title)
+    paragraphs: List[str] = []
+    used = 0
+    while used < budget:
+        paragraph = _filler_paragraph(rng)
+        paragraphs.append(paragraph)
+        used += len(paragraph) + 2
+    n = len(paragraphs)
+
+    def plant(fraction: float, sentence: str) -> None:
+        index = min(n - 1, max(0, int(round(fraction * (n - 1)))))
+        paragraphs[index] = f"{paragraphs[index]} {sentence}"
+
+    for site, depth in zip(notices, _NOTICE_DEPTHS):
+        plant(depth, f"A boil-water notice was issued for customers served from {site} and lifted two days later.")
+    plant(0.5, f"A boil-water notice was considered for {decoy}, but sampling came back clear and none was issued.")
+    plant(0.1, f"At the spring survey, the {gauge} reservoir gauge level read {spring:.1f} metres.")
+    plant(0.88, f"At the autumn survey, the {gauge} reservoir gauge level read {autumn:.1f} metres.")
+    incidents = tuple(zip(incident_sites, _INCIDENTS))
+    for (site, what), depth in zip(incidents, _INCIDENT_DEPTHS):
+        plant(depth, f"Major incident: at {site}, {what}; crews restored service the same day.")
+
+    per_section = 8
+    sections = tuple(
+        (f"Section {i // per_section + 1}: operations notes", tuple(paragraphs[i:i + per_section]))
+        for i in range(0, n, per_section)
+    )
+    doc = Document(title=title, sections=sections, facts={}, absent=Absent("", "", "", ""))
+    return doc, WholeFacts(
+        notices=notices, decoy=decoy, gauge=gauge, spring_level=f"{spring:.1f}",
+        autumn_level=f"{autumn:.1f}", change=f"{fall:.1f}", incidents=incidents,
+    )
+
+
+#: The whole-document PDFs, by size label. Their site slots come after every
+#: other fixture's, so adding them moved no existing subject.
+_WHOLE: Dict[str, Tuple[str, int, str]] = {
+    f"delivery_yearbook_{size}.pdf": (f"yearbook_{size}", SIZES[size], f"Operations yearbook ({size})")
+    for size in ("30k", "80k", "150k")
+}
+_WHOLE_DOCUMENTS: Dict[str, Tuple[Document, WholeFacts]] = {}
+
+
+def whole(filename: str) -> Tuple[Document, WholeFacts]:
+    if filename not in _WHOLE_DOCUMENTS:
+        name, tokens, title = _WHOLE[filename]
+        _WHOLE_DOCUMENTS[filename] = whole_document(name, tokens, title=title)
+    return _WHOLE_DOCUMENTS[filename]
+
+
+for _name in _WHOLE:
+    whole(_name)
+
 GENERATED: Dict[str, Callable[[], bytes]] = {
     **{name: _prose_builder(name) for name in _PROSE},
     **{name: _table_builder(name) for name in _TABLES},
     "delivery_permit_card.png": permit_card,
+    **{name: (lambda n=name: as_pdf(whole(n)[0])) for name in _WHOLE},
 }
 
 
@@ -431,4 +546,6 @@ def estimated_tokens(filename: str) -> int:
         return _TABLES[filename][1]
     if filename == "delivery_permit_card.png":
         return 1_500
+    if filename in _WHOLE:
+        return len(whole(filename)[0].text) // CHARS_PER_TOKEN
     return 0

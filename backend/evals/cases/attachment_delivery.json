@@ -2099,5 +2099,545 @@
    "delivery_report_150k.pdf"
   ],
   "notes": "Ceiling arm: a ~150k-token PDF held on_demand at the default ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Corran Weir",
+    "Quill Levee",
+    "Brack Mere",
+    "Vane Gap",
+    "Vane Basin",
+    "Ashby Reach"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document list: a ~30k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Corran Weir",
+    "Quill Levee",
+    "Brack Mere",
+    "Vane Gap",
+    "Vane Basin",
+    "Ashby Reach"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document list: a ~30k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Orrin Tarn reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "4.4"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~30k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Orrin Tarn reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "4.4"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~30k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Orrin Cut",
+    "Morrow Mere",
+    "Kestrel Flats",
+    "Corran Tarn"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~30k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Orrin Cut",
+    "Morrow Mere",
+    "Kestrel Flats",
+    "Corran Tarn"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~30k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_80k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Vane Flats",
+    "Brack Hollow",
+    "Morrow Crossing",
+    "Ashby Bend",
+    "Vane Ford",
+    "Ilsey Cut"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document list: a ~80k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_80k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Vane Flats",
+    "Brack Hollow",
+    "Morrow Crossing",
+    "Ashby Bend",
+    "Vane Ford",
+    "Ilsey Cut"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document list: a ~80k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_80k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Ilsey Shoals reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "3.0"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~80k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_80k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Ilsey Shoals reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "3.0"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~80k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_80k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Hale Cut",
+    "Kestrel Cut",
+    "Morrow Hollow",
+    "Quill Basin"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~80k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_80k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Hale Cut",
+    "Kestrel Cut",
+    "Morrow Hollow",
+    "Quill Basin"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~80k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_150k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Hale Bend",
+    "Pell Gap",
+    "Thorn Hollow",
+    "Brack Weir",
+    "Wren Basin",
+    "Corran Flats"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document list: a ~150k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_150k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Hale Bend",
+    "Pell Gap",
+    "Thorn Hollow",
+    "Brack Weir",
+    "Wren Basin",
+    "Corran Flats"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document list: a ~150k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_150k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Quill Tarn reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "3.6"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~150k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_150k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Quill Tarn reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "3.6"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~150k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_150k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Calder Crossing",
+    "Saddle Ford",
+    "Thorn Flats",
+    "Wren Crossing"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~150k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_150k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Calder Crossing",
+    "Saddle Ford",
+    "Thorn Flats",
+    "Wren Crossing"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~150k-token PDF held on_demand. Every scored value is planted, spread across the document."
  }
 ]
