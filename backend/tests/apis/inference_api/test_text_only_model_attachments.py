@@ -10,8 +10,9 @@ on the turn path read ``inputModalities``. Now:
 - ``_resolve_model_settings`` returns the row's ``input_modalities`` and
   ``TurnModel.text_only`` reads them — keyed on TEXT-*only*, because Claude rows
   declare ``["TEXT", "IMAGE"]`` with no ``DOCUMENT`` and read PDFs natively;
-- ``_adapt_attachments_for_model`` converts documents to text and drops images
-  (and text-less documents) with a note, once the model is known;
+- the planner (``attachment_plan.refine_for_model``) plans documents as text and
+  images as dropped once the model is known, and ``_adapt_attachments_for_model``
+  carries that out (text-less documents are dropped too) with a note;
 - ``build_conversational_error_event`` maps both Bedrock wordings to the
   friendly copy, as the backstop for a wrong or missing row.
 """
@@ -59,8 +60,22 @@ def _model(modalities):
     )
 
 
-def _attachments(*files) -> TurnAttachments:
-    return TurnAttachments(files_to_send=list(files), marker_names=[f.filename for f in files])
+def _attachments(*files, profile=None) -> TurnAttachments:
+    """The inline set as `_resolve_turn_attachments` plans it (model not yet known)."""
+    from apis.shared.files.attachment_plan import MODE_NATIVE, current_limits_profile, plan_attachments
+
+    profile = profile or current_limits_profile()
+    facts = [routes._file_facts(f, {}) for f in files]
+    plan = plan_attachments(facts, None, profile=profile)
+    inline = plan.indices(MODE_NATIVE)
+    return TurnAttachments(
+        files_to_send=[files[i] for i in inline],
+        marker_names=[f.filename for f in files],
+        plan=plan,
+        plan_facts=facts,
+        inline_indices=inline,
+        profile=profile,
+    )
 
 
 class TestIsTextOnlyModel:
@@ -160,9 +175,16 @@ class TestAdaptAttachments:
 
     @pytest.mark.asyncio
     async def test_the_turn_budget_is_split_across_documents(self, monkeypatch):
-        monkeypatch.setattr(routes, "TEXT_ONLY_DOCUMENTS_MAX_CHARS", 10_000)
+        from dataclasses import replace
+
+        from apis.shared.files.attachment_plan import legacy_profile
+
         big = b"x" * 9_000
-        attachments = _attachments(_File("a.txt", "text/plain", big), _File("b.txt", "text/plain", big))
+        attachments = _attachments(
+            _File("a.txt", "text/plain", big),
+            _File("b.txt", "text/plain", big),
+            profile=replace(legacy_profile(), text_only_max_chars=10_000),
+        )
         await _adapt_attachments_for_model(attachments, _model(["TEXT"]))
 
         a, b = attachments.extracted_documents

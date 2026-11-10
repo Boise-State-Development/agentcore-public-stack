@@ -1,16 +1,15 @@
 """An uploaded document over the combined inline budget goes by reference.
 
-``_apply_inline_byte_budget`` holds a turn's inline attachments to
-``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` first-fit. Before this, a document it moved
-out was dropped with a footnote the model relayed. Now an uploaded document that
-does not fit becomes a ``ReferenceAttachment(over_budget=True)``: its stored
-in-process digest (or a ``status="ready"`` stub) in the user message and
-``document_read`` on the original, rendered from the row the resolver already
-read. Pins:
+The planner (``attachment_plan``, ``over_budget_reference``) decides which file
+does not fit and whether it can go by reference; those cases are rows of its
+table (``tests/apis/shared/files/test_attachment_plan.py``). This file pins the
+route's side of it: a planned ``on_demand`` file becomes a
+``ReferenceAttachment(over_budget=True)`` built from the row the resolver
+already read, placed among the turn's other references in attachment order,
+and kept in the marker; its stored in-process digest (or a ``status="ready"``
+stub) is in the user message and ``document_read`` reads the original. Pins:
 
-- the shape that prompted it: five PDFs, one over the per-file limit, four
-  inline candidates that together pass the budget;
-- images and direct ``files`` bytes have no reference path and stay dropped;
+- the shape that prompted it, end to end through ``_resolve_turn_attachments``;
 - a turn within the budget is unchanged (kept set, references, marker, text);
 - the rendered text is a pure function of the row (prompt-cache contract);
 - the guidance sentence names the combined limit and never offers ``query``;
@@ -28,9 +27,10 @@ from typing import Any, List
 import pytest
 
 import apis.inference_api.chat.routes as routes
-from apis.inference_api.chat.models import FileContent, InvocationRequest
+from apis.inference_api.chat.models import InvocationRequest
 from apis.shared.feature_flags import inline_budget_by_reference_enabled
 from apis.shared.files import models as file_models
+from apis.shared.files.attachment_plan import delivers_by_reference
 from apis.shared.files.document_digest import DigestSection, DocumentDigest
 from apis.shared.files.file_resolver import FileResolver, ResolvedFileContent
 from apis.shared.files.models import FileMetadata, FileStatus
@@ -80,7 +80,7 @@ def _row(upload_id: str, filename: str, size: int, mime_type: str = PDF, digest:
 def _resolved(row: FileMetadata) -> ResolvedFileContent:
     """What the resolver returns for ``row``: the row alone for a reference-class
     upload, its bytes and its row for an inline-class one."""
-    if file_models.is_reference_document(row):
+    if delivers_by_reference(row):
         return ResolvedFileContent(row.filename, row.mime_type, "", reference=row, meta=row)
     return ResolvedFileContent(row.filename, row.mime_type, _b64_of_size(row.size_bytes), meta=row)
 
@@ -161,6 +161,14 @@ class TestOverBudgetDocumentGoesByReference:
         # Nothing was dropped, so every file keeps its card on reload.
         assert out.marker_names == [f"policy-{x}.pdf" for x in "abcde"]
         assert out.turn_has_document is True
+        # The cost row records the decision behind it.
+        assert [(e["mode"], e["reason"]) for e in out.plan.to_row()["files"]] == [
+            ("on_demand", "reference_class"),
+            ("native", "inline"),
+            ("native", "inline"),
+            ("on_demand", "over_budget_reference"),
+            ("native", "inline"),
+        ]
 
     @pytest.mark.asyncio
     async def test_the_guidance_names_the_combined_limit_and_document_read(self, phase):
@@ -202,35 +210,6 @@ class TestOverBudgetDocumentGoesByReference:
 
         assert first == second
         assert '<document-digest name="policy-d.pdf" upload_id="up-d"' in first
-
-    @pytest.mark.asyncio
-    async def test_an_image_over_the_budget_is_still_dropped(self, phase):
-        rows = [
-            _row("up-1", "scan-1.pdf", int(3.9 * MB)),
-            _row("up-2", "photo.png", int(3.5 * MB), mime_type="image/png"),
-            _row("up-3", "notes.docx", int(3.6 * MB), mime_type=DOCX),
-        ]
-
-        out = await phase(rows)
-
-        assert [f.filename for f in out.files_to_send] == ["scan-1.pdf"]
-        assert [f.filename for f in out.over_budget_inline] == ["photo.png"]
-        assert [r.filename for r in out.reference_documents] == ["notes.docx"]
-        assert out.marker_names == ["scan-1.pdf", "notes.docx"]
-
-    @pytest.mark.asyncio
-    async def test_direct_bytes_over_the_budget_are_still_dropped(self, phase):
-        # No upload row, so nothing `document_read` could read later (§4B.6).
-        direct = [
-            FileContent(filename="one.pdf", content_type=PDF, bytes=_b64_of_size(int(3.9 * MB))),
-            FileContent(filename="two.pdf", content_type=PDF, bytes=_b64_of_size(int(3.9 * MB))),
-        ]
-
-        out = await phase([], files=direct)
-
-        assert [f.filename for f in out.files_to_send] == ["one.pdf"]
-        assert [f.filename for f in out.over_budget_inline] == ["two.pdf"]
-        assert out.reference_documents == []
 
     @pytest.mark.asyncio
     async def test_the_kill_switch_restores_the_drop(self, phase, monkeypatch):

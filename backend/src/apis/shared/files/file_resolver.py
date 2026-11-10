@@ -5,7 +5,7 @@ Resolves file upload IDs to FileContent objects with base64-encoded bytes.
 Used by chat endpoints to fetch files from S3 before passing to agent.
 
 Metadata first: the row is read before the object, and a reference-class row
-(``is_reference_document``) comes back as its metadata alone, with no
+(``attachment_plan.delivers_by_reference``) comes back as its metadata alone, with no
 ``get_object``. A 50 MB GET plus its base64 on the turn path would cost seconds
 before the first token, for bytes the turn never sends
 (``docs/specs/large-document-attachments.md`` §4B.1).
@@ -22,7 +22,8 @@ import boto3
 from botocore.exceptions import ClientError
 
 from .repository import get_file_upload_repository
-from .models import FileMetadata, FileStatus, is_reference_document
+from .attachment_plan import delivers_by_reference
+from .models import FileMetadata, FileStatus
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,7 @@ class FileResolver:
             logger.warning(f"File {upload_id} not ready: {file_meta.status}")
             return None
 
-        if is_reference_document(file_meta):
+        if delivers_by_reference(file_meta):
             return ResolvedFileContent(
                 filename=file_meta.filename,
                 content_type=file_meta.mime_type,

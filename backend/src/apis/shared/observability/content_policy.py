@@ -211,6 +211,9 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     # The turn's wall time, on its last row only: what tells one turn's calls
     # from the next (release-ledger spec §5.1). A number.
     "turnDurationMs",
+    # How the turn's attachments were delivered (``attachment_plan``): per file
+    # a mode, a class, a reason code, a token estimate and an upload id.
+    "attachmentPlan",
 )
 
 #: C# rows as the release ledger reads them (``apis.shared.sessions.ledger_rollups``):

@@ -195,6 +195,15 @@ DELIVERY_INLINE = "inline"
 DELIVERY_REFERENCE = "reference"
 Delivery = Literal["inline", "reference"]
 
+# The fixture-only override (docs/specs/unified-attachment-delivery.md §8.2):
+# DynamoDB ``deliveryOverride`` on a file row forces the planner's mode for that
+# file (``attachment_plan.FORCEABLE_MODES``), so an eval can hold a question
+# fixed and vary only the delivery. Separate from ``delivery`` above, which the
+# folder import sets for real users. Only a direct row write sets it: no request
+# field, no app-api route and no ``FileUploadService`` method takes it
+# (``tests/apis/shared/files/test_delivery_override_is_fixture_only.py``).
+DELIVERY_OVERRIDE_VALUES = frozenset({"native", "on_demand"})
+
 
 def is_reference_document(meta: "FileMetadata") -> bool:
     """Whether ``meta`` is attached by reference rather than inline.
@@ -317,6 +326,10 @@ class FileMetadata(BaseModel):
     # changed. Absent on older rows, which read as ``inline``.
     delivery: Delivery = Field(default=DELIVERY_INLINE, description="inline or reference delivery")
 
+    # Fixture-only: forces the attachment planner's mode for this file (see
+    # ``DELIVERY_OVERRIDE_VALUES``). ``None`` on every row a user produced.
+    delivery_override: Optional[str] = Field(None, description="Eval fixture only: forced delivery mode")
+
     # DocumentDigest (docs/specs/document-context-offload.md §4A), built once
     # when a document upload completes and stored as a plain map — see
     # ``apis.shared.files.document_digest``. ``None`` = never generated (files
@@ -387,6 +400,8 @@ class FileMetadata(BaseModel):
         }
         if self.delivery != DELIVERY_INLINE:
             item["delivery"] = self.delivery
+        if self.delivery_override in DELIVERY_OVERRIDE_VALUES:
+            item["deliveryOverride"] = self.delivery_override
         if self.digest:
             item["digest"] = self.digest
         if self.preparation:
@@ -416,6 +431,11 @@ class FileMetadata(BaseModel):
                 DELIVERY_REFERENCE
                 if item.get("delivery") == DELIVERY_REFERENCE
                 else DELIVERY_INLINE
+            ),
+            delivery_override=(
+                item.get("deliveryOverride")
+                if item.get("deliveryOverride") in DELIVERY_OVERRIDE_VALUES
+                else None
             ),
             created_at=from_iso(created_at) if created_at else datetime.now(timezone.utc),
             updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
