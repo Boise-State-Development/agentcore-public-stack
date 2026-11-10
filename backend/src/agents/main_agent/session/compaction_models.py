@@ -187,11 +187,6 @@ class CompactionConfig:
     # Token bound on the protected tail (spec §3.2). A rollout switch: off
     # keeps the last ``protected_turns`` turns whole whatever their size.
     tail_token_bound_enabled: bool = Defaults.COMPACTION_TAIL_TOKEN_BOUND_ENABLED
-    # Unified-attachment-delivery §5.2, measurement only: the ceiling (the
-    # cut trigger and the ``over_ceiling`` offload) compares the last input
-    # minus the documents the conversation holds; the hard ceiling still
-    # counts everything. Off by default and wired to no deployment.
-    ceiling_excludes_documents: bool = False
 
     @classmethod
     def from_env(cls) -> "CompactionConfig":
@@ -214,7 +209,4 @@ class CompactionConfig:
             summary_extract_enabled=compaction_summary_extract_enabled(),
             deferred_apply_enabled=_env_flag_default_on(EnvVars.COMPACTION_DEFERRED_APPLY_ENABLED),
             tail_token_bound_enabled=_env_flag_default_on(EnvVars.COMPACTION_TAIL_TOKEN_BOUND_ENABLED),
-            ceiling_excludes_documents=(
-                os.environ.get(EnvVars.COMPACTION_CEILING_EXCLUDES_DOCUMENTS, "").strip().lower() == "true"
-            ),
         )

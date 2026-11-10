@@ -205,52 +205,6 @@ def estimate_message_tokens(message: Dict[str, Any], documents: Optional["Docume
 
 
 # ---------------------------------------------------------------------------
-# Held documents (unified-attachment-delivery §5.2, measurement only)
-# ---------------------------------------------------------------------------
-
-
-def held_document_tokens(
-    messages: Optional[Sequence[Dict[str, Any]]],
-    documents: Optional["DocumentIndex"] = None,
-) -> int:
-    """Estimated tokens of the document blocks the conversation holds in context.
-
-    Only the user-attached blocks (top level of a message): a ``document_read``
-    slice is a tool result and counts as conversation. The estimate is the
-    row's facts, or ``estimate_document_tokens`` on the bytes for a row without
-    them. Never raises.
-    """
-    index = documents if documents is not None else EMPTY_INDEX
-    total = 0
-    for message in messages or ():
-        content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if isinstance(block, dict) and "document" in block:
-                total += index.block_tokens(block.get("document"))
-    return total
-
-
-def chat_input_tokens(
-    config: "CompactionConfig",
-    input_tokens: int,
-    messages: Optional[Sequence[Dict[str, Any]]],
-    documents: Optional["DocumentIndex"] = None,
-) -> Tuple[int, int]:
-    """``(tokens the chat ceiling compares, held document tokens subtracted)``.
-
-    With ``ceiling_excludes_documents`` off, which is every deployment, this
-    is ``(input_tokens, 0)`` and nothing is read. On, the held documents are
-    subtracted (never below zero); the hard ceiling keeps the full input.
-    """
-    if not getattr(config, "ceiling_excludes_documents", False):
-        return int(input_tokens), 0
-    held = held_document_tokens(messages, documents)
-    return max(0, int(input_tokens) - held), held
-
-
-# ---------------------------------------------------------------------------
 # Cut selection
 # ---------------------------------------------------------------------------
 

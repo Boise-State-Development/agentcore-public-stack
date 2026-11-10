@@ -64,21 +64,18 @@ DELIVERY_ARMS: Tuple[str, ...] = ("auto", "native", "text", "on_demand")
 #: under 4 MB can be forced into it. Reserved until phase 5's ``search`` mode.
 RESERVED_ARMS: Tuple[str, ...] = ("search",)
 #: The compaction ceiling a case runs under (§8.4): ``default`` is the
-#: deployment's (a 100k cap), ``200k`` a 200k cap, and
-#: ``100k_documents_excluded`` the 100k cap with §5.2's subtraction. A
+#: deployment's (a 100k cap) and ``200k`` a 200k cap. (Phase 0's third arm,
+#: the 100k cap with §5.2's document subtraction, was deleted with the switch
+#: once the readout dropped §5.2.) A
 #: ceiling is a property of the Runtime, not of a request, so a run takes one
 #: (``eval_harness.py run --ceiling``) and the target must be started with
 #: :data:`CEILING_ENV`'s variables.
-CEILINGS: Tuple[str, ...] = ("default", "200k", "100k_documents_excluded")
+CEILINGS: Tuple[str, ...] = ("default", "200k")
 RESERVED_CEILINGS: Tuple[str, ...] = ()
 #: The Runtime environment each ceiling needs (``compaction_models.CompactionConfig``).
 CEILING_ENV: Dict[str, Dict[str, str]] = {
     "default": {},
     "200k": {"AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "200000"},
-    "100k_documents_excluded": {
-        "AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "100000",
-        "AGENTCORE_MEMORY_COMPACTION_CEILING_EXCLUDES_DOCUMENTS": "true",
-    },
 }
 #: Longest pause a turn may ask for before it is sent: past the 5-minute
 #: prompt-cache TTL, short of the Runtime session's idle timeout.

@@ -227,9 +227,16 @@ held the document, read the same slices and answered directly.
   turn-5 `cacheStatus` for this.
 - **Sonnet's 30k cells are k=1**, and its 80k cells are k=3. The held-then-lost failure is
   stable at 80k (0/6 at today's ceiling).
-- **A PDF's tokens depend on the model.** The "80k" fixture (82 pages) is about 128k tokens
-  on Haiku 5.5 but about 214k input on Sonnet 4.6 (about 2.3k per page against 1.56k). A
-  `document_budget` in tokens has to come from per-model facts, not one per-page constant.
+- **A PDF's tokens depend on the model.** A `document_budget` in tokens has to come from
+  per-model facts, not one per-page constant. **Correction (2026-11-10, phase 3):** the
+  "measured" column of the ceiling tables for Haiku 5.5 (~48k, ~128k, ~239k) is the
+  pages × 1,500 estimate, not a measurement. Measured directly on dev, a page image is
+  ~1,565 tokens on every model and the text is billed on top at the model's tokenizer:
+  0.95 × `tokens.text` on Sonnet 4.6 and Haiku 4.5, 1.40 × on Haiku 5.5 (and Opus 4.7 and
+  5.5). So the 85-page "80k" fixture is about 214k on Sonnet 4.6 and about 248k on Haiku
+  5.5 (~2.5k and ~2.9k a page), which the whole-document rows' token columns agree with.
+  See the spec's §2.1. None of the recommendations change: every Haiku 5.5 held document
+  was already over its budget.
 - **Held document tokens come from `estimate_document_tokens`** (pages × 1,500), not row
   facts (#1966 had not merged). Each fixture page measures about 1,560 tokens, so the
   subtraction was about 4% low on a PDF.
