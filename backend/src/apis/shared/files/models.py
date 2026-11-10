@@ -352,6 +352,13 @@ class FileMetadata(BaseModel):
     # ``None`` = never queued for indexing. Status fields only: never content.
     kb_index: Optional[dict] = Field(None, description="Attachments-KB index state, when queued")
 
+    # File facts (unified-attachment-delivery spec §4.1): ``{version, class,
+    # tokens: {text, native}, pages, hasTextLayer, units}``, written once per
+    # set of bytes by preparation (``apis.shared.files.file_facts``). ``None``
+    # until prepared, for non-documents, and with large-document attachments
+    # off. Numbers and enums only: never content.
+    facts: Optional[dict] = Field(None, description="File facts, once prepared")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -408,6 +415,8 @@ class FileMetadata(BaseModel):
             item["preparation"] = self.preparation
         if self.kb_index:
             item["kbIndex"] = self.kb_index
+        if self.facts:
+            item["facts"] = self.facts
         return item
 
     @classmethod
@@ -443,6 +452,7 @@ class FileMetadata(BaseModel):
             digest=item.get("digest") if isinstance(item.get("digest"), dict) else None,
             preparation=item.get("preparation") if isinstance(item.get("preparation"), dict) else None,
             kb_index=item.get("kbIndex") if isinstance(item.get("kbIndex"), dict) else None,
+            facts=item.get("facts") if isinstance(item.get("facts"), dict) else None,
         )
 
 
