@@ -37,6 +37,7 @@ import {
   type LargeDocumentChip,
   type PendingUpload,
 } from '../../../services/file-upload';
+import { AttachmentLimitsService } from '../../../services/file-upload/attachment-limits';
 import { FEATURES } from '../../../services/features';
 import { FilePreviewStateService } from '../../services/file-preview/file-preview-state.service';
 import { isPreviewableFilename } from '../../services/file-preview/file-preview.model';
@@ -183,6 +184,7 @@ export class AttachmentCardComponent {
 
   private readonly fileUploadService = inject(FileUploadService);
   private readonly filePreview = inject(FilePreviewStateService);
+  private readonly attachmentLimits = inject(AttachmentLimitsService);
   /** Present only while the deployment has the attachments KB. */
   private readonly searchStatus = inject(FEATURES).attachmentKb ? inject(AttachmentSearchStatusService) : null;
 
@@ -239,7 +241,9 @@ export class AttachmentCardComponent {
     return pending.progress;
   });
 
-  protected readonly isReference = computed(() => isReferenceDocument(this.mimeType(), this.sizeBytes()));
+  protected readonly isReference = computed(() =>
+    isReferenceDocument(this.mimeType(), this.sizeBytes(), this.attachmentLimits.limits()),
+  );
 
   protected readonly chip = computed<LargeDocumentChip>(() => {
     const service = this.searchStatus;
