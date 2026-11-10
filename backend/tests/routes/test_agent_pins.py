@@ -24,7 +24,6 @@ from apis.shared.assistants.models import (
     PinnedAgentRef,
     UserPinState,
 )
-from apis.shared.auth import require_admin
 from tests.conftest import override_admin_auth
 from tests.routes.conftest import mock_auth_user
 

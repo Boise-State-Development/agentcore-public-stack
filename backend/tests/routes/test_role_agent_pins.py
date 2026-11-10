@@ -29,7 +29,6 @@ from apis.shared.assistants.models import (
     RoleAgentPin,
     UserPinState,
 )
-from apis.shared.auth import require_admin
 from tests.conftest import override_admin_auth
 from apis.shared.rbac.models import AppRole, EffectivePermissions, UserEffectivePermissions
 from tests.routes.conftest import mock_auth_user
