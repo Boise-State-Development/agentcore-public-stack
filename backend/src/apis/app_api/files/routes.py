@@ -30,6 +30,8 @@ from apis.shared.files.models import (
     FileListResponse,
     QuotaResponse,
     AttachmentLimitsResponse,
+    AttachmentPreviewsResponse,
+    MAX_PREVIEW_IDS,
     QuotaExceededError as QuotaExceededModel,
     ALLOWED_MIME_TYPES,
 )
@@ -490,6 +492,31 @@ class SortOrder(str, Enum):
     """Sort order options for file listing."""
     ASC = "asc"
     DESC = "desc"
+
+
+@router.get("/previews", response_model=AttachmentPreviewsResponse)
+async def get_attachment_previews(
+    ids: str = Query(..., description="Comma-separated upload ids, at most 20"),
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    The attachment cards' previews for a message's files, in one call.
+
+    Each id maps to its preview (a Word file's opening lines, a spreadsheet's or
+    CSV's first rows, a deck's first slide) or `null` when there is none to
+    show: not the caller's, not ready, a type without one, or not written yet.
+    The prepare Lambda writes them at upload.
+    """
+    upload_ids = [part.strip() for part in ids.split(",") if part.strip()]
+    if not upload_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No upload ids given")
+    if len(upload_ids) > MAX_PREVIEW_IDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"At most {MAX_PREVIEW_IDS} upload ids per request",
+        )
+    return AttachmentPreviewsResponse(previews=await service.get_previews(user.user_id, upload_ids))
 
 
 @router.get("", response_model=FileListResponse)

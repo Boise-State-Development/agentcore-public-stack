@@ -10,7 +10,7 @@ import os
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 import boto3
 from botocore.config import Config
@@ -635,6 +635,7 @@ class FileUploadService:
         else:
             self._schedule_digest(file_meta)
             await self._enqueue_facts(file_meta)
+            await self._enqueue_preview(file_meta)
 
     # =========================================================================
     # Preview URL
@@ -1199,11 +1200,74 @@ class FileUploadService:
         except Exception:  # noqa: BLE001 - facts are never worth a failed upload
             logger.warning("File facts not queued", exc_info=True)
 
+    @staticmethod
+    def _has_preview_format(file_meta: FileMetadata) -> bool:
+        from apis.shared.files.attachment_preview import preview_format
+
+        return preview_format(file_meta.filename, file_meta.mime_type) is not None
+
+    async def _enqueue_preview(self, file_meta: FileMetadata) -> None:
+        """Queue a spreadsheet, CSV or deck for its card preview. Never raises.
+
+        A Word file's preview is written by its facts or preparation pass;
+        these formats are not document-class, so nothing else reaches the
+        Lambda for them. Same queue and gate as the facts message.
+        """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+        from apis.shared.files.attachment_preview import preview_format
+        from apis.shared.files.document_read import is_document_class
+
+        queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "").strip()
+        if not large_document_attachments_enabled() or not queue_url:
+            return
+        if preview_format(file_meta.filename, file_meta.mime_type) is None:
+            return
+        if is_document_class(file_meta.mime_type, file_meta.filename):
+            return  # its facts pass writes the preview
+        try:
+            body = json.dumps(
+                {"action": "preview", "user_id": file_meta.user_id, "upload_id": file_meta.upload_id}
+            )
+            await asyncio.to_thread(self._sqs().send_message, QueueUrl=queue_url, MessageBody=body)
+        except Exception:  # noqa: BLE001 - a preview is never worth a failed upload
+            logger.warning("Attachment preview not queued", exc_info=True)
+
+    async def get_previews(self, user_id: str, upload_ids: List[str]) -> Dict[str, Optional[dict]]:
+        """The card preview of each of ``upload_ids``, or ``None``.
+
+        Owner-scoped: an id that is not the caller's, not ready or has no
+        preview format answers ``None``, the same as one not written yet, so
+        the answer says nothing about another user's files. Rows and objects
+        are read concurrently.
+        """
+        from apis.shared.files.attachment_preview import decode_preview, preview_format, preview_key
+
+        async def one(upload_id: str) -> Optional[dict]:
+            meta = await self.repository.get_file(user_id, upload_id)
+            if meta is None or meta.status != FileStatus.READY:
+                return None
+            if preview_format(meta.filename, meta.mime_type) is None:
+                return None
+            try:
+                response = await asyncio.to_thread(
+                    self._s3_client.get_object, Bucket=self.bucket_name, Key=preview_key(meta.s3_key)
+                )
+                return decode_preview(response["Body"].read())
+            except ClientError as e:
+                if e.response["Error"]["Code"] not in ("404", "NoSuchKey"):
+                    logger.warning("Attachment preview not read", exc_info=True)
+                return None
+
+        unique = list(dict.fromkeys(upload_ids))
+        results = await asyncio.gather(*(one(upload_id) for upload_id in unique))
+        return dict(zip(unique, results))
+
     def _delete_derived_objects(self, file_meta: FileMetadata) -> None:
         """Best-effort delete of a prepared document's ``_derived/`` sidecars.
 
-        Only a reference-class file (its preparation) or a PDF (its first-page
-        thumbnail) can have any, so every other file skips the LIST. A preparation still running when the row is deleted cleans up
+        Only a reference-class file (its preparation), a PDF (its first-page
+        thumbnail) or a Word, spreadsheet, CSV or deck file (its card preview)
+        can have any, so every other file skips the LIST. A preparation still running when the row is deleted cleans up
         after itself: its final row write is conditional on the row, and it
         deletes the prefix when that write fails.
         """
@@ -1211,6 +1275,7 @@ class FileUploadService:
             file_meta.preparation
             or is_reference_document(file_meta)
             or file_meta.mime_type == "application/pdf"  # its _derived/thumb.png
+            or self._has_preview_format(file_meta)  # its _derived/preview.json
         ):
             return
         from apis.shared.files.large_document import derived_prefix

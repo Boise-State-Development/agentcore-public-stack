@@ -100,7 +100,9 @@ class TestCompleteUpload:
         service, repository, _, sqs, _ = _service(_meta(size, mime, filename))
         await service.complete_upload("u1", "up-1")
         await _drain(service)
-        sqs.send_message.assert_not_called()
+        # Never prepared; a spreadsheet or deck is only queued for its card preview.
+        actions = [json.loads(call.kwargs["MessageBody"]).get("action") for call in sqs.send_message.call_args_list]
+        assert actions == ([] if filename.endswith(".png") else ["preview"])
         repository.update_file_preparation.assert_not_awaited()
 
     @pytest.mark.parametrize(

@@ -80,6 +80,7 @@ _KNOWN: Dict[str, str] = {
     "src/lambdas/large_document_prepare/handler.py": "preparation Lambda: which uploads to prepare (off the turn path)",
     "src/apis/shared/files/folder_manifest.py": "the folder manifest's wording about sheets and decks",
     "src/apis/shared/assistants/kb_tabular.py": "a project knowledge base's spreadsheet inventory",
+    "src/apis/shared/files/attachment_preview.py": "which card preview to write (a display choice, written at upload off the turn path; never a delivery mode)",
     "src/agents/builtin_tools/spreadsheet_analysis/analyze_tool.py": "the spreadsheet tool finding its file",
     "src/agents/builtin_tools/spreadsheet_analysis/list_spreadsheets_tool.py": "the spreadsheet tool listing its files",
     # Phase 6 (§9.1): the per-call projection's own selection retires with the flag.

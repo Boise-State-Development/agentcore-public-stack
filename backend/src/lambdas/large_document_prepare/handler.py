@@ -62,6 +62,13 @@ is open, so app-api only presigns it and never runs PDFium on a request.
 uploaded before this existed, when app-api first finds it missing. A page that
 will not render leaves no thumbnail and fails nothing: the card falls back to
 its skeleton.
+
+**Card preview.** The same passes write a Word file's opening paragraphs to
+``_derived/preview.json`` (``apis/shared/files/attachment_preview.py``), and
+``{"action": "preview", "user_id", "upload_id"}`` (from app-api, for a
+spreadsheet, CSV or deck, which are not document-class and so get no facts
+pass) writes their first rows or first slide. A file that will not parse
+leaves no preview: the card keeps its skeleton.
 """
 
 from __future__ import annotations
@@ -82,6 +89,13 @@ from apis.shared.files import file_facts, large_document
 from apis.shared.files.document_digest import build_digest, document_digest_enabled, record_digest
 from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs, text_lines
 from apis.shared.files.models import FileMetadata, FileStatus, is_reference_document
+from apis.shared.files.attachment_preview import (
+    PreviewUnavailable,
+    build_preview,
+    encode_preview,
+    preview_format,
+    preview_key,
+)
 from apis.shared.files.pdf_thumbnail import render_first_page, thumbnail_key
 from apis.shared.files.pdfium_lock import serialized_pdfium
 from apis.shared.files.repository import FileUploadRepository, get_file_upload_repository
@@ -156,6 +170,24 @@ def _first_page_png(pdf: Any) -> Optional[bytes]:
 def _put_thumbnail(s3: Any, meta: FileMetadata, png: Optional[bytes]) -> None:
     if png is not None:
         _put(s3, meta.s3_bucket, thumbnail_key(meta.s3_key), png, "image/png")
+
+
+def _store_preview(s3: Any, meta: FileMetadata, raw: bytes) -> bool:
+    """Write the card preview of a Word, spreadsheet, CSV or deck file.
+
+    False when the file has no preview format or will not parse; S3 errors
+    propagate so SQS retries them.
+    """
+    fmt = preview_format(meta.filename, meta.mime_type)
+    if fmt is None:
+        return False
+    try:
+        preview = build_preview(fmt, raw)
+    except PreviewUnavailable as e:
+        logger.warning("large-document-prepare: preview not built (%s)", e)
+        return False
+    _put(s3, meta.s3_bucket, preview_key(meta.s3_key), encode_preview(preview), "application/json")
+    return True
 
 
 @serialized_pdfium
@@ -288,6 +320,8 @@ async def prepare_upload(
             texts = _units(fmt, raw)
         layer = large_document.encode_text_layer(large_document.UNIT_FOR_FORMAT[fmt], texts)
         _put(s3, meta.s3_bucket, large_document.text_layer_key(meta.s3_key), layer, "application/x-ndjson")
+        if fmt == "docx":
+            _store_preview(s3, meta, raw)
     except PreparationFailed as e:
         logger.warning("large-document-prepare: document could not be prepared (%s)", e.cause)
         try:
@@ -398,11 +432,13 @@ async def compute_facts(
         logger.warning("large-document-prepare: facts given up after retries (%s)", type(e).__name__)
         file_facts.record_facts(outcome="failed", fmt=fmt, ms=int((time.monotonic() - started) * 1000))
         return "failed"
-    if fmt == "pdf":
-        try:
+    try:
+        if fmt == "pdf":
             _put_thumbnail(s3, meta, _pdf_thumbnail(raw))
-        except _TRANSIENT:
-            logger.warning("large-document-prepare: thumbnail not stored", exc_info=True)
+        else:
+            _store_preview(s3, meta, raw)
+    except _TRANSIENT:
+        logger.warning("large-document-prepare: thumbnail or preview not stored", exc_info=True)
     try:
         facts = file_facts.compute_document_facts(fmt, raw)
     except Exception as e:  # noqa: BLE001 - a bad document leaves the row as it was
@@ -453,6 +489,40 @@ async def render_thumbnail(
         logger.warning("large-document-prepare: thumbnail given up after retries (%s)", type(e).__name__)
         return "failed"
     return "ready" if png is not None else "failed"
+
+
+async def render_preview(
+    user_id: str,
+    upload_id: str,
+    *,
+    s3: Any = None,
+    repository: Optional[FileUploadRepository] = None,
+    final_attempt: bool = False,
+) -> str:
+    """Write the card preview of a spreadsheet, CSV or deck (or an older Word
+    file). Raises only on AWS errors before the final attempt."""
+    repository = repository or get_file_upload_repository()
+    s3 = s3 or get_client("s3", os.environ.get("AWS_REGION") or None)
+
+    meta = await repository.get_file(user_id, upload_id)
+    if meta is None:
+        return "missing"
+    status = meta.status if isinstance(meta.status, str) else meta.status.value
+    if status != FileStatus.READY.value:
+        return "not_ready"
+    if preview_format(meta.filename, meta.mime_type) is None:
+        return "no_preview"
+    if not _key_is_owned(meta, user_id, upload_id):
+        return "unexpected_key"
+    try:
+        raw = s3.get_object(Bucket=meta.s3_bucket, Key=meta.s3_key)["Body"].read()
+        written = _store_preview(s3, meta, raw)
+    except _TRANSIENT as e:
+        if not final_attempt:
+            raise
+        logger.warning("large-document-prepare: preview given up after retries (%s)", type(e).__name__)
+        return "failed"
+    return "ready" if written else "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +582,8 @@ def _parse(body: str) -> Optional[Dict[str, Any]]:
     Kinds: ``prepare`` (``{user_id, upload_id}``, from app-api), ``facts``
     (``{"action": "facts", ...}``, from app-api for a document under the inline
     limit), ``thumbnail`` (``{"action": "thumbnail", ...}``, from app-api for a
-    PDF with no rendered first page yet), ``index`` and
+    PDF with no rendered first page yet), ``preview`` (``{"action":
+    "preview", ...}``, from app-api for a spreadsheet, CSV or deck), ``index`` and
     ``check`` (from this pipeline and app-api's re-index on open), ``deleted``
     (an S3 Object Deleted event for an original) and ``reconcile`` (the daily
     schedule).
@@ -546,6 +617,8 @@ def _parse(body: str) -> Optional[Dict[str, Any]]:
         return {"kind": "facts", "user_id": ids[0], "upload_id": ids[1]}
     if action == "thumbnail":
         return {"kind": "thumbnail", "user_id": ids[0], "upload_id": ids[1]}
+    if action == "preview":
+        return {"kind": "preview", "user_id": ids[0], "upload_id": ids[1]}
     if action == "index":
         return {"kind": "index", "user_id": ids[0], "upload_id": ids[1], "force": bool(message.get("force"))}
     if action == "check":
@@ -570,6 +643,8 @@ async def _handle(message: Dict[str, Any], final_attempt: bool) -> str:
         return await compute_facts(message["user_id"], message["upload_id"], final_attempt=final_attempt)
     if kind == "thumbnail":
         return await render_thumbnail(message["user_id"], message["upload_id"], final_attempt=final_attempt)
+    if kind == "preview":
+        return await render_preview(message["user_id"], message["upload_id"], final_attempt=final_attempt)
     if not attachment_kb_enabled():
         return "attachment KB off; acknowledged"
     return await _run_index_message(message)

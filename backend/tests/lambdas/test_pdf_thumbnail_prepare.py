@@ -24,12 +24,12 @@ class TestThumbnail:
         assert await handler.compute_facts("u1", "up-1", s3=s3, repository=repository) == "ready"
         assert _body(s3, THUMB).startswith(b"\x89PNG\r\n\x1a\n")
 
-    async def test_the_facts_pass_renders_nothing_for_a_word_file(self, store):
+    async def test_the_facts_pass_renders_no_thumbnail_for_a_word_file(self, store):
         s3, repository = store
         raw = build_docx(["Memo"])
         await _upload(store, raw, filename="memo.docx", mime=DOCX, size=len(raw))
         assert await handler.compute_facts("u1", "up-1", s3=s3, repository=repository) == "ready"
-        assert _keys(s3, "user-files/u1/s1/up-1/_derived/") == []
+        assert THUMB not in _keys(s3)
 
     async def test_a_pdf_that_will_not_open_still_gets_its_facts_outcome(self, store):
         s3, repository = store

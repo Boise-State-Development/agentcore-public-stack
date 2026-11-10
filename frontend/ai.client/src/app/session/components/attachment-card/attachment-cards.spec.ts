@@ -3,7 +3,13 @@ import { TestBed } from '@angular/core/testing';
 
 import { environment } from '../../../../environments/environment';
 import { FEATURES } from '../../../services/features';
-import { FileUploadService, type FileMetadata, type PendingUpload } from '../../../services/file-upload';
+import {
+  AttachmentPreviewsService,
+  FileUploadService,
+  type AttachmentPreview,
+  type FileMetadata,
+  type PendingUpload,
+} from '../../../services/file-upload';
 import { FilePreviewStateService } from '../../services/file-preview/file-preview-state.service';
 import type { FileAttachmentData } from '../../services/models/message.model';
 import { AttachmentCardComponent } from './attachment-card.component';
@@ -51,6 +57,8 @@ function restored(id: string): FileMetadata {
 }
 
 const opened: unknown[] = [];
+const storedPreviews = new Map<string, AttachmentPreview>();
+const previewsService = { preview: vi.fn(async (id: string) => storedPreviews.get(id) ?? null) };
 const fileUploadService = {
   getPreviewUrl: vi.fn().mockResolvedValue({ url: 'https://s3.example/x' }),
   getTextSnippet: vi.fn().mockResolvedValue({ snippet: '# Title\n\nBody' }),
@@ -67,6 +75,7 @@ async function configure(imports: unknown[]): Promise<void> {
       { provide: FEATURES, useValue: { ...environment.features, attachmentKb: false, attachmentCards: true } },
       { provide: FileUploadService, useValue: fileUploadService },
       { provide: FilePreviewStateService, useValue: { open: (ref: unknown) => opened.push(ref) } },
+      { provide: AttachmentPreviewsService, useValue: previewsService },
     ],
   }).compileComponents();
 }
@@ -167,6 +176,48 @@ describe('AttachmentCardComponent', () => {
     expect(el.querySelector('button[aria-label^="Remove"]')).toBeNull();
     button!.click();
     expect(opened).toEqual([{ uploadId: 'brief', filename: 'brief.docx' }]);
+  });
+});
+
+describe('stored previews', () => {
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+  it('draws a Word file\'s opening lines', async () => {
+    storedPreviews.set('memo', { version: 1, kind: 'doc', lines: ['Memo to the board', 'Costs held flat'] });
+    const el = await card({ attachment: sent('memo', DOCX, 'memo.docx'), surface: 'message' });
+    const lines = Array.from(el.querySelectorAll('app-attachment-preview p')).map((p) => p.textContent?.trim());
+    expect(lines).toEqual(['Memo to the board', 'Costs held flat']);
+  });
+
+  it('draws a workbook\'s first rows and its sheet names', async () => {
+    storedPreviews.set('budget', { version: 1, kind: 'sheet', sheets: ['Budget', 'Notes'], rows: [['Line', 'FY27'], ['Travel', '1200']] });
+    const el = await card({ attachment: sent('budget', XLSX, 'budget.xlsx'), surface: 'message' });
+    const preview = el.querySelector('app-attachment-preview');
+    const cells = Array.from(preview?.querySelectorAll('td') ?? []).map((td) => td.textContent?.trim());
+    expect(cells).toEqual(['Line', 'FY27', 'Travel', '1200']);
+    expect(text(preview)).toContain('Notes');
+  });
+
+  it('draws a deck\'s first slide', async () => {
+    storedPreviews.set('talk', { version: 1, kind: 'deck', slides: 12, title: 'Quarterly review', bullets: ['Revenue up'] });
+    const el = await card({ attachment: sent('talk', PPTX, 'talk.pptx'), surface: 'message' });
+    const preview = el.querySelector('app-attachment-preview');
+    expect(preview?.querySelector('p')?.textContent?.trim()).toBe('Quarterly review');
+    expect(preview?.querySelector('li')?.textContent?.trim()).toBe('Revenue up');
+  });
+
+  it('keeps the skeleton for a file with no stored preview', async () => {
+    const el = await card({ attachment: sent('old', DOCX, 'old.docx'), surface: 'message' });
+    expect(el.querySelector('app-attachment-preview p')).toBeNull();
+  });
+
+  it('asks as a fresh upload while the composer still holds the file', async () => {
+    previewsService.preview.mockClear();
+    const docx = upload('new', 'ready', { file: sizedFile('new.docx', DOCX) });
+    await card({ pendingUpload: docx });
+    expect(previewsService.preview).toHaveBeenCalledWith('new', { fresh: true });
   });
 });
 

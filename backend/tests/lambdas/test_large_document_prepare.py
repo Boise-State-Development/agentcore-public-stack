@@ -140,7 +140,9 @@ class TestPrepare:
         s3, repository = store
         await _upload(store, raw, filename=filename, mime=mime)
         assert await _prepare(store) == "ready"
-        assert _keys(s3, "user-files/u1/s1/up-1/_derived/") == ["user-files/u1/s1/up-1/_derived/text.jsonl"]
+        # A Word file also gets its card preview.
+        preview = ["user-files/u1/s1/up-1/_derived/preview.json"] if filename.endswith(".docx") else []
+        assert _keys(s3, "user-files/u1/s1/up-1/_derived/") == sorted([*preview, "user-files/u1/s1/up-1/_derived/text.jsonl"])
         assert ld.decode_text_layer(_body(s3, "user-files/u1/s1/up-1/_derived/text.jsonl")) == expected
         prep = (await repository.get_file("u1", "up-1")).preparation
         assert prep["status"] == "ready" and int(prep["pageCount"]) == 0 and int(prep["shardPages"]) == 0
