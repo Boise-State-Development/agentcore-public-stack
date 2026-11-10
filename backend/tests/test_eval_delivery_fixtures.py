@@ -169,3 +169,58 @@ def test_case_answers_are_the_planted_values():
 def test_the_right_value_must_lead_the_answer_and_a_lookalike_after_it_is_fine(answer, passes):
     pattern = delivery_cases.leads("WP-51759", ["WP-51795"])
     assert bool(re.search(pattern, answer, re.MULTILINE)) is passes
+
+
+# ---------------------------------------------------------------------------
+# Whole-document questions (§11 Q3: where holding a document might win)
+# ---------------------------------------------------------------------------
+
+
+def _whole_cases():
+    return {c.id.split(".", 1)[1]: c for c in load_cases(CASES_DIR, families=["attachment_delivery"])
+            if c.id.split(".", 1)[1].startswith("whole_")}
+
+
+def test_every_whole_document_question_runs_held_and_on_demand_at_three_sizes():
+    cases = _whole_cases()
+    assert len(cases) == 3 * 3 * 2
+    for kind in ("list", "compare", "summarise"):
+        for size in ("30k", "80k", "150k"):
+            for arm in ("native", "on_demand"):
+                case = cases[f"whole_{kind}_pdf_{size}_{arm}"]
+                assert case.run.arm == arm and case.run.ceiling == "default" and len(case.turns) == 1
+
+
+@pytest.mark.parametrize("name", sorted(d._WHOLE))
+def test_whole_document_facts_are_planted_once_and_spread(name):
+    doc, facts = d.whole(name)
+    text = doc.text
+    assert text.count("boil-water notice was issued") == 6 and text.count("boil-water notice was considered") == 1
+    for site in facts.notices + (facts.decoy, facts.gauge) + tuple(s for s, _ in facts.incidents):
+        assert text.count(site) == 1 or site == facts.gauge and text.count(site) == 2, site
+    assert text.index("spring survey, the") < 0.2 * len(text) < 0.8 * len(text) < text.index("autumn survey, the")
+    assert round(float(facts.spring_level) - float(facts.autumn_level), 1) == float(facts.change)
+    assert 0.95 * d._WHOLE[name][1] <= d.estimated_tokens(name) <= 1.1 * d._WHOLE[name][1]
+    assert d.GENERATED[name]().startswith(b"%PDF")
+
+
+def test_whole_document_scoring_passes_a_right_answer_and_fails_the_decoy_and_the_misread():
+    from apis.shared.evals.score import score_sample
+
+    cases = _whole_cases()
+    _, facts = d.whole("delivery_yearbook_30k.pdf")
+
+    def passed(kind, text):
+        return score_sample(cases[f"whole_{kind}_pdf_30k_native"].expect, final_message=text,
+                            tool_calls=[], status="completed").passed
+
+    sites = list(facts.notices)
+    assert passed("list", "Notices went to " + ", ".join(sites) + ". Six in total.")
+    assert not passed("list", "Notices went to " + ", ".join(sites + [facts.decoy]) + ". 7 in total.")
+    assert not passed("list", "Notices went to " + ", ".join(sites[:-1]) + ". 5 in total.")
+    assert passed("compare", f"It fell by {facts.change} metres, from {facts.spring_level} to {facts.autumn_level}.")
+    assert not passed("compare", f"It rose by {facts.change} metres.")
+    assert not passed("compare", f"It fell by {float(facts.change) + 1:.1f} metres.")
+    names = [s for s, _ in facts.incidents]
+    assert passed("summarise", "\n".join(f"- {s}: something happened" for s in names))
+    assert not passed("summarise", "\n".join(f"- {s}: something happened" for s in names[:3]))

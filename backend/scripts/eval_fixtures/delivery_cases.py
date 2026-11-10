@@ -22,7 +22,11 @@ Three groups (unified-attachment-delivery §8.4):
   question it answers that was not asked before, after the document's turn
   has left the three-turn protected tail. Two paces: every turn inside the
   prompt-cache TTL (``warm``), and a pause past it before turn 5 (``cold``).
-  ``on_demand`` holds no document, so it runs at the default ceiling only.
+  ``on_demand`` holds no document, so it runs at the default ceiling only;
+- the whole-document questions (``whole_*``): list and count, compare two
+  sections far apart, and summarise, on a ~30k to ~150k-token PDF held
+  ``native`` or read ``on_demand``, at today's ceiling. Every scored value is
+  planted (``delivery.WholeFacts``).
 """
 
 from __future__ import annotations
@@ -187,6 +191,58 @@ def cases() -> List[Dict[str, Any]]:
     ))
     out.extend(forced_arm_cases())
     out.extend(ceiling_cases())
+    out.extend(whole_document_cases())
+    return out
+
+
+def whole_document_questions(facts: "d.WholeFacts") -> Dict[str, Any]:
+    """The three questions only the whole document answers, and how each is scored.
+
+    Deterministic: every value scored is planted. ``list`` must name all six
+    notice sites and say six, which the decoy (considered, never issued)
+    would make seven. ``compare`` must give the change and its direction from
+    two readings ~80% of the document apart. ``summarise`` must name every
+    incident's site, one per quarter of the document.
+    """
+    gauge = f"the {facts.gauge} reservoir gauge"
+    return {
+        "list": (
+            "The attached yearbook records every boil-water notice issued during the year. List each site that "
+            "received one, then say how many there were in total.",
+            {"contains_all": list(facts.notices), "regex": {"search": [r"(?i)\b(6|six)\b"]}},
+        ),
+        "compare": (
+            f"The attached yearbook gives {gauge} level at the spring survey and again at the autumn survey, "
+            "in different sections. By how many metres did the level change between the two surveys, and did "
+            "it rise or fall?",
+            {"contains_all": [facts.change], "regex": {"search": [r"(?i)\b(fell|fall|fallen|dropped|drop|decreas\w*|lower\w*|down)\b"]}},
+        ),
+        "summarise": (
+            "Summarise the major incidents the attached yearbook records: one line per incident, naming the site "
+            "and what happened.",
+            {"contains_all": [site for site, _ in facts.incidents]},
+        ),
+    }
+
+
+def whole_document_cases() -> List[Dict[str, Any]]:
+    """Questions only the whole document answers, held ``native`` or read ``on_demand`` (§11 Q3).
+
+    Where holding might win: the answer is spread over the document, so a
+    model reading slices has to find every one of them. Today's ceiling only.
+    """
+    out: List[Dict[str, Any]] = []
+    for name in d._WHOLE:
+        size = name.rsplit("_", 1)[1].removesuffix(".pdf")
+        _, facts = d.whole(name)
+        for kind, (prompt, expect) in whole_document_questions(facts).items():
+            for arm in ("native", "on_demand"):
+                out.append(_case(
+                    f"whole_{kind}_pdf_{size}_{arm}", [prompt], [name], expect,
+                    f"Whole-document {kind}: a ~{size}-token PDF held {arm}. Every scored value is planted, "
+                    "spread across the document.",
+                    arm=arm,
+                ))
     return out
 
 
