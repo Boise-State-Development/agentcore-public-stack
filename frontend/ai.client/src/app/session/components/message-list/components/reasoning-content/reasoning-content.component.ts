@@ -8,27 +8,9 @@ import {
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroExclamationTriangle } from '@ng-icons/heroicons/outline';
 import { ContentBlock, ReasoningContentData } from '../../../../services/models/message.model';
+import { formatThinkingDuration, latestCompleteSentence } from './reasoning-text';
 
 let nextPanelId = 0;
-
-/**
- * The last sentence in streamed `text` known to be finished, or null.
- *
- * A boundary is `.`, `!` or `?` followed by whitespace, or a line break, so
- * "2.8405" and "1.2%" stay whole. Whatever follows the last boundary is
- * still arriving, even if it ends in a full stop (that may be "2." before
- * "8405"), so it is never the answer. Takes the raw text: trimmed, a
- * finished final sentence would lose the whitespace that marks it finished.
- */
-function latestCompleteSentence(text: string): string | null {
-  const parts = text.split(/(?<=[.!?])\s+|\n+/);
-  parts.pop();
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const sentence = parts[i].trim();
-    if (sentence) return sentence;
-  }
-  return null;
-}
 
 /**
  * The model's reasoning, drawn as a sibling of the tool rail rather than a
@@ -223,21 +205,10 @@ export class ReasoningContentComponent {
     return elapsed ? `Thought for ${elapsed}` : 'Thinking';
   });
 
-  /**
-   * The duration formatted for the header, or null when there isn't one.
-   *
-   * Sub-second blocks read "<1s" rather than rounding up to "1s": the whole
-   * point of the readout is that it is measured, and 400ms is not a second.
-   */
-  protected readonly durationLabel = computed<string | null>(() => {
-    const ms = this.contentBlock().reasoningDurationMs;
-    if (typeof ms !== 'number' || ms < 0) return null;
-    if (ms < 1000) return '<1s';
-
-    const seconds = Math.round(ms / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  });
+  /** The duration formatted for the header, or null when there isn't one. */
+  protected readonly durationLabel = computed<string | null>(() =>
+    formatThinkingDuration(this.contentBlock().reasoningDurationMs),
+  );
 
   /**
    * The one line beside the headline.

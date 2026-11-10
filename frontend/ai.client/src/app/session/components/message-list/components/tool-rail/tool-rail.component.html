@@ -15,7 +15,7 @@
   (click)="toggleExpanded()"
   class="flex items-center gap-2 cursor-pointer group/rail w-full text-left"
   [attr.aria-expanded]="isExpanded()"
-  [attr.aria-label]="isExpanded() ? 'Hide tool call details' : 'Show tool call details'"
+  [attr.aria-label]="toggleLabel()"
 >
   <svg
     class="chevron size-3 text-gray-400 dark:text-gray-500 shrink-0"
@@ -37,15 +37,21 @@
 
   <!-- Counts and timing sit apart from the sentence so the sentence stays
        readable. Both are suppressed for a single finished call, where they
-       would just restate the line above. -->
-  @if (group().calls.length > 1) {
+       would just restate the line above. Reasoning folded into the rail adds
+       its own readout after the tool time, so "6 tools 5.3s" stays a pair. -->
+  @if (toolCountLabel(); as toolCount) {
     <span class="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
-      {{ group().calls.length }} tools
+      {{ toolCount }}
     </span>
   }
   @if (totalDurationMs(); as total) {
     <span class="shrink-0 text-[11px] text-gray-400 dark:text-gray-500 tabular-nums">
       {{ formatDuration(total) }}
+    </span>
+  }
+  @if (thinkingLabel(); as thought) {
+    <span class="thinking-total shrink-0 text-[11px] text-gray-400 dark:text-gray-500 tabular-nums">
+      {{ thought }}
     </span>
   }
   @if (failureCount(); as failures) {
@@ -67,7 +73,71 @@
     <div
       class="mt-2 overflow-hidden rounded-lg border border-gray-200/80 divide-y divide-gray-200/80 dark:border-white/10 dark:divide-white/10"
     >
-      @for (batch of batches(); track batch.key) {
+      @for (step of steps(); track step.key) {
+        @if (step.kind === 'thinking') {
+        <!-- A reasoning span, in the order the model did it. Same row shape
+             as a call — dot, one line, time, chevron — so the list reads as
+             one sequence; the full reasoning is folded behind the row like a
+             call's input and result. -->
+        <div class="bg-white/40 dark:bg-transparent">
+          <button
+            type="button"
+            (click)="toggleCallDetail(step.thinking.key)"
+            class="thinking-row flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-gray-100/70 group/call dark:hover:bg-white/5"
+            [attr.aria-expanded]="isThinkingOpen(step.thinking)"
+            aria-label="Toggle thinking details"
+          >
+            <!-- A hollow dot: the same size as a call's status dot, so the
+                 rows line up, but unfilled, since a thought has no outcome. -->
+            <span class="status-dot thinking-dot" aria-hidden="true"></span>
+            <span
+              class="min-w-0 truncate text-xs italic text-gray-500 dark:text-gray-400 group-hover/call:text-gray-800 dark:group-hover/call:text-gray-100"
+              [class.text-shimmer]="step.thinking.active"
+            >
+              {{ describeThinking(step.thinking) }}
+            </span>
+            @if (thinkingDuration(step.thinking); as elapsed) {
+              <span
+                class="text-[11px] text-gray-400 dark:text-gray-500 ml-auto shrink-0 tabular-nums"
+              >
+                {{ elapsed }}
+              </span>
+            }
+            <svg
+              class="chevron size-2.5 shrink-0 text-gray-400 dark:text-gray-500"
+              [class.open]="isThinkingOpen(step.thinking)"
+              [class.ml-auto]="!thinkingDuration(step.thinking)"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+
+          @if (isThinkingOpen(step.thinking)) {
+          <div class="detail-panel space-y-2 border-t border-gray-200/60 bg-gray-50/60 px-2.5 py-2 dark:border-white/5 dark:bg-black/20">
+            @if (step.thinking.text.trim()) {
+              <div
+                class="detail-scroll thinking-text max-h-80 text-gray-600 dark:text-gray-300"
+                tabindex="0"
+                role="group"
+                aria-label="Reasoning"
+              >{{ step.thinking.text.trim() }}</div>
+            }
+            @if (step.thinking.redacted) {
+              <div class="flex items-center gap-1.5 text-[11px] font-medium text-state-warning-700 dark:text-state-warning-300">
+                <ng-icon name="heroExclamationTriangle" size="0.875rem" class="shrink-0" aria-hidden="true" />
+                <span>Some reasoning content was redacted for safety purposes.</span>
+              </div>
+            }
+          </div>
+          }
+        </div>
+        }
+        @if (step.kind === 'batch') {
+        @let batch = step.batch;
         <!-- The batch's own line, when the side-channel summarized this
              round. One per batch, not one per group: a collapsed pipeline
              contains several rounds and each did something different. -->
@@ -207,6 +277,7 @@
           </div>
           }
         </div>
+        }
         }
       }
     </div>

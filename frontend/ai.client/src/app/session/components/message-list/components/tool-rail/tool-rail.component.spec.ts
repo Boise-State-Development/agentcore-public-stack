@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ToolRailComponent } from './tool-rail.component';
-import { ToolCallGroup, ToolCallDisplay } from './tool-rail.model';
+import { ToolCallGroup, ToolCallDisplay, ThinkingStep, ToolRailStep } from './tool-rail.model';
 
 function makeCall(overrides: Partial<ToolCallDisplay> = {}): ToolCallDisplay {
   return {
@@ -10,6 +10,30 @@ function makeCall(overrides: Partial<ToolCallDisplay> = {}): ToolCallDisplay {
     input: { query: 'CS 101' },
     status: 'complete',
     ...overrides,
+  };
+}
+
+function makeThinking(overrides: Partial<ThinkingStep> = {}): ToolRailStep {
+  const thinking: ThinkingStep = {
+    key: 'msg:0',
+    text: 'Look up the sprint first. ',
+    redacted: false,
+    active: false,
+    ...overrides,
+  };
+  return { kind: 'thinking', key: thinking.key, thinking };
+}
+
+/** A group whose steps interleave the given calls and reasoning spans. */
+function makeSteppedGroup(entries: (ToolCallDisplay | ToolRailStep)[]): ToolCallGroup {
+  const steps: ToolRailStep[] = entries.map((e) =>
+    'kind' in e ? e : { kind: 'batch', key: e.id, batch: { key: e.id, calls: [e] } },
+  );
+  const calls = entries.filter((e): e is ToolCallDisplay => !('kind' in e));
+  return {
+    calls,
+    batches: steps.flatMap((st) => (st.kind === 'batch' ? [st.batch] : [])),
+    steps,
   };
 }
 
@@ -653,6 +677,85 @@ describe('ToolRailComponent', () => {
       expect(component.hasResultBody(makeCall({ result: { status: 'success', content: [] } }))).toBe(
         false,
       );
+    });
+  });
+  describe('folded reasoning', () => {
+    it('totals measured thinking time in the header', () => {
+      render(
+        makeSteppedGroup([
+          makeThinking({ key: 'a', durationMs: 4000 }),
+          makeCall({ id: 'c1', durationMs: 1200 }),
+          makeThinking({ key: 'b', durationMs: 11000 }),
+          makeCall({ id: 'c2', durationMs: 300 }),
+        ]),
+      );
+
+      expect(component.thinkingLabel()).toBe('thought for 15s');
+      expect(component.toolCountLabel()).toBe('2 tools');
+      // Tool time stays tool time: thinking is reported on its own.
+      expect(component.totalDurationMs()).toBe(1500);
+    });
+
+    it('counts spans instead of inventing a time on a reload', () => {
+      render(
+        makeSteppedGroup([makeThinking({ key: 'a' }), makeCall(), makeThinking({ key: 'b' })]),
+      );
+      expect(component.thinkingLabel()).toBe('2 thoughts');
+    });
+
+    it('shows the tool count for a lone call once reasoning is folded in', () => {
+      render(makeSteppedGroup([makeThinking(), makeCall()]));
+      expect(component.toolCountLabel()).toBe('1 tool');
+    });
+
+    it('keeps a reasoning-free rail exactly as before', () => {
+      render(makeGroup());
+      expect(component.thinkingLabel()).toBeNull();
+      expect(component.toolCountLabel()).toBeNull();
+      expect(component.steps().map((st) => st.kind)).toEqual(['batch']);
+      expect(component.toggleLabel()).toBe('Show tool call details');
+    });
+
+    it('follows live reasoning in the headline, then hands back to the tools', () => {
+      const call = makeCall({ toolName: 'list_projects' });
+      render(
+        makeSteppedGroup([
+          call,
+          makeThinking({ text: 'The search failed. Try the sprint field', active: true }),
+        ]),
+      );
+      expect(component.headline()).toBe('The search failed.');
+      expect(component.isRunning()).toBe(true);
+
+      render(makeSteppedGroup([call, makeThinking({ durationMs: 2000 })]));
+      expect(component.headline()).toBe(component.describe(call));
+      expect(component.isRunning()).toBe(false);
+    });
+
+    it('reads "Thinking" until a live span has a finished sentence', () => {
+      render(makeSteppedGroup([makeCall(), makeThinking({ text: 'Let me', active: true })]));
+      expect(component.headline()).toBe('Thinking');
+      expect(component.thinkingLabel()).toBeNull();
+    });
+
+    it('describes a span by its opening line, and a redacted one as such', () => {
+      const [open] = [makeThinking({ text: 'First line.\nSecond line.' })];
+      const redacted = makeThinking({ text: '', redacted: true });
+      expect(open.kind === 'thinking' && component.describeThinking(open.thinking)).toBe(
+        'First line.',
+      );
+      expect(redacted.kind === 'thinking' && component.describeThinking(redacted.thinking)).toBe(
+        'Reasoning redacted',
+      );
+    });
+
+    it('toggles a span open by its key', () => {
+      const step = makeThinking({ key: 'm:3' });
+      render(makeSteppedGroup([makeCall(), step]));
+      if (step.kind !== 'thinking') throw new Error('unreachable');
+      expect(component.isThinkingOpen(step.thinking)).toBe(false);
+      component.toggleCallDetail('m:3');
+      expect(component.isThinkingOpen(step.thinking)).toBe(true);
     });
   });
 });
