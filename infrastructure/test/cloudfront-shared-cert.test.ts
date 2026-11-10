@@ -85,6 +85,6 @@ describe('PlatformStack — shared CloudFront certificate (forked first-deploy)'
       env: { account: MOCK_ACCOUNT, region: MOCK_REGION },
     });
     const template = Template.fromStack(stack);
-    template.resourceCountIs('AWS::CloudFront::Distribution', 3);
+    template.resourceCountIs('AWS::CloudFront::Distribution', 4); // SPA, artifacts, mcp-sandbox, browser-live-view
   });
 });

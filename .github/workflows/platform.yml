@@ -12,7 +12,7 @@ on:
       - 'infrastructure/cdk.context.json'
       - 'infrastructure/bin/infrastructure.ts'
       - 'infrastructure/bootstrap-assets/**'
-      # Staged into the mcp-sandbox bucket at synth (mcp-sandbox-bucket-construct).
+      # Staged into the mcp-sandbox and browser-live-view buckets at synth.
       # Without this a viewer change deploys NOWHERE: frontend-deploy.yml does not
       # ship it, so the push goes green and the old asset stays live.
       - 'infrastructure/assets/**'
@@ -628,11 +628,11 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      # The browser sign-in live view is served from the mcp-sandbox origin and
+      # The browser sign-in live view is served from its own origin and
       # needs the Amazon DCV Web Client SDK deployed alongside it. The SDK is a
       # EULA-licensed AWS download and this repo is PUBLIC, so it is fetched and
       # verified here rather than committed. Must run BEFORE the deploy: CDK
-      # stages assets/mcp-sandbox at synth time, so an absent SDK silently ships
+      # stages assets/browser-live-view at synth time, so an absent SDK silently ships
       # a viewer that cannot load. See docs/specs/authenticated-web-assessment.md.
       - name: Fetch Amazon DCV Web Client SDK
         run: bash scripts/build/fetch-dcv-sdk.sh

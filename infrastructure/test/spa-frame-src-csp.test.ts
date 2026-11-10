@@ -11,7 +11,7 @@
  * masking the gap through live verification.
  */
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { loadConfig } from '../lib/config';
 import { PlatformStack } from '../lib/platform-stack';
 import { mockSsmContext, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
@@ -77,8 +77,16 @@ describe('SPA distribution frame-src CSP', () => {
         Name: 'test-project-frontend-headers',
         SecurityHeadersConfig: {
           ContentSecurityPolicy: {
-            ContentSecurityPolicy:
-              "frame-src 'self' https://artifacts.example.com https://mcp-sandbox.example.com",
+            // The browser sign-in viewer's origin follows: a default-domain
+            // distribution of its own (browser-live-view-origin.test.ts pins it).
+            ContentSecurityPolicy: Match.objectLike({
+              'Fn::Join': [
+                '',
+                Match.arrayWith([
+                  "frame-src 'self' https://artifacts.example.com https://mcp-sandbox.example.com https://",
+                ]),
+              ],
+            }),
             Override: true,
           },
         },
