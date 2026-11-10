@@ -40,6 +40,17 @@ Every active `mcp_external` server in dev's tool catalog (22) and the AgentCore 
   - The fix: `_StatusCarryingReadStream` now appends the status to a server's own message on a 401 or 403 ("Access token is required (Server returned HTTP 401 Unauthorized)"). Any other status on a server's own body is left as it was, because a server that reported the failure itself has not left the outcome unknown.
   - Tests: `test_mcp_transport.py` pins both detectors against that shape, end to end through `FlakyMCPServer.down_message`.
 
+## #1662 fallback retired (2026-11-09)
+
+Retired in its own PR after #1666 merged. Deleted:
+- `_GITHUB_FORM_STUB_PREFIX`, `_is_form_stub_text`, `awaiting_user_submission` and `mark_awaiting_user_submission`;
+- `McpAppAwaitingSubmissionHook` and its registration.
+
+`call_awaits_user_submission` is now a marker check (`has_awaiting_marker`). The tests flip as listed below, and the two hook fixtures gained the marker.
+
+**Dev proof (2026-11-10):** on dev at mcp 2.3.0, a real `issue_write` result persisted GitHub's own `structuredContent` (`status: "awaiting_user_submission"` plus `reason`), next to the `io.modelcontextprotocol/serverInfo` stamp of a 2026-07-28 connection, so the marker came from GitHub, not from the hook. A self-hosted `github-mcp-server` that predates 2026-07-28 still sends a bare stub, which now reads as "Failed".
+
+
 ## As built (2026-10-17)
 
 - **Pins as recommended:**

@@ -155,6 +155,7 @@ def test_an_app_form_waiting_for_the_user_is_not_an_error(hook):
     event.result["content"] = [
         {"text": "An interactive form has been shown to the user for creating a new issue"}
     ]
+    event.result["structuredContent"] = {"status": "awaiting_user_submission"}
 
     _turn(hook, [event])
 
