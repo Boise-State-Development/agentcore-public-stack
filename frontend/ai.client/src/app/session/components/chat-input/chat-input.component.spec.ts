@@ -2751,6 +2751,33 @@ describe('ChatInputComponent — the `+` menu hand-offs', () => {
     fixture.detectChanges();
   }
 
+  it('refuses a dropped sixth attachment when the five come from mixed sources', async () => {
+    // Restored, importing and folder attachments all fill slots; the drop
+    // path used to count pendingUploads() only (unified-attachment-delivery §1.3).
+    const upload = TestBed.inject(FileUploadService) as unknown as { uploadFile: ReturnType<typeof vi.fn> };
+    upload.uploadFile = vi.fn(async () => ({}));
+    const toast = TestBed.inject(ToastService);
+    const warning = vi.spyOn(toast, 'warning');
+
+    component.restoredAttachments.set([META, { ...META, uploadId: 'up-2' }, { ...META, uploadId: 'up-3' }]);
+    component.importingAttachments.set([
+      { file: new File(['x'], 'Doc.docx'), uploadId: 'import-1', status: 'uploading', progress: 0 },
+    ]);
+    component.attachedFolders.set([
+      {
+        localId: 'f1', folderAttachId: 'fa1', sessionId: 's1', name: 'Reports', source: 'Google Drive',
+        row: null, phase: 'attached', error: null,
+      },
+    ]);
+    expect(component.remainingFileSlots()).toBe(0);
+
+    const dropped = new File(['SELECT 1;'], 'q.sql', { type: 'text/plain' });
+    await (component as unknown as { processFiles(f: File[]): Promise<void> }).processFiles([dropped]);
+
+    expect(upload.uploadFile).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith('File Limit', 'Maximum 5 files per message. You can add 0 more.');
+  });
+
   it('shows a card while app-api fetches a file-source file, then holds it as metadata', async () => {
     let resolve!: (meta: FileMetadata) => void;
     attachToConversation.mockImplementationOnce(() => new Promise<FileMetadata>((r) => (resolve = r)));

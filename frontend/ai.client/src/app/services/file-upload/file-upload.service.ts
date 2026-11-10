@@ -69,6 +69,23 @@ export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024;
 export const PPTX_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
 /**
+ * Maximum spreadsheet (csv, xls, xlsx) size in bytes (25MB).
+ *
+ * A spreadsheet never goes inline either: `analyze_spreadsheet` reads it in
+ * Code Interpreter, up to its own 25MB (`ANALYZE_MAX_FILE_SIZE_BYTES`). Must
+ * match `FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET` on the backend
+ * (`spreadsheet_max_file_size` in `backend/src/apis/shared/files/models.py`),
+ * the enforcing side.
+ */
+export const SPREADSHEET_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+
+const SPREADSHEET_MIME_TYPES = new Set<string>([
+  'text/csv',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+/**
  * Maximum size of a large document attached by reference (50MB).
  *
  * A document over `MAX_FILE_SIZE_BYTES` never rides inline: the backend
@@ -140,6 +157,9 @@ export function attachmentSizeLimitFor(
     mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   if (isPptx) {
     return PPTX_MAX_FILE_SIZE_BYTES;
+  }
+  if (SPREADSHEET_MIME_TYPES.has(resolveMimeTypeFor(filename, mimeType))) {
+    return SPREADSHEET_MAX_FILE_SIZE_BYTES;
   }
   if (
     features.largeDocumentAttachments &&
@@ -604,7 +624,7 @@ export class FileUploadService {
         this.http.post<PresignResponse>(`${this.baseUrl()}/presign`, presignRequest)
       );
     } catch (err) {
-      throw this.handleApiError(err, 'Failed to get upload URL');
+      throw this.handleApiError(err, 'Failed to get upload URL', presignRequest);
     }
 
     // Track pending upload
@@ -628,7 +648,7 @@ export class FileUploadService {
       });
 
       // Step 3: Mark as complete
-      const completeResponse = await this.completeUpload(presignResponse.uploadId);
+      const completeResponse = await this.completeUpload(presignResponse.uploadId, presignRequest);
 
       // Update to ready
       this.updatePendingUpload(presignResponse.uploadId, {
@@ -737,13 +757,16 @@ export class FileUploadService {
   /**
    * Mark an upload as complete.
    */
-  async completeUpload(uploadId: string): Promise<CompleteUploadResponse> {
+  async completeUpload(
+    uploadId: string,
+    file?: { filename: string; mimeType: string; sizeBytes: number },
+  ): Promise<CompleteUploadResponse> {
     try {
       return await firstValueFrom(
         this.http.post<CompleteUploadResponse>(`${this.baseUrl()}/${uploadId}/complete`, {})
       );
     } catch (err) {
-      throw this.handleApiError(err, 'Failed to complete upload');
+      throw this.handleApiError(err, 'Failed to complete upload', file);
     }
   }
 
@@ -969,7 +992,11 @@ export class FileUploadService {
   /**
    * Handle API errors with proper typing.
    */
-  private handleApiError(err: unknown, fallbackMessage: string): FileUploadError {
+  private handleApiError(
+    err: unknown,
+    fallbackMessage: string,
+    file?: { filename: string; mimeType: string; sizeBytes: number },
+  ): FileUploadError {
     if (err instanceof HttpErrorResponse) {
       const body = err.error;
 
@@ -987,9 +1014,16 @@ export class FileUploadService {
         return new InvalidFileTypeError(body.detail);
       }
 
-      // Check for file too large
-      if (err.status === 400 && body?.detail?.includes('too large')) {
-        return new FileTooLargeError(0, MAX_FILE_SIZE_BYTES);
+      // Check for file too large. app-api says "File exceeds 25MB limit";
+      // the size is the file's own and the limit is its class's, read from
+      // the message when it names one (the server is the enforcing side).
+      const detail = typeof body?.detail === 'string' ? body.detail : '';
+      if (file && err.status === 400 && /too large|exceeds .*limit/i.test(detail)) {
+        const stated = /(\d+)\s*MB limit/i.exec(detail);
+        const limit = stated
+          ? Number(stated[1]) * 1024 * 1024
+          : attachmentSizeLimitFor(file.filename, file.mimeType, this.features);
+        return new FileTooLargeError(file.sizeBytes, limit);
       }
 
       // Generic API error
