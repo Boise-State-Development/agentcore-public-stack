@@ -435,7 +435,9 @@ async def read_document(
     # txt / md / html
     if pattern_text:
         raw = await _fetch_bytes(meta)
-        return await asyncio.to_thread(_text_pattern, raw.decode("utf-8", errors="replace"), pattern_text, base, "line")
+        return await asyncio.to_thread(
+            lambda: _text_pattern("\n".join(text_lines(fmt, raw)), pattern_text, base, "line")
+        )
     return await _text_read(user_id, upload_id, offset, base, fmt)
 
 
@@ -1389,8 +1391,8 @@ def _units_text(fmt: str, raw: bytes) -> List[str]:
 
     The same three extractors the retrieval modes above use, so a quote is
     verified against exactly the text ``document_read`` would have shown — not
-    a second, differently-cleaned rendering of the same file. HTML in
-    particular is left as-is, because that is what ``pattern`` mode searches.
+    a second, differently-cleaned rendering of the same file. HTML is
+    rendered by ``text_lines``, because that is what ``pattern`` mode searches.
     """
     if fmt == "pdf":
         with pdfium_lock():
@@ -1401,7 +1403,25 @@ def _units_text(fmt: str, raw: bytes) -> List[str]:
                 pdf.close()
     if fmt == "docx":
         return docx_paragraphs(raw)
-    return raw.decode("utf-8", errors="replace").splitlines()
+    return text_lines(fmt, raw)
+
+
+def text_lines(fmt: str, raw: bytes) -> List[str]:
+    """The lines ``pattern`` mode searches in a txt, md or html document.
+
+    HTML is rendered first (``html_markdown``, the renderer the Converse
+    projection uses). Its raw lines are markup, and a minified page is a
+    single line, so a pattern used to find only the first match in the whole
+    document, cut to ``_LINE_CHARS`` around it: a fact beside an earlier
+    lookalike could never be reached. Measured by the ``attachment_delivery``
+    eval's ``arm_html_30k_on_demand`` cell (0/3 on Haiku 5.5 before this).
+    """
+    text = raw.decode("utf-8", errors="replace")
+    if fmt == "html":
+        from apis.shared.files.html_markdown import html_to_markdown
+
+        text = html_to_markdown(text)
+    return text.splitlines()
 
 
 async def document_provenance_units(

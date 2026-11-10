@@ -467,3 +467,24 @@ class TestListingFolderPaths:
         assert "path" not in (await dr.list_session_documents("u1", "s1"))["documents"][0]
         self._setup(monkeypatch, [from_folder], RuntimeError("throttled"))
         assert "path" not in (await dr.list_session_documents("u1", "s1"))["documents"][0]
+
+
+
+def test_pattern_mode_reaches_every_match_in_a_minified_html_page():
+    """A minified page is one raw line, so the pattern used to return only the
+    first match in the whole document, cut to 200 characters around it. A fact
+    planted after its lookalike could never be reached (attachment_delivery
+    ``arm_html_30k_on_demand``, 0/3 on Haiku 5.5)."""
+    from apis.shared.files.document_read import _text_pattern, text_lines
+
+    filler = "<p>" + "Routine inspection, nothing to note. " * 20 + "</p>"
+    page = (
+        f"<html><body>{filler}<p>The cancelled work order for Thorn Gap is WO-58779.</p>{filler}"
+        f"<p>For the record, the work order for Thorn Gap is WO-58797.</p>{filler}</body></html>"
+    ).encode()
+    assert len(page.decode().splitlines()) == 1
+    text = "\n".join(text_lines("html", page))
+    result = _text_pattern(text, "Thorn Gap", {}, "line")
+    found = str(result.payload)
+    assert "WO-58779" in found and "WO-58797" in found
+    assert "<p>" not in found
