@@ -43,7 +43,13 @@ from urllib.request import Request, urlopen
 
 from mcp.client.session import ClientSession
 from mcp.shared.exceptions import MCPError
-from mcp.types import METHOD_NOT_FOUND, REQUEST_TIMEOUT, DiscoverResult
+from mcp.types import (
+    METHOD_NOT_FOUND,
+    REQUEST_TIMEOUT,
+    DiscoverResult,
+    ElicitationCapability,
+    FormElicitationCapability,
+)
 from strands.tools.mcp import MCPClient
 from strands.types import PaginatedList
 
@@ -717,6 +723,11 @@ def _rejection_is_era_evidence(exc: MCPError) -> bool:
     )
 
 
+#: The first protocol version whose elicitation is the stateless multi-round-trip
+#: shape (SEP-2322). ISO dates, so they compare as strings.
+ELICITATION_MIN_PROTOCOL_VERSION = "2026-07-28"
+
+
 class _UIExtensionClientSession(ClientSession):
     """`ClientSession` that advertises the MCP Apps UI extension.
 
@@ -741,6 +752,15 @@ class _UIExtensionClientSession(ClientSession):
     goes straight to `initialize`. Not gated on the host flag: it changes
     nothing a server can see except the missing probe.
 
+    **Form elicitation only, and only on 2026-07-28.** The SDK advertises
+    elicitation whenever a callback is set, and then always both `form` and
+    `url`. A client built with `elicitation_callback` (an opted-in server, see
+    `mcp_elicitation.py`) advertises `form` alone, and only on a connection
+    speaking 2026-07-28 or later, where a request is the stateless
+    `InputRequiredResult` that a pause and replay can serve. A legacy handshake
+    advertises nothing, exactly as without a callback. Without a callback the
+    SDK's own ad is returned unchanged.
+
     The server's identity (`serverInfo`: name/title/icons) for the App header
     is the session's own `server_info`, read by `_resolve_server_identity`.
     """
@@ -760,6 +780,17 @@ class _UIExtensionClientSession(ClientSession):
         self._mcp_server_url: Optional[str] = getattr(read_stream, "server_url", None)
         self._discover_rejected = False
         super().__init__(read_stream, *args, extensions=extensions, **kwargs)
+
+    def _build_capabilities(self, version: str) -> Any:
+        capabilities = super()._build_capabilities(version)
+        if capabilities.elicitation is None:
+            return capabilities
+        elicitation = (
+            ElicitationCapability(form=FormElicitationCapability())
+            if version >= ELICITATION_MIN_PROTOCOL_VERSION
+            else None
+        )
+        return capabilities.model_copy(update={"elicitation": elicitation})
 
     async def send_discover(self, version: str) -> Dict[str, Any]:
         if is_known_legacy_server(self._mcp_server_url):
@@ -876,6 +907,10 @@ class UICapableMCPClient(MCPClient):
         self, *args: Any, server_url: Optional[str] = None, **kwargs: Any
     ) -> None:
         self.server_url = server_url
+        # True when this client was built with an elicitation callback (an
+        # opted-in server with MCP_ELICITATION_ENABLED on); the elicitation
+        # middleware handles only this client's tools.
+        self.elicitation_enabled: bool = kwargs.get("elicitation_callback") is not None
         # Set by the integration that built this client when it carries one
         # user's credential; partitions this client's `UIToolCatalog` entries
         # to that user. None = shared client (see `UIToolCatalog`).

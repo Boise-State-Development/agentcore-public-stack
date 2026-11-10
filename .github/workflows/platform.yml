@@ -412,6 +412,12 @@ jobs:
       # "true" enables. Sets the flag on the AgentCore Runtime and app-api; no
       # resources. The SPA's matching switch is `features.sourceProvenance`.
       CDK_SOURCE_PROVENANCE_ENABLED: ${{ vars.CDK_SOURCE_PROVENANCE_ENABLED }}
+      # MCP form elicitation: an opted-in external MCP server may ask the user
+      # for input partway through a tool call (docs/specs/mcp-elicitation.md).
+      # In development, so only "true" enables. Sets the flag on the AgentCore
+      # Runtime and app-api; no resources. The SPA's matching switch is
+      # `features.mcpElicitation`.
+      CDK_MCP_ELICITATION_ENABLED: ${{ vars.CDK_MCP_ELICITATION_ENABLED }}
       # Release ledger writes: each model call's cost row also bumps the
       # version-keyed LEDGER# rollups in the existing system-cost-rollup table
       # (docs/specs/release-ledger.md §5.2). In development, so only "true"

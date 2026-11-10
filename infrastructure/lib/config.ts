@@ -110,6 +110,7 @@ export interface AppConfig {
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
   sourceProvenance: SourceProvenanceConfig;
+  mcpElicitation: McpElicitationConfig;
   releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
@@ -929,6 +930,24 @@ export interface FolderSyncConfig {
  * SessionLookupIndex GSI.
  */
 export interface SourceProvenanceConfig {
+  enabled: boolean;
+}
+
+/**
+ * MCP form elicitation (docs/specs/mcp-elicitation.md): an external MCP server
+ * whose catalog row sets `elicitationEnabled` may ask the user for structured
+ * input partway through a tool call. The turn pauses on an interrupt, the SPA
+ * shows the server's form, and the call is replayed with the answer. Form mode
+ * on 2026-07-28 connections only. **Opt-in while in development**: off unless
+ * CDK_MCP_ELICITATION_ENABLED=true (or a `mcpElicitation.enabled: true` cdk.json
+ * context). A feature switch, and therefore permanent: it widens what users can
+ * do, since a server can expose tools gated on elicitation. Sets
+ * MCP_ELICITATION_ENABLED on the AgentCore Runtime (which advertises the
+ * capability, pauses and replays) and on app-api (admin discovery). Written to
+ * the Runtime's environment **only while on**, so the default spends none of the
+ * V2 payload budget. No resources.
+ */
+export interface McpElicitationConfig {
   enabled: boolean;
 }
 
@@ -1970,6 +1989,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SOURCE_PROVENANCE_ENABLED
         ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
+    },
+    mcpElicitation: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_MCP_ELICITATION_ENABLED
+        ? process.env.CDK_MCP_ELICITATION_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('mcpElicitation')?.enabled ?? false,
     },
     releaseLedger: {
       // In development: only "true" enables, and an unset GitHub variable

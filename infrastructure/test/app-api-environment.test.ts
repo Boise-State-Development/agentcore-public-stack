@@ -298,3 +298,14 @@ describe('buildAppApiEnvironment — knowledge-base per-file upload limit', () =
     expect(buildAppApiEnvironment(config, stubParams()).KB_UPLOAD_MAX_FILE_BYTES).toBe('10485760');
   });
 });
+
+describe('buildAppApiEnvironment — MCP elicitation', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).MCP_ELICITATION_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(
+      createMockConfig({ mcpElicitation: { enabled: true } }),
+      stubParams(),
+    );
+    expect(on.MCP_ELICITATION_ENABLED).toBe('true');
+  });
+});
