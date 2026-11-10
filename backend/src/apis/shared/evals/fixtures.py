@@ -88,6 +88,11 @@ async def register_upload(
     (``test_delivery_override_is_fixture_only.py``). A document forced
     ``on_demand`` also gets the digest app-api builds for an upload, so its
     message carries what an over-budget reference's does rather than a stub.
+
+    A document also gets the §4.1 facts the prepare Lambda writes for a real
+    upload (``file_facts.compute_document_facts``), so the attachment planner's
+    ``token`` profile costs a fixture the way it costs a user's file. Without
+    them every fixture would plan as ``facts_pending``.
     """
     import boto3
 
@@ -114,11 +119,26 @@ async def register_upload(
             s3_bucket=bucket,
             status=FileStatus.READY,
             delivery_override=delivery,
+            facts=await asyncio.to_thread(_document_facts, filename, mime_type, data),
         )
     )
     if delivery == "on_demand":
         await _store_digest(user_id, upload_id, filename, mime_type, data)
     return upload_id
+
+
+def _document_facts(filename: str, mime_type: str, data: bytes) -> Optional[dict]:
+    """The facts preparation writes for a document; ``None`` for anything else or a file that will not parse."""
+    from apis.shared.files.document_read import document_format_for
+    from apis.shared.files.file_facts import compute_document_facts
+
+    fmt = document_format_for(mime_type, filename)
+    if fmt is None:
+        return None
+    try:
+        return compute_document_facts(fmt, data)
+    except Exception:  # noqa: BLE001 - a fixture without facts plans as facts_pending, like a user's
+        return None
 
 
 async def _store_digest(user_id: str, upload_id: str, filename: str, mime_type: str, data: bytes) -> None:

@@ -172,6 +172,10 @@ REASON_OVER_DOCUMENT_BUDGET = "over_document_budget"
 REASON_PDF_PAGE_LIMIT = "pdf_page_limit"
 #: Over the budget with no row to read it from later: sent as planned.
 REASON_NO_ROW = "no_row"
+#: The row has no facts yet (preparation still queued, or a row written before
+#: them): the file is sent the way the legacy rules would send it, for this
+#: turn only (§4.1), and counted at its bytes estimate.
+REASON_FACTS_PENDING = "facts_pending"
 
 PROFILE_LEGACY = "legacy"
 #: Phase 3 (§9 / §9.1): selected by ``ATTACHMENT_PLAN_ENABLED``.
@@ -912,6 +916,12 @@ def _token_ladder(
 
         if cls == CLASS_IMAGE:
             take(MODE_NATIVE, REASON_INLINE, document_cost(facts, cls, MODE_NATIVE, model))
+        elif cls in (CLASS_PDF, CLASS_DOCUMENT) and facts.text_tokens is None:
+            # No facts, so no honest cost: the bytes are ~9x low for a .docx
+            # and blind to a PDF's pages. Today's rules decide this turn (§4.1);
+            # the reason makes the race countable on the cost rows.
+            mode = MODE_TEXT if cls == CLASS_DOCUMENT and _renders_as_text(facts) else MODE_NATIVE
+            take(mode, REASON_FACTS_PENDING, document_cost(facts, cls, mode, model))
         elif cls == CLASS_PDF:
             pages = facts.page_count
             within_pages = not pages or int(pages) <= page_limit
@@ -957,6 +967,7 @@ __all__ = [
     "PROFILE_LEGACY",
     "PROFILE_TOKEN",
     "PDF_PAGE_IMAGE_TOKENS",
+    "REASON_FACTS_PENDING",
     "REASON_NO_ROW",
     "REASON_OVER_DOCUMENT_BUDGET",
     "REASON_PDF_PAGE_LIMIT",

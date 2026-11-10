@@ -59,6 +59,7 @@ from apis.shared.files.attachment_plan import (
     MODE_TEXT,
     REASON_DOCUMENTS_AS_TEXT,
     REASON_FORCED,
+    REASON_FACTS_PENDING,
     REASON_NO_ROW,
     REASON_OVER_DOCUMENT_BUDGET,
     REASON_PDF_PAGE_LIMIT,
@@ -3619,12 +3620,14 @@ async def _prerender_documents_as_text(attachments: TurnAttachments, turn_model:
     ]
     # A forced ``text`` file still inline after ``_carry_out_forced_modes`` is
     # one the projection renders.
-    # So is a ``token`` profile text entry (``within_budget``, ``no_row``).
+    # So is a ``token`` profile text entry (``within_budget``, ``no_row``, ``facts_pending``).
     if attachments.plan is not None:
         text_entries = {e.index for e in attachments.plan.entries if e.mode == MODE_TEXT}
         jobs += [
             ((f.filename or "").lower().rsplit(".", 1)[-1], f.bytes)
-            for i, f in _inline_by_reason(attachments, REASON_FORCED, REASON_WITHIN_BUDGET, REASON_NO_ROW)
+            for i, f in _inline_by_reason(
+                attachments, REASON_FORCED, REASON_WITHIN_BUDGET, REASON_NO_ROW, REASON_FACTS_PENDING
+            )
             if i in text_entries
         ]
     if not jobs:
