@@ -287,7 +287,17 @@ def _ui_client(server):
 
 
 def _methods(server) -> list:
-    return [body.get("method") for body in server.requests if isinstance(body, dict)]
+    """The request methods the server received, in order, without notifications.
+
+    A connection's `notifications/initialized` is posted after `initialize`
+    returns, so it can land after a test's `requests.clear()` and read as the
+    next connection's first request (seen on CI under xdist load).
+    """
+    return [
+        body.get("method")
+        for body in server.requests
+        if isinstance(body, dict) and "id" in body
+    ]
 
 
 def _connect(server) -> str:
