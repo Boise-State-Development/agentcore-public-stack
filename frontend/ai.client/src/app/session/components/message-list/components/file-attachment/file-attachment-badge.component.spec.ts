@@ -89,6 +89,7 @@ describe('FileAttachmentBadgeComponent click routing', () => {
             getPreviewUrl,
             getTextSnippet: vi.fn().mockResolvedValue({ snippet: '' }),
             getThumbnail: vi.fn().mockResolvedValue({ status: 'error' }),
+            getThumbnailWhenRendered: vi.fn().mockResolvedValue({ status: 'error' }),
           },
         },
       ],
@@ -215,6 +216,7 @@ describe('FileAttachmentBadgeComponent search chip', () => {
           useValue: {
             getTextSnippet: vi.fn().mockResolvedValue({ snippet: '' }),
             getThumbnail: vi.fn().mockResolvedValue({ status: 'unavailable' }),
+            getThumbnailWhenRendered: vi.fn().mockResolvedValue({ status: 'unavailable' }),
           },
         },
       ],

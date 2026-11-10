@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, JSONResponse
 
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.feature_flags import attachment_kb_enabled
@@ -55,7 +55,7 @@ from .service import (
     FileUploadError,
 )
 from .sheet_preview import WorkbookTooLargeError, WorkbookUnreadableError
-from .thumbnails import ThumbnailRenderError, ThumbnailUnsupportedError
+from .thumbnails import ThumbnailPending, ThumbnailRenderError, ThumbnailUnsupportedError
 
 from apis.shared.security.log_sanitize import scrub_log
 
@@ -428,7 +428,11 @@ async def get_sheet_preview(
         )
 
 
-@router.get("/{upload_id}/thumbnail", response_model=ThumbnailResponse)
+@router.get(
+    "/{upload_id}/thumbnail",
+    response_model=ThumbnailResponse,
+    responses={202: {"description": "Not rendered yet; a render has been queued. Ask again shortly."}},
+)
 async def get_thumbnail(
     upload_id: str,
     user: User = Depends(get_current_user_from_session),
@@ -437,12 +441,12 @@ async def get_thumbnail(
     """
     Return a presigned URL for a PNG thumbnail of the file's first page.
 
-    Lazy-renders on first request and caches the resulting `_thumb.png`
-    sibling object next to the original. Subsequent calls hit the cache and
-    return immediately.
+    The prepare Lambda renders a PDF's first page at upload; this presigns it.
 
     Status codes:
     - 200: Thumbnail available (response body indicates `cached`).
+    - 202: Not rendered yet, and a render has been queued: ask again in a few
+           seconds. Body `{"status": "rendering"}`.
     - 404: File not found or not owned by the caller.
     - 415: MIME type has no thumbnail renderer (UI should fall back to its
            skeleton card).
@@ -460,6 +464,8 @@ async def get_thumbnail(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=str(e),
         )
+    except ThumbnailPending:
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "rendering"})
     except ThumbnailRenderError as e:
         logger.warning(f"Thumbnail render failed for {scrub_log(upload_id)}: {scrub_log(e)}")
         raise HTTPException(
