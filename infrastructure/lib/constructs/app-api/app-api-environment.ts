@@ -431,6 +431,11 @@ export function buildAppApiEnvironment(
     // so only "true" enables.
     SOURCE_PROVENANCE_ENABLED: config.sourceProvenance.enabled ? 'true' : 'false',
 
+    // Attachment planner's token profile (docs/specs/unified-attachment-delivery.md
+    // phase 3). app-api's share is `GET /files/limits`, which reports the active
+    // profile. In development, so only "true" enables.
+    ATTACHMENT_PLAN_ENABLED: config.attachmentPlan.enabled ? 'true' : 'false',
+
     // MCP form elicitation (docs/specs/mcp-elicitation.md). app-api's share is
     // admin capability discovery, which advertises form elicitation to an
     // opted-in server so its elicitation-gated tools can be listed and allowed.

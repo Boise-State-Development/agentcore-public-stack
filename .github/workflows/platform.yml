@@ -412,6 +412,12 @@ jobs:
       # "true" enables. Sets the flag on the AgentCore Runtime and app-api; no
       # resources. The SPA's matching switch is `features.sourceProvenance`.
       CDK_SOURCE_PROVENANCE_ENABLED: ${{ vars.CDK_SOURCE_PROVENANCE_ENABLED }}
+      # Attachment planner, token profile: attachments decided in tokens against
+      # a per-model document budget (docs/specs/unified-attachment-delivery.md
+      # phase 3). In development, so only "true" enables. Sets the flag on the
+      # AgentCore Runtime and app-api; no resources. A rollout switch. The SPA's
+      # matching switch is `features.attachmentPlan`.
+      CDK_ATTACHMENT_PLAN_ENABLED: ${{ vars.CDK_ATTACHMENT_PLAN_ENABLED }}
       # MCP form elicitation: an opted-in external MCP server may ask the user
       # for input partway through a tool call (docs/specs/mcp-elicitation.md).
       # In development, so only "true" enables. Sets the flag on the AgentCore

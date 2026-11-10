@@ -170,8 +170,10 @@ def test_the_route_wires_the_phase_after_the_model_is_known():
 
     source = inspect.getsource(routes)
     adapt = source.index("await _adapt_attachments_for_model(attachments, turn_model)")
+    token = source.index("_carry_out_token_plan(attachments, turn_model)")
     prerender = source.index("await _prerender_documents_as_text(attachments, turn_model)")
-    assert 0 < prerender - adapt < 400
+    # The token plan's on-demand move sits between them (phase 3), before the prerender.
+    assert 0 < token - adapt < prerender - adapt < 600
 
 
 # ---------------------------------------------------------------------------

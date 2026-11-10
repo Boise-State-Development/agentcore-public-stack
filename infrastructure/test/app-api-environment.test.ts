@@ -141,6 +141,10 @@ describe('buildAppApiEnvironment — folder sync', () => {
 
 describe('buildAppApiEnvironment — source provenance', () => {
   it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).ATTACHMENT_PLAN_ENABLED).toBe('false');
+    expect(
+      buildAppApiEnvironment(createMockConfig({ attachmentPlan: { enabled: true } }), stubParams()).ATTACHMENT_PLAN_ENABLED,
+    ).toBe('true');
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SOURCE_PROVENANCE_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(
       createMockConfig({ sourceProvenance: { enabled: true } }),

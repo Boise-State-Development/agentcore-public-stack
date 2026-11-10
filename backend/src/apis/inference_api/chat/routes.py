@@ -59,6 +59,10 @@ from apis.shared.files.attachment_plan import (
     MODE_TEXT,
     REASON_DOCUMENTS_AS_TEXT,
     REASON_FORCED,
+    REASON_NO_ROW,
+    REASON_OVER_DOCUMENT_BUDGET,
+    REASON_PDF_PAGE_LIMIT,
+    REASON_WITHIN_BUDGET,
     REASON_PROVIDER_NEEDS_TEXT,
     REASON_OVER_BUDGET,
     REASON_OVER_BUDGET_REFERENCE,
@@ -817,10 +821,14 @@ def _merge_inference_params(
     return merged
 
 
+_UNRESOLVED = object()
+
+
 async def _resolve_model_settings(
     model_id: str | None,
     explicit_caching_enabled: bool | None,
     request_inference_params: dict | None,
+    managed_model: Any = _UNRESOLVED,
 ) -> tuple[bool | None, dict, str | None, str | None, str | None, list[str] | None]:
     """Resolve runtime model knobs from the managed-model registry.
 
@@ -845,7 +853,8 @@ async def _resolve_model_settings(
     if not model_id:
         return explicit_caching_enabled, request_params, None, None, None, None
 
-    managed_model = await _find_managed_model(model_id)
+    if managed_model is _UNRESOLVED:
+        managed_model = await _find_managed_model(model_id)
 
     if explicit_caching_enabled is not None:
         caching = explicit_caching_enabled
@@ -1762,6 +1771,32 @@ def _estimate_decoded_size(file: "FileContent") -> int:
         return 0
 
 
+def _row_token_facts(meta) -> dict:
+    """The row's §4.1 facts as planner fields, when it carries a current set. No read."""
+    from apis.shared.files.file_facts import facts_current
+
+    if meta is None or not facts_current(meta):
+        return {}
+    facts = meta.facts
+    tokens = facts.get("tokens") if isinstance(facts.get("tokens"), dict) else {}
+
+    def _int(value):
+        try:
+            return int(value) if value is not None and not isinstance(value, bool) else None
+        except (TypeError, ValueError):
+            return None
+
+    out: dict = {
+        "text_tokens": _int(tokens.get("text")),
+        "native_tokens": _int(tokens.get("native")),
+        "has_text_layer": facts.get("hasTextLayer") if isinstance(facts.get("hasTextLayer"), bool) else None,
+    }
+    pages = _int(facts.get("pages"))
+    if pages:
+        out["page_count"] = pages
+    return out
+
+
 def _file_facts(file, upload_rows: dict) -> FileFacts:
     """The planner's facts for one resolved attachment, from what is already in hand.
 
@@ -1776,6 +1811,7 @@ def _file_facts(file, upload_rows: dict) -> FileFacts:
             page_count = int(pages) if pages is not None else None
         except (TypeError, ValueError):
             page_count = None
+        facts = {"page_count": page_count, **_row_token_facts(meta)}
         return FileFacts(
             filename=file.filename,
             mime_type=file.content_type,
@@ -1784,7 +1820,7 @@ def _file_facts(file, upload_rows: dict) -> FileFacts:
             by_reference=True,
             has_row=True,
             forced_mode=meta.delivery_override,
-            page_count=page_count,
+            **facts,
         )
     row = upload_rows.get(id(file))
     return FileFacts(
@@ -1794,6 +1830,7 @@ def _file_facts(file, upload_rows: dict) -> FileFacts:
         upload_id=row.upload_id if row is not None else None,
         has_row=row is not None,
         forced_mode=getattr(row, "delivery_override", None),
+        **_row_token_facts(row),
     )
 
 
@@ -1911,7 +1948,14 @@ def _build_attachment_guidance(
     # the tool, the call and the id.
     for ref in references or ():
         over_budget_ref = getattr(ref, "over_budget", False)
-        if over_budget_ref:
+        if getattr(ref, "token_budget", False):
+            # The ``token`` profile's ``document_budget`` (attachment_plan): the
+            # file fits a message, but holding it costs more than reading it.
+            lead = (
+                f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached, but it is larger "
+                f"than this conversation keeps in context at once, so its content is not in this message."
+            )
+        elif over_budget_ref:
             # Each file fits on its own; together they exceed what one message
             # can carry in full (the planner's ``over_budget_reference``).
             lead = (
@@ -2770,6 +2814,12 @@ class TurnAttachments:
     plan_facts: list = field(default_factory=list)
     inline_indices: list = field(default_factory=list)
     profile: Optional[LimitsProfile] = None
+    # The plan index of each ``reference_documents`` entry, so a file the
+    # ``token`` profile moves on demand after the model is known lands in
+    # attachment order; and the rows behind the inline uploads, which that move
+    # renders from (no read).
+    reference_indices: list = field(default_factory=list)
+    upload_rows: dict = field(default_factory=dict)
 
     @property
     def max_files_per_message(self) -> int:
@@ -3096,7 +3146,8 @@ async def _resolve_turn_attachments(
     diverted_tabular = _planned(REASON_TABULAR)
     diverted_presentations = _planned(REASON_PRESENTATION)
     oversized_inline = _planned(REASON_OVERSIZED)
-    reference_documents = [all_files[i] for i in plan.indices(MODE_ON_DEMAND) if isinstance(all_files[i], ReferenceAttachment)]
+    reference_indices = [i for i in plan.indices(MODE_ON_DEMAND) if isinstance(all_files[i], ReferenceAttachment)]
+    reference_documents = [all_files[i] for i in reference_indices]
     if reference_documents:
         logger.info(
             "Attached %d large document(s) by reference (no S3 read on the turn path)",
@@ -3165,7 +3216,8 @@ async def _resolve_turn_attachments(
         # in the order the user attached the files.
         by_index = {i: all_files[i] for i in plan.indices(MODE_ON_DEMAND)}
         by_index.update(zip(budget_indices, budget_references))
-        reference_documents = [by_index[i] for i in sorted(by_index)]
+        reference_indices = sorted(by_index)
+        reference_documents = [by_index[i] for i in reference_indices]
 
     # All three classes were dropped from the turn entirely; the marker must
     # not promise a card for any of them.
@@ -3193,6 +3245,8 @@ async def _resolve_turn_attachments(
         plan_facts=plan_facts,
         inline_indices=inline_indices,
         profile=profile,
+        reference_indices=reference_indices,
+        upload_rows=upload_rows,
     )
 
 
@@ -3292,12 +3346,73 @@ def _plan_for_model(attachments: TurnAttachments, turn_model: "TurnModel") -> No
     """
     if attachments.plan is None or attachments.profile is None:
         return
+    budgeted = attachments.profile.document_budget_share > 0
     attachments.plan = refine_for_model(
         attachments.plan,
         attachments.plan_facts,
-        ModelFacts(text_only=turn_model.text_only, converse=_is_converse_model(turn_model)),
+        ModelFacts(
+            text_only=turn_model.text_only,
+            converse=_is_converse_model(turn_model),
+            context_window=turn_model.context_window,
+            model_id=turn_model.model_id,
+            chat_ceiling=_chat_ceiling(turn_model.context_window) if budgeted else None,
+        ),
         profile=attachments.profile,
     )
+
+
+def _chat_ceiling(context_window: Optional[int]) -> Optional[int]:
+    """The compaction ceiling this turn's model runs under: what the token
+    profile's ``document_budget`` is a share of (spec §5.2). Environment reads
+    and arithmetic only. ``None`` when compaction is off."""
+    from agents.main_agent.session.compaction_models import CompactionConfig
+    from agents.main_agent.session.compaction_policy import CompactionPolicy
+
+    try:
+        config = CompactionConfig.from_env()
+        if not config.enabled:
+            return None
+        return CompactionPolicy.resolve(config, context_window).ceiling
+    except Exception:  # noqa: BLE001 - no budget is the legacy behaviour, never a failed turn
+        logger.warning("Compaction ceiling unavailable; planning without a document budget", exc_info=True)
+        return None
+
+
+def _carry_out_token_plan(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Move the files the ``token`` profile sent on demand out of the inline set (map stage B11).
+
+    ``_resolve_turn_attachments`` fetched their bytes before the model was known;
+    with the model, the planner judged them over the turn's ``document_budget``
+    (``over_document_budget``). Each becomes a by-reference attachment rendered
+    from the row the resolver already read (its upload digest, or a ready stub;
+    ``document_read`` reads the original), exactly like an over-byte-budget one,
+    so nothing is read before the first token. Pure; returns at once on the
+    ``legacy`` profile and on any turn with nothing over budget.
+    """
+    _plan_for_model(attachments, turn_model)
+    if attachments.plan is None or not attachments.files_to_send:
+        return
+    over = set(attachments.plan.with_reason(REASON_OVER_DOCUMENT_BUDGET))
+    if not over:
+        return
+    moved: list = []
+    kept: list = []
+    for index, file in zip(attachments.inline_indices, attachments.files_to_send):
+        row = attachments.upload_rows.get(id(file))
+        if index in over and row is not None:
+            moved.append((index, ReferenceAttachment(meta=row, over_budget=True, token_budget=True)))
+        else:
+            kept.append((index, file))
+    if not moved:
+        return
+    attachments.inline_indices = [i for i, _ in kept]
+    attachments.files_to_send = [f for _, f in kept]
+    by_index = dict(zip(attachments.reference_indices, attachments.reference_documents))
+    by_index.update(moved)
+    attachments.reference_indices = sorted(by_index)
+    attachments.reference_documents = [by_index[i] for i in attachments.reference_indices]
+    record_reference_attachments([ref for _, ref in moved])
+    logger.info("token plan: %d attachment(s) over the document budget sent on demand", len(moved))
 
 
 def _inline_by_reason(attachments: TurnAttachments, *reasons: str) -> list:
@@ -3422,7 +3537,9 @@ async def _carry_out_forced_modes(attachments: TurnAttachments, turn_model: "Tur
     _plan_for_model(attachments, turn_model)
     if attachments.plan is None or not attachments.files_to_send:
         return
-    forced = _inline_by_reason(attachments, REASON_FORCED)
+    # A PDF the token profile sends as text (past the model's page limit) takes
+    # the same extraction as a forced ``text`` PDF.
+    forced = _inline_by_reason(attachments, REASON_FORCED, REASON_PDF_PAGE_LIMIT)
     if not forced:
         return
     entries = {e.index: e for e in attachments.plan.entries}
@@ -3432,7 +3549,7 @@ async def _carry_out_forced_modes(attachments: TurnAttachments, turn_model: "Tur
     def ext(f) -> str:
         return (f.filename or "").lower().rsplit(".", 1)[-1]
 
-    pins = [f for i, f in forced if entries[i].mode == MODE_NATIVE and converse]
+    pins = [f for i, f in forced if entries[i].mode == MODE_NATIVE and entries[i].reason == REASON_FORCED and converse]
     if pins:
         await asyncio.gather(*(asyncio.to_thread(_pin_native_one, ext(f), f.bytes) for f in pins))
 
@@ -3502,11 +3619,12 @@ async def _prerender_documents_as_text(attachments: TurnAttachments, turn_model:
     ]
     # A forced ``text`` file still inline after ``_carry_out_forced_modes`` is
     # one the projection renders.
+    # So is a ``token`` profile text entry (``within_budget``, ``no_row``).
     if attachments.plan is not None:
-        text_entries = {e.index for e in attachments.plan.entries if e.mode == MODE_TEXT and e.reason == REASON_FORCED}
+        text_entries = {e.index for e in attachments.plan.entries if e.mode == MODE_TEXT}
         jobs += [
             ((f.filename or "").lower().rsplit(".", 1)[-1], f.bytes)
-            for i, f in _inline_by_reason(attachments, REASON_FORCED)
+            for i, f in _inline_by_reason(attachments, REASON_FORCED, REASON_WITHIN_BUDGET, REASON_NO_ROW)
             if i in text_entries
         ]
     if not jobs:
@@ -3761,6 +3879,10 @@ class TurnModel:
     # `is_text_only_model`, which keeps documents and images off a model
     # that rejects them.
     input_modalities: Optional[list] = None
+    # The context window compaction uses for this model (the catalog's
+    # ``maxInputTokens``, else Strands' table): the attachment planner's token
+    # profile sizes its document budget from it.
+    context_window: Optional[int] = None
 
     @property
     def text_only(self) -> bool:
@@ -3829,6 +3951,16 @@ async def _resolve_turn_model(
     if agent_model_override is not None and agent_model_override.params:
         request_inference_params = {**agent_model_override.params, **request_inference_params}
 
+    # One registry lookup: the row feeds the settings below and the window.
+    managed_model = await _find_managed_model(effective_model_id) if effective_model_id else None
+    context_window = None
+    if effective_model_id:
+        from apis.shared.models.context_window import resolve_context_window
+
+        context_window, _ = resolve_context_window(
+            effective_model_id, getattr(managed_model, "max_input_tokens", None)
+        )
+
     # Single registry lookup resolves caching + inference params +
     # the Mantle endpoint path + provider, merging admin defaults with
     # request overrides.
@@ -3843,6 +3975,7 @@ async def _resolve_turn_model(
         model_id=effective_model_id,
         explicit_caching_enabled=input_data.caching_enabled,
         request_inference_params=request_inference_params,
+        managed_model=managed_model,
     )
 
     # Recover the provider from the registry when neither the request nor
@@ -3866,6 +3999,7 @@ async def _resolve_turn_model(
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
         input_modalities=input_modalities,
+        context_window=context_window,
     )
 
 
@@ -5934,6 +6068,8 @@ async def _run_invocation(
             # rules apply first, `_plan_for_model`). Returns immediately for
             # every other model.
             await _adapt_attachments_for_model(attachments, turn_model)
+            # The token profile's over-budget files go on demand; returns at once otherwise.
+            _carry_out_token_plan(attachments, turn_model)
             # An eval fixture's forced native / text rows; returns at once otherwise.
             await _carry_out_forced_modes(attachments, turn_model)
             # With documents-as-text on, render the turn's non-PDF attachments

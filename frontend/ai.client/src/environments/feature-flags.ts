@@ -88,6 +88,18 @@ export interface FeatureFlags {
   sourceProvenance: boolean;
 
   /**
+   * The attachment planner's `token` profile
+   * (docs/specs/unified-attachment-delivery.md phase 3): attachments are decided
+   * in tokens against a per-model document budget, and the composer's limits
+   * come from `GET /files/limits`, which reports the active profile. Backend:
+   * ATTACHMENT_PLAN_ENABLED (the Runtime plans the turn; app-api serves the
+   * limits). Nothing in the UI branches on it yet: it is here so the two sides
+   * stay in step as phase 4 changes what the composer offers. In development,
+   * so `false` everywhere except deployed dev.
+   */
+  attachmentPlan: boolean;
+
+  /**
    * Structured extraction: a named field set run over a document as typed rows
    * (docs/specs/structured-extraction.md). The UI's share is the rows table —
    * each cell showing its source-provenance state in the same vocabulary
