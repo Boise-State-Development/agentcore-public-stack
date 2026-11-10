@@ -32,6 +32,10 @@ class TestPreview:
             ("grades.csv", "text/csv", b"Student,Score\nAvery,94\n", "sheet"),
             ("talk.pptx", PPTX, build_pptx([("Quarterly review", ["Revenue up"])]), "deck"),
         ],
+        # Named, not derived from the bytes: a built xlsx/pptx carries the zip
+        # entry's mtime, so two xdist workers collecting a second apart got
+        # different test ids and CI refused the run.
+        ids=["xlsx", "csv", "pptx"],
     )
     async def test_the_preview_action_writes_spreadsheets_csvs_and_decks(self, store, filename, mime, raw, kind):
         s3, repository = store
