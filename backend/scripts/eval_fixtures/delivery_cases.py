@@ -310,7 +310,7 @@ def ceiling_prompts(name: str) -> List[str]:
 
 def ceiling_cases() -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
-    cells = [("native", c) for c in ("default", "200k", "100k_documents_excluded")] + [("on_demand", "default")]
+    cells = [("native", c) for c in ("default", "200k")] + [("on_demand", "default")]
     for size, name in CEILING_DOCUMENTS.items():
         late = d.prose(name).facts["late"]
         for arm, ceiling in cells:

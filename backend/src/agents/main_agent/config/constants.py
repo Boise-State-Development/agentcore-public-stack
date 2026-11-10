@@ -38,7 +38,6 @@ class EnvVars:
     # ceiling compares the last input minus the held document tokens. Off
     # everywhere; no CDK or workflow writes it, so only a local stack an eval
     # run starts can turn it on. Only "true" enables.
-    COMPACTION_CEILING_EXCLUDES_DOCUMENTS = "AGENTCORE_MEMORY_COMPACTION_CEILING_EXCLUDES_DOCUMENTS"
     COMPACTION_FLOOR_RATIO = "AGENTCORE_MEMORY_COMPACTION_FLOOR_RATIO"
     COMPACTION_HARD_CEILING_RATIO = "AGENTCORE_MEMORY_COMPACTION_HARD_CEILING_RATIO"
     COMPACTION_HARD_CEILING_MULTIPLIER = "AGENTCORE_MEMORY_COMPACTION_HARD_CEILING_MULTIPLIER"

@@ -335,7 +335,7 @@ def test_a_delivery_case_defaults_to_the_auto_arm_and_the_deployments_ceiling():
 
 @pytest.mark.parametrize("key,value", [
     ("arm", "native"), ("arm", "text"), ("arm", "on_demand"),
-    ("ceiling", "200k"), ("ceiling", "100k_documents_excluded"),
+    ("ceiling", "200k"),
 ])
 def test_the_forced_arms_and_the_ceiling_arms_parse(key, value):
     case = parse_case(_delivery(**{key: value}), family="attachment_delivery")
@@ -351,7 +351,7 @@ def test_every_ceiling_names_its_runtime_environment():
     from apis.shared.evals.cases import CEILING_ENV, CEILINGS
 
     assert set(CEILING_ENV) == set(CEILINGS) and CEILING_ENV["default"] == {}
-    assert CEILING_ENV["100k_documents_excluded"]["AGENTCORE_MEMORY_COMPACTION_CEILING_EXCLUDES_DOCUMENTS"] == "true"
+    assert "100k_documents_excluded" not in CEILINGS  # deleted with §5.2's switch
 
 
 def test_a_pause_is_a_delivery_case_s_and_bounded():
