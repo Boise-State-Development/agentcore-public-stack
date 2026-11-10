@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse, Response
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.feature_flags import attachment_kb_enabled
 from apis.shared.files.attachment_index import search_status
+from apis.shared.files.attachment_plan import client_limits
 from apis.shared.files.repository import InvalidCursorError
 from apis.shared.files.models import (
     ImportFileRequest,
@@ -28,6 +29,7 @@ from apis.shared.files.models import (
     ThumbnailResponse,
     FileListResponse,
     QuotaResponse,
+    AttachmentLimitsResponse,
     QuotaExceededError as QuotaExceededModel,
     ALLOWED_MIME_TYPES,
 )
@@ -546,6 +548,26 @@ async def delete_file(
         )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# =============================================================================
+# Limits Endpoint
+# =============================================================================
+
+
+@router.get("/limits", response_model=AttachmentLimitsResponse)
+async def get_limits(
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """What an attachment may be, as admission and the turn enforce it.
+
+    The SPA and the TUI judge a drop against this before uploading
+    (docs/specs/unified-attachment-delivery.md §4.4). Built from the attachment
+    planner's active limits profile and upload ceilings, never restated.
+    """
+    del user  # authenticated; the limits are per deployment today
+    return AttachmentLimitsResponse.model_validate(client_limits(uploads=service.upload_limits()))
 
 
 # =============================================================================

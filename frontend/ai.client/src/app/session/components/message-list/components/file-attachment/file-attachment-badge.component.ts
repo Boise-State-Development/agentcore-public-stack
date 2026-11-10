@@ -12,6 +12,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { MarkdownComponent } from 'ngx-markdown';
 import {
+  AttachmentLimitsService,
   AttachmentSearchStatusService,
   formatBytes,
   FileUploadService,
@@ -424,6 +425,7 @@ export class FileAttachmentBadgeComponent {
   readonly attachment = input.required<FileAttachmentData>();
 
   private readonly fileUploadService = inject(FileUploadService);
+  private readonly attachmentLimits = inject(AttachmentLimitsService);
   private readonly filePreview = inject(FilePreviewStateService);
   /** Present only while the deployment has the attachments KB. */
   private readonly searchStatus = inject(FEATURES).attachmentKb ? inject(AttachmentSearchStatusService) : null;
@@ -451,7 +453,7 @@ export class FileAttachmentBadgeComponent {
   protected readonly hasSnippet = computed(() => this.snippet().trim().length > 0);
 
   protected readonly isReference = computed(() =>
-    isReferenceDocument(this.attachment().mimeType, this.attachment().sizeBytes),
+    isReferenceDocument(this.attachment().mimeType, this.attachment().sizeBytes, this.attachmentLimits.limits()),
   );
 
   /** What the large-document chip says: read on demand, indexing, or searchable. */

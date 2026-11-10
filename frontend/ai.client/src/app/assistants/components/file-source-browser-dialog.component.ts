@@ -24,8 +24,7 @@ import {
   heroXMark,
 } from '@ng-icons/heroicons/outline';
 import { FileSourceService, FileSourceError } from '../services/file-source.service';
-import { FEATURES } from '../../services/features';
-import { isAttachableSourceFile } from '../../services/file-upload';
+import { AttachmentLimitsService, isAttachableSourceFile } from '../../services/file-upload';
 import {
   Breadcrumb,
   FileEntry,
@@ -212,7 +211,7 @@ export class FileSourceBrowserDialogComponent {
   private readonly connectorsService = inject(UserConnectorsService);
   private readonly consentService = inject(OAuthConsentService);
   private readonly toast = inject(ToastService);
-  private readonly features = inject(FEATURES);
+  private readonly attachmentLimits = inject(AttachmentLimitsService);
 
   /** `import` (default), `pick-folder` for the export destination picker, or `attach`. */
   protected readonly mode: FileSourceBrowserMode = this.data.mode ?? 'import';
@@ -297,7 +296,7 @@ export class FileSourceBrowserDialogComponent {
     // chat cannot take instead of letting the import fail after the download.
     if (this.isAttach) {
       return this.entries().map((entry) =>
-        entry.type === 'file' && entry.selectable && !isAttachableSourceFile(entry, this.features)
+        entry.type === 'file' && entry.selectable && !isAttachableSourceFile(entry, this.attachmentLimits.limits())
           ? { ...entry, selectable: false }
           : entry,
       );

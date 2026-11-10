@@ -20,8 +20,6 @@ stub) is in the user message and ``document_read`` reads the original. Pins:
 from __future__ import annotations
 
 import base64
-import re
-from pathlib import Path
 from typing import Any, List
 
 import pytest
@@ -29,7 +27,6 @@ import pytest
 import apis.inference_api.chat.routes as routes
 from apis.inference_api.chat.models import InvocationRequest
 from apis.shared.feature_flags import inline_budget_by_reference_enabled
-from apis.shared.files import models as file_models
 from apis.shared.files.attachment_plan import delivers_by_reference
 from apis.shared.files.document_digest import DigestSection, DocumentDigest
 from apis.shared.files.file_resolver import FileResolver, ResolvedFileContent
@@ -309,29 +306,5 @@ class TestKillSwitch:
         assert inline_budget_by_reference_enabled() is False
 
 
-# ---------------------------------------------------------------------------
-# The SPA mirrors the two numbers its composer notice is computed from
-# ---------------------------------------------------------------------------
-
-_SPA_UPLOAD_SERVICE = (
-    Path(__file__).resolve().parents[4]
-    / "frontend/ai.client/src/app/services/file-upload/file-upload.service.ts"
-)
-
-
-def _spa_constant(name: str) -> int:
-    source = _SPA_UPLOAD_SERVICE.read_text(encoding="utf-8")
-    match = re.search(rf"export const {name} = ([0-9_ *]+);", source)
-    assert match, f"{name} not found in {_SPA_UPLOAD_SERVICE.name}"
-    value = 1
-    for factor in match.group(1).split("*"):
-        value *= int(factor.strip().replace("_", ""))
-    return value
-
-
-class TestSpaMirrorsTheServerLimits:
-    def test_the_combined_inline_budget(self):
-        assert _spa_constant("INLINE_ATTACHMENTS_MAX_TOTAL_BYTES") == file_models.INLINE_ATTACHMENTS_MAX_TOTAL_BYTES
-
-    def test_the_per_file_inline_limit(self):
-        assert _spa_constant("MAX_FILE_SIZE_BYTES") == file_models.INLINE_DOCUMENT_MAX_BYTES
+# The SPA reads these limits from GET /files/limits; its one built-in fallback
+# is pinned against the endpoint in tests/apis/app_api/test_file_limits_route.py.

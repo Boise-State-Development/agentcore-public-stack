@@ -492,7 +492,9 @@ class TestUploadFile:
         uploaded = await client.upload_file("sess-1", target)
         await client.aclose()
 
-        assert [r.url.path for r in seen] == ["/api/files/presign", "/up-1", "/api/files/up-1/complete"]
+        # GET /files/limits 404s here (an older server): nothing is checked client-side.
+        assert [r.url.path for r in seen] == ["/api/files/limits", "/api/files/presign", "/up-1", "/api/files/up-1/complete"]
+        seen = seen[1:]
         presign = json.loads(seen[0].content)
         assert presign == {"sessionId": "sess-1", "filename": "notes.md", "mimeType": "text/markdown", "sizeBytes": 5}
         assert seen[1].method == "PUT" and seen[1].content == b"hello"
@@ -525,6 +527,81 @@ class TestUploadFile:
         client = build(respond)
         with pytest.raises(UploadError, match="403"):
             await client.upload_file("s", target)
+
+
+LIMITS_WIRE = {
+    "profile": "legacy",
+    "filesPerMessage": 5,
+    "imagesPerMessage": None,
+    "pdfMaxPages": None,
+    "inlineDocumentMaxBytes": 4 * 1024 * 1024,
+    "inlineBudgetBytes": 7_000_000,
+    "maxBytes": {
+        "document": 4 * 1024 * 1024,
+        "image": 4 * 1024 * 1024,
+        "spreadsheet": 25 * 1024 * 1024,
+        "presentation": 25 * 1024 * 1024,
+        "largeDocument": 50 * 1024 * 1024,
+    },
+    "largeDocuments": True,
+    "folders": {"enabled": True, "perMessage": 2},
+}
+
+
+class TestAttachmentLimits:
+    """``GET /files/limits``: parsed once, and the size checked before any bytes move."""
+
+    def test_parses_the_servers_body(self) -> None:
+        from aps_tui.client.attachment_limits import AttachmentLimits
+
+        limits = AttachmentLimits.from_wire(LIMITS_WIRE)
+        mb = 1024 * 1024
+        assert limits.files_per_message == 5
+        assert limits.size_limit_for(".pdf") == 50 * mb
+        assert limits.size_limit_for(".sql") == 50 * mb
+        assert limits.size_limit_for(".png") == 4 * mb
+        assert limits.size_limit_for(".XLSX") == 25 * mb
+        assert limits.size_limit_for(".pptx") == 25 * mb
+
+    def test_large_documents_off_falls_back_to_the_document_limit(self) -> None:
+        from aps_tui.client.attachment_limits import AttachmentLimits
+
+        body = {**LIMITS_WIRE, "largeDocuments": False, "maxBytes": {**LIMITS_WIRE["maxBytes"], "largeDocument": None}}
+        assert AttachmentLimits.from_wire(body).size_limit_for(".pdf") == 4 * 1024 * 1024
+
+    def test_null_and_malformed_limits_mean_none(self) -> None:
+        from aps_tui.client.attachment_limits import AttachmentLimits
+
+        limits = AttachmentLimits.from_wire({"filesPerMessage": None, "maxBytes": {"image": "big"}})
+        assert limits.files_per_message is None
+        assert limits.size_limit_for(".png") is None
+
+    async def test_fetched_once_and_cached(self) -> None:
+        seen: list[httpx.Request] = []
+        client = build(json_handler(LIMITS_WIRE), capture=seen)
+        first = await client.attachment_limits()
+        second = await client.attachment_limits()
+        assert first is second and first is not None
+        assert [r.url.path for r in seen] == ["/api/files/limits"]
+
+    async def test_unavailable_is_none_and_not_cached(self) -> None:
+        seen: list[httpx.Request] = []
+        client = build(json_handler({"detail": "Not Found"}, status=404), capture=seen)
+        assert await client.attachment_limits() is None
+        assert await client.attachment_limits() is None
+        assert len(seen) == 2
+
+    async def test_oversized_file_is_refused_before_presign(self, tmp_path) -> None:
+        from aps_tui.errors import UploadError
+
+        seen: list[httpx.Request] = []
+        target = tmp_path / "photo.png"
+        with target.open("wb") as handle:
+            handle.truncate(4 * 1024 * 1024 + 1)
+        client = build(json_handler(LIMITS_WIRE), capture=seen)
+        with pytest.raises(UploadError, match="exceeds 4 MB limit"):
+            await client.upload_file("s", target)
+        assert [r.url.path for r in seen] == ["/api/files/limits"]
 
 
 def test_upload_mime_types_mirror_the_servers_allowlist():

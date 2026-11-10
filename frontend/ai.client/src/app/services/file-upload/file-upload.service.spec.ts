@@ -12,10 +12,6 @@ import {
   FileTooLargeError,
   InvalidFileTypeError,
   QuotaExceededError,
-  MAX_FILE_SIZE_BYTES,
-  PPTX_MAX_FILE_SIZE_BYTES,
-  SPREADSHEET_MAX_FILE_SIZE_BYTES,
-  LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES,
   maxFileSizeFor,
   isReferenceDocument,
   isAttachableSourceFile,
@@ -24,9 +20,23 @@ import {
 } from './file-upload.service';
 import { ConfigService } from '../config.service';
 import { FEATURES } from '../features';
+import { type AttachmentLimits, FALLBACK_ATTACHMENT_LIMITS } from './attachment-limits';
 
 const FLAG_OFF = { largeDocumentAttachments: false };
 const FLAG_ON = { largeDocumentAttachments: true };
+
+/** What GET /files/limits serves with large-document attachments on and off. */
+const LIMITS_ON: AttachmentLimits = { ...FALLBACK_ATTACHMENT_LIMITS };
+const LIMITS_OFF: AttachmentLimits = {
+  ...FALLBACK_ATTACHMENT_LIMITS,
+  largeDocuments: false,
+  maxBytes: { ...FALLBACK_ATTACHMENT_LIMITS.maxBytes, largeDocument: null },
+};
+// Today's limits, pinned so phase 1 of unified-attachment-delivery is "no change".
+const MAX_FILE_SIZE_BYTES = FALLBACK_ATTACHMENT_LIMITS.maxBytes.document;
+const PPTX_MAX_FILE_SIZE_BYTES = FALLBACK_ATTACHMENT_LIMITS.maxBytes.presentation;
+const SPREADSHEET_MAX_FILE_SIZE_BYTES = FALLBACK_ATTACHMENT_LIMITS.maxBytes.spreadsheet;
+const LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES = FALLBACK_ATTACHMENT_LIMITS.maxBytes.largeDocument as number;
 
 /** A File that reports `size` without allocating it (a 50 MB string is slow). */
 function sizedFile(name: string, type: string, size: number): File {
@@ -589,19 +599,19 @@ describe('FileUploadService', () => {
       describe('maxFileSizeFor', () => {
         it('should return the general cap for ordinary files', () => {
           const file = new File(['c'], 'doc.pdf', { type: 'application/pdf' });
-          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, LIMITS_OFF)).toBe(MAX_FILE_SIZE_BYTES);
         });
 
         it('should return the presentation cap by MIME type', () => {
           const file = new File(['c'], 'deck.pptx', {
             type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
           });
-          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, LIMITS_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
         });
 
         it('should return the presentation cap by extension when MIME is empty', () => {
           const file = new File(['c'], 'deck.pptx', { type: '' });
-          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, LIMITS_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
         });
 
         it('should return the large-document ceiling for every document class when the flag is on', () => {
@@ -618,14 +628,14 @@ describe('FileUploadService', () => {
             ['scan.pdf', ''],
           ];
           for (const [name, type] of documents) {
-            expect(maxFileSizeFor(new File(['c'], name, { type }), FLAG_ON)).toBe(
+            expect(maxFileSizeFor(new File(['c'], name, { type }), LIMITS_ON)).toBe(
               LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES
             );
           }
         });
 
         it('should keep spreadsheets, images and decks on their own caps when the flag is on', () => {
-          expect(maxFileSizeFor(new File(['c'], 'data.csv', { type: 'text/csv' }), FLAG_ON)).toBe(
+          expect(maxFileSizeFor(new File(['c'], 'data.csv', { type: 'text/csv' }), LIMITS_ON)).toBe(
             SPREADSHEET_MAX_FILE_SIZE_BYTES
           );
           expect(
@@ -633,13 +643,13 @@ describe('FileUploadService', () => {
               new File(['c'], 'sales.xlsx', {
                 type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
               }),
-              FLAG_ON
+              LIMITS_ON
             )
           ).toBe(SPREADSHEET_MAX_FILE_SIZE_BYTES);
-          expect(maxFileSizeFor(new File(['c'], 'photo.png', { type: 'image/png' }), FLAG_ON)).toBe(
+          expect(maxFileSizeFor(new File(['c'], 'photo.png', { type: 'image/png' }), LIMITS_ON)).toBe(
             MAX_FILE_SIZE_BYTES
           );
-          expect(maxFileSizeFor(new File(['c'], 'deck.pptx', { type: '' }), FLAG_ON)).toBe(
+          expect(maxFileSizeFor(new File(['c'], 'deck.pptx', { type: '' }), LIMITS_ON)).toBe(
             PPTX_MAX_FILE_SIZE_BYTES
           );
         });
@@ -654,22 +664,22 @@ describe('FileUploadService', () => {
         const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
         it('accepts a type the chat takes, within its cap', () => {
-          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 1024 }, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 1024 }, LIMITS_OFF)).toBe(true);
         });
 
         it('judges a provider-native document on what it downloads as', () => {
           const gdoc = { name: 'Notes', mimeType: 'application/vnd.google-apps.document', downloadMimeType: DOCX, sizeBytes: null };
-          expect(isAttachableSourceFile(gdoc, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile(gdoc, LIMITS_OFF)).toBe(true);
           const form = { name: 'Survey', mimeType: 'application/vnd.google-apps.form', sizeBytes: null };
-          expect(isAttachableSourceFile(form, FLAG_OFF)).toBe(false);
+          expect(isAttachableSourceFile(form, LIMITS_OFF)).toBe(false);
         });
 
         it('refuses a type the chat does not take', () => {
-          expect(isAttachableSourceFile({ name: 'a.zip', mimeType: 'application/zip', sizeBytes: 10 }, FLAG_OFF)).toBe(false);
+          expect(isAttachableSourceFile({ name: 'a.zip', mimeType: 'application/zip', sizeBytes: 10 }, LIMITS_OFF)).toBe(false);
         });
 
         it('falls back to the extension when the provider reports a vague type', () => {
-          expect(isAttachableSourceFile({ name: 'notes.md', mimeType: 'application/octet-stream', sizeBytes: 10 }, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile({ name: 'notes.md', mimeType: 'application/octet-stream', sizeBytes: 10 }, LIMITS_OFF)).toBe(true);
           expect(resolveMimeTypeFor('notes.md', 'application/octet-stream')).toBe('text/markdown');
           expect(resolveMimeTypeFor('query.sql', 'application/sql')).toBe('text/plain');
           expect(resolveMimeTypeFor('query.sql', '')).toBe('text/plain');
@@ -677,14 +687,14 @@ describe('FileUploadService', () => {
 
         it('applies the class cap, which the large-document flag raises for documents', () => {
           const big = { name: 'scan.pdf', mimeType: 'application/pdf', sizeBytes: 10 * 1024 * 1024 };
-          expect(isAttachableSourceFile(big, FLAG_OFF)).toBe(false);
-          expect(isAttachableSourceFile(big, FLAG_ON)).toBe(true);
+          expect(isAttachableSourceFile(big, LIMITS_OFF)).toBe(false);
+          expect(isAttachableSourceFile(big, LIMITS_ON)).toBe(true);
           const deck = { name: 'deck.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', sizeBytes: 10 * 1024 * 1024 };
-          expect(isAttachableSourceFile(deck, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile(deck, LIMITS_OFF)).toBe(true);
         });
 
         it('lets an unknown size through for the backend to judge', () => {
-          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf' }, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf' }, LIMITS_OFF)).toBe(true);
         });
       });
 
@@ -692,21 +702,22 @@ describe('FileUploadService', () => {
         const MB = 1024 * 1024;
 
         it('should be a document over the inline limit and within the ceiling', () => {
-          expect(isReferenceDocument('application/pdf', 4 * MB)).toBe(false);
-          expect(isReferenceDocument('application/pdf', 4 * MB + 1)).toBe(true);
-          expect(isReferenceDocument('application/pdf', 50 * MB)).toBe(true);
-          expect(isReferenceDocument('application/pdf', 50 * MB + 1)).toBe(false);
+          expect(isReferenceDocument('application/pdf', 4 * MB, LIMITS_ON)).toBe(false);
+          expect(isReferenceDocument('application/pdf', 4 * MB + 1, LIMITS_ON)).toBe(true);
+          expect(isReferenceDocument('application/pdf', 50 * MB, LIMITS_ON)).toBe(true);
+          expect(isReferenceDocument('application/pdf', 50 * MB + 1, LIMITS_ON)).toBe(false);
         });
 
         it('should never be a spreadsheet, deck or image', () => {
-          expect(isReferenceDocument('text/csv', 10 * MB)).toBe(false);
+          expect(isReferenceDocument('text/csv', 10 * MB, LIMITS_ON)).toBe(false);
           expect(
             isReferenceDocument(
               'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-              10 * MB
+              10 * MB,
+              LIMITS_ON
             )
           ).toBe(false);
-          expect(isReferenceDocument('image/png', 10 * MB)).toBe(false);
+          expect(isReferenceDocument('image/png', 10 * MB, LIMITS_ON)).toBe(false);
         });
       });
 

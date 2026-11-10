@@ -38,14 +38,16 @@ from apis.shared.files.models import (
     FileListResponse,
     QuotaResponse,
     is_allowed_mime_type,
-    is_presentation_file,
     is_reference_document,
-    is_tabular_file,
-    spreadsheet_max_file_size as _spreadsheet_max_file_size,
     ALLOWED_EXTENSIONS,
     ALLOWED_MIME_TYPES,
-    LARGE_DOCUMENT_MAX_BYTES,
-    MAX_FILES_PER_MESSAGE,
+)
+from apis.shared.files.attachment_plan import (
+    UploadLimits,
+    current_limits_profile,
+    upload_download_ceiling,
+    upload_limits,
+    upload_size_limit,
 )
 from .sheet_preview import (
     MAX_WORKBOOK_BYTES,
@@ -193,36 +195,22 @@ class FileUploadService:
             "S3_USER_FILES_BUCKET_NAME", "user-files"
         )
 
-        # Upload limits from environment
-        self.max_file_size = max_file_size or int(
-            os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES", 4 * 1024 * 1024)  # 4MB
+        # Upload limits: the attachment planner's (``upload_limits``), the same
+        # numbers ``GET /files/limits`` serves the SPA and the TUI. A
+        # constructor value overrides one class (tests). Decks and spreadsheets
+        # never go inline, so their ceilings are the tools' (25 MB), not
+        # Bedrock's inline document limit.
+        planner_limits = upload_limits()
+        self.max_file_size = max_file_size or planner_limits.general_max_bytes
+        self.presentation_max_file_size = (
+            presentation_max_file_size or planner_limits.presentation_max_bytes
         )
-        # Presentations get a larger cap than the general limit. The general
-        # 4MB is sized for what Bedrock will accept as an inline document
-        # block; a .pptx never goes inline (Bedrock has no pptx document
-        # format — see `is_presentation_file`), so that ceiling does not
-        # apply to it. What does apply is the Code Interpreter hop in the
-        # PowerPoint tools: `_ci_write_bytes` base64-encodes the whole deck
-        # into a single writeFiles `text` field, inflating it ~4/3. That
-        # field is a MaxLenString (100MB), so 25MB of deck → ~33MB of base64
-        # stays well inside it. Real-world corporate templates with imagery
-        # routinely exceed 4MB, which is what made the template workflow
-        # unusable at the general cap.
-        self.presentation_max_file_size = presentation_max_file_size or int(
-            os.environ.get(
-                "FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION", 25 * 1024 * 1024  # 25MB
-            )
-        )
-        # Spreadsheets never go inline either: ``analyze_spreadsheet`` reads
-        # them in Code Interpreter up to its own 25MB cap, so the general 4MB
-        # refused files the tool accepts (unified-attachment-delivery §1.3).
         self.spreadsheet_max_file_size = (
-            spreadsheet_max_file_size or _spreadsheet_max_file_size()
+            spreadsheet_max_file_size or planner_limits.spreadsheet_max_bytes
         )
-        # Single source of truth is the shared constant (the inference API
-        # enforces it per message; see ``_apply_message_file_cap``). Kept on
-        # the service so callers can read the effective limit.
-        self.max_files_per_message = max_files_per_message or MAX_FILES_PER_MESSAGE
+        self.max_files_per_message = (
+            max_files_per_message or current_limits_profile().max_files_per_message
+        )
         self.user_quota_bytes = user_quota_bytes or int(
             os.environ.get("FILE_UPLOAD_USER_QUOTA_BYTES", 1024 * 1024 * 1024)  # 1GB
         )
@@ -231,28 +219,31 @@ class FileUploadService:
         self.presign_expiration = 15 * 60  # 15 minutes
         self.preview_url_expiration = 10 * 60  # 10 minutes for GET previews
 
+    def upload_limits(self) -> UploadLimits:
+        """The planner's upload limits with this service's class overrides.
+
+        Read per call: the large-document and folder flags are inputs to it.
+        """
+        from dataclasses import replace
+
+        return replace(
+            upload_limits(),
+            general_max_bytes=self.max_file_size,
+            presentation_max_bytes=self.presentation_max_file_size,
+            spreadsheet_max_bytes=self.spreadsheet_max_file_size,
+        )
+
     def max_size_for(self, filename: str, mime_type: str) -> int:
         """Return the upload size cap that applies to this file.
 
-        Presentations and spreadsheets get their own (larger) caps. With
-        ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED`` on, a document-class file (pdf,
-        docx, txt, md, html) gets ``LARGE_DOCUMENT_MAX_BYTES``: one over the
-        inline limit is attached by reference (``is_reference_document``) and
-        prepared off the request path. Everything else gets the general
-        limit. Callers must use this rather than reading `max_file_size`
+        The planner decides (``upload_size_limit``): decks and spreadsheets get
+        their own caps, a document-class file gets the large-document ceiling
+        while large-document attachments are on, everything else the general
+        limit. Callers must use this rather than reading ``max_file_size``
         directly, or a file under its class's cap gets rejected by whichever
         gate was missed (presign and ``complete_upload`` both read it).
         """
-        from apis.shared.feature_flags import large_document_attachments_enabled
-        from apis.shared.files.document_read import is_document_class
-
-        if is_presentation_file(filename, mime_type):
-            return self.presentation_max_file_size
-        if is_tabular_file(filename, mime_type):
-            return self.spreadsheet_max_file_size
-        if large_document_attachments_enabled() and is_document_class(mime_type, filename):
-            return LARGE_DOCUMENT_MAX_BYTES
-        return self.max_file_size
+        return upload_size_limit(filename, mime_type, self.upload_limits())
 
     # =========================================================================
     # Pre-signed URL Flow
@@ -446,16 +437,7 @@ class FileUploadService:
         told the widest cap and `import_file` applies the file's own class
         cap afterwards. Bounds memory to one over-cap file at most.
         """
-        from apis.shared.feature_flags import large_document_attachments_enabled
-
-        caps = [
-            self.max_file_size,
-            self.presentation_max_file_size,
-            self.spreadsheet_max_file_size,
-        ]
-        if large_document_attachments_enabled():
-            caps.append(LARGE_DOCUMENT_MAX_BYTES)
-        return max(caps)
+        return upload_download_ceiling(self.upload_limits())
 
     async def import_file(
         self,

@@ -2,7 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
-import { FEATURES, type FeatureFlags } from '../features';
+import { type AttachmentLimits, AttachmentLimitsService } from './attachment-limits';
 /**
  * File status enum matching backend FileStatus
  */
@@ -46,57 +46,11 @@ export const ALLOWED_EXTENSIONS = [
   '.png', '.jpg', '.jpeg', '.gif', '.webp'
 ];
 
-/**
- * Maximum file size in bytes (4MB): the per-file inline limit. Must match
- * `INLINE_DOCUMENT_MAX_BYTES` in `backend/src/apis/shared/files/models.py`
- * (pinned by `test_inline_budget_by_reference.py`).
- */
-export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024;
-
-/**
- * Maximum .pptx size in bytes (25MB).
- *
- * Decks get a larger cap because the general limit exists to keep documents
- * under what Bedrock accepts as an inline content block, and a .pptx is
- * never sent inline — it routes to the PowerPoint tools instead. Corporate
- * templates with imagery routinely clear 4MB, which is what made the
- * `template_name` workflow unusable.
- *
- * Must match `FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION` on the backend
- * (`files/service.py`), which is the enforcing side — if this is the larger
- * of the two, the UI accepts a deck that presign then rejects.
- */
-export const PPTX_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
-
-/**
- * Maximum spreadsheet (csv, xls, xlsx) size in bytes (25MB).
- *
- * A spreadsheet never goes inline either: `analyze_spreadsheet` reads it in
- * Code Interpreter, up to its own 25MB (`ANALYZE_MAX_FILE_SIZE_BYTES`). Must
- * match `FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET` on the backend
- * (`spreadsheet_max_file_size` in `backend/src/apis/shared/files/models.py`),
- * the enforcing side.
- */
-export const SPREADSHEET_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
-
 const SPREADSHEET_MIME_TYPES = new Set<string>([
   'text/csv',
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
-
-/**
- * Maximum size of a large document attached by reference (50MB).
- *
- * A document over `MAX_FILE_SIZE_BYTES` never rides inline: the backend
- * prepares it off the request path and the model reads the parts it needs
- * through `document_read` (docs/specs/large-document-attachments.md). Admitted
- * only while `features.largeDocumentAttachments` is on.
- *
- * Must match `LARGE_DOCUMENT_MAX_BYTES` on the backend
- * (`backend/src/apis/shared/files/models.py`), which is the enforcing side.
- */
-export const LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 
 /**
  * MIME types `document_read` can read: the backend's `DOCUMENT_CLASS_FORMATS`
@@ -120,54 +74,61 @@ export function isDocumentClassMimeType(mimeType: string): boolean {
  * Whether a file is attached by reference: a document over the inline limit
  * and within the large-document ceiling. Mirrors the backend's one predicate,
  * `is_reference_document`, for display only (the attachment chip); the backend
- * decides how the file actually reaches the model.
+ * decides how the file actually reaches the model. `limits` is
+ * `AttachmentLimitsService.limits()`.
  */
-export function isReferenceDocument(mimeType: string, sizeBytes: number): boolean {
+export function isReferenceDocument(
+  mimeType: string,
+  sizeBytes: number,
+  limits: Readonly<AttachmentLimits>,
+): boolean {
+  const ceiling = limits.maxBytes.largeDocument;
   return (
     isDocumentClassMimeType(mimeType) &&
-    sizeBytes > MAX_FILE_SIZE_BYTES &&
-    sizeBytes <= LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES
+    sizeBytes > limits.inlineDocumentMaxBytes &&
+    ceiling !== null &&
+    sizeBytes <= ceiling
   );
 }
 
 /**
- * Resolve the size cap that applies to a given file. Use this rather than
- * `MAX_FILE_SIZE_BYTES` directly at any gate, or a legitimate deck (or, with
- * large-document attachments on, a large PDF) gets rejected by whichever check
- * was missed. `features` comes from the `FEATURES` token at the call site.
+ * Resolve the size cap that applies to a given file. Use this at every gate
+ * rather than a single number, or a legitimate deck (or, with large-document
+ * attachments on, a large PDF) gets rejected by whichever check was missed.
+ * `limits` is `AttachmentLimitsService.limits()`, the same numbers presign
+ * enforces (`GET /files/limits`).
  */
-export function maxFileSizeFor(
-  file: File,
-  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
-): number {
-  return attachmentSizeLimitFor(file.name, file.type, features);
+export function maxFileSizeFor(file: File, limits: Readonly<AttachmentLimits>): number {
+  return attachmentSizeLimitFor(file.name, file.type, limits);
 }
 
 /**
  * The same cap, for a file known only by name and MIME type: an entry in a
- * connected file source's listing, before it is downloaded.
+ * connected file source's listing, before it is downloaded. The order is the
+ * backend's (`upload_size_limit`): decks, spreadsheets, large documents.
  */
 export function attachmentSizeLimitFor(
   filename: string,
   mimeType: string,
-  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+  limits: Readonly<AttachmentLimits>,
 ): number {
   const isPptx =
     filename.toLowerCase().endsWith('.pptx') ||
     mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   if (isPptx) {
-    return PPTX_MAX_FILE_SIZE_BYTES;
+    return limits.maxBytes.presentation;
   }
-  if (SPREADSHEET_MIME_TYPES.has(resolveMimeTypeFor(filename, mimeType))) {
-    return SPREADSHEET_MAX_FILE_SIZE_BYTES;
+  const mime = resolveMimeTypeFor(filename, mimeType);
+  if (SPREADSHEET_MIME_TYPES.has(mime)) {
+    return limits.maxBytes.spreadsheet;
   }
-  if (
-    features.largeDocumentAttachments &&
-    isDocumentClassMimeType(resolveMimeTypeFor(filename, mimeType))
-  ) {
-    return LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES;
+  if (limits.largeDocuments && limits.maxBytes.largeDocument !== null && isDocumentClassMimeType(mime)) {
+    return limits.maxBytes.largeDocument;
   }
-  return MAX_FILE_SIZE_BYTES;
+  if (mime.startsWith('image/')) {
+    return limits.maxBytes.image;
+  }
+  return limits.maxBytes.document;
 }
 
 /** The shape of a file-source listing entry the composer needs to judge. */
@@ -190,41 +151,17 @@ export interface AttachableSourceFile {
  */
 export function isAttachableSourceFile(
   file: AttachableSourceFile,
-  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+  limits: Readonly<AttachmentLimits>,
 ): boolean {
   const mime = resolveMimeTypeFor(file.name, file.downloadMimeType || file.mimeType || '');
   if (!isAllowedMimeType(mime)) {
     return false;
   }
-  if (file.sizeBytes != null && file.sizeBytes > attachmentSizeLimitFor(file.name, mime, features)) {
+  if (file.sizeBytes != null && file.sizeBytes > attachmentSizeLimitFor(file.name, mime, limits)) {
     return false;
   }
   return true;
 }
-
-/**
- * Maximum files per message
- */
-export const MAX_FILES_PER_MESSAGE = 5;
-
-/**
- * Combined bytes of one message's inline attachments (7.0 MB): every image and
- * every document under `MAX_FILE_SIZE_BYTES`. Spreadsheets, decks and large
- * documents never ride inline, so they do not count. The backend holds a turn
- * to it first-fit in attachment order (`_apply_inline_byte_budget`), because the
- * turn's inline attachments are stored as one AgentCore Memory event, which
- * fails past ~7.5 MB. The composer computes the same total before send
- * (`inlineBudgetOverflow`) so the user is told which files will not fit.
- *
- * Mirrored rather than fetched: no endpoint serves the SPA its upload limits
- * (every number in this file is a mirror of this kind), and a fetch would leave
- * the composer unable to judge a drop until it answered. A deployment can
- * override the backend's value with an env var; the SPA would then mis-predict,
- * which is cosmetic, since the backend decides. Must match
- * `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` in `backend/src/apis/shared/files/models.py`;
- * `test_inline_budget_by_reference.py` pins the two.
- */
-export const INLINE_ATTACHMENTS_MAX_TOTAL_BYTES = 7_000_000;
 
 /**
  * Request body for POST /files/presign
@@ -498,7 +435,7 @@ export function resolveMimeTypeFor(filename: string, mimeType: string): string {
 export class FileUploadService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
-  private features = inject(FEATURES);
+  private readonly attachmentLimits = inject(AttachmentLimitsService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/files`);
 
@@ -581,7 +518,7 @@ export class FileUploadService {
    */
   validateFile(file: File): void {
     // Check size (pptx and, behind the flag, large documents have their own caps)
-    const sizeLimit = maxFileSizeFor(file, this.features);
+    const sizeLimit = maxFileSizeFor(file, this.attachmentLimits.limits());
     if (file.size > sizeLimit) {
       throw new FileTooLargeError(file.size, sizeLimit);
     }
@@ -682,7 +619,7 @@ export class FileUploadService {
     files: File[]
   ): Promise<Array<{ file: File; result?: CompleteUploadResponse; error?: Error }>> {
     // Limit number of files
-    const filesToUpload = files.slice(0, MAX_FILES_PER_MESSAGE);
+    const filesToUpload = files.slice(0, this.attachmentLimits.filesPerMessage());
 
     // Upload in parallel
     const results = await Promise.all(
@@ -1022,7 +959,7 @@ export class FileUploadService {
         const stated = /(\d+)\s*MB limit/i.exec(detail);
         const limit = stated
           ? Number(stated[1]) * 1024 * 1024
-          : attachmentSizeLimitFor(file.filename, file.mimeType, this.features);
+          : attachmentSizeLimitFor(file.filename, file.mimeType, this.attachmentLimits.limits());
         return new FileTooLargeError(file.sizeBytes, limit);
       }
 

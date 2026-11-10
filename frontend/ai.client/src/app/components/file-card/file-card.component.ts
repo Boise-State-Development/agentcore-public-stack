@@ -23,6 +23,7 @@ import {
   type FileMetadata,
 } from '../../services/file-upload';
 import { FEATURES } from '../../services/features';
+import { AttachmentLimitsService } from '../../services/file-upload/attachment-limits';
 
 /**
  * Check if MIME type is an image
@@ -287,6 +288,7 @@ export class FileCardComponent {
 
   /** Present only while the deployment has the attachments KB. */
   private readonly searchStatus = inject(FEATURES).attachmentKb ? inject(AttachmentSearchStatusService) : null;
+  private readonly attachmentLimits = inject(AttachmentLimitsService);
 
   constructor() {
     // A ready large document follows its search index (one poll per upload,
@@ -401,7 +403,7 @@ export class FileCardComponent {
   protected readonly isReference = computed(() => {
     const pending = this.pendingUpload();
     const mime = pending ? resolveMimeType(pending.file) : this.mimeType();
-    return isReferenceDocument(mime, this.sizeBytes());
+    return isReferenceDocument(mime, this.sizeBytes(), this.attachmentLimits.limits());
   });
 
   /** What the large-document chip says: read on demand, indexing, or searchable. */
