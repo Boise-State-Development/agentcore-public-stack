@@ -85,14 +85,59 @@ one file through presign (median 0.6 s), and 2.7 s for five.
    because each sample opens a new session (no prewarm on the headless path). The
    Runtime's number is the one that moves with delivery.
 
-## Not run yet
+## Sonnet 4.6 (2026-11-10)
 
-- **The larger model.** A Sonnet 4.6 k=3 run hit the eval user's $10 monthly quota on
-  dev after the Haiku run, so 58 of its 66 samples answered with the quota message.
-  That run is discarded. The harness now stops on `quota_exceeded` instead of scoring
-  it.
-- **The forced arms, the ceiling arms and the paced follow-up** (§8.4). These wait for
-  the planner's fixture-only `delivery` value. The cases already carry `run.arm` and
-  `run.ceiling`.
+`runtime:dev-boisestateai-v2` with #1968, #1970, #1975 and #1978 deployed, presign uploads,
+k=3. Promoted as `evals/baselines/us.anthropic.claude-sonnet-4-6.json` for the 22 `auto`
+cases (`baseline --family attachment_delivery --match '\.(lookup|cross_document|absent_fact|follow_up|count)_'`).
+
+| Case | Pass | $/sample | First token | Turn | Doc tokens | Delivery |
+|---|---|---|---|---|---|---|
+| lookup_md_5k | 3/3 | $0.0162 | 1.0s | 2.3s | 5,279 | text 3 |
+| lookup_md_30k | 3/3 | $0.0534 | 1.2s | 2.5s | 30,487 | text 3 |
+| lookup_md_80k | 3/3 | $0.2158 | 1.9s | 3.4s | 80,876 | text 3 |
+| lookup_md_150k | 3/3 | $0.5797 | 2.8s | 4.2s | 151,476 | text 3 |
+| lookup_md_300k | 3/3 | $0.7997 | 4.5s | 5.8s | 302,737 | text 3 |
+| lookup_txt_30k | 3/3 | $0.0471 | 1.7s | 3.0s | 30,412 | text 3 |
+| lookup_pdf_30k | 3/3 | $0.2286 | 5.8s | 7.1s | 78,779 | native 3 |
+| lookup_pdf_80k | 3/3 | $0.8668 | 11.2s | 12.6s | 209,122 | native 3 |
+| lookup_pdf_150k | 3/3 | $1.6198 | 22.0s | 23.2s | 391,383 | native 3 |
+| lookup_docx_30k | 3/3 | $0.0472 | 1.7s | 3.1s | 30,496 | text 3 |
+| lookup_html_30k | 3/3 | $0.0471 | 1.5s | 3.0s | 30,458 | text 3 |
+| lookup_pptx_30k | 3/3 | $0.0346 | 1.9s | 8.8s | 0 | tool 3 |
+| lookup_csv_30k | 3/3 | $0.0256 | 1.1s | 16.0s | 0 | tool 3 |
+| lookup_xlsx_30k | 3/3 | $0.0079 | 1.1s | 9.1s | 0 | tool 3 |
+| lookup_png | 3/3 | $0.0120 | 1.1s | 2.4s | 1,500 | native 3 |
+| cross_document_30k | 1/3 | $0.5174 | 5.4s | 14.4s | 109,266 | native+text 3 |
+| cross_document_80k | 3/3 | $0.7568 | 3.1s | 18.7s | 289,998 | native+text 3 |
+| absent_fact_30k | 0/3 | $0.0873 | 1.1s | 8.1s | 30,487 | text 3 |
+| absent_fact_150k | 0/3 | $0.2270 | 1.5s | 4.2s | 151,476 | text 3 |
+| follow_up_30k | 3/3 | $0.0854 | 1.5s | 5.4s | 30,487 | text 3 |
+| follow_up_150k | 3/3 | $0.2733 | 1.5s | 2.8s | 151,476 | text 3 |
+| count_five_documents | 3/3 | $0.0733 | 1.4s | 2.9s | 26,477 | text 3 |
+
+**58/66 samples; $19.87 as the `C#` rows price it.** Every failure has the right content
+and the wrong format:
+
+- `absent_fact_*` (0/6): Sonnet explains that only the backup permit is there before it
+  writes `NOT IN DOCUMENT`, or never writes the exact phrase. The "refusal leads" check
+  fails it. Haiku 5.5 leads with the phrase.
+- `cross_document_30k` (2 of 3 failed): Sonnet calls `verify_sources` on both values and
+  opens with a sentence about verification, so both correct values land after the 160
+  characters the check allows.
+
+Read against the baseline, these cells measure instruction-following on the answer's
+format, not delivery. A future change that makes them pass is a format change.
+
+Two things only the larger model shows:
+
+- **A PDF costs about 1.6× more tokens on Sonnet 4.6 than on Haiku 5.5.** The 80k-token PDF
+  is 209k on Sonnet against 127.5k on Haiku, and the 150k one is 391k against 239k. That is
+  about 2.5k tokens a page. A per-model token fact is needed before the planner budgets a
+  PDF.
+- **First token is much faster for text than for a native PDF** on Sonnet too: 1–4.5 s for
+  Markdown up to 300k, against 5.8–22 s for a PDF of the same text.
+
+## Not run yet
 - **20 files**, because today's cap is 5. **Scanned and chart PDFs** are in `document_qa`
   and `attachment_tools`, not repeated here.

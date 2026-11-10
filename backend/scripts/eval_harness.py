@@ -1151,8 +1151,14 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         wanted = args.family or list(DEFAULT_FAMILIES)
         cases = load_cases(Path(args.cases_dir), families=wanted, fixtures_dir=Path(args.fixtures_dir),
                            generated=GENERATED)
-        rows = [r for r in read_rows(out / RESULTS_FILE) if r.get("family") in wanted]
-        judgements = [j for j in read_rows(out / JUDGEMENTS_FILE) if j.get("family") in wanted]
+        if getattr(args, "match", None):
+            # Promote the subset a run covered, e.g. a family's ``auto`` cases.
+            pattern = re.compile(args.match)
+            cases = [c for c in cases if pattern.search(c.id)]
+        ids = {c.id for c in cases}
+        rows = [r for r in read_rows(out / RESULTS_FILE) if r.get("family") in wanted and r.get("case_id") in ids]
+        judgements = [j for j in read_rows(out / JUDGEMENTS_FILE)
+                      if j.get("family") in wanted and j.get("case_id") in ids]
         baseline = build_baseline(rows, cases=cases, meta=meta, judgements=judgements)
     except (ReportError, CaseError) as exc:
         print(f"not promoting: {exc}", file=sys.stderr)
@@ -1280,6 +1286,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--baseline", help="write here instead of baselines/<model>.json")
     s.add_argument("--family", type=families,
                    help="promote only these families' cases, keeping every other family's entries in the file")
+    s.add_argument("--match", help="promote only the cases whose id matches this regex (the subset the run covered)")
 
     s = sub.add_parser("readout", help="per-case quality, cost and speed of a run (unified-attachment-delivery §8.5)")
     s.add_argument("--out", required=True)

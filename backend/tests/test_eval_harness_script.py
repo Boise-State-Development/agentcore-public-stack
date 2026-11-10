@@ -537,3 +537,18 @@ def test_match_narrows_the_run_to_matching_case_ids(tmp_path, capsys):
     assert code == 0
     # native and on_demand, two sizes, two paces, at the default ceiling.
     assert "8 cases × k=3" in capsys.readouterr().out
+
+
+def test_baseline_match_promotes_the_subset_a_run_covered(tmp_path, golden, capsys):
+    """A family that grew since its first baseline can be promoted for the cases a run covered."""
+    flags, baselines = golden
+    run = tmp_path / "run"
+    _write_run(run)
+    # Drop every sample of cases g and h: without --match the run is partial.
+    rows = [r for r in (run / "results.jsonl").read_text().splitlines()
+            if not json.loads(r)["case_id"].endswith((".g", ".h"))]
+    (run / "results.jsonl").write_text("\n".join(rows) + "\n")
+    assert eval_harness.main(flags + ["baseline", "--out", str(run)]) == 2
+    assert eval_harness.main(flags + ["baseline", "--out", str(run), "--match", r"\.[a-f]$"]) == 0
+    written = json.loads(next(baselines.glob("*.json")).read_text())
+    assert sorted(written["cases"]) == [f"tool_selection.{c}" for c in "abcdef"]
