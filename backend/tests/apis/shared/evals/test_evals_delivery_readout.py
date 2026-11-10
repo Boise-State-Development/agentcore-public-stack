@@ -43,7 +43,7 @@ def test_readout_per_case_pass_rate_cost_timing_and_context():
     assert readout.offloads == {"document_offload": 2} and readout.offloads_per_sample == pytest.approx(2 / 3)
     assert readout.failures == {"error": 1}
     table = format_delivery_readout([readout], title="Haiku 5.5")
-    assert "| follow_up_30k | 2/3 |" in table and "2.0s" in table and "30,500" in table
+    assert "| follow_up_30k | — | — | 2/3 |" in table and "2.0s" in table and "30,500" in table
     assert "s0" not in table and "s0" not in str(readout.to_dict())
 
 

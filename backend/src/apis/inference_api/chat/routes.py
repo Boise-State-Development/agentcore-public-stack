@@ -52,9 +52,12 @@ from apis.shared.files.inline_persist import get_inline_attachment_persister
 from apis.shared.files.attachment_plan import (
     CLASS_PRESENTATION,
     CLASS_TABULAR,
+    FORCED_TEXT_MAX_CHARS,
     MODE_NATIVE,
     MODE_ON_DEMAND,
+    MODE_TEXT,
     REASON_DOCUMENTS_AS_TEXT,
+    REASON_FORCED,
     REASON_PROVIDER_NEEDS_TEXT,
     REASON_OVER_BUDGET,
     REASON_OVER_BUDGET_REFERENCE,
@@ -74,6 +77,7 @@ from apis.shared.files.attachment_plan import (
     current_limits_profile,
     file_class,
     plan_attachments,
+    reads_from_original,
     refine_for_model,
 )
 from apis.shared.files.folder_attachments import FOLDERS_PER_MESSAGE, FolderAttachment
@@ -3011,7 +3015,9 @@ async def _resolve_turn_attachments(
                 # before any S3 read: a reference comes back as its row alone.
                 reference_meta = getattr(rf, "reference", None)
                 if reference_meta is not None:
-                    all_files.append(ReferenceAttachment(meta=reference_meta))
+                    all_files.append(
+                        ReferenceAttachment(meta=reference_meta, over_budget=reads_from_original(reference_meta))
+                    )
                     continue
                 content = FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
                 row = getattr(rf, "meta", None)
@@ -3074,7 +3080,9 @@ async def _resolve_turn_attachments(
     def _planned(*reasons: str) -> list:
         return [all_files[i] for i in plan.with_reason(*reasons)]
 
-    inline_indices = plan.indices(MODE_NATIVE)
+    # Before the model is known only a forced ``text`` row plans as text; its
+    # bytes ride inline until ``_carry_out_forced_modes`` decides how.
+    inline_indices = plan.indices(MODE_NATIVE, MODE_TEXT)
     files_to_send = [all_files[i] for i in inline_indices]
     diverted_tabular = _planned(REASON_TABULAR)
     diverted_presentations = _planned(REASON_PRESENTATION)
@@ -3240,6 +3248,9 @@ class ExtractedDocument:
     truncated: bool
     unit: str
     count: int
+    #: An eval fixture forced this file to ``text`` (``attachment_plan``); the
+    #: model is not text-only, so the section's header says neither.
+    forced: bool = False
 
 
 def _extract_document_text(file, fmt: str, limit: int) -> Optional[ExtractedDocument]:
@@ -3378,6 +3389,77 @@ def _is_converse_model(turn_model: "TurnModel") -> bool:
     return not model_id.startswith(("gpt-", "o1-", "gemini-"))
 
 
+def _pin_native_one(fmt: str, encoded: str) -> None:
+    import base64
+
+    from apis.shared.models.document_cap import pin_native
+
+    pin_native(fmt, base64.b64decode(encoded or ""))
+
+
+async def _carry_out_forced_modes(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Carry out an eval fixture's forced ``native`` and ``text`` rows (map stage B11).
+
+    Only a row whose ``deliveryOverride`` a direct table write set reaches
+    either branch (``attachment_plan``), so every user turn returns on the
+    first lines. A forced ``native`` document is pinned in the Converse
+    projection, so documents-as-text leaves its block alone. A forced
+    ``text`` document the projection would not render here (a PDF, or any
+    document on a Converse model with documents-as-text off) becomes its
+    extracted text layer in the user message, as a text-only model's does,
+    held to ``FORCED_TEXT_MAX_CHARS``; one the projection renders is
+    pre-rendered with the rest by ``_prerender_documents_as_text``.
+    """
+    _plan_for_model(attachments, turn_model)
+    if attachments.plan is None or not attachments.files_to_send:
+        return
+    forced = _inline_by_reason(attachments, REASON_FORCED)
+    if not forced:
+        return
+    entries = {e.index: e for e in attachments.plan.entries}
+    converse = _is_converse_model(turn_model)
+    renders = (not converse) or bool(attachments.profile and attachments.profile.documents_as_text)
+
+    def ext(f) -> str:
+        return (f.filename or "").lower().rsplit(".", 1)[-1]
+
+    pins = [f for i, f in forced if entries[i].mode == MODE_NATIVE and converse]
+    if pins:
+        await asyncio.gather(*(asyncio.to_thread(_pin_native_one, ext(f), f.bytes) for f in pins))
+
+    from apis.shared.files.attachment_plan import DOCUMENTS_AS_TEXT_EXTENSIONS
+    from apis.shared.files.document_read import document_format_for
+
+    to_extract = [
+        (i, f, document_format_for(f.content_type or "", f.filename or ""))
+        for i, f in forced
+        if entries[i].mode == MODE_TEXT and not (renders and ext(f) in DOCUMENTS_AS_TEXT_EXTENSIONS)
+    ]
+    if not to_extract:
+        logger.info("forced delivery: %d native pinned, 0 converted to text", len(pins))
+        return
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_extract_document_text, f, fmt, FORCED_TEXT_MAX_CHARS) for _, f, fmt in to_extract),
+        return_exceptions=True,
+    )
+    gone = set()
+    for (index, file, fmt), result in zip(to_extract, results):
+        gone.add(index)
+        if isinstance(result, ExtractedDocument):
+            result.forced = True
+            attachments.extracted_documents.append(result)
+            continue
+        if isinstance(result, BaseException):
+            logger.warning("Forced text extraction failed for a %s attachment: %s", fmt, result)
+        attachments.unreadable_documents.append(file)
+        attachments.plan = attachments.plan.with_outcome(index, REASON_TEXT_UNAVAILABLE)
+        attachments.marker_names = [n for n in attachments.marker_names if n != file.filename]
+    kept = [(i, f) for i, f in zip(attachments.inline_indices, attachments.files_to_send) if i not in gone]
+    attachments.inline_indices = [i for i, _ in kept]
+    attachments.files_to_send = [f for _, f in kept]
+    logger.info("forced delivery: %d native pinned, %d converted to text", len(pins), len(to_extract))
+
+
 def _prerender_one(fmt: str, encoded: str) -> bool:
     import base64
 
@@ -3409,6 +3491,15 @@ async def _prerender_documents_as_text(attachments: TurnAttachments, turn_model:
         ((f.filename or "").lower().rsplit(".", 1)[-1], f.bytes)
         for _, f in _inline_by_reason(attachments, REASON_DOCUMENTS_AS_TEXT, REASON_PROVIDER_NEEDS_TEXT)
     ]
+    # A forced ``text`` file still inline after ``_carry_out_forced_modes`` is
+    # one the projection renders.
+    if attachments.plan is not None:
+        text_entries = {e.index for e in attachments.plan.entries if e.mode == MODE_TEXT and e.reason == REASON_FORCED}
+        jobs += [
+            ((f.filename or "").lower().rsplit(".", 1)[-1], f.bytes)
+            for i, f in _inline_by_reason(attachments, REASON_FORCED)
+            if i in text_entries
+        ]
     if not jobs:
         return
     started = time.perf_counter()
@@ -3433,11 +3524,15 @@ def _build_extracted_documents_section(extracted: list, document_read_available:
     """
     if not extracted:
         return ""
-    parts = [
-        "_The selected model reads text only, so the attached document(s) below "
+    header = (
+        "_The attached document(s) below were converted to text. Layout, images, charts and scanned "
+        "pages are not included._"
+        if all(getattr(doc, "forced", False) for doc in extracted)
+        else "_The selected model reads text only, so the attached document(s) below "
         "were converted to text. Layout, images, charts and scanned pages are not "
         "included._"
-    ]
+    )
+    parts = [header]
     for doc in extracted:
         name = doc.filename.replace('"', "'")
         body = doc.text.replace("</attached-document", "<\\/attached-document")
@@ -5830,6 +5925,8 @@ async def _run_invocation(
             # rules apply first, `_plan_for_model`). Returns immediately for
             # every other model.
             await _adapt_attachments_for_model(attachments, turn_model)
+            # An eval fixture's forced native / text rows; returns at once otherwise.
+            await _carry_out_forced_modes(attachments, turn_model)
             # With documents-as-text on, render the turn's non-PDF attachments
             # now, in worker threads, so the per-call projection finds them.
             await _prerender_documents_as_text(attachments, turn_model)

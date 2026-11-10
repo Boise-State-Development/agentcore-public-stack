@@ -193,6 +193,77 @@ def estimate_message_tokens(message: Dict[str, Any]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Held documents (unified-attachment-delivery §5.2, measurement only)
+# ---------------------------------------------------------------------------
+
+#: ``estimate_document_tokens`` by ``(format, hash of the bytes)``: a PDF's
+#: estimate parses its page count, so each held document is measured once per
+#: process, not once per turn.
+_DOCUMENT_TOKENS: Dict[Tuple[str, int], int] = {}
+_DOCUMENT_TOKENS_MAX = 64
+
+
+def _document_block_tokens(document: Any) -> int:
+    if not isinstance(document, dict):
+        return 0
+    source = document.get("source")
+    raw = source.get("bytes") if isinstance(source, dict) else None
+    if not isinstance(raw, (bytes, bytearray)):
+        return 0
+    fmt = str(document.get("format") or "").strip().lower()
+    key = (fmt, hash(bytes(raw)))
+    cached = _DOCUMENT_TOKENS.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from apis.shared.files.document_tokens import estimate_document_tokens
+
+        tokens = int(estimate_document_tokens(fmt, raw))
+    except Exception:  # noqa: BLE001 - estimator must never raise
+        tokens = len(raw) // CHARS_PER_TOKEN
+    if len(_DOCUMENT_TOKENS) >= _DOCUMENT_TOKENS_MAX:
+        _DOCUMENT_TOKENS.clear()
+    _DOCUMENT_TOKENS[key] = tokens
+    return tokens
+
+
+def held_document_tokens(messages: Optional[Sequence[Dict[str, Any]]]) -> int:
+    """Estimated tokens of the document blocks the conversation holds in context.
+
+    Only the user-attached blocks (top level of a message): a ``document_read``
+    slice is a tool result and counts as conversation. The estimate is
+    ``estimate_document_tokens`` (pages × 1,500 for a PDF, bytes/4 otherwise)
+    until phase 2's row facts exist. Never raises.
+    """
+    total = 0
+    for message in messages or ():
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and "document" in block:
+                total += _document_block_tokens(block.get("document"))
+    return total
+
+
+def chat_input_tokens(
+    config: "CompactionConfig",
+    input_tokens: int,
+    messages: Optional[Sequence[Dict[str, Any]]],
+) -> Tuple[int, int]:
+    """``(tokens the chat ceiling compares, held document tokens subtracted)``.
+
+    With ``ceiling_excludes_documents`` off, which is every deployment, this
+    is ``(input_tokens, 0)`` and nothing is read. On, the held documents are
+    subtracted (never below zero); the hard ceiling keeps the full input.
+    """
+    if not getattr(config, "ceiling_excludes_documents", False):
+        return int(input_tokens), 0
+    held = held_document_tokens(messages)
+    return max(0, int(input_tokens) - held), held
+
+
+# ---------------------------------------------------------------------------
 # Cut selection
 # ---------------------------------------------------------------------------
 

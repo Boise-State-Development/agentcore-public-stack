@@ -8,10 +8,21 @@ generated one differ.
 
     cd backend && uv run python scripts/eval_fixtures/delivery_cases.py --write
 
-Every case runs the ``auto`` arm (unified-attachment-delivery §8.4): today's
-turn path, deciding for itself. The forced arms and the ceiling arms come
-once the planner's fixture-only ``delivery`` value exists; the cases already
-carry ``run.arm`` and ``run.ceiling`` so that wave adds arms, not a schema.
+Three groups (unified-attachment-delivery §8.4):
+
+- the ``auto`` cases: today's turn path, deciding for itself, across type,
+  size, count and question;
+- the forced arms (``arm_*``): one planted fact asked under each arm that is
+  legal for the file, the gating cells: ``native`` against ``text`` for pdf,
+  docx and html (the risk that text loses layout), and both against
+  ``on_demand``. ``search`` is reserved (``cases.RESERVED_ARMS``);
+- the ceiling arms (``ceiling_*``): one PDF of ~30k to ~150k estimated tokens
+  (about 1.35x that measured), held ``native`` or read ``on_demand``, over six
+  turns: three lookups, two turns that do not touch the document, then a
+  question it answers that was not asked before, after the document's turn
+  has left the three-turn protected tail. Two paces: every turn inside the
+  prompt-cache TTL (``warm``), and a pause past it before turn 5 (``cold``).
+  ``on_demand`` holds no document, so it runs at the default ceiling only.
 """
 
 from __future__ import annotations
@@ -42,12 +53,18 @@ def _case(
     expect: Dict[str, Any],
     notes: str,
     run: Optional[Dict[str, Any]] = None,
+    *,
+    arm: str = "auto",
+    ceiling: str = "default",
+    pauses: Optional[Dict[int, int]] = None,
 ) -> Dict[str, Any]:
+    pauses = pauses or {}
     return {
         "id": f"{FAMILY}.{name}",
         "family": FAMILY,
-        "turns": [{"prompt": p} for p in prompts],
-        "run": {**(run or _NO_TOOLS), "arm": "auto", "ceiling": "default"},
+        "turns": [{"prompt": p, **({"pause_seconds": pauses[i]} if i in pauses else {})}
+                  for i, p in enumerate(prompts)],
+        "run": {**(run or _NO_TOOLS), "arm": arm, "ceiling": ceiling},
         "expect": expect,
         "files": list(files),
         "notes": notes,
@@ -168,6 +185,87 @@ def cases() -> List[Dict[str, Any]]:
         {"contains_any": [target.value], "regex": {"search": [leads(target.value, [target.lookalike, *others])]}},
         "Five ~5k-token documents, today's per-message cap. Each holds a certificate; only one is the subject's.",
     ))
+    out.extend(forced_arm_cases())
+    out.extend(ceiling_cases())
+    return out
+
+
+#: The arms legal for each gating file, and the file. ``auto`` already covers
+#: each file once (``lookup_*``); these name the mode instead of inheriting it.
+_GATING: Dict[str, str] = {
+    "pdf_30k": "delivery_report_30k.pdf",
+    "docx_30k": "delivery_memo_30k.docx",
+    "html_30k": "delivery_bulletin_30k.html",
+}
+_GATING_ARMS = ("native", "text", "on_demand")
+#: Larger files where holding competes with reading on demand.
+_ON_DEMAND_SIZES: Dict[str, str] = {"pdf_80k": "delivery_report_80k.pdf", "md_150k": "delivery_prose_150k.md"}
+
+
+def forced_arm_cases() -> List[Dict[str, Any]]:
+    """The gating cells: one late-depth lookup per file under each legal arm."""
+    out: List[Dict[str, Any]] = []
+    for label, name in _GATING.items():
+        fact = d.prose(name).facts["late"]
+        for arm in _GATING_ARMS:
+            out.append(_case(
+                f"arm_{label}_{arm}", [fact.question()], [name], _lookup(fact),
+                f"Gating cell: {label.replace('_', ', ~')} tokens forced {arm}. Fact at 90% depth.", arm=arm,
+            ))
+    for label, name in _ON_DEMAND_SIZES.items():
+        fact = d.prose(name).facts["late"]
+        for arm in ("native", "on_demand"):
+            out.append(_case(
+                f"arm_{label}_{arm}", [fact.question()], [name], _lookup(fact),
+                f"Holding against reading on demand at ~{label.split('_')[1]}: forced {arm}. Fact at 90% depth.",
+                arm=arm,
+            ))
+    return out
+
+
+#: The ceiling arms' document, by its size label.
+CEILING_DOCUMENTS: Dict[str, str] = {
+    "30k": "delivery_report_30k.pdf",
+    "80k": "delivery_report_80k.pdf",
+    "150k": "delivery_report_150k.pdf",
+}
+#: Past Bedrock's 5-minute prompt-cache TTL, with a margin for clock skew.
+COLD_PAUSE_SECONDS = 330
+#: Turns that do not touch the document, so its turn leaves the protected tail.
+_ASIDES = (
+    "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to "
+    "log every inspection on the day it happens.",
+    "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water "
+    "utility. Keep it general.",
+)
+
+
+def ceiling_prompts(name: str) -> List[str]:
+    """Six turns: three lookups, two asides, then the late fact nobody asked about yet."""
+    doc = d.prose(name)
+    early, middle, late = doc.facts["early"], doc.facts["middle"], doc.facts["late"]
+    backup = (
+        f"According to the same document, what is the {early.lookalike_attribute} for {early.subject}? "
+        "Reply with just the number."
+    )
+    return [early.question(), middle.question("the same document"), backup, *_ASIDES,
+            late.question("the document I attached at the start")]
+
+
+def ceiling_cases() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    cells = [("native", c) for c in ("default", "200k", "100k_documents_excluded")] + [("on_demand", "default")]
+    for size, name in CEILING_DOCUMENTS.items():
+        late = d.prose(name).facts["late"]
+        for arm, ceiling in cells:
+            for pace in ("warm", "cold"):
+                out.append(_case(
+                    f"ceiling_pdf_{size}_{arm}_{ceiling}_{pace}", ceiling_prompts(name), [name], _lookup(late),
+                    f"Ceiling arm: a ~{size}-token PDF held {arm} at the {ceiling} ceiling, {pace} pace. Turn 6 "
+                    "asks the 90%-depth fact after the document's turn has left the protected tail"
+                    + ("; turn 5 waits past the cache TTL." if pace == "cold" else "."),
+                    arm=arm, ceiling=ceiling, pauses={4: COLD_PAUSE_SECONDS} if pace == "cold" else None,
+                ))
     return out
 
 

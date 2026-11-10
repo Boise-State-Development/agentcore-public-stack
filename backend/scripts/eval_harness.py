@@ -74,6 +74,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -88,7 +89,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from apis.shared.costs.ledger_publish import EVAL_TRACKS  # noqa: E402
 from apis.shared.evals.cases import (  # noqa: E402
     ADVISORY_FAMILIES,
+    CEILING_ENV,
+    CEILINGS,
     DEFAULT_FAMILIES,
+    DELIVERY_FAMILY,
     FAMILIES,
     OPT_IN_FAMILIES,
     CaseError,
@@ -372,6 +376,8 @@ def _prepare_meta(out: Path, args: argparse.Namespace, families: List[str]) -> D
             )
         if meta.get("user_id") != args.user_id:
             raise ReportError(f"{out} holds a run as a different user; use a new --out")
+        if meta.get("ceiling", "default") != getattr(args, "ceiling", "default"):
+            raise ReportError(f"{out} holds a run at ceiling {meta.get('ceiling', 'default')}; use a new --out")
         meta["families"] = sorted(set(meta.get("families") or []) | set(families), key=FAMILIES.index)
     else:
         meta = {
@@ -385,6 +391,7 @@ def _prepare_meta(out: Path, args: argparse.Namespace, families: List[str]) -> D
             "auth": args.auth,
             "user_id": args.user_id,
             "gitCommit": _git_commit(),
+            "ceiling": getattr(args, "ceiling", "default"),
         }
     path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return meta
@@ -406,6 +413,31 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if not cases:
         print("no cases selected", file=sys.stderr)
         return 2
+
+    if getattr(args, "match", None):
+        pattern = re.compile(args.match)
+        cases = [c for c in cases if pattern.search(c.id)]
+        if not cases:
+            print(f"no cases match --match {args.match}", file=sys.stderr)
+            return 2
+    # A ceiling is the Runtime's, not the request's: one run, one ceiling.
+    ceiling = getattr(args, "ceiling", "default")
+    if any(c.family == DELIVERY_FAMILY for c in cases):
+        skipped = [c for c in cases if c.family == DELIVERY_FAMILY and c.run.ceiling != ceiling]
+        cases = [c for c in cases if not (c.family == DELIVERY_FAMILY and c.run.ceiling != ceiling)]
+        if skipped:
+            print(f"--ceiling {ceiling}: skipping {len(skipped)} {DELIVERY_FAMILY} case(s) of other ceilings")
+        env = CEILING_ENV[ceiling]
+        if env:
+            if not args.invocations_url:
+                print(f"--ceiling {ceiling} needs a local stack (--invocations-url) started with "
+                      + " ".join(f"{k}={v}" for k, v in env.items()), file=sys.stderr)
+                return 2
+            print(f"--ceiling {ceiling}: the stack at {args.invocations_url} must run with "
+                  + " ".join(f"{k}={v}" for k, v in env.items()))
+        if not cases:
+            print("no cases selected", file=sys.stderr)
+            return 2
 
     out = Path(args.out)
     rows = read_rows(out / RESULTS_FILE)
@@ -522,11 +554,14 @@ async def cmd_run(args: argparse.Namespace) -> int:
             **kwargs,
         )
 
-    async def register_fixture(session_id: str, filename: str) -> str:
+    async def register_fixture(session_id: str, filename: str, arm: Optional[str] = None) -> str:
         if filename in GENERATED:
             data, mime_type = build_fixture(filename), mime_type_for(filename)
         else:
             data, mime_type = load_fixture(fixtures_dir, filename)
+        if arm is not None:
+            # A forced arm is a row value only a direct write sets, so it never goes through presign.
+            return await register_upload(args.user_id, session_id, filename, mime_type, data, delivery=arm)
         if uploader is not None:
             return await upload_via_presign(uploader, session_id, filename, mime_type, data)
         return await register_upload(args.user_id, session_id, filename, mime_type, data)
@@ -1213,6 +1248,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                    help="direct: write each fixture's S3 object and READY row (default); presign: upload as the "
                         "SPA does, POST /files/presign → PUT → complete, so app-api's admission runs "
                         "(needs --auth cognito)")
+    s.add_argument("--match", help="run only the cases whose id matches this regex (e.g. 'ceiling_pdf_(30|80)k')")
+    s.add_argument("--ceiling", choices=list(CEILINGS), default="default",
+                   help=f"{DELIVERY_FAMILY} only: run the cases of this compaction ceiling (a non-default one "
+                        "needs a local stack started with its environment; cases.CEILING_ENV)")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
 
     s = sub.add_parser("judge", help="(spends) score a run's samples with the LLM judges their cases name")

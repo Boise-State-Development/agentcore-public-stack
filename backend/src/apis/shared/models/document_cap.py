@@ -117,6 +117,44 @@ _TEXT_CACHE_MAX_BYTES = 32 * 1024 * 1024
 _text_cache_bytes = 0
 _TEXT_CACHE_LOCK = threading.Lock()
 
+#: Documents the planner was told to keep native (an eval fixture's forced
+#: ``native`` row, ``attachment_plan``): with documents-as-text on, the
+#: projection leaves these blocks as they are. Keyed like the text cache and
+#: confirmed by equality. Only the chat route adds to it, and only for a row
+#: whose ``deliveryOverride`` a direct table write set, so no user's document
+#: is ever in it. Process-local: a block projected in a process that never
+#: saw its turn is rendered as usual, which is today's behaviour.
+_NATIVE_PINS: "OrderedDict[Tuple[str, int], bytes]" = OrderedDict()
+_NATIVE_PINS_MAX_ENTRIES = 32
+
+
+def pin_native(fmt: str, raw: bytes) -> None:
+    """Keep ``raw`` a native document block in every later projection. Never raises."""
+    try:
+        fmt = (fmt or "").strip().lower()
+        if not isinstance(raw, (bytes, bytearray)) or fmt not in RENDERABLE_FORMATS:
+            return
+        raw = bytes(raw)
+        with _TEXT_CACHE_LOCK:
+            _NATIVE_PINS[_cache_key(fmt, raw)] = raw
+            _NATIVE_PINS.move_to_end(_cache_key(fmt, raw))
+            while len(_NATIVE_PINS) > _NATIVE_PINS_MAX_ENTRIES:
+                _NATIVE_PINS.popitem(last=False)
+    except Exception:  # noqa: BLE001 - the block is then rendered, as for any user
+        logger.info("document_cap: could not pin a native document", exc_info=True)
+
+
+def _pinned_native(document: Dict[str, Any]) -> bool:
+    if not _NATIVE_PINS:
+        return False
+    source = document.get("source")
+    raw = source.get("bytes") if isinstance(source, dict) else None
+    if not isinstance(raw, (bytes, bytearray)):
+        return False
+    with _TEXT_CACHE_LOCK:
+        pinned = _NATIVE_PINS.get(_cache_key(_normalized_format(document), bytes(raw)))
+    return pinned is not None and pinned == raw
+
 
 def _normalized_format(document: Dict[str, Any]) -> str:
     fmt = document.get("format")
@@ -277,7 +315,7 @@ class _Pass:
 
     def block(self, block: Any) -> Any:
         if _counts(block):
-            if self.as_text:
+            if self.as_text and not _pinned_native(block["document"]):
                 rendered = _rendered_text(block["document"])
                 if rendered is not None:
                     self.rendered += 1

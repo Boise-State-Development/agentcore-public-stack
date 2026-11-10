@@ -71,8 +71,24 @@ def upload_key(user_id: str, session_id: str, upload_id: str, filename: str) -> 
     return f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
 
 
-async def register_upload(user_id: str, session_id: str, filename: str, mime_type: str, data: bytes) -> str:
-    """Store ``data`` as a READY upload in ``session_id`` and return its ``upload_id``."""
+async def register_upload(
+    user_id: str,
+    session_id: str,
+    filename: str,
+    mime_type: str,
+    data: bytes,
+    *,
+    delivery: Optional[str] = None,
+) -> str:
+    """Store ``data`` as a READY upload in ``session_id`` and return its ``upload_id``.
+
+    ``delivery`` is an ``attachment_delivery`` arm (``native``, ``text`` or
+    ``on_demand``): it is written on the row as the planner's fixture-only
+    override, the one way that value is ever set
+    (``test_delivery_override_is_fixture_only.py``). A document forced
+    ``on_demand`` also gets the digest app-api builds for an upload, so its
+    message carries what an over-budget reference's does rather than a stub.
+    """
     import boto3
 
     from apis.shared.files.models import FileMetadata, FileStatus
@@ -97,9 +113,21 @@ async def register_upload(user_id: str, session_id: str, filename: str, mime_typ
             s3_key=key,
             s3_bucket=bucket,
             status=FileStatus.READY,
+            delivery_override=delivery,
         )
     )
+    if delivery == "on_demand":
+        await _store_digest(user_id, upload_id, filename, mime_type, data)
     return upload_id
+
+
+async def _store_digest(user_id: str, upload_id: str, filename: str, mime_type: str, data: bytes) -> None:
+    """The digest ``FileUploadService`` builds after a document upload, built and stored the same way."""
+    from apis.shared.files.document_digest import build_digest
+    from apis.shared.files.repository import get_file_upload_repository
+
+    digest = await build_digest(raw=data, mime_type=mime_type, filename=filename, upload_id=upload_id)
+    await get_file_upload_repository().update_file_digest(user_id, upload_id, digest.to_item())
 
 
 class AppApiCaller(Protocol):
