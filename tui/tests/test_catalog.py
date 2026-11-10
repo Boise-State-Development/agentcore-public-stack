@@ -525,3 +525,26 @@ class TestUploadFile:
         client = build(respond)
         with pytest.raises(UploadError, match="403"):
             await client.upload_file("s", target)
+
+
+def test_upload_mime_types_mirror_the_servers_allowlist():
+    """The TUI's extension map must admit what the server admits, with the
+    same content type, or a file the server takes (``.sql``) is refused as
+    "not supported" before it is uploaded (unified-attachment-delivery §1.3)."""
+    import ast
+    from pathlib import Path
+
+    from aps_tui.client.catalog import UPLOAD_MIME_TYPES
+
+    models = Path(__file__).resolve().parents[2] / "backend/src/apis/shared/files/models.py"
+    if not models.exists():
+        pytest.skip("backend source not checked out alongside the TUI")
+    tree = ast.parse(models.read_text())
+    server = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "ALLOWED_EXTENSIONS" for t in node.targets)
+    )
+    assert UPLOAD_MIME_TYPES == server
+    assert UPLOAD_MIME_TYPES[".sql"] == "text/plain"
