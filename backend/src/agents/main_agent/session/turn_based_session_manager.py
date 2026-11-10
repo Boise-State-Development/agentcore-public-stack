@@ -47,7 +47,7 @@ from bedrock_agentcore.memory.integrations.strands.session_manager import AgentC
 from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
 
 from .compaction_models import CompactionState, CompactionConfig, CompactionResult
-from .compaction_policy import CompactionPolicy, choose_checkpoint
+from .compaction_policy import CompactionPolicy, chat_input_tokens, choose_checkpoint
 from .compaction_summary import bound_summary
 
 if TYPE_CHECKING:
@@ -1543,8 +1543,16 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             state.last_prefix_key = self._current_prefix_key
 
         policy = CompactionPolicy.resolve(self.compaction_config, context_window)
+        # §5.2 measurement switch (off everywhere): the ceiling compares the
+        # input less the documents held; the hard ceiling keeps the full input.
+        chat_tokens, held_tokens = chat_input_tokens(self.compaction_config, input_tokens, current_messages)
+        if held_tokens:
+            logger.info(
+                "compaction_ceiling_excludes_documents: input=%d held_documents=%d chat=%d ceiling=%d",
+                input_tokens, held_tokens, chat_tokens, policy.ceiling,
+            )
 
-        if input_tokens <= policy.ceiling:
+        if chat_tokens <= policy.ceiling:
             if policy.hysteresis_enabled and not state.armed:
                 logger.info(
                     "compaction_rearmed: input=%d <= ceiling=%d (source=%s)",
@@ -2106,7 +2114,8 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             if not candidates and not has_slices:
                 return None
 
-            reason, gap_seconds = self._document_offload_reason()
+            _, held_tokens = chat_input_tokens(self.compaction_config, 0, messages) if self.compaction_config else (0, 0)
+            reason, gap_seconds = self._document_offload_reason(held_document_tokens=held_tokens)
             if reason is None:
                 if candidates:
                     logger.info(
@@ -2149,7 +2158,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.warning(f"apply_document_offload skipped: {e}", exc_info=True)
             return None
 
-    def _document_offload_reason(self) -> Tuple[Optional[str], Optional[int]]:
+    def _document_offload_reason(self, held_document_tokens: int = 0) -> Tuple[Optional[str], Optional[int]]:
         """``(reason, cache gap seconds)`` — why a prefix re-write is free or
         unavoidable right now, or ``(None, gap)`` while the cache is live.
 
@@ -2182,7 +2191,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                     ceiling = CompactionPolicy.resolve(config, None).ceiling
                 except Exception:  # noqa: BLE001
                     ceiling = None
-            if ceiling and state.last_input_tokens and state.last_input_tokens > int(ceiling):
+            # ``held_document_tokens`` is 0 unless the §5.2 measurement switch is on.
+            last_chat = (state.last_input_tokens or 0) - max(0, int(held_document_tokens))
+            if ceiling and state.last_input_tokens and last_chat > int(ceiling):
                 return "over_ceiling", gap
         return None, gap
 
