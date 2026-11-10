@@ -140,36 +140,41 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
           </div>
         }
 
-        <!-- Image attachments (iMessage-style mosaic) -->
-        @if (imageAttachments().length > 0) {
-          <div class="flex max-w-[80%] justify-end">
-            <app-image-attachment-group [attachments]="imageAttachments()" />
-          </div>
-        }
-
-        <!-- Non-image file attachments (below message bubble) -->
-        @if (nonImageAttachments().length > 0) {
-          @if (attachmentCards) {
-            <!-- features.attachmentCards: one card, a pair, or a mosaic with a "+N" tile -->
+        @if (attachmentCards) {
+          <!--
+            features.attachmentCards: documents, images and Drive folders in one
+            layout (one card, a pair, or a mosaic with a "+N" tile).
+          -->
+          @if (fileAttachments().length > 0 || folderAttachments().length > 0) {
             <div class="flex w-full max-w-[80%] justify-end">
-              <app-message-attachments [attachments]="nonImageAttachments()" />
+              <app-message-attachments [attachments]="fileAttachments()" [folders]="folderAttachments()" />
             </div>
-          } @else {
+          }
+        } @else {
+          <!-- Image attachments (iMessage-style mosaic) -->
+          @if (imageAttachments().length > 0) {
+            <div class="flex max-w-[80%] justify-end">
+              <app-image-attachment-group [attachments]="imageAttachments()" />
+            </div>
+          }
+
+          <!-- Non-image file attachments (below message bubble) -->
+          @if (nonImageAttachments().length > 0) {
             <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
               @for (attachment of nonImageAttachments(); track attachment.uploadId) {
                 <app-file-attachment-badge [attachment]="attachment" />
               }
             </div>
           }
-        }
 
-        <!-- Drive folders (drive-folder spec §4.7): one chip each, expanding to its files -->
-        @if (folderAttachments().length > 0) {
-          <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
-            @for (folder of folderAttachments(); track $index) {
-              <app-folder-attachment-chip [folder]="folder" />
-            }
-          </div>
+          <!-- Drive folders (drive-folder spec §4.7): one chip each, expanding to its files -->
+          @if (folderAttachments().length > 0) {
+            <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
+              @for (folder of folderAttachments(); track $index) {
+                <app-folder-attachment-chip [folder]="folder" />
+              }
+            </div>
+          }
         }
 
         <!--

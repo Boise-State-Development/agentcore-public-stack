@@ -11,6 +11,9 @@ import { csvPreviewRows } from './attachment-kind';
 import { mosaicLeadSpan } from './attachment-layout';
 import { ComposerAttachmentsComponent } from './composer-attachments.component';
 import { MessageAttachmentsComponent } from './message-attachments.component';
+import { ComposerFolderCardComponent } from './composer-folder-card.component';
+import type { ComposerFolder } from '../chat-input/folder-card.component';
+import type { FolderAttachmentData } from '../../services/models/message.model';
 
 const MB = 1024 * 1024;
 
@@ -196,13 +199,13 @@ describe('MessageAttachmentsComponent', () => {
     const fixture = await mount(ids(8));
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelectorAll('app-attachment-card')).toHaveLength(3);
-    const tile = el.querySelector<HTMLButtonElement>('button[aria-label="Show 5 more files"]');
+    const tile = el.querySelector<HTMLButtonElement>('button[aria-label="Show 5 more attachments"]');
     expect(tile?.textContent).toContain('+5');
 
     tile!.click();
     fixture.detectChanges();
     expect(el.querySelectorAll('app-attachment-card')).toHaveLength(8);
-    expect(el.querySelector('button[aria-label^="Show"][aria-label$="more files"]')).toBeNull();
+    expect(el.querySelector('button[aria-label^="Show"][aria-label$="more attachments"]')).toBeNull();
 
     const fewer = Array.from(el.querySelectorAll('button')).find((b) => text(b) === 'Show fewer');
     fewer!.click();
@@ -248,3 +251,84 @@ describe('ComposerAttachmentsComponent', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
   });
 });
+
+describe('images and folders as cards', () => {
+  const folder: FolderAttachmentData = {
+    folderAttachId: 'fa-1',
+    name: 'Grant drafts',
+    source: 'Google Drive',
+    status: 'ready',
+    fileCount: 9,
+    files: ['budget/Budget.xlsx', 'Narrative.docx', 'Letters/Support.pdf'],
+    moreCount: 6,
+  };
+
+  async function message(attachments: FileAttachmentData[], folders: FolderAttachmentData[] = []) {
+    await configure([MessageAttachmentsComponent]);
+    const fixture = TestBed.createComponent(MessageAttachmentsComponent);
+    fixture.componentRef.setInput('attachments', attachments);
+    fixture.componentRef.setInput('folders', folders);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  it('lays out documents, images and folders in one mosaic', async () => {
+    const el = (await message([sent('brief'), sent('photo', 'image/png', 'photo.png')], [folder]))
+      .nativeElement as HTMLElement;
+    expect(el.querySelectorAll('ul[aria-label] > li')).toHaveLength(3);
+    expect(el.querySelector('ul')?.getAttribute('aria-label')).toBe('3 attachments');
+    expect(el.querySelector('app-folder-attachment-card')).not.toBeNull();
+  });
+
+  it('opens the message images in the lightbox at the one clicked', async () => {
+    const fixture = await message([sent('a', 'image/png', 'a.png'), sent('doc'), sent('b', 'image/jpeg', 'b.jpg')]);
+    const el = fixture.nativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('button[aria-label="Preview b.jpg"]')!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fixture.detectChanges();
+    const lightbox = fixture.debugElement.query((node) => node.name === 'app-image-lightbox');
+    expect(lightbox).not.toBeNull();
+    expect(lightbox.componentInstance.images().map((i: { filename: string }) => i.filename)).toEqual(['a.png', 'b.jpg']);
+    expect(lightbox.componentInstance.startIndex()).toBe(1);
+  });
+
+  it('shows a folder with its first files, and its whole list on Files', async () => {
+    const fixture = await message([], [folder]);
+    const el = fixture.nativeElement as HTMLElement;
+    expect(text(el)).toContain('Folder · 9 files · Google Drive');
+    expect(el.querySelector('app-folder-preview')?.textContent).toContain('Budget.xlsx');
+    const files = el.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    files.click();
+    fixture.detectChanges();
+    expect(files.getAttribute('aria-expanded')).toBe('true');
+    expect(el.querySelector(`#${files.getAttribute('aria-controls')}`)?.textContent).toContain('Letters/Support.pdf');
+  });
+
+  async function composerFolder(overrides: Partial<ComposerFolder>) {
+    await configure([ComposerFolderCardComponent]);
+    const fixture = TestBed.createComponent(ComposerFolderCardComponent);
+    fixture.componentRef.setInput('folder', {
+      localId: 'l1', folderAttachId: 'fa-1', sessionId: 's1', name: 'Grant drafts', source: 'Google Drive',
+      row: null, phase: 'attaching', error: null, ...overrides,
+    });
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('draws the composer folder while it is being added, with Remove', async () => {
+    const el = await composerFolder({});
+    expect(text(el)).toContain('Adding from Google Drive…');
+    expect(el.querySelector('button[aria-label="Remove folder Grant drafts"]')).not.toBeNull();
+  });
+
+  it('offers Connect when the source needs consent again', async () => {
+    const el = await composerFolder({
+      phase: 'attached',
+      row: { status: 'partial', error: 'needs_consent', counts: { attached: 2 }, files: [] } as never,
+    });
+    expect(Array.from(el.querySelectorAll('button')).some((b) => b.textContent?.includes('Connect'))).toBe(true);
+  });
+});
+
