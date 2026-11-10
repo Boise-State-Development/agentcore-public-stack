@@ -52,6 +52,7 @@ const fileUploadService = {
   getPreviewUrl: vi.fn().mockResolvedValue({ url: 'https://s3.example/x' }),
   getTextSnippet: vi.fn().mockResolvedValue({ snippet: '# Title\n\nBody' }),
   getThumbnail: vi.fn().mockResolvedValue({ status: 'unsupported' }),
+  getThumbnailWhenRendered: vi.fn().mockResolvedValue({ status: 'unsupported' }),
 };
 
 async function configure(imports: unknown[]): Promise<void> {

@@ -56,6 +56,7 @@ from .sheet_preview import (
     read_workbook_preview,
 )
 from .thumbnails import (
+    ThumbnailPending,
     ThumbnailRenderer,
     ThumbnailRenderError,
     ThumbnailUnsupportedError,
@@ -904,9 +905,11 @@ class FileUploadService:
         """
         Return a presigned URL for a PNG thumbnail of the file's first page.
 
-        Lazy-renders on first request: checks for a cached ``_thumb.png``
-        sibling object in S3, generates one synchronously if missing, then
-        returns a short-lived presigned URL. Subsequent calls hit the cache.
+        Serves the prepare Lambda's ``_derived/thumb.png``, or the
+        ``_thumb.png`` this service rendered before that existed. When neither
+        exists it queues a render (``ThumbnailPending``) rather than running
+        PDFium here; only a deployment without the prepare queue still renders
+        in-process.
 
         Args:
             user_id: The owner's user ID.
@@ -918,6 +921,7 @@ class FileUploadService:
         Raises:
             FileNotFoundError: File not found, not owned, or not ready.
             ThumbnailUnsupportedError: MIME type has no registered renderer.
+            ThumbnailPending: Not rendered yet; the prepare Lambda has been asked.
             ThumbnailRenderError: The file was unreadable / corrupt / encrypted.
         """
         file_meta = await self.repository.get_file(user_id, upload_id)
@@ -934,20 +938,13 @@ class FileUploadService:
                 f"No thumbnail renderer for {file_meta.mime_type}"
             )
 
-        thumb_key = self._thumbnail_s3_key(file_meta)
-
-        # Cache check via HEAD — cheap, no body transfer.
-        cached = True
-        try:
-            self._s3_client.head_object(Bucket=self.bucket_name, Key=thumb_key)
-        except ClientError as e:
-            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
-                cached = False
-            else:
-                logger.error(f"HEAD failed for thumbnail {thumb_key}: {e}")
-                raise
-
-        if not cached:
+        thumb_key = await self._find_thumbnail(file_meta)
+        cached = thumb_key is not None
+        if thumb_key is None:
+            if await self._queue_thumbnail(file_meta):
+                raise ThumbnailPending(f"Thumbnail for {upload_id} is being rendered")
+            # No prepare queue in this deployment: render here, as before.
+            thumb_key = self._thumbnail_s3_key(file_meta)
             await self._render_and_store_thumbnail(file_meta, thumb_key)
 
         # Generate the presigned URL for the thumbnail. Use the same
@@ -977,6 +974,45 @@ class FileUploadService:
             expires_at=expires_at,
             cached=cached,
         )
+
+    async def _find_thumbnail(self, file_meta: FileMetadata) -> Optional[str]:
+        """The key of a stored thumbnail, or ``None``.
+
+        The prepare Lambda's ``_derived/thumb.png`` first, then the
+        ``_thumb.png`` this service rendered for files uploaded before it.
+        """
+        from apis.shared.files.pdf_thumbnail import thumbnail_key
+
+        for key in (thumbnail_key(file_meta.s3_key), self._thumbnail_s3_key(file_meta)):
+            try:
+                await asyncio.to_thread(self._s3_client.head_object, Bucket=self.bucket_name, Key=key)
+                return key
+            except ClientError as e:
+                if e.response["Error"]["Code"] not in ("404", "NoSuchKey"):
+                    logger.error(f"HEAD failed for thumbnail {key}: {e}")
+                    raise
+        return None
+
+    async def _queue_thumbnail(self, file_meta: FileMetadata) -> bool:
+        """Ask the prepare Lambda to render this file's first page.
+
+        True when this deployment has the prepare queue, whether or not the
+        send succeeded: with the queue, app-api never runs PDFium itself, and
+        the next view asks again.
+        """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+
+        queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "").strip()
+        if not large_document_attachments_enabled() or not queue_url:
+            return False
+        try:
+            body = json.dumps(
+                {"action": "thumbnail", "user_id": file_meta.user_id, "upload_id": file_meta.upload_id}
+            )
+            await asyncio.to_thread(self._sqs().send_message, QueueUrl=queue_url, MessageBody=body)
+        except Exception:  # noqa: BLE001 - the card keeps its skeleton
+            logger.warning("Thumbnail render not queued", exc_info=True)
+        return True
 
     @staticmethod
     def _thumbnail_source_key(file_meta: FileMetadata) -> str:
@@ -1166,12 +1202,16 @@ class FileUploadService:
     def _delete_derived_objects(self, file_meta: FileMetadata) -> None:
         """Best-effort delete of a prepared document's ``_derived/`` sidecars.
 
-        Only reference-class files can have any, so every other file skips the
-        LIST. A preparation still running when the row is deleted cleans up
+        Only a reference-class file (its preparation) or a PDF (its first-page
+        thumbnail) can have any, so every other file skips the LIST. A preparation still running when the row is deleted cleans up
         after itself: its final row write is conditional on the row, and it
         deletes the prefix when that write fails.
         """
-        if not (file_meta.preparation or is_reference_document(file_meta)):
+        if not (
+            file_meta.preparation
+            or is_reference_document(file_meta)
+            or file_meta.mime_type == "application/pdf"  # its _derived/thumb.png
+        ):
             return
         from apis.shared.files.large_document import derived_prefix
 

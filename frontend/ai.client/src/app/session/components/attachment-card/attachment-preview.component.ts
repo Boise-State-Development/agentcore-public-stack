@@ -276,7 +276,7 @@ export class AttachmentPreviewComponent {
   }
 
   private async fetchThumbnail(uploadId: string): Promise<void> {
-    const result = await this.fileUploadService.getThumbnail(uploadId);
+    const result = await this.fileUploadService.getThumbnailWhenRendered(uploadId);
     this.thumbnailUrl.set(result.status === 'ready' ? result.response.url : null);
   }
 

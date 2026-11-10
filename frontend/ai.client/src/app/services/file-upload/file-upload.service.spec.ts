@@ -780,4 +780,30 @@ describe('FileUploadService', () => {
       });
     });
   });
+
+  describe('thumbnails rendered by the prepare Lambda', () => {
+    const url = 'http://localhost:8000/files/up-1/thumbnail';
+    const body = { uploadId: 'up-1', url: 'https://s3/thumb.png', expiresAt: '2026-11-10T00:10:00Z', cached: true };
+
+    it('reports a 202 as pending', async () => {
+      const result = service.getThumbnail('up-1');
+      httpMock.expectOne(url).flush({ status: 'rendering' }, { status: 202, statusText: 'Accepted' });
+      expect(await result).toEqual({ status: 'pending' });
+    });
+
+    it('asks again while pending, then returns the rendered thumbnail', async () => {
+      const spy = vi
+        .spyOn(service, 'getThumbnail')
+        .mockResolvedValueOnce({ status: 'pending' })
+        .mockResolvedValueOnce({ status: 'ready', response: body });
+      expect(await service.getThumbnailWhenRendered('up-1', [0, 0, 0])).toEqual({ status: 'ready', response: body });
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+
+    it('gives up as unavailable after its last ask', async () => {
+      const spy = vi.spyOn(service, 'getThumbnail').mockResolvedValue({ status: 'pending' });
+      expect(await service.getThumbnailWhenRendered('up-1', [0, 0])).toEqual({ status: 'unavailable' });
+      expect(spy).toHaveBeenCalledTimes(3);
+    });
+  });
 });

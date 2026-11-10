@@ -96,8 +96,10 @@ class TestPrepare:
             f"{base}_derived/pages-0011-0020.pdf",
             f"{base}_derived/pages-0021-0023.pdf",
             f"{base}_derived/text.jsonl",
+            f"{base}_derived/thumb.png",
             f"{base}manual.pdf",
         ]
+        assert _body(s3, f"{base}_derived/thumb.png").startswith(b"\x89PNG\r\n\x1a\n")
         assert ld.decode_text_layer(_body(s3, f"{base}_derived/text.jsonl")) == PAGES
         row = await repository.get_file("u1", "up-1")
         prep = row.preparation
@@ -161,7 +163,7 @@ class TestPrepare:
             "u1", "up-1", ld.preparation_record(status=ld.STATUS_FAILED, error="ClientError")
         )
         assert await _prepare(store) == "ready"
-        assert len(_keys(s3, "user-files/u1/s1/up-1/_derived/")) == 4
+        assert len(_keys(s3, "user-files/u1/s1/up-1/_derived/")) == 5  # 3 shards, text layer, thumbnail
 
     async def test_a_bad_document_records_failed_and_never_raises(self, store):
         s3, repository = store

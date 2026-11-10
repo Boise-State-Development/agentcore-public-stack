@@ -232,7 +232,12 @@ export interface ThumbnailResponse {
 export type ThumbnailFetchResult =
   | { status: 'ready'; response: ThumbnailResponse }
   | { status: 'unsupported' }
-  | { status: 'unavailable' };
+  | { status: 'unavailable' }
+  /** Not rendered yet; the prepare Lambda has been asked (HTTP 202). */
+  | { status: 'pending' };
+
+/** Waits between asks while a thumbnail is being rendered (`getThumbnailWhenRendered`). */
+const THUMBNAIL_PENDING_DELAYS_MS = [2000, 4000, 8000];
 
 /**
  * Whether a large document can be searched through the attachments KB, from
@@ -837,24 +842,42 @@ export class FileUploadService {
   /**
    * Fetch a presigned URL for a PNG thumbnail of the file's first page.
    *
-   * Backend lazy-renders on first call and caches the result, so subsequent
-   * calls return instantly. Distinguishes between "this file type can never
-   * have a thumbnail" (415 → `unsupported`) and "we tried but it didn't
-   * work" (404/422/network → `unavailable`) so the UI can decide whether
-   * to retry or give up.
+   * The prepare Lambda renders it at upload; app-api only presigns it. A
+   * thumbnail not rendered yet answers 202 (`pending`), and a render is
+   * queued. Distinguishes "this file type can never have a thumbnail" (415 →
+   * `unsupported`) from "we tried but it didn't work" (404/422/network →
+   * `unavailable`) so the UI can decide whether to retry or give up.
    */
   async getThumbnail(uploadId: string): Promise<ThumbnailFetchResult> {
     try {
       const response = await firstValueFrom(
-        this.http.get<ThumbnailResponse>(`${this.baseUrl()}/${uploadId}/thumbnail`)
+        this.http.get<ThumbnailResponse>(`${this.baseUrl()}/${uploadId}/thumbnail`, { observe: 'response' })
       );
-      return { status: 'ready', response };
+      if (response.status === 202 || !response.body) return { status: 'pending' };
+      return { status: 'ready', response: response.body };
     } catch (err) {
       if (err instanceof HttpErrorResponse && err.status === 415) {
         return { status: 'unsupported' };
       }
       return { status: 'unavailable' };
     }
+  }
+
+  /**
+   * `getThumbnail`, asking again a few times (2 s, 4 s, 8 s) while it is
+   * still being rendered: a card shown in the seconds after an upload, or the
+   * first view of a PDF uploaded before preparation rendered thumbnails.
+   * Still pending after that, it reports `unavailable` and the card keeps its
+   * skeleton until the next view.
+   */
+  async getThumbnailWhenRendered(uploadId: string, delays: readonly number[] = THUMBNAIL_PENDING_DELAYS_MS): Promise<ThumbnailFetchResult> {
+    let result = await this.getThumbnail(uploadId);
+    for (const delay of delays) {
+      if (result.status !== 'pending') return result;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      result = await this.getThumbnail(uploadId);
+    }
+    return result.status === 'pending' ? { status: 'unavailable' } : result;
   }
 
   /**

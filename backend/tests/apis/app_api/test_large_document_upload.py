@@ -262,7 +262,7 @@ class TestDeletion:
         assert _keys(bucket) == []
 
     async def test_an_inline_class_file_skips_the_listing(self, bucket):
-        meta = _meta(size=1000, status=FileStatus.READY)
+        meta = _meta(size=1000, status=FileStatus.READY, filename="notes.txt", mime="text/plain")
         _seed(bucket, meta, derived=())
         s3 = MagicMock(wraps=bucket)
         assert await _deleting_service(s3, [meta]).delete_file("u1", "up-1") is True
