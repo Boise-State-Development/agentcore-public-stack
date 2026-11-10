@@ -24,8 +24,17 @@ So a response hook records the status of each failed POST by JSON-RPC id. The
 read stream handed to the session then rewrites the SDK's stand-in message to
 :func:`~apis.shared.tools.mcp_session.http_error_message` for that id. The
 error code is left alone. The hook runs before the transport writes the error
-to the stream, so the status is always there when the error is read. A server
-that sends its own JSON-RPC error body keeps its own message.
+to the stream, so the status is always there when the error is read.
+
+A server that sends its own JSON-RPC error body keeps its own message, with
+one exception: on a 401 or 403 the status is appended to it, e.g. "Access
+token is required (Server returned HTTP 401 Unauthorized)". `mcp.zoom.us`
+answers a missing or expired token exactly that way, and neither auth
+detector matches its words, so without the status the user got no Connect
+prompt and no token refresh (1.x raised an `HTTPStatusError` carrying the 401;
+found probing dev's catalog, 2026-11-09). Any other status on a server's own
+body is left alone: the server reported the failure itself, so the 5xx
+unknown-outcome rule does not apply.
 
 Last, it remembers which servers speak only the legacy handshake. mcp 2.x
 probes `server/discover` on every connect and falls back to `initialize` when
@@ -64,6 +73,10 @@ logger = logging.getLogger(__name__)
 # The message `StreamableHTTPTransport._handle_post_request` (mcp 2.1.1 through 2.3.0) puts
 # on a non-2xx POST whose body is not a JSON-RPC error.
 _SDK_HTTP_ERROR_MESSAGE = "Server returned an error response"
+
+# Statuses written onto a server's own JSON-RPC error message too, because the
+# auth detectors key on them (see the module docstring).
+_AUTH_STATUSES = frozenset({401, 403})
 
 # Failed POSTs whose error has not been read yet. A server that answers with
 # its own JSON-RPC error body never has its entry consumed by a rewrite, so the
@@ -156,12 +169,17 @@ class _StatusCarryingReadStream:
         if not isinstance(message, JSONRPCError):
             return item
         recorded = self._statuses.pop(message.id)
-        if recorded is None or message.error.message != _SDK_HTTP_ERROR_MESSAGE:
+        if recorded is None:
             return item
         status, reason = recorded
-        error = message.error.model_copy(
-            update={"message": http_error_message(status, reason)}
-        )
+        original = message.error.message
+        if original == _SDK_HTTP_ERROR_MESSAGE:
+            rewritten = http_error_message(status, reason)
+        elif status in _AUTH_STATUSES:
+            rewritten = f"{original} ({http_error_message(status, reason)})"
+        else:
+            return item
+        error = message.error.model_copy(update={"message": rewritten})
         return replace(item, message=message.model_copy(update={"error": error}))
 
     async def receive(self) -> Any:

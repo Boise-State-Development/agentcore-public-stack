@@ -25,7 +25,8 @@ class FlakyMCPServer:
 
     With `down` set it answers every request with `down_status` (503) without
     running anything — a server still unavailable when a client tries to
-    reconnect, or one refusing the caller (401).
+    reconnect, or one refusing the caller (401). `down_message` makes that
+    answer the server's own JSON-RPC error instead of plain text.
 
     Every JSON request body it receives is kept in `requests`, so a test can
     read what the client put on the wire. `server_kwargs` go to `MCPServer`
@@ -43,6 +44,9 @@ class FlakyMCPServer:
         self.drop_calls = False
         self.down = False
         self.down_status = 503
+        # While `down`, answer with this JSON-RPC error message instead of a
+        # plain-text body.
+        self.down_message = None
         # How `server/discover` is answered: None (the modern server answers
         # it), "reject" (a legacy server's 400 JSON-RPC error, as
         # mcp.excalidraw.com sends), or "503".
@@ -59,15 +63,28 @@ class FlakyMCPServer:
 
         inner = server.streamable_http_app(stateless_http=True, json_response=True)
 
-        async def unavailable(send):
+        async def unavailable(send, request_id=None):
+            if self.down_message is None:
+                content_type, payload = b"text/plain", b"unavailable"
+            else:
+                # The server's own JSON-RPC error on the failed status, as
+                # mcp.zoom.us answers a missing token with a 401.
+                content_type = b"application/json"
+                payload = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32003, "message": self.down_message},
+                    }
+                ).encode()
             await send(
                 {
                     "type": "http.response.start",
                     "status": self.down_status,
-                    "headers": [(b"content-type", b"text/plain")],
+                    "headers": [(b"content-type", content_type)],
                 }
             )
-            await send({"type": "http.response.body", "body": b"unavailable"})
+            await send({"type": "http.response.body", "body": payload})
 
         async def unavailable_503(send):
             await send(
@@ -123,14 +140,17 @@ class FlakyMCPServer:
                 if not message.get("more_body"):
                     break
             replay_iter = iter(messages)
+            parsed = None
             with contextlib.suppress(ValueError):
-                self.requests.append(json.loads(body))
+                parsed = json.loads(body)
+                self.requests.append(parsed)
 
             async def replay():
                 return next(replay_iter, {"type": "http.disconnect"})
 
             if self.down:
-                return await unavailable(send)
+                request_id = parsed.get("id") if isinstance(parsed, dict) else None
+                return await unavailable(send, request_id)
             if self.discover_reply and b'"server/discover"' in body:
                 if self.discover_reply == "503":
                     return await unavailable_503(send)

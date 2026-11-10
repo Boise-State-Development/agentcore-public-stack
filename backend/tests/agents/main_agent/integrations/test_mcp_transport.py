@@ -87,6 +87,66 @@ def test_a_401_on_a_call_reads_as_an_auth_failure():
         assert not server_error_outcome_unknown(result)
 
 
+_ZOOM_401_MESSAGE = "Access token is required"
+
+
+def test_a_401_with_the_servers_own_error_body_on_connect_reads_as_an_auth_failure():
+    """mcp.zoom.us answers a missing token with a 401 and its own JSON-RPC
+    error, whose words neither detector knows."""
+    with FlakyMCPServer() as server:
+        server.down = True
+        server.down_status = 401
+        server.down_message = _ZOOM_401_MESSAGE
+        client = server.client()
+        with pytest.raises(Exception) as caught:
+            client.start()
+        assert _ZOOM_401_MESSAGE in str(_root(caught.value))
+        assert _is_auth_failure(caught.value)
+
+
+def test_a_401_with_the_servers_own_error_body_on_a_call_reads_as_an_auth_failure():
+    with FlakyMCPServer() as server, _stopping(server.client()) as client:
+        client.start()
+        server.down = True
+        server.down_status = 401
+        server.down_message = _ZOOM_401_MESSAGE
+        result = client.call_tool_sync("t-1", "issue_write", {"title": "a"})
+
+        text = result["content"][0]["text"]
+        assert _ZOOM_401_MESSAGE in text
+        assert "Server returned HTTP 401 Unauthorized" in text
+        assert looks_like_auth_failure(result)
+        assert not server_error_outcome_unknown(result)
+
+
+def test_a_503_with_the_servers_own_error_body_keeps_its_message():
+    """The server reported the failure itself, so it is not an unknown outcome."""
+    with FlakyMCPServer() as server, _stopping(server.client()) as client:
+        client.start()
+        server.down = True
+        server.down_message = "Rate limited, try later"
+        result = client.call_tool_sync("t-1", "issue_write", {"title": "a"})
+
+        assert "Rate limited, try later" in result["content"][0]["text"]
+        assert "HTTP 503" not in result["content"][0]["text"]
+        assert not server_error_outcome_unknown(result)
+        assert not looks_like_auth_failure(result)
+
+
+def _root(exc: BaseException) -> BaseException:
+    """The innermost exception, through ExceptionGroups and causes."""
+    while True:
+        nested = getattr(exc, "exceptions", None)
+        if nested:
+            exc = nested[0]
+        elif exc.__cause__ is not None:
+            exc = exc.__cause__
+        elif exc.__context__ is not None:
+            exc = exc.__context__
+        else:
+            return exc
+
+
 def test_a_plain_mcp_client_never_sees_the_status():
     """The premise: without our transport the status is gone."""
     from mcp.client.streamable_http import streamable_http_client
@@ -133,6 +193,26 @@ async def test_a_servers_own_error_message_is_kept():
     assert item.message.error.message == "Invalid params"
     assert statuses.pop(7) is None  # consumed either way
     assert stream.last_context == "ctx"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "reason"), [(401, "Unauthorized"), (403, "Forbidden")]
+)
+async def test_an_auth_status_is_appended_to_a_servers_own_message(status, reason):
+    statuses = _FailedPostStatuses()
+    statuses._by_id[7] = (status, reason)
+    stream = _StatusCarryingReadStream(
+        _Inner(_error(7, "Access token is required")), statuses, _URL
+    )
+
+    item = await stream.receive()
+
+    assert item.message.error.message == (
+        f"Access token is required (Server returned HTTP {status} {reason})"
+    )
+    assert item.message.error.code == INTERNAL_ERROR
+    assert statuses.pop(7) is None
 
 
 @pytest.mark.asyncio
