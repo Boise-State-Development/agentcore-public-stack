@@ -109,10 +109,30 @@ overflow. What not to adopt yet is the 500 MB figure (§11, Q2).
 |---|---|---|
 | Document and image sources for Claude | `bytes` only; no S3 location, no Files API | Documented by AWS and Anthropic |
 | Non-PDF document blocks per request | 5, 4.5 MB each | Documented; avoided entirely by sending text |
-| PDF pages per request | 100 (AWS) vs 600 for 1M-context models (Anthropic) | **Conflicting; needs a probe** |
-| Request payload | 32 MB (AWS) vs 20 MB (Anthropic's Bedrock page) | **Conflicting; needs a probe** |
+| PDF pages per request | **100** on Haiku 4.5 (200k window); **600** on Haiku 5.5 and Sonnet 4.6 (1M window). Per PDF block: the refusal names the block, `A maximum of N PDF pages may be provided` | **Measured** on dev, 2026-11-09 |
+| Request payload | **32 MB** on the wire (the base64 body), for all three: 31.8 MB accepted, 32.2 MB refused. The same whether one PDF or six. Anthropic's 20 MB does not apply on Bedrock | **Measured** on dev, 2026-11-09 |
 | Image | 5 MB base64 on Bedrock; 8000×8000 px; stricter per-image limit above 20 image and PDF blocks | Documented by Anthropic |
 | AgentCore Memory event | 10 MB | Ours to avoid (§6.2) |
+
+**How the two ceilings were measured.** `backend/scripts/probe_bedrock_document_ceilings.py`
+sends Converse requests on dev that differ only in the dimension under test, and
+records each refusal verbatim. Pages: a PDF of N near-empty pages at 10, 100, 101,
+600 and 601. Payload: one page whose bytes are an embedded noise image, at 19, 21,
+31, 31.8, 32.2, 32.6 and 33 MB on the wire, sent both as one PDF and split into
+PDFs under 4 MB.
+
+- **Each PDF page costs about 1,560 input tokens** whatever its text: 15,650 for 10
+  near-empty pages and 936,051 for 600 on Sonnet 4.6. The page images dominate. So
+  the 600-page ceiling is a context ceiling too: 600 pages leave about 64k tokens of
+  a 1M window for everything else. On a 200k model, 100 pages already take 156k.
+- **The payload refusal is misleading.** Over 32 MB, Bedrock answers `Input is too
+  long for requested model`, the same text as a context overflow, although the
+  request held about 1,600 tokens. Anything that maps that error to "too many
+  tokens" will misreport a payload overflow.
+- CountTokens refuses document input (`Document input not supported for token
+  counting`), so a PDF's page-image cost cannot be measured before sending. The
+  planner's estimate stays `PDF_PAGE_TOKEN_ESTIMATE` per page (1,500 today, about
+  4% low).
 
 ## 3. Goals and non-goals
 
@@ -513,7 +533,11 @@ when it is promoted.
    Set from the ceiling arms in phase 0. If holding a document never beats
    `on_demand` on the late question, §5.2 is dropped and the budget stays under the
    ceiling.
-4. **Bedrock's PDF page and payload ceilings for 1M-context models.** Probe on dev in phase 0.
+4. ~~**Bedrock's PDF page and payload ceilings for 1M-context models.**~~ Resolved by
+   the phase 0 probe (§2.1). The page ceiling is per model, set by its window: 100
+   at 200k and 600 at 1M. The planner reads it from the model's facts, not from one
+   constant. The payload ceiling is 32 MB on the wire, which is about 24 MB of raw
+   bytes, for every model probed.
 5. **Per-conversation count.** The Claude apps cap a chat at 20 files. This spec caps
    a message at 20 and lets the budget and `on_demand` govern the conversation.
 6. **Small CSVs.** They could go `text` under the budget instead of always `tool`.
