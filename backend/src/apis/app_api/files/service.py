@@ -642,11 +642,16 @@ class FileUploadService:
         A reference-class document (large-document spec §4A) is never read
         here: the preparation Lambda builds its digest along with the
         sidecars, so app-api never holds a 50 MB object in memory.
+
+        Every other document is also sent to the same Lambda for its file
+        facts only (unified-attachment-delivery spec §4.1, §7): no sidecars, no
+        ``preparation`` and no indexing, so its delivery is unchanged.
         """
         if is_reference_document(file_meta):
             await self._enqueue_preparation(file_meta)
         else:
             self._schedule_digest(file_meta)
+            await self._enqueue_facts(file_meta)
 
     # =========================================================================
     # Preview URL
@@ -1151,6 +1156,30 @@ class FileUploadService:
                 )
             except Exception:  # noqa: BLE001
                 logger.warning("Could not record the failed preparation", exc_info=True)
+
+    async def _enqueue_facts(self, file_meta: FileMetadata) -> None:
+        """Queue a document under the inline limit for its file facts. Never raises.
+
+        Only while large-document attachments are on and the queue exists;
+        otherwise the row simply has no facts, which every reader handles.
+        Nothing is written to the row here: a lost message leaves it without
+        facts, the same state as the flag off.
+        """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+        from apis.shared.files.document_read import is_document_class
+
+        queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "").strip()
+        if not large_document_attachments_enabled() or not queue_url:
+            return
+        if not is_document_class(file_meta.mime_type, file_meta.filename):
+            return
+        try:
+            body = json.dumps(
+                {"action": "facts", "user_id": file_meta.user_id, "upload_id": file_meta.upload_id}
+            )
+            await asyncio.to_thread(self._sqs().send_message, QueueUrl=queue_url, MessageBody=body)
+        except Exception:  # noqa: BLE001 - facts are never worth a failed upload
+            logger.warning("File facts not queued", exc_info=True)
 
     def _delete_derived_objects(self, file_meta: FileMetadata) -> None:
         """Best-effort delete of a prepared document's ``_derived/`` sidecars.

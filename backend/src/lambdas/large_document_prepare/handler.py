@@ -45,6 +45,15 @@ attachment_index.py``), because the stack had no room for a second one:
 
 An index failure never undoes a preparation: Tier 1 does not depend on Tier 2.
 With the flag off, every index message is acknowledged untouched.
+
+**File facts (unified-attachment-delivery spec §4.1).** A preparation that ends
+``ready`` writes the row's ``facts`` map in its final write, from the units it
+already extracted. Every *other* document-class upload (one under the inline
+limit) arrives as ``{"action": "facts", "user_id", "upload_id"}``: it reads the
+original, computes the same facts, and writes only ``facts``. It writes no
+sidecar, no shard, no ``preparation`` and no digest (app-api builds that one
+in-process, as before), and never indexes, so a small file's delivery and KB
+eligibility are exactly what they were.
 """
 
 from __future__ import annotations
@@ -61,7 +70,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from apis.shared.aws_clients import get_client
 from apis.shared.feature_flags import attachment_kb_enabled
-from apis.shared.files import large_document
+from apis.shared.files import file_facts, large_document
 from apis.shared.files.document_digest import build_digest, document_digest_enabled, record_digest
 from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs
 from apis.shared.files.models import FileMetadata, FileStatus, is_reference_document
@@ -271,6 +280,15 @@ async def prepare_upload(
         record_digest(built)
         digest = built.to_item()
 
+    facts: Optional[Dict[str, Any]] = None
+    try:
+        if fmt == "pdf":
+            facts = file_facts.build_document_facts(fmt, size_bytes=len(raw), page_texts=texts)
+        else:
+            facts = file_facts.build_document_facts(fmt, size_bytes=len(raw), text=file_facts.render_text(fmt, raw))
+    except Exception:  # noqa: BLE001 - facts are never worth a failed preparation
+        logger.warning("large-document-prepare: file facts not computed", exc_info=True)
+
     ms = int((time.monotonic() - started) * 1000)
     page_count = len(texts) if fmt == "pdf" else 0
     preparation = large_document.preparation_record(
@@ -282,7 +300,7 @@ async def prepare_upload(
         ms=ms,
         prepared_at=utc_now_iso(),
     )
-    stored = await repository.update_file_preparation(user_id, upload_id, preparation, digest)
+    stored = await repository.update_file_preparation(user_id, upload_id, preparation, digest, facts)
     if stored is None:
         # Deleted (or no longer READY) while it was being prepared: app-api's
         # delete may already have run, so the sidecars are this run's to remove.
@@ -295,6 +313,64 @@ async def prepare_upload(
         return "deleted"
     large_document.record_preparation(outcome="ready", fmt=fmt, ms=ms, pages=page_count, units=len(texts))
     return "ready"
+
+
+async def compute_facts(
+    user_id: str,
+    upload_id: str,
+    *,
+    s3: Any = None,
+    repository: Optional[FileUploadRepository] = None,
+    final_attempt: bool = False,
+) -> str:
+    """Write the facts of one document under the inline limit; returns the outcome.
+
+    The facts-only preparation (module docstring). Raises only on AWS errors
+    before the final attempt, so SQS retries them; a document that will not
+    parse is recorded as ``failed`` in the metric and left without facts, which
+    is the state every turn already handles.
+    """
+    repository = repository or get_file_upload_repository()
+    s3 = s3 or get_client("s3", os.environ.get("AWS_REGION") or None)
+    started = time.monotonic()
+
+    meta = await repository.get_file(user_id, upload_id)
+    if meta is None:
+        return "missing"
+    status = meta.status if isinstance(meta.status, str) else meta.status.value
+    if status != FileStatus.READY.value:
+        return "not_ready"
+    fmt = document_format_for(meta.mime_type, meta.filename)
+    if fmt is None:
+        return "not_document"
+    if is_reference_document(meta):
+        return "reference"  # its preparation writes the facts
+    if file_facts.facts_current(meta):
+        return "already_computed"
+    if not _key_is_owned(meta, user_id, upload_id):
+        file_facts.record_facts(outcome="failed", fmt=fmt, ms=0)
+        return "unexpected_key"
+
+    try:
+        raw = s3.get_object(Bucket=meta.s3_bucket, Key=meta.s3_key)["Body"].read()
+    except _TRANSIENT as e:
+        if not final_attempt:
+            raise
+        logger.warning("large-document-prepare: facts given up after retries (%s)", type(e).__name__)
+        file_facts.record_facts(outcome="failed", fmt=fmt, ms=int((time.monotonic() - started) * 1000))
+        return "failed"
+    try:
+        facts = file_facts.compute_document_facts(fmt, raw)
+    except Exception as e:  # noqa: BLE001 - a bad document leaves the row as it was
+        logger.warning("large-document-prepare: facts not computed (%s)", type(e).__name__)
+        file_facts.record_facts(outcome="failed", fmt=fmt, ms=int((time.monotonic() - started) * 1000))
+        return "failed"
+
+    stored = await repository.update_file_facts(user_id, upload_id, facts, len(raw))
+    ms = int((time.monotonic() - started) * 1000)
+    outcome = "ready" if stored is not None else "stale"
+    file_facts.record_facts(outcome=outcome, fmt=fmt, ms=ms)
+    return outcome
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +427,9 @@ def _ids(message: Dict[str, Any]) -> Optional[Tuple[str, str]]:
 def _parse(body: str) -> Optional[Dict[str, Any]]:
     """The message's kind and fields, or None when it is malformed.
 
-    Kinds: ``prepare`` (``{user_id, upload_id}``, from app-api), ``index`` and
+    Kinds: ``prepare`` (``{user_id, upload_id}``, from app-api), ``facts``
+    (``{"action": "facts", ...}``, from app-api for a document under the inline
+    limit), ``index`` and
     ``check`` (from this pipeline and app-api's re-index on open), ``deleted``
     (an S3 Object Deleted event for an original) and ``reconcile`` (the daily
     schedule).
@@ -381,6 +459,8 @@ def _parse(body: str) -> Optional[Dict[str, Any]]:
         return None
     if action is None:
         return {"kind": "prepare", "user_id": ids[0], "upload_id": ids[1]}
+    if action == "facts":
+        return {"kind": "facts", "user_id": ids[0], "upload_id": ids[1]}
     if action == "index":
         return {"kind": "index", "user_id": ids[0], "upload_id": ids[1], "force": bool(message.get("force"))}
     if action == "check":
@@ -401,6 +481,8 @@ async def _handle(message: Dict[str, Any], final_attempt: bool) -> str:
         if outcome == "ready" and attachment_kb_enabled():
             outcome += f", index: {await index_after_prepare(message['user_id'], message['upload_id'])}"
         return outcome
+    if kind == "facts":
+        return await compute_facts(message["user_id"], message["upload_id"], final_attempt=final_attempt)
     if not attachment_kb_enabled():
         return "attachment KB off; acknowledged"
     return await _run_index_message(message)
