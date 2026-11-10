@@ -34,6 +34,8 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
+from apis.shared.models.tool_specs import model_facing_tool_spec
+
 # Headings `routes.py` composes the user-instructions section under
 # (`compose_agent_system_prompt`, `compose_personal_instructions`,
 # `append_active_prompt`), plus the memory block's opening tag
@@ -265,7 +267,9 @@ def itemize_tools(agent: Any, tool_tokens: int) -> Optional[List[Dict[str, Any]]
         name = str(spec.get("name") or getattr(tool, "tool_name", "") or "")
         key, label = _tool_origin(tool, name)
         try:
-            size = len(json.dumps(spec, sort_keys=True, default=str))
+            # Size what the model is sent: an MCP tool's `outputSchema`
+            # would otherwise inflate its origin's share (GitHub's ~2.6×).
+            size = len(json.dumps(model_facing_tool_spec(spec), sort_keys=True, default=str))
         except (TypeError, ValueError):
             size = len(repr(spec))
         entry = groups.setdefault(key, [label, 0])
