@@ -44,5 +44,6 @@ export const environment = {
         knowledgeBaseMode: true,
         // CDK_RELEASE_LEDGER_ENABLED is on in the `development` GitHub environment.
         releaseLedger: true,
+        attachmentCards: true,
     } satisfies FeatureFlags,
 };
