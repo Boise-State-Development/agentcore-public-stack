@@ -25,6 +25,11 @@ orientation is applied. The ICC profile is kept, since it is the input's own
 bytes. (Byte-identity holds for one Pillow and codec build; the image pin in
 ``pyproject.toml`` is what keeps it across deploys.)
 
+**Two copies.** ``high`` (above) is what a turn sends by default; ``compact``
+is Claude's standard tier (1,568 px, 1,568 tokens) under 480 KB, which the
+planner sends when the high copy does not fit the message's budget. Twenty
+compact copies fit any budget, so an image is never dropped for its bytes.
+
 **What is kept as uploaded.** An image already inside both limits, under the
 byte cap, in a format every model reads, and upright, is sent as uploaded:
 :func:`plan_model_image` returns ``None`` for it, and the row records its
@@ -49,6 +54,14 @@ VISUAL_PATCH_PX = 28
 #: Under Bedrock's 5 MB base64 image limit (3,932,160 raw bytes), with margin.
 MODEL_IMAGE_MAX_BYTES = 3_700_000
 
+#: The compact copy: Claude's standard tier (every model before 4.7 reads at
+#: most 1,568 px and 1,568 visual tokens), under a byte cap small enough that a
+#: message's 20 images always fit the planner's combined budget (20 x 480 KB is
+#: under the 10 MB AgentCore Memory event, and far under the 32 MB request).
+COMPACT_LONG_EDGE_PX = 1_568
+COMPACT_VISUAL_TOKENS = 1_568
+COMPACT_IMAGE_MAX_BYTES = 480_000
+
 #: Refuse to decode anything larger: a decompression bomb, or a panorama app-api
 #: cannot hold. A JPEG is decoded at a reduced scale (``draft``) before this
 #: matters; a PNG of this size is ~400 MB decoded.
@@ -67,6 +80,22 @@ _MAX_SHRINKS = 6
 _MIME_BY_FORMAT = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp", "GIF": "image/gif"}
 _EXT_BY_MIME = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 _EXIF_ORIENTATION = 0x0112
+
+
+@dataclass(frozen=True)
+class Tier:
+    """A size a model copy is made at: long edge, visual tokens, encoded bytes."""
+
+    name: str
+    long_edge: int
+    visual_tokens: int
+    max_bytes: int
+
+
+#: What Claude 4.7+ reads: the copy a turn sends by default.
+HIGH = Tier("high", MAX_LONG_EDGE_PX, MAX_VISUAL_TOKENS, MODEL_IMAGE_MAX_BYTES)
+#: What every earlier model reads, small enough for 20 to a message.
+COMPACT = Tier("compact", COMPACT_LONG_EDGE_PX, COMPACT_VISUAL_TOKENS, COMPACT_IMAGE_MAX_BYTES)
 
 
 class ImageUnreadableError(ValueError):
@@ -103,20 +132,21 @@ def visual_tokens(width: int, height: int) -> int:
     return math.ceil(max(1, width) / VISUAL_PATCH_PX) * math.ceil(max(1, height) / VISUAL_PATCH_PX)
 
 
-def target_size(width: int, height: int) -> Tuple[int, int]:
-    """The largest size, aspect kept, inside both the long-edge and visual-token limits.
+def target_size(width: int, height: int, tier: "Tier" = None) -> Tuple[int, int]:
+    """The largest size, aspect kept, inside the tier's long-edge and visual-token limits.
 
     An image already inside both comes back unchanged. Never upscales.
     """
+    tier = tier or HIGH
     width, height = max(1, int(width)), max(1, int(height))
-    scale = min(1.0, MAX_LONG_EDGE_PX / max(width, height))
+    scale = min(1.0, tier.long_edge / max(width, height))
     w, h = _scaled(width, height, scale)
     # The token limit is on patches, so step down until the patch count fits;
     # the closed form lands within a step or two of the answer.
-    if visual_tokens(w, h) > MAX_VISUAL_TOKENS:
-        scale = min(scale, math.sqrt(MAX_VISUAL_TOKENS * VISUAL_PATCH_PX**2 / (width * height)))
+    if visual_tokens(w, h) > tier.visual_tokens:
+        scale = min(scale, math.sqrt(tier.visual_tokens * VISUAL_PATCH_PX**2 / (width * height)))
         w, h = _scaled(width, height, scale)
-        while visual_tokens(w, h) > MAX_VISUAL_TOKENS and scale > 0:
+        while visual_tokens(w, h) > tier.visual_tokens and scale > 0:
             scale *= 0.995
             w, h = _scaled(width, height, scale)
     return w, h
@@ -140,13 +170,14 @@ def inspect_image(raw: bytes) -> ImageInfo:
     return ImageInfo(width=width, height=height, mime_type=mime, needs_transpose=orientation not in (None, 1))
 
 
-def needs_model_copy(info: ImageInfo, size_bytes: int, declared_mime: str) -> bool:
-    """Whether the uploaded bytes cannot be sent as they are."""
+def needs_model_copy(info: ImageInfo, size_bytes: int, declared_mime: str, tier: "Tier" = None) -> bool:
+    """Whether the uploaded bytes cannot be sent as they are at this tier."""
+    tier = tier or HIGH
     if info.mime_type is None or info.mime_type != (declared_mime or "").lower():
         return True
-    if info.needs_transpose or size_bytes > MODEL_IMAGE_MAX_BYTES:
+    if info.needs_transpose or size_bytes > tier.max_bytes:
         return True
-    return target_size(info.width, info.height) != (info.width, info.height)
+    return target_size(info.width, info.height, tier) != (info.width, info.height)
 
 
 def plan_model_image(raw: bytes, declared_mime: str) -> Tuple[ImageInfo, Optional[ModelImage]]:
@@ -160,7 +191,22 @@ def plan_model_image(raw: bytes, declared_mime: str) -> Tuple[ImageInfo, Optiona
     return info, downscale(raw)
 
 
-def downscale(raw: bytes) -> ModelImage:
+def plan_model_images(
+    raw: bytes, declared_mime: str
+) -> Tuple[ImageInfo, Optional[ModelImage], Optional[ModelImage]]:
+    """The image's info, its ``high`` copy and its ``compact`` copy.
+
+    Each copy is ``None`` when the uploaded bytes already satisfy that tier, so
+    the original is sent as is. Both are made from the uploaded bytes, never one
+    from the other, so each is a pure function of the input.
+    """
+    info = inspect_image(raw)
+    high = downscale(raw, HIGH) if needs_model_copy(info, len(raw), declared_mime, HIGH) else None
+    compact = downscale(raw, COMPACT) if needs_model_copy(info, len(raw), declared_mime, COMPACT) else None
+    return info, high, compact
+
+
+def downscale(raw: bytes, tier: "Tier" = None) -> ModelImage:
     """The model copy of an image: upright, inside both limits, under the byte cap.
 
     A JPEG stays JPEG. Anything else is PNG while it fits (lossless, so text in
@@ -169,6 +215,7 @@ def downscale(raw: bytes) -> ModelImage:
     """
     from PIL import Image, ImageOps, UnidentifiedImageError
 
+    tier = tier or HIGH
     try:
         img = Image.open(io.BytesIO(raw))
         if img.width * img.height > MAX_SOURCE_PIXELS and img.format != "JPEG":
@@ -176,7 +223,7 @@ def downscale(raw: bytes) -> ModelImage:
         source_format = img.format
         icc = img.info.get("icc_profile")
         orientation = img.getexif().get(_EXIF_ORIENTATION, 1)
-        w, h = target_size(*_oriented(img.size, orientation))
+        w, h = target_size(*_oriented(img.size, orientation), tier)
         if source_format == "JPEG":
             # Decode at the smallest power-of-two scale that is still at least
             # the target: a 100 MP photo is never held at full size.
@@ -196,7 +243,7 @@ def downscale(raw: bytes) -> ModelImage:
 
     for _ in range(_MAX_SHRINKS + 1):
         frame = img if img.size == (w, h) else img.resize((w, h), Image.Resampling.LANCZOS)
-        encoded = _encode_within_cap(frame, source_format, alpha, icc)
+        encoded = _encode_within_cap(frame, source_format, alpha, icc, tier.max_bytes)
         if encoded is not None:
             data, mime = encoded
             return ModelImage(data=data, mime_type=mime, width=frame.width, height=frame.height)
@@ -217,22 +264,22 @@ def _has_alpha(img) -> bool:
     return False
 
 
-def _encode_within_cap(frame, source_format: Optional[str], alpha: bool, icc: Optional[bytes]):
+def _encode_within_cap(frame, source_format: Optional[str], alpha: bool, icc: Optional[bytes], cap: int):
     if source_format != "JPEG":
         data = _save(frame, "PNG", compress_level=_PNG_COMPRESS_LEVEL, optimize=False, icc_profile=icc)
-        if len(data) <= MODEL_IMAGE_MAX_BYTES:
+        if len(data) <= cap:
             return data, "image/png"
     if alpha:
         for quality in _WEBP_QUALITIES:
             data = _save(frame, "WEBP", quality=quality, method=4, exact=False, icc_profile=icc)
-            if len(data) <= MODEL_IMAGE_MAX_BYTES:
+            if len(data) <= cap:
                 return data, "image/webp"
         return None
     for quality in _JPEG_QUALITIES:
         data = _save(
             frame, "JPEG", quality=quality, subsampling=2, optimize=False, progressive=False, icc_profile=icc
         )
-        if len(data) <= MODEL_IMAGE_MAX_BYTES:
+        if len(data) <= cap:
             return data, "image/jpeg"
     return None
 
@@ -245,11 +292,12 @@ def _save(frame, fmt: str, **params) -> bytes:
     return buf.getvalue()
 
 
-def model_image_key(s3_key: str, mime_type: str) -> str:
+def model_image_key(s3_key: str, mime_type: str, tier: "Tier" = None) -> str:
     """Where an upload's model copy is stored: beside its other ``_derived/`` sidecars."""
     from apis.shared.files.large_document import derived_prefix
 
-    return f"{derived_prefix(s3_key)}model-image.{_EXT_BY_MIME[mime_type]}"
+    suffix = "" if (tier or HIGH) is HIGH else f"-{tier.name}"
+    return f"{derived_prefix(s3_key)}model-image{suffix}.{_EXT_BY_MIME[mime_type]}"
 
 
 def model_image_record(
@@ -261,6 +309,7 @@ def model_image_record(
     height: int,
     source: ImageInfo,
     downscaled: bool,
+    compact: Optional[dict] = None,
 ) -> dict:
     """The row's ``modelImage`` map: where the model's bytes are and what they are.
 
@@ -277,10 +326,17 @@ def model_image_record(
         "sourceWidth": int(source.width),
         "sourceHeight": int(source.height),
         "downscaled": bool(downscaled),
+        # The ``compact`` copy: ``{key, mimeType, sizeBytes, width, height}``.
+        "compact": dict(compact) if compact else None,
     }
 
 
 __all__ = [
+    "COMPACT",
+    "COMPACT_IMAGE_MAX_BYTES",
+    "HIGH",
+    "Tier",
+    "plan_model_images",
     "ImageInfo",
     "ImageUnreadableError",
     "MAX_LONG_EDGE_PX",

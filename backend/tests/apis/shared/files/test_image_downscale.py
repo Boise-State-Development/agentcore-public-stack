@@ -161,3 +161,30 @@ class TestDeterminism:
 def test_model_copy_lives_with_the_other_derived_sidecars():
     key = d.model_image_key("user-files/u/s/up-1/photo.heic.png", "image/jpeg")
     assert key == "user-files/u/s/up-1/_derived/model-image.jpg"
+    compact = d.model_image_key("user-files/u/s/up-1/photo.png", "image/webp", d.COMPACT)
+    assert compact == "user-files/u/s/up-1/_derived/model-image-compact.webp"
+
+
+class TestCompactCopy:
+    def test_standard_tier_and_small_enough_for_twenty(self):
+        raw = _jpeg(6000, 4000)
+        info, high, compact = d.plan_model_images(raw, "image/jpeg")
+        assert high is not None and compact is not None
+        assert max(compact.width, compact.height) <= d.COMPACT_LONG_EDGE_PX
+        assert d.visual_tokens(compact.width, compact.height) <= d.COMPACT_VISUAL_TOKENS
+        assert len(compact.data) <= d.COMPACT_IMAGE_MAX_BYTES
+        assert 20 * d.COMPACT_IMAGE_MAX_BYTES < 10 * 1024 * 1024
+
+    def test_worst_case_noise_png_with_alpha_still_fits(self):
+        raw = _encode(_noise(2000, 2000, "RGBA"), "PNG")
+        _, _, compact = d.plan_model_images(raw, "image/png")
+        assert compact is not None and len(compact.data) <= d.COMPACT_IMAGE_MAX_BYTES
+
+    def test_a_small_image_has_neither_copy(self):
+        raw = _encode(Image.new("RGB", (640, 480), (1, 2, 3)), "PNG")
+        _, high, compact = d.plan_model_images(raw, "image/png")
+        assert high is None and compact is None
+
+    def test_deterministic(self):
+        raw = _jpeg(3000, 2000)
+        assert d.downscale(raw, d.COMPACT).data == d.downscale(raw, d.COMPACT).data

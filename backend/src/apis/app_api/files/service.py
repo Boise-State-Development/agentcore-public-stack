@@ -674,25 +674,26 @@ class FileUploadService:
                 return file_meta
 
         try:
-            info, copy = await asyncio.to_thread(image_downscale.plan_model_image, raw, file_meta.mime_type)
+            info, high, compact = await asyncio.to_thread(
+                image_downscale.plan_model_images, raw, file_meta.mime_type
+            )
         except image_downscale.ImageUnreadableError:
             if len(raw) > self.max_file_size:
                 raise ImageUnreadableUploadError(file_meta.filename)
             logger.info("An image could not be decoded; it is sent as uploaded")
             return file_meta
 
-        if copy is None:
-            record = image_downscale.model_image_record(
-                key=file_meta.s3_key,
-                mime_type=file_meta.mime_type,
-                size_bytes=len(raw),
-                width=info.width,
-                height=info.height,
-                source=info,
-                downscaled=False,
-            )
-        else:
-            key = image_downscale.model_image_key(file_meta.s3_key, copy.mime_type)
+        async def _stored(copy, tier) -> Optional[dict]:
+            """``{key, mimeType, sizeBytes, width, height}`` of one tier's bytes."""
+            if copy is None:
+                return {
+                    "key": file_meta.s3_key,
+                    "mimeType": file_meta.mime_type,
+                    "sizeBytes": len(raw),
+                    "width": info.width,
+                    "height": info.height,
+                }
+            key = image_downscale.model_image_key(file_meta.s3_key, copy.mime_type, tier)
             try:
                 await asyncio.to_thread(
                     self._s3_client.put_object,
@@ -703,18 +704,32 @@ class FileUploadService:
                 )
             except ClientError:
                 logger.error("Could not store an image's model copy", exc_info=True)
-                if len(raw) > self.max_file_size:
-                    raise FileUploadError("The image could not be prepared. Try again.")
-                return file_meta
-            record = image_downscale.model_image_record(
-                key=key,
-                mime_type=copy.mime_type,
-                size_bytes=len(copy.data),
-                width=copy.width,
-                height=copy.height,
-                source=info,
-                downscaled=True,
-            )
+                return None
+            return {
+                "key": key,
+                "mimeType": copy.mime_type,
+                "sizeBytes": len(copy.data),
+                "width": copy.width,
+                "height": copy.height,
+            }
+
+        stored_high, stored_compact = await asyncio.gather(
+            _stored(high, image_downscale.HIGH), _stored(compact, image_downscale.COMPACT)
+        )
+        if stored_high is None:
+            if len(raw) > self.max_file_size:
+                raise FileUploadError("The image could not be prepared. Try again.")
+            return file_meta
+        record = image_downscale.model_image_record(
+            key=stored_high["key"],
+            mime_type=stored_high["mimeType"],
+            size_bytes=stored_high["sizeBytes"],
+            width=stored_high["width"],
+            height=stored_high["height"],
+            source=info,
+            downscaled=high is not None,
+            compact=stored_compact,
+        )
         updated = await self.repository.update_file_model_image(
             file_meta.user_id, file_meta.upload_id, record
         )
@@ -1392,7 +1407,7 @@ class FileUploadService:
             or is_reference_document(file_meta)
             or file_meta.mime_type == "application/pdf"  # its _derived/thumb.png
             or self._has_preview_format(file_meta)  # its _derived/preview.json
-            or (file_meta.model_image or {}).get("downscaled")  # its _derived/model-image.*
+            or file_meta.model_image  # its _derived/model-image*.*
         ):
             return
         from apis.shared.files.large_document import derived_prefix

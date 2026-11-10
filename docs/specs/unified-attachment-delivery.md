@@ -258,6 +258,12 @@ and keeps its 4 MB image limit.
   A JPEG stays JPEG (quality 85, then 75, 62, 50). Anything else stays PNG while it
   fits, so a screenshot's text stays sharp, then becomes JPEG, or WebP when it has
   transparency. If no quality fits, the size shrinks by 0.8 and the ladder repeats.
+- **A compact copy beside it.** Claude's standard tier (every model before 4.7):
+  1,568 px and 1,568 visual tokens, at most 480 KB. Twenty of them are 9.6 MB, so
+  a message's images always fit a 10 MB combined budget and far under the 32 MB
+  request. The planner sends it when the high copy does not fit (§4.4.1). It is
+  made from the uploaded bytes, never from the high copy, so it too is a pure
+  function of the input.
 - **Upright, first frame, no EXIF.** The EXIF orientation is applied and the EXIF
   block dropped. The ICC profile is kept. An animation sends its first frame, as
   Bedrock would.
@@ -265,13 +271,14 @@ and keeps its 4 MB image limit.
   timestamps: the same bytes give the same copy, in a fresh process too (a test
   pins this). Phase 4a's image handles restore from the stored copy, so a restored
   turn sends the bytes the first turn sent.
-- **Where it lives.** `…/{upload_id}/_derived/model-image.{jpg,png,webp}`, with the
-  other sidecars: deleted with the file, and excluded from the attachments-KB
+- **Where it lives.** `…/{upload_id}/_derived/model-image.{jpg,png,webp}` and
+  `model-image-compact.{…}`, with the other sidecars: deleted with the file, and excluded from the attachments-KB
   delete rule. The row's `modelImage` map records `{version, key, mimeType,
-  sizeBytes, width, height, sourceWidth, sourceHeight, downscaled}`. An image
-  already inside every limit is sent as uploaded, and `modelImage.key` is then the
-  original's (`downscaled: false`). `file_resolver.model_image_source(meta)` is the
-  one reader: the turn sends `modelImage.key` with its `mimeType`, and the
+  sizeBytes, width, height, sourceWidth, sourceHeight, downscaled, compact}`, where
+  `compact` is `{key, mimeType, sizeBytes, width, height}`. An image already inside
+  a tier's limits is sent as uploaded at that tier, and that tier's key is then the
+  original's. `file_resolver.model_image_source(meta, variant)` is the one reader
+  (`variant` is `high` or `compact`): the turn sends `modelImage.key` with its `mimeType`, and the
   original for a row without one.
 - **Admission.** An image up to 20 MB is accepted. One that cannot be decoded is
   still accepted when it is within the general 4 MB limit (sent as uploaded, as

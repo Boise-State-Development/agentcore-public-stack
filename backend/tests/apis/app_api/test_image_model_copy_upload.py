@@ -31,7 +31,12 @@ from apis.shared.files.attachment_plan import (
     upload_size_limit,
 )
 from apis.shared.files.file_resolver import FileResolver, model_image_source
-from apis.shared.files.image_downscale import MODEL_IMAGE_MAX_BYTES, target_size
+from apis.shared.files.image_downscale import (
+    COMPACT_IMAGE_MAX_BYTES,
+    COMPACT_LONG_EDGE_PX,
+    MODEL_IMAGE_MAX_BYTES,
+    target_size,
+)
 from apis.shared.files.models import FileMetadata, FileStatus
 
 MAX = 4 * 1024 * 1024
@@ -43,6 +48,12 @@ def _jpeg(w: int, h: int, quality: int = 95) -> bytes:
     img = Image.frombytes("RGB", (w, h), random.Random(3).randbytes(w * h * 3))
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _flat_jpeg(w: int, h: int) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), (40, 120, 200)).save(buf, format="JPEG", quality=90)
     return buf.getvalue()
 
 
@@ -98,8 +109,12 @@ class TestTokenProfile:
 
         await service.complete_upload("u1", "up-1")
 
-        put = s3.put_object.call_args.kwargs
-        assert put["Key"] == "user-files/u1/s1/up-1/_derived/model-image.jpg"
+        puts = {c.kwargs["Key"]: c.kwargs for c in s3.put_object.call_args_list}
+        assert set(puts) == {
+            "user-files/u1/s1/up-1/_derived/model-image.jpg",
+            "user-files/u1/s1/up-1/_derived/model-image-compact.jpg",
+        }
+        put = puts["user-files/u1/s1/up-1/_derived/model-image.jpg"]
         assert put["ContentType"] == "image/jpeg"
         assert len(put["Body"]) <= MODEL_IMAGE_MAX_BYTES
         kinds = [k for k, _ in order]
@@ -109,12 +124,16 @@ class TestTokenProfile:
         assert (record["width"], record["height"]) == target_size(6000, 4000)
         assert (record["sourceWidth"], record["sourceHeight"]) == (6000, 4000)
         assert record["sizeBytes"] == len(put["Body"])
+        compact = record["compact"]
+        assert compact["key"] == "user-files/u1/s1/up-1/_derived/model-image-compact.jpg"
+        assert max(compact["width"], compact["height"]) <= COMPACT_LONG_EDGE_PX
+        assert compact["sizeBytes"] <= COMPACT_IMAGE_MAX_BYTES
         # Quota counts what the user uploaded.
         repository.increment_quota.assert_awaited_once_with("u1", len(raw))
 
     @pytest.mark.asyncio
     async def test_an_image_inside_the_limits_records_its_original(self, token):
-        raw = _jpeg(900, 600)
+        raw = _flat_jpeg(900, 600)
         service, repository, s3, order = _service(_meta(len(raw)), raw)
 
         await service.complete_upload("u1", "up-1")
@@ -124,6 +143,7 @@ class TestTokenProfile:
         assert record["key"] == "user-files/u1/s1/up-1/photo.jpg"
         assert record["downscaled"] is False
         assert (record["width"], record["height"]) == (900, 600)
+        assert record["compact"]["key"] == record["key"]
 
     @pytest.mark.asyncio
     async def test_an_unreadable_image_over_the_general_limit_is_rejected(self, token):
@@ -172,7 +192,7 @@ class TestTokenProfile:
 
         s3.get_object.assert_not_called()
         keys = [c.kwargs["Key"] for c in s3.put_object.call_args_list]
-        assert keys[1].endswith("/_derived/model-image.jpg")
+        assert any(k.endswith("/_derived/model-image.jpg") for k in keys)
         assert [k for k, _ in order][-2:] == ["model_image", "status"]
 
     def test_limits_endpoint_serves_the_image_ceiling(self):
@@ -206,6 +226,20 @@ class TestResolverSendsTheModelCopy:
             update={"model_image": {"key": "user-files/u1/s1/up-1/_derived/model-image.webp", "mimeType": "image/webp"}}
         )
         assert model_image_source(meta) == ("user-files/u1/s1/up-1/_derived/model-image.webp", "image/webp")
+
+    def test_compact_variant(self):
+        meta = _meta(10).model_copy(
+            update={
+                "model_image": {
+                    "key": "k/high.jpg", "mimeType": "image/jpeg",
+                    "compact": {"key": "k/compact.jpg", "mimeType": "image/jpeg"},
+                }
+            }
+        )
+        assert model_image_source(meta, "compact") == ("k/compact.jpg", "image/jpeg")
+        assert model_image_source(meta) == ("k/high.jpg", "image/jpeg")
+        no_compact = meta.model_copy(update={"model_image": {"key": "k/high.jpg", "mimeType": "image/jpeg"}})
+        assert model_image_source(no_compact, "compact") == ("k/high.jpg", "image/jpeg")
 
     def test_source_is_the_original_without_one(self):
         meta = _meta(10)

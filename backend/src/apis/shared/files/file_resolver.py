@@ -163,14 +163,23 @@ class FileResolver:
         )
 
 
-def model_image_source(file_meta: FileMetadata) -> tuple:
+def model_image_source(file_meta: FileMetadata, variant: str = "high") -> tuple:
     """``(key, mime_type)`` of the bytes a model is sent for this row.
 
-    An image's stored model copy when its row records one; the original for
-    every other row (and for an image uploaded under the ``legacy`` profile).
+    ``variant`` is ``high`` (the default copy) or ``compact`` (the small copy
+    the planner sends when the high one does not fit, ``image_downscale``).
+    An image's stored copy when its row records one; the original for every
+    other row (and for an image uploaded under the ``legacy`` profile). A row
+    without a compact copy answers ``compact`` with its high copy.
     """
     record = file_meta.model_image if isinstance(file_meta.model_image, dict) else None
-    if record and record.get("key") and record.get("mimeType"):
+    if not record:
+        return file_meta.s3_key, file_meta.mime_type
+    if variant == "compact" and isinstance(record.get("compact"), dict):
+        compact = record["compact"]
+        if compact.get("key") and compact.get("mimeType"):
+            return str(compact["key"]), str(compact["mimeType"])
+    if record.get("key") and record.get("mimeType"):
         return str(record["key"]), str(record["mimeType"])
     return file_meta.s3_key, file_meta.mime_type
 
