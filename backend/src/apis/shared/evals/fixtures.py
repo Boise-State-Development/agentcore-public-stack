@@ -32,7 +32,7 @@ import time
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 #: Extensions the case fixtures use, pinned rather than left to the host's
 #: ``mimetypes`` table, which differs between macOS and the CI image for ``.md``.
@@ -99,6 +99,75 @@ async def register_upload(user_id: str, session_id: str, filename: str, mime_typ
             status=FileStatus.READY,
         )
     )
+    return upload_id
+
+
+class AppApiCaller(Protocol):
+    """What :func:`upload_via_presign` needs from a signed-in app-api client.
+
+    ``smoke_turns.AppApiTransport.call`` is one: a JSON request as the
+    signed-in user, cookie session and CSRF header included.
+    """
+
+    async def call(
+        self, method: str, path: str, *, json_body: Any = None, params: Optional[Dict[str, Any]] = None
+    ) -> Tuple[int, Any]: ...
+
+
+#: ``(url, data, headers) -> status``: the PUT to the presigned URL.
+PutObject = Callable[[str, bytes, Dict[str, str]], Awaitable[int]]
+
+
+async def _httpx_put(url: str, data: bytes, headers: Dict[str, str]) -> int:
+    import httpx
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+        response = await client.put(url, content=data, headers=headers)
+        return response.status_code
+
+
+def _detail(body: Any) -> str:
+    if isinstance(body, Mapping):
+        return str(body.get("detail") or body)[:300]
+    return str(body)[:300]
+
+
+async def upload_via_presign(
+    app_api: AppApiCaller,
+    session_id: str,
+    filename: str,
+    mime_type: str,
+    data: bytes,
+    *,
+    put: PutObject = _httpx_put,
+) -> str:
+    """Upload ``data`` the way the SPA does and return its ``upload_id``.
+
+    ``POST /files/presign`` → ``PUT`` to the presigned URL → ``POST
+    /files/{id}/complete``, so app-api's admission (type, size, quota) and
+    its post-upload work (a reference document's preparation) run on the
+    fixture exactly as on a user's file (unified-attachment-delivery §8.2).
+    The opt-in alternative to :func:`register_upload`, which writes the row
+    directly and so never meets admission.
+
+    A refusal at any step is a :class:`FixtureError` naming the step and
+    app-api's reason, because a case whose file cannot be attached measures
+    nothing about delivery.
+    """
+    status, body = await app_api.call(
+        "POST", "/files/presign",
+        json_body={"sessionId": session_id, "filename": filename, "mimeType": mime_type, "sizeBytes": len(data)},
+    )
+    if status != 200 or not isinstance(body, Mapping) or not body.get("uploadId") or not body.get("presignedUrl"):
+        raise FixtureError(f"presign refused {filename} ({len(data):,} bytes): HTTP {status}: {_detail(body)}")
+    upload_id = str(body["uploadId"])
+    # The URL is signed over Content-Type, so the PUT must send the same one.
+    put_status = await put(str(body["presignedUrl"]), data, {"Content-Type": mime_type})
+    if put_status not in (200, 204):
+        raise FixtureError(f"PUT of {filename} to the presigned URL -> HTTP {put_status}")
+    status, body = await app_api.call("POST", f"/files/{upload_id}/complete")
+    if status != 200:
+        raise FixtureError(f"complete refused {filename}: HTTP {status}: {_detail(body)}")
     return upload_id
 
 

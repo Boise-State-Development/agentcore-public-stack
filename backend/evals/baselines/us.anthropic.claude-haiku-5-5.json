@@ -6,6 +6,7 @@
     "tool_selection",
     "document_qa",
     "attachment_tools",
+    "attachment_delivery",
     "project_kb",
     "agent_harness",
     "project_memory",
@@ -958,6 +959,160 @@
       "passes": 3,
       "samples": 3,
       "answer": "The loop stops one item early because of how `range` works.\n\n`range(stop)` produces integers from `0` up to, but **not including**, `stop`. Here, `len(items) - 1` is `3 - 1 = 2`, so the loop only visits indexes `0` and `1`:\n\n```python\nlist(range(len(items) - 1))  # [0, 1]  ->  prints 'a' and 'b' only\n```\n\nThe index of the last item is `2`, which is never reached.\n\n**Fix:** Use `len(items)` without subtracting 1:\n\n```python\nitems = ['a', 'b', 'c']\nfor i in range(len(items)):\n    print(items[i])\n```\n\n**Better still:** If you don't need the index, loop over the list directly. This avoids off-by-o"
+    },
+    "attachment_delivery.lookup_md_5k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-96625"
+    },
+    "attachment_delivery.lookup_md_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-78096"
+    },
+    "attachment_delivery.lookup_md_80k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-66685"
+    },
+    "attachment_delivery.lookup_md_150k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-24282"
+    },
+    "attachment_delivery.lookup_md_300k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-77180"
+    },
+    "attachment_delivery.lookup_txt_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-39741"
+    },
+    "attachment_delivery.lookup_pdf_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-60930"
+    },
+    "attachment_delivery.lookup_pdf_80k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-58797"
+    },
+    "attachment_delivery.lookup_pdf_150k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-66350"
+    },
+    "attachment_delivery.lookup_docx_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-25778"
+    },
+    "attachment_delivery.lookup_html_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-28557"
+    },
+    "attachment_delivery.lookup_pptx_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-95665"
+    },
+    "attachment_delivery.lookup_csv_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-20975"
+    },
+    "attachment_delivery.lookup_xlsx_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-97893"
+    },
+    "attachment_delivery.lookup_png": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WP-60418"
+    },
+    "attachment_delivery.cross_document_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WP-51759; CC-73502"
+    },
+    "attachment_delivery.cross_document_80k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WP-38313; CC-80537\n\nBoth values are in the attached documents. The permit number is in the markdown file. The certificate number is in the PDF on page 44, which is where the markdown file doesn't have it.\n\nEach item also has a similar number flagged as not current. I left those out:\n- WP-38331 is labelled a backup permit number for Wren Bend, kept for audit only.\n- CC-80573 is labelled the expired calibration certificate for Saddle Cut."
+    },
+    "attachment_delivery.absent_fact_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "NOT IN DOCUMENT"
+    },
+    "attachment_delivery.absent_fact_150k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "NOT IN DOCUMENT"
+    },
+    "attachment_delivery.follow_up_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-78096"
+    },
+    "attachment_delivery.follow_up_150k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-24282"
+    },
+    "attachment_delivery.count_five_documents": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "CC-63136"
     }
   },
   "judgeModel": "us.anthropic.claude-sonnet-4-6",
@@ -1130,6 +1285,20 @@
     },
     "skill_outcome.agent_bound_skill_shapes_the_answer": {
       "skill_following": 0.3333
+    }
+  },
+  "familyPromotions": {
+    "attachment_delivery": {
+      "promotedAt": "2026-11-10T05:28:13.152629Z",
+      "source": {
+        "startedAt": "2026-11-10T05:11:48.797184Z",
+        "target": "runtime:dev-boisestateai-v2",
+        "gitCommit": "8011bf5671c525b11758823ad411619287b48a91",
+        "imageTags": {
+          "inference-api": "dc8d00fd7731b316",
+          "app-api": "09c23f04ccbdcc09"
+        }
+      }
     }
   }
 }

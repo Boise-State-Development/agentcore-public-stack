@@ -25,6 +25,7 @@ FAMILIES: Tuple[str, ...] = (
     "tool_selection",
     "document_qa",
     "attachment_tools",
+    "attachment_delivery",
     "project_kb",
     "agent_harness",
     "project_memory",
@@ -40,7 +41,30 @@ JUDGED_FAMILIES = frozenset({"general_chat"})
 #: Families that report but never fail a run: the judged ones, and a
 #: deterministic family under D18's ten-case floor (``terminal``), which gates
 #: once it reaches ten.
-ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal"})
+ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal", "attachment_delivery"})
+
+#: The delivery measurement family (unified-attachment-delivery spec §8.4).
+#: Advisory: its gating set is the cells where two arms are both legal for a
+#: file, and until the forced arms exist every case runs the one ``auto`` arm.
+DELIVERY_FAMILY = "attachment_delivery"
+#: Families a run includes only when ``--family`` names them. The delivery
+#: family attaches documents up to ~300k tokens, so a release or nightly pass
+#: over "every family" must not start paying for it unannounced.
+OPT_IN_FAMILIES = frozenset({DELIVERY_FAMILY})
+#: What a run with no ``--family`` covers.
+DEFAULT_FAMILIES: Tuple[str, ...] = tuple(f for f in FAMILIES if f not in OPT_IN_FAMILIES)
+
+#: Delivery arms a case may name today. ``auto`` is the turn path as it
+#: stands: whatever the deployment decides for the file.
+DELIVERY_ARMS: Tuple[str, ...] = ("auto",)
+#: Arms the schema reserves for the forced-mode wave (§8.4). Each needs the
+#: planner's fixture-only ``delivery`` row value, so naming one is an error
+#: until that lands, rather than a case that silently runs ``auto``.
+RESERVED_ARMS: Tuple[str, ...] = ("native", "text", "on_demand", "search")
+#: The compaction ceiling a case runs under: ``default`` is the deployment's.
+CEILINGS: Tuple[str, ...] = ("default",)
+#: The ceiling arms (§8.4): 200k, and 100k with documents excluded (§5.2).
+RESERVED_CEILINGS: Tuple[str, ...] = ("200k", "100k_documents_excluded")
 
 #: The strands-evals evaluators a case may name: exactly the ones the judge adapter maps.
 JUDGE_EVALUATORS = CASE_EVALUATORS
@@ -181,6 +205,10 @@ class RunConfig:
     #: the model calls it: ``{name, description, input_schema, respond}``,
     #: ``respond`` being ``{"output": str, "is_error": bool}`` or ``{"declined": true}``.
     client_tools: Optional[Tuple[Mapping[str, Any], ...]] = None
+    #: ``attachment_delivery`` only: the delivery arm (``DELIVERY_ARMS``) and the
+    #: compaction ceiling (``CEILINGS``) the case runs under.
+    arm: str = "auto"
+    ceiling: str = "default"
 
 
 #: A project of the sample's own, created before its first turn and purged after
@@ -393,9 +421,22 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     _check_keys(
         run_raw,
         ("enabled_tools", "enabled_skills", "project", "agent", "project_memory", "member2_role", "client_surface",
-         "client_tools"),
+         "client_tools", "arm", "ceiling"),
         f"{where}.run",
     )
+    for key, allowed, reserved in (("arm", DELIVERY_ARMS, RESERVED_ARMS), ("ceiling", CEILINGS, RESERVED_CEILINGS)):
+        value = run_raw.get(key)
+        if value is None:
+            continue
+        if family != DELIVERY_FAMILY:
+            raise CaseError(f"{where}.run.{key}: only {DELIVERY_FAMILY} cases name a {key}")
+        if value in reserved:
+            raise CaseError(
+                f"{where}.run.{key}: '{value}' is reserved for the forced-mode wave and needs the planner's "
+                "fixture-only delivery value (unified-attachment-delivery §8.4)"
+            )
+        if value not in allowed:
+            raise CaseError(f"{where}.run.{key}: expected one of {', '.join(allowed + reserved)}")
     client_surface = run_raw.get("client_surface")
     if client_surface is not None and client_surface not in ("terminal", "web"):
         raise CaseError(f"{where}.run.client_surface: expected 'terminal' or 'web'")
@@ -448,6 +489,8 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         member2_role=member2_role,
         client_surface=client_surface,
         client_tools=tuple(client_tools) if client_tools else None,
+        arm=run_raw.get("arm") or "auto",
+        ceiling=run_raw.get("ceiling") or "default",
     )
 
     expect = _parse_expect(raw.get("expect") or {}, f"{where}.expect")

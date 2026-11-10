@@ -12,13 +12,14 @@ need nothing but the run directory.
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tuple
 
-from apis.shared.evals.cases import EvalCase
+from apis.shared.evals.cases import DELIVERY_FAMILY, EvalCase
 from apis.shared.evals.score import score_sample
 from apis.shared.evals.session_mapper import build_session
 from apis.shared.harness.models import RunResult
@@ -64,6 +65,14 @@ class StagedSample:
     session_id: str
     upload_ids: Tuple[str, ...]
     documents: Tuple[Dict[str, Any], ...] = ()
+
+
+class QuotaExceededError(RuntimeError):
+    """The eval user is over its quota, so every later turn answers with the quota message.
+
+    Like a missing consent, this is the environment, not the model: scored,
+    it would read as every remaining case regressing. It stops the run.
+    """
 
 
 class OAuthRequiredError(RuntimeError):
@@ -112,7 +121,31 @@ def _merge_rounds(rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
     if len(rounds) > 1:
         merged["rounds"] = len(rounds)
         merged["usage"] = {"usage": sum_usage(rounds)}
+        # The user waited for the first round's first token; the turn lasted all of them.
+        for key in ("first_token_ms", "client_first_token_ms"):
+            merged[key] = rounds[0].get(key)
+        for key in ("turn_duration_ms", "client_duration_ms"):
+            values = [r.get(key) for r in rounds]
+            merged[key] = sum(values) if all(isinstance(v, int) for v in values) else None
     return merged
+
+
+#: Per-turn timing a result row carries (``RunResult``'s names, camelCased).
+TIMING_FIELDS = (
+    ("first_token_ms", "firstTokenMs"),
+    ("turn_duration_ms", "turnDurationMs"),
+    ("client_first_token_ms", "clientFirstTokenMs"),
+    ("client_duration_ms", "clientDurationMs"),
+)
+
+
+def turn_timing(turns: List[Dict[str, Any]]) -> List[Dict[str, Optional[int]]]:
+    """Each turn's first token and duration, as the Runtime and as the harness measured them.
+
+    ``None`` where a turn's final ``metadata`` frame never came (an error or a
+    cut stream), so a readout can tell a missing number from a fast one.
+    """
+    return [{label: turn.get(key) for key, label in TIMING_FIELDS} for turn in turns]
 
 
 def new_session_id() -> str:
@@ -172,10 +205,14 @@ async def run_sample(
     started_at = _now_iso()
 
     upload_ids: List[str] = list(staged.upload_ids) if staged is not None else []
+    upload_started = time.monotonic()
     for filename in case.files:
         if register_fixture is None:
             raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
         upload_ids.append(await register_fixture(session_id, filename))
+    # Upload to usable, for files attached at send time: the registrar returns
+    # once the upload is READY (direct row, or presign → PUT → complete).
+    upload_ms = int((time.monotonic() - upload_started) * 1000) if case.files else None
 
     turns: List[Dict[str, Any]] = []
     status = "completed"
@@ -226,6 +263,8 @@ async def run_sample(
             status = "client_tool_loop"
             error = f"still calling client tools after {MAX_CLIENT_TOOL_ROUNDS} answers"
             break
+        if result.quota_exceeded:
+            raise QuotaExceededError(f"{case.id}: the eval user is over its quota; raise it or wait for the period")
         if result.status == "oauth_required":
             providers = ", ".join(o.provider_id for o in result.oauth_required) or "unknown"
             raise OAuthRequiredError(f"{case.id}: the eval user needs consent for {providers}")
@@ -270,6 +309,9 @@ async def run_sample(
         "final_message": str(last.get("final_message") or ""),
         "tool_calls": tool_calls,
         "usage": sum_usage(turns),
+        "timing": turn_timing(turns),
+        **({"upload_ms": upload_ms} if upload_ms is not None else {}),
+        **({"arm": case.run.arm, "ceiling": case.run.ceiling} if case.family == DELIVERY_FAMILY else {}),
         "started_at": started_at,
         "finished_at": _now_iso(),
         "turns": turns,

@@ -429,3 +429,81 @@ class TestOrphanSweep:
         assert "swept 1 upload(s) and 1 session(s)" in capsys.readouterr().out
         assert s3.list_objects_v2(Bucket="files").get("Contents", []) == []
         assert ended == ["eval-old"]
+
+
+# --------------------------------------------------------------------------- attachment_delivery (§8)
+
+
+def test_presign_uploads_need_a_cognito_session():
+    base = ["run", "--out", "x", "--model-id", MODEL, "--prefix", "dev-example"]
+    assert eval_harness.parse_args(base + ["--user-id", "u"]).upload_via == "direct"
+    with pytest.raises(SystemExit):
+        eval_harness.parse_args(base + ["--user-id", "u", "--upload-via", "presign"])
+    args = eval_harness.parse_args(base + ["--auth", "cognito", "--base-url", "https://dev.example/api",
+                                           "--upload-via", "presign"])
+    assert args.upload_via == "presign"
+
+
+def test_the_estimate_prices_sized_attachments():
+    from apis.shared.evals.cases import load_cases
+
+    cases = {c.id: c for c in load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"])}
+    _, small, _ = eval_harness.estimate([(cases["attachment_delivery.lookup_md_5k"], 0)], MODEL)
+    _, large, _ = eval_harness.estimate([(cases["attachment_delivery.lookup_md_300k"], 0)], MODEL)
+    # ~300k tokens written to the cache at 1.25x Haiku 4.5's $1.10.
+    assert large > 0.4 > small
+
+
+def test_a_run_with_no_family_leaves_out_the_opt_in_family(tmp_path, capsys):
+    from apis.shared.evals.cases import DEFAULT_FAMILIES, load_cases
+
+    default = len(load_cases(eval_harness.CASES_DIR, families=list(DEFAULT_FAMILIES)))
+    delivery = len(load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"]))
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+    ])
+    assert code == 0
+    every = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery",
+    ])
+    assert every == 0
+    first, second = capsys.readouterr().out.split("estimate only", 1)
+    assert f"{default} cases × k=3" in first
+    assert f"{delivery} cases × k=3" in second
+
+
+def _write_delivery_run(out: Path):
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 1, "startedAt": "t"}), encoding="utf-8")
+    (out / "results.jsonl").write_text(json.dumps({
+        "case_id": "attachment_delivery.lookup_md_5k", "family": "attachment_delivery", "sample": 0,
+        "model_id": MODEL, "passed": True, "failures": [], "final_message": "WP", "tool_calls": [],
+        "session_id": "eval-x", "timing": [{"firstTokenMs": 900, "turnDurationMs": 2100}],
+    }) + "\n", encoding="utf-8")
+
+
+def test_readout_prints_the_per_case_table_and_writes_json(tmp_path, capsys):
+    run = tmp_path / "run"
+    _write_delivery_run(run)
+    report = tmp_path / "readout.json"
+    assert eval_harness.main(["readout", "--out", str(run), "--no-cost-rows", "--json", str(report)]) == 0
+    out = capsys.readouterr().out
+    assert "| lookup_md_5k | 1/1 |" in out and "0.9s" in out
+    assert json.loads(report.read_text())["cases"][0]["firstTokenMs"] == 900
+
+
+def test_baseline_family_splices_into_the_existing_file(tmp_path, golden, capsys):
+    flags, baselines = golden
+    run1 = tmp_path / "run1"
+    _write_run(run1)
+    assert eval_harness.main(flags + ["baseline", "--out", str(run1)]) == 0
+    path = baselines / eval_harness.baseline_filename(MODEL)
+    before = json.loads(path.read_text())
+
+    run2 = tmp_path / "run2"
+    _write_run(run2, failing="a")
+    assert eval_harness.main(flags + ["baseline", "--out", str(run2), "--family", "tool_selection"]) == 0
+    after = json.loads(path.read_text())
+    assert before["cases"]["tool_selection.a"]["passed"] and not after["cases"]["tool_selection.a"]["passed"]
+    assert "tool_selection" in after["familyPromotions"]
