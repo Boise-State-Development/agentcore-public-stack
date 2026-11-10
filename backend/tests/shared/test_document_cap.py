@@ -378,6 +378,19 @@ class TestDocumentsAsText:
         assert projected[0]["content"][0] == {"text": '<document name="minutes" format="docx">\nHello.\n</document>'}
         assert projected[0]["content"][1] == {"text": '<document name="notes" format="txt">\nn\n</document>'}
 
+    def test_a_pinned_document_stays_native_and_only_its_exact_bytes_are_pinned(self, monkeypatch):
+        monkeypatch.setattr(document_cap, "_NATIVE_PINS", type(document_cap._NATIVE_PINS)())
+        data = _docx("Forced native.")
+        document_cap.pin_native("docx", data)
+        history = [_user(_doc("docx", "memo", data), _doc("docx", "other", _docx("Not pinned.")))]
+        projected = project_document_cap(history, as_text=True)
+        assert _documents(projected) == [("docx", "memo")]
+        assert projected[0]["content"][1]["text"].startswith('<document name="other" format="docx">')
+        # A pin never reaches a format the projection does not render, and never raises.
+        document_cap.pin_native("pdf", b"%PDF")
+        document_cap.pin_native("docx", None)
+        assert len(document_cap._NATIVE_PINS) == 1
+
     def test_a_request_without_non_pdf_documents_is_returned_as_is(self):
         history = [_user(*[_doc("pdf", f"p{i}") for i in range(3)]), _assistant()]
         assert project_document_cap(history, as_text=True) is history

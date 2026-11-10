@@ -46,7 +46,22 @@ predicate to choose a mode.
 hold a question fixed and vary only how the file is delivered. Only a direct row
 write sets it: no request field and no app-api route can
 (``tests/apis/shared/files/test_delivery_override_is_fixture_only.py``). The
-``legacy`` profile can force ``native`` and ``on_demand``.
+``legacy`` profile can force ``native``, ``text`` and ``on_demand``:
+
+- a forced ``native`` file stays a document block on a Converse model even
+  with documents-as-text on (the route pins it in the projection,
+  ``document_cap.pin_native``); off Converse it is still text, since those
+  formatters cannot read the block;
+- a forced ``text`` file is the document's text in the message: the
+  projection's rendering where it renders that format, else the extracted
+  text layer (a PDF, or a Converse model with documents-as-text off), held to
+  ``FORCED_TEXT_MAX_CHARS``;
+- a forced ``on_demand`` file under the reference size is read from its
+  original by ``document_read``, as an over-budget one is
+  (:func:`reads_from_original`).
+
+``search`` is not forceable: in the ``legacy`` profile only a prepared
+reference-class document is ingested into the attachments KB (phase 5).
 
 **What is recorded.** :meth:`AttachmentPlan.to_row` is written on the turn's
 ``C#`` cost row as ``attachmentPlan`` after the stream: modes, classes, reason
@@ -92,7 +107,12 @@ MODE_DROPPED = "dropped"
 MODES = (MODE_NATIVE, MODE_TEXT, MODE_ON_DEMAND, MODE_SEARCH, MODE_TOOL, MODE_DROPPED)
 
 #: Modes a file row's ``delivery_override`` may force.
-FORCEABLE_MODES = frozenset({MODE_NATIVE, MODE_ON_DEMAND})
+FORCEABLE_MODES = frozenset({MODE_NATIVE, MODE_TEXT, MODE_ON_DEMAND})
+
+#: Characters of extracted text a forced ``text`` file may carry: about 400k
+#: estimated tokens, above any fixture the delivery evals attach. A forced
+#: arm measures the mode, not a sampling rule.
+FORCED_TEXT_MAX_CHARS = 1_600_000
 
 CLASS_IMAGE = "image"
 CLASS_PDF = "pdf"
@@ -368,11 +388,22 @@ def delivers_by_reference(meta: Any) -> bool:
     wins; otherwise the reference class decides (``is_reference_document``).
     """
     forced = getattr(meta, "delivery_override", None)
-    if forced == MODE_NATIVE:
+    if forced in (MODE_NATIVE, MODE_TEXT):
         return False
     if forced == MODE_ON_DEMAND:
         return document_format_for(meta.mime_type, meta.filename) is not None
     return is_reference_document(meta)
+
+
+def reads_from_original(meta: Any) -> bool:
+    """Whether a by-reference row is read from its original rather than prepared sidecars.
+
+    True for a row forced ``on_demand`` that is under the reference size: the
+    prepare Lambda never prepares it, so it renders like an over-budget
+    reference (its upload digest, or a ``ready`` stub) and ``document_read``
+    reads the original. Every user row answers ``False``.
+    """
+    return getattr(meta, "delivery_override", None) == MODE_ON_DEMAND and not is_reference_document(meta)
 
 
 def _forced(facts: FileFacts) -> Optional[str]:
@@ -485,8 +516,8 @@ def plan_attachments(
         if cls == CLASS_PRESENTATION:
             modes[i], reasons[i] = MODE_TOOL, REASON_PRESENTATION
             continue
-        if forced == MODE_NATIVE:
-            modes[i], reasons[i] = MODE_NATIVE, REASON_FORCED
+        if forced in (MODE_NATIVE, MODE_TEXT) and cls != CLASS_IMAGE:
+            modes[i], reasons[i] = forced, REASON_FORCED
             candidates.append(i)
             continue
         # Images have their own (larger) Bedrock limits and become image
@@ -518,7 +549,7 @@ def plan_attachments(
             index=i,
             mode=modes[i] or MODE_DROPPED,
             file_class=classes[i],
-            tokens=_estimate_tokens(facts, classes[i]) if modes[i] == MODE_NATIVE else 0,
+            tokens=_estimate_tokens(facts, classes[i]) if modes[i] in (MODE_NATIVE, MODE_TEXT) else 0,
             reason=reasons[i] or REASON_INLINE,
             upload_id=facts.upload_id,
         )
@@ -579,6 +610,10 @@ def refine_for_model(
         # CONVERSE_DOCUMENTS_AS_TEXT_ENABLED.
         reason = REASON_DOCUMENTS_AS_TEXT if model.converse else REASON_PROVIDER_NEEDS_TEXT
         for e in native:
+            # A forced ``native`` file stays a block on Converse; elsewhere the
+            # formatter cannot read it, so it is text whatever the row says.
+            if model.converse and e.reason == REASON_FORCED:
+                continue
             if e.file_class != CLASS_IMAGE and _extension(files[e.index].filename) in DOCUMENTS_AS_TEXT_EXTENSIONS:
                 entries[e.index] = replace(e, mode=MODE_TEXT, reason=reason)
     return replace(plan, entries=tuple(entries), text_char_limit=text_char_limit)
@@ -593,6 +628,7 @@ __all__ = [
     "CLASS_TABULAR",
     "DELIVERY_OVERRIDE_VALUES",
     "FORCEABLE_MODES",
+    "FORCED_TEXT_MAX_CHARS",
     "MODES",
     "MODE_DROPPED",
     "MODE_NATIVE",
@@ -615,5 +651,6 @@ __all__ = [
     "file_class",
     "legacy_profile",
     "plan_attachments",
+    "reads_from_original",
     "refine_for_model",
 ]

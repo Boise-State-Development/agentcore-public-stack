@@ -31,6 +31,7 @@ _KNOWN = {
     "src/apis/shared/files/models.py": "defines and round-trips it",
     "src/apis/shared/files/attachment_plan.py": "reads it as a planner input",
     "src/apis/inference_api/chat/routes.py": "hands the row's value to the planner (read only)",
+    "src/apis/shared/evals/fixtures.py": "the eval registrar: its direct row write is the one writer",
 }
 
 

@@ -370,6 +370,29 @@ CASES: List[Case] = [
         [(N, "pdf", "forced"), (OD, "pdf", "over_budget_reference")],
     ),
     Case(
+        "forced native docx stays a block on Converse with documents-as-text on",
+        [up("memo.docx", DOCX, forced_mode="native"), up("note.docx", DOCX)],
+        [(N, "document", "forced"), (T, "document", "documents_as_text")],
+        profile=replace(LEGACY, documents_as_text=True),
+    ),
+    Case(
+        "forced native off Converse is still text: those formatters cannot read the block",
+        [up("memo.docx", DOCX, forced_mode="native")],
+        [(T, "document", "provider_needs_text")],
+        model=MANTLE,
+    ),
+    Case(
+        "forced text: a pdf and a docx, held whole whatever the per-file limit",
+        [up("a.pdf", size=5 * MIB, forced_mode="text"), up("b.docx", DOCX, forced_mode="text")],
+        [(T, "pdf", "forced"), (T, "document", "forced")],
+        tokens=[5 * MIB // 4, 250],
+    ),
+    Case(
+        "forced text on an image plans as usual",
+        [up("p.png", PNG, forced_mode="text")],
+        [(N, "image", "inline")],
+    ),
+    Case(
         "a forced value the profile cannot realise plans as usual",
         [up("a.pdf", forced_mode="search"), up("b.xlsx", XLSX, forced_mode="native")],
         [(N, "pdf", "inline"), (TOOL, "tabular", "tabular")],
@@ -409,7 +432,7 @@ def test_the_table(case: Case):
 
 #: sha256 over every row's inputs and the plan the planner produced for them.
 #: A change here is a change to who gets what: say so in the PR.
-TABLE_DIGEST = "6cc4299b0682ffddaea20c77a196d3f387734a818dbd539301f59c62231e0cc4"
+TABLE_DIGEST = "c0a65269a994c043930829c3444b51c5d2a2fa7347157657d5f99d7fe1b83ecd"
 
 
 def _table_payload() -> str:
@@ -559,6 +582,7 @@ def _meta(filename: str = "policy.pdf", mime: str = PDF, size: int = 1_000, **kw
         (_meta(size=1_000, delivery_override="on_demand"), True),
         (_meta("photo.png", PNG, 1_000, delivery_override="on_demand"), False),
         (_meta(size=20 * MIB, delivery_override="native"), False),
+        (_meta(size=20 * MIB, delivery_override="text"), False),
         (_meta(size=1_000, delivery="reference", delivery_override="native"), False),
     ],
     ids=[
@@ -573,6 +597,7 @@ def _meta(filename: str = "policy.pdf", mime: str = PDF, size: int = 1_000, **kw
         "forced on_demand",
         "forced on_demand on an image",
         "forced native",
+        "forced text",
         "forced native wins over a folder file",
     ],
 )
@@ -607,6 +632,21 @@ def test_documents_as_text_matches_the_projection():
     from apis.shared.models.document_cap import RENDERABLE_FORMATS
 
     assert ap.DOCUMENTS_AS_TEXT_EXTENSIONS == RENDERABLE_FORMATS
+
+
+@pytest.mark.parametrize(
+    "meta,expected",
+    [
+        (_meta(size=1_000, delivery_override="on_demand"), True),
+        (_meta(size=4 * MIB + 1, delivery_override="on_demand"), False),
+        (_meta(size=1_000), False),
+        (_meta(size=1_000, delivery_override="native"), False),
+    ],
+    ids=["small forced on_demand", "reference-class forced on_demand", "a user row", "forced native"],
+)
+def test_reads_from_original(meta, expected):
+    """A small forced on_demand file renders like an over-budget reference, never a "preparing" stub."""
+    assert ap.reads_from_original(meta) is expected
 
 
 def test_the_forceable_modes_are_the_row_values():

@@ -172,3 +172,86 @@ def test_the_route_wires_the_phase_after_the_model_is_known():
     adapt = source.index("await _adapt_attachments_for_model(attachments, turn_model)")
     prerender = source.index("await _prerender_documents_as_text(attachments, turn_model)")
     assert 0 < prerender - adapt < 400
+
+
+# ---------------------------------------------------------------------------
+# An eval fixture's forced native / text rows (unified-attachment-delivery §8.4)
+# ---------------------------------------------------------------------------
+
+
+class _Row:
+    def __init__(self, name: str, override):
+        self.upload_id = f"up-{name}"
+        self.delivery_override = override
+
+
+def _forced(*pairs, profile=None):
+    """``(file, override)`` pairs as uploads whose rows carry the fixture-only override."""
+    from apis.shared.files.attachment_plan import MODE_NATIVE, MODE_TEXT, current_limits_profile, plan_attachments
+
+    profile = profile or current_limits_profile()
+    files = [f for f, _ in pairs]
+    rows = {id(f): _Row(f.filename, o) for f, o in pairs}
+    facts = [routes._file_facts(f, rows) for f in files]
+    plan = plan_attachments(facts, None, profile=profile)
+    inline = plan.indices(MODE_NATIVE, MODE_TEXT)
+    return TurnAttachments(
+        files_to_send=[files[i] for i in inline],
+        marker_names=[f.filename for f in files],
+        plan=plan,
+        plan_facts=facts,
+        inline_indices=inline,
+        profile=profile,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_user_turn_returns_at_once(flag_on, monkeypatch):
+    pins = []
+    monkeypatch.setattr(document_cap, "pin_native", lambda fmt, raw: pins.append(fmt))
+    attachments = _attachments(_File("a.docx", "application/octet-stream", build_docx(["Hi."])))
+    before = list(attachments.files_to_send)
+    await routes._carry_out_forced_modes(attachments, _model())
+    assert pins == [] and attachments.files_to_send == before and attachments.extracted_documents == []
+
+
+@pytest.mark.asyncio
+async def test_forced_native_is_pinned_so_documents_as_text_leaves_the_block(flag_on, monkeypatch):
+    monkeypatch.setattr(document_cap, "_NATIVE_PINS", type(document_cap._NATIVE_PINS)())
+    raw = build_docx(["Forced native."])
+    attachments = _forced((_File("memo.docx", "application/octet-stream", raw), "native"))
+    await routes._carry_out_forced_modes(attachments, _model())
+    assert [e.mode for e in attachments.plan.entries] == ["native"]
+    projected = document_cap.project_document_cap(
+        [{"role": "user", "content": [{"document": {"format": "docx", "name": "memo", "source": {"bytes": raw}}}]}],
+        as_text=True,
+    )
+    assert "document" in projected[0]["content"][0]
+
+
+@pytest.mark.asyncio
+async def test_forced_text_pdf_becomes_its_extracted_text(monkeypatch):
+    from apis.inference_api.chat.routes import ExtractedDocument, _build_extracted_documents_section
+
+    monkeypatch.setattr(routes, "_extract_document_text", lambda f, fmt, limit: ExtractedDocument(
+        filename=f.filename, text=f"{fmt}:{limit}", truncated=False, unit="page", count=2))
+    pdf = _File("report.pdf", "application/pdf", b"%PDF-1.4")
+    docx = _File("memo.docx", "application/octet-stream", build_docx(["x"]))
+    attachments = _forced((pdf, "text"), (docx, None))
+    await routes._carry_out_forced_modes(attachments, _model())
+    assert [f.filename for f in attachments.files_to_send] == ["memo.docx"]
+    assert attachments.inline_indices == [1]
+    [doc] = attachments.extracted_documents
+    assert doc.forced and doc.text == f"pdf:{routes.FORCED_TEXT_MAX_CHARS}"
+    section = _build_extracted_documents_section(attachments.extracted_documents, document_read_available=True)
+    assert "reads text only" not in section and section.startswith("_The attached document(s) below")
+
+
+@pytest.mark.asyncio
+async def test_forced_text_docx_rides_the_projection_where_it_renders(flag_on, rendered):
+    raw = build_docx(["Forced text."])
+    attachments = _forced((_File("memo.docx", "application/octet-stream", raw), "text"))
+    await routes._carry_out_forced_modes(attachments, _model())
+    assert [f.filename for f in attachments.files_to_send] == ["memo.docx"] and not attachments.extracted_documents
+    await _prerender_documents_as_text(attachments, _model())
+    assert [(fmt, data) for fmt, data, _ in rendered] == [("docx", raw)]
