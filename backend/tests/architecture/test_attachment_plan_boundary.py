@@ -62,6 +62,7 @@ _DELIVERY_INPUTS = {
     "attachment_turn_guard_enabled",
     "inline_budget_by_reference_enabled",
     "converse_documents_as_text_enabled",
+    "attachment_plan_enabled",
 }
 
 #: Modules allowed to read a delivery input, and why. None of them chooses a mode
@@ -83,8 +84,6 @@ _KNOWN: Dict[str, str] = {
     "src/apis/shared/files/attachment_preview.py": "which card preview to write (a display choice, written at upload off the turn path; never a delivery mode)",
     "src/agents/builtin_tools/spreadsheet_analysis/analyze_tool.py": "the spreadsheet tool finding its file",
     "src/agents/builtin_tools/spreadsheet_analysis/list_spreadsheets_tool.py": "the spreadsheet tool listing its files",
-    # Phase 6 (§9.1): the per-call projection's own selection retires with the flag.
-    "src/agents/main_agent/core/agent_factory.py": "phase 6: installs the document-cap projection in its as-text mode",
 }
 
 #: Modules on ``_KNOWN`` held to a narrower set of names than ``_DELIVERY_INPUTS``.

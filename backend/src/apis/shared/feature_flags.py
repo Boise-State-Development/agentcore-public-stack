@@ -1558,3 +1558,32 @@ def release_ledger_enabled() -> bool:
     calls) that a deployment may reasonably decline.
     """
     return os.environ.get("RELEASE_LEDGER_ENABLED", "").strip().lower() == "true"
+
+
+def attachment_plan_enabled() -> bool:
+    """Whether the attachment planner runs its ``token`` profile
+    (``docs/specs/unified-attachment-delivery.md`` §4.3, §5.2, phase 3).
+
+    On, each turn's attachments are decided in tokens against a per-model
+    ``document_budget`` of half the compaction ceiling, costed in that model's
+    own tokens: a PDF ``native`` within the model's page limit and the budget,
+    every other renderable document as text within it, and anything over it
+    ``on_demand`` (a digest plus ``document_read``). Off, the ``legacy``
+    profile's byte rules decide, exactly as before. The flag selects a profile
+    of the one planner (``apis.shared.files.attachment_plan.current_limits_profile``),
+    never a second code path, and is read nowhere else.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK writes it to the AgentCore Runtime (which plans the turn) and
+    app-api (which reports the active profile on ``GET /files/limits``), the
+    Runtime copy only while on. The SPA's matching switch is
+    ``features.attachmentPlan``.
+
+    A **rollout switch**: what a deployment chooses is the profile's limits,
+    not whether a planner runs. **Retirement condition** (spec §9.1, #1422):
+    shipped in a production release, then two weeks there with the switch never
+    flipped and the ``attachment_delivery`` readout recorded; it retires in
+    phase 6 together with the ``legacy`` profile.
+    """
+    return os.environ.get("ATTACHMENT_PLAN_ENABLED", "").strip().lower() == "true"
