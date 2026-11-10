@@ -51,6 +51,29 @@ Retired in its own PR after #1666 merged. Deleted:
 **Dev proof (2026-11-10):** on dev at mcp 2.3.0, a real `issue_write` result persisted GitHub's own `structuredContent` (`status: "awaiting_user_submission"` plus `reason`), next to the `io.modelcontextprotocol/serverInfo` stamp of a 2026-07-28 connection, so the marker came from GitHub, not from the hook. A self-hosted `github-mcp-server` that predates 2026-07-28 still sends a bare stub, which now reads as "Failed".
 
 
+## Observability on dev after the deploy (2026-11-10)
+
+R6 expected to lose spans. Dev shows almost nothing was lost. The real finding is a privacy one, and it predates the upgrade.
+
+**What the spans show** (Logs Insights over `aws/spans`, 75 days before the deploy, then the first MCP turn after it):
+- **ADOT's MCP spans stopped on 2026-09-25,** when the Dockerfile set `AWS_AGENTIC_INSTRUMENTATION=disabled` to keep tool arguments and results out of `aws/spans`. The upgrade removed nothing dev still had.
+- **The per-request HTTP spans survived.** opentelemetry-instrumentation-httpx 0.66b1 registers an `httpx2` instrumentor too, and `opentelemetry-instrument` loads it. Each MCP POST still gets a CLIENT span with host, status and duration.
+- **The SDK's own `mcp-python-sdk` spans reach `aws/spans`.** They are named `MCP send <method> [<tool>]` and carry `mcp.method.name`, `jsonrpc.request.id`, and `error.type` on failure. Each one is the parent of its HTTP span. They carry no URL, so per-server attribution still comes from the HTTP child.
+- **Nothing depended on the old spans.** No dashboard queries them, and the alarms read Gateway metrics and Lambda errors. Feedback eval sampling reads Strands spans.
+- **Versions:** ADOT is pinned at 0.22.0, not the 0.19.0 the R6 text above names. Its MCP instrumentor still emits nothing on 2.x, which `test_adot_mcp_instrumentor_cannot_see_the_sdk` pins.
+
+**Privacy.** Every invocation arrives with W3C baggage `session.id=<runtime session id>`, a stable hash naming one user's conversation, and ADOT's default propagators (`baggage,xray,tracecontext`) injected it into every outbound carrier.
+- **On 2.x every MCP request carried it twice:** in the HTTP headers (from the httpx2 instrumentor) and in `params._meta` (from the SDK).
+- **1.x already sent the header copy.** It went to third-party MCP servers on every request (100% of GitHub, Zoom and Oracle Analytics calls in the 30 days before), and to every site `fetch_url_content` opened.
+- **No content.** Arguments travel only in `params.arguments`.
+- **The fix:** `install_outbound_trace_policy` (`apis/shared/observability/trace_propagation.py`) wraps the propagator so it injects without baggage. `traceparent` and `X-Amzn-Trace-Id` keep flowing to every host: they are random, carry nothing, and SEP-414 expects them. `tests/security/test_outbound_trace_context.py` pins it on the wire.
+
+**Our own MCP servers.**
+- **Where they live:** every first-party Lambda server in the catalog lives in one monorepo.
+- **Why they can't join our traces yet:** all of them are on mcp 1.30.0 `FastMCP`, which has no OTel and does not read `_meta.traceparent`.
+- **Phase 1:** a log line per JSON-RPC request carrying the trace id (no new dependencies), so Logs Insights can join a turn to the server's log group.
+- **Phase 2:** move them to mcp 2.x. `MCPServer` ships `OpenTelemetryMiddleware` on by default, which extracts `_meta` and opens SERVER spans parented to our client span. Add an OTLP exporter flushed per invocation, and those spans land in the turn's X-Ray trace.
+
 ## As built (2026-10-17)
 
 - **Pins as recommended:**
@@ -68,7 +91,7 @@ Retired in its own PR after #1666 merged. Deleted:
   - 2.1.1 with the legacy verdict: 205 ms after the first connect per process.
 
   The verdict works like this. `_UIExtensionClientSession` records a URL as legacy for an hour when its probe was rejected and `initialize` then succeeded; a 5xx or timeout is not a verdict. While the verdict is fresh, `send_discover` refuses locally. A modern server (GitHub) is never marked. Noted in `docs/specs/turn-path-ttft.md`.
-- **R6 settled.** ADOT 0.19.0 declares `mcp >= 1.10.0` (no upper bound), so its MCP instrumentor still loads, and it emits nothing (it wraps the removed `BaseSession`). The SDK's own `mcp-python-sdk` client spans carry method and tool name only. `test_otel_content_capture.py` now pins both facts, and its `test_adot_mcp_instrumentor_cannot_see_the_sdk` fails the day ADOT instruments 2.x again. The SDK also injects W3C `traceparent` into every request's `_meta` (SEP-414): trace ids, no content, reach third-party servers.
+- **R6 settled.** ADOT 0.19.0 declares `mcp >= 1.10.0` (no upper bound), so its MCP instrumentor still loads, and it emits nothing (it wraps the removed `BaseSession`). The SDK's own `mcp-python-sdk` client spans carry method and tool name only. `test_otel_content_capture.py` now pins both facts, and its `test_adot_mcp_instrumentor_cannot_see_the_sdk` fails the day ADOT instruments 2.x again. The SDK also injects W3C trace context into every request's `_meta` (SEP-414). Under ADOT's propagators that included the `session.id` baggage, not only trace ids; see "Observability on dev after the deploy" above.
 - **`ReleasesCallsOnSessionEnd` stays.** Two different failures now behave differently on 2.x:
   - a 503 no longer kills the session;
   - a response broken off mid-body still does (the transport error escapes its task group).

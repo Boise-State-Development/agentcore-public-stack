@@ -28,8 +28,9 @@ class FlakyMCPServer:
     reconnect, or one refusing the caller (401). `down_message` makes that
     answer the server's own JSON-RPC error instead of plain text.
 
-    Every JSON request body it receives is kept in `requests`, so a test can
-    read what the client put on the wire. `server_kwargs` go to `MCPServer`
+    Every JSON request body it receives is kept in `requests`, and its HTTP
+    headers in `request_headers`, so a test can read what the client put on
+    the wire. `server_kwargs` go to `MCPServer`
     (`title`, `icons`: the identity a modern server stamps on discover), and
     `setup(server)` may register more tools before the app is built.
     """
@@ -42,6 +43,8 @@ class FlakyMCPServer:
 
         self.writes: list = []
         self.requests: list = []
+        # The HTTP headers of each request in `requests`, same order, names lowercased.
+        self.request_headers: list[dict[str, str]] = []
         self.fail_calls = fail_calls
         self.drop_calls = False
         self.down = False
@@ -148,6 +151,9 @@ class FlakyMCPServer:
             with contextlib.suppress(ValueError):
                 parsed = json.loads(body)
                 self.requests.append(parsed)
+                self.request_headers.append(
+                    {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope["headers"]}
+                )
 
             async def replay():
                 # After the body, defer to the real channel: an SSE response
