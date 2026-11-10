@@ -44,8 +44,8 @@ import {
   FileMetadata,
   PendingUpload,
   ALLOWED_EXTENSIONS,
+  AttachmentLimitsService,
   maxFileSizeFor,
-  MAX_FILES_PER_MESSAGE,
   formatBytes,
   resolveMimeTypeFor,
   inlineBudgetOverflow,
@@ -65,7 +65,6 @@ import {
   FolderAttachmentError,
   FolderAttachmentService,
   FolderRefreshService,
-  MAX_FOLDERS_PER_MESSAGE,
   isSettledStatus,
 } from '../../../services/folder-attachments';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
@@ -360,6 +359,12 @@ export const PROJECT_SKILLS_HINT = "Skills for this project are chosen on its Sk
 export class ChatInputComponent {
   // Service injection
   private readonly fileUploadService = inject(FileUploadService);
+  /** `GET /files/limits`, read at load; the built-in fallback until it answers. */
+  private readonly attachmentLimits = inject(AttachmentLimitsService);
+  /** Files one message may carry (served; the fallback says 5). */
+  protected readonly maxFilesPerMessage = this.attachmentLimits.filesPerMessage;
+  /** Folders one message may carry, while folder attachments are on. */
+  private readonly maxFoldersPerMessage = computed(() => this.attachmentLimits.limits().folders.perMessage ?? 0);
   private readonly fileSourceService = inject(FileSourceService);
   private readonly folderAttachments = inject(FolderAttachmentService);
   private readonly folderRefresh = inject(FolderRefreshService);
@@ -621,7 +626,7 @@ export class ChatInputComponent {
   readonly remainingFolderSlots = computed(() => {
     if (!this.features.folderAttachments || !this.allowFolderAttachments()) return 0;
     return Math.min(
-      Math.max(0, MAX_FOLDERS_PER_MESSAGE - this.attachedFolders().length),
+      Math.max(0, this.maxFoldersPerMessage() - this.attachedFolders().length),
       this.remainingFileSlots(),
     );
   });
@@ -694,7 +699,7 @@ export class ChatInputComponent {
         sizeBytes: upload.file.size,
       });
     }
-    return inlineBudgetOverflow(attachments);
+    return inlineBudgetOverflow(attachments, this.attachmentLimits.limits());
   });
 
   // Computed: show file attachments area
@@ -710,7 +715,7 @@ export class ChatInputComponent {
   readonly remainingFileSlots = computed(() =>
     Math.max(
       0,
-      MAX_FILES_PER_MESSAGE -
+      this.maxFilesPerMessage() -
         this.pendingUploads().length -
         this.restoredAttachments().length -
         this.importingAttachments().length -
@@ -1333,6 +1338,9 @@ export class ChatInputComponent {
   readonly isSkillMenuVisible = computed(() => this.isSkillMenuOpen() && !this.isMentionMenuOpen());
 
   constructor() {
+    // The composer judges drops against the fallback until this answers.
+    void this.attachmentLimits.load();
+
     // Walk the rotating hints once, then stop for good. The interval is torn
     // down the moment `rotateHints` goes false — the user typed, a turn
     // started, or the pass finished — so nothing ticks behind an idle tab's
@@ -2881,7 +2889,7 @@ export class ChatInputComponent {
     if (newFiles.length > remaining) {
       this.toastService.warning(
         'File Limit',
-        `Maximum ${MAX_FILES_PER_MESSAGE} files per message. You can add ${remaining} more.`
+        `Maximum ${this.maxFilesPerMessage()} files per message. You can add ${remaining} more.`
       );
       return;
     }
@@ -2907,7 +2915,7 @@ export class ChatInputComponent {
     for (const file of newFiles) {
       // Check file size (pptx and, behind the flag, large documents have
       // their own caps — see maxFileSizeFor)
-      const sizeLimit = maxFileSizeFor(file, this.features);
+      const sizeLimit = maxFileSizeFor(file, this.attachmentLimits.limits());
       if (file.size > sizeLimit) {
         this.toastService.error(
           'File Too Large',
@@ -2978,7 +2986,7 @@ export class ChatInputComponent {
     if (this.remainingFolderSlots() <= 0) {
       this.toastService.warning(
         'Folder limit',
-        `A message can carry ${MAX_FOLDERS_PER_MESSAGE} folders, and each counts as one of its ${MAX_FILES_PER_MESSAGE} attachments.`,
+        `A message can carry ${this.maxFoldersPerMessage()} folders, and each counts as one of its ${this.maxFilesPerMessage()} attachments.`,
       );
       return;
     }
@@ -3166,7 +3174,7 @@ export class ChatInputComponent {
     if (files.length > remaining) {
       this.toastService.warning(
         'File Limit',
-        `Maximum ${MAX_FILES_PER_MESSAGE} files per message. You can add ${remaining} more.`,
+        `Maximum ${this.maxFilesPerMessage()} files per message. You can add ${remaining} more.`,
       );
       return;
     }

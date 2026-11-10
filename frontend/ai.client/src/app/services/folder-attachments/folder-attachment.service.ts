@@ -108,9 +108,6 @@ export class FolderAttachmentError extends Error {
   }
 }
 
-/** Folders one message may carry. Must match `FOLDER_ATTACH_MAX_PER_MESSAGE` on the Runtime. */
-export const MAX_FOLDERS_PER_MESSAGE = 2;
-
 /**
  * Milliseconds between polls of an expanding folder, the last repeated.
  *
