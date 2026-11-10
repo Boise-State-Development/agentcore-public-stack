@@ -78,6 +78,17 @@ _SDK_HTTP_ERROR_MESSAGE = "Server returned an error response"
 # auth detectors key on them (see the module docstring).
 _AUTH_STATUSES = frozenset({401, 403})
 
+# The largest single server-sent event the transport will buffer. mcp 2.x caps
+# one event at 1 MiB by default (`DEFAULT_MAX_SSE_EVENT_SIZE`); 1.x had no cap.
+# A streamable-HTTP server answers a request as one event, so the cap applies to
+# a whole response. GitHub's `ui://github-mcp-server/issue-write` App HTML is
+# bigger than 1 MiB, and `resources/read` failed with "Server-sent event exceeded
+# the 1048576 byte limit": the form never mounted, while the rail said "Waiting
+# for you" (found on dev, 2026-11-10). A large tool result, such as a big
+# `get_file_contents`, hits the same cap. The limit stays bounded rather than
+# off, so a runaway server still cannot grow one buffer without end.
+_MAX_SSE_EVENT_BYTES = 16 * 1024 * 1024
+
 # Failed POSTs whose error has not been read yet. A server that answers with
 # its own JSON-RPC error body never has its entry consumed by a rewrite, so the
 # map is bounded rather than trusted to drain.
@@ -225,7 +236,9 @@ async def streamable_http_transport(
     # one's lifetime is bound to the transport's here.
     async with create_mcp_http_client(headers=headers, auth=auth) as http_client:
         http_client.event_hooks["response"].append(statuses.on_response)
-        async with streamable_http_client(url, http_client=http_client) as (
+        async with streamable_http_client(
+            url, http_client=http_client, max_sse_event_size=_MAX_SSE_EVENT_BYTES
+        ) as (
             read_stream,
             write_stream,
         ):
