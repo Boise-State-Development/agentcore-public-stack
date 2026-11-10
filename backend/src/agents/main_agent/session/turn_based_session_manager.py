@@ -1545,6 +1545,14 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             state.last_prefix_key = self._current_prefix_key
 
         policy = CompactionPolicy.resolve(self.compaction_config, context_window)
+        # The thresholds this turn ran under, every turn, so the next turn's
+        # ``over_ceiling`` offload judges the model's own ceiling. Until a cut
+        # wrote ``policy`` the offload fell back to the window-less fixed
+        # threshold (100k): too high on Haiku 5.5's 50k ceiling, too low under
+        # a 200k cap. Merged, so a cut's own keys (``forced``,
+        # ``retainedTokensEstimate``, ``tailBounded``, ``keptTurns``) survive
+        # the turns that do not cut.
+        state.policy = {**(state.policy or {}), **policy.to_dict()}
         # §5.2 measurement switch (off everywhere): the ceiling compares the
         # input less the documents held; the hard ceiling keeps the full input.
         documents = self.document_index()
