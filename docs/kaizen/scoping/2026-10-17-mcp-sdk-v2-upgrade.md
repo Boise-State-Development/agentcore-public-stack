@@ -17,11 +17,28 @@ The PR sat for three weeks. `develop` moved Strands to 1.63.0, which declares `m
   - `SessionMessage` is still a dataclass, and `JSONRPCError` is still a model class after #3470 replaced the `RootModel` wrappers;
   - `ClientSession(extensions=…)`, `send_discover`, `initialize`, `adopt` and `server_info` are unchanged. `negotiate_auto` still falls back to `initialize()` on any MCPError from the probe, which is what the legacy-verdict refusal relies on. Strands 1.63.0 imports it from `mcp.client.client`, which re-exports it.
 - **2.2.0 / 2.3.0 behaviour changes that reach us:**
-  - **Redirects are followed only within the endpoint's origin** (#3397). A cross-origin redirect now fails the call with `MCPError` and keeps the session. A 3xx is under our status hook's 400 floor, so it is not rewritten. Dev check: every configured MCP server and the Gateway connect without a redirect error.
+  - **Redirects are followed only within the endpoint's origin** (#3397). A cross-origin redirect now fails the call with `MCPError` and keeps the session. A 3xx is under our status hook's 400 floor, so it is not rewritten. Probed below: no configured server on dev redirects.
   - **Legacy connections no longer send an empty `_meta` / `params`, and `initialize` omits an unset `experimental`** (#3628, #3614). We read neither.
   - **The SDK's OAuth providers validate `issuer`** (#3398). We don't use them; our auth is our own `httpx2.Auth`.
   - **The probe to a legacy server now records one `ERROR` client span** (#3629). The legacy verdict skips the probe for an hour, so that is one span per server per process per hour. Spans still carry no content.
   - **Idle legacy sessions on an SDK *server* expire after 30 minutes** (#3395). This is server-side: a third-party legacy server built on 2.2+ answers a cached agent's next call after 30 idle minutes with a 404. Not yet verified: whether that surfaces as session death (which `MCPSessionHealHook` reconnects) or as a plain failed call. Dev check: a GitHub or Excalidraw call after 30+ idle minutes on a cached agent.
+
+### Probed against dev's catalog (2026-11-09)
+
+Every active `mcp_external` server in dev's tool catalog (22) and the AgentCore Gateway, connected from a laptop with the runtime's own path (`UICapableMCPClient` over `streamable_http_transport`, 2.3.0). The probe lists tools and calls none. No user token was sent, so a server that needs one can only be checked up to its 401.
+
+- **No server redirects.** Every response was a 200, 202, 400, 401, 403 or 502, with no 3xx.
+- **Every server but GitHub is legacy.** Each rejects `server/discover` with a 400 and then completes `initialize`. The Gateway's protocol configuration lists only `2025-11-25`.
+- **The Gateway signs and lists.** It uses AWS_IAM inbound auth. The httpx2 `SigV4HTTPXAuth` signed correctly and the Gateway listed 18 tools. Two IAM-signed Lambda servers listed theirs too.
+- **The legacy verdict works live.** The first connect took 1.5–3 s. A second connect with the verdict skipped the probe and took about 150–250 ms.
+- **The 401s and 403s are not the SDK's.** Each server that refused the probe refused a plain `curl` `initialize` the same way. One Lambda-hosted server returned a 502 once: its cold start hit Lambda's 10 s init limit. A 502 at start is not retried, on 1.x or on 2.x.
+- **GitHub's modern path is still unverified live,** because it needs a token. Its 401 reads as `Server returned HTTP 401 Unauthorized`, so the R5 rewrite works there.
+- **Regression found and fixed: a 401 that carries the server's own JSON-RPC error.**
+  - What Zoom does: `mcp.zoom.us` answers a missing token with HTTP 401 and `{"error": {"code": -32003, "message": "Access token is required"}}`.
+  - Why it broke: 2.x surfaces the server's message rather than the SDK stand-in, so our rewrite did not fire and the status was lost. Neither `_AUTH_TEXT_RE` (pre-flight) nor `AUTH_FAILURE_PATTERN` (after a call) matches those words.
+  - What it did to users: no Connect prompt and no token refresh, only a silent tool drop. On 1.30.0 the same response raised `HTTPStatusError` with the 401.
+  - The fix: `_StatusCarryingReadStream` now appends the status to a server's own message on a 401 or 403 ("Access token is required (Server returned HTTP 401 Unauthorized)"). Any other status on a server's own body is left as it was, because a server that reported the failure itself has not left the outcome unknown.
+  - Tests: `test_mcp_transport.py` pins both detectors against that shape, end to end through `FlakyMCPServer.down_message`.
 
 ## As built (2026-10-17)
 
