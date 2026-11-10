@@ -831,8 +831,10 @@ TOKEN_CASES: List[Case] = [
     Case("a scanned PDF past the page limit has no text to send: on demand",
          [pdf("scan.pdf", 150, scanned=True)], [(OD, "pdf", "over_document_budget")], HAIKU45, TOKEN),
     # --- costs without facts, and files with nothing to read them from later ---
-    Case("no facts: the bytes estimate at the model's factor",
-         [up("old.docx", DOCX, 40_000)], [(T, "document", "within_budget")], HAIKU55, TOKEN, tokens=[14_000]),
+    Case("no facts yet: today's rules for this turn, counted at the bytes estimate",
+         [up("old.docx", DOCX, 40_000), up("fresh.pdf", PDF, 59_470), doc("c.md", MD, 20_000)],
+         [(T, "document", "facts_pending"), (N, "pdf", "facts_pending"), (OD, "document", "over_document_budget")],
+         HAIKU55, TOKEN, tokens=[14_000, 20_814, 0]),
     Case("over the budget with no row: sent as text and recorded",
          [doc("pasted.docx", DOCX, 60_000, row=False)], [(T, "document", "no_row")], HAIKU55, TOKEN, tokens=[84_000]),
     Case("a direct PDF over the budget with no row stays native",
@@ -867,7 +869,7 @@ def test_the_token_table(case: Case):
 
 
 #: The ``token`` table's own digest. A change here is a change to who gets what.
-TOKEN_TABLE_DIGEST = "d8408f011ab1a190399dfea91bbb998f3924033f060523998b4deb3143cdc2f7"
+TOKEN_TABLE_DIGEST = "287ff5bf6f34d18c3787f2b89a09715ecd3b5277922ad711e768af8836849149"
 
 
 def test_the_token_table_digest_is_pinned():
