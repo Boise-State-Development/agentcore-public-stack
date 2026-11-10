@@ -83,7 +83,7 @@ What gets provisioned:
 - **Data**: ~24 DynamoDB tables (sessions, users, roles, quotas, models, costs, OAuth, fine-tuning jobs, etc.), 6 S3 buckets (file uploads, RAG documents, RAG vectors, artifacts content, MCP sandbox shell, fine-tuning data), all encrypted at rest with public-access fully blocked.
 - **AgentCore**: Memory, Code Interpreter, Browser, Gateway, and the AgentCore Runtime resource (initially pointed at the inference-api bootstrap image).
 - **Compute**: App API ECS Fargate service + task definition (initially pointed at the app-api bootstrap image), RAG ingestion Lambda, artifact render Lambda.
-- **Edge**: CloudFront distributions for the SPA (`{CDK_DOMAIN_NAME}`), artifacts subdomain (`artifacts.{CDK_DOMAIN_NAME}`), and MCP sandbox subdomain (`mcp-sandbox.{CDK_DOMAIN_NAME}`). Custom origins, OAC-only S3 reads, response-headers policies with strict CSP.
+- **Edge**: CloudFront distributions for the SPA (`{CDK_DOMAIN_NAME}`), artifacts subdomain (`artifacts.{CDK_DOMAIN_NAME}`), MCP sandbox subdomain (`mcp-sandbox.{CDK_DOMAIN_NAME}`), and the browser sign-in viewer (on its CloudFront default `*.cloudfront.net` domain, so it needs no certificate or DNS record, and never shares an origin with MCP Apps). Custom origins, OAC-only S3 reads, response-headers policies with strict CSP.
 - **ML**: SageMaker execution IAM role + security group for fine-tuning training jobs.
 
 Artifacts, MCP sandbox, and SageMaker fine-tuning are **always provisioned** — there are no `CDK_*_ENABLED` flags. If you don't use them, the resources sit idle at zero or near-zero cost.

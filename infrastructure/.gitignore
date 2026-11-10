@@ -18,4 +18,4 @@ cdk.out
 # redistribution. Must live here rather than the root .gitignore: the
 # `!assets/**` negation above is in a deeper file and wins.
 # See docs/specs/authenticated-web-assessment.md D3.
-assets/mcp-sandbox/dcvjs/
+assets/browser-live-view/dcvjs/

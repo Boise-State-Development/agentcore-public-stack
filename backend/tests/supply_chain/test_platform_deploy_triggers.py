@@ -91,7 +91,7 @@ def test_cdk_staged_asset_directories_trigger_a_deploy() -> None:
 
 def test_the_viewer_asset_specifically_triggers_a_deploy() -> None:
     """Regression guard for the exact file that was stranded."""
-    viewer = "infrastructure/assets/mcp-sandbox/live-view.js"
+    viewer = "infrastructure/assets/browser-live-view/live-view.js"
     assert (REPO_ROOT / viewer).exists(), f"{viewer} moved; update this guard"
     assert _covers(_trigger_paths(), viewer), (
         f"{viewer} is deployed by platform.yml but would not trigger it"

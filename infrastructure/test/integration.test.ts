@@ -170,8 +170,8 @@ describe('Single-stack integration', () => {
       expect(buckets).toBeGreaterThanOrEqual(5);
     });
 
-    it('owns SPA + MCP sandbox + artifacts CloudFront distributions', () => {
-      template.resourceCountIs('AWS::CloudFront::Distribution', 3);
+    it('owns SPA + MCP sandbox + artifacts + browser-live-view CloudFront distributions', () => {
+      template.resourceCountIs('AWS::CloudFront::Distribution', 4); // SPA, artifacts, mcp-sandbox, browser-live-view
     });
 
     it('owns Cognito user pool', () => {

@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+### 🔒 Security
+
+- **The browser sign-in viewer has an origin of its own.** `live-view.html`, where a user types a password into the takeover browser, was served from the mcp-sandbox origin that also runs untrusted MCP App HTML, and the SPA framed it with no `sandbox` attribute, so an App frame on the same page shared its security principal. The viewer now has its own CloudFront distribution and bucket (`BrowserLiveViewConstruct`) on the distribution's default `*.cloudfront.net` domain: no certificate, no DNS record, no deploy variable. app-api returns the origin as `viewerOrigin` on `POST /sessions/{id}/browser/live-view` (new env `BROWSER_LIVE_VIEW_ORIGIN`, app-api only; the AgentCore Runtime's environment is unchanged), and the SPA frames and posts to that origin only, refusing one equal to the MCP App origin. The SPA's `frame-src` gains the new origin. The DCV SDK now lives at `infrastructure/assets/browser-live-view/dcvjs/`. +6 PlatformStack resources. No feature flag.
+
 ## [1.35.0] - 2026-11-08
 
 Contract redlining in the Word tools is finished: `redline_word_document` inserts and deletes whole tracked paragraphs and can leave changes it cannot place as ACTION NEEDED comments, and a new `compare_word_documents` turns a counterparty's clean revised copy into a redline of the original. All four ship under the existing `WORD_TRACKED_CHANGES_ENABLED` switch with no flag of their own, and grow the Word family's tool spec by about 1,000 tokens (`redline_word_document` 568 → 1,152, `compare_word_documents` 419), one cached `toolConfig` rewrite at deploy for users with the Word tools. The release ledger is complete: read-only admin routes under `/admin/costs/ledger/*`, eval and smoke results published into the ledger, a Releases tab on `/admin/costs`, and a terminal readout script plus `/release-readout` skill. Flags: one new SPA field, `features.releaseLedger` (in development, default off, the SPA half of the existing `RELEASE_LEDGER_ENABLED`); no default changes, none retired. Manual steps: none required; this is the first release prod can turn the ledger on from (runbook in `docs/specs/release-ledger.md` §7.2). No GSI changes; no dependency changes.

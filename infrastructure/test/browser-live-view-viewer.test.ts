@@ -1,5 +1,5 @@
 /**
- * The live-view viewer (`assets/mcp-sandbox/live-view.js`) runs the real file
+ * The live-view viewer (`assets/browser-live-view/live-view.js`) runs the real file
  * in a `vm` context against a minimal DOM stub. No jsdom: the script touches
  * only `document.getElementById`, `document.referrer`, `window.parent` and
  * `addEventListener`, so a stub is both sufficient and honest about what the
@@ -18,7 +18,7 @@ import * as path from 'path';
 import * as vm from 'vm';
 
 const SOURCE = fs.readFileSync(
-  path.join(__dirname, '..', 'assets', 'mcp-sandbox', 'live-view.js'),
+  path.join(__dirname, '..', 'assets', 'browser-live-view', 'live-view.js'),
   'utf8',
 );
 

@@ -8,10 +8,12 @@
  *
  * Trust model, which is the whole reason this file is not in the SPA
  * ------------------------------------------------------------------
+ * 0. **It runs on an origin of its own.** Never the mcp-sandbox origin, where
+ *    MCP Apps run: a same-origin App frame on the same page could read this
+ *    document, signed URL and keystrokes included (BrowserLiveViewConstruct).
  * 1. **It never calls app-api.** The SPA mints the short-lived live-view URL
- *    and posts it in. app-api's CORS is a credentialed allowlist, so letting
- *    this page call it would mean allowlisting an origin that also serves
- *    untrusted MCP App HTML — handing every App a path to the user's session.
+ *    and posts it in. app-api's CORS is a credentialed allowlist, and keeping
+ *    this origin off it means a compromised SDK has no path to the session.
  * 2. **It only accepts a URL from the origin that framed it.** Checked against
  *    `document.referrer`'s origin, so a sibling frame cannot feed it a stream.
  * 3. **It stores nothing.** No storage, no cookies. The signed URL lives in a

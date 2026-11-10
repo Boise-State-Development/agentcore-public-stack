@@ -79,6 +79,8 @@ export interface AppApiSsmParams {
   voiceTicketReplayTableName: string;
   voiceTicketReplayTableArn: string;
   voiceTicketSigningSecretArn: string;
+  // The browser sign-in viewer's own origin (never the mcp-sandbox origin).
+  browserLiveViewOrigin: string;
   // Inference
   inferenceApiRuntimeEndpointUrl: string;
   /** AgentCore Runtime CloudWatch log group (spans + content log records) for eval sampling. */
@@ -206,6 +208,7 @@ export function resolveAppApiParams(
     voiceTicketReplayTableName: refs.voiceTicketReplayTable.tableName,
     voiceTicketReplayTableArn: refs.voiceTicketReplayTable.tableArn,
     voiceTicketSigningSecretArn: refs.voiceTicketSigningSecret.secretArn,
+    browserLiveViewOrigin: refs.browserLiveViewOrigin,
     // Inference
     inferenceApiRuntimeEndpointUrl: overrides.inferenceApiRuntimeEndpointUrl,
     agentCoreRuntimeLogGroupName: overrides.agentCoreRuntimeLogGroupName,
@@ -475,5 +478,12 @@ export function buildAppApiEnvironment(
     DICTATION_LANGUAGES: config.dictation.languages,
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
+    // The origin the SPA frames the browser sign-in viewer from, returned on
+    // the live-view mint response beside the signed URL it is the only place
+    // to send (docs/specs/authenticated-web-assessment.md D3). Its own
+    // CloudFront distribution, so no MCP App ever shares an origin with the
+    // page a user types a password into. app-api only: the Runtime never
+    // frames anything, and its environment budget stays untouched.
+    BROWSER_LIVE_VIEW_ORIGIN: params.browserLiveViewOrigin,
   };
 }

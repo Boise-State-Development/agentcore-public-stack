@@ -83,6 +83,7 @@ import { AgentCoreGatewayConstruct } from './constructs/gateway/agentcore-gatewa
 // MCP sandbox (S3 + CloudFront — Platform edge surface)
 import { McpSandboxBucketConstruct } from './constructs/mcp-sandbox/mcp-sandbox-bucket-construct';
 import { McpSandboxDistributionConstruct } from './constructs/mcp-sandbox/mcp-sandbox-distribution-construct';
+import { BrowserLiveViewConstruct } from './constructs/mcp-sandbox/browser-live-view-construct';
 
 // Observability (cross-service dashboards + alarms)
 import { AlarmTopicConstruct } from './constructs/observability/alarm-topic-construct';
@@ -222,6 +223,8 @@ export class PlatformStack extends cdk.Stack {
   public readonly mcpSandboxBucket: s3.IBucket;
   public readonly mcpSandboxDistribution: cloudfront.IDistribution;
   public readonly mcpSandboxProxyOrigin: string;
+  /** The browser sign-in viewer's own origin — never the MCP App origin. */
+  public readonly browserLiveViewOrigin: string;
 
   // ── Artifacts
   public readonly artifactsContentBucket: s3.IBucket;
@@ -863,6 +866,17 @@ export class PlatformStack extends cdk.Stack {
 
     this._mcpSandboxBucketConstruct.deployShell(mcpSandboxDist.distribution);
 
+    // The browser sign-in viewer gets an origin of its own: a user types a
+    // password there, and the mcp-sandbox origin runs untrusted MCP App HTML.
+    // Same CSP function and headers, different host, different bucket.
+    const browserLiveView = new BrowserLiveViewConstruct(this, 'BrowserLiveView', {
+      config,
+      cspFunction: mcpSandboxDist.cspFunction,
+      responseHeadersPolicy: mcpSandboxDist.responseHeadersPolicy,
+      cachePolicy: mcpSandboxDist.cachePolicy,
+    });
+    this.browserLiveViewOrigin = browserLiveView.origin;
+
     // ============================================================
     // SPA bucket + CloudFront distribution.
     // ============================================================
@@ -889,6 +903,7 @@ export class PlatformStack extends cdk.Stack {
       bucket: this.spaBucket,
       appApiUrl: this._albDns.albUrl,
       mcpSandboxOrigin: this.mcpSandboxProxyOrigin,
+      browserLiveViewOrigin: this.browserLiveViewOrigin,
     });
     this.spaDistribution = spaDist.distribution;
     this.spaDistributionDomainName = spaDist.distributionDomainName;
@@ -1010,6 +1025,7 @@ export class PlatformStack extends cdk.Stack {
       browserPolicyBucketName: this.browserPolicyBucketName,
       browserPolicyKey: this.browserPolicyKey,
       mcpSandboxProxyOrigin: this.mcpSandboxProxyOrigin,
+      browserLiveViewOrigin: this.browserLiveViewOrigin,
     };
 
     const inferenceApi = new InferenceAgentCoreConstruct(this, 'InferenceApi', {

@@ -43,6 +43,12 @@ export interface SpaDistributionConstructProps {
    * shows up on deployed environments).
    */
   mcpSandboxOrigin: string;
+  /**
+   * The browser sign-in viewer's own origin (`BrowserLiveViewConstruct`),
+   * framed by the browser panel. Listed beside, never instead of, the
+   * mcp-sandbox origin: the two are deliberately different hosts.
+   */
+  browserLiveViewOrigin: string;
 }
 
 /**
@@ -106,7 +112,7 @@ export class SpaDistributionConstruct extends Construct {
   ) {
     super(scope, id);
 
-    const { config, bucket, appApiUrl, mcpSandboxOrigin } = props;
+    const { config, bucket, appApiUrl, mcpSandboxOrigin, browserLiveViewOrigin } = props;
 
     // OAC for CloudFront → S3 access (S3 bucket has block-public-access).
     new cloudfront.CfnOriginAccessControl(this, 'FrontendOAC', {
@@ -165,7 +171,7 @@ export class SpaDistributionConstruct extends Construct {
           ...(artifactsOrigin
             ? {
                 contentSecurityPolicy: {
-                  contentSecurityPolicy: `frame-src 'self' ${artifactsOrigin} ${mcpSandboxOrigin}`,
+                  contentSecurityPolicy: `frame-src 'self' ${artifactsOrigin} ${mcpSandboxOrigin} ${browserLiveViewOrigin}`,
                   override: true,
                 },
               }

@@ -673,6 +673,16 @@ class BrowserLiveViewResponse(BaseModel):
             "drive; 'agent' when the view is read-only because the agent holds it"
         ),
     )
+    viewer_origin: str = Field(
+        default="",
+        alias="viewerOrigin",
+        description=(
+            "Origin to frame the sign-in viewer from and the only origin the "
+            "SPA may post `url` to. Its own CloudFront distribution, never the "
+            "mcp-sandbox origin MCP Apps run on. Empty when no viewer is "
+            "deployed, in which case the SPA frames nothing"
+        ),
+    )
 
 
 AwaitingInputKind = Literal["oauth", "tool_approval", "user_question", "browser_login"]

@@ -1,8 +1,6 @@
-import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
-import * as fs from 'fs';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
@@ -74,27 +72,10 @@ export class McpSandboxBucketConstruct extends Construct {
       __dirname, '..', '..', '..', 'assets', 'mcp-sandbox',
     );
 
-    // The browser sign-in viewer (`live-view.html`) needs the Amazon DCV Web
-    // Client SDK served beside it. The SDK is a EULA-licensed AWS download and
-    // this repo is public, so it is fetched at build time by
-    // `scripts/build/fetch-dcv-sdk.sh` and is gitignored — which means a synth
-    // that skipped that step would deploy a viewer with no client.
-    //
-    // A warning rather than an error on purpose: every CDK unit test synths
-    // this stack, and none of them should have to download a 1.6MB archive to
-    // do it. The viewer also fails visibly rather than silently ("The viewer
-    // failed to load"), so this is a nudge, not the only line of defence.
-    if (
-      fs.existsSync(path.join(assetDir, 'live-view.html')) &&
-      !fs.existsSync(path.join(assetDir, 'dcvjs', 'dcv.js'))
-    ) {
-      cdk.Annotations.of(this).addWarning(
-        'Amazon DCV Web Client SDK not found at assets/mcp-sandbox/dcvjs/. ' +
-          'The browser sign-in viewer will deploy without its client and fail ' +
-          'to connect. Run scripts/build/fetch-dcv-sdk.sh before deploying.',
-      );
-    }
-
+    // The browser sign-in viewer is NOT in this bucket. It has its own
+    // origin (`BrowserLiveViewConstruct`), because this one runs untrusted MCP
+    // App HTML and two same-origin frames on one page can script each other.
+    // `prune` below removes the copies earlier deploys left at this root.
     new s3deploy.BucketDeployment(this, 'McpSandboxShellDeployment', {
       sources: [
         s3deploy.Source.asset(assetDir),
