@@ -1,6 +1,6 @@
 # MCP typed tool outputs: measurements and proposal
 
-Status: **proposal, not agreed.** No code has changed. Written 2026-11-09, after mcp 2.3.0 (protocol 2026-07-28) reached dev in #1666.
+Status: **Part A agreed and implemented (2026-11-09). Parts B and C are proposals, not agreed.** Written 2026-11-09, after mcp 2.3.0 (protocol 2026-07-28) reached dev in #1666.
 
 Typed outputs mean an `outputSchema` on each tool in `tools/list`, plus `structuredContent` on each result. This doc covers four things. What they cost us. What they break in our own bookkeeping. What they could buy: a bounded payload for the model, and cards in the SPA. How each part is gated.
 
@@ -95,6 +95,8 @@ Effect:
 - The Responses key stops moving on GitHub schema edits.
 - The itemized breakdown is right.
 - `BeforeModelCall` hashes less.
+
+**As built.** The helper is `apis/shared/models/tool_specs.py` (`model_facing_tool_specs`). `compute_prefix_fingerprint` projects internally, so `handoff_brief` needs no change of its own. `tests/shared/test_tool_specs.py` formats real Strands requests (Bedrock, Bedrock strict, OpenAI chat, OpenAI Responses) and checks two things: a spec carrying `outputSchema` and `annotations` formats identically to its projection, and every kept key changes the request. Hashing GitHub's 43 typed tools plus 20 plain ones went from **0.68 ms to 0.22 ms** per `BeforeModelCall`.
 
 The cost is one deliberate rotation of `toolConfigHash` (observability only) and of the Responses `prompt_cache_key` (one cache write per live GPT conversation) at the deploy. Specs that already carry `annotations` rotate too, because those were also hashed but not sent.
 

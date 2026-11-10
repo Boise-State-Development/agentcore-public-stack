@@ -286,9 +286,12 @@ def build_prompt_cache_key(
     definitions). Including conversation history would rotate the key every
     turn, which is precisely the cache-busting this exists to prevent.
     """
+    from apis.shared.models.tool_specs import model_facing_tool_specs
     from apis.shared.observability import fingerprint_canonical_json, fingerprint_text
 
-    return f"{fingerprint_text(system_prompt)}:{fingerprint_canonical_json(tool_specs or [])}"
+    # Only what the Responses formatter sends: an MCP tool's `outputSchema`
+    # must not move the key, or a GitHub schema edit routes to a cold cache.
+    return f"{fingerprint_text(system_prompt)}:{fingerprint_canonical_json(model_facing_tool_specs(tool_specs))}"
 
 
 def apply_explicit_prompt_cache(

@@ -6,6 +6,10 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ## [Unreleased]
 
+### 🐛 Fixed
+
+- **`toolConfigHash`, the Responses `prompt_cache_key` and the context breakdown now count only what a model is sent.** Since mcp 2.3.0, Strands copies an MCP tool's `outputSchema` onto its registered spec: +77 KB across GitHub's 43 tools, which no formatter sends. Hashing that made `toolConfigHash` rotate with no cache miss behind it, which is a false lead for the cost runbook and for `TOOLCONFIG_MUTATED`. It also moved the Responses cache key on any GitHub schema edit, and overstated GitHub's share of the tool tokens about 2.6×. All three now go through `model_facing_tool_specs` (`apis/shared/models/tool_specs.py`), which a test pins against the Bedrock, OpenAI chat and Responses formatters. Expect one rotation of `toolConfigHash` at deploy for sessions whose tools carry `outputSchema` or `annotations`, and one cache write per live GPT conversation on the Responses transport. Bedrock's `toolConfig` itself is unchanged.
+
 ### 🔒 Security
 
 - **The browser sign-in viewer has an origin of its own.** `live-view.html`, where a user types a password into the takeover browser, was served from the mcp-sandbox origin that also runs untrusted MCP App HTML, and the SPA framed it with no `sandbox` attribute, so an App frame on the same page shared its security principal. The viewer now has its own CloudFront distribution and bucket (`BrowserLiveViewConstruct`) on the distribution's default `*.cloudfront.net` domain: no certificate, no DNS record, no deploy variable. app-api returns the origin as `viewerOrigin` on `POST /sessions/{id}/browser/live-view` (new env `BROWSER_LIVE_VIEW_ORIGIN`, app-api only; the AgentCore Runtime's environment is unchanged), and the SPA frames and posts to that origin only, refusing one equal to the MCP App origin. The SPA's `frame-src` gains the new origin. The DCV SDK now lives at `infrastructure/assets/browser-live-view/dcvjs/`. +6 PlatformStack resources. No feature flag.
