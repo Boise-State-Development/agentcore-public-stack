@@ -1028,7 +1028,7 @@ def _scan_pages(
         lines = page_text(index).splitlines()
         page_no = index + 1
         hit = False
-        for entry in _grep_lines(lines, regex, DOCUMENT_READ_MAX_MATCHES - len(matches), clock):
+        for entry in _grep_lines(lines, regex, DOCUMENT_READ_MAX_MATCHES - len(matches), clock, across_wraps=True):
             entry["page"] = page_no
             matches.append(entry)
             hit = True
@@ -1303,14 +1303,32 @@ def _grep_lines(
     regex: "re.Pattern[str]",
     budget: int,
     clock: Optional[_Budget] = None,
+    *,
+    across_wraps: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Matching lines with ``_CONTEXT_LINES`` of context, 1-indexed."""
+    """Matching lines with ``_CONTEXT_LINES`` of context, 1-indexed.
+
+    ``across_wraps`` is for a PDF page, whose lines are where the layout
+    wrapped, not where the author broke the text: a match that runs across a
+    line break ("Major" / "incident: at …") is also found, reported at the line
+    it starts on with both lines as its text. Without it a phrase was invisible
+    to ``pattern`` whenever the wrap fell inside it (attachment_delivery's
+    ``whole_summarise_pdf_150k_on_demand``: Sonnet 4.6 missed the same
+    incident in 3 of 3 samples).
+    """
     out: List[Dict[str, Any]] = []
     for i, line in enumerate(lines):
         if len(out) >= budget or (clock is not None and clock.out_of_time()):
             break
         text = line.strip()
         match = regex.search(text)
+        if not match and across_wraps and i + 1 < len(lines):
+            joined = f"{text} {lines[i + 1].strip()}"
+            spanning = next(
+                (m for m in regex.finditer(joined) if m.start() < len(text) < m.end()), None
+            )
+            if spanning is not None:
+                text, match = joined, spanning
         if not match:
             continue
         before = [ln.strip()[:_LINE_CHARS] for ln in lines[max(0, i - _CONTEXT_LINES): i]]
