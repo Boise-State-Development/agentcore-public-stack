@@ -233,10 +233,12 @@ describe('MessageAttachmentsComponent', () => {
 
   const ids = (n: number) => Array.from({ length: n }, (_, i) => sent(`f${i + 1}`));
 
-  it('draws one card without a list', async () => {
+  it('draws one card without a list, wide enough for its name and actions', async () => {
     const el = (await mount(ids(1))).nativeElement as HTMLElement;
     expect(el.querySelectorAll('app-attachment-card')).toHaveLength(1);
     expect(el.querySelector('ul')).toBeNull();
+    expect(el.querySelector('app-attachment-card')?.parentElement?.className).toContain('max-w-sm');
+    expect(el.querySelector('app-attachment-card')?.className).toContain('w-full');
   });
 
   it('spans the first of three cards so both rows are full', async () => {
