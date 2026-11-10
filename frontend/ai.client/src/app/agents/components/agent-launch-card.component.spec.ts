@@ -31,6 +31,7 @@ describe('AgentLaunchCardComponent', () => {
     name: 'Bronco Advisor',
     starters: [],
     listed: false,
+    pinnable: false,
     ...overrides,
   });
 
@@ -39,7 +40,7 @@ describe('AgentLaunchCardComponent', () => {
     fixture.componentRef.setInput('view', input);
     if (runnability !== undefined) fixture.componentRef.setInput('runnability', runnability);
     fixture.detectChanges();
-    // A `listed` card loads the session-wide pin list on mount.
+    // A `pinnable` card loads the session-wide pin list on mount.
     http.match(`/api/agents/pins`).forEach((req) => req.flush({ pins: [] }));
     fixture.detectChanges();
     return fixture;
@@ -120,21 +121,65 @@ describe('AgentLaunchCardComponent', () => {
     expect(emitted).toBe('When does registration close?');
   });
 
-  // ── the store affordances are gated on the listing ──────────────────────────────
-  it('offers Add and a detail link only for a listed agent', () => {
-    const unlisted = create(view({ listed: false }));
-    expect(text(unlisted)).not.toContain('Agent details');
-    expect(unlisted.nativeElement.querySelector('a[href]')).toBeNull();
+  // ── the detail link is gated on the listing; the pin control is not (#1897) ──────
+  const pinButton = (fixture: { nativeElement: HTMLElement }) =>
+    fixture.nativeElement.querySelector<HTMLButtonElement>('button[aria-pressed]');
 
-    const listed = create(view({ listed: true }));
-    expect(text(listed)).toContain('Add');
+  it('offers Add and a detail link for a listed agent', () => {
+    const listed = create(view({ listed: true, pinnable: true }));
+    expect(pinButton(listed)?.textContent?.trim()).toBe('Add');
     expect(text(listed)).toContain('Agent details');
     expect(listed.nativeElement.querySelector('a[href="/agents/ast-1"]')).toBeTruthy();
   });
 
+  it('offers Pin, and no detail link, for an agent that is not in the store', () => {
+    const unlisted = create(view({ listed: false, pinnable: true }));
+    expect(pinButton(unlisted)?.textContent?.trim()).toBe('Pin');
+    expect(text(unlisted)).not.toContain('Agent details');
+    expect(unlisted.nativeElement.querySelector('a[href]')).toBeNull();
+  });
+
+  it('pins an unlisted agent and then says Pinned', async () => {
+    const fixture = create(view({ listed: false, pinnable: true }));
+    pinButton(fixture)!.click();
+    http
+      .expectOne((req) => req.method === 'POST' && req.url === '/api/agents/ast-1/pin')
+      .flush({ agentId: 'ast-1', name: 'Bronco Advisor', locked: false });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(pinButton(fixture)?.textContent?.trim()).toBe('Pinned');
+    expect(pinButton(fixture)?.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('shows a lock, not a toggle, for a locked role pin on an unlisted agent', async () => {
+    const fixture = TestBed.createComponent(AgentLaunchCardComponent);
+    fixture.componentRef.setInput('view', view({ listed: false, pinnable: true }));
+    fixture.detectChanges();
+    http
+      .expectOne('/api/agents/pins')
+      .flush({ pins: [{ agentId: 'ast-1', name: 'Bronco Advisor', locked: true }] });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(pinButton(fixture)).toBeNull();
+    expect(fixture.nativeElement.querySelector('ng-icon[name="heroLockClosed"]')).toBeTruthy();
+    expect(text(fixture)).toContain('Pinned');
+  });
+
+  it('offers no pin control, and loads no pins, where pinning means nothing', () => {
+    // The Designer's preview and the Assistant-shape fallback both pass `pinnable: false`.
+    const fixture = TestBed.createComponent(AgentLaunchCardComponent);
+    fixture.componentRef.setInput('view', view({ pinnable: false }));
+    fixture.detectChanges();
+
+    http.expectNone('/api/agents/pins');
+    expect(pinButton(fixture)).toBeNull();
+  });
+
   it('says Added for an agent already on the shelf', async () => {
     const fixture = TestBed.createComponent(AgentLaunchCardComponent);
-    fixture.componentRef.setInput('view', view({ listed: true }));
+    fixture.componentRef.setInput('view', view({ listed: true, pinnable: true }));
     fixture.detectChanges();
     http
       .expectOne('/api/agents/pins')
@@ -222,6 +267,16 @@ describe('agentLaunchCardView', () => {
       agentLaunchCardView(
         agent({ listing: { state: 'published', category: 'advising', publisherId: 'p1' } }),
       ).listed,
+    ).toBe(true);
+  });
+
+  it('makes any saved agent pinnable, published or not', () => {
+    // Pinning is gated on reach, not publication (#1897).
+    expect(agentLaunchCardView(agent({ visibility: 'PRIVATE', status: 'DRAFT' })).pinnable).toBe(true);
+    expect(
+      agentLaunchCardView(
+        agent({ listing: { state: 'published', category: 'advising', publisherId: 'p1' } }),
+      ).pinnable,
     ).toBe(true);
   });
 

@@ -25,6 +25,7 @@ import { runnabilityMessage } from '../models/runnability';
 import { AgentIconComponent } from './agent-icon.component';
 import { AgentPinService } from '../services/agent-pin.service';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
+import { appPin } from '../../components/sidenav/components/session-list/pin-icons';
 
 /**
  * Everything the card renders, in the shape the card renders it.
@@ -48,12 +49,18 @@ export interface AgentLaunchCardView {
   iconUrl?: string;
   starters: string[];
   /**
-   * Whether this agent is in the store, which gates the two store affordances — the
-   * Add/Added pill and the link to the detail page. A private agent has no detail page
-   * to link to and nothing to add; rendering either would be an affordance with no
-   * destination behind it.
+   * Whether this agent is in the store. Gates the link to the detail page, which a
+   * private agent does not have, and picks the store's "Add / Added" wording for the pin
+   * control over the plainer "Pin / Pinned" an unlisted agent gets.
    */
   listed: boolean;
+  /**
+   * Whether to offer the pin control at all (#1897). Pinning is gated on reach, not
+   * publication, so any agent the caller opened from its saved record qualifies — a
+   * private draft included. Off where pinning means nothing (the Designer's own preview)
+   * or where the record might be a project's harness, which the server refuses.
+   */
+  pinnable: boolean;
 }
 
 /**
@@ -77,6 +84,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
     iconUrl: agent.iconUrl,
     starters: agent.starters ?? [],
     listed: agent.listing?.state === 'published',
+    pinnable: true,
   };
 }
 
@@ -112,6 +120,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
   imports: [AgentIconComponent, NgIcon, RouterLink, TooltipDirective],
   providers: [
     provideIcons({
+      appPin,
       heroArrowRight,
       heroCheck,
       heroCheckBadge,
@@ -181,7 +190,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
             </div>
 
             <div class="flex shrink-0 items-center gap-1">
-              @if (v.listed) {
+              @if (v.pinnable) {
                 @if (isLocked()) {
                   <!--
                     A locked role pin (D9.4): the control is absent, not disabled. A
@@ -194,7 +203,7 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
                     appTooltipPosition="top"
                   >
                     <ng-icon name="heroLockClosed" class="size-4" aria-hidden="true" />
-                    Added
+                    {{ v.listed ? 'Added' : 'Pinned' }}
                   </span>
                 } @else {
                   <button
@@ -212,11 +221,11 @@ export function agentLaunchCardView(agent: Agent): AgentLaunchCardView {
                    "
                   >
                     <ng-icon
-                      [name]="isPinned() ? 'heroCheck' : 'heroPlus'"
+                      [name]="pinIcon()"
                       class="size-4"
                       aria-hidden="true"
                     />
-                    {{ isPinned() ? 'Added' : 'Add' }}
+                    {{ pinLabel() }}
                   </button>
                 }
               }
@@ -336,7 +345,7 @@ export class AgentLaunchCardComponent {
     // the user reached via the store — and it is the only thing that keeps the pill from
     // saying "Add" for an agent they already added a moment ago on another screen.
     effect(() => {
-      if (this.view().listed) void this.pinService.load();
+      if (this.view().pinnable) void this.pinService.load();
     });
   }
 
@@ -386,9 +395,28 @@ export class AgentLaunchCardComponent {
   }
 
   pinTooltip(): string {
+    const name = this.view().name;
+    if (!this.view().listed) {
+      return this.isPinned() ? `Unpin ${name} from the sidebar` : `Pin ${name} to the sidebar`;
+    }
     return this.isPinned()
-      ? `Remove ${this.view().name} from your agents`
-      : `Add ${this.view().name} to your agents — a pointer, not a copy`;
+      ? `Remove ${name} from your agents`
+      : `Add ${name} to your agents — a pointer, not a copy`;
+  }
+
+  /**
+   * The store says "Add" because that is the verb its shelf sells with. An agent that is
+   * not in the store (your own, or one shared with you) has no shelf to be added to, so
+   * the control says what it actually does: puts it in the sidebar.
+   */
+  pinLabel(): string {
+    if (this.view().listed) return this.isPinned() ? 'Added' : 'Add';
+    return this.isPinned() ? 'Pinned' : 'Pin';
+  }
+
+  pinIcon(): string {
+    if (this.view().listed) return this.isPinned() ? 'heroCheck' : 'heroPlus';
+    return 'appPin';
   }
 
   verifiedTooltip(): string {

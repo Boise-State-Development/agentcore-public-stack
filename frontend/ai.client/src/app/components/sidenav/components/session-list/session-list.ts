@@ -734,7 +734,8 @@ export class SessionList {
 
   /**
    * A row dropped on Pinned: pin it, unless it came from Pinned already. Only
-   * conversations arrive from outside Pinned; Agents are pinned from the store.
+   * conversations arrive from outside Pinned; Agents are pinned from the store,
+   * My Agents or the chat launch card.
    */
   protected onPinnedDrop(event: CdkDragDrop<unknown, unknown, DragData>): void {
     if (event.previousContainer === event.container) return;

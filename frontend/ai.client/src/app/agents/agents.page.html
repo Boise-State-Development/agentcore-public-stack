@@ -158,6 +158,7 @@
                   <button type="button" (click)="onChat(agent)" [attr.aria-label]="'Chat with ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Chat'" appTooltipPosition="top">
                     <ng-icon name="heroChatBubbleLeftRight" class="size-4" aria-hidden="true" />
                   </button>
+                  <ng-container *ngTemplateOutlet="pinControl; context: { $implicit: agent }" />
                   <button type="button" (click)="onEdit(agent)" [attr.aria-label]="'Edit ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Edit'" appTooltipPosition="top">
                     <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                   </button>
@@ -214,6 +215,7 @@
                   <button type="button" (click)="onChat(agent)" [attr.aria-label]="'Chat with ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Chat'" appTooltipPosition="top">
                     <ng-icon name="heroChatBubbleLeftRight" class="size-4" aria-hidden="true" />
                   </button>
+                  <ng-container *ngTemplateOutlet="pinControl; context: { $implicit: agent }" />
                   <button type="button" (click)="onEdit(agent)" [attr.aria-label]="'Edit ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Edit'" appTooltipPosition="top">
                     <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                   </button>
@@ -239,3 +241,31 @@
     </main>
   </div>
 </div>
+
+<!--
+  Pin to sidebar (#1897), shared by the list and grid rows so the two views can never
+  offer different controls. A locked role pin (D9.4) gets a lock in the same slot rather
+  than a disabled toggle — the same treatment every store surface gives it.
+-->
+<ng-template #pinControl let-agent>
+  @if (isPinLocked(agent)) {
+    <span class="grid place-items-center rounded-md p-1.5 text-gray-400 dark:text-gray-500" [appTooltip]="lockTooltip(agent)" appTooltipPosition="top">
+      <ng-icon name="heroLockClosed" class="size-4" aria-hidden="true" />
+      <span class="sr-only">{{ lockTooltip(agent) }}</span>
+    </span>
+  } @else {
+    <button
+      type="button"
+      (click)="onTogglePin(agent)"
+      [disabled]="pinningId() !== null"
+      [attr.aria-label]="'Pin ' + agent.name + ' to sidebar'"
+      [attr.aria-pressed]="isPinned(agent)"
+      class="rounded-md p-1.5 transition hover:bg-gray-100 hover:text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:hover:bg-gray-700"
+      [class]="isPinned(agent) ? 'text-primary-accessible dark:text-primary-accessible-dark' : 'text-gray-400'"
+      [appTooltip]="pinTooltip(agent)"
+      appTooltipPosition="top"
+    >
+      <ng-icon name="appPin" class="size-4" aria-hidden="true" />
+    </button>
+  }
+</ng-template>
