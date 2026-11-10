@@ -1562,7 +1562,7 @@ class TestCustomHeaders:
             self._config({"X-MCP-Toolsets": "issues,context"}), oauth_token="tok"
         )
         with patch(
-            "agents.main_agent.integrations.external_mcp_client.streamablehttp_client"
+            "agents.main_agent.integrations.external_mcp_client.streamable_http_transport"
         ) as transport:
             client._transport_callable()
 
@@ -1580,7 +1580,7 @@ class TestCustomHeaders:
 
         client = create_external_mcp_client(self._config({}))
         with patch(
-            "agents.main_agent.integrations.external_mcp_client.streamablehttp_client"
+            "agents.main_agent.integrations.external_mcp_client.streamable_http_transport"
         ) as transport:
             client._transport_callable()
 

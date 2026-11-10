@@ -21,7 +21,12 @@ A third channel bypasses ``otel-rt-logs`` entirely:
   and ``gen_ai.tool.call.result`` on every ``tools/call`` span, with no
   capture gate, and those spans go to ``aws/spans``. The only 0.19 switch is
   ``AWS_AGENTIC_INSTRUMENTATION=disabled``, which stops ADOT loading the
-  instrumentor at all.
+  instrumentor at all. On the mcp 2.x SDK the instrumentor loads but emits
+  nothing (it wraps ``mcp.shared.session.BaseSession``, which 2.x removed).
+  The SDK's own client spans (``mcp-python-sdk``) carry method and tool
+  names, never arguments or results. The switch stays set for the day ADOT
+  instruments 2.x, and ``test_adot_mcp_instrumentor_cannot_see_the_sdk``
+  fails that day so the switch is re-checked.
 
 ``Dockerfile.inference-api`` sets all three. These tests read the values from
 the Dockerfile, not from a copy, and run them through the installed Strands,
@@ -34,19 +39,18 @@ exercising the content path cannot pass by accident.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import Any, Iterator
+from unittest.mock import patch
 
 import pytest
 from amazon.opentelemetry.distro.aws_opentelemetry_distro import AwsOpenTelemetryDistro
 from amazon.opentelemetry.distro.instrumentation.mcp import McpInstrumentor
 from amazon.opentelemetry.distro.llo_handler import LLOHandler
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.memory import create_connected_server_and_client_session
+import mcp.shared._otel as mcp_otel
 from opentelemetry.instrumentation.botocore.extensions.bedrock_utils import (
     _Choice,
     genai_capture_message_content,
@@ -58,6 +62,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from strands.agent.agent_result import AgentResult
+from strands.tools.mcp import MCPClient
 from strands.telemetry.metrics import EventLoopMetrics
 from strands.telemetry.tracer import Tracer
 
@@ -278,26 +283,43 @@ def _aws_mcp_entry_point() -> EntryPoint:
 def _run_mcp_tool_call() -> tuple[str, list[Any]]:
     """Start the process the way ``opentelemetry-instrument`` does for ADOT's MCP
     instrumentor (``AwsOpenTelemetryDistro.load_instrumentor``), then make one MCP
-    ``tools/call`` whose argument and result both carry a sentinel. Returns the
-    tool's result text and the exported spans.
+    ``tools/call`` whose argument and result both carry a sentinel, over the
+    production path: Strands' ``MCPClient`` and our streamable-HTTP transport.
+    The SDK's own tracer is pointed at the same provider. Returns the tool's
+    result text and the exported spans.
     """
+    from agents.main_agent.integrations.mcp_transport import streamable_http_transport
+    from tests.fixtures.flaky_mcp_server import FlakyMCPServer
+
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
     AwsOpenTelemetryDistro().load_instrumentor(_aws_mcp_entry_point(), tracer_provider=tracer_provider)
 
-    server = FastMCP("otel-content-probe")
+    def setup(server: Any) -> None:
+        @server.tool()
+        def lookup(query: str) -> str:
+            return f"{_TOOL_RESULT} for {query}"
 
-    @server.tool()
-    def lookup(query: str) -> str:
-        return f"{_TOOL_RESULT} for {query}"
+    with patch.object(mcp_otel, "_tracer", tracer_provider.get_tracer("mcp-python-sdk")), FlakyMCPServer(
+        fail_calls=False, setup=setup
+    ) as server:
+        client = MCPClient(lambda: streamable_http_transport(server.url))
+        client.start()
+        try:
+            result = client.call_tool_sync("t-1", "lookup", {"query": _TOOL_INPUT})
+        finally:
+            client.stop(None, None, None)
+    text = "".join(block.get("text", "") for block in result["content"])
+    return text, list(span_exporter.get_finished_spans())
 
-    async def call() -> str:
-        async with create_connected_server_and_client_session(server) as client:
-            result = await client.call_tool("lookup", {"query": _TOOL_INPUT})
-        return "".join(getattr(block, "text", "") for block in result.content)
 
-    return asyncio.run(call()), list(span_exporter.get_finished_spans())
+def _sdk_client_spans(spans: list[Any]) -> list[Any]:
+    return [
+        span
+        for span in spans
+        if span.instrumentation_scope.name == "mcp-python-sdk" and span.name == "MCP send tools/call lookup"
+    ]
 
 
 def test_dockerfile_disables_adot_native_agentic_instrumentors() -> None:
@@ -318,25 +340,29 @@ def test_mcp_tool_call_leaves_no_content_on_spans(
     result_text, spans = _run_mcp_tool_call()
 
     assert _TOOL_RESULT in result_text, "the MCP tool call did not run; the test is not exercising it"
+    assert _sdk_client_spans(spans), "the SDK emitted no client span; the test is not capturing spans"
     span_texts = [text for span in spans for text in _strings(dict(span.attributes or {}))]
     assert not _leaked(span_texts), f"MCP tool content reached trace spans: {_leaked(span_texts)}"
     assert not [span for span in spans if span.instrumentation_scope.name == _MCP_SCOPE]
 
 
-def test_mcp_control_leaks_with_only_the_otel_rt_logs_switches(
+def test_adot_mcp_instrumentor_cannot_see_the_sdk(
     image_env: dict[str, str], agentcore_observability: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The other two switches stay on, so this shows it is the agentic switch,
-    not the capture or redaction variable, that keeps MCP content off spans."""
+    """With the agentic switch removed (ADOT's default), its MCP instrumentor
+    loads and still records nothing: it wraps ``BaseSession``, which mcp 2.x
+    removed. If this fails, ADOT instruments the installed SDK again, and its
+    ``gen_ai.tool.call.arguments`` / ``.result`` capture may be back. Restore a
+    control that proves ``AWS_AGENTIC_INSTRUMENTATION=disabled`` keeps it off
+    spans (git history of this file has the 1.x one) before trusting the
+    switch."""
     monkeypatch.delenv(_AGENTIC_VAR, raising=False)
-    _, spans = _run_mcp_tool_call()
+    result_text, spans = _run_mcp_tool_call()
 
-    mcp_spans = [span for span in spans if span.instrumentation_scope.name == _MCP_SCOPE]
-    assert mcp_spans, "ADOT's MCP instrumentor emitted no spans on its default; the switch proves nothing"
-    arguments = [str(span.attributes.get("gen_ai.tool.call.arguments", "")) for span in mcp_spans]
-    results = [str(span.attributes.get("gen_ai.tool.call.result", "")) for span in mcp_spans]
-    assert any(_TOOL_INPUT in text for text in arguments), (
-        f"MCP tool arguments no longer reach spans with {_CAPTURE_VAR}=false. ADOT may have gated "
-        f"them upstream (aws-otel-python-instrumentation#904); re-check before dropping the switch."
+    assert _TOOL_RESULT in result_text
+    assert _sdk_client_spans(spans), "the SDK emitted no client span; the test is not capturing spans"
+    assert not [span for span in spans if span.instrumentation_scope.name == _MCP_SCOPE], (
+        "ADOT's MCP instrumentor emits spans on the installed mcp SDK again; re-check its content capture"
     )
-    assert any(_TOOL_RESULT in text for text in results)
+    span_texts = [text for span in spans for text in _strings(dict(span.attributes or {}))]
+    assert not _leaked(span_texts), f"MCP tool content reached trace spans: {_leaked(span_texts)}"

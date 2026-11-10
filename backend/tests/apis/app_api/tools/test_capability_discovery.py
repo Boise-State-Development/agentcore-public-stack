@@ -80,29 +80,29 @@ def _prompts(*names):
             )
             for n in names
         ],
-        nextCursor=None,
+        next_cursor=None,
     )
 
 
 def _resources(*uris):
     return SimpleNamespace(
         resources=[
-            SimpleNamespace(uri=u, name=None, description=None, mimeType="text/plain")
+            SimpleNamespace(uri=u, name=None, description=None, mime_type="text/plain")
             for u in uris
         ],
-        nextCursor=None,
+        next_cursor=None,
     )
 
 
 def _templates(*uris):
     return SimpleNamespace(
-        resourceTemplates=[
+        resource_templates=[
             SimpleNamespace(
-                uriTemplate=u, name=None, description=None, mimeType=None
+                uri_template=u, name=None, description=None, mime_type=None
             )
             for u in uris
         ],
-        nextCursor=None,
+        next_cursor=None,
     )
 
 
@@ -202,18 +202,18 @@ async def test_pagination_follows_the_cursor():
         SimpleNamespace(
             resources=[
                 SimpleNamespace(
-                    uri="x://1", name=None, description=None, mimeType=None
+                    uri="x://1", name=None, description=None, mime_type=None
                 )
             ],
-            nextCursor="c1",
+            next_cursor="c1",
         ),
         SimpleNamespace(
             resources=[
                 SimpleNamespace(
-                    uri="x://2", name=None, description=None, mimeType=None
+                    uri="x://2", name=None, description=None, mime_type=None
                 )
             ],
-            nextCursor=None,
+            next_cursor=None,
         ),
     ]
 
@@ -244,10 +244,10 @@ async def test_a_broken_cursor_cannot_loop_forever():
             return SimpleNamespace(
                 resources=[
                     SimpleNamespace(
-                        uri="x://same", name=None, description=None, mimeType=None
+                        uri="x://same", name=None, description=None, mime_type=None
                     )
                 ],
-                nextCursor="always",
+                next_cursor="always",
             )
 
         def list_prompts_sync(self, pagination_token=None):
@@ -269,7 +269,41 @@ async def test_long_descriptions_are_clipped():
                 name="p", title=None, description=long_desc, arguments=[]
             )
         ],
-        nextCursor=None,
+        next_cursor=None,
     )
     snapshot = await _run(_tool(), _StubClient(prompts=payload))
     assert len(snapshot.prompts[0].description) < 600
+
+
+def test_real_sdk_results_are_read_by_their_field_names():
+    """The fakes above mirror field names by hand; this reads the SDK's own
+    result models, so a rename in a future `mcp` release fails here rather
+    than silently truncating discovery to page one."""
+    import mcp.types as mcp_types
+
+    from apis.app_api.tools.discovery import _paginate, _resource_entries
+
+    pages = {
+        None: mcp_types.ListResourcesResult(
+            resources=[mcp_types.Resource(uri="x://1", name="one", mimeType="text/plain")],
+            nextCursor="c1",
+        ),
+        "c1": mcp_types.ListResourcesResult(
+            resources=[mcp_types.Resource(uri="x://2", name="two")]
+        ),
+    }
+    entries, truncated = _paginate(
+        lambda cursor: pages[cursor],
+        lambda result: _resource_entries(result, templates=False),
+    )
+    assert [e.uri for e in entries] == ["x://1", "x://2"]
+    assert entries[0].mime_type == "text/plain"
+    assert truncated is False
+
+    templates = mcp_types.ListResourceTemplatesResult(
+        resourceTemplates=[
+            mcp_types.ResourceTemplate(uriTemplate="x://{id}", name="by id", mimeType="text/html")
+        ]
+    )
+    (entry,) = _resource_entries(templates, templates=True)
+    assert (entry.uri, entry.uri_template, entry.mime_type) == ("x://{id}", True, "text/html")
