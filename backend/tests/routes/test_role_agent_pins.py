@@ -184,6 +184,29 @@ def test_a_role_seed_lands_on_the_shelf(client):
         assert leaked not in row
 
 
+def test_role_seeds_do_not_apply_while_the_marketplace_is_off(client, monkeypatch):
+    """#1897: pins outlive the store switch, role seeds do not.
+
+    The admin console that manages seeds 404s with the marketplace off, so a seed that
+    still applied could be neither edited by an admin nor dropped by a member if locked.
+    The user's own pin of the same Agent survives.
+    """
+    monkeypatch.setenv("AGENT_MARKETPLACE_ENABLED", "false")
+    state = UserPinState(pinned=[PinnedAgentRef(agent_id="ast-mine", order=0)])
+
+    response = _shelf(
+        client,
+        state=state,
+        seeds={"faculty": [_seed("ast-seeded", locked=True), _seed("ast-mine", locked=True)]},
+    )
+
+    assert response.status_code == 200
+    rows = response.json()["pins"]
+    assert [row["agentId"] for row in rows] == ["ast-mine"]
+    assert rows[0]["source"] == "user"
+    assert rows[0]["locked"] is False
+
+
 def test_a_dismissed_seed_stays_gone(client):
     """The tombstone is the whole reason live resolution is safe (D9.3)."""
     response = _shelf(

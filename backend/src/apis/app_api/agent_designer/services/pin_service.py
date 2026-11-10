@@ -64,6 +64,7 @@ from apis.shared.assistants.service import (
     resolve_assistant_permission,
 )
 from apis.shared.auth.models import User
+from apis.shared.feature_flags import agent_marketplace_enabled
 from apis.shared.rbac.service import get_app_role_service
 
 logger = logging.getLogger(__name__)
@@ -142,7 +143,14 @@ async def _role_seeds(user: User) -> Dict[str, _Seed]:
     a user holding both ``staff`` and ``faculty`` gets; the only per-Agent decisions are
     that a lock from *any* role wins (the strictest claim is the honest one) and that the
     ordering hints come from the highest-priority role that seeds it.
+
+    **None while the marketplace is off (#1897).** Role pins are managed from the
+    marketplace admin console, which 404s with the switch off. Applying them anyway would
+    leave admins unable to change a seed and members unable to drop a locked one.
     """
+    if not agent_marketplace_enabled():
+        return {}
+
     service = get_app_role_service()
     try:
         permissions = await service.resolve_user_permissions(user)

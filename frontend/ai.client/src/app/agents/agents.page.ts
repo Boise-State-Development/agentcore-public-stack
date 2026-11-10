@@ -1,5 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
+import { NgTemplateOutlet } from '@angular/common';
 import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -14,6 +15,7 @@ import {
   heroSquares2x2,
   heroBars3,
   heroDocumentDuplicate,
+  heroLockClosed,
 } from '@ng-icons/heroicons/outline';
 import { AGENT_DUPLICATED_TOAST, AgentService } from './services/agent.service';
 import { ToastService } from '../services/toast/toast.service';
@@ -27,6 +29,8 @@ import { TemplatePickerDialogComponent } from './components/template-picker-dial
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
 import { AgentsTabsComponent } from './components/agents-tabs.component';
 import { AgentIconComponent } from './components/agent-icon.component';
+import { AgentPinService } from './services/agent-pin.service';
+import { appPin } from '../components/sidenav/components/session-list/pin-icons';
 import { AgentsViewMode, LocalSettingsService } from '../services/local-settings.service';
 
 /**
@@ -49,12 +53,14 @@ import { AgentsViewMode, LocalSettingsService } from '../services/local-settings
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     NgIcon,
+    NgTemplateOutlet,
     TooltipDirective,
     AgentsTabsComponent,
     AgentIconComponent,
   ],
   providers: [
     provideIcons({
+      appPin,
       heroPlus,
       heroPencilSquare,
       heroChatBubbleLeftRight,
@@ -64,17 +70,21 @@ import { AgentsViewMode, LocalSettingsService } from '../services/local-settings
       heroSquares2x2,
       heroBars3,
       heroDocumentDuplicate,
+      heroLockClosed,
     }),
   ],
 })
 export class AgentsPage implements OnInit {
   private router = inject(Router);
   private agentService = inject(AgentService);
+  private pinService = inject(AgentPinService);
   private localSettings = inject(LocalSettingsService);
   private dialog = inject(Dialog);
   private toast = inject(ToastService);
   /** The agent currently being duplicated; disables the Duplicate buttons meanwhile. */
   readonly duplicatingId = signal<string | null>(null);
+  /** The agent whose pin is being toggled; disables that row's Pin button meanwhile. */
+  readonly pinningId = signal<string | null>(null);
 
   readonly agents = this.agentService.agents$;
   readonly loading = this.agentService.loading$;
@@ -90,6 +100,9 @@ export class AgentsPage implements OnInit {
 
   ngOnInit(): void {
     void this.load();
+    // Session-wide and loaded once, so this is free when the sidebar already asked. A
+    // failure leaves every row reading "not pinned", which is the safe direction.
+    void this.pinService.load();
   }
 
   private async load(): Promise<void> {
@@ -149,6 +162,41 @@ export class AgentsPage implements OnInit {
     this.router.navigate(['/'], { queryParams: { assistantId: agent.agentId } });
   }
 
+  isPinned(agent: Agent): boolean {
+    return this.pinService.isPinned(agent.agentId);
+  }
+
+  /** A role pin an admin locked (D9.4): the row shows a lock instead of the toggle. */
+  isPinLocked(agent: Agent): boolean {
+    return this.pinService.isLocked(agent.agentId);
+  }
+
+  pinTooltip(agent: Agent): string {
+    return this.isPinned(agent) ? 'Unpin from sidebar' : 'Pin to sidebar';
+  }
+
+  lockTooltip(agent: Agent): string {
+    return `${agent.name} is pinned for your role and can't be removed`;
+  }
+
+  /**
+   * Pin or unpin from the sidebar (#1897). Every row qualifies: pinning is gated on
+   * reach, not publication, and this list is exactly the agents the caller can reach.
+   * Project harnesses never appear here, so the server's refusal of those never shows.
+   */
+  async onTogglePin(agent: Agent): Promise<void> {
+    if (this.pinningId()) return;
+    this.pinningId.set(agent.agentId);
+    try {
+      await this.pinService.toggle(agent.agentId);
+    } catch {
+      // The service has already rolled the list back and holds the message.
+      this.toast.error('Could not update pin', this.pinService.error() ?? 'Please try again.');
+    } finally {
+      this.pinningId.set(null);
+    }
+  }
+
   /**
    * Everything about who can reach this agent — people, the link, and the marketplace
    * listing — lives in this one dialog. `agentId == assistantId`, so the share records
@@ -187,6 +235,8 @@ export class AgentsPage implements OnInit {
     if (confirmed) {
       try {
         await this.agentService.deleteAgent(agent.agentId);
+        // A pinned agent would otherwise linger in the sidebar until the next full load.
+        if (this.isPinned(agent)) void this.pinService.load(true);
       } catch (err) {
         console.error('Error deleting agent:', err);
       }

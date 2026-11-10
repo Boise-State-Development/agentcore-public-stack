@@ -766,7 +766,11 @@ link-sharing that exposure was bounded; under a store it is not.
 
 All SPA-facing under `apis/app_api/`, all `Depends(get_current_user_from_session)` per the CLAUDE.md
 auth rule; admin routes `Depends(require_admin)` (= `require_app_roles("system_admin")`,
-[`rbac.py:75`](../../backend/src/apis/shared/auth/rbac.py)). All behind the D14 gate.
+[`rbac.py:75`](../../backend/src/apis/shared/auth/rbac.py)). All behind the D14 gate, except the
+three pin routes: since #1897 they depend only on `require_agents_enabled`, because a pin is an
+Agent-surface bookmark (your own private draft included), not a store feature. While the marketplace
+is off, `GET /agents/pins` returns the user's own pins and skips role seeds, whose admin console is
+behind the gate.
 
 | Route | Purpose |
 |---|---|
