@@ -431,6 +431,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // runs the check and emits `source_provenance`. Written only while ON,
         // so the default costs nothing against the V2 payload budget.
         ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Attachment planner's token profile: the Runtime plans each turn's
+        // attachments against a per-model document budget. Written only while
+        // ON, so the default costs nothing against the V2 payload budget.
+        ...(config.attachmentPlan.enabled ? { ATTACHMENT_PLAN_ENABLED: 'true' } : {}),
         // MCP form elicitation: the Runtime advertises form elicitation to
         // opted-in servers, pauses the turn on a server's form and replays the
         // call with the answer. Written only while ON, so the default costs

@@ -110,6 +110,7 @@ export interface AppConfig {
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
   sourceProvenance: SourceProvenanceConfig;
+  attachmentPlan: AttachmentPlanConfig;
   mcpElicitation: McpElicitationConfig;
   releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
@@ -930,6 +931,22 @@ export interface FolderSyncConfig {
  * SessionLookupIndex GSI.
  */
 export interface SourceProvenanceConfig {
+  enabled: boolean;
+}
+
+/**
+ * Attachment planner, `token` profile (docs/specs/unified-attachment-delivery.md
+ * phase 3): each turn's attachments are decided in tokens against a per-model
+ * document budget of half the compaction ceiling. A PDF goes native within the
+ * model's page limit and the budget, other documents as text, and anything over
+ * it on demand (a digest plus `document_read`). **Opt-in while in development**:
+ * off unless CDK_ATTACHMENT_PLAN_ENABLED=true (or an `attachmentPlan.enabled:
+ * true` cdk.json context). A rollout switch, retired in the spec's phase 6.
+ * Sets ATTACHMENT_PLAN_ENABLED on the AgentCore Runtime (which plans the turn),
+ * written there **only while on**, and on app-api (`GET /files/limits` reports
+ * the active profile). No resources.
+ */
+export interface AttachmentPlanConfig {
   enabled: boolean;
 }
 
@@ -1989,6 +2006,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SOURCE_PROVENANCE_ENABLED
         ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
+    },
+    attachmentPlan: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_ATTACHMENT_PLAN_ENABLED
+        ? process.env.CDK_ATTACHMENT_PLAN_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('attachmentPlan')?.enabled ?? false,
     },
     mcpElicitation: {
       // In development: only "true" enables, and an unset GitHub variable

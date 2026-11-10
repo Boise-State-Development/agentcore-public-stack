@@ -64,6 +64,10 @@ class ReferenceAttachment:
     #: An inline-class upload moved out of the turn's combined inline budget
     #: (module docstring). Readable from the original, so never "preparing".
     over_budget: bool = False
+    #: Moved out by the ``token`` profile's ``document_budget`` (the planner's
+    #: ``over_document_budget``), not by the combined byte budget. Implies
+    #: ``over_budget``: readable from the original, so never "preparing".
+    token_budget: bool = False
 
     @property
     def filename(self) -> str:
@@ -173,7 +177,8 @@ def record_reference_attachments(refs: List[ReferenceAttachment]) -> None:
 
     In ``AgentCoreStack/Compaction`` beside ``DocumentRead``. Properties are the
     size bucket, the format, the stub status and why the file went by reference
-    (``size``, or ``over_budget`` for one moved out of the combined inline budget):
+    (``size``, ``over_budget`` for one moved out of the combined inline budget, or
+    ``document_budget`` for one the ``token`` profile's budget sent on demand):
     never a name, an id or text. Never raises.
     """
     if not refs:
@@ -192,7 +197,9 @@ def record_reference_attachments(refs: List[ReferenceAttachment]) -> None:
                     "sizeBucket": size_bucket(ref.size_bytes),
                     "format": ref.format,
                     "status": ref.stub_status(),
-                    "reason": "over_budget" if ref.over_budget else "size",
+                    "reason": (
+                        "document_budget" if ref.token_budget else "over_budget" if ref.over_budget else "size"
+                    ),
                 },
                 units={"AttachmentReference": "Count"},
             )
