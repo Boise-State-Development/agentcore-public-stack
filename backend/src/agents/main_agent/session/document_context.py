@@ -14,9 +14,11 @@ title, text or document byte ever leaves this function — the MIME map is
 keyed by Bedrock's ``document.format`` enum (``pdf`` / ``docx`` / …) plus
 ``image``.
 
-Token numbers are heuristics (``document_tokens.estimate_document_tokens``:
-pages x the per-page image estimate for PDFs, bytes/4 otherwise; a flat figure
-per image), not Bedrock counts: Bedrock reports no per-block usage. They are comparable across rows and against
+Token numbers are heuristics, not Bedrock counts (Bedrock reports no per-block
+usage): the file row's facts where this process has them (``document_estimate``:
+a PDF's text plus its page images, a text format's text, a slice its pages'
+share), ``estimate_document_tokens`` on the bytes otherwise, and a flat figure
+per image. They are comparable across rows and against
 ``contextBreakdown.messages``, which is the measured total they are a share of.
 """
 
@@ -25,7 +27,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from agents.main_agent.session.compaction_policy import IMAGE_TOKEN_ESTIMATE
-from apis.shared.files.document_tokens import estimate_document_tokens
+from agents.main_agent.session.document_estimate import EMPTY_INDEX, DocumentIndex, slice_reference
 
 #: A restore-time stand-in for a document that is no longer inline — today the
 #: contentless placeholder ``_strip_document_bytes`` writes; from PR-3 the
@@ -61,7 +63,10 @@ def _is_turn_prompt(message: Dict[str, Any]) -> bool:
     return not any(isinstance(b, dict) and "toolResult" in b for b in content)
 
 
-def summarize_document_context(messages: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+def summarize_document_context(
+    messages: Optional[List[Dict[str, Any]]],
+    documents: Optional[DocumentIndex] = None,
+) -> Optional[Dict[str, Any]]:
     """The attachment footprint of ``messages`` (the live conversation).
 
     Returns ``None`` for an empty or malformed list, otherwise a dict with:
@@ -82,6 +87,7 @@ def summarize_document_context(messages: Optional[List[Dict[str, Any]]]) -> Opti
     """
     if not isinstance(messages, list) or not messages:
         return None
+    index = documents if isinstance(documents, DocumentIndex) else EMPTY_INDEX
 
     count = tokens = digests = slices = slice_tokens = 0
     mime: Dict[str, int] = {}
@@ -103,9 +109,7 @@ def summarize_document_context(messages: Optional[List[Dict[str, Any]]]) -> Opti
                 count += 1
                 attached_here += 1
                 fmt = str((block.get("document") or {}).get("format") or "unknown")
-                tokens += estimate_document_tokens(
-                    fmt, ((block.get("document") or {}).get("source") or {}).get("bytes")
-                )
+                tokens += index.block_tokens(block.get("document"))
                 mime[fmt] = mime.get(fmt, 0) + 1
                 continue
             size = _inline_bytes(block, "image")
@@ -120,15 +124,15 @@ def summarize_document_context(messages: Optional[List[Dict[str, Any]]]) -> Opti
                 continue
             tool_result = block.get("toolResult")
             if isinstance(tool_result, dict):
+                upload_id, pages = slice_reference(tool_result.get("content"))
                 for inner in tool_result.get("content") or []:
                     if not isinstance(inner, dict):
                         continue
                     inner_size = _inline_bytes(inner, "document")
                     if inner_size is not None:
                         slices += 1
-                        inner_doc = inner.get("document") or {}
-                        slice_tokens += estimate_document_tokens(
-                            inner_doc.get("format"), (inner_doc.get("source") or {}).get("bytes")
+                        slice_tokens += index.block_tokens(
+                            inner.get("document"), upload_id=upload_id, pages_covered=pages
                         )
         if prompt:
             last_prompt_attachments = attached_here

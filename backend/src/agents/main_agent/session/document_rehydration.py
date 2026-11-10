@@ -49,7 +49,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from agents.main_agent.multimodal.file_sanitizer import FileSanitizer
 from agents.main_agent.session.compaction_policy import CHARS_PER_TOKEN
-from apis.shared.files.document_tokens import estimate_document_tokens
+from apis.shared.files.document_estimate import document_tokens, remember_session_documents
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +207,9 @@ def rehydrate_documents(
                 try:
                     if candidates is None:
                         candidates = load_session_documents(session_id, user_id)
+                        # The rows are read here anyway: keep their facts so
+                        # this session's estimates need no read of their own.
+                        remember_session_documents(user_id, session_id, candidates)
                     meta = match_document(name, fmt, size, candidates, used)
                     if meta is not None:
                         digest = digest_for(meta, bytes(raw) if isinstance(raw, (bytes, bytearray)) else b"")
@@ -231,8 +234,9 @@ def rehydrate_documents(
                 result.stripped += 1
                 # Same estimator the row and the offloader use, so the
                 # ``document_stripped`` ledger event is comparable to
-                # ``document_offload`` / ``document_rehydrated``.
-                result.stripped_tokens += estimate_document_tokens(fmt, raw)
+                # ``document_offload`` / ``document_rehydrated``. A stripped
+                # block matched no row, so it has no facts: its bytes decide.
+                result.stripped_tokens += document_tokens(fmt, raw)
             content[idx] = {"text": replacement}
 
     return result
