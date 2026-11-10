@@ -2005,6 +2005,16 @@ class StreamCoordinator:
             except Exception:  # noqa: BLE001
                 logger.debug("source provenance discard failed", exc_info=True)
 
+            # Stop the turn's analyze_spreadsheet sandbox (#259). The agent's
+            # AfterInvocationEvent normally does this; a dropped client can
+            # skip it, so release here too. Idempotent.
+            try:
+                sandbox_hook = getattr(main_agent_wrapper, "analyze_sandbox_hook", None)
+                if sandbox_hook is not None:
+                    await sandbox_hook.release()
+            except Exception:  # noqa: BLE001
+                logger.debug("analyze sandbox release failed", exc_info=True)
+
     @staticmethod
     def _completed_turn_outcome(
         agent: Any, per_message_metadata: List[Dict[str, Any]]

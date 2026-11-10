@@ -21,7 +21,7 @@
 - **Language**: Python 3.13+
 - **Framework**: FastAPI 0.116.1
 - **Server**: Uvicorn 0.35.0 (ASGI)
-- **Agent Framework**: Strands Agents 1.22.0
+- **Agent Framework**: Strands Agents 1.63.0 (pinned in `backend/pyproject.toml`; must stay ≥1.56 and move together with `bedrock-agentcore` ≥1.23.1)
 - **AWS SDK**: boto3 (Bedrock, S3, DynamoDB)
 - **Authentication**: PyJWT with crypto support
 - **Environment**: python-dotenv
