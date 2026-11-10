@@ -17,7 +17,6 @@ import {
   ReactiveFormsModule,
 } from '@angular/forms';
 import { map } from 'rxjs';
-import { MarkdownComponent } from 'ngx-markdown';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -60,7 +59,7 @@ const WILDCARD = '*';
 @Component({
   selector: 'app-role-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule, MarkdownComponent, NgIcon, SpinnerComponent, ToolSelectorComponent],
+  imports: [ReactiveFormsModule, NgIcon, SpinnerComponent, ToolSelectorComponent],
   providers: [
     provideIcons({ heroArrowLeft, heroInformationCircle }),
   ],
@@ -388,23 +387,15 @@ const WILDCARD = '*';
                   The System Admin role can't carry a system instruction.
                 </p>
               } @else {
-                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <textarea
-                    id="systemInstruction"
-                    formControlName="systemInstruction"
-                    rows="12"
-                    placeholder="e.g., Our users are undergraduate students. Explain your reasoning step by step and point to campus resources when relevant."
-                    aria-describedby="system-instruction-hint system-instruction-count"
-                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
-                    [class.border-state-danger-500]="instructionOverLimit()"
-                  ></textarea>
-                  <div class="rounded-sm border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900">
-                    <p class="mb-2 text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Preview</p>
-                    <div class="message-block text-sm/6 text-gray-700 dark:text-gray-300">
-                      <markdown [data]="instructionPreview()" />
-                    </div>
-                  </div>
-                </div>
+                <textarea
+                  id="systemInstruction"
+                  formControlName="systemInstruction"
+                  rows="5"
+                  placeholder="e.g., Our users are undergraduate students. Explain your reasoning step by step and point to campus resources when relevant."
+                  aria-describedby="system-instruction-hint system-instruction-count"
+                  class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="instructionOverLimit()"
+                ></textarea>
                 <p
                   id="system-instruction-count"
                   class="mt-1 text-xs/5"
@@ -501,7 +492,7 @@ export class RoleFormPage implements OnInit {
 
   protected readonly maxInstructionLength = MAX_ROLE_SYSTEM_INSTRUCTION_CHARS;
 
-  /** The instruction text as a signal, so the count and preview are `computed()`. */
+  /** The instruction text as a signal, so the count and limit are `computed()`. */
   private readonly instructionText = toSignal(this.roleForm.controls.systemInstruction.valueChanges, {
     initialValue: this.roleForm.controls.systemInstruction.value,
   });
@@ -511,9 +502,6 @@ export class RoleFormPage implements OnInit {
   readonly instructionTokens = computed(() => Math.ceil(this.instructionLength() / 4));
   readonly instructionOverLimit = computed(
     () => this.instructionLength() > MAX_ROLE_SYSTEM_INSTRUCTION_CHARS,
-  );
-  readonly instructionPreview = computed(
-    () => (this.instructionText() ?? '').trim() || '*(nothing to preview yet)*',
   );
 
   /** The server strips the field from `system_admin` updates, so the form hides it. */
