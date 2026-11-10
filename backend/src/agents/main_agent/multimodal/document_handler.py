@@ -10,10 +10,15 @@ logger = logging.getLogger(__name__)
 class DocumentHandler:
     """Handles document format detection and ContentBlock creation"""
 
-    # Supported document formats and extensions
+    # Supported document formats and extensions. Every document extension the
+    # upload allowlist admits (``ALLOWED_EXTENSIONS`` in
+    # ``apis/shared/files/models.py``) must be listed here, or the file is
+    # admitted and then silently dropped from the turn. ``.pptx`` is the one
+    # exception: it never goes inline (PowerPoint tools), and is excluded on
+    # purpose. ``test_document_handler_covers_admitted_extensions`` pins this.
     SUPPORTED_EXTENSIONS = {
         ".pdf", ".csv", ".doc", ".docx",
-        ".xls", ".xlsx", ".html", ".txt", ".md"
+        ".xls", ".xlsx", ".html", ".txt", ".md", ".sql"
     }
 
     # Extension to format mapping
@@ -26,7 +31,9 @@ class DocumentHandler:
         ".xlsx": "xlsx",
         ".html": "html",
         ".txt": "txt",
-        ".md": "md"
+        ".md": "md",
+        # Admitted as text/plain; Bedrock has no sql format, so it reads as txt.
+        ".sql": "txt",
     }
 
     @staticmethod

@@ -107,6 +107,21 @@ class TestBuildPromptUnsupportedFiles:
         assert len(result) == 1
         assert "text" in result[0]
 
+    def test_sql_file_becomes_a_txt_document_block(self):
+        # .sql is admitted as text/plain; it used to be dropped here.
+        import base64 as _b64
+
+        from tests.agents.main_agent.conftest import FakeFileContent
+
+        file = FakeFileContent(
+            "schema.sql", "text/plain", _b64.b64encode(b"SELECT 1;").decode()
+        )
+        result = _make_builder().build_prompt("Read this", files=[file])
+        docs = [b["document"] for b in result if "document" in b]
+        assert len(docs) == 1
+        assert docs[0]["format"] == "txt"
+        assert docs[0]["source"]["bytes"] == b"SELECT 1;"
+
     def test_mixed_files_skips_unsupported(self, sample_files):
         builder = _make_builder()
         # All three: image, document, unsupported
