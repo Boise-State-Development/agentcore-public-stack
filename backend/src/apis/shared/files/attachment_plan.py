@@ -31,11 +31,30 @@ reproduces the byte rules the chat route applied before this module existed:
 The flags those rules read are inputs to the profile, read once in
 :func:`legacy_profile`; nothing here branches on a flag anywhere else.
 
-**The ``token`` seam.** Phase 3 adds a ``token`` profile selected by
-``ATTACHMENT_PLAN_ENABLED``: the same function, a different
-:class:`LimitsProfile` (token budgets instead of byte budgets, ``text`` for every
-non-PDF document). :func:`current_limits_profile` is where that selection goes,
-and :data:`PROFILE_TOKEN` names it. It is not built.
+**The ``token`` profile (phase 3).** The same function with a different
+:class:`LimitsProfile` (:func:`token_profile`): the §4.3 ladder against a
+per-model ``document_budget`` of half the chat ceiling (§5.2), applied by
+:func:`refine_for_model` once the model is known:
+
+- a PDF goes ``native`` within the model's page limit and the budget, on a
+  model with image input; ``text`` when it is over the page limit, has a text
+  layer and its text fits; otherwise ``on_demand``;
+- every other renderable document goes ``text`` within the budget, else
+  ``on_demand``; it is never a native block;
+- an image is ``native`` and counts against the budget; spreadsheets and decks
+  are ``tool``; a reference-class upload stays ``on_demand``;
+- a document over the per-file inline limit with a row goes ``on_demand``
+  rather than being dropped. Only a file with nothing to read it from later (a
+  direct base64 attachment with no row, an image) can still be over a byte
+  rule; phase 4's handles remove those.
+
+Each file is costed in the turn model's own tokens (:func:`document_cost`):
+the row's ``tokens.text`` times the model's tokenizer factor, plus
+``PDF_PAGE_IMAGE_TOKENS`` a page for a native PDF (measured, §2.1). The budget
+is spent per turn, in attachment order. The byte rules that protect the
+AgentCore Memory event (the per-message count, the combined inline bytes) are
+unchanged until phase 4. :func:`current_limits_profile` selects it with
+``ATTACHMENT_PLAN_ENABLED``.
 
 **One place decides (§9.1 rule 3).** ``tests/architecture/test_attachment_plan_boundary.py``
 fails if a turn-path module outside this one reads a limit constant or a class
@@ -70,6 +89,7 @@ codes, token estimates and upload ids. Never a filename.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -143,9 +163,51 @@ REASON_TEXT_ONLY_UNREADABLE = "text_only_unreadable"
 REASON_PERSIST_FAILED = "persist_failed"
 REASON_TEXT_UNAVAILABLE = "text_unavailable"
 
+# The ``token`` profile's reasons (§4.3). Stable strings, like the rest.
+#: Within the turn's ``document_budget``: a PDF ``native``, anything else ``text``.
+REASON_WITHIN_BUDGET = "within_budget"
+#: Over what is left of the budget, so ``document_read`` reads it.
+REASON_OVER_DOCUMENT_BUDGET = "over_document_budget"
+#: A PDF past the model's page limit whose text layer fits the budget.
+REASON_PDF_PAGE_LIMIT = "pdf_page_limit"
+#: Over the budget with no row to read it from later: sent as planned.
+REASON_NO_ROW = "no_row"
+
 PROFILE_LEGACY = "legacy"
-#: Phase 3 (§9 / §9.1). Named so the seam is visible; not built.
+#: Phase 3 (§9 / §9.1): selected by ``ATTACHMENT_PLAN_ENABLED``.
 PROFILE_TOKEN = "token"
+
+# ---------------------------------------------------------------------------
+# Per-model document costs (§2.1, §5.2)
+# ---------------------------------------------------------------------------
+
+#: Input tokens one PDF page's image costs, on every model probed: 15,624 to
+#: 15,639 for ten near-empty pages on Haiku 4.5, Haiku 5.5 and Sonnet 4.6, and
+#: 3,159 for two on Opus 4.7 and Opus 5.5 (dev, 2026-11-10).
+PDF_PAGE_IMAGE_TOKENS = 1_565
+
+#: Tokens the model bills per ``tokens.text`` (characters / 4) of extracted
+#: text, by model id. Measured on dev on 2026-11-10 with the 32-page
+#: ``delivery_report_30k.pdf`` fixture (``tokens.text`` 30,779): its text alone
+#: was 29,298 tokens on Haiku 4.5 and Sonnet 4.6 and 43,225 on Haiku 5.5, Opus
+#: 4.7 and Opus 5.5; the PDF was its page images plus that text to within 0.1%.
+LEGACY_TOKENIZER_FACTOR = 0.95
+#: The newer tokenizer, and the default for any model not listed: it
+#: over-counts a legacy tokenizer by ~45%, which only sends a file
+#: ``on_demand`` sooner (the cheaper mode, equal on quality in phase 0).
+DEFAULT_TOKENIZER_FACTOR = 1.40
+_LEGACY_TOKENIZER_MODELS = ("claude-haiku-4-5", "claude-sonnet-4-6")
+
+#: PDF pages Bedrock accepts in one block, by model id (the phase 0 probe,
+#: #1961): 100 on a 200k model, 600 on a 1M one. An unlisted model gets 600
+#: when its window is at least 1M and 100 otherwise, which is the probe's rule.
+_PDF_PAGE_LIMITS = (("claude-haiku-4-5", 100), ("claude-haiku-5-5", 600), ("claude-sonnet-4-6", 600))
+PDF_PAGE_LIMIT_SMALL_WINDOW = 100
+PDF_PAGE_LIMIT_LARGE_WINDOW = 600
+LARGE_WINDOW_TOKENS = 1_000_000
+
+#: ``document_budget`` as a share of the chat ceiling (§5.2, the phase 0 readout).
+DOCUMENT_BUDGET_CEILING_SHARE = 0.5
 
 #: Floor on one document's share of ``text_only_max_chars``, so five
 #: attachments still get a useful excerpt each.
@@ -193,6 +255,9 @@ class LimitsProfile:
     text_only_max_chars: int = 60_000
     #: How many ids the resolver fetches when the guard is off (its old backstop).
     resolver_backstop_without_guard: int = 5
+    #: ``document_budget`` as a share of the model's chat ceiling. ``0`` is the
+    #: ``legacy`` profile: no token budget, the byte rules only.
+    document_budget_share: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -212,6 +277,11 @@ class FileFacts:
     forced_mode: Optional[str] = None
     #: Pages, when the row knows (a prepared reference-class document).
     page_count: Optional[int] = None
+    #: The row's facts (§4.1), when current: ``tokens.text``, ``tokens.native``
+    #: and ``hasTextLayer``. Read by the ``token`` profile only.
+    text_tokens: Optional[int] = None
+    native_tokens: Optional[int] = None
+    has_text_layer: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +294,11 @@ class ModelFacts:
     converse: bool = True
     #: Context window in tokens, when known. Read by the ``token`` profile.
     context_window: Optional[int] = None
+    #: The turn's model id: picks its tokenizer factor and PDF page limit.
+    model_id: Optional[str] = None
+    #: The compaction ceiling this model runs under (``CompactionPolicy``),
+    #: which ``document_budget`` is a share of. ``None``: no token budget.
+    chat_ceiling: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -349,13 +424,32 @@ def legacy_profile() -> LimitsProfile:
     )
 
 
-def current_limits_profile() -> LimitsProfile:
-    """The profile this turn plans with.
+def token_profile() -> LimitsProfile:
+    """The ``token`` profile (§4.3, §5.2): the legacy byte limits that protect the
+    persisted message, plus the per-model document budget, and text for every
+    renderable non-PDF document whatever ``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`` says."""
+    return replace(
+        legacy_profile(),
+        name=PROFILE_TOKEN,
+        documents_as_text=True,
+        over_budget_by_reference=True,
+        document_budget_share=DOCUMENT_BUDGET_CEILING_SHARE,
+    )
 
-    Phase 3's ``ATTACHMENT_PLAN_ENABLED`` selects :data:`PROFILE_TOKEN` here, and
-    nowhere else. Until then every turn is ``legacy``.
-    """
-    return legacy_profile()
+
+def current_limits_profile() -> LimitsProfile:
+    """The profile this turn plans with: ``token`` with ``ATTACHMENT_PLAN_ENABLED``,
+    else ``legacy``. The flag is read here and nowhere else (§9.1 rule 1)."""
+    from apis.shared.feature_flags import attachment_plan_enabled
+
+    return token_profile() if attachment_plan_enabled() else legacy_profile()
+
+
+def documents_as_text() -> bool:
+    """Whether the per-call projection renders every renderable non-PDF document
+    as text on a Converse model: the active profile's rule, so the projection
+    and the plan always agree."""
+    return current_limits_profile().documents_as_text
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +628,54 @@ def _estimate_tokens(facts: FileFacts, cls: str) -> int:
     return byte_tokens
 
 
+def tokenizer_factor(model_id: Optional[str]) -> float:
+    """Tokens the model bills per ``tokens.text``: :data:`LEGACY_TOKENIZER_FACTOR`
+    for the listed models, :data:`DEFAULT_TOKENIZER_FACTOR` for every other."""
+    mid = (model_id or "").lower()
+    if any(key in mid for key in _LEGACY_TOKENIZER_MODELS):
+        return LEGACY_TOKENIZER_FACTOR
+    return DEFAULT_TOKENIZER_FACTOR
+
+
+def pdf_page_limit(model: ModelFacts) -> int:
+    """Pages one native PDF block may have on this model (§2.1)."""
+    mid = (model.model_id or "").lower()
+    for key, limit in _PDF_PAGE_LIMITS:
+        if key in mid:
+            return limit
+    if model.context_window and int(model.context_window) >= LARGE_WINDOW_TOKENS:
+        return PDF_PAGE_LIMIT_LARGE_WINDOW
+    return PDF_PAGE_LIMIT_SMALL_WINDOW
+
+
+def document_budget(model: ModelFacts, profile: LimitsProfile) -> Optional[int]:
+    """Tokens of ``native`` and ``text`` attachments one turn may carry, or ``None``
+    when the profile has no token budget or the ceiling is unknown."""
+    if profile.document_budget_share <= 0 or not model.chat_ceiling:
+        return None
+    return int(int(model.chat_ceiling) * profile.document_budget_share)
+
+
+def document_cost(facts: FileFacts, cls: str, mode: str, model: ModelFacts) -> int:
+    """Estimated input tokens for one file in ``mode`` on ``model`` (§5.2).
+
+    From the row's facts when it has them: text at the model's tokenizer factor,
+    plus the page images for a native PDF. Without facts, today's estimate from
+    the bytes (:func:`_estimate_tokens`), scaled the same way.
+    """
+    if cls == CLASS_IMAGE:
+        return IMAGE_TOKENS
+    factor = tokenizer_factor(model.model_id)
+    if facts.text_tokens is not None:
+        text = int(math.ceil(max(0, int(facts.text_tokens)) * factor))
+        if cls == CLASS_PDF and mode == MODE_NATIVE:
+            pages = facts.page_count
+            images = int(pages) * PDF_PAGE_IMAGE_TOKENS if pages else int(facts.native_tokens or 0)
+            return text + images
+        return text
+    return int(math.ceil(_estimate_tokens(facts, cls) * factor))
+
+
 # ---------------------------------------------------------------------------
 # The planner
 # ---------------------------------------------------------------------------
@@ -632,6 +774,10 @@ def plan_attachments(
         # Images have their own (larger) Bedrock limits and become image
         # blocks, which the per-document ceiling does not apply to.
         if cls != CLASS_IMAGE and facts.size_bytes > profile.inline_document_max_bytes:
+            if profile.document_budget_share > 0 and facts.has_row and cls in (CLASS_PDF, CLASS_DOCUMENT):
+                # The token profile never drops a file it can read later (§4.3).
+                modes[i], reasons[i] = MODE_ON_DEMAND, REASON_OVER_BUDGET_REFERENCE
+                continue
             modes[i], reasons[i] = MODE_DROPPED, REASON_OVERSIZED
             continue
         modes[i], reasons[i] = MODE_NATIVE, REASON_INLINE
@@ -713,6 +859,8 @@ def refine_for_model(
                     reason=REASON_TEXT_ONLY_MODEL,
                     tokens=min(e.tokens, text_char_limit // CHARS_PER_TOKEN),
                 )
+    elif document_budget(model, profile) is not None:
+        entries = _token_ladder(entries, files, model, profile)
     elif not model.converse or profile.documents_as_text:
         # Off Converse the projection always renders (agent_factory installs it
         # with as_text=True for every other provider); on Converse only with
@@ -726,6 +874,67 @@ def refine_for_model(
             if e.file_class != CLASS_IMAGE and _extension(files[e.index].filename) in DOCUMENTS_AS_TEXT_EXTENSIONS:
                 entries[e.index] = replace(e, mode=MODE_TEXT, reason=reason)
     return replace(plan, entries=tuple(entries), text_char_limit=text_char_limit)
+
+
+def _token_ladder(
+    entries: List[PlanEntry],
+    files: Sequence[FileFacts],
+    model: ModelFacts,
+    profile: LimitsProfile,
+) -> List[PlanEntry]:
+    """The §4.3 ladder over the plan's ``native`` entries, against the turn's budget.
+
+    In attachment order; each file takes the first mode it qualifies for
+    against what is left. A forced entry keeps its mode and is not counted (an
+    eval arm measures the mode, not the budget). Only ``native`` entries are
+    judged, so a second call finds nothing left to change.
+    """
+    remaining = document_budget(model, profile) or 0
+    page_limit = pdf_page_limit(model)
+    for e in list(entries):
+        if e.mode != MODE_NATIVE or e.reason == REASON_FORCED:
+            continue
+        facts = files[e.index]
+        cls = e.file_class
+
+        def take(mode: str, reason: str, cost: int) -> None:
+            nonlocal remaining
+            remaining -= cost
+            entries[e.index] = replace(e, mode=mode, reason=reason, tokens=cost)
+
+        def over() -> None:
+            if facts.has_row:
+                entries[e.index] = replace(e, mode=MODE_ON_DEMAND, reason=REASON_OVER_DOCUMENT_BUDGET, tokens=0)
+            else:
+                # Nothing to read it from later: send it as the rule says, and say why.
+                mode = MODE_TEXT if cls == CLASS_DOCUMENT and _renders_as_text(facts) else MODE_NATIVE
+                take(mode, REASON_NO_ROW, document_cost(facts, cls, mode, model))
+
+        if cls == CLASS_IMAGE:
+            take(MODE_NATIVE, REASON_INLINE, document_cost(facts, cls, MODE_NATIVE, model))
+        elif cls == CLASS_PDF:
+            pages = facts.page_count
+            within_pages = not pages or int(pages) <= page_limit
+            native_cost = document_cost(facts, cls, MODE_NATIVE, model)
+            text_cost = document_cost(facts, cls, MODE_TEXT, model)
+            if within_pages and native_cost <= remaining:
+                take(MODE_NATIVE, REASON_WITHIN_BUDGET, native_cost)
+            elif not within_pages and facts.has_text_layer and facts.text_tokens is not None and text_cost <= remaining:
+                take(MODE_TEXT, REASON_PDF_PAGE_LIMIT, text_cost)
+            else:
+                over()
+        elif cls == CLASS_DOCUMENT and _renders_as_text(facts):
+            cost = document_cost(facts, cls, MODE_TEXT, model)
+            if cost <= remaining:
+                take(MODE_TEXT, REASON_WITHIN_BUDGET, cost)
+            else:
+                over()
+        # Anything else (a format the projection cannot render) keeps the legacy plan.
+    return entries
+
+
+def _renders_as_text(facts: FileFacts) -> bool:
+    return _extension(facts.filename) in DOCUMENTS_AS_TEXT_EXTENSIONS
 
 
 __all__ = [
@@ -747,6 +956,11 @@ __all__ = [
     "MODE_TOOL",
     "PROFILE_LEGACY",
     "PROFILE_TOKEN",
+    "PDF_PAGE_IMAGE_TOKENS",
+    "REASON_NO_ROW",
+    "REASON_OVER_DOCUMENT_BUDGET",
+    "REASON_PDF_PAGE_LIMIT",
+    "REASON_WITHIN_BUDGET",
     "AttachmentPlan",
     "ConversationFacts",
     "CountCap",
@@ -756,6 +970,12 @@ __all__ = [
     "PlanEntry",
     "cap_message_attachments",
     "current_limits_profile",
+    "document_budget",
+    "document_cost",
+    "documents_as_text",
+    "pdf_page_limit",
+    "token_profile",
+    "tokenizer_factor",
     "delivers_by_reference",
     "file_class",
     "legacy_profile",

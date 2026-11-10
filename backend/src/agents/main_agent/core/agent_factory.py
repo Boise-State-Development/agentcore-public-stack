@@ -17,7 +17,8 @@ from agents.main_agent.config.constants import EnvVars, Defaults
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 from apis.shared.models.mantle import build_mantle_model
 from apis.shared.models.stream_output import tag_partial_output
-from apis.shared.feature_flags import converse_document_cap_enabled, converse_documents_as_text_enabled
+from apis.shared.feature_flags import converse_document_cap_enabled
+from apis.shared.files.attachment_plan import documents_as_text
 from apis.shared.models.document_cap import CONVERSE_MAX_NON_PDF_DOCUMENTS, UNCAPPED, converse_document_cap
 from apis.shared.models.text_only_input import text_only_input
 from apis.shared.models.usage_normalization import usage_normalized
@@ -252,11 +253,12 @@ class AgentFactory:
         # at five, not a conversation, so a later turn's attachments can tip a
         # warm session over. Same per-call projection: past the fifth, a
         # document is sent as its text (apis/shared/models/document_cap.py).
-        # With CONVERSE_DOCUMENTS_AS_TEXT_ENABLED (in development) every
-        # non-PDF document it can render goes as text, not only the overflow.
+        # When the planner's profile says so (CONVERSE_DOCUMENTS_AS_TEXT_ENABLED
+        # in the legacy profile, always in the token profile) every non-PDF
+        # document it can render goes as text, not only the overflow.
         if provider == ModelProvider.BEDROCK:
             capped = converse_document_cap_enabled()
-            as_text = converse_documents_as_text_enabled()
+            as_text = documents_as_text()
             if capped or as_text:
                 model = converse_document_cap(
                     model,
