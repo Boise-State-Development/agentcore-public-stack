@@ -181,6 +181,7 @@ def _github_form_stub_event():
                 {"text": "An interactive form has been shown to the user for creating a "
                          "new issue in owner/repo. STOP — do not call any other tools."}
             ],
+            "structuredContent": {"status": "awaiting_user_submission"},
         },
     )
 
