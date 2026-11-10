@@ -6,6 +6,10 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ## [Unreleased]
 
+### ✨ Added
+
+- **Attachment cards, behind `features.attachmentCards` (UI only; on in `environment.development.ts`, off locally and in prod).** Attached files are drawn with the browser card's shape: a tray holding the file's preview, then its name and `TYPE · size · status`. The preview shows a PDF's first page, the opening lines of text and Markdown, a CSV's first rows, or a skeleton shaped like a page, sheet or slide. In the composer, a local file previews from its own bytes before the upload finishes. Up to five files sit on one line; past five the line folds into a summary that keeps failed and in-flight files in view. A sent message shows one card, a pair, a two-column mosaic for 3 to 5, and for 6 or more the first three with a "+N more files" tile that expands in place. The shared shell (`app-content-card`) now draws the browser card too, with no visual change. Every route it reads already exists; nothing reaches a model call or the prompt. Images keep their mosaic and Drive folders their own card for now.
+
 ### 🐛 Fixed
 
 - **`toolConfigHash`, the Responses `prompt_cache_key` and the context breakdown now count only what a model is sent.** Since mcp 2.3.0, Strands copies an MCP tool's `outputSchema` onto its registered spec: +77 KB across GitHub's 43 tools, which no formatter sends. Hashing that made `toolConfigHash` rotate with no cache miss behind it, which is a false lead for the cost runbook and for `TOOLCONFIG_MUTATED`. It also moved the Responses cache key on any GitHub schema edit, and overstated GitHub's share of the tool tokens about 2.6×. All three now go through `model_facing_tool_specs` (`apis/shared/models/tool_specs.py`), which a test pins against the Bedrock, OpenAI chat and Responses formatters. Expect one rotation of `toolConfigHash` at deploy for sessions whose tools carry `outputSchema` or `annotations`, and one cache write per live GPT conversation on the Responses transport. Bedrock's `toolConfig` itself is unchanged.

@@ -36,5 +36,6 @@ export const environment = {
         awsLimits: false,
         knowledgeBaseMode: true,
         releaseLedger: false,
+        attachmentCards: false,
     } satisfies FeatureFlags,
 };

@@ -16,6 +16,8 @@ import { heroArrowPath, heroArrowTurnDownRight, heroArrowUturnLeft, heroCheck, h
 import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
 import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
+import { FEATURES } from '../../../../services/features';
+import { MessageAttachmentsComponent } from '../../attachment-card/message-attachments.component';
 import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import { FailedSendService } from '../../../services/chat/failed-send.service';
@@ -42,7 +44,7 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon, RouterLink, TooltipDirective],
+  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, MessageAttachmentsComponent, NgIcon, RouterLink, TooltipDirective],
   viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft, heroCheck, heroSquare2Stack, appFork: FORK_ICON })],
   template: `
     @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
@@ -147,11 +149,18 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
 
         <!-- Non-image file attachments (below message bubble) -->
         @if (nonImageAttachments().length > 0) {
-          <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
-            @for (attachment of nonImageAttachments(); track attachment.uploadId) {
-              <app-file-attachment-badge [attachment]="attachment" />
-            }
-          </div>
+          @if (attachmentCards) {
+            <!-- features.attachmentCards: one card, a pair, or a mosaic with a "+N" tile -->
+            <div class="flex w-full max-w-[80%] justify-end">
+              <app-message-attachments [attachments]="nonImageAttachments()" />
+            </div>
+          } @else {
+            <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
+              @for (attachment of nonImageAttachments(); track attachment.uploadId) {
+                <app-file-attachment-badge [attachment]="attachment" />
+              }
+            </div>
+          }
         }
 
         <!-- Drive folders (drive-folder spec §4.7): one chip each, expanding to its files -->
@@ -271,6 +280,8 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   isOverflowing = signal(false);
 
   private localSettings = inject(LocalSettingsService);
+  /** The redesigned attachment cards (`features.attachmentCards`). */
+  protected readonly attachmentCards = inject(FEATURES).attachmentCards;
   private failedSends = inject(FailedSendService);
   private handoffState = inject(HandoffStateService);
   private sessions = inject(SessionService);

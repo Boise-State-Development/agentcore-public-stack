@@ -192,4 +192,15 @@ export interface FeatureFlags {
    * ledger routes 404 while off). In development, so `false` locally and in prod.
    */
   releaseLedger: boolean;
+
+  /**
+   * Attachment cards: the composer's and a sent message's files drawn with the
+   * browser card's shape (a tray holding the file's preview, then its name and
+   * `TYPE · size · status`), laid out as a rail that folds into a summary past
+   * five files in the composer, and as a mosaic with a "+N" tile in a message.
+   * UI only: no backend switch, since every route it reads already exists.
+   * In development while it lands over several PRs (images and folders join
+   * next), so `false` locally and in prod, `true` on dev.
+   */
+  attachmentCards: boolean;
 }
