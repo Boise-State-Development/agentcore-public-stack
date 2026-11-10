@@ -12,6 +12,7 @@ need nothing but the run directory.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass
@@ -47,8 +48,10 @@ class TurnRunner(Protocol):
     ) -> Awaitable[RunResult]: ...
 
 
-#: ``(session_id, filename) -> upload_id``
-FixtureRegistrar = Callable[[str, str], Awaitable[str]]
+#: ``(session_id, filename) -> upload_id``. For an ``attachment_delivery`` case
+#: whose arm is not ``auto`` it is also passed ``arm=``: the planner's
+#: fixture-only ``delivery`` value the row must carry.
+FixtureRegistrar = Callable[..., Awaitable[str]]
 
 
 @dataclass(frozen=True)
@@ -178,6 +181,7 @@ async def run_sample(
     staged: Optional[StagedSample] = None,
     assistant_id: Optional[str] = None,
     inspect: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None,
+    sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
 ) -> Dict[str, Any]:
     """Run every turn of ``case`` in one fresh session and score the last.
 
@@ -206,10 +210,13 @@ async def run_sample(
 
     upload_ids: List[str] = list(staged.upload_ids) if staged is not None else []
     upload_started = time.monotonic()
+    forced_arm: Dict[str, Any] = (
+        {"arm": case.run.arm} if case.family == DELIVERY_FAMILY and case.run.arm != "auto" else {}
+    )
     for filename in case.files:
         if register_fixture is None:
             raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
-        upload_ids.append(await register_fixture(session_id, filename))
+        upload_ids.append(await register_fixture(session_id, filename, **forced_arm))
     # Upload to usable, for files attached at send time: the registrar returns
     # once the upload is READY (direct row, or presign → PUT → complete).
     upload_ms = int((time.monotonic() - upload_started) * 1000) if case.files else None
@@ -226,6 +233,9 @@ async def run_sample(
     sessions: Dict[int, str] = {1: session_id}
     for index, prompt in enumerate(case.turns):
         meta = case.meta_for(index)
+        if meta.pause_seconds:
+            # A paced case: let the prompt cache expire before this turn.
+            await sleep(meta.pause_seconds)
         turn_session = sessions.setdefault(meta.session, new_session_id())
         per_user: Dict[str, Any] = {"as_user": meta.as_user} if meta.as_user != "eval" else {}
         result = await run_turn(

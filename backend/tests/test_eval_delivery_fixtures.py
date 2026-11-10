@@ -65,11 +65,36 @@ def test_the_committed_case_file_is_the_generated_one():
     assert committed == delivery_cases.render(), "run scripts/eval_fixtures/delivery_cases.py --write"
 
 
-def test_every_case_parses_runs_the_auto_arm_and_names_only_delivery_fixtures():
+def test_every_case_parses_and_names_only_delivery_fixtures():
     cases = load_cases(CASES_DIR, families=["attachment_delivery"])
     assert len(cases) >= 20
-    assert {c.run.arm for c in cases} == {"auto"} and {c.run.ceiling for c in cases} == {"default"}
+    assert {c.run.arm for c in cases} == {"auto", "native", "text", "on_demand"}
+    assert {c.run.ceiling for c in cases} == {"default", "200k", "100k_documents_excluded"}
     assert {f for c in cases for f in c.files} == set(d.GENERATED)
+
+
+def test_each_gating_file_runs_every_legal_arm():
+    cases = {c.id.split(".", 1)[1]: c for c in load_cases(CASES_DIR, families=["attachment_delivery"])}
+    for label in ("pdf_30k", "docx_30k", "html_30k"):
+        assert {cases[f"arm_{label}_{arm}"].run.arm for arm in ("native", "text", "on_demand")} == {
+            "native", "text", "on_demand"}
+
+
+def test_a_ceiling_case_asks_the_late_fact_on_turn_six_after_the_tail_moves_on():
+    cases = load_cases(CASES_DIR, families=["attachment_delivery"])
+    ceiling = [c for c in cases if c.id.split(".", 1)[1].startswith("ceiling_")]
+    # Three PDFs: native at three ceilings and on_demand at one, each at two paces.
+    assert len(ceiling) == 3 * 4 * 2
+    for case in ceiling:
+        assert len(case.turns) == 6 and len(case.files) == 1 and case.files[0].endswith(".pdf")
+        late = d.prose(case.files[0]).facts["late"]
+        # Not asked before turn 6, and turn 1 is out of the 3-turn protected tail by then.
+        assert late.subject in case.turns[-1] and not any(late.subject in t for t in case.turns[:-1])
+        pauses = [case.meta_for(i).pause_seconds for i in range(6)]
+        assert pauses == ([0, 0, 0, 0, delivery_cases.COLD_PAUSE_SECONDS, 0] if case.id.endswith("_cold") else [0] * 6)
+        assert delivery_cases.COLD_PAUSE_SECONDS > 300
+        if case.run.arm == "on_demand":
+            assert case.run.ceiling == "default"
 
 
 @pytest.mark.parametrize("name", PROSE)

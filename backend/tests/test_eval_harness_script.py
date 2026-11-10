@@ -470,7 +470,27 @@ def test_a_run_with_no_family_leaves_out_the_opt_in_family(tmp_path, capsys):
     assert every == 0
     first, second = capsys.readouterr().out.split("estimate only", 1)
     assert f"{default} cases × k=3" in first
-    assert f"{delivery} cases × k=3" in second
+    # One run, one ceiling: the default run leaves out the 200k and documents-excluded cases.
+    others = sum(1 for c in load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"])
+                 if c.run.ceiling != "default")
+    assert f"skipping {others} attachment_delivery case(s) of other ceilings" in second
+    assert f"{delivery - others} cases × k=3" in second
+
+
+def test_a_non_default_ceiling_needs_a_local_stack(tmp_path, capsys):
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--ceiling", "200k",
+    ])
+    assert code == 2
+    assert "needs a local stack" in capsys.readouterr().err
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--ceiling", "200k", "--invocations-url", "http://localhost:8011",
+    ])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS=200000" in out and "6 cases × k=3" in out
 
 
 def _write_delivery_run(out: Path):
@@ -489,7 +509,7 @@ def test_readout_prints_the_per_case_table_and_writes_json(tmp_path, capsys):
     report = tmp_path / "readout.json"
     assert eval_harness.main(["readout", "--out", str(run), "--no-cost-rows", "--json", str(report)]) == 0
     out = capsys.readouterr().out
-    assert "| lookup_md_5k | 1/1 |" in out and "0.9s" in out
+    assert "| lookup_md_5k | — | — | 1/1 |" in out and "0.9s" in out
     assert json.loads(report.read_text())["cases"][0]["firstTokenMs"] == 900
 
 
@@ -507,3 +527,13 @@ def test_baseline_family_splices_into_the_existing_file(tmp_path, golden, capsys
     after = json.loads(path.read_text())
     assert before["cases"]["tool_selection.a"]["passed"] and not after["cases"]["tool_selection.a"]["passed"]
     assert "tool_selection" in after["familyPromotions"]
+
+
+def test_match_narrows_the_run_to_matching_case_ids(tmp_path, capsys):
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--match", r"ceiling_pdf_(30|80)k_.*_default_",
+    ])
+    assert code == 0
+    # native and on_demand, two sizes, two paces, at the default ceiling.
+    assert "8 cases × k=3" in capsys.readouterr().out

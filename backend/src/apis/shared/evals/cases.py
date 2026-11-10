@@ -54,17 +54,35 @@ OPT_IN_FAMILIES = frozenset({DELIVERY_FAMILY})
 #: What a run with no ``--family`` covers.
 DEFAULT_FAMILIES: Tuple[str, ...] = tuple(f for f in FAMILIES if f not in OPT_IN_FAMILIES)
 
-#: Delivery arms a case may name today. ``auto`` is the turn path as it
-#: stands: whatever the deployment decides for the file.
-DELIVERY_ARMS: Tuple[str, ...] = ("auto",)
-#: Arms the schema reserves for the forced-mode wave (§8.4). Each needs the
-#: planner's fixture-only ``delivery`` row value, so naming one is an error
-#: until that lands, rather than a case that silently runs ``auto``.
-RESERVED_ARMS: Tuple[str, ...] = ("native", "text", "on_demand", "search")
-#: The compaction ceiling a case runs under: ``default`` is the deployment's.
-CEILINGS: Tuple[str, ...] = ("default",)
-#: The ceiling arms (§8.4): 200k, and 100k with documents excluded (§5.2).
-RESERVED_CEILINGS: Tuple[str, ...] = ("200k", "100k_documents_excluded")
+#: Delivery arms a case may name. ``auto`` is the turn path as it stands:
+#: whatever the deployment decides for the file. Each other arm is the
+#: planner's fixture-only ``delivery`` value, written on the file row by the
+#: registrar (``fixtures.register_upload``), never sent on the request.
+DELIVERY_ARMS: Tuple[str, ...] = ("auto", "native", "text", "on_demand")
+#: ``search`` needs a document in the attachments KB, and the ``legacy``
+#: profile ingests only a prepared reference-class document, so no fixture
+#: under 4 MB can be forced into it. Reserved until phase 5's ``search`` mode.
+RESERVED_ARMS: Tuple[str, ...] = ("search",)
+#: The compaction ceiling a case runs under (§8.4): ``default`` is the
+#: deployment's (a 100k cap), ``200k`` a 200k cap, and
+#: ``100k_documents_excluded`` the 100k cap with §5.2's subtraction. A
+#: ceiling is a property of the Runtime, not of a request, so a run takes one
+#: (``eval_harness.py run --ceiling``) and the target must be started with
+#: :data:`CEILING_ENV`'s variables.
+CEILINGS: Tuple[str, ...] = ("default", "200k", "100k_documents_excluded")
+RESERVED_CEILINGS: Tuple[str, ...] = ()
+#: The Runtime environment each ceiling needs (``compaction_models.CompactionConfig``).
+CEILING_ENV: Dict[str, Dict[str, str]] = {
+    "default": {},
+    "200k": {"AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "200000"},
+    "100k_documents_excluded": {
+        "AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "100000",
+        "AGENTCORE_MEMORY_COMPACTION_CEILING_EXCLUDES_DOCUMENTS": "true",
+    },
+}
+#: Longest pause a turn may ask for before it is sent: past the 5-minute
+#: prompt-cache TTL, short of the Runtime session's idle timeout.
+MAX_PAUSE_SECONDS = 600
 
 #: The strands-evals evaluators a case may name: exactly the ones the judge adapter maps.
 JUDGE_EVALUATORS = CASE_EVALUATORS
@@ -224,6 +242,9 @@ class TurnMeta:
 
     session: int = 1
     as_user: str = "eval"
+    #: Seconds to wait before sending this turn (``attachment_delivery``'s
+    #: paced cases: a pause past the prompt-cache TTL).
+    pause_seconds: int = 0
 
 
 #: The generated reference documents a case may attach (``large_documents``).
@@ -401,7 +422,7 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     turn_meta: List[TurnMeta] = []
     session_users: Dict[int, str] = {}
     for i, turn in enumerate(turns_raw):
-        _check_keys(turn, ("prompt", "session", "as"), f"{where}.turns[{i}]")
+        _check_keys(turn, ("prompt", "session", "as", "pause_seconds"), f"{where}.turns[{i}]")
         prompt = turn.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise CaseError(f"{where}.turns[{i}].prompt: expected text")
@@ -414,8 +435,13 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         # A conversation belongs to one user; a second member opens their own.
         if session_users.setdefault(session, as_user) != as_user:
             raise CaseError(f"{where}.turns[{i}]: session {session} already belongs to {session_users[session]}")
+        pause = turn.get("pause_seconds", 0)
+        if not isinstance(pause, int) or isinstance(pause, bool) or not 0 <= pause <= MAX_PAUSE_SECONDS:
+            raise CaseError(f"{where}.turns[{i}].pause_seconds: expected 0..{MAX_PAUSE_SECONDS}")
+        if pause and family != DELIVERY_FAMILY:
+            raise CaseError(f"{where}.turns[{i}].pause_seconds: only {DELIVERY_FAMILY} cases pause")
         turns.append(prompt)
-        turn_meta.append(TurnMeta(session=session, as_user=as_user))
+        turn_meta.append(TurnMeta(session=session, as_user=as_user, pause_seconds=pause))
 
     run_raw = raw.get("run") or {}
     _check_keys(
@@ -432,8 +458,8 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
             raise CaseError(f"{where}.run.{key}: only {DELIVERY_FAMILY} cases name a {key}")
         if value in reserved:
             raise CaseError(
-                f"{where}.run.{key}: '{value}' is reserved for the forced-mode wave and needs the planner's "
-                "fixture-only delivery value (unified-attachment-delivery §8.4)"
+                f"{where}.run.{key}: '{value}' is reserved: the legacy profile can only put a prepared "
+                "reference-class document in the attachments KB (unified-attachment-delivery §8.4, phase 5)"
             )
         if value not in allowed:
             raise CaseError(f"{where}.run.{key}: expected one of {', '.join(allowed + reserved)}")

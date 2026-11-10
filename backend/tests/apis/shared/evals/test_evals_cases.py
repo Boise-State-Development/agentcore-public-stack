@@ -333,10 +333,39 @@ def test_a_delivery_case_defaults_to_the_auto_arm_and_the_deployments_ceiling():
     assert not case.gating
 
 
-@pytest.mark.parametrize("key,value", [("arm", "native"), ("arm", "on_demand"), ("ceiling", "200k")])
-def test_reserved_arms_and_ceilings_are_refused_until_the_planner_lands(key, value):
-    with pytest.raises(CaseError, match="reserved for the forced-mode wave"):
-        parse_case(_delivery(**{key: value}), family="attachment_delivery")
+@pytest.mark.parametrize("key,value", [
+    ("arm", "native"), ("arm", "text"), ("arm", "on_demand"),
+    ("ceiling", "200k"), ("ceiling", "100k_documents_excluded"),
+])
+def test_the_forced_arms_and_the_ceiling_arms_parse(key, value):
+    case = parse_case(_delivery(**{key: value}), family="attachment_delivery")
+    assert getattr(case.run, key) == value
+
+
+def test_search_stays_reserved_until_phase_five():
+    with pytest.raises(CaseError, match="reserved: the legacy profile"):
+        parse_case(_delivery(arm="search"), family="attachment_delivery")
+
+
+def test_every_ceiling_names_its_runtime_environment():
+    from apis.shared.evals.cases import CEILING_ENV, CEILINGS
+
+    assert set(CEILING_ENV) == set(CEILINGS) and CEILING_ENV["default"] == {}
+    assert CEILING_ENV["100k_documents_excluded"]["AGENTCORE_MEMORY_COMPACTION_CEILING_EXCLUDES_DOCUMENTS"] == "true"
+
+
+def test_a_pause_is_a_delivery_case_s_and_bounded():
+    raw = _delivery()
+    raw["turns"] = [{"prompt": "one"}, {"prompt": "two", "pause_seconds": 330}]
+    case = parse_case(raw, family="attachment_delivery")
+    assert [case.meta_for(i).pause_seconds for i in range(2)] == [0, 330]
+    raw["turns"][1]["pause_seconds"] = 5_000
+    with pytest.raises(CaseError, match="pause_seconds"):
+        parse_case(raw, family="attachment_delivery")
+    other = _case()
+    other["turns"] = [{"prompt": "one", "pause_seconds": 10}]
+    with pytest.raises(CaseError, match="only attachment_delivery cases pause"):
+        parse_case(other, family="tool_selection")
 
 
 def test_an_unknown_arm_and_an_arm_outside_the_family_are_refused():
