@@ -38,6 +38,7 @@ import { ProjectFileReadinessComponent } from '../project-file-readiness/project
 import { TooltipDirective } from '../../../components/tooltip';
 import { FileCardComponent } from '../../../components/file-card';
 import { ComposerAttachmentsComponent } from '../attachment-card/composer-attachments.component';
+import { ComposerFolderCardComponent } from '../attachment-card/composer-folder-card.component';
 import { StorageQuotaBannerComponent } from '../../../components/storage-quota-banner';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import {
@@ -337,7 +338,7 @@ export const PROJECT_SKILLS_HINT = "Skills for this project are chosen on its Sk
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AgentNoticeBannerComponent, ProjectFileReadinessComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, ComposerAttachmentsComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent, IncognitoToggleComponent, InlineBudgetNoticeComponent],
+  imports: [AgentNoticeBannerComponent, ProjectFileReadinessComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, ComposerAttachmentsComponent, ComposerFolderCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent, IncognitoToggleComponent, InlineBudgetNoticeComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },

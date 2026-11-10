@@ -181,6 +181,8 @@ export class AttachmentCardComponent {
   /** Remove (or cancel) this file; carries its upload id. */
   readonly remove = output<string>();
   readonly retry = output<PendingUpload>();
+  /** A sent image was opened: its upload id, for the message's lightbox. */
+  readonly imageOpen = output<string>();
 
   private readonly fileUploadService = inject(FileUploadService);
   private readonly filePreview = inject(FilePreviewStateService);
@@ -289,7 +291,7 @@ export class AttachmentCardComponent {
   private readonly isPanePreviewable = computed(() => isPreviewableFilename(this.name()));
 
   protected readonly openLabel = computed(() =>
-    this.isPanePreviewable() || this.isMarkdown() ? 'Preview' : 'Open',
+    this.isPanePreviewable() || this.isMarkdown() || this.kind().preview === 'image' ? 'Preview' : 'Open',
   );
 
   constructor() {
@@ -316,11 +318,15 @@ export class AttachmentCardComponent {
   }
 
   /**
-   * Markdown opens in its modal; anything the docked pane renders (.docx,
+   * An image opens in the message's lightbox; Markdown in its modal; anything the docked pane renders (.docx,
    * .pptx, PDF) opens there, the same gate the generated-file card uses; the
    * rest opens in a new tab from a short-lived presigned URL.
    */
   protected async open(): Promise<void> {
+    if (this.kind().preview === 'image') {
+      this.imageOpen.emit(this.uploadId());
+      return;
+    }
     if (this.isMarkdown()) {
       this.markdownModalOpen.set(true);
       return;
