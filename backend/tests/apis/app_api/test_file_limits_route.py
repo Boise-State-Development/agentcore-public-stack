@@ -9,7 +9,9 @@ spreadsheets and decks, 50 MB large documents, a 7.0 MB inline budget.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -161,3 +163,40 @@ class TestAdmissionReadsThePlanner:
             lambda: replace(attachment_plan.legacy_profile(), max_files_per_message=9),
         )
         assert _service().max_files_per_message == 9
+
+
+class TestSpaFallbackMatchesTheEndpoint:
+    """The SPA's one built-in copy (``FALLBACK_ATTACHMENT_LIMITS``) is what it
+    judges a drop by before ``GET /files/limits`` answers, so it must equal what
+    the endpoint serves with default settings."""
+
+    _FALLBACK = (
+        Path(__file__).resolve().parents[4]
+        / "frontend/ai.client/src/app/services/file-upload/attachment-limits.ts"
+    )
+
+    def _fallback_numbers(self) -> dict:
+        source = self._FALLBACK.read_text(encoding="utf-8")
+        start = source.index("export const FALLBACK_ATTACHMENT_LIMITS")
+        block = source[start : source.index("});", start)]
+        numbers = {}
+        for name, expr in re.findall(r"(\w+): ([0-9_ *MB]+?)\s*[,\n}]", block):
+            value = 1
+            for factor in expr.split("*"):
+                factor = factor.strip()
+                value *= MB if factor == "MB" else int(factor.replace("_", ""))
+            numbers[name] = value
+        return numbers
+
+    def test_every_number_matches(self) -> None:
+        if not self._FALLBACK.exists():
+            pytest.skip("SPA not checked out alongside the backend")
+        served = _client().get("/files/limits").json()
+        expected = {
+            "filesPerMessage": served["filesPerMessage"],
+            "inlineDocumentMaxBytes": served["inlineDocumentMaxBytes"],
+            "inlineBudgetBytes": served["inlineBudgetBytes"],
+            **served["maxBytes"],
+            "perMessage": served["folders"]["perMessage"],
+        }
+        assert self._fallback_numbers() == expected
