@@ -311,3 +311,43 @@ class TestTerminalFormat:
     def test_an_unknown_surface_is_refused(self):
         with pytest.raises(CaseError, match="client_surface"):
             parse_case(self._raw(client_surface="tui"), family="terminal")
+
+
+# --------------------------------------------------------------------------- delivery arms (§8.4)
+
+
+def _delivery(**run):
+    return {
+        "id": "attachment_delivery.example",
+        "family": "attachment_delivery",
+        "turns": [{"prompt": "What is the permit?"}],
+        "run": {"enabled_tools": [], **run},
+        "expect": {"contains_any": ["WP-1"]},
+        "notes": "",
+    }
+
+
+def test_a_delivery_case_defaults_to_the_auto_arm_and_the_deployments_ceiling():
+    case = parse_case(_delivery(), family="attachment_delivery")
+    assert (case.run.arm, case.run.ceiling) == ("auto", "default")
+    assert not case.gating
+
+
+@pytest.mark.parametrize("key,value", [("arm", "native"), ("arm", "on_demand"), ("ceiling", "200k")])
+def test_reserved_arms_and_ceilings_are_refused_until_the_planner_lands(key, value):
+    with pytest.raises(CaseError, match="reserved for the forced-mode wave"):
+        parse_case(_delivery(**{key: value}), family="attachment_delivery")
+
+
+def test_an_unknown_arm_and_an_arm_outside_the_family_are_refused():
+    with pytest.raises(CaseError, match="expected one of auto, native"):
+        parse_case(_delivery(arm="fast"), family="attachment_delivery")
+    with pytest.raises(CaseError, match="only attachment_delivery cases name a arm"):
+        parse_case(_case(run={"enabled_tools": ["calculator"], "arm": "auto"}), family="tool_selection")
+
+
+def test_the_delivery_family_is_opt_in():
+    from apis.shared.evals.cases import DEFAULT_FAMILIES, OPT_IN_FAMILIES
+
+    assert "attachment_delivery" in OPT_IN_FAMILIES and "attachment_delivery" not in DEFAULT_FAMILIES
+    assert set(DEFAULT_FAMILIES) | OPT_IN_FAMILIES == set(FAMILIES)

@@ -190,6 +190,42 @@ def build_baseline(
     return baseline
 
 
+def merge_family_baseline(existing: Mapping[str, Any], promoted: Mapping[str, Any]) -> Dict[str, Any]:
+    """``existing`` with ``promoted``'s families replaced by ``promoted``'s cases.
+
+    ``baseline --family`` promotes one family's run without re-running the
+    rest: every other family keeps its cases, and the promoted families'
+    old cases go (a case removed from the family leaves the baseline too).
+    Each promotion is recorded under ``familyPromotions`` with its own time
+    and source, since the file's ``promotedAt`` no longer describes every case.
+    """
+    if existing.get("modelId") != promoted.get("modelId"):
+        raise ReportError(f"the baseline is for {existing.get('modelId')}, the run is on {promoted.get('modelId')}")
+    if existing.get("schemaVersion") != promoted.get("schemaVersion"):
+        raise ReportError(f"unsupported baseline schema {existing.get('schemaVersion')}")
+    if existing.get("k") != promoted.get("k"):
+        raise ReportError(f"the baseline has k={existing.get('k')}, the run k={promoted.get('k')}")
+    families = set(promoted.get("families") or ())
+    merged = json.loads(json.dumps(existing))
+    merged["cases"] = {
+        cid: entry for cid, entry in (existing.get("cases") or {}).items() if entry.get("family") not in families
+    }
+    merged["cases"].update(promoted.get("cases") or {})
+    merged["families"] = sorted(set(existing.get("families") or ()) | families, key=FAMILIES.index)
+    scores = {
+        cid: v for cid, v in (existing.get("judgeScores") or {}).items()
+        if (existing.get("cases") or {}).get(cid, {}).get("family") not in families
+    }
+    scores.update(promoted.get("judgeScores") or {})
+    if scores:
+        merged["judgeScores"] = scores
+    promotions = dict(merged.get("familyPromotions") or {})
+    for family in sorted(families, key=FAMILIES.index):
+        promotions[family] = {"promotedAt": promoted.get("promotedAt"), "source": promoted.get("source")}
+    merged["familyPromotions"] = promotions
+    return merged
+
+
 def load_baseline(path: Path) -> Dict[str, Any]:
     if not path.is_file():
         raise ReportError(f"no baseline at {path}; promote a complete run with `baseline` first")

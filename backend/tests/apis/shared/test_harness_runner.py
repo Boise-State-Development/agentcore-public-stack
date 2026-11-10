@@ -191,6 +191,30 @@ async def test_happy_path_completes_and_delivers(monkeypatch, delivery_spy):
 
 
 @pytest.mark.asyncio
+async def test_the_runtime_and_client_timing_are_reported(monkeypatch, delivery_spy):
+    stream = _sse(
+        ("message_start", '{"role": "assistant"}'),
+        ("content_block_delta", '{"contentBlockIndex": 0, "type": "text", "text": "pong"}'),
+        ("message_stop", '{"stopReason": "end_turn"}'),
+        ("metadata", '{"usage": {"inputTokens": 5}, "metrics": {"timeToFirstByteMs": 1200}, "turnDurationMs": 3400}'),
+        ("done", "{}"),
+    )
+    _mock_http(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=stream))
+
+    result = await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=SpyBearerAuth("b"),
+        invocations_base_url="http://localhost:8001", governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+
+    assert result.turn_duration_ms == 3400
+    assert result.first_token_ms == 1200
+    assert result.client_first_token_ms is not None and result.client_duration_ms is not None
+    assert 0 <= result.client_first_token_ms <= result.client_duration_ms
+    assert result.to_dict()["turn_duration_ms"] == 3400
+
+
+@pytest.mark.asyncio
 async def test_scheduled_completion_marks_session_unread(monkeypatch, delivery_spy):
     """An unattended (schedule) run flags the session unread on completion."""
     def handler(request: httpx.Request) -> httpx.Response:

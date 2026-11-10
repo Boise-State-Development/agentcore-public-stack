@@ -277,3 +277,49 @@ async def test_a_declined_call_is_answered_as_declined():
 async def test_a_model_that_never_stops_calling_fails_rather_than_looping():
     row = await run_sample(_terminal_case({"output": "x"}), sample=0, model_id="m", run_turn=PausingRunner(pauses=99))
     assert not row["passed"] and row["status"] == "client_tool_loop"
+
+
+# --------------------------------------------------------------------------- delivery timing (§8.2, §8.5)
+
+
+def _delivery_case():
+    return parse_case(
+        {
+            "id": "attachment_delivery.example",
+            "family": "attachment_delivery",
+            "turns": [{"prompt": "What is the permit?"}],
+            "run": {"enabled_tools": [], "arm": "auto"},
+            "expect": {"contains_any": ["WP-1"]},
+            "files": ["delivery_prose_5k.md"],
+        },
+        family="attachment_delivery",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_row_carries_each_turns_timing_the_upload_time_and_the_arm():
+    class TimedRunner(FakeRunner):
+        async def __call__(self, **kwargs):
+            result = await super().__call__(**kwargs)
+            result.first_token_ms, result.turn_duration_ms = 1200, 3400
+            result.client_first_token_ms, result.client_duration_ms = 1500, 3600
+            return result
+
+    async def register(session_id: str, filename: str) -> str:
+        return "upload-1"
+
+    row = await run_sample(_delivery_case(), sample=0, model_id="m", run_turn=TimedRunner(["WP-1"]),
+                           register_fixture=register)
+    assert row["timing"] == [{"firstTokenMs": 1200, "turnDurationMs": 3400,
+                              "clientFirstTokenMs": 1500, "clientDurationMs": 3600}]
+    assert isinstance(row["upload_ms"], int)
+    assert row["arm"] == "auto" and row["ceiling"] == "default"
+    json.dumps(row)
+
+
+@pytest.mark.asyncio
+async def test_rows_outside_the_delivery_family_carry_no_arm_and_missing_timing_is_none():
+    row = await run_sample(_retention_case(), sample=0, model_id="m", run_turn=FakeRunner(["a", "b", "QX-4471"]))
+    assert "arm" not in row and "upload_ms" not in row
+    assert row["timing"][0] == {"firstTokenMs": None, "turnDurationMs": None,
+                                "clientFirstTokenMs": None, "clientDurationMs": None}

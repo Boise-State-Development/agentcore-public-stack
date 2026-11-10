@@ -22,7 +22,7 @@ from typing import Callable, Dict, List
 
 from large_document_quality import pdf
 
-from eval_fixtures import images, ooxml
+from eval_fixtures import delivery, images, ooxml
 
 # ---------------------------------------------------------------------------
 # Planted facts
@@ -272,6 +272,8 @@ GENERATED: Dict[str, Callable[[], bytes]] = {
     "sensor_readings.csv": sensor_readings,
     "quarterly_review.pptx": quarterly_review,
 }
+# The attachment_delivery family's fixtures (unified-attachment-delivery §8.4).
+GENERATED.update(delivery.GENERATED)
 
 _CACHE: Dict[str, bytes] = {}
 

@@ -74,3 +74,71 @@ def test_fetch_reads_each_session_once_and_leaves_out_a_failed_read():
     found = asyncio.run(fetch_session_calls(["s1", "s1", "", "broken", "s2"], storage))
     assert storage.reads == ["s1", "broken", "s2"]
     assert sorted(found) == ["s1", "s2"]
+
+
+# --------------------------------------------------------------------------- document fields (§8.5)
+
+from decimal import Decimal  # noqa: E402
+
+from apis.shared.evals.calls import DocumentReads, PlannedFile  # noqa: E402
+
+
+def test_document_fields_take_the_peak_and_sum_the_reads():
+    rows = [
+        _call("first_write", documentsAttached=Decimal(2), documentTokens=Decimal(31000), documentDigests=0,
+              documentMime={"pdf": Decimal(1), "md": 1}, documentReads={"calls": 1, "pages": 4, "bytes": 900},
+              turnDurationMs=4000),
+        _call("hit", documentsAttached=0, documentTokens=29000, documentDigests=1, documentMime={"pdf": 1},
+              documentReads={"calls": Decimal(2), "pages": 6, "bytes": 100}, turnDurationMs=2000),
+    ]
+    summary = summarize_calls(rows, model_id=MODEL)
+    assert summary.documents_attached == 2
+    assert summary.document_tokens == 31000
+    assert summary.document_digests == 1
+    assert summary.document_reads == DocumentReads(calls=3, pages=10, bytes=1000)
+    assert summary.document_mime == (("md", 1), ("pdf", 1))
+    line = summary.line()
+    assert "documents 2 attached, ~31,000 tokens, 1 digests" in line and "document_read 3× 10p" in line
+
+
+def test_turn_cache_statuses_read_the_first_call_of_each_turn():
+    # A turn's last call carries turnDurationMs; a tool round in between does not.
+    rows = [
+        _call("first_write"), _call("hit", turnDurationMs=5000),
+        _call("partial_miss"), _call("hit"), _call("hit", turnDurationMs=3000),
+        _call("miss", turnDurationMs=1000),
+    ]
+    assert summarize_calls(rows, model_id=MODEL).turn_cache_statuses == ("first_write", "partial_miss", "miss")
+
+
+def test_cuts_and_offloads_are_counted_by_reason():
+    rows = [
+        _call(compactionEvents=[{"kind": "checkpoint", "checkpoint": 4}, {"kind": "forced"}]),
+        _call(compactionEvents=[{"kind": "applied", "truncatedToolResults": 3}, {"kind": "document_rehydrated"}]),
+        _call(compactionEvents=[{"kind": "applied", "truncatedToolResults": 3}, {"kind": "truncation_anchor"},
+                                {"kind": "document_offload", "documents": 1}]),
+    ]
+    summary = summarize_calls(rows, model_id=MODEL)
+    assert summary.cuts == (("checkpoint", 1), ("forced", 1), ("truncation_anchor", 1))
+    # ``applied`` repeats per restore of one cut, so its truncations count once.
+    assert summary.offloads == (("document_offload", 1), ("document_rehydrated", 1), ("tool_results_truncated", 3))
+    assert summary.cut_count == 3 and summary.offload_count == 5
+    assert "cuts checkpoint 1" in summary.line() and "offloads document_offload 1" in summary.line()
+
+
+def test_attachment_plan_is_read_from_the_first_row_that_has_one_in_any_container():
+    entry = {"mode": "text", "class": "inline", "tokens": Decimal(30500), "reason": "under_budget"}
+    for raw in ([entry], {"files": [entry]}, {"1730000000000-abc": entry}):
+        rows = [_call(), _call(attachmentPlan=raw), _call(attachmentPlan=[{"mode": "native"}])]
+        summary = summarize_calls(rows, model_id=MODEL)
+        assert summary.attachment_plan == (PlannedFile("text", "inline", 30500, "under_budget"),)
+        assert "plan text 1" in summary.line()
+        assert "1730000000000-abc" not in str(summary.to_dict())
+
+
+def test_absent_document_fields_stay_untracked_not_zero():
+    summary = summarize_calls([_call()], model_id=MODEL)
+    assert summary.documents_attached is None and summary.document_tokens is None
+    assert summary.document_reads is None and summary.attachment_plan == ()
+    assert summary.to_dict()["documentReads"] is None
+    assert "documents" not in summary.line()

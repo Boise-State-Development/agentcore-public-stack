@@ -1,0 +1,194 @@
+"""The ``attachment_delivery`` readout: quality, cost and speed per case (unified-attachment-delivery §8.5).
+
+``score`` says whether a family regressed against its baseline. This says
+what a delivery run cost and how long the user waited, per case: the pass
+rate over its samples, dollars per sample, first token and turn duration,
+the document tokens that were in context, the second turn's cache status,
+and every cut and offload by its reason. Cost and the context facts come
+from each sample's ``C#`` rows (``calls.summarize_calls``); timing from the
+result rows the runner wrote (``execute.turn_timing``).
+
+Content-free like its inputs: case ids, numbers and enum values. A sample's
+session id is read to find its rows and never written out.
+"""
+
+from __future__ import annotations
+
+import statistics
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+from apis.shared.evals.calls import CallSummary, summarize_calls
+
+
+@dataclass
+class CaseReadout:
+    case_id: str
+    samples: int = 0
+    passes: int = 0
+    #: Mean ``C#`` cost per sample, over the samples whose rows were read.
+    cost_per_sample: Optional[float] = None
+    #: Medians over samples, of the first turn (the turn that carries the files).
+    first_token_ms: Optional[int] = None
+    client_first_token_ms: Optional[int] = None
+    turn_duration_ms: Optional[int] = None
+    upload_ms: Optional[int] = None
+    #: Median of each sample's peak inline document tokens.
+    document_tokens: Optional[int] = None
+    #: How the files reached the model, as the rows show it (``delivery_label``).
+    delivery: Counter = field(default_factory=Counter)
+    #: The second turn's first-call ``cacheStatus``, counted over samples.
+    second_turn_cache: Counter = field(default_factory=Counter)
+    cuts: Counter = field(default_factory=Counter)
+    offloads: Counter = field(default_factory=Counter)
+    #: Why failed samples failed: the non-completed status, else "wrong answer".
+    failures: Counter = field(default_factory=Counter)
+
+    @property
+    def pass_rate(self) -> float:
+        return self.passes / self.samples if self.samples else 0.0
+
+    @property
+    def cuts_per_sample(self) -> float:
+        return sum(self.cuts.values()) / self.samples if self.samples else 0.0
+
+    @property
+    def offloads_per_sample(self) -> float:
+        return sum(self.offloads.values()) / self.samples if self.samples else 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "caseId": self.case_id,
+            "samples": self.samples,
+            "passes": self.passes,
+            "passRate": round(self.pass_rate, 4),
+            "costPerSampleUsd": round(self.cost_per_sample, 6) if self.cost_per_sample is not None else None,
+            "firstTokenMs": self.first_token_ms,
+            "clientFirstTokenMs": self.client_first_token_ms,
+            "turnDurationMs": self.turn_duration_ms,
+            "uploadMs": self.upload_ms,
+            "documentTokens": self.document_tokens,
+            "delivery": dict(self.delivery),
+            "secondTurnCache": dict(self.second_turn_cache),
+            "cutsPerSample": round(self.cuts_per_sample, 3),
+            "offloadsPerSample": round(self.offloads_per_sample, 3),
+            "cuts": dict(self.cuts),
+            "offloads": dict(self.offloads),
+            "failures": dict(self.failures),
+        }
+
+
+def delivery_label(summary: CallSummary) -> str:
+    """One word for how a sample's files reached the model.
+
+    The planner's ``attachmentPlan`` when the rows carry one; before it, the
+    shape the context took: ``document_read`` slices, a digest, inline
+    document tokens, or none of those (a tool read it, or nothing did).
+    """
+    if summary.attachment_plan:
+        return "+".join(sorted({f.mode for f in summary.attachment_plan}))
+    if summary.document_reads is not None and summary.document_reads.calls:
+        return "on_demand"
+    if summary.document_digests:
+        return "digest"
+    if summary.document_tokens:
+        return "inline"
+    return "none"
+
+
+def _median(values: Sequence[Optional[float]]) -> Optional[int]:
+    present = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    return int(statistics.median(present)) if present else None
+
+
+def _first_turn(row: Mapping[str, Any], key: str) -> Optional[int]:
+    timing = row.get("timing")
+    if isinstance(timing, list) and timing and isinstance(timing[0], Mapping):
+        value = timing[0].get(key)
+        return value if isinstance(value, int) else None
+    return None
+
+
+def delivery_readout(
+    rows: Sequence[Mapping[str, Any]],
+    calls_by_session: Optional[Mapping[str, Sequence[Mapping[str, Any]]]] = None,
+) -> List[CaseReadout]:
+    """One :class:`CaseReadout` per case in ``rows``, in first-seen order."""
+    by_case: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_case[str(row.get("case_id"))].append(row)
+    calls_by_session = calls_by_session or {}
+
+    readouts = []
+    for case_id, samples in by_case.items():
+        out = CaseReadout(case_id=case_id, samples=len(samples))
+        costs, tokens = [], []
+        for row in samples:
+            if row.get("passed"):
+                out.passes += 1
+            else:
+                status = str(row.get("status") or "")
+                out.failures[status if status and status != "completed" else "wrong answer"] += 1
+            calls = calls_by_session.get(str(row.get("session_id") or ""))
+            if calls is None:
+                continue
+            summary = summarize_calls(calls, model_id=row.get("model_id"))
+            if summary.calls:
+                costs.append(summary.cost_usd)
+            tokens.append(summary.document_tokens)
+            out.delivery[delivery_label(summary)] += 1
+            if len(summary.turn_cache_statuses) > 1:
+                out.second_turn_cache[summary.turn_cache_statuses[1]] += 1
+            out.cuts.update(dict(summary.cuts))
+            out.offloads.update(dict(summary.offloads))
+        out.cost_per_sample = sum(costs) / len(costs) if costs else None
+        out.document_tokens = _median(tokens)
+        out.first_token_ms = _median([_first_turn(r, "firstTokenMs") for r in samples])
+        out.client_first_token_ms = _median([_first_turn(r, "clientFirstTokenMs") for r in samples])
+        out.turn_duration_ms = _median([_first_turn(r, "turnDurationMs") for r in samples])
+        out.upload_ms = _median([r.get("upload_ms") for r in samples])
+        readouts.append(out)
+    return readouts
+
+
+def _ms(value: Optional[int]) -> str:
+    return "—" if value is None else f"{value / 1000:.1f}s"
+
+
+def _counts(counter: Counter) -> str:
+    return ", ".join(f"{k} {n}" for k, n in sorted(counter.items())) or "—"
+
+
+def format_delivery_readout(readouts: Sequence[CaseReadout], *, title: Optional[str] = None) -> str:
+    """A Markdown table, one row per case, then the run's totals."""
+    lines = [f"### {title}", ""] if title else []
+    lines += [
+        "| Case | Pass | $/sample | First token | Turn | Doc tokens | Delivery | Turn-2 cache | Cuts/sample | "
+        "Offloads/sample | Failures |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in readouts:
+        name = r.case_id.split(".", 1)[-1]
+        cost = "—" if r.cost_per_sample is None else f"${r.cost_per_sample:.4f}"
+        doc_tokens = "—" if r.document_tokens is None else f"{r.document_tokens:,}"
+        cuts = f"{r.cuts_per_sample:.1f}" + (f" ({_counts(r.cuts)})" if r.cuts else "")
+        offloads = f"{r.offloads_per_sample:.1f}" + (f" ({_counts(r.offloads)})" if r.offloads else "")
+        lines.append(
+            f"| {name} | {r.passes}/{r.samples} | {cost} | {_ms(r.first_token_ms)} | {_ms(r.turn_duration_ms)} | "
+            f"{doc_tokens} | {_counts(r.delivery)} | {_counts(r.second_turn_cache)} | {cuts} | {offloads} | "
+            f"{_counts(r.failures)} |"
+        )
+    samples = sum(r.samples for r in readouts)
+    passes = sum(r.passes for r in readouts)
+    priced = [r.cost_per_sample * r.samples for r in readouts if r.cost_per_sample is not None]
+    lines += [
+        "",
+        f"{passes}/{samples} samples passed across {len(readouts)} cases"
+        + (f"; ${sum(priced):.2f} in all" if priced else "")
+        + ".",
+    ]
+    return "\n".join(lines)
+
+
+__all__ = ["CaseReadout", "delivery_label", "delivery_readout", "format_delivery_readout"]

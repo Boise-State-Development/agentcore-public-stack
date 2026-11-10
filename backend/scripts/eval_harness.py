@@ -88,7 +88,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from apis.shared.costs.ledger_publish import EVAL_TRACKS  # noqa: E402
 from apis.shared.evals.cases import (  # noqa: E402
     ADVISORY_FAMILIES,
+    DEFAULT_FAMILIES,
     FAMILIES,
+    OPT_IN_FAMILIES,
     CaseError,
     EPHEMERAL_PROJECT,
     EvalCase,
@@ -99,6 +101,7 @@ from apis.shared.evals.cases import (  # noqa: E402
 )
 from eval_fixtures.build import GENERATED  # noqa: E402
 from eval_fixtures.build import build as build_fixture  # noqa: E402
+from eval_fixtures.delivery import estimated_tokens as fixture_tokens  # noqa: E402
 from eval_fixtures.references import reference_for  # noqa: E402
 from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
@@ -114,6 +117,7 @@ from apis.shared.evals.report import (  # noqa: E402
     format_judge_table,
     format_table,
     load_baseline,
+    merge_family_baseline,
     read_rows,
 )
 
@@ -152,6 +156,9 @@ FALLBACK_RATE_MODEL = "us.anthropic.claude-sonnet-4-6"
 #: write (1.25x), ~1.9k cache read (0.1x) and ~130 output tokens per turn, about
 #: $0.86 in all. These figures add a third on top, so the estimate stays high.
 EST_INPUT_TOKENS_PER_TURN = 4_000
+#: Cache write and read multiples of the input rate, for sized attachments.
+EST_CACHE_WRITE = 1.25
+EST_CACHE_READ = 0.1
 EST_OUTPUT_TOKENS_PER_TURN = 200
 #: Re-mint the Cognito bearer well inside its one-hour life.
 BEARER_REUSE_SECONDS = 20 * 60
@@ -212,6 +219,11 @@ def estimate(todo: Sequence[Tuple[EvalCase, int]], model_id: str) -> Tuple[int, 
     rate_model = model_id if model_id in RATES else FALLBACK_RATE_MODEL
     rate_in, rate_out = RATES[rate_model]
     dollars = turns * (EST_INPUT_TOKENS_PER_TURN * rate_in + EST_OUTPUT_TOKENS_PER_TURN * rate_out) / 1_000_000
+    # Sized attachments (the delivery family's): written to the cache on the
+    # first turn and read on each later one. Others are inside the per-turn figure.
+    for case, _ in todo:
+        attached = sum(fixture_tokens(name) for name in case.files)
+        dollars += attached * rate_in * (EST_CACHE_WRITE + EST_CACHE_READ * (len(case.turns) - 1)) / 1_000_000
     note = "" if rate_model == model_id else f" (priced at {rate_model} rates; no table entry for {model_id})"
     return turns, dollars, note
 
@@ -311,6 +323,8 @@ def cmd_cases(args: argparse.Namespace) -> int:
     for family in FAMILIES:
         if counts.get(family):
             gate = "advisory" if family in ADVISORY_FAMILIES else "gating"
+            if family in OPT_IN_FAMILIES:
+                gate += ", opt-in (run only with --family)"
             print(f"{family:<22} {counts[family]:>5} {turns[family]:>5}  {gate}")
     print(f"{'total':<22} {len(cases):>5} {sum(turns.values()):>5}")
     grants = required_grants(cases)
@@ -384,7 +398,8 @@ async def cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
     try:
-        cases = load_cases(Path(args.cases_dir), families=args.family, fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
+        cases = load_cases(Path(args.cases_dir), families=args.family or list(DEFAULT_FAMILIES),
+                           fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
     except CaseError as exc:
         print(f"invalid case set: {exc}", file=sys.stderr)
         return 2
@@ -411,7 +426,13 @@ async def cmd_run(args: argparse.Namespace) -> int:
     from smoke_turns import resolve_runtime_env
 
     from apis.shared.evals.execute import EVAL_TRIGGER, OAuthRequiredError, run_sample
-    from apis.shared.evals.fixtures import FixtureError, load_fixture, mime_type_for, register_upload
+    from apis.shared.evals.fixtures import (
+        FixtureError,
+        load_fixture,
+        mime_type_for,
+        register_upload,
+        upload_via_presign,
+    )
     from apis.shared.harness.auth import CognitoRefreshBearerAuth, HeadlessAuthError
     from apis.shared.harness.runner import run_agent_headless
 
@@ -462,6 +483,18 @@ async def cmd_run(args: argparse.Namespace) -> int:
             print(f"fixtures not seeded: {', '.join(missing)}; run scripts/seed_eval_fixtures.py first",
                   file=sys.stderr)
             return 2
+    uploader = None
+    if args.upload_via == "presign" and any(case.files for case in cases):
+        from smoke_turns import AppApiTransport
+
+        uploader = AppApiTransport(args.base_url, label="eval:uploads")
+        try:
+            await uploader.login_cognito(*_eval_credentials(args.prefix, args.region), "")
+        except RuntimeError as exc:
+            print(f"could not sign in to upload through presign: {exc}", file=sys.stderr)
+            await uploader.close()
+            return 2
+        print("uploads go through presign → PUT → complete")
     out.mkdir(parents=True, exist_ok=True)
     families = sorted({case.family for case in cases}, key=FAMILIES.index)
     try:
@@ -494,6 +527,8 @@ async def cmd_run(args: argparse.Namespace) -> int:
             data, mime_type = build_fixture(filename), mime_type_for(filename)
         else:
             data, mime_type = load_fixture(fixtures_dir, filename)
+        if uploader is not None:
+            return await upload_via_presign(uploader, session_id, filename, mime_type, data)
         return await register_upload(args.user_id, session_id, filename, mime_type, data)
 
     try:
@@ -557,6 +592,8 @@ async def cmd_run(args: argparse.Namespace) -> int:
         await _cleanup(new_rows + unrun, args.user_id,
                        member2_user_id=accounts.member2_user_id if accounts is not None else None)
         _forget_staged(out, unrun)
+    if uploader is not None:
+        await uploader.close()
     if accounts is not None:
         if accounts.member2_user_id and meta.get("member2_user_id") != accounts.member2_user_id:
             meta["member2_user_id"] = accounts.member2_user_id
@@ -1076,16 +1113,23 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
         meta = _read_meta(out)
-        cases = load_cases(Path(args.cases_dir), fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
-        baseline = build_baseline(
-            read_rows(out / RESULTS_FILE), cases=cases, meta=meta,
-            judgements=read_rows(out / JUDGEMENTS_FILE),
-        )
+        wanted = args.family or list(DEFAULT_FAMILIES)
+        cases = load_cases(Path(args.cases_dir), families=wanted, fixtures_dir=Path(args.fixtures_dir),
+                           generated=GENERATED)
+        rows = [r for r in read_rows(out / RESULTS_FILE) if r.get("family") in wanted]
+        judgements = [j for j in read_rows(out / JUDGEMENTS_FILE) if j.get("family") in wanted]
+        baseline = build_baseline(rows, cases=cases, meta=meta, judgements=judgements)
     except (ReportError, CaseError) as exc:
         print(f"not promoting: {exc}", file=sys.stderr)
         return 2
 
     path = _baseline_path(args, meta["model_id"])
+    if args.family and path.is_file():
+        try:
+            baseline = merge_family_baseline(json.loads(path.read_text(encoding="utf-8")), baseline)
+        except ReportError as exc:
+            print(f"not promoting: {exc}", file=sys.stderr)
+            return 2
     if path.is_file():
         previous = json.loads(path.read_text(encoding="utf-8"))
         flips = sorted(
@@ -1100,6 +1144,34 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     path.write_text(json.dumps(baseline, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     passed = sum(1 for entry in baseline["cases"].values() if entry["passed"])
     print(f"wrote {path} — {passed}/{len(baseline['cases'])} cases pass on {meta['model_id']}; commit it with the run's score output")
+    return 0
+
+
+def cmd_readout(args: argparse.Namespace) -> int:
+    from apis.shared.evals.delivery_readout import delivery_readout, format_delivery_readout
+
+    out = Path(args.out)
+    try:
+        meta = _read_meta(out)
+    except ReportError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    rows = [r for r in read_rows(out / RESULTS_FILE) if not args.family or r.get("family") in args.family]
+    if not rows:
+        print(f"no results in {out / RESULTS_FILE}" + (f" for {', '.join(args.family)}" if args.family else ""),
+              file=sys.stderr)
+        return 2
+    calls = None
+    if not args.no_cost_rows:
+        calls = asyncio.run(_session_calls(meta, [str(r["session_id"]) for r in rows if r.get("session_id")]))
+    readouts = delivery_readout(rows, calls)
+    print(format_delivery_readout(readouts, title=f"{meta['model_id']}, k={meta['k']}"))
+    if args.json:
+        Path(args.json).write_text(json.dumps({
+            "modelId": meta["model_id"], "k": meta["k"],
+            "run": {key: meta.get(key) for key in ("startedAt", "target", "gitCommit", "imageTags", "appVersion")},
+            "cases": [r.to_dict() for r in readouts],
+        }, indent=2) + "\n", encoding="utf-8")
     return 0
 
 
@@ -1137,6 +1209,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--keep", action="store_true", help="do not delete the sessions and uploads this run created")
     s.add_argument("--document-timeout", type=float, default=900.0,
                    help="seconds to wait for staged large documents to become searchable (default 900)")
+    s.add_argument("--upload-via", choices=["direct", "presign"], default="direct",
+                   help="direct: write each fixture's S3 object and READY row (default); presign: upload as the "
+                        "SPA does, POST /files/presign → PUT → complete, so app-api's admission runs "
+                        "(needs --auth cognito)")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
 
     s = sub.add_parser("judge", help="(spends) score a run's samples with the LLM judges their cases name")
@@ -1163,6 +1239,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s = sub.add_parser("baseline", help="promote a complete run to baselines/<model>.json")
     s.add_argument("--out", required=True)
     s.add_argument("--baseline", help="write here instead of baselines/<model>.json")
+    s.add_argument("--family", type=families,
+                   help="promote only these families' cases, keeping every other family's entries in the file")
+
+    s = sub.add_parser("readout", help="per-case quality, cost and speed of a run (unified-attachment-delivery §8.5)")
+    s.add_argument("--out", required=True)
+    s.add_argument("--family", type=families, help="comma-separated families (default: every family in the run)")
+    s.add_argument("--json", help="also write the readout as JSON to this path")
+    s.add_argument("--no-cost-rows", action="store_true", help="skip reading the samples' C# rows (no AWS)")
 
     s = sub.add_parser("cleanup", help="delete the sessions and fixture uploads a run recorded")
     s.add_argument("--out", help="the run directory whose sessions and uploads to delete")
@@ -1184,6 +1268,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             p.error("--auth cognito needs --base-url (the app-api origin it signs in through)")
         if args.auth == "headless-grant" and not args.user_id:
             p.error("--auth headless-grant needs --user-id")
+        if args.upload_via == "presign" and args.auth != "cognito":
+            p.error("--upload-via presign needs --auth cognito (an app-api session to upload as)")
     return args
 
 
@@ -1200,6 +1286,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return cmd_score(args)
     if args.command == "baseline":
         return cmd_baseline(args)
+    if args.command == "readout":
+        return cmd_readout(args)
     return asyncio.run(cmd_cleanup(args))
 
 

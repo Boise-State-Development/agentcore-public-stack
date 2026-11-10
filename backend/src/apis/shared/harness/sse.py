@@ -67,6 +67,12 @@ async def iter_sse_events(
         # Comments (`:`) and unknown fields are ignored per the SSE spec.
 
 
+def _as_ms(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return None
+    return int(value)
+
+
 @dataclass
 class InvocationStreamAccumulator:
     """Folds the typed event stream into RunResult-shaped state.
@@ -87,6 +93,13 @@ class InvocationStreamAccumulator:
     client_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     usage: Dict[str, Any] = field(default_factory=dict)
     events_seen: Dict[str, int] = field(default_factory=dict)
+    #: From the turn's final ``metadata`` frame (the one carrying
+    #: ``turnDurationMs``, written by the stream coordinator just before
+    #: ``done``): the whole turn as the Runtime measured it, from the moment
+    #: the invocation reached the container, and its time to first token.
+    #: ``None`` when the frame never arrived (an error or a cut stream).
+    turn_duration_ms: Optional[int] = None
+    first_token_ms: Optional[int] = None
 
     _current: List[str] = field(default_factory=list)
     _messages: List[str] = field(default_factory=list)
@@ -195,6 +208,14 @@ class InvocationStreamAccumulator:
             for key in ("usage", "metrics"):
                 if key in payload:
                     self._per_message_usage[key] = payload[key]
+            # Only the turn's final frame carries ``turnDurationMs``; its
+            # ``metrics.timeToFirstByteMs`` is then the coordinator's own
+            # first-token measurement, not a per-call provider figure.
+            if "turnDurationMs" in payload:
+                self.turn_duration_ms = _as_ms(payload.get("turnDurationMs"))
+                metrics = payload.get("metrics")
+                if isinstance(metrics, dict):
+                    self.first_token_ms = _as_ms(metrics.get("timeToFirstByteMs"))
         elif name == "metadata_summary":
             # Turn-cumulative totals — authoritative for cost attribution.
             self.usage.update(

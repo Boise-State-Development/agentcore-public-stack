@@ -155,3 +155,23 @@ def test_accumulator_oauth_required_and_final_message_fallback():
     # No message_stop — unterminated buffer must still surface.
     assert acc.final_message == "partial"
     assert acc.oauth_required[0].provider_id == "google-drive"
+
+
+def test_accumulator_keeps_timing_from_the_final_metadata_frame_only():
+    acc = InvocationStreamAccumulator()
+    # A per-call frame: provider metrics, no turnDurationMs. Not the turn's timing.
+    acc.handle("metadata", {"usage": {"inputTokens": 5}, "metrics": {"timeToFirstByteMs": 90, "latencyMs": 400}})
+    assert acc.turn_duration_ms is None and acc.first_token_ms is None
+    acc.handle("metadata", {
+        "usage": {"inputTokens": 5},
+        "metrics": {"timeToFirstByteMs": 1840, "latencyMs": 5200},
+        "turnDurationMs": 7810,
+    })
+    assert acc.turn_duration_ms == 7810
+    assert acc.first_token_ms == 1840
+
+
+def test_accumulator_timing_ignores_malformed_values():
+    acc = InvocationStreamAccumulator()
+    acc.handle("metadata", {"metrics": {"timeToFirstByteMs": "soon"}, "turnDurationMs": True})
+    assert acc.turn_duration_ms is None and acc.first_token_ms is None
