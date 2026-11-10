@@ -744,6 +744,32 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // MCP form elicitation — in development, so only "true" enables
+  // ============================================================
+
+  describe('MCP elicitation feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_MCP_ELICITATION_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_MCP_ELICITATION_ENABLED;
+      expect(loadConfig(app).mcpElicitation.enabled).toBe(false);
+      process.env.CDK_MCP_ELICITATION_ENABLED = '';
+      expect(loadConfig(app).mcpElicitation.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_MCP_ELICITATION_ENABLED = 'TRUE';
+      expect(loadConfig(app).mcpElicitation.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_MCP_ELICITATION_ENABLED = value;
+        expect(loadConfig(app).mcpElicitation.enabled).toBe(false);
+      }
+    });
+  });
+
+  // ============================================================
   // Release ledger writes — in development, so only "true" enables
   // ============================================================
 

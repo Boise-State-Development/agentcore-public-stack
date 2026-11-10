@@ -377,6 +377,19 @@ class MCPServerConfig(BaseModel):
         default=300, description="Interval between health checks"
     )
 
+    # MCP form elicitation (docs/specs/mcp-elicitation.md)
+    elicitation_enabled: bool = Field(
+        default=False,
+        description=(
+            "If true, and MCP_ELICITATION_ENABLED is on, this server is told the "
+            "client supports form elicitation (2026-07-28 connections only), so "
+            "it may ask the user for input partway through a tool call. A server "
+            "may then list tools it otherwise hides, such as GitHub's "
+            "delete_repository; with a non-empty `tools` list those still reach "
+            "the model only once an admin adds them."
+        ),
+    )
+
     model_config = {"use_enum_values": True}
 
     @field_validator("custom_headers", mode="before")
@@ -401,6 +414,8 @@ class MCPServerConfig(BaseModel):
             "tools": [entry.to_dict() for entry in self.tools],
             "healthCheckEnabled": self.health_check_enabled,
             "healthCheckIntervalSeconds": self.health_check_interval_seconds,
+            # Written only while on, so every existing row reads back unchanged.
+            **({"elicitationEnabled": True} if self.elicitation_enabled else {}),
         }
 
     @classmethod
@@ -419,6 +434,7 @@ class MCPServerConfig(BaseModel):
             tools=_parse_mcp_tools(data.get("tools", [])),
             health_check_enabled=data.get("healthCheckEnabled", False),
             health_check_interval_seconds=data.get("healthCheckIntervalSeconds", 300),
+            elicitation_enabled=bool(data.get("elicitationEnabled", False)),
         )
 
     def approval_required_names(self) -> set[str]:
@@ -1466,6 +1482,7 @@ class MCPServerConfigRequest(BaseModel):
     health_check_interval_seconds: int = Field(
         default=300, alias="healthCheckIntervalSeconds"
     )
+    elicitation_enabled: bool = Field(default=False, alias="elicitationEnabled")
 
     model_config = {"populate_by_name": True, "use_enum_values": True}
 
@@ -1487,6 +1504,7 @@ class MCPServerConfigRequest(BaseModel):
             tools=[entry.to_model() for entry in self.tools],
             health_check_enabled=self.health_check_enabled,
             health_check_interval_seconds=self.health_check_interval_seconds,
+            elicitation_enabled=self.elicitation_enabled,
         )
 
 
@@ -1702,6 +1720,7 @@ class MCPServerConfigResponse(BaseModel):
     health_check_interval_seconds: int = Field(
         default=300, alias="healthCheckIntervalSeconds"
     )
+    elicitation_enabled: bool = Field(default=False, alias="elicitationEnabled")
 
     model_config = {"populate_by_name": True}
 
@@ -1723,6 +1742,7 @@ class MCPServerConfigResponse(BaseModel):
             tools=[MCPToolEntryPayload.from_model(entry) for entry in config.tools],
             health_check_enabled=config.health_check_enabled,
             health_check_interval_seconds=config.health_check_interval_seconds,
+            elicitation_enabled=config.elicitation_enabled,
         )
 
 

@@ -258,6 +258,9 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // sessions-metadata table and one more tool in toolConfig — so it is here
     // for the environment-variable ceilings, not the resource count.
     sourceProvenance: { enabled: true },
+    // MCP elicitation adds no resources; it is here for the Runtime's
+    // environment-variable ceiling.
+    mcpElicitation: { enabled: true },
     // The release ledger adds no resources either — `LEDGER#` rows on the
     // existing system-cost-rollup table — so it is here for the Runtime's
     // environment-variable ceiling, flag coverage, and its one statement

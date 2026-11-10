@@ -1392,6 +1392,34 @@ def source_provenance_enabled() -> bool:
     return os.environ.get("SOURCE_PROVENANCE_ENABLED", "").strip().lower() == "true"
 
 
+def mcp_elicitation_enabled() -> bool:
+    """Whether an MCP server may ask the user for input partway through a tool
+    call (form elicitation, ``docs/specs/mcp-elicitation.md``).
+
+    On, an external MCP server whose catalog row sets ``elicitationEnabled`` is
+    told the client supports **form** elicitation, on 2026-07-28 connections
+    only (never URL mode, never the legacy handshake). When the server answers a
+    ``tools/call`` with an ``InputRequiredResult``, the turn pauses on an
+    interrupt, the SPA shows the server's form (``mcp_elicitation_required``),
+    and on resume the call is replayed with the user's answer. Nothing reaches
+    the system prompt, ``toolConfig`` or history beyond the server's own result.
+    Off, no elicitation callback is passed, the client's capabilities are
+    byte-identical to before, and the middleware is never registered.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime (written only while on) and on
+    app-api from ``config.mcpElicitation.enabled``. The SPA's matching switch is
+    ``features.mcpElicitation``.
+
+    A **feature switch**, not a rollout switch, and therefore permanent: it
+    widens what users can do (a server can expose tools gated on elicitation,
+    such as GitHub's ``delete_repository``), which a deployment may reasonably
+    decline.
+    """
+    return os.environ.get("MCP_ELICITATION_ENABLED", "").strip().lower() == "true"
+
+
 def web_search_default_max_results_enabled() -> bool:
     """Whether an AgentCore Web Search call that names no ``maxResults`` asks
     for 5 results instead of the connector's 10.

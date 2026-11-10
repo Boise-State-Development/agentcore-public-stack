@@ -428,6 +428,12 @@ export function buildAppApiEnvironment(
     // so only "true" enables.
     SOURCE_PROVENANCE_ENABLED: config.sourceProvenance.enabled ? 'true' : 'false',
 
+    // MCP form elicitation (docs/specs/mcp-elicitation.md). app-api's share is
+    // admin capability discovery, which advertises form elicitation to an
+    // opted-in server so its elicitation-gated tools can be listed and allowed.
+    // In development, so only "true" enables.
+    MCP_ELICITATION_ENABLED: config.mcpElicitation.enabled ? 'true' : 'false',
+
     // Release ledger writes (docs/specs/release-ledger.md §5.2). app-api's share
     // is the api-converse cost rows it writes; the Runtime writes the rest. In
     // development, so only "true" enables.

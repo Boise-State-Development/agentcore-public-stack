@@ -981,6 +981,12 @@ class StreamCoordinator:
                         user_id=user_id,
                     ):
                         yield sse
+                    for sse in await self._extract_mcp_elicitation_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
+                        yield sse
                     for sse in await self._extract_client_tool_call_events(
                         agent,
                         session_id=session_id,
@@ -2797,6 +2803,72 @@ class StreamCoordinator:
                     questions=questions,
                 ).to_sse_format()
             )
+        return events
+
+    async def _extract_mcp_elicitation_required_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield one SSE-formatted ``mcp_elicitation_required`` event per form
+        an MCP server is waiting on, persisting each one so the form rehydrates
+        after a refresh (``docs/specs/mcp-elicitation.md`` §4).
+
+        Raised by ``elicitation_middleware`` through
+        ``ExecuteToolContext.interrupt``; Strands stops for it exactly as it
+        does for a hook or tool interrupt, so the ``PausedTurnSnapshot`` on
+        this same ``done`` event covers it. One difference from the other
+        extractors: a call that elicits twice pauses twice, and the first
+        round's interrupt is still in the state, answered. Only an unanswered
+        one is a form to show.
+
+        Persistence is best-effort, as for the other kinds.
+        """
+        from apis.shared.mcp_elicitation.forms import (
+            ELICITATION_EVENT_TYPE,
+            event_payload,
+            event_sse,
+        )
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != ELICITATION_EVENT_TYPE:
+                continue
+            if interrupt.response is not None:
+                continue
+            if not reason.get("fields"):
+                logger.warning("MCP elicitation interrupt has no fields: id=%s", interrupt.id)
+                continue
+
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            kind="mcp_elicitation",
+                            tool_use_id=reason.get("toolUseId") or None,
+                            tool_name=reason.get("toolName") or None,
+                            elicitation=json.dumps(event_payload(interrupt.id, reason)),
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist mcp_elicitation pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
+            events.append(event_sse(interrupt.id, reason))
         return events
 
     async def _extract_client_tool_call_events(

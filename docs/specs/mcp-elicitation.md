@@ -1,6 +1,6 @@
 # MCP elicitation: a server asking the user for structured input during a tool call
 
-**Status:** Draft for discussion. No code yet. Decisions needed in §9.
+**Status:** In development, behind `MCP_ELICITATION_ENABLED` (off by default; only the literal `"true"` enables). Approved 2026-11-09 with every §9 recommendation accepted. PR-1 (backend, dark) implemented; §11 lists where it differs from this draft.
 **Author:** Phil Merrell (with Claude Code)
 **Date:** 2026-11-09
 **Targets:** `develop`
@@ -94,8 +94,7 @@ Payload, emitted after `message_stop` in the same `done` block as the other inte
   "interruptId": "v1:middleware_execute_tool:…",
   "toolUseId": "…",
   "toolName": "github_issues___delete_repository",
-  "serverName": "GitHub",          // session.server_info → ui:// authority → catalog name
-  "icon": "data:…",                // same resolver as ui_resource; may be ""
+  "serverName": "GitHub",          // the catalog row's display name (§11)
   "message": "Type \"acme/scratch\" to confirm permanent deletion of this repository.",
   "fields": [
     { "name": "repository_name", "title": "Repository name", "description": "Enter acme/scratch exactly…",
@@ -113,7 +112,7 @@ Payload, emitted after `message_stop` in the same `done` block as the other inte
 - `{"action": "decline"}`, from the form's Decline button
 - `{"action": "cancel"}`, sent when the user dismisses the form; see §9.5
 
-The middleware re-validates `content` against the stored schema before the replay. An invalid answer re-raises the same interrupt, so the form reappears with an error, rather than reaching the server.
+The callback validates `content` against the server's schema before the replay. An answer that does not fit is sent to the server as `cancel`, never forwarded (§11).
 
 **Breadcrumb.** `PendingInterrupt(kind="mcp_elicitation")`, holding the normalized form JSON-encoded, as `user_question` does. That is one addition to the `kind` Literal and to `AwaitingInputKind`.
 
@@ -230,3 +229,15 @@ App-api's admin discovery advertises form elicitation to an opted-in server too,
 - **PR-1, backend, dark.** The flag and its CDK wiring, `elicitationEnabled`, the capability narrowing in `_UIExtensionClientSession`, the callback and the slot, `ElicitationMiddleware`, the normaliser and validator, the event and the breadcrumb, and the §8 hermetic and real-wire tests.
 - **PR-2, SPA.** `McpElicitationPrompt`, the parser and the resume, the admin toggle behind `features.mcpElicitation`, plus app-api discovery advertising. Docs: the CLAUDE.md SSE row and in-development flag line, and a docs-site feature-flags row of kind **Feature switch**.
 - **PR-3, dev enablement.** The GitHub environment variable, `environment.development.ts`, the dev catalog change, and the §8 dev run recorded here.
+
+## 11. As built (PR-1, 2026-11-09)
+
+- **Risk 1 is closed.** A real Strands `Agent` over a real 2.x `MCPServer` (`test_mcp_elicitation_real_wire.py`) pauses on a middleware interrupt, resumes, and a call that asks twice pauses twice with its first answer still in `_interrupt_state`. `_InterruptState.to_dict` / `from_dict` keep answered interrupts, so a rebuilt agent restores them too. Two parallel calls that each ask pause together and resume in one request.
+- **Risk 2 is closed.** The contextvar the middleware sets reaches the callback on the MCP client's background loop; the same test reads the capability off the wire: `clientCapabilities.elicitation == {"form": {}}`.
+- **A replayed delete costs three `tools/call` POSTs in all:** the paused first round, the replayed first round, and the retry carrying the answer.
+- **An answer that does not fit is sent as `cancel`**, not re-asked. The interrupt name is fixed once answered, so the same name cannot pause again, and the SPA validates before it posts; a misfit is a broken or hostile client.
+- **`serverName` is the catalog row's display name** (`MCPClient.context_label`), not the server's own `serverInfo`. A server cannot then claim to be someone else in the header. The icon is left to PR-2.
+- **`AwaitingInputKind` gains `mcp_elicitation` in PR-2**, with the SPA that renders it. Until then the SPA skips the new breadcrumb kind on reload (its hydrator falls through to the OAuth branch, which needs a `providerId`).
+- **The middleware rides a Strands `Plugin`** (`McpElicitationPlugin`, whose `init_agent` calls `add_middleware`), appended to `ChatAgent`'s plugin list only while the flag is on. It is a deployment constant, so it adds no agent-cache key element.
+- **Strands logs `tool execution failed` with a traceback for any exception from a call**, the pause included. A logging filter on `strands.tools.mcp.mcp_client` drops that one record (`ElicitationPending`, also inside an `ExceptionGroup`) and passes every other.
+- **Unattended runs** (scheduled prompts, `run_agent_headless`) invoke the same Runtime turn path, so they get the middleware too. A run that reaches a server's form pauses exactly as it does today on an approval card or an `ask_user_question` prompt: the harness knows none of those events and reports the run `completed` with the turn left paused. That is existing behaviour for every interrupt kind, not new here; a headless status for paused turns is its own change.

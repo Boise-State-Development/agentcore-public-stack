@@ -63,7 +63,9 @@ class PendingInterrupt(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     interrupt_id: str = Field(..., alias="interruptId", description="Strands interrupt id used to resume the paused turn")
-    kind: Literal["oauth", "tool_approval", "user_question", "browser_login", "client_tool"] = Field(
+    kind: Literal[
+        "oauth", "tool_approval", "user_question", "browser_login", "client_tool", "mcp_elicitation"
+    ] = Field(
         default="oauth",
         description="Discriminator: which variant this interrupt represents",
     )
@@ -106,6 +108,16 @@ class PendingInterrupt(BaseModel):
     questions: Optional[str] = Field(
         default=None,
         description="(user_question) JSON-encoded list of questions to re-render",
+    )
+
+    # mcp_elicitation-only fields
+    elicitation: Optional[str] = Field(
+        default=None,
+        description=(
+            "(mcp_elicitation) JSON-encoded form a server asked the user to fill "
+            "in: toolName, serverName, message and the normalized fields. Never "
+            "the user's answer"
+        ),
     )
 
     # browser_login-only fields

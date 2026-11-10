@@ -257,6 +257,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     sourceProvenance: {
       enabled: false,
     },
+    mcpElicitation: {
+      enabled: false,
+    },
     releaseLedger: {
       enabled: false,
     },

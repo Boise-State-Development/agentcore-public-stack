@@ -139,6 +139,23 @@ class ChatAgent(BaseAgent):
             )
             if offloader is not None:
                 plugins.append(offloader)
+
+            # MCP form elicitation (docs/specs/mcp-elicitation.md): the
+            # ExecuteToolStage middleware that pauses on an opted-in server's
+            # form and replays the call with the answer. A deployment constant,
+            # so no agent-cache key element; it handles only tools from clients
+            # built with an elicitation callback and passes everything else
+            # straight through, after the model has answered.
+            from apis.shared.feature_flags import mcp_elicitation_enabled
+
+            if mcp_elicitation_enabled():
+                from agents.main_agent.integrations.mcp_elicitation import (
+                    McpElicitationPlugin,
+                    install_log_filter,
+                )
+
+                install_log_filter()
+                plugins.append(McpElicitationPlugin())
             plugins = plugins or None
 
             mark_stage("plugins")
