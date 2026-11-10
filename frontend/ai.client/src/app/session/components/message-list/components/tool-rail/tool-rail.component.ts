@@ -6,8 +6,20 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { KeyValuePipe } from '@angular/common';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { heroExclamationTriangle, heroLightBulb } from '@ng-icons/heroicons/outline';
 import { JsonSyntaxHighlightPipe } from '../tool-use/json-syntax-highlight.pipe';
-import { ToolCallGroup, ToolCallDisplay, ToolCallBatch } from './tool-rail.model';
+import {
+  ToolCallGroup,
+  ToolCallDisplay,
+  ToolCallBatch,
+  ToolRailStep,
+  ThinkingStep,
+} from './tool-rail.model';
+import {
+  formatThinkingDuration,
+  latestCompleteSentence,
+} from '../reasoning-content/reasoning-text';
 import {
   describeToolCall,
   describeToolGroup,
@@ -22,7 +34,8 @@ import { ToolResultContent } from '../../../../services/models/message.model';
   templateUrl: './tool-rail.component.html',
   styleUrl: './tool-rail.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [JsonSyntaxHighlightPipe, KeyValuePipe, PinScrollToBottomDirective],
+  imports: [JsonSyntaxHighlightPipe, KeyValuePipe, PinScrollToBottomDirective, NgIcon],
+  providers: [provideIcons({ heroLightBulb, heroExclamationTriangle })],
 })
 export class ToolRailComponent {
   /** The grouped tool calls to display */
@@ -59,6 +72,71 @@ export class ToolRailComponent {
   });
 
   /**
+   * Everything the rail did, in order: its batches, with any reasoning the
+   * model did between them. A rail with no folded reasoning has one step per
+   * batch, which renders exactly like the pre-thinking rail.
+   */
+  steps = computed<ToolRailStep[]>(() => {
+    const steps = this.group().steps;
+    if (steps?.length) return steps;
+    return this.batches().map((batch) => ({ kind: 'batch', key: batch.key, batch }));
+  });
+
+  /** The reasoning spans folded into this rail. */
+  thinkingSteps = computed<ThinkingStep[]>(() =>
+    this.steps().flatMap((st) => (st.kind === 'thinking' ? [st.thinking] : [])),
+  );
+
+  /**
+   * The span the model is reasoning in right now, if that is the rail's
+   * newest step. Only the newest: an earlier span cannot still be open once
+   * a tool call has followed it.
+   */
+  activeThinking = computed<ThinkingStep | null>(() => {
+    const steps = this.steps();
+    const last = steps[steps.length - 1];
+    return last?.kind === 'thinking' && last.thinking.active ? last.thinking : null;
+  });
+
+  /**
+   * The header's thinking readout: measured time when the stream timed it,
+   * otherwise how many spans there were. A reloaded conversation has no
+   * durations (they are live-only, like tool timings), and a guessed number
+   * would be one the user could not trust. Null when nothing was folded in.
+   */
+  thinkingLabel = computed<string | null>(() => {
+    const spans = this.thinkingSteps();
+    if (!spans.length) return null;
+    const timed = spans.filter((t) => typeof t.durationMs === 'number');
+    if (timed.length) {
+      const total = timed.reduce((sum, t) => sum + (t.durationMs ?? 0), 0);
+      return `thought for ${formatThinkingDuration(total)}`;
+    }
+    // Still in the first span: the shimmering headline already says so.
+    if (spans.every((t) => t.active)) return null;
+    return spans.length === 1 ? '1 thought' : `${spans.length} thoughts`;
+  });
+
+  /**
+   * The tool count beside the headline. Suppressed for a lone call in a rail
+   * with no reasoning, where it would only restate the line; with reasoning
+   * folded in the headline may be a thought, so the count is shown.
+   */
+  toolCountLabel = computed<string | null>(() => {
+    const n = this.group().calls.length;
+    if (n > 1) return `${n} tools`;
+    return n === 1 && this.thinkingSteps().length ? '1 tool' : null;
+  });
+
+  /** The header button's accessible name. */
+  toggleLabel = computed(() => {
+    const what = this.thinkingSteps().length
+      ? 'thinking and tool call details'
+      : 'tool call details';
+    return `${this.isExpanded() ? 'Hide' : 'Show'} ${what}`;
+  });
+
+  /**
    * The one line shown collapsed.
    *
    * Order of preference: an explicit override; then the first batch that has
@@ -74,6 +152,12 @@ export class ToolRailComponent {
     const override = this.group().groupSummary;
     if (override) return override;
 
+    // While the model reasons, say what it is on — the latest finished
+    // sentence, the same line the standalone reasoning block shows — rather
+    // than restating the last tool round it has already moved past.
+    const thinking = this.activeThinking();
+    if (thinking) return latestCompleteSentence(thinking.text) ?? 'Thinking';
+
     const batches = this.batches();
     const first = batches.findIndex((b) => !!b.summary);
     if (first === -1) return describeToolGroup(this.group().calls);
@@ -84,9 +168,11 @@ export class ToolRailComponent {
     return `${head}, then ${rest} more step${rest === 1 ? '' : 's'}`;
   });
 
-  /** True while any call in the group is still executing. */
-  isRunning = computed(() =>
-    this.group().calls.some(c => c.status === 'pending'),
+  /** True while any call is still executing or the model is reasoning. */
+  isRunning = computed(
+    () =>
+      !!this.activeThinking() ||
+      this.group().calls.some(c => c.status === 'pending'),
   );
 
   /**
@@ -127,6 +213,22 @@ export class ToolRailComponent {
     return call.summary || describeToolCall(call);
   }
 
+  /**
+   * The one line for a reasoning span in the expanded list: its opening, or,
+   * while it is still going, its latest finished sentence.
+   */
+  describeThinking(step: ThinkingStep): string {
+    const text = step.text.trim();
+    if (step.active) return latestCompleteSentence(step.text) ?? 'Thinking';
+    if (text) return text.split(/\n+/)[0].trim();
+    return step.redacted ? 'Reasoning redacted' : 'Thinking';
+  }
+
+  /** A reasoning span's measured length, or null on a reload. */
+  thinkingDuration(step: ThinkingStep): string | null {
+    return formatThinkingDuration(step.durationMs);
+  }
+
   /** Toggle rail expand/collapse */
   toggleExpanded(): void {
     this.isExpanded.update(v => !v);
@@ -155,6 +257,11 @@ export class ToolRailComponent {
    */
   isCallDetailOpen(call: ToolCallDisplay): boolean {
     return this.isGenerating(call) || this.expandedCallIds().has(call.id);
+  }
+
+  /** Whether a reasoning span's full text is showing. */
+  isThinkingOpen(step: ThinkingStep): boolean {
+    return this.expandedCallIds().has(step.key);
   }
 
   /** CSS class for status dot */

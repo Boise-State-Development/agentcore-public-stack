@@ -191,3 +191,10 @@
 :host-context(.dark) .result-block .json-bracket {
   color: #6b7280;
 }
+
+/* Reasoning is prose, not a payload: it keeps the sans face inside the same
+   bounded box the call details use. */
+.thinking-text {
+  font-family: inherit;
+  line-height: 1.25rem;
+}
