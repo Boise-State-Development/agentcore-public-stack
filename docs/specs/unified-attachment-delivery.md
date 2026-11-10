@@ -265,9 +265,16 @@ and documents together. Four consequences for documents:
   `over_ceiling` when the last input exceeds it, and the live offload replaces every
   unpinned document of 5,000 tokens or more with its digest. A compaction cut that
   passes the document's turn removes it as well, and the summary cannot carry it.
-- **The estimate is wrong.** `_block_tokens` counts a document block as bytes/4. The
-  same session estimated 22k retained against about 62k measured, and a second forced
-  cut followed two turns later. Phase 2 replaces it with the row facts.
+- **The estimate was wrong.** `_block_tokens` counted a document block as bytes/4. The
+  same session estimated 22k retained against about 62k measured. A `document_read`
+  slice is a re-packed PDF of 8 kB for 8 pages, so bytes/4 saw 2k tokens of a slice
+  that cost about 29k. And the context breakdown had no `messages` partition while a
+  document was inline (CountTokens refuses documents), so the cut was calibrated
+  against the whole input. Phase 2 reads the row facts (a native PDF is
+  `tokens.text + tokens.native`, a slice its pages' share) and counts the breakdown's
+  system/tools split over a stand-in for the attachments: the same cut now estimates
+  61.7k. The second forced cut is a separate matter: the turn the cut kept was 62k on
+  its own, over the 50k ceiling, and a cut never goes inside the newest turn.
 
 The 100k cap rests on a replay of 20 heavy Sonnet 5 sessions (2026-09-15): $73.70 at
 a 100k ceiling against $105.30 at 200k, because a prefix is re-written whole after a
@@ -470,8 +477,8 @@ Usage counts are from `develop` at e39c6a9d1.
 | Admission rules that restate the turn's rules | `app_api/files/service.py` (`max_size_for`, the count check) | 1 | They call the planner's limits. **Done:** `upload_limits` / `upload_size_limit` in the planner; `inline_persist` reads them too |
 | `test_inline_budget_by_reference.py`, `test_attachment_turn_guard.py`, `test_large_document_turn_path.py`, `test_presentation_attachment_carveout.py` | `backend/tests/apis/inference_api/` | 1 | Selection cases move to the table test; what remains tests the route's wiring only |
 | SPA limit constants and the per-rule checks | `file-upload.service.ts`, `inline-attachment-budget.ts` and its spec, `chat-input.component.ts`, `composer-add-menu.component.ts` | 1 | `GET /files/limits` is read at load. One built-in fallback object remains, so the composer can judge a drop before the fetch answers. **Done:** `AttachmentLimitsService` and `FALLBACK_ATTACHMENT_LIMITS` (`attachment-limits.ts`); the inline-budget notice and the folder count read it as well, and the TUI checks the same numbers before `/attach` |
-| The bytes/4 document estimate | `_bytes_tokens` for document blocks, `compaction_policy.py` | 2 | Compaction reads row facts |
-| `estimate_document_tokens` as a primary source | `apis/shared/files/document_tokens.py`; 3 callers in `agents/main_agent/session/` | 2 | Callers read row facts. The function stays as the fallback for a file row written before phase 2 |
+| The bytes/4 document estimate | `_bytes_tokens` for document blocks, `compaction_policy.py` | 2 | Compaction reads row facts. **Done:** `_bytes_tokens` is gone; every document block goes through `DocumentIndex.block_tokens` (`agents/main_agent/session/document_estimate.py`) |
+| `estimate_document_tokens` as a primary source | `apis/shared/files/document_tokens.py`; 3 callers in `agents/main_agent/session/` | 2 | Callers read row facts. The function stays as the fallback for a file row written before phase 2. **Done:** offload, slice ageing, rehydration and the cost row's footprint read `apis/shared/files/document_estimate.py`, which falls back to it |
 | The ceiling-subtraction fixture arm | Built in phase 0 behind the eval fixture | 3 | It becomes §5.2's production code, or is deleted if the readout drops §5.2 |
 | `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` and `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` | 5 source files, 4 test files, `config.ts`, two constructs, `config.test.ts`, `platform.yml`, `.env.example` | 6 | Text is the `token` profile's rule. The `legacy` profile reads the flag until then |
 | `_prerender_documents_as_text` and the per-call projection's own selection | `routes.py`, `apis/shared/models/document_cap.py` | 6 | The planner names the files to render; the projection keeps only the rendering |

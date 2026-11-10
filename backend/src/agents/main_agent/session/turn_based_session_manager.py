@@ -53,6 +53,8 @@ from .compaction_summary import bound_summary
 if TYPE_CHECKING:
     from concurrent.futures import ThreadPoolExecutor
 
+    from .document_estimate import DocumentIndex
+
     from strands.agent.agent import Agent
 
 logger = logging.getLogger(__name__)
@@ -1545,7 +1547,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         policy = CompactionPolicy.resolve(self.compaction_config, context_window)
         # §5.2 measurement switch (off everywhere): the ceiling compares the
         # input less the documents held; the hard ceiling keeps the full input.
-        chat_tokens, held_tokens = chat_input_tokens(self.compaction_config, input_tokens, current_messages)
+        documents = self.document_index()
+        chat_tokens, held_tokens = chat_input_tokens(
+            self.compaction_config, input_tokens, current_messages, documents
+        )
         if held_tokens:
             logger.info(
                 "compaction_ceiling_excludes_documents: input=%d held_documents=%d chat=%d ceiling=%d",
@@ -1647,6 +1652,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # Choose the cut in LIVE-LIST coordinates, then translate to absolute.
         messages = self._all_messages_for_summary
         retained_estimate: Optional[int] = None
+        if policy.floor is not None:
+            # A cut is being chosen, after the turn: the one moment a row read
+            # for a document whose facts this process has not seen is allowed.
+            documents = await self._fill_document_index(documents, messages)
         if policy.floor is None:
             # Legacy (kill switch): keep the last N turns, whatever their size.
             relative_cut = cutoffs[-protected_turns]
@@ -1658,6 +1667,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 policy.floor,
                 history_tokens if history_tokens is not None else input_tokens,
                 tail_bound_tokens=tail_bound,
+                documents=documents,
             )
         # Whole turns the cut keeps, and whether it went inside the protected
         # tail to get there — persisted on the policy snapshot, numbers only.
@@ -2104,8 +2114,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             messages = getattr(agent, "messages", None)
             if not isinstance(messages, list) or not messages:
                 return None
+            documents = self.document_index()
             pinned = pinned_document_names(messages, prompt, pin_turns=DOCUMENT_OFFLOAD_PIN_TURNS)
-            candidates = candidate_documents(messages, pinned, min_tokens=DOCUMENT_OFFLOAD_MIN_TOKENS)
+            candidates = candidate_documents(
+                messages, pinned, min_tokens=DOCUMENT_OFFLOAD_MIN_TOKENS, documents=documents
+            )
             has_slices = any(
                 isinstance(b, dict) and isinstance(b.get("toolResult"), dict)
                 for m in messages if isinstance(m, dict) and isinstance(m.get("content"), list)
@@ -2114,7 +2127,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             if not candidates and not has_slices:
                 return None
 
-            _, held_tokens = chat_input_tokens(self.compaction_config, 0, messages) if self.compaction_config else (0, 0)
+            _, held_tokens = (
+                chat_input_tokens(self.compaction_config, 0, messages, documents)
+                if self.compaction_config else (0, 0)
+            )
             reason, gap_seconds = self._document_offload_reason(held_document_tokens=held_tokens)
             if reason is None:
                 if candidates:
@@ -2125,7 +2141,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 return None
 
             result = offload_documents(messages, candidates, session_id=session_id, user_id=self.user_id)
-            result.slices_aged, result.slice_tokens = age_document_slices(messages, max_turns=DOCUMENT_SLICE_MAX_TURNS)
+            result.slices_aged, result.slice_tokens = age_document_slices(
+                messages, max_turns=DOCUMENT_SLICE_MAX_TURNS, documents=documents
+            )
             if not result.offloaded and not result.slices_aged:
                 return None
 
@@ -2157,6 +2175,49 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         except Exception as e:  # noqa: BLE001 - never break a turn
             logger.warning(f"apply_document_offload skipped: {e}", exc_info=True)
             return None
+
+    def document_index(self) -> "DocumentIndex":
+        """The row facts this session's document blocks are estimated from.
+
+        Read from the process-wide store keyed by ``(user, session)``
+        (``apis.shared.files.document_estimate``), never held on this manager:
+        another agent serving the session reads the same facts. Facts are
+        immutable per set of bytes, so there is nothing to go stale.
+        """
+        from apis.shared.files.document_estimate import session_document_facts
+
+        from .document_estimate import DocumentIndex
+
+        config = getattr(self, "config", None)
+        return DocumentIndex(
+            session_document_facts(getattr(self, "user_id", None), getattr(config, "session_id", None))
+        )
+
+    async def _fill_document_index(self, documents: "DocumentIndex", messages: Optional[List[Dict]]) -> "DocumentIndex":
+        """``documents``, plus the session's rows when a block in ``messages`` has no facts.
+
+        Runs after the turn, only when a cut is being chosen, so the one
+        Query it may cost is never before a first token. Never raises.
+        """
+        try:
+            if not messages or not documents.unmatched(messages):
+                return documents
+            session_id = getattr(self.config, "session_id", None)
+            # No files table configured (a local run or a unit test): nothing
+            # to read, and the estimate falls back to the bytes.
+            if not session_id or not os.environ.get("DYNAMODB_USER_FILES_TABLE_NAME"):
+                return documents
+            from apis.shared.files.document_estimate import remember_session_documents
+
+            from .document_rehydration import load_session_documents
+
+            user_id = getattr(self, "user_id", None)
+            rows = await asyncio.to_thread(load_session_documents, session_id, user_id)
+            if remember_session_documents(user_id, session_id, rows):
+                return self.document_index()
+        except Exception as e:  # noqa: BLE001 - the estimate falls back to the bytes
+            logger.debug("Document facts lookup skipped: %s", e)
+        return documents
 
     def _document_offload_reason(self, held_document_tokens: int = 0) -> Tuple[Optional[str], Optional[int]]:
         """``(reason, cache gap seconds)`` — why a prefix re-write is free or

@@ -4735,7 +4735,11 @@ class StreamCoordinator:
                     try:
                         from agents.main_agent.session.document_context import summarize_document_context
 
-                        footprint = summarize_document_context(getattr(strands_agent, "messages", None))
+                        index_of = getattr(turn_session_manager, "document_index", None)
+                        footprint = summarize_document_context(
+                            getattr(strands_agent, "messages", None),
+                            index_of() if callable(index_of) else None,
+                        )
                         if footprint:
                             metadata_kwargs.update(footprint)
                     except Exception as doc_err:  # noqa: BLE001 - never block the cost row
