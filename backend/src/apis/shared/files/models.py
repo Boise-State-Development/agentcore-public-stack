@@ -286,6 +286,15 @@ MAX_FILES_PER_MESSAGE = int(
 # =============================================================================
 
 
+def _optional_int(value) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class FileMetadata(BaseModel):
     """
     File metadata stored in DynamoDB.
@@ -368,6 +377,12 @@ class FileMetadata(BaseModel):
     # image uploaded under the ``legacy`` profile, which is sent as uploaded.
     model_image: Optional[dict] = Field(None, description="Model copy of an image, when one was planned")
 
+    # A PDF's page count, read at admission under the ``token`` profile
+    # (``apis.shared.files.pdf_page_count``) so a turn that arrives before the
+    # file's facts can judge it by its pages. ``None`` for every other file,
+    # under the ``legacy`` profile, and when the count could not be read.
+    page_count: Optional[int] = Field(None, description="PDF page count read at admission")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -428,6 +443,8 @@ class FileMetadata(BaseModel):
             item["facts"] = self.facts
         if self.model_image:
             item["modelImage"] = self.model_image
+        if self.page_count is not None:
+            item["pageCount"] = int(self.page_count)
         return item
 
     @classmethod
@@ -465,6 +482,7 @@ class FileMetadata(BaseModel):
             kb_index=item.get("kbIndex") if isinstance(item.get("kbIndex"), dict) else None,
             facts=item.get("facts") if isinstance(item.get("facts"), dict) else None,
             model_image=item.get("modelImage") if isinstance(item.get("modelImage"), dict) else None,
+            page_count=_optional_int(item.get("pageCount")),
         )
 
 

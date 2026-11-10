@@ -143,6 +143,18 @@ class ImageUnreadableUploadError(FileUploadError):
         )
 
 
+class TooManyPagesError(FileUploadError):
+    """Raised when a PDF has more pages than the profile admits."""
+
+    def __init__(self, filename: str, pages: int, limit: int):
+        from apis.shared.files.pdf_page_count import too_many_pages_message
+
+        self.filename = filename
+        self.pages = pages
+        self.limit = limit
+        super().__init__(too_many_pages_message(filename, pages, limit))
+
+
 class FileNotFoundError(FileUploadError):
     """Raised when file is not found."""
     pass
@@ -416,10 +428,12 @@ class FileUploadService:
             await self._reject_upload(file_meta)
             raise UploadSizeMismatchError(file_meta.size_bytes, stored_size)
 
-        # An image's model copy, before READY, so no turn reads it without one.
+        # An image's model copy and a PDF's page count, before READY, so no
+        # turn reads the row without them.
         try:
             await self._store_model_image(file_meta)
-        except ImageUnreadableUploadError:
+            await self._check_pdf_pages(file_meta)
+        except (ImageUnreadableUploadError, TooManyPagesError):
             await self._reject_upload(file_meta)
             raise
 
@@ -541,7 +555,8 @@ class FileUploadService:
 
         try:
             await self._store_model_image(file_meta, raw=content)
-        except ImageUnreadableUploadError:
+            await self._check_pdf_pages(file_meta, raw=content)
+        except (ImageUnreadableUploadError, TooManyPagesError):
             await self._reject_upload(file_meta)
             raise
 
@@ -614,6 +629,11 @@ class FileUploadService:
             updated = await self._store_model_image(updated, raw=content)
         except ImageUnreadableUploadError:
             logger.warning("A replaced image could not be read; it is sent as uploaded")
+        try:
+            updated = await self._check_pdf_pages(updated, raw=content)
+        except TooManyPagesError:
+            # A refreshed folder file keeps its id; the turn's page rule sends it on demand.
+            logger.warning("A replaced PDF is over the page limit")
         if delta:
             await self.repository.adjust_quota_bytes(file_meta.user_id, delta)
         await self._after_upload_ready(updated)
@@ -742,6 +762,39 @@ class FileUploadService:
             record["height"],
             record["sizeBytes"],
         )
+        return updated or file_meta
+
+    async def _check_pdf_pages(self, file_meta: FileMetadata, raw: Optional[bytes] = None) -> FileMetadata:
+        """Count a PDF's pages under a profile with a page rule, and record the count.
+
+        Raises :class:`TooManyPagesError` over ``pdf_max_pages``. The count is
+        read by ranges from S3 when the bytes are not in hand (``pdf_page_count``),
+        so a 50 MB PDF is never held here. A count that cannot be read admits
+        the file: its facts, written by preparation, decide later.
+        """
+        limit = current_limits_profile().pdf_max_pages
+        if limit is None or (file_meta.mime_type or "").lower() != "application/pdf":
+            return file_meta
+        from apis.shared.files import pdf_page_count
+
+        try:
+            if raw is not None:
+                pages = await asyncio.to_thread(pdf_page_count.count_pages, raw)
+            else:
+                pages = await asyncio.to_thread(
+                    pdf_page_count.count_s3_pdf_pages,
+                    self._s3_client,
+                    file_meta.s3_bucket,
+                    file_meta.s3_key,
+                    file_meta.size_bytes,
+                )
+        except pdf_page_count.PageCountUnavailable:
+            logger.info("A PDF's page count could not be read at admission")
+            return file_meta
+        if pages > limit:
+            raise TooManyPagesError(file_meta.filename, pages, limit)
+        file_meta.page_count = pages
+        updated = await self.repository.update_file_page_count(file_meta.user_id, file_meta.upload_id, pages)
         return updated or file_meta
 
     async def _after_upload_ready(self, file_meta: FileMetadata) -> None:

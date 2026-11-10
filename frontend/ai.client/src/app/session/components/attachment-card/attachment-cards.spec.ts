@@ -266,6 +266,22 @@ describe('MessageAttachmentsComponent', () => {
     fixture.detectChanges();
     expect(el.querySelectorAll('app-attachment-card')).toHaveLength(3);
   });
+
+  it('at the token profile\'s twenty files, folds to +17 and expands to full rows', async () => {
+    const fixture = await mount(ids(20));
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelectorAll('app-attachment-card')).toHaveLength(3);
+    const tile = el.querySelector<HTMLButtonElement>('button[aria-label="Show 17 more attachments"]');
+    expect(tile?.textContent).toContain('+17');
+    expect(el.querySelector('ul')?.getAttribute('aria-label')).toBe('20 attachments');
+
+    tile!.click();
+    fixture.detectChanges();
+    const items = el.querySelectorAll('li');
+    expect(items).toHaveLength(20);
+    // Twenty is even: no lead card spans, so ten full rows of two.
+    expect(items[0].className).not.toContain('col-span-2');
+  });
 });
 
 describe('ComposerAttachmentsComponent', () => {
@@ -303,6 +319,21 @@ describe('ComposerAttachmentsComponent', () => {
     fixture.detectChanges();
     expect(el.querySelectorAll('app-attachment-card')).toHaveLength(7);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('summarises twenty files and shows them all on request', async () => {
+    const pending = [
+      ...Array.from({ length: 12 }, (_, i) => upload(`doc${i}`, 'ready')),
+      ...Array.from({ length: 8 }, (_, i) => upload(`img${i}`, 'ready', { file: sizedFile(`img${i}.jpg`, 'image/jpeg') })),
+    ];
+    const fixture = await mount({ pending });
+    const el = fixture.nativeElement as HTMLElement;
+    expect(text(el)).toContain('20 files · 20 ready');
+    expect(el.querySelectorAll('app-attachment-card')).toHaveLength(0);
+
+    Array.from(el.querySelectorAll('button')).find((b) => text(b) === 'Show all')!.click();
+    fixture.detectChanges();
+    expect(el.querySelectorAll('app-attachment-card')).toHaveLength(20);
   });
 });
 

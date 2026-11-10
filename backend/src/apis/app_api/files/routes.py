@@ -56,6 +56,7 @@ from .service import (
     FileNotFoundError,
     FileUploadError,
     ImageUnreadableUploadError,
+    TooManyPagesError,
 )
 from .sheet_preview import WorkbookTooLargeError, WorkbookUnreadableError
 from .thumbnails import ThumbnailPending, ThumbnailRenderError, ThumbnailUnsupportedError
@@ -170,7 +171,7 @@ async def complete_upload(
             detail=f"File exceeds {e.max_size // (1024*1024)}MB limit",
         )
 
-    except ImageUnreadableUploadError as e:
+    except (ImageUnreadableUploadError, TooManyPagesError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     except FileUploadError as e:
@@ -260,7 +261,7 @@ async def import_file_from_source(
                 required_space=e.required_space,
             ).model_dump(by_alias=True),
         )
-    except ImageUnreadableUploadError as e:
+    except (ImageUnreadableUploadError, TooManyPagesError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except FileUploadError as e:
         raise HTTPException(
