@@ -25,16 +25,20 @@ class TestPreview:
         assert await handler.compute_facts("u1", "up-1", s3=s3, repository=repository) == "ready"
         assert decode_preview(_body(s3, PREVIEW))["lines"] == ["Memo to the board", "Costs held flat"]
 
+    # Builders, not bytes: a zip's headers carry its build time, so bytes in a
+    # parametrize id differ between xdist workers and break collection.
     @pytest.mark.parametrize(
-        "filename,mime,raw,kind",
+        "filename,mime,build,kind",
         [
-            ("budget.xlsx", XLSX, build_xlsx({"Budget": [["Line", "FY27"], ["Travel", 1200]]}), "sheet"),
-            ("grades.csv", "text/csv", b"Student,Score\nAvery,94\n", "sheet"),
-            ("talk.pptx", PPTX, build_pptx([("Quarterly review", ["Revenue up"])]), "deck"),
+            ("budget.xlsx", XLSX, lambda: build_xlsx({"Budget": [["Line", "FY27"], ["Travel", 1200]]}), "sheet"),
+            ("grades.csv", "text/csv", lambda: b"Student,Score\nAvery,94\n", "sheet"),
+            ("talk.pptx", PPTX, lambda: build_pptx([("Quarterly review", ["Revenue up"])]), "deck"),
         ],
+        ids=["xlsx", "csv", "pptx"],
     )
-    async def test_the_preview_action_writes_spreadsheets_csvs_and_decks(self, store, filename, mime, raw, kind):
+    async def test_the_preview_action_writes_spreadsheets_csvs_and_decks(self, store, filename, mime, build, kind):
         s3, repository = store
+        raw = build()
         await _upload(store, raw, filename=filename, mime=mime, size=len(raw))
         assert await handler.render_preview("u1", "up-1", s3=s3, repository=repository) == "ready"
         assert decode_preview(_body(s3, PREVIEW))["kind"] == kind
