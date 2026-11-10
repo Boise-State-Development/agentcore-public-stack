@@ -359,6 +359,15 @@ class FileMetadata(BaseModel):
     # off. Numbers and enums only: never content.
     facts: Optional[dict] = Field(None, description="File facts, once prepared")
 
+    # The image a model is sent (unified-attachment-delivery spec §4.3,
+    # ``apis.shared.files.image_downscale``): ``{version, key, mimeType,
+    # sizeBytes, width, height, sourceWidth, sourceHeight, downscaled}``,
+    # written once per set of bytes when an image upload completes under the
+    # ``token`` profile. ``key`` is the stored downscaled copy, or the original
+    # when it was sent as uploaded. ``None`` for every other file and for an
+    # image uploaded under the ``legacy`` profile, which is sent as uploaded.
+    model_image: Optional[dict] = Field(None, description="Model copy of an image, when one was planned")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -417,6 +426,8 @@ class FileMetadata(BaseModel):
             item["kbIndex"] = self.kb_index
         if self.facts:
             item["facts"] = self.facts
+        if self.model_image:
+            item["modelImage"] = self.model_image
         return item
 
     @classmethod
@@ -453,6 +464,7 @@ class FileMetadata(BaseModel):
             preparation=item.get("preparation") if isinstance(item.get("preparation"), dict) else None,
             kb_index=item.get("kbIndex") if isinstance(item.get("kbIndex"), dict) else None,
             facts=item.get("facts") if isinstance(item.get("facts"), dict) else None,
+            model_image=item.get("modelImage") if isinstance(item.get("modelImage"), dict) else None,
         )
 
 

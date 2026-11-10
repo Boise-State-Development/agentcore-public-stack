@@ -25,19 +25,23 @@ class ImageHandler:
         Returns:
             str: Image format (png, jpeg, gif, webp)
         """
-        content_type_lower = content_type.lower()
-        filename_lower = filename.lower()
-
-        if "png" in content_type_lower or filename_lower.endswith(".png"):
+        # The content type decides when it names a format: an image's stored
+        # model copy can be a different format from its filename (a large PNG
+        # sent as WebP), and the block must name the bytes, not the name.
+        content_type_lower = (content_type or "").lower()
+        for token, fmt in (("png", "png"), ("jpeg", "jpeg"), ("jpg", "jpeg"), ("gif", "gif"), ("webp", "webp")):
+            if token in content_type_lower:
+                return fmt
+        filename_lower = (filename or "").lower()
+        if filename_lower.endswith(".png"):
             return "png"
-        elif "jpeg" in content_type_lower or "jpg" in content_type_lower or filename_lower.endswith((".jpg", ".jpeg")):
+        if filename_lower.endswith((".jpg", ".jpeg")):
             return "jpeg"
-        elif "gif" in content_type_lower or filename_lower.endswith(".gif"):
+        if filename_lower.endswith(".gif"):
             return "gif"
-        elif "webp" in content_type_lower or filename_lower.endswith(".webp"):
+        if filename_lower.endswith(".webp"):
             return "webp"
-        else:
-            return "png"  # default
+        return "png"  # default
 
     @staticmethod
     def is_image(content_type: str, filename: str) -> bool:

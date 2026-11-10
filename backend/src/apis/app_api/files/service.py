@@ -133,6 +133,16 @@ class UploadSizeMismatchError(FileUploadError):
         )
 
 
+class ImageUnreadableUploadError(FileUploadError):
+    """Raised when an image over the general limit cannot be read to downscale it."""
+
+    def __init__(self, filename: str):
+        self.filename = filename
+        super().__init__(
+            f"{filename} could not be read as an image. Try saving it as a JPEG or PNG and attaching it again."
+        )
+
+
 class FileNotFoundError(FileUploadError):
     """Raised when file is not found."""
     pass
@@ -406,6 +416,13 @@ class FileUploadService:
             await self._reject_upload(file_meta)
             raise UploadSizeMismatchError(file_meta.size_bytes, stored_size)
 
+        # An image's model copy, before READY, so no turn reads it without one.
+        try:
+            await self._store_model_image(file_meta)
+        except ImageUnreadableUploadError:
+            await self._reject_upload(file_meta)
+            raise
+
         # Update status to READY
         await self.repository.update_file_status(
             user_id, upload_id, FileStatus.READY
@@ -522,6 +539,12 @@ class FileUploadService:
             await self.repository.update_file_status(user_id, upload_id, FileStatus.FAILED)
             raise FileUploadError("The file could not be stored. Try again.")
 
+        try:
+            await self._store_model_image(file_meta, raw=content)
+        except ImageUnreadableUploadError:
+            await self._reject_upload(file_meta)
+            raise
+
         await self.repository.update_file_status(user_id, upload_id, FileStatus.READY)
         file_meta.status = FileStatus.READY
         await self.repository.increment_quota(user_id, size_bytes)
@@ -586,6 +609,11 @@ class FileUploadService:
         )
         if updated is None:
             raise FileNotFoundError(f"File '{file_meta.upload_id}' is gone")
+        # A refreshed image gets a new model copy; an unreadable one is sent as is.
+        try:
+            updated = await self._store_model_image(updated, raw=content)
+        except ImageUnreadableUploadError:
+            logger.warning("A replaced image could not be read; it is sent as uploaded")
         if delta:
             await self.repository.adjust_quota_bytes(file_meta.user_id, delta)
         await self._after_upload_ready(updated)
@@ -612,6 +640,94 @@ class FileUploadService:
     @staticmethod
     def _s3_key_for(user_id: str, session_id: str, upload_id: str, filename: str) -> str:
         return f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
+
+    async def _store_model_image(
+        self, file_meta: FileMetadata, raw: Optional[bytes] = None
+    ) -> FileMetadata:
+        """Plan and store an image's model copy, and record it on the row.
+
+        Only under a profile that downscales (``token``); every other file and
+        profile returns the row unchanged, so the ``legacy`` profile sends an
+        image exactly as uploaded. The copy is deterministic
+        (``image_downscale``): the same bytes always store the same object, at
+        ``_derived/model-image.<ext>``.
+
+        An image that cannot be decoded is still accepted when it is within
+        the general upload limit (it is sent as uploaded, as before); over that
+        limit there is nothing a model could be sent, so it raises
+        :class:`ImageUnreadableUploadError` and the caller rejects the upload.
+        """
+        if not current_limits_profile().downscale_images:
+            return file_meta
+        if not (file_meta.mime_type or "").lower().startswith("image/"):
+            return file_meta
+        from apis.shared.files import image_downscale
+
+        if raw is None:
+            try:
+                response = await asyncio.to_thread(
+                    self._s3_client.get_object, Bucket=file_meta.s3_bucket, Key=file_meta.s3_key
+                )
+                raw = await asyncio.to_thread(response["Body"].read)
+            except ClientError:
+                logger.warning("Could not read an image to plan its model copy", exc_info=True)
+                return file_meta
+
+        try:
+            info, copy = await asyncio.to_thread(image_downscale.plan_model_image, raw, file_meta.mime_type)
+        except image_downscale.ImageUnreadableError:
+            if len(raw) > self.max_file_size:
+                raise ImageUnreadableUploadError(file_meta.filename)
+            logger.info("An image could not be decoded; it is sent as uploaded")
+            return file_meta
+
+        if copy is None:
+            record = image_downscale.model_image_record(
+                key=file_meta.s3_key,
+                mime_type=file_meta.mime_type,
+                size_bytes=len(raw),
+                width=info.width,
+                height=info.height,
+                source=info,
+                downscaled=False,
+            )
+        else:
+            key = image_downscale.model_image_key(file_meta.s3_key, copy.mime_type)
+            try:
+                await asyncio.to_thread(
+                    self._s3_client.put_object,
+                    Bucket=file_meta.s3_bucket,
+                    Key=key,
+                    Body=copy.data,
+                    ContentType=copy.mime_type,
+                )
+            except ClientError:
+                logger.error("Could not store an image's model copy", exc_info=True)
+                if len(raw) > self.max_file_size:
+                    raise FileUploadError("The image could not be prepared. Try again.")
+                return file_meta
+            record = image_downscale.model_image_record(
+                key=key,
+                mime_type=copy.mime_type,
+                size_bytes=len(copy.data),
+                width=copy.width,
+                height=copy.height,
+                source=info,
+                downscaled=True,
+            )
+        updated = await self.repository.update_file_model_image(
+            file_meta.user_id, file_meta.upload_id, record
+        )
+        file_meta.model_image = record
+        logger.info(
+            "Planned an image's model copy: %sx%s -> %sx%s, %s bytes",
+            info.width,
+            info.height,
+            record["width"],
+            record["height"],
+            record["sizeBytes"],
+        )
+        return updated or file_meta
 
     async def _after_upload_ready(self, file_meta: FileMetadata) -> None:
         """What every READY upload gets, however its bytes arrived.
@@ -1276,6 +1392,7 @@ class FileUploadService:
             or is_reference_document(file_meta)
             or file_meta.mime_type == "application/pdf"  # its _derived/thumb.png
             or self._has_preview_format(file_meta)  # its _derived/preview.json
+            or (file_meta.model_image or {}).get("downscaled")  # its _derived/model-image.*
         ):
             return
         from apis.shared.files.large_document import derived_prefix

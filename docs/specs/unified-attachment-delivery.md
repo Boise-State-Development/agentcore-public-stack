@@ -240,6 +240,48 @@ Rules that hold across the ladder:
 - A file is never dropped. Today's "skipped" and "send it in a follow-up" outcomes
   become `on_demand`.
 
+### 4.3.1 Images: the model copy (phase 4b, built)
+
+`apis/shared/files/image_downscale.py`, run by app-api when an image upload
+completes (presign, Drive import, folder refresh), before the row turns READY, in
+the `token` profile only. The `legacy` profile reads nothing and stores nothing,
+and keeps its 4 MB image limit.
+
+- **Target.** The largest size any curated model reads: Claude 4.7 and later,
+  2,576 px on the long edge and 4,784 visual tokens (one per 28 × 28 px patch;
+  Anthropic's vision docs, read 2026-11-10). Every other curated model reads less
+  and resizes on its side. An image larger than either limit is scaled, aspect
+  kept, to the largest size inside both. That is also under the 3,000 px limit
+  Anthropic applies to every image in a request with more than 20 image and
+  document blocks, so a message of 20 images never meets it.
+- **Bytes.** At most 3.7 MB raw, under Bedrock's 5 MB base64 limit (3.93 MB raw).
+  A JPEG stays JPEG (quality 85, then 75, 62, 50). Anything else stays PNG while it
+  fits, so a screenshot's text stays sharp, then becomes JPEG, or WebP when it has
+  transparency. If no quality fits, the size shrinks by 0.8 and the ladder repeats.
+- **Upright, first frame, no EXIF.** The EXIF orientation is applied and the EXIF
+  block dropped. The ICC profile is kept. An animation sends its first frame, as
+  Bedrock would.
+- **Deterministic.** Fixed resampling (Lanczos), fixed encoder settings, no
+  timestamps: the same bytes give the same copy, in a fresh process too (a test
+  pins this). Phase 4a's image handles restore from the stored copy, so a restored
+  turn sends the bytes the first turn sent.
+- **Where it lives.** `…/{upload_id}/_derived/model-image.{jpg,png,webp}`, with the
+  other sidecars: deleted with the file, and excluded from the attachments-KB
+  delete rule. The row's `modelImage` map records `{version, key, mimeType,
+  sizeBytes, width, height, sourceWidth, sourceHeight, downscaled}`. An image
+  already inside every limit is sent as uploaded, and `modelImage.key` is then the
+  original's (`downscaled: false`). `file_resolver.model_image_source(meta)` is the
+  one reader: the turn sends `modelImage.key` with its `mimeType`, and the
+  original for a row without one.
+- **Admission.** An image up to 20 MB is accepted. One that cannot be decoded is
+  still accepted when it is within the general 4 MB limit (sent as uploaded, as
+  today); over it, the upload is refused with a message naming the file. A source
+  over 100 MP that is not a JPEG is refused as undecodable (a JPEG is decoded at a
+  reduced scale, so a 108 MP phone photo is fine). Quota counts the uploaded bytes.
+- **Cost.** Nothing reaches the prompt beyond the image itself. Decoding runs on
+  app-api's upload path, never the turn path: about 0.2 s for a 28 MB 6000 × 4000
+  JPEG on a laptop.
+
 ### 4.4 Limits a user sees
 
 | Limit | Proposed | Today |
