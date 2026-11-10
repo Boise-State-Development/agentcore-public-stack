@@ -12,6 +12,12 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ### 🔒 Security
 
+- **Outbound requests from the AgentCore Runtime no longer carry the conversation's `session.id`.**
+  - **What leaked:** every invocation arrives with W3C baggage `session.id=<runtime session id>`, a stable hash of user and session. ADOT's propagators (`baggage,xray,tracecontext`) injected it into every outbound carrier: the HTTP headers of every httpx/httpx2 request, to third-party MCP servers and every site `fetch_url_content` opens, and, since mcp 2.x, every MCP request's `params._meta`. It carried no content.
+  - **The fix:** `install_outbound_trace_policy` (`apis/shared/observability/trace_propagation.py`), called once at Runtime startup, wraps the configured propagator so it injects without baggage and extracts as before.
+  - **What stays:** `traceparent` and `X-Amzn-Trace-Id` still go out, so an MCP server can join its logs to the turn's trace. `session.id` stays on our own spans for the AgentCore Observability console. botocore was never affected, because it uses its own X-Ray propagator.
+  - **Cost:** nothing on the turn path or in the prompt. No feature flag.
+  - **Test:** `tests/security/test_outbound_trace_context.py` pins it on the real MCP wire, headers and `_meta` both.
 - **The browser sign-in viewer has an origin of its own.** `live-view.html`, where a user types a password into the takeover browser, was served from the mcp-sandbox origin that also runs untrusted MCP App HTML, and the SPA framed it with no `sandbox` attribute, so an App frame on the same page shared its security principal. The viewer now has its own CloudFront distribution and bucket (`BrowserLiveViewConstruct`) on the distribution's default `*.cloudfront.net` domain: no certificate, no DNS record, no deploy variable. app-api returns the origin as `viewerOrigin` on `POST /sessions/{id}/browser/live-view` (new env `BROWSER_LIVE_VIEW_ORIGIN`, app-api only; the AgentCore Runtime's environment is unchanged), and the SPA frames and posts to that origin only, refusing one equal to the MCP App origin. The SPA's `frame-src` gains the new origin. The DCV SDK now lives at `infrastructure/assets/browser-live-view/dcvjs/`. +6 PlatformStack resources. No feature flag.
 
 ## [1.35.0] - 2026-11-08

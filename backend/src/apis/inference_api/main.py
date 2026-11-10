@@ -40,6 +40,15 @@ _derived_environment_report = hydrate_derived_environment()
 # after the .env load, so a local run can name its version there.
 from apis.shared.build_info import APP_VERSION  # noqa: E402
 
+# Before anything makes an outbound request: trace ids go out, the inbound
+# `session.id` baggage does not (it names the user's conversation, and reached
+# every third-party MCP server and fetched site). opentelemetry-instrument set
+# the global propagator before this module was imported, so wrapping it here
+# covers every caller. Startup only; nothing on the turn path.
+from apis.shared.observability.trace_propagation import install_outbound_trace_policy  # noqa: E402
+
+install_outbound_trace_policy()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
