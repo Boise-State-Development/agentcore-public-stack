@@ -12,7 +12,11 @@ import {
 import { NgTemplateOutlet } from '@angular/common';
 import { MarkdownComponent } from 'ngx-markdown';
 
-import { FileUploadService } from '../../../services/file-upload';
+import {
+  AttachmentPreviewsService,
+  FileUploadService,
+  type AttachmentPreview,
+} from '../../../services/file-upload';
 import {
   type AttachmentPreviewKind,
   attachmentKind,
@@ -32,12 +36,13 @@ const SNIPPET_CHARS = 600;
  * The inside of an attachment card's sheet: the file's first page, opening
  * lines, first rows or a type-shaped skeleton.
  *
- * Every source here exists today. In the composer a local file previews from
- * its own bytes (`FileReader` for an image, `File.slice` for text) before the
- * upload finishes; once the server has the file, a PDF's first page comes
- * from `GET /files/{id}/thumbnail` and text from `getTextSnippet`. Word,
- * spreadsheet and deck files draw a skeleton of their shape until the
- * prepare step writes a preview for them.
+ * In the composer a local file previews from its own bytes (`FileReader` for
+ * an image, `File.slice` for text) before the upload finishes. Once the
+ * server has the file, a PDF's first page comes from `GET /files/{id}/thumbnail`
+ * and text from `getTextSnippet`, and a Word file's opening lines, a
+ * spreadsheet's first rows or a deck's first slide from the prepare Lambda's
+ * preview (`AttachmentPreviewsService`, batched). A file uploaded before
+ * previews existed has none, and draws a skeleton of its type's shape.
  *
  * Display only: nothing here reaches a model call or the stored message.
  * Decorative, so hidden from assistive tech; the card's footer names the file.
@@ -131,6 +136,63 @@ const SNIPPET_CHARS = 600;
         </table>
         <ng-container [ngTemplateOutlet]="fade" />
       }
+      @case ('doc-real') {
+        @if (stored(); as p) {
+          @if (p.kind === 'doc') {
+            <div class="space-y-1 px-3 py-2 text-[9px]/[1.45] text-gray-700 dark:text-gray-300">
+              @for (line of p.lines; track $index; let first = $first) {
+                <p class="m-0 line-clamp-2" [class]="first ? 'text-[10.5px] font-semibold text-gray-900 dark:text-gray-100' : ''">{{ line }}</p>
+              }
+            </div>
+            <ng-container [ngTemplateOutlet]="fade" />
+          }
+        }
+      }
+      @case ('sheet-real') {
+        @if (stored(); as p) {
+          @if (p.kind === 'sheet') {
+            <div class="flex h-full flex-col">
+              <table class="w-full table-fixed border-collapse text-[9px] leading-4 text-gray-700 dark:text-gray-300">
+                <tbody>
+                  @for (row of p.rows; track $index; let first = $first) {
+                    <tr class="border-b border-gray-100 dark:border-white/5" [class.font-semibold]="first">
+                      @for (cell of row; track $index) {
+                        <td class="truncate px-1.5 py-0.5">{{ cell }}</td>
+                      }
+                    </tr>
+                  }
+                </tbody>
+              </table>
+              @if (p.sheets.length > 1) {
+                <div class="mt-auto flex gap-1 overflow-hidden border-t border-gray-100 px-1.5 py-0.5 text-[8.5px] text-gray-600 dark:border-white/5 dark:text-gray-400">
+                  @for (name of p.sheets; track $index; let first = $first) {
+                    <span class="truncate rounded-sm px-1" [class]="first ? 'bg-filetype-sheet-100 text-filetype-sheet-800 dark:bg-filetype-sheet-900/60 dark:text-filetype-sheet-200' : ''">{{ name }}</span>
+                  }
+                </div>
+              }
+            </div>
+          }
+        }
+      }
+      @case ('deck-real') {
+        @if (stored(); as p) {
+          @if (p.kind === 'deck') {
+            <div class="flex h-full items-center justify-center">
+              <div class="flex aspect-video h-[82%] flex-col overflow-hidden rounded-md border border-gray-200 bg-white p-2 shadow-sm dark:border-gray-600 dark:bg-gray-800">
+                <p class="m-0 truncate text-[9.5px] font-semibold text-gray-900 dark:text-gray-100">{{ p.title }}</p>
+                <ul class="m-0 mt-1 list-none space-y-0.5 p-0 text-[7.5px] leading-tight text-gray-700 dark:text-gray-300">
+                  @for (bullet of p.bullets; track $index) {
+                    <li class="flex items-start gap-1">
+                      <span class="mt-[3px] size-1 shrink-0 rounded-full bg-filetype-presentation-400/80"></span>
+                      <span class="truncate">{{ bullet }}</span>
+                    </li>
+                  }
+                </ul>
+              </div>
+            </div>
+          }
+        }
+      }
       @case ('sheet') {
         <div class="grid h-full grid-cols-4 grid-rows-6">
           @for (cell of sheetCells; track $index) {
@@ -194,6 +256,7 @@ export class AttachmentPreviewComponent {
   readonly preparing = input(false);
 
   private readonly fileUploadService = inject(FileUploadService);
+  private readonly previews = inject(AttachmentPreviewsService);
 
   protected readonly lineWidths = LINE_WIDTHS;
   protected readonly bulletWidths = BULLET_WIDTHS;
@@ -205,6 +268,8 @@ export class AttachmentPreviewComponent {
   protected readonly thumbnailUrl = signal<string | null>(null);
   protected readonly thumbnailReminted = signal(false);
   private readonly text = signal('');
+  /** The prepare Lambda's preview of a Word, spreadsheet or deck file. */
+  protected readonly stored = signal<AttachmentPreview | null>(null);
 
   private readonly kind = computed(() => attachmentKind(this.mimeType()).preview);
 
@@ -216,6 +281,8 @@ export class AttachmentPreviewComponent {
     if (kind === 'image') return 'image';
     if (kind === 'pdf') return this.thumbnailUrl() ? 'thumbnail' : 'lines';
     if (TEXT_PREVIEW_KINDS.has(kind)) return this.text().trim() ? kind : 'lines';
+    const stored = this.stored();
+    if (stored) return `${stored.kind}-real` as const;
     if (kind === 'deck' || kind === 'sheet') return kind;
     return 'lines';
   });
@@ -242,6 +309,15 @@ export class AttachmentPreviewComponent {
       return;
     }
     if (kind === 'pdf' && serverReady) void this.fetchThumbnail(uploadId);
+    if ((kind === 'doc' || kind === 'sheet' || kind === 'deck') && serverReady) {
+      // A file the composer still holds was just uploaded: its preview may
+      // still be being written, so the service asks again a few times.
+      void this.fetchStored(uploadId, file !== null);
+    }
+  }
+
+  private async fetchStored(uploadId: string, fresh: boolean): Promise<void> {
+    this.stored.set(await this.previews.preview(uploadId, { fresh }));
   }
 
   private readImage(file: File): void {

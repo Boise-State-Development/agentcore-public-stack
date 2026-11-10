@@ -8,7 +8,7 @@ Supports the pre-signed URL upload flow for S3.
 import os
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ConfigDict
 from apis.shared.timestamps import from_iso, to_iso
@@ -643,6 +643,22 @@ class ThumbnailResponse(BaseModel):
     cached: bool = Field(..., description="True if served from cache, False if newly rendered")
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+#: Most ids one ``GET /files/previews`` call answers: a message's attachment limit.
+MAX_PREVIEW_IDS = 20
+
+
+class AttachmentPreviewsResponse(BaseModel):
+    """Response for GET /api/files/previews.
+
+    ``previews`` maps each asked id to its card preview
+    (``apis/shared/files/attachment_preview.py``) or ``null``: not the
+    caller's, not ready, no preview format, or not written yet (a file
+    uploaded before previews existed, or one still being prepared).
+    """
+
+    previews: Dict[str, Optional[Dict[str, Any]]]
 
 
 class SearchStatusResponse(BaseModel):

@@ -125,9 +125,10 @@ class TestFactsOnly:
         assert facts["tokens"]["native"] == estimate_document_tokens(fmt, raw)
         assert facts["tokens"]["text"] >= 0
         # Small-file path: no sidecars, no shards, no preparation, no digest, no index.
-        # No sidecar, shard or text layer; a PDF also gets its first-page thumbnail.
-        thumb = ["user-files/u1/s1/up-1/_derived/thumb.png"] if fmt == "pdf" else []
-        assert _keys(s3) == sorted([f"user-files/u1/s1/up-1/{filename}", *thumb])
+        # No sidecar, shard or text layer; a PDF also gets its first-page
+        # thumbnail and a Word file its card preview.
+        card = {"pdf": ["_derived/thumb.png"], "docx": ["_derived/preview.json"]}.get(fmt, [])
+        assert _keys(s3) == sorted([f"user-files/u1/s1/up-1/{filename}", *(f"user-files/u1/s1/up-1/{k}" for k in card)])
         assert row.preparation is None and row.digest is None and row.kb_index is None
 
     async def test_pdf_text_tokens_count_the_page_texts(self, store):
