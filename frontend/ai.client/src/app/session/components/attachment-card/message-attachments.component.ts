@@ -34,7 +34,7 @@ type MessageItem =
  * A sent message's attachments, right-aligned under the bubble: documents,
  * images and Drive folders, in one layout.
  *
- * One item is one card; two are a pair; three to five are a two-column mosaic
+ * One item is one card, up to 24rem wide; two are a pair; three to five are a two-column mosaic
  * whose first card spans the gap the last row would leave, so rows are always
  * full. Six or more show the first three and a "+N more" tile that expands the
  * same mosaic in place; "Show fewer" folds it back. Below a container width of
@@ -50,8 +50,13 @@ type MessageItem =
   host: { class: 'block w-full @container' },
   template: `
     @if (items().length === 1) {
+      <!-- A lone card gets the browser card's width class (max-w-sm here), not
+           a mosaic cell's: with Files or Preview and a menu beside it, 18rem
+           left a folder's name cut to a dozen characters. -->
       <div class="flex justify-end">
-        <ng-container [ngTemplateOutlet]="card" [ngTemplateOutletContext]="{ $implicit: items()[0], fill: false }" />
+        <div class="w-full max-w-sm">
+          <ng-container [ngTemplateOutlet]="card" [ngTemplateOutletContext]="{ $implicit: items()[0], fill: true }" />
+        </div>
       </div>
     } @else {
       <ul
