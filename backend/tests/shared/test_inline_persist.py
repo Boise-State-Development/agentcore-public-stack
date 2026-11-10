@@ -25,6 +25,7 @@ from apis.shared.files.inline_persist import (
 from apis.shared.files.models import FileMetadata, FileStatus, UserFileQuota
 
 CSV = "text/csv"
+TXT = "text/plain"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
@@ -139,12 +140,27 @@ async def test_size_cap_is_per_class(monkeypatch):
     persisted, failures = await _persister(repo, s3).persist(
         user_id="u",
         session_id="s",
-        files=[_File("big.csv", CSV, two_mb), _File("deck.pptx", PPTX, two_mb)],
+        files=[_File("big.txt", TXT, two_mb), _File("deck.pptx", PPTX, two_mb)],
     )
     # 2 MB is over the 1 MB general cap but under the 3 MB presentation cap.
     assert [m.filename for m in persisted] == ["deck.pptx"]
-    assert [f.file.filename for f in failures] == ["big.csv"]
+    assert [f.file.filename for f in failures] == ["big.txt"]
     assert "1 MB limit" in failures[0].reason
+
+
+@pytest.mark.asyncio
+async def test_spreadsheets_get_the_spreadsheet_cap_not_the_general_one(monkeypatch):
+    # analyze_spreadsheet reads up to 25 MB; the 4 MB inline cap must not
+    # refuse a spreadsheet the tool accepts (unified-attachment-delivery §1.3).
+    monkeypatch.setenv("FILE_UPLOAD_MAX_SIZE_BYTES", str(1024 * 1024))
+    monkeypatch.delenv("FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET", raising=False)
+    repo, s3 = _FakeRepo(), _FakeS3()
+    two_mb = _b64(b"x" * (2 * 1024 * 1024))
+    persisted, failures = await _persister(repo, s3).persist(
+        user_id="u", session_id="s", files=[_File("big.csv", CSV, two_mb)]
+    )
+    assert [m.filename for m in persisted] == ["big.csv"]
+    assert failures == []
 
 
 @pytest.mark.asyncio

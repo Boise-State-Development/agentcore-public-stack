@@ -113,6 +113,18 @@ def is_tabular_file(filename: str, mime_type: str) -> bool:
     return False
 
 
+def spreadsheet_max_file_size() -> int:
+    """Upload cap for a tabular file (csv, xls, xlsx).
+
+    A spreadsheet never goes inline: it is read by ``analyze_spreadsheet`` in
+    Code Interpreter, whose own download cap is ``ANALYZE_MAX_FILE_SIZE_BYTES``
+    (25 MB). The 4 MB general cap is sized for an inline document block, so
+    applying it here refused files the tool would have read. Same default as
+    the tool, so admission is never the smaller of the two.
+    """
+    return int(os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET", 25 * 1024 * 1024))
+
+
 # =============================================================================
 # Presentation File Detection
 # =============================================================================
