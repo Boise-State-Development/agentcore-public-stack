@@ -337,3 +337,65 @@ def test_a_verdict_expires_so_an_upgraded_server_is_probed_again(fresh_verdicts,
         fresh_verdicts.remember_legacy_server(server.url)
         assert not fresh_verdicts.is_known_legacy_server(server.url)
         assert _connect(server) == "2026-07-28"
+
+
+# --- The server-sent event size cap --------------------------------------------
+
+# Bigger than mcp 2.x's 1 MiB default (`DEFAULT_MAX_SSE_EVENT_SIZE`), as GitHub's
+# `ui://github-mcp-server/issue-write` App HTML is.
+_BIG = 3 * 1024 * 1024
+_BIG_URI = "ui://flaky/big-form"
+
+
+def _register_big_payloads(server: Any) -> None:
+    @server.resource(_BIG_URI, mime_type="text/html;profile=mcp-app")
+    def big_form() -> str:
+        return "<html>" + "x" * _BIG + "</html>"
+
+    @server.tool()
+    def big_read() -> str:
+        return "y" * _BIG
+
+
+@contextlib.contextmanager
+def _sse_server():
+    """A server that answers each request as a server-sent event.
+
+    The 2.x server answers a 2026-07-28 client in JSON, which has no event cap,
+    so the probe is refused and the client falls back to `initialize`, as on a
+    legacy server; then every answer is SSE, as GitHub's are.
+    """
+    with FlakyMCPServer(fail_calls=False, setup=_register_big_payloads, json_response=False) as server:
+        server.discover_reply = "reject"
+        yield server
+
+
+def test_a_ui_resource_larger_than_1_mib_reads_over_sse():
+    """An App's HTML is one SSE event; 2.x's 1 MiB default refused GitHub's."""
+    with _sse_server() as server:
+        with _stopping(server.client()) as client:
+            client.start()
+            result = client.read_resource_sync(_BIG_URI)
+        assert len(result.contents[0].text) > _BIG
+
+
+def test_a_tool_result_larger_than_1_mib_reads_over_sse():
+    with _sse_server() as server:
+        with _stopping(server.client()) as client:
+            client.start()
+            result = client.call_tool_sync("t-1", "big_read", {})
+        assert result["status"] == "success"
+        assert len(result["content"][0]["text"]) >= _BIG
+
+
+def test_the_sdk_default_refuses_an_event_larger_than_1_mib():
+    """The premise: without our transport's cap the read fails."""
+    from mcp.client.streamable_http import streamable_http_client
+
+    with _sse_server() as server:
+        client = MCPClient(lambda: streamable_http_client(server.url))
+        with _stopping(client):
+            client.start()
+            with pytest.raises(Exception) as caught:
+                client.read_resource_sync(_BIG_URI)
+        assert "byte limit" in str(caught.value)

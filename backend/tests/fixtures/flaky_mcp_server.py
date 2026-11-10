@@ -34,7 +34,9 @@ class FlakyMCPServer:
     `setup(server)` may register more tools before the app is built.
     """
 
-    def __init__(self, fail_calls: bool = True, setup=None, **server_kwargs) -> None:
+    def __init__(
+        self, fail_calls: bool = True, setup=None, json_response: bool = True, **server_kwargs
+    ) -> None:
         import uvicorn
         from mcp.server.mcpserver import MCPServer
 
@@ -61,7 +63,9 @@ class FlakyMCPServer:
         if setup is not None:
             setup(server)
 
-        inner = server.streamable_http_app(stateless_http=True, json_response=True)
+        # `json_response=False` answers each request as a server-sent event, as
+        # GitHub's server does, so the transport's SSE event-size cap applies.
+        inner = server.streamable_http_app(stateless_http=True, json_response=json_response)
 
         async def unavailable(send, request_id=None):
             if self.down_message is None:
@@ -146,7 +150,10 @@ class FlakyMCPServer:
                 self.requests.append(parsed)
 
             async def replay():
-                return next(replay_iter, {"type": "http.disconnect"})
+                # After the body, defer to the real channel: an SSE response
+                # watches it for a disconnect, and a made-up one ends the stream.
+                replayed = next(replay_iter, None)
+                return replayed if replayed is not None else await receive()
 
             if self.down:
                 request_id = parsed.get("id") if isinstance(parsed, dict) else None
