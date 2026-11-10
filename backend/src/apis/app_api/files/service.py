@@ -40,6 +40,8 @@ from apis.shared.files.models import (
     is_allowed_mime_type,
     is_presentation_file,
     is_reference_document,
+    is_tabular_file,
+    spreadsheet_max_file_size as _spreadsheet_max_file_size,
     ALLOWED_EXTENSIONS,
     ALLOWED_MIME_TYPES,
     LARGE_DOCUMENT_MAX_BYTES,
@@ -160,6 +162,7 @@ class FileUploadService:
         bucket_name: Optional[str] = None,
         max_file_size: Optional[int] = None,
         presentation_max_file_size: Optional[int] = None,
+        spreadsheet_max_file_size: Optional[int] = None,
         max_files_per_message: Optional[int] = None,
         user_quota_bytes: Optional[int] = None,
         thumbnail_renderer: Optional[ThumbnailRenderer] = None,
@@ -210,6 +213,12 @@ class FileUploadService:
                 "FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION", 25 * 1024 * 1024  # 25MB
             )
         )
+        # Spreadsheets never go inline either: ``analyze_spreadsheet`` reads
+        # them in Code Interpreter up to its own 25MB cap, so the general 4MB
+        # refused files the tool accepts (unified-attachment-delivery §1.3).
+        self.spreadsheet_max_file_size = (
+            spreadsheet_max_file_size or _spreadsheet_max_file_size()
+        )
         # Single source of truth is the shared constant (the inference API
         # enforces it per message; see ``_apply_message_file_cap``). Kept on
         # the service so callers can read the effective limit.
@@ -225,7 +234,7 @@ class FileUploadService:
     def max_size_for(self, filename: str, mime_type: str) -> int:
         """Return the upload size cap that applies to this file.
 
-        Presentations get their own (larger) cap. With
+        Presentations and spreadsheets get their own (larger) caps. With
         ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED`` on, a document-class file (pdf,
         docx, txt, md, html) gets ``LARGE_DOCUMENT_MAX_BYTES``: one over the
         inline limit is attached by reference (``is_reference_document``) and
@@ -239,6 +248,8 @@ class FileUploadService:
 
         if is_presentation_file(filename, mime_type):
             return self.presentation_max_file_size
+        if is_tabular_file(filename, mime_type):
+            return self.spreadsheet_max_file_size
         if large_document_attachments_enabled() and is_document_class(mime_type, filename):
             return LARGE_DOCUMENT_MAX_BYTES
         return self.max_file_size
@@ -437,7 +448,11 @@ class FileUploadService:
         """
         from apis.shared.feature_flags import large_document_attachments_enabled
 
-        caps = [self.max_file_size, self.presentation_max_file_size]
+        caps = [
+            self.max_file_size,
+            self.presentation_max_file_size,
+            self.spreadsheet_max_file_size,
+        ]
         if large_document_attachments_enabled():
             caps.append(LARGE_DOCUMENT_MAX_BYTES)
         return max(caps)

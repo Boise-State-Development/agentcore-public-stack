@@ -263,6 +263,19 @@ class AgentFactory:
                     limit=CONVERSE_MAX_NON_PDF_DOCUMENTS if capped else UNCAPPED,
                     as_text=as_text,
                 )
+        else:
+            # Every other provider is an OpenAI-shaped or Gemini Strands model
+            # (OpenAIModel, OpenAIResponsesModel, GeminiModel). Strands formats
+            # a document block for them as a base64 file part whose MIME type
+            # comes from `mimetypes` on the format: docx has no entry there, so
+            # it goes as application/octet-stream, and Chat Completions' file
+            # part reads PDFs only. Text is the one shape all of them accept,
+            # so every non-PDF document they get is sent as its text, the
+            # projection's documents-as-text mode. There is no five-document
+            # limit off Converse, so nothing is capped. PDFs and images keep
+            # their native parts, which each of these formatters maps (Strands
+            # 1.63.0: `image_url`, `input_image`, `inline_data`).
+            model = converse_document_cap(model, limit=UNCAPPED, as_text=True)
 
         # Reasoning blocks a model would reject are dropped by Strands itself
         # since 1.61.1 (#5166), in `BedrockModel._format_bedrock_messages` via

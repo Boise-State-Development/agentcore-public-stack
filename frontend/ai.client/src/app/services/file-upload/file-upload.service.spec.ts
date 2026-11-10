@@ -14,6 +14,7 @@ import {
   QuotaExceededError,
   MAX_FILE_SIZE_BYTES,
   PPTX_MAX_FILE_SIZE_BYTES,
+  SPREADSHEET_MAX_FILE_SIZE_BYTES,
   LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES,
   maxFileSizeFor,
   isReferenceDocument,
@@ -206,6 +207,18 @@ describe('FileUploadService', () => {
         expect(() => service.validateFile(file)).toThrow(FileTooLargeError);
       });
 
+      // analyze_spreadsheet reads up to 25 MB; the 4 MB inline cap refused
+      // spreadsheets the tool accepts (unified-attachment-delivery §1.3).
+      it('should allow a 10 MB spreadsheet and cap it at the spreadsheet limit', () => {
+        const xlsx = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        expect(SPREADSHEET_MAX_FILE_SIZE_BYTES).toBe(25 * 1024 * 1024);
+        expect(() => service.validateFile(sizedFile('big.xlsx', xlsx, 10 * 1024 * 1024))).not.toThrow();
+        expect(() => service.validateFile(sizedFile('big.csv', '', 10 * 1024 * 1024))).not.toThrow();
+        expect(() =>
+          service.validateFile(sizedFile('huge.xlsx', xlsx, SPREADSHEET_MAX_FILE_SIZE_BYTES + 1))
+        ).toThrow('Maximum: 25 MB');
+      });
+
       it('should throw InvalidFileTypeError for invalid MIME type', () => {
         const file = new File(['content'], 'test.exe', { type: 'application/exe' });
         expect(() => service.validateFile(file)).toThrow(InvalidFileTypeError);
@@ -349,6 +362,31 @@ describe('FileUploadService', () => {
           } finally {
             vi.unstubAllGlobals();
           }
+        });
+      });
+
+      describe('server size rejection', () => {
+        it('reports the file\'s real size and the limit the server names', async () => {
+          // Under the client cap, so the server is the one that refuses it.
+          const file = sizedFile('deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 3 * 1024 * 1024);
+          const upload = service.uploadFile('session1', file);
+          const presign = await vi.waitFor(() => httpMock.expectOne(r => r.url.endsWith('/presign')));
+          presign.flush({ detail: 'File exceeds 2MB limit' }, { status: 400, statusText: 'Bad Request' });
+
+          const err = await upload.catch(e => e);
+          expect(err).toBeInstanceOf(FileTooLargeError);
+          expect(err.message).toBe('File too large: 3 MB. Maximum: 2 MB');
+          expect(err.message).not.toContain('0 B');
+        });
+
+        it('falls back to the file\'s class limit when the message names none', async () => {
+          const file = sizedFile('deck.pptx', '', 3 * 1024 * 1024);
+          const upload = service.uploadFile('session1', file);
+          const presign = await vi.waitFor(() => httpMock.expectOne(r => r.url.endsWith('/presign')));
+          presign.flush({ detail: 'File too large' }, { status: 400, statusText: 'Bad Request' });
+
+          const err = await upload.catch(e => e);
+          expect(err.message).toBe('File too large: 3 MB. Maximum: 25 MB');
         });
       });
 
@@ -588,7 +626,7 @@ describe('FileUploadService', () => {
 
         it('should keep spreadsheets, images and decks on their own caps when the flag is on', () => {
           expect(maxFileSizeFor(new File(['c'], 'data.csv', { type: 'text/csv' }), FLAG_ON)).toBe(
-            MAX_FILE_SIZE_BYTES
+            SPREADSHEET_MAX_FILE_SIZE_BYTES
           );
           expect(
             maxFileSizeFor(
@@ -597,7 +635,7 @@ describe('FileUploadService', () => {
               }),
               FLAG_ON
             )
-          ).toBe(MAX_FILE_SIZE_BYTES);
+          ).toBe(SPREADSHEET_MAX_FILE_SIZE_BYTES);
           expect(maxFileSizeFor(new File(['c'], 'photo.png', { type: 'image/png' }), FLAG_ON)).toBe(
             MAX_FILE_SIZE_BYTES
           );

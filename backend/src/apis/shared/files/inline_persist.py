@@ -45,6 +45,8 @@ from apis.shared.files.models import (
     FileStatus,
     is_allowed_mime_type,
     is_presentation_file,
+    is_tabular_file,
+    spreadsheet_max_file_size,
 )
 from apis.shared.files.repository import FileUploadRepository, get_file_upload_repository
 
@@ -76,6 +78,8 @@ class PersistFailure:
 def _max_size_for(filename: str, mime_type: str) -> int:
     if is_presentation_file(filename, mime_type):
         return int(os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION", 25 * 1024 * 1024))
+    if is_tabular_file(filename, mime_type):
+        return spreadsheet_max_file_size()
     return int(os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES", 4 * 1024 * 1024))
 
 

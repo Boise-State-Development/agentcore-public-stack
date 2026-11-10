@@ -68,8 +68,8 @@ class TestMaxSizeFor:
     @pytest.mark.parametrize(
         "filename,mime,cap",
         [
-            ("sales.xlsx", XLSX, GENERAL_CAP),
-            ("data.csv", "text/csv", GENERAL_CAP),
+            ("sales.xlsx", XLSX, 25 * MB),
+            ("data.csv", "text/csv", 25 * MB),
             ("photo.png", "image/png", GENERAL_CAP),
             ("deck.pptx", PPTX, PRESENTATION_CAP),
         ],

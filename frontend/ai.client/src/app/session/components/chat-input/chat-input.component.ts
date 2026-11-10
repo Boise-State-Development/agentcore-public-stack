@@ -2874,12 +2874,14 @@ export class ChatInputComponent {
       return;
     }
 
-    // Check file count limit
-    const currentCount = this.pendingUploads().length;
-    if (currentCount + newFiles.length > MAX_FILES_PER_MESSAGE) {
+    // Check file count limit. Counts what `remainingFileSlots` counts
+    // (restored, importing and folder attachments too), so a drop and the
+    // composer's other add paths refuse the same sixth attachment.
+    const remaining = this.remainingFileSlots();
+    if (newFiles.length > remaining) {
       this.toastService.warning(
         'File Limit',
-        `Maximum ${MAX_FILES_PER_MESSAGE} files per message. You have ${currentCount} already attached.`
+        `Maximum ${MAX_FILES_PER_MESSAGE} files per message. You can add ${remaining} more.`
       );
       return;
     }
@@ -2909,7 +2911,7 @@ export class ChatInputComponent {
       if (file.size > sizeLimit) {
         this.toastService.error(
           'File Too Large',
-          `${file.name} exceeds maximum size of ${formatBytes(sizeLimit)}.`
+          `${file.name} is ${formatBytes(file.size)}. The maximum for this file type is ${formatBytes(sizeLimit)}.`
         );
         continue;
       }
