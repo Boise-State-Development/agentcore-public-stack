@@ -259,8 +259,9 @@ and keeps its 4 MB image limit.
   fits, so a screenshot's text stays sharp, then becomes JPEG, or WebP when it has
   transparency. If no quality fits, the size shrinks by 0.8 and the ladder repeats.
 - **A compact copy beside it.** Claude's standard tier (every model before 4.7):
-  1,568 px and 1,568 visual tokens, at most 480 KB. Twenty of them are 9.6 MB, so
-  a message's images always fit a 10 MB combined budget and far under the 32 MB
+  1,568 px and 1,568 visual tokens, at most 340 KB. Twenty of them are 6.8 MB, so
+  a message's images always fit the 7.0 MB combined budget that protects the
+  AgentCore Memory event, and far under the 32 MB
   request. The planner sends it when the high copy does not fit (§4.4.1). It is
   made from the uploaded bytes, never from the high copy, so it too is a pure
   function of the input.

@@ -26,7 +26,7 @@ bytes. (Byte-identity holds for one Pillow and codec build; the image pin in
 ``pyproject.toml`` is what keeps it across deploys.)
 
 **Two copies.** ``high`` (above) is what a turn sends by default; ``compact``
-is Claude's standard tier (1,568 px, 1,568 tokens) under 480 KB, which the
+is Claude's standard tier (1,568 px, 1,568 tokens) under 340 KB, which the
 planner sends when the high copy does not fit the message's budget. Twenty
 compact copies fit any budget, so an image is never dropped for its bytes.
 
@@ -56,11 +56,12 @@ MODEL_IMAGE_MAX_BYTES = 3_700_000
 
 #: The compact copy: Claude's standard tier (every model before 4.7 reads at
 #: most 1,568 px and 1,568 visual tokens), under a byte cap small enough that a
-#: message's 20 images always fit the planner's combined budget (20 x 480 KB is
-#: under the 10 MB AgentCore Memory event, and far under the 32 MB request).
+#: message's 20 images always fit the planner's combined budget (20 x 340 KB is
+#: 6.8 MB, under the 7.0 MB that protects the 10 MB AgentCore Memory event, and
+#: far under the 32 MB request).
 COMPACT_LONG_EDGE_PX = 1_568
 COMPACT_VISUAL_TOKENS = 1_568
-COMPACT_IMAGE_MAX_BYTES = 480_000
+COMPACT_IMAGE_MAX_BYTES = 340_000
 
 #: Refuse to decode anything larger: a decompression bomb, or a panorama app-api
 #: cannot hold. A JPEG is decoded at a reduced scale (``draft``) before this

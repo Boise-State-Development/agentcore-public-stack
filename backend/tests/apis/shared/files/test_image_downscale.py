@@ -173,7 +173,7 @@ class TestCompactCopy:
         assert max(compact.width, compact.height) <= d.COMPACT_LONG_EDGE_PX
         assert d.visual_tokens(compact.width, compact.height) <= d.COMPACT_VISUAL_TOKENS
         assert len(compact.data) <= d.COMPACT_IMAGE_MAX_BYTES
-        assert 20 * d.COMPACT_IMAGE_MAX_BYTES < 10 * 1024 * 1024
+        assert 20 * d.COMPACT_IMAGE_MAX_BYTES < 7_000_000
 
     def test_worst_case_noise_png_with_alpha_still_fits(self):
         raw = _encode(_noise(2000, 2000, "RGBA"), "PNG")
