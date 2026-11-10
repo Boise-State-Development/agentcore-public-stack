@@ -143,11 +143,18 @@ def _json_tokens(value: Any) -> int:
         return 0
 
 
+def _scaled(tokens: int, documents: "DocumentIndex") -> int:
+    """Characters / 4 at the conversation model's tokenizer factor, so text
+    weighs against a document's page images as the model bills them."""
+    factor = documents.text_factor
+    return tokens if factor == 1.0 else int(round(tokens * factor))
+
+
 def _block_tokens(block: Any, documents: "DocumentIndex") -> int:
     if not isinstance(block, dict):
-        return _text_tokens(block) if isinstance(block, str) else 0
+        return _scaled(_text_tokens(block), documents) if isinstance(block, str) else 0
     if "text" in block:
-        return _text_tokens(block.get("text"))
+        return _scaled(_text_tokens(block.get("text")), documents)
     if "image" in block:
         return IMAGE_TOKEN_ESTIMATE
     if "document" in block:
@@ -156,22 +163,22 @@ def _block_tokens(block: Any, documents: "DocumentIndex") -> int:
         return documents.block_tokens(block.get("document"))
     if "toolUse" in block:
         tool_use = block.get("toolUse") or {}
-        return _json_tokens(tool_use.get("input")) + 8
+        return _scaled(_json_tokens(tool_use.get("input")), documents) + 8
     if "toolResult" in block:
         result = block.get("toolResult") or {}
         content = result.get("content") if isinstance(result, dict) else None
         if isinstance(content, list):
             return _tool_result_tokens(content, documents) + 8
-        return _json_tokens(content) + 8
+        return _scaled(_json_tokens(content), documents) + 8
     if "json" in block:
-        return _json_tokens(block.get("json"))
+        return _scaled(_json_tokens(block.get("json")), documents)
     if "reasoningContent" in block:
         rc = block.get("reasoningContent") or {}
         text = rc.get("reasoningText", {}) if isinstance(rc, dict) else {}
-        return _text_tokens(text.get("text") if isinstance(text, dict) else None)
+        return _scaled(_text_tokens(text.get("text") if isinstance(text, dict) else None), documents)
     if "cachePoint" in block:
         return 0
-    return _json_tokens(block)
+    return _scaled(_json_tokens(block), documents)
 
 
 def _tool_result_tokens(content: List[Any], documents: "DocumentIndex") -> int:
@@ -191,14 +198,17 @@ def estimate_message_tokens(message: Dict[str, Any], documents: Optional["Docume
     """Heuristic token estimate for one Converse message (never raises).
 
     ``documents`` holds the row facts the conversation's documents are
-    estimated from; without it every document falls back to its bytes.
+    estimated from; without it every document falls back to its bytes. Its
+    ``model_id`` prices text at that model's tokenizer factor, the planner's
+    (``tokenizer_costs``): a document's page images do not scale with the
+    tokenizer, so text and images are weighed as the model bills them.
     """
     if not isinstance(message, dict):
         return 0
     index = documents if documents is not None else EMPTY_INDEX
     content = message.get("content")
     if isinstance(content, str):
-        return _text_tokens(content) + MESSAGE_OVERHEAD_TOKENS
+        return _scaled(_text_tokens(content), index) + MESSAGE_OVERHEAD_TOKENS
     if not isinstance(content, list):
         return MESSAGE_OVERHEAD_TOKENS
     return sum(_block_tokens(block, index) for block in content) + MESSAGE_OVERHEAD_TOKENS

@@ -94,6 +94,14 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from apis.shared.files.document_read import document_format_for, is_document_class
+from apis.shared.files.tokenizer_costs import (  # noqa: F401 - re-exported
+    DEFAULT_TOKENIZER_FACTOR,
+    LEGACY_TOKENIZER_FACTOR,
+    PDF_PAGE_IMAGE_TOKENS,
+    native_pdf_cost,
+    text_cost,
+    tokenizer_factor,
+)
 from apis.shared.files.models import (
     DELIVERY_OVERRIDE_VALUES,
     INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
@@ -185,22 +193,8 @@ PROFILE_TOKEN = "token"
 # Per-model document costs (§2.1, §5.2)
 # ---------------------------------------------------------------------------
 
-#: Input tokens one PDF page's image costs, on every model probed: 15,624 to
-#: 15,639 for ten near-empty pages on Haiku 4.5, Haiku 5.5 and Sonnet 4.6, and
-#: 3,159 for two on Opus 4.7 and Opus 5.5 (dev, 2026-11-10).
-PDF_PAGE_IMAGE_TOKENS = 1_565
-
-#: Tokens the model bills per ``tokens.text`` (characters / 4) of extracted
-#: text, by model id. Measured on dev on 2026-11-10 with the 32-page
-#: ``delivery_report_30k.pdf`` fixture (``tokens.text`` 30,779): its text alone
-#: was 29,298 tokens on Haiku 4.5 and Sonnet 4.6 and 43,225 on Haiku 5.5, Opus
-#: 4.7 and Opus 5.5; the PDF was its page images plus that text to within 0.1%.
-LEGACY_TOKENIZER_FACTOR = 0.95
-#: The newer tokenizer, and the default for any model not listed: it
-#: over-counts a legacy tokenizer by ~45%, which only sends a file
-#: ``on_demand`` sooner (the cheaper mode, equal on quality in phase 0).
-DEFAULT_TOKENIZER_FACTOR = 1.40
-_LEGACY_TOKENIZER_MODELS = ("claude-haiku-4-5", "claude-sonnet-4-6")
+# The page-image cost and tokenizer factors live in ``tokenizer_costs`` so
+# compaction's estimate reads the same numbers (§2.1); re-exported here.
 
 #: PDF pages Bedrock accepts in one block, by model id (the phase 0 probe,
 #: #1961): 100 on a 200k model, 600 on a 1M one. An unlisted model gets 600
@@ -632,15 +626,6 @@ def _estimate_tokens(facts: FileFacts, cls: str) -> int:
     return byte_tokens
 
 
-def tokenizer_factor(model_id: Optional[str]) -> float:
-    """Tokens the model bills per ``tokens.text``: :data:`LEGACY_TOKENIZER_FACTOR`
-    for the listed models, :data:`DEFAULT_TOKENIZER_FACTOR` for every other."""
-    mid = (model_id or "").lower()
-    if any(key in mid for key in _LEGACY_TOKENIZER_MODELS):
-        return LEGACY_TOKENIZER_FACTOR
-    return DEFAULT_TOKENIZER_FACTOR
-
-
 def pdf_page_limit(model: ModelFacts) -> int:
     """Pages one native PDF block may have on this model (§2.1)."""
     mid = (model.model_id or "").lower()
@@ -671,12 +656,9 @@ def document_cost(facts: FileFacts, cls: str, mode: str, model: ModelFacts) -> i
         return IMAGE_TOKENS
     factor = tokenizer_factor(model.model_id)
     if facts.text_tokens is not None:
-        text = int(math.ceil(max(0, int(facts.text_tokens)) * factor))
         if cls == CLASS_PDF and mode == MODE_NATIVE:
-            pages = facts.page_count
-            images = int(pages) * PDF_PAGE_IMAGE_TOKENS if pages else int(facts.native_tokens or 0)
-            return text + images
-        return text
+            return native_pdf_cost(facts.text_tokens, facts.page_count, facts.native_tokens or 0, factor)
+        return text_cost(facts.text_tokens, factor)
     return int(math.ceil(_estimate_tokens(facts, cls) * factor))
 
 

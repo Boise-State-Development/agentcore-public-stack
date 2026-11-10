@@ -23,6 +23,9 @@ A block with no facts falls back to ``estimate_document_tokens`` on its bytes
 (pages x ``PDF_PAGE_TOKEN_ESTIMATE`` for a PDF, bytes/4 otherwise), memoized by
 the bytes so a held document is parsed once per process.
 
+The index carries the conversation's model id, so a matched block is priced
+at that model's tokenizer (text) and page-image cost, the planner's numbers.
+
 Estimates only: nothing here changes a message.
 """
 
@@ -31,6 +34,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 from apis.shared.files.document_estimate import DocumentTokenFacts, document_tokens
+from apis.shared.files.tokenizer_costs import tokenizer_factor
 
 #: ``estimate_document_tokens`` by ``(format, hash of the bytes)``.
 _FALLBACK: Dict[Tuple[str, int], int] = {}
@@ -73,9 +77,23 @@ def slice_reference(tool_result_content: Any) -> Tuple[Optional[str], Optional[i
 class DocumentIndex:
     """The row facts a conversation's document blocks are estimated from."""
 
-    def __init__(self, facts: Optional[Iterable[DocumentTokenFacts]] = None) -> None:
+    def __init__(
+        self,
+        facts: Optional[Iterable[DocumentTokenFacts]] = None,
+        *,
+        model_id: Optional[str] = None,
+    ) -> None:
         self._facts = list(facts or ())
         self._by_id = {f.upload_id: f for f in self._facts}
+        #: The model the conversation is sent to; prices text at its tokenizer
+        #: (``tokenizer_costs``). ``None``: the facts' own count, factor 1.
+        self.model_id = model_id or None
+
+    @property
+    def text_factor(self) -> float:
+        """Tokens the model bills per characters / 4 of text: the planner's
+        factor for :attr:`model_id`, or 1.0 when the model is not known."""
+        return tokenizer_factor(self.model_id) if self.model_id else 1.0
 
     def __bool__(self) -> bool:
         return bool(self._facts)
@@ -116,7 +134,7 @@ class DocumentIndex:
                 facts = self.for_attached(str(document.get("name", "")), fmt, len(raw))
                 pages_covered = None
             if facts is not None:
-                return document_tokens(fmt, raw, facts, pages_covered=pages_covered)
+                return document_tokens(fmt, raw, facts, pages_covered=pages_covered, model_id=self.model_id)
             return _fallback_tokens(fmt, raw)
         except Exception:  # noqa: BLE001 - estimator must never raise
             return 0
