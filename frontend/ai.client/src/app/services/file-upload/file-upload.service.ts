@@ -1,6 +1,7 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, retry, throwError, timer } from 'rxjs';
+import { GATEWAY_RETRY_DELAY_MS } from '../../auth/retry.interceptor';
 import { ConfigService } from '../config.service';
 import { type AttachmentLimits, AttachmentLimitsService } from './attachment-limits';
 /**
@@ -400,6 +401,32 @@ const EXTENSION_TO_MIME_TYPE: Record<string, string> = {
 };
 
 /**
+ * Gateway statuses on which a presign is sent once more: 502 (CloudFront or
+ * the ALB could not use its connection to the origin) and 503 (no healthy
+ * target). Both mean the request almost certainly never reached app-api.
+ * 504 is left out because app-api may have handled the request before the
+ * gateway gave up.
+ */
+const PRESIGN_RETRY_STATUSES = new Set([502, 503]);
+
+/**
+ * Wait before the one presign retry, or rethrow the error if it isn't a
+ * retryable gateway error.
+ *
+ * `gatewayRetryInterceptor` retries only GETs, because a repeated POST can do
+ * the work twice. Presign is an exception: the worst a duplicate can do is
+ * leave an extra PENDING file row that never completes and expires by its TTL.
+ * Dropping the file is worse, because the composer fires one presign per file,
+ * up to 20 at once, and one gateway blip used to cost the user that file and
+ * an "Upload Failed" toast.
+ */
+export function presignRetryDelay(err: unknown) {
+  return err instanceof HttpErrorResponse && PRESIGN_RETRY_STATUSES.has(err.status)
+    ? timer(GATEWAY_RETRY_DELAY_MS)
+    : throwError(() => err);
+}
+
+/**
  * Resolve the MIME type to send with a presign request.
  *
  * Browsers do not always populate `File.type` — an OS with no handler
@@ -563,7 +590,9 @@ export class FileUploadService {
     let presignResponse: PresignResponse;
     try {
       presignResponse = await firstValueFrom(
-        this.http.post<PresignResponse>(`${this.baseUrl()}/presign`, presignRequest)
+        this.http.post<PresignResponse>(`${this.baseUrl()}/presign`, presignRequest).pipe(
+          retry({ count: 1, delay: (err: unknown) => presignRetryDelay(err) }),
+        )
       );
     } catch (err) {
       throw this.handleApiError(err, 'Failed to get upload URL', presignRequest);
