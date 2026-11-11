@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from agents.main_agent.core.model_config import KNOWN_CANONICAL_PARAMS
+from agents.main_agent.multimodal.image_handler import ImageHandler
 from agents.main_agent.session.session_factory import SessionFactory
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
@@ -47,9 +48,14 @@ from apis.shared.feature_flags import (
     skills_enabled,
 )
 from apis.shared.files.document_read import is_document_class
-from apis.shared.files.file_resolver import get_file_resolver
+from apis.shared.files.file_resolver import get_file_resolver, model_image_source
 from apis.shared.files.inline_persist import get_inline_attachment_persister
-from apis.shared.files.attachment_handle import remember_session_uploads
+from apis.shared.files.attachment_handle import (
+    ImageRef,
+    image_fingerprint_b64,
+    remember_session_uploads,
+    remember_turn_images,
+)
 from apis.shared.files.document_estimate import remember_session_documents
 from apis.shared.files.attachment_plan import (
     CLASS_PRESENTATION,
@@ -66,6 +72,8 @@ from apis.shared.files.attachment_plan import (
     REASON_REQUEST_PAGE_LIMIT,
     REASON_WITHIN_BUDGET,
     VARIANT_COMPACT,
+    VARIANT_HIGH,
+    persist_document_handles,
     REASON_PROVIDER_NEEDS_TEXT,
     REASON_OVER_BUDGET,
     REASON_OVER_BUDGET_REFERENCE,
@@ -2856,6 +2864,9 @@ class TurnAttachments:
     # ``FileContent`` built from its high copy: ``(base64, mime_type)``. Read
     # only when the plan sends that image's ``compact`` variant.
     compact_images: dict = field(default_factory=dict)
+    # The ``FileContent`` objects ``_send_compact_images`` swapped to their
+    # compact copy, so the persisted handle names the copy actually sent.
+    compact_image_ids: set = field(default_factory=set)
 
     @property
     def max_files_per_message(self) -> int:
@@ -3432,7 +3443,7 @@ def _carry_out_token_plan(attachments: TurnAttachments, turn_model: "TurnModel")
     _plan_for_model(attachments, turn_model)
     if attachments.plan is None or not attachments.files_to_send:
         return
-    _send_compact_images(attachments)
+    attachments.compact_image_ids = _send_compact_images(attachments)
     # Every file the model's plan sent on demand that the byte pass had kept
     # inline: over the document budget, a PDF judged by its pages before its
     # facts (``facts_pending``), or one past the request's native pages.
@@ -3459,15 +3470,17 @@ def _carry_out_token_plan(attachments: TurnAttachments, turn_model: "TurnModel")
     logger.info("token plan: %d attachment(s) sent on demand", len(moved))
 
 
-def _send_compact_images(attachments: TurnAttachments) -> None:
+def _send_compact_images(attachments: TurnAttachments) -> set:
     """Swap in the compact copy of every image the plan sends as ``compact``.
 
     The resolver fetched both stored copies concurrently, so this reads
     nothing. A ``FileContent`` whose compact copy is missing keeps its high
-    copy, which the plan's byte pass already counted. Pure, in place.
+    copy, which the plan's byte pass already counted. In place; returns the
+    ids of the ``FileContent`` objects now holding a compact copy.
     """
+    swapped_ids: set = set()
     if not attachments.compact_images or attachments.plan is None:
-        return
+        return swapped_ids
     variants = {e.index: e.variant for e in attachments.plan.entries}
     swapped = 0
     files = list(attachments.files_to_send)
@@ -3481,10 +3494,38 @@ def _send_compact_images(attachments: TurnAttachments) -> None:
         if row is not None:
             attachments.upload_rows[id(replacement)] = row
         files[k] = replacement
+        swapped_ids.add(id(replacement))
         swapped += 1
     if swapped:
         attachments.files_to_send = files
         logger.info("token plan: %d image(s) sent as their compact copy", swapped)
+    return swapped_ids
+
+
+def _remember_sent_images(attachments: TurnAttachments, user_id: Optional[str], session_id: Optional[str]) -> None:
+    """Name the stored copy each inline image is sent from, so the message
+    persisted to Memory carries a handle in place of its bytes
+    (unified-attachment-delivery §6.2). Reads nothing and decodes only each
+    image's first and last 64 base64 characters. Never raises.
+    """
+    try:
+        if not user_id or not session_id or not persist_document_handles():
+            return
+        refs = []
+        for file in attachments.files_to_send:
+            row = attachments.upload_rows.get(id(file))
+            if row is None or not ImageHandler.is_image(file.content_type, file.filename):
+                continue
+            variant = VARIANT_COMPACT if id(file) in attachments.compact_image_ids else VARIANT_HIGH
+            key, mime = model_image_source(row, variant)
+            size, head, tail = image_fingerprint_b64(file.bytes)
+            refs.append(ImageRef(
+                upload_id=row.upload_id, variant=variant, mime_type=mime or file.content_type,
+                bucket=row.s3_bucket, key=key, size_bytes=size, head=head, tail=tail,
+            ))
+        remember_turn_images(user_id, session_id, refs)
+    except Exception:  # noqa: BLE001 - an image without a handle keeps its bytes
+        logger.debug("Image handles skipped for this turn", exc_info=True)
 
 
 def _inline_by_reason(attachments: TurnAttachments, *reasons: str) -> list:
@@ -6149,6 +6190,8 @@ async def _run_invocation(
             # With documents-as-text on, render the turn's non-PDF attachments
             # now, in worker threads, so the per-call projection finds them.
             await _prerender_documents_as_text(attachments, turn_model)
+            # The stored copy each inline image is sent from, for its handle (§6.2).
+            _remember_sent_images(attachments, user_id, input_data.session_id)
 
             # The tool ids this turn carries — one value for the cache key,
             # every builder, the attachment guidance and the paused snapshot.

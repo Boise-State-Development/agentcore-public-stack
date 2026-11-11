@@ -166,7 +166,7 @@ def memory_retrieval_query(text: str) -> str:
 COMPACTION_EVENT_KINDS = frozenset({
     "applied", "checkpoint", "forced", "floor_unreachable",
     "document_stripped", "document_rehydrated", "document_offload",
-    "truncation_anchor",
+    "truncation_anchor", "image_restored",
 })
 _MAX_PENDING_COMPACTION_EVENTS = 8
 
@@ -413,11 +413,12 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
             if not persist_document_handles():
                 return message
-            from apis.shared.files.attachment_handle import persisted_message, session_uploads
+            from apis.shared.files.attachment_handle import persisted_message, session_uploads, turn_images
 
             from .document_rehydration import match_document
 
-            uploads = session_uploads(getattr(self, "user_id", None), getattr(self.config, "session_id", None))
+            owner = (getattr(self, "user_id", None), getattr(self.config, "session_id", None))
+            uploads = session_uploads(*owner)
             used: Set[str] = set()
 
             def _resolve(name: str, fmt: str, size: int) -> Optional[str]:
@@ -427,7 +428,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 used.add(ref.upload_id)
                 return ref.upload_id
 
-            return persisted_message(message, _resolve)
+            return persisted_message(message, _resolve, turn_images(*owner))
         except Exception as e:  # noqa: BLE001 - persisting the bytes is always correct
             logger.warning("Document handles skipped for this message: %s", e)
             return message
@@ -893,6 +894,14 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # preserves the reference for the model without re-sending bytes.
         # Images are handled the same way inside _truncate_tool_contents, but
         # that method is gated on compaction being enabled — this one is not.
+        # Images persisted as handles (unified-attachment-delivery §6.2) are
+        # read back from the stored copy each names, byte for byte, before any
+        # other pass sees the history. A no-op without a handle.
+        try:
+            agent.messages = self._restore_image_handles(agent.messages)
+        except Exception as e:
+            logger.warning(f"Image handle restore failed, continuing: {e}", exc_info=True)
+
         try:
             agent.messages = self._strip_document_bytes(agent.messages)
         except Exception as e:
@@ -2601,6 +2610,26 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         if repaired is None:
             return block
         return {**block, "toolResult": {**tool_result, "content": repaired}}
+
+    def _restore_image_handles(self, messages: List[Dict]) -> List[Dict]:
+        """Put each image handle's stored bytes back (``image_restore``) and
+        record ``image_restored`` (count, bytes, milliseconds) on the ledger."""
+        from agents.main_agent.session.image_restore import restore_image_handles
+
+        result = restore_image_handles(messages, user_id=getattr(self, "user_id", None))
+        if result.restored or result.failed:
+            logger.info(
+                "image_restore: restored=%d failed=%d bytes=%d ms=%d",
+                result.restored, result.failed, result.bytes_read, result.elapsed_ms,
+            )
+            self.record_compaction_event(
+                "image_restored",
+                images=result.restored,
+                failed=result.failed,
+                bytes=result.bytes_read,
+                ms=result.elapsed_ms,
+            )
+        return result.messages
 
     def _strip_document_bytes(self, messages: List[Dict]) -> List[Dict]:
         """Replace document content blocks' inline bytes with their digest — or,
