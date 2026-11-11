@@ -204,6 +204,16 @@ class _SkipExtractionClient:
         return getattr(self._client, name)
 
 
+def _agent_model_id(agent: Any) -> Optional[str]:
+    """The model id an agent sends to (Strands keeps it in ``model.config``)."""
+    try:
+        config = getattr(getattr(agent, "model", None), "config", None)
+        value = config.get("model_id") if isinstance(config, dict) else None
+        return str(value) if value else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _is_bidi_agent(agent: Any) -> bool:
     """True for the voice path's ``BidiAgent``.
 
@@ -1532,6 +1542,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         current_messages: Optional[List[Dict]] = None,
         context_window: Optional[int] = None,
         history_tokens: Optional[int] = None,
+        model_id: Optional[str] = None,
     ) -> Optional[CompactionResult]:
         """
         Update compaction state after a turn completes.
@@ -1559,6 +1570,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 prompt (the ``messages`` partition of the context breakdown);
                 calibrates the per-message estimates. ``None`` → use
                 ``input_tokens``, which biases the cut slightly deeper.
+            model_id: the turn's model. Prices the per-message estimates at
+                its tokenizer factor (``tokenizer_costs``), so a held PDF's
+                page images weigh against text as that model bills them.
         """
         # In-process "when did the last turn end" for the document-offload
         # cache-gap decision when compaction (whose state stamps updated_at
@@ -1588,7 +1602,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # ``retainedTokensEstimate``, ``tailBounded``, ``keptTurns``) survive
         # the turns that do not cut.
         state.policy = {**(state.policy or {}), **policy.to_dict()}
-        documents = self.document_index()
+        documents = self.document_index(model_id)
 
         if input_tokens <= policy.ceiling:
             if policy.hysteresis_enabled and not state.armed:
@@ -2106,7 +2120,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     # Document offload (offload spec §4C / §4D, PR-4)
     # =========================================================================
 
-    def apply_document_offload(self, agent: "Agent", *, prompt: Any = None) -> Optional[str]:
+    def apply_document_offload(
+        self, agent: "Agent", *, prompt: Any = None, model_id: Optional[str] = None
+    ) -> Optional[str]:
         """Head-of-turn: swap unpinned, large inline documents for their digests
         — and stub aged ``document_read`` page slices — when the prefix
         re-write is free or unavoidable.
@@ -2147,7 +2163,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             messages = getattr(agent, "messages", None)
             if not isinstance(messages, list) or not messages:
                 return None
-            documents = self.document_index()
+            documents = self.document_index(model_id or _agent_model_id(agent))
             pinned = pinned_document_names(messages, prompt, pin_turns=DOCUMENT_OFFLOAD_PIN_TURNS)
             candidates = candidate_documents(
                 messages, pinned, min_tokens=DOCUMENT_OFFLOAD_MIN_TOKENS, documents=documents
@@ -2205,13 +2221,17 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.warning(f"apply_document_offload skipped: {e}", exc_info=True)
             return None
 
-    def document_index(self) -> "DocumentIndex":
+    def document_index(self, model_id: Optional[str] = None) -> "DocumentIndex":
         """The row facts this session's document blocks are estimated from.
 
         Read from the process-wide store keyed by ``(user, session)``
         (``apis.shared.files.document_estimate``), never held on this manager:
         another agent serving the session reads the same facts. Facts are
         immutable per set of bytes, so there is nothing to go stale.
+
+        ``model_id`` is the turn's model, passed by the caller rather than
+        held here: the estimate prices text at that model's tokenizer factor,
+        the planner's (``tokenizer_costs``). ``None`` keeps the facts' own count.
         """
         from apis.shared.files.document_estimate import session_document_facts
 
@@ -2219,7 +2239,8 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         config = getattr(self, "config", None)
         return DocumentIndex(
-            session_document_facts(getattr(self, "user_id", None), getattr(config, "session_id", None))
+            session_document_facts(getattr(self, "user_id", None), getattr(config, "session_id", None)),
+            model_id=model_id,
         )
 
     async def _fill_document_index(self, documents: "DocumentIndex", messages: Optional[List[Dict]]) -> "DocumentIndex":
@@ -2243,7 +2264,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             user_id = getattr(self, "user_id", None)
             rows = await asyncio.to_thread(load_session_documents, session_id, user_id)
             if remember_session_documents(user_id, session_id, rows):
-                return self.document_index()
+                return self.document_index(documents.model_id)
         except Exception as e:  # noqa: BLE001 - the estimate falls back to the bytes
             logger.debug("Document facts lookup skipped: %s", e)
         return documents

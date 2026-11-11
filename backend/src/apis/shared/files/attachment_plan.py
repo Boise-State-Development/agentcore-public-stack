@@ -94,6 +94,14 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from apis.shared.files.document_read import document_format_for, is_document_class
+from apis.shared.files.tokenizer_costs import (  # noqa: F401 - re-exported
+    DEFAULT_TOKENIZER_FACTOR,
+    LEGACY_TOKENIZER_FACTOR,
+    PDF_PAGE_IMAGE_TOKENS,
+    native_pdf_cost,
+    text_cost,
+    tokenizer_factor,
+)
 from apis.shared.files.models import (
     DELIVERY_OVERRIDE_VALUES,
     INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
@@ -185,22 +193,8 @@ PROFILE_TOKEN = "token"
 # Per-model document costs (§2.1, §5.2)
 # ---------------------------------------------------------------------------
 
-#: Input tokens one PDF page's image costs, on every model probed: 15,624 to
-#: 15,639 for ten near-empty pages on Haiku 4.5, Haiku 5.5 and Sonnet 4.6, and
-#: 3,159 for two on Opus 4.7 and Opus 5.5 (dev, 2026-11-10).
-PDF_PAGE_IMAGE_TOKENS = 1_565
-
-#: Tokens the model bills per ``tokens.text`` (characters / 4) of extracted
-#: text, by model id. Measured on dev on 2026-11-10 with the 32-page
-#: ``delivery_report_30k.pdf`` fixture (``tokens.text`` 30,779): its text alone
-#: was 29,298 tokens on Haiku 4.5 and Sonnet 4.6 and 43,225 on Haiku 5.5, Opus
-#: 4.7 and Opus 5.5; the PDF was its page images plus that text to within 0.1%.
-LEGACY_TOKENIZER_FACTOR = 0.95
-#: The newer tokenizer, and the default for any model not listed: it
-#: over-counts a legacy tokenizer by ~45%, which only sends a file
-#: ``on_demand`` sooner (the cheaper mode, equal on quality in phase 0).
-DEFAULT_TOKENIZER_FACTOR = 1.40
-_LEGACY_TOKENIZER_MODELS = ("claude-haiku-4-5", "claude-sonnet-4-6")
+# The page-image cost and tokenizer factors live in ``tokenizer_costs`` so
+# compaction's estimate reads the same numbers (§2.1); re-exported here.
 
 #: PDF pages Bedrock accepts in one block, by model id (the phase 0 probe,
 #: #1961): 100 on a 200k model, 600 on a 1M one. An unlisted model gets 600
@@ -262,6 +256,12 @@ class LimitsProfile:
     #: ``document_budget`` as a share of the model's chat ceiling. ``0`` is the
     #: ``legacy`` profile: no token budget, the byte rules only.
     document_budget_share: float = 0.0
+    #: Images are downscaled at upload to the largest size any curated model
+    #: reads (``image_downscale``), and that copy is what a turn sends (§4.3).
+    downscale_images: bool = False
+    #: Per-file upload ceiling for an image, before downscaling. ``None`` keeps
+    #: the general upload limit (the ``legacy`` profile).
+    image_upload_max_bytes: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -438,6 +438,8 @@ def token_profile() -> LimitsProfile:
         documents_as_text=True,
         over_budget_by_reference=True,
         document_budget_share=DOCUMENT_BUDGET_CEILING_SHARE,
+        downscale_images=True,
+        image_upload_max_bytes=TOKEN_IMAGE_UPLOAD_MAX_BYTES,
     )
 
 
@@ -472,6 +474,9 @@ def documents_as_text() -> bool:
 #: in :func:`upload_limits` and nowhere else.
 UPLOAD_GENERAL_MAX_BYTES = 4 * 1024 * 1024
 UPLOAD_PRESENTATION_MAX_BYTES = 25 * 1024 * 1024
+#: An image the ``token`` profile accepts before downscaling (§4.4). The stored
+#: model copy is always under ``image_downscale.MODEL_IMAGE_MAX_BYTES``.
+TOKEN_IMAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -492,10 +497,13 @@ class UploadLimits:
     large_document_max_bytes: Optional[int] = None
     #: Folders one message may carry; ``None`` while folder attachments are off.
     folders_per_message: Optional[int] = None
+    #: An image, before downscaling; ``None`` means ``general_max_bytes``.
+    image_max_bytes: Optional[int] = None
 
 
-def upload_limits() -> UploadLimits:
-    """The per-class upload ceilings, with the two flags that widen admission."""
+def upload_limits(profile: Optional[LimitsProfile] = None) -> UploadLimits:
+    """The per-class upload ceilings, with the two flags that widen admission
+    and the active profile's image ceiling."""
     import os
 
     from apis.shared.feature_flags import (
@@ -513,6 +521,7 @@ def upload_limits() -> UploadLimits:
         spreadsheet_max_bytes=spreadsheet_max_file_size(),
         large_document_max_bytes=LARGE_DOCUMENT_MAX_BYTES if large_document_attachments_enabled() else None,
         folders_per_message=FOLDERS_PER_MESSAGE if folder_attachments_enabled() else None,
+        image_max_bytes=(profile or current_limits_profile()).image_upload_max_bytes,
     )
 
 
@@ -524,14 +533,17 @@ def upload_size_limit(filename: str, mime_type: str, limits: UploadLimits) -> in
         return limits.spreadsheet_max_bytes
     if limits.large_document_max_bytes is not None and is_document_class(mime_type, filename):
         return limits.large_document_max_bytes
+    if limits.image_max_bytes is not None and (mime_type or "").lower().startswith("image/"):
+        return limits.image_max_bytes
     return limits.general_max_bytes
 
 
 def upload_download_ceiling(limits: UploadLimits) -> int:
     """The widest class ceiling: what a server-side import may download before sizing."""
     caps = [limits.general_max_bytes, limits.presentation_max_bytes, limits.spreadsheet_max_bytes]
-    if limits.large_document_max_bytes is not None:
-        caps.append(limits.large_document_max_bytes)
+    for extra in (limits.large_document_max_bytes, limits.image_max_bytes):
+        if extra is not None:
+            caps.append(extra)
     return max(caps)
 
 
@@ -547,7 +559,7 @@ def client_limits(
     ``None`` until a profile sets them; ``None`` always means "no limit".
     """
     profile = profile or current_limits_profile()
-    uploads = uploads or upload_limits()
+    uploads = uploads or upload_limits(profile)
     count = profile.max_files_per_message if profile.turn_guard else profile.resolver_backstop_without_guard
     budget = profile.inline_total_max_bytes if profile.turn_guard else 0
     return {
@@ -559,7 +571,7 @@ def client_limits(
         "inlineBudgetBytes": budget if budget > 0 else None,
         "maxBytes": {
             "document": uploads.general_max_bytes,
-            "image": uploads.general_max_bytes,
+            "image": uploads.image_max_bytes or uploads.general_max_bytes,
             "spreadsheet": uploads.spreadsheet_max_bytes,
             "presentation": uploads.presentation_max_bytes,
             "largeDocument": uploads.large_document_max_bytes,
@@ -640,15 +652,6 @@ def _estimate_tokens(facts: FileFacts, cls: str) -> int:
     return byte_tokens
 
 
-def tokenizer_factor(model_id: Optional[str]) -> float:
-    """Tokens the model bills per ``tokens.text``: :data:`LEGACY_TOKENIZER_FACTOR`
-    for the listed models, :data:`DEFAULT_TOKENIZER_FACTOR` for every other."""
-    mid = (model_id or "").lower()
-    if any(key in mid for key in _LEGACY_TOKENIZER_MODELS):
-        return LEGACY_TOKENIZER_FACTOR
-    return DEFAULT_TOKENIZER_FACTOR
-
-
 def pdf_page_limit(model: ModelFacts) -> int:
     """Pages one native PDF block may have on this model (§2.1)."""
     mid = (model.model_id or "").lower()
@@ -679,12 +682,9 @@ def document_cost(facts: FileFacts, cls: str, mode: str, model: ModelFacts) -> i
         return IMAGE_TOKENS
     factor = tokenizer_factor(model.model_id)
     if facts.text_tokens is not None:
-        text = int(math.ceil(max(0, int(facts.text_tokens)) * factor))
         if cls == CLASS_PDF and mode == MODE_NATIVE:
-            pages = facts.page_count
-            images = int(pages) * PDF_PAGE_IMAGE_TOKENS if pages else int(facts.native_tokens or 0)
-            return text + images
-        return text
+            return native_pdf_cost(facts.text_tokens, facts.page_count, facts.native_tokens or 0, factor)
+        return text_cost(facts.text_tokens, factor)
     return int(math.ceil(_estimate_tokens(facts, cls) * factor))
 
 
@@ -975,6 +975,7 @@ __all__ = [
     "PROFILE_LEGACY",
     "PROFILE_TOKEN",
     "PDF_PAGE_IMAGE_TOKENS",
+    "TOKEN_IMAGE_UPLOAD_MAX_BYTES",
     "REASON_FACTS_PENDING",
     "REASON_NO_ROW",
     "REASON_OVER_DOCUMENT_BUDGET",

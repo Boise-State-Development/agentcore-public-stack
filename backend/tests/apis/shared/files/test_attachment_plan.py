@@ -441,6 +441,8 @@ TABLE_DIGEST = "c0a65269a994c043930829c3444b51c5d2a2fa7347157657d5f99d7fe1b83ecd
 _PHASE3_DEFAULTS = {
     "text_tokens": None, "native_tokens": None, "has_text_layer": None,
     "model_id": None, "chat_ceiling": None, "document_budget_share": 0.0,
+    # Phase 4b (image downscale): the token profile's only.
+    "downscale_images": False, "image_upload_max_bytes": None,
 }
 
 
@@ -723,8 +725,16 @@ def test_the_projection_follows_the_profile(monkeypatch):
 def test_the_token_profile_is_the_legacy_byte_limits_plus_the_budget(monkeypatch):
     monkeypatch.setenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "false")
     legacy, token = ap.legacy_profile(), ap.token_profile()
-    assert replace(token, name=legacy.name, documents_as_text=legacy.documents_as_text, document_budget_share=0.0) == legacy
+    assert replace(
+        token,
+        name=legacy.name,
+        documents_as_text=legacy.documents_as_text,
+        document_budget_share=0.0,
+        downscale_images=False,
+        image_upload_max_bytes=None,
+    ) == legacy
     assert (token.name, token.documents_as_text, token.document_budget_share) == ("token", True, 0.5)
+    assert (token.downscale_images, token.image_upload_max_bytes) == (True, 20 * MIB)
 
 
 # ---------------------------------------------------------------------------

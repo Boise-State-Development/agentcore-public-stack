@@ -234,6 +234,37 @@ class TestUpdateAfterTurn:
         assert json.dumps(live, default=repr, sort_keys=True) == before, "estimates move cuts, never bytes"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fill", [False, True])
+    async def test_the_turn_model_prices_the_cut(self, make_session_manager, monkeypatch, fill):
+        """The coordinator passes the turn's model; the index the cut reads
+        carries it, including one filled from the rows after the turn."""
+        from agents.main_agent.session import compaction_policy
+
+        mgr, _ = self._manager(make_session_manager)
+        if fill:
+            monkeypatch.setenv("DYNAMODB_USER_FILES_TABLE_NAME", "files")
+            monkeypatch.setattr(
+                "agents.main_agent.session.document_rehydration.load_session_documents", lambda *a: [_Row()]
+            )
+        else:
+            remember_session_documents(TEST_USER_ID, TEST_SESSION_ID, [_Row()])
+        seen = []
+        real = compaction_policy.choose_checkpoint
+
+        def _spy(*args, **kwargs):
+            seen.append(kwargs["documents"].model_id)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr("agents.main_agent.session.turn_based_session_manager.choose_checkpoint", _spy)
+        await mgr.update_after_turn(
+            159_938, current_messages=_conversation(), context_window=100_000,
+            history_tokens=MEASURED_HISTORY, model_id="us.anthropic.claude-haiku-5-5",
+        )
+        assert seen == ["us.anthropic.claude-haiku-5-5"]
+        retained = mgr.compaction_state.policy["retainedTokensEstimate"]
+        assert abs(retained - MEASURED_RETAINED) <= 0.02 * MEASURED_RETAINED, retained
+
+    @pytest.mark.asyncio
     async def test_another_users_facts_are_not_read(self, make_session_manager):
         mgr, _ = self._manager(make_session_manager)
         remember_session_documents("someone-else", TEST_SESSION_ID, [type("R", (_Row,), {"user_id": "someone-else"})()])
