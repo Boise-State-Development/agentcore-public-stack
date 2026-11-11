@@ -13,6 +13,7 @@ before the first token, for bytes the turn never sends
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from dataclasses import dataclass
@@ -45,6 +46,11 @@ class ResolvedFileContent:
     # combined inline budget and goes by reference instead: the row is already
     # in hand, so that costs no second read.
     meta: Optional[FileMetadata] = None
+    # An image's compact copy (``image_downscale``), fetched beside its high
+    # copy so the planner can send either with no read after it decides.
+    # ``None`` when the row has no separate compact copy.
+    compact_bytes: Optional[str] = None
+    compact_content_type: Optional[str] = None
 
 
 class FileResolverError(Exception):
@@ -98,17 +104,25 @@ class FileResolver:
             )
             upload_ids = upload_ids[:max_files]
 
-        for upload_id in upload_ids:
-            try:
-                file_content = await self._resolve_single_file(user_id, upload_id)
-                if file_content:
-                    resolved_files.append(file_content)
-            except Exception as e:
-                logger.warning(f"Failed to resolve file {upload_id}: {e}")
+        # Concurrently, in attachment order: twenty files read one after another
+        # cost twenty round trips before the first token.
+        results = await asyncio.gather(
+            *(self._resolve_single_file(user_id, upload_id) for upload_id in upload_ids),
+            return_exceptions=True,
+        )
+        for upload_id, result in zip(upload_ids, results):
+            if isinstance(result, BaseException):
+                logger.warning(f"Failed to resolve file {upload_id}: {result}")
                 # Continue with other files rather than failing entirely
                 continue
+            if result:
+                resolved_files.append(result)
 
         return resolved_files
+
+    def _get_bytes(self, bucket: str, key: str) -> bytes:
+        response = self._s3_client.get_object(Bucket=bucket, Key=key)
+        return response["Body"].read()
 
     async def _resolve_single_file(
         self,
@@ -140,26 +154,32 @@ class FileResolver:
         # An image's model copy when the upload stored one (``image_downscale``):
         # the bytes every turn sends for it, byte-identical on every read.
         key, content_type = model_image_source(file_meta)
+        compact_key, compact_type = model_image_source(file_meta, "compact")
+        fetch_compact = compact_key != key
 
-        # Fetch content from S3
+        # Fetch content from S3, off the event loop; both copies at once.
         try:
-            response = self._s3_client.get_object(
-                Bucket=file_meta.s3_bucket,
-                Key=key
-            )
-            file_bytes = response["Body"].read()
+            reads = [asyncio.to_thread(self._get_bytes, file_meta.s3_bucket, key)]
+            if fetch_compact:
+                reads.append(asyncio.to_thread(self._get_bytes, file_meta.s3_bucket, compact_key))
+            fetched = await asyncio.gather(*reads, return_exceptions=True)
         except ClientError as e:
             logger.error(f"Failed to fetch file {upload_id} from S3: {e}")
             return None
-
-        # Encode as base64
-        base64_content = base64.b64encode(file_bytes).decode("utf-8")
+        if isinstance(fetched[0], BaseException):
+            logger.error(f"Failed to fetch file {upload_id} from S3: {fetched[0]}")
+            return None
+        compact = None
+        if fetch_compact and not isinstance(fetched[1], BaseException):
+            compact = base64.b64encode(fetched[1]).decode("utf-8")
 
         return ResolvedFileContent(
             filename=file_meta.filename,
             content_type=content_type,
-            bytes=base64_content,
+            bytes=base64.b64encode(fetched[0]).decode("utf-8"),
             meta=file_meta,
+            compact_bytes=compact,
+            compact_content_type=compact_type if compact else None,
         )
 
 

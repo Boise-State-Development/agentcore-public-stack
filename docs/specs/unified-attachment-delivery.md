@@ -306,6 +306,75 @@ Served by `GET /files/limits` on app-api (session-cookie auth), computed from th
 same constants the planner and admission use. The SPA and the TUI read it and drop
 their mirrors.
 
+### 4.4.1 The raised limits in the `token` profile (phase 4b, built)
+
+The `token` profile carries the §4.4 limits as profile fields, and `GET /files/limits`
+serves them (`filesPerMessage` 20, `imagesPerMessage` 20, `pdfMaxPages` 1,000,
+`maxBytes.image` 20 MB). The SPA and the TUI already read that body, so neither
+needed a new constant. Documents keep 50 MB through the large-document pipeline, and
+spreadsheets and decks keep their 25 MB. The `legacy` profile is unchanged (5 files,
+4 MB images, no page rule), and its table digest is the one it had before.
+
+**Per request, images first.** One turn's native blocks share one byte budget: the
+smaller of the 7.0 MB that protects the AgentCore Memory event (until phase 4a's
+handles take bytes out of the persisted message) and 16 MB raw. The 16 MB is 21.3 MB
+of the probed 32 MB request on the wire, which leaves about 10 MB for the history,
+system prompt and tools. The planner places images first, because an image has no
+other mode, then documents in attachment order:
+
+1. Every image goes at its `high` copy when they all fit, else every image at its
+   `compact` copy (§4.3.1). Twenty compact copies are 6.8 MB, so an uploaded image
+   always fits. A model that reads Claude's standard tier (every Claude model before
+   4.7) is sent the compact copy whatever the budget, because that is what it would
+   downscale to: the same tokens, fewer bytes. The entry's `variant`
+   (`high` or `compact`) is on the cost row, and phase 4a's image handle records it,
+   so a restored turn re-sends the same bytes.
+2. A document that does not fit goes `on_demand` (`over_budget_reference`) when it
+   has a row, as an over-budget document already did.
+
+**What an image's `on_demand` is.** For an uploaded image the compact copy is the
+overflow mode, so `on_demand` is never reached: no image reader is added to
+`document_read`. That reader would change `toolConfig` for every image session, the
+rotation class `_session_has_documents` was hardened against. Only an image with no
+upload row and no stored copy, sent as base64 by a client, can still be dropped over
+the budget (`over_budget`), as before.
+
+**An image costs its patches.** In the model's tokens: one per 28 px patch of the
+copy sent, capped at 4,784 at Claude's high tier and 1,568 at the standard tier. Without
+a stored copy, the cap itself. This replaces the flat 1,500.
+
+**PDF pages.**
+
+- Up to the model's probed page limit (100 or 600), a PDF goes native within the budget.
+- Above it, a PDF with a text layer goes `text` within the budget (`pdf_page_limit`),
+  else `on_demand`.
+- Native pages are also counted across the turn. A second PDF that would take the
+  turn past the model's page limit goes `text` (`request_page_limit`), or `on_demand`
+  without a text layer. Under today's budgets this cannot bind (25k–50k tokens is at
+  most 32 pages), but it holds if a budget is raised.
+- **Admission.** Over 1,000 pages is refused when the upload completes. The message
+  names the file, its pages and the limit: "handbook.pdf has 1,200 pages. A PDF can
+  have at most 1,000 pages; split it and attach the parts." PDFium counts the pages
+  through ranged S3 reads (`pdf_page_count.S3RangeReader`, 256 KB blocks, at most
+  8 MB). A 1,200-page PDF is one or two GETs, and no PDF is held whole in app-api.
+  The count is stored on the row as `pageCount`. A PDF whose count cannot be read is
+  admitted, and its facts decide later.
+
+**Before a PDF's facts land (`facts_pending`).** Phase 3 sent such a PDF by today's
+byte rules, so a 159-page PDF went native at about 320k tokens. Now it is judged by
+its pages: the admission `pageCount`, else `ceil(bytes / 25 KB)`. That divisor is low
+on purpose, since a text page is 3–30 KB, so the estimate errs towards more pages.
+Each page is costed at its page image (1,565) plus a full prose page of text (1,000
+`tokens.text` at the model's factor). That is above the measured 960, so a pending PDF
+is never judged cheaper than it is. Native when within the page limit and the budget,
+else `on_demand` (`facts_pending`). A non-PDF document without facts keeps phase 3's
+rule.
+
+**The resolver reads concurrently.** B4's S3 GETs ran one after another on the event
+loop, so twenty files were twenty round trips before the first token. They now run in
+worker threads, together, in attachment order. An image's compact copy is fetched
+beside its high copy, so the plan never reads after it decides.
+
 ## 5. The in-context budget
 
 The planner needs one number per model: how many attachment tokens a conversation

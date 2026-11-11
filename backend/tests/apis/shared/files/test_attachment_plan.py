@@ -443,6 +443,10 @@ _PHASE3_DEFAULTS = {
     "model_id": None, "chat_ceiling": None, "document_budget_share": 0.0,
     # Phase 4b (image downscale): the token profile's only.
     "downscale_images": False, "image_upload_max_bytes": None,
+    # Phase 4b (raised limits): profile fields, image facts and the entry's variant.
+    "images_per_message": None, "pdf_max_pages": None, "request_attachment_max_bytes": 0,
+    "image_width": None, "image_height": None, "compact_bytes": None,
+    "compact_width": None, "compact_height": None, "variant": None,
 }
 
 
@@ -460,7 +464,7 @@ def _table_payload(cases=None) -> str:
                 "files": [_facts_dict(x) for x in case.files],
                 "model": _facts_dict(case.model) if case.model else None,
                 "profile": _facts_dict(case.profile),
-                "plan": [asdict(e) for e in plan.entries],
+                "plan": [_facts_dict(e) for e in plan.entries],
                 "textCharLimit": plan.text_char_limit,
             }
         )
@@ -732,9 +736,19 @@ def test_the_token_profile_is_the_legacy_byte_limits_plus_the_budget(monkeypatch
         document_budget_share=0.0,
         downscale_images=False,
         image_upload_max_bytes=None,
+        max_files_per_message=legacy.max_files_per_message,
+        images_per_message=None,
+        pdf_max_pages=None,
+        request_attachment_max_bytes=0,
     ) == legacy
     assert (token.name, token.documents_as_text, token.document_budget_share) == ("token", True, 0.5)
     assert (token.downscale_images, token.image_upload_max_bytes) == (True, 20 * MIB)
+    assert (token.max_files_per_message, token.images_per_message, token.pdf_max_pages) == (20, 20, 1_000)
+    assert token.request_attachment_max_bytes == 16 * MIB
+    # The table's TOKEN is the real profile.
+    assert replace(TOKEN, turn_guard=token.turn_guard, over_budget_by_reference=True) == replace(
+        token, turn_guard=token.turn_guard
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -773,7 +787,19 @@ def test_no_attachments_writes_nothing():
 # The ``token`` profile (phase 3, spec §4.3 and §5.2)
 # ---------------------------------------------------------------------------
 
-TOKEN = replace(LEGACY, name="token", documents_as_text=True, document_budget_share=0.5)
+TOKEN = replace(
+    LEGACY,
+    name="token",
+    documents_as_text=True,
+    document_budget_share=0.5,
+    # Phase 4b: the raised limits (§4.4).
+    downscale_images=True,
+    image_upload_max_bytes=20 * MIB,
+    max_files_per_message=20,
+    images_per_message=20,
+    pdf_max_pages=1_000,
+    request_attachment_max_bytes=16 * MIB,
+)
 #: The catalog windows and the ceilings CompactionPolicy gives them on dev.
 HAIKU55 = ModelFacts(context_window=100_000, model_id="us.anthropic.claude-haiku-5-5", chat_ceiling=50_000)
 SONNET46 = ModelFacts(context_window=1_000_000, model_id="us.anthropic.claude-sonnet-4-6", chat_ceiling=100_000)
@@ -794,6 +820,20 @@ def pdf(name: str, pages: int, text: Optional[int] = None, *, row: bool = True, 
         name, PDF, 200 * pages, page_count=pages, text_tokens=0 if scanned else text,
         native_tokens=1_500 * pages, has_text_layer=not scanned, **kw,
     )
+
+
+def img(name: str, size: int, *, w: int = 2_348, h: int = 1_565, cw: int = 1_530, ch: int = 1_020,
+        compact: int = 330_000) -> FileFacts:
+    """An uploaded image with its high copy (``size`` bytes) and compact copy."""
+    return up(name, "image/jpeg", size, image_width=w, image_height=h, compact_bytes=compact,
+              compact_width=cw, compact_height=ch)
+
+
+#: Haiku 4.5's 100-page limit with a budget wide enough to reach it.
+HAIKU45_WIDE = replace(
+    ModelFacts(context_window=200_000, model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+    chat_ceiling=1_000_000,
+)
 
 
 def doc(name: str, mime: str, text: int, *, row: bool = True, **kw) -> FileFacts:
@@ -818,7 +858,7 @@ TOKEN_CASES: List[Case] = [
     Case("three small mixed files: text, an image, text",
          [doc("notes.docx", DOCX, 2_000), f("chart.png", PNG, 200_000, upload_id="up-chart"), doc("readme.md", MD, 1_000)],
          [(T, "document", "within_budget"), (N, "image", "inline"), (T, "document", "within_budget")],
-         HAIKU55, TOKEN, tokens=[2_800, 1_500, 1_400]),
+         HAIKU55, TOKEN, tokens=[2_800, 4_784, 1_400]),
     # --- the budget is spent in attachment order ---
     Case("first fit: the second PDF no longer fits, a later small file still does",
          [pdf("a.pdf", 12), pdf("b.pdf", 12), doc("c.txt", TXT, 1_000)],
@@ -841,10 +881,46 @@ TOKEN_CASES: List[Case] = [
     Case("a scanned PDF past the page limit has no text to send: on demand",
          [pdf("scan.pdf", 150, scanned=True)], [(OD, "pdf", "over_document_budget")], HAIKU45, TOKEN),
     # --- costs without facts, and files with nothing to read them from later ---
-    Case("no facts yet: today's rules for this turn, counted at the bytes estimate",
+    Case("no facts yet: today's rules for a docx; a PDF by its estimated pages",
          [up("old.docx", DOCX, 40_000), up("fresh.pdf", PDF, 59_470), doc("c.md", MD, 20_000)],
          [(T, "document", "facts_pending"), (N, "pdf", "facts_pending"), (OD, "document", "over_document_budget")],
-         HAIKU55, TOKEN, tokens=[14_000, 20_814, 0]),
+         HAIKU55, TOKEN, tokens=[14_000, 3 * (1_565 + 1_400), 0]),
+    # --- phase 4b: a PDF before its facts is judged by its pages (§4.4.1) ---
+    Case("a 159-page PDF before its facts goes on demand, not whole",
+         [up("syllabus.pdf", PDF, 1_400_000, page_count=159)], [(OD, "pdf", "facts_pending")], HAIKU55, TOKEN),
+    Case("the same PDF on Sonnet 4.6 too",
+         [up("syllabus.pdf", PDF, 1_400_000, page_count=159)], [(OD, "pdf", "facts_pending")], SONNET46, TOKEN),
+    Case("without an admission count, its bytes give the pages (25 KB a page)",
+         [up("unknown.pdf", PDF, 1_400_000)], [(OD, "pdf", "facts_pending")], SONNET46, TOKEN),
+    Case("a short PDF before its facts still goes native",
+         [up("memo.pdf", PDF, 90_000, page_count=4)], [(N, "pdf", "facts_pending")], HAIKU55, TOKEN,
+         tokens=[4 * (1_565 + 1_400)]),
+    Case("a pending PDF past the model's page limit goes on demand",
+         [up("long.pdf", PDF, 900_000, page_count=120)], [(OD, "pdf", "facts_pending")], HAIKU45_WIDE, TOKEN),
+    Case("a pending PDF with no row is sent as the rule says",
+         [f("direct.pdf", PDF, 1_400_000, page_count=159)], [(N, "pdf", "no_row")], HAIKU55, TOKEN),
+    # --- phase 4b: the native pages of one request (§2.1, §4.4.1) ---
+    Case("a second PDF past the turn's native pages goes text",
+         [pdf("a.pdf", 60, 6_000), pdf("b.pdf", 60, 6_000)],
+         [(N, "pdf", "within_budget"), (T, "pdf", "request_page_limit")], HAIKU45_WIDE, TOKEN),
+    Case("without a text layer it goes on demand",
+         [pdf("a.pdf", 60, 6_000), pdf("scan.pdf", 60, scanned=True)],
+         [(N, "pdf", "within_budget"), (OD, "pdf", "request_page_limit")], HAIKU45_WIDE, TOKEN),
+    # --- phase 4b: images first in the request's bytes, never dropped (§4.4.1) ---
+    Case("twenty photos too big together at their high copies all go compact",
+         [img(f"p{i}.jpg", 1_400_000) for i in range(20)], [(N, "image", "inline")] * 20, HAIKU55, TOKEN,
+         tokens=[55 * 37] * 20),
+    Case("images take the bytes first; a PDF that no longer fits goes on demand",
+         [up("late.pdf", PDF, 300_000, page_count=2, text_tokens=1_000, native_tokens=3_000, has_text_layer=True)]
+         + [img(f"p{i}.jpg", 700_000) for i in range(14)],
+         [(OD, "pdf", "over_budget_reference")] + [(N, "image", "inline")] * 14, HAIKU55,
+         replace(TOKEN, inline_total_max_bytes=10_000_000)),
+    Case("a standard-tier model reads the compact copy: capped at 1,568 tokens",
+         [img("p.jpg", 1_400_000, w=2_348, h=1_565, cw=1_530, ch=1_020)], [(N, "image", "inline")],
+         SONNET46, TOKEN, tokens=[1_568]),
+    Case("a high-tier model reads the high copy: one token a patch",
+         [img("p.jpg", 1_400_000, w=2_348, h=1_565, cw=1_530, ch=1_020)], [(N, "image", "inline")],
+         HAIKU55, TOKEN, tokens=[84 * 56]),
     Case("over the budget with no row: sent as text and recorded",
          [doc("pasted.docx", DOCX, 60_000, row=False)], [(T, "document", "no_row")], HAIKU55, TOKEN, tokens=[84_000]),
     Case("a direct PDF over the budget with no row stays native",
@@ -879,7 +955,7 @@ def test_the_token_table(case: Case):
 
 
 #: The ``token`` table's own digest. A change here is a change to who gets what.
-TOKEN_TABLE_DIGEST = "287ff5bf6f34d18c3787f2b89a09715ecd3b5277922ad711e768af8836849149"
+TOKEN_TABLE_DIGEST = "31ab7e3c2fea7066a25e43961edab8d233f2ecd7be10699b26ad3d787235786e"
 
 
 def test_the_token_table_digest_is_pinned():
@@ -936,3 +1012,63 @@ def test_the_token_profile_never_drops_a_file_it_can_read_later():
     for model in (HAIKU55, SONNET46, HAIKU45, OPUS55, MANTLE_T):
         plan = plan_attachments(files, model, ConversationFacts(), profile=TOKEN)
         assert all(e.mode != D for e in plan.entries), model
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b: which copy of an image is sent, and the raised limits
+# ---------------------------------------------------------------------------
+
+
+def _variants(files, model, profile=TOKEN):
+    return [e.variant for e in plan_attachments(files, model, profile=profile).entries]
+
+
+def test_images_that_fit_at_their_high_copy_send_it_to_a_high_tier_model():
+    files = [img(f"p{i}.jpg", 300_000) for i in range(8)]
+    assert _variants(files, HAIKU55) == ["high"] * 8
+
+
+def test_a_standard_tier_model_is_sent_the_compact_copy():
+    files = [img(f"p{i}.jpg", 300_000) for i in range(8)]
+    assert _variants(files, SONNET46) == ["compact"] * 8
+    assert _variants(files, HAIKU45) == ["compact"] * 8
+
+
+def test_over_the_byte_budget_every_image_goes_compact_before_any_is_dropped():
+    files = [img(f"p{i}.jpg", 3_700_000) for i in range(20)]
+    plan = plan_attachments(files, HAIKU55, profile=TOKEN)
+    assert [e.mode for e in plan.entries] == ["native"] * 20
+    assert {e.variant for e in plan.entries} == {"compact"}
+
+
+def test_twenty_worst_case_compact_copies_always_fit_the_real_budget():
+    from apis.shared.files.image_downscale import COMPACT_IMAGE_MAX_BYTES, MODEL_IMAGE_MAX_BYTES
+
+    token = ap.token_profile()
+    files = [img(f"p{i}.jpg", MODEL_IMAGE_MAX_BYTES, compact=COMPACT_IMAGE_MAX_BYTES) for i in range(20)]
+    plan = plan_attachments(files, HAIKU55, profile=token)
+    assert all(e.mode == "native" for e in plan.entries)
+    assert 20 * COMPACT_IMAGE_MAX_BYTES <= ap._request_byte_budget(token)
+
+
+def test_an_image_without_a_model_copy_has_no_variant():
+    plan = plan_attachments([f("p.png", PNG, 200_000, upload_id="up-p")], HAIKU55, profile=TOKEN)
+    assert plan.entries[0].variant is None
+    assert "variant" not in plan.entries[0].to_row()
+
+
+def test_the_cost_row_records_the_variant():
+    row = plan_attachments([img("p.jpg", 300_000)], SONNET46, profile=TOKEN).to_row()
+    assert row["files"][0]["variant"] == "compact"
+
+
+def test_the_legacy_profile_never_records_a_variant():
+    plan = plan_attachments([img(f"p{i}.jpg", 300_000) for i in range(3)], SONNET46, profile=LEGACY)
+    assert {e.variant for e in plan.entries} == {None}
+
+
+def test_limits_endpoint_serves_the_raised_limits():
+    body = ap.client_limits(ap.token_profile(), ap.upload_limits(ap.token_profile()))
+    assert (body["filesPerMessage"], body["imagesPerMessage"], body["pdfMaxPages"]) == (20, 20, 1_000)
+    legacy = ap.client_limits(ap.legacy_profile(), ap.upload_limits(ap.legacy_profile()))
+    assert (legacy["filesPerMessage"], legacy["imagesPerMessage"], legacy["pdfMaxPages"]) == (5, None, None)
