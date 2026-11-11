@@ -189,6 +189,22 @@ def cases() -> List[Dict[str, Any]]:
         {"contains_any": [target.value], "regex": {"search": [leads(target.value, [target.lookalike, *others])]}},
         "Five ~5k-token documents, today's per-message cap. Each holds a certificate; only one is the subject's.",
     ))
+
+    # Count: twenty documents (the token profile's per-message cap), the answer
+    # in the seventeenth, past what the document budget holds inline on the
+    # smaller models, so the planner's overflow is what is measured.
+    twenty = ["delivery_prose_5k.md", *notes, *(f"delivery_note_{letter}_5k.md" for letter in d.COUNT_NOTE_LETTERS)]
+    deep = d.prose(twenty[16]).facts["middle"]
+    rest = [d.prose(n).facts["middle"].value for i, n in enumerate(twenty) if i != 16]
+    out.append(_case(
+        "count_twenty_documents", [
+            f"Twenty site notes are attached. What is the {deep.attribute} for {deep.subject}? "
+            "Reply with just the number."
+        ], twenty,
+        {"contains_any": [deep.value], "regex": {"search": [leads(deep.value, [deep.lookalike, *rest])]}},
+        "Twenty ~5k-token documents, the token profile's per-message cap (~100k tokens together). Each holds a "
+        "certificate; only the seventeenth is the subject's.",
+    ))
     out.extend(forced_arm_cases())
     out.extend(ceiling_cases())
     out.extend(whole_document_cases())
