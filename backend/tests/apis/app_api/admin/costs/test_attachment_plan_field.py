@@ -65,8 +65,9 @@ async def test_the_anatomy_projects_the_plan_on_its_row_only():
     assert dumped == {
         "profile": "legacy",
         "files": [
-            {"mode": "native", "class": "pdf", "tokens": 1200, "reason": "inline", "uploadId": "up-1"},
-            {"mode": "tool", "class": "tabular", "tokens": 0, "reason": "tabular", "uploadId": None},
+            {"mode": "native", "class": "pdf", "tokens": 1200, "reason": "inline", "uploadId": "up-1",
+             "variant": None},
+            {"mode": "tool", "class": "tabular", "tokens": 0, "reason": "tabular", "uploadId": None, "variant": None},
         ],
         "droppedOverCount": 1,
     }
@@ -76,3 +77,14 @@ async def test_the_anatomy_projects_the_plan_on_its_row_only():
 async def test_a_malformed_plan_is_dropped_not_raised():
     anatomy = await _service([_record(0, attachmentPlan={"files": "nope"}), _record(1, attachmentPlan="x")]).get_session_cost_anatomy("s1")
     assert [c.attachment_plan for c in anatomy.calls] == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_an_images_variant_survives_the_projection():
+    plan = {"profile": "token", "files": [
+        {"mode": "native", "class": "image", "tokens": Decimal("1530"), "reason": "inline", "uploadId": "up-1",
+         "variant": "compact"},
+    ]}
+    anatomy = await _service([_record(0, attachmentPlan=plan)]).get_session_cost_anatomy("s1")
+    [entry] = anatomy.calls[0].model_dump(by_alias=True)["attachmentPlan"]["files"]
+    assert entry["variant"] == "compact"

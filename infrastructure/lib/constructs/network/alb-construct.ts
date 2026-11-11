@@ -22,6 +22,27 @@ export const CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST = 'com.amazonaws.global.cloudf
  */
 const ACCESS_LOG_RETENTION_DAYS = 30;
 
+/**
+ * Connection idle timeouts along the app-api path, browser → CloudFront →
+ * ALB → uvicorn. Each hop that pools connections must close an idle one
+ * BEFORE the hop behind it does. Otherwise it sometimes reuses a socket the
+ * far side has just closed, and the request fails without ever being served.
+ *
+ *   CloudFront origin keep-alive (30 s) < ALB idle timeout (60 s)
+ *                                       < uvicorn --timeout-keep-alive (75 s)
+ *
+ * On dev on 2026-11-11, 1 of 20 parallel `POST /files/presign` calls got a
+ * CloudFront 502, `x-edge-detailed-result-type = AbortedOrigin`, in 9 ms. The
+ * ALB access log had no record of it. CloudFront's keep-alive was 60 s, the
+ * same as the ALB's idle timeout, so the two raced. uvicorn's 5 s default
+ * set up the same race one hop further back, where the ALB is the client.
+ *
+ * `test/connection-idle-timeouts.test.ts` checks the ordering against the
+ * synthesized template and `backend/Dockerfile.app-api`.
+ */
+export const ALB_IDLE_TIMEOUT_SECONDS = 60;
+export const CLOUDFRONT_ORIGIN_KEEPALIVE_SECONDS = 30;
+
 export interface AlbConstructProps {
   config: AppConfig;
   vpc: ec2.IVpc;
@@ -146,6 +167,9 @@ export class AlbConstruct extends Construct {
       vpcSubnets: {
         subnetType: ec2.SubnetType.PUBLIC,
       },
+      // The ALB's own default, set explicitly so the ordering above stays
+      // something you can read here.
+      idleTimeout: cdk.Duration.seconds(ALB_IDLE_TIMEOUT_SECONDS),
     });
 
     // Access logs: the only record of who ENDED a connection.

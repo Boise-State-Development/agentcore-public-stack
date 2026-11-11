@@ -530,6 +530,15 @@ def whole(filename: str) -> Tuple[Document, WholeFacts]:
 for _name in _WHOLE:
     whole(_name)
 
+#: The twenty-document count cell's other fifteen site notes (phase 4b's 20
+#: files a message). Their slots come after every other fixture's, so adding
+#: them moved no existing document's subjects.
+COUNT_NOTE_LETTERS = "efghijklmnopqrs"
+for _letter in COUNT_NOTE_LETTERS:
+    _note = f"delivery_note_{_letter}_5k.md"
+    _PROSE[_note] = (f"note_{_letter}", SIZES["5k"], f"Site note {_letter.upper()}", as_markdown)
+    _SLOTS.setdefault(_PROSE[_note][0], len(_SLOTS))
+
 GENERATED: Dict[str, Callable[[], bytes]] = {
     **{name: _prose_builder(name) for name in _PROSE},
     **{name: _table_builder(name) for name in _TABLES},

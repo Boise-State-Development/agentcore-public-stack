@@ -78,6 +78,35 @@ describe('countsTowardInlineBudget', () => {
   });
 });
 
+describe('under the token profile', () => {
+  // As dev served it: images are downscaled at upload, so the uploaded bytes never travel.
+  const TOKEN: AttachmentLimits = {
+    ...LIMITS,
+    profile: 'token',
+    filesPerMessage: 20,
+    imagesPerMessage: 20,
+    pdfMaxPages: 1000,
+    maxBytes: { ...LIMITS.maxBytes, image: 20 * 1024 * 1024 },
+  };
+
+  it('never leaves an image out, whatever its uploaded size', () => {
+    // The dev validation's case: a 10 MB photo among nineteen small files.
+    const photo = file('p', 'image_8_photo.jpg', 10.2 * MB, 'image/jpeg');
+    const notes = Array.from({ length: 11 }, (_, i) => file(`n${i}`, `note_${i}.md`, 0.009 * MB, 'text/markdown'));
+    expect(inlineBudgetOverflow([photo, ...notes, file('r', 'report.pdf', 1.3 * MB)], TOKEN)).toBeNull();
+    expect(countsTowardInlineBudget('photo.jpg', 'image/jpeg', 19 * MB, TOKEN)).toBe(false);
+  });
+
+  it('still walks the documents', () => {
+    const over = inlineBudgetOverflow([
+      file('p', 'photo.jpg', 15 * MB, 'image/jpeg'),
+      file('a', 'a.pdf', 3.9 * MB),
+      file('b', 'b.pdf', 3.9 * MB),
+    ], TOKEN);
+    expect(over).toEqual({ byReference: [file('b', 'b.pdf', 3.9 * MB)], dropped: [] });
+  });
+});
+
 describe('limits from GET /files/limits', () => {
   it('reads the served budget, not a built-in one', () => {
     const tight: AttachmentLimits = { ...LIMITS, inlineBudgetBytes: 5 * MB };
