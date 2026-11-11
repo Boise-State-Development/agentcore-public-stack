@@ -2420,5 +2420,265 @@
    "delivery_yearbook_150k.pdf"
   ],
   "notes": "Whole-document summarise: a ~150k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.overflow_2_documents_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Cut intake. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-31747"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-31774)(?!WO\\-18737)[\\s\\S]){0,160}?WO\\-31747"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 2 ~30k-token dossiers, two a turn, forced on_demand. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_2_documents_search",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Cut intake. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "search",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-31747"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-31774)(?!WO\\-18737)[\\s\\S]){0,160}?WO\\-31747"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 2 ~30k-token dossiers, two a turn, forced search. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_4_documents_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_c_30k.md`, what is the operating permit number for the Vane Crossing sluice gate? Reply with just the number.",
+    "files": [
+     "delivery_dossier_c_30k.md",
+     "delivery_dossier_d_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Cut intake. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-31747"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-31774)(?!WO\\-18737)(?!WO\\-83048)(?!WO\\-78537)[\\s\\S]){0,160}?WO\\-31747"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 4 ~30k-token dossiers, two a turn, forced on_demand. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_4_documents_search",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_c_30k.md`, what is the operating permit number for the Vane Crossing sluice gate? Reply with just the number.",
+    "files": [
+     "delivery_dossier_c_30k.md",
+     "delivery_dossier_d_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Cut intake. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "search",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-31747"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-31774)(?!WO\\-18737)(?!WO\\-83048)(?!WO\\-78537)[\\s\\S]){0,160}?WO\\-31747"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 4 ~30k-token dossiers, two a turn, forced search. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_8_documents_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_c_30k.md`, what is the operating permit number for the Vane Crossing sluice gate? Reply with just the number.",
+    "files": [
+     "delivery_dossier_c_30k.md",
+     "delivery_dossier_d_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_e_30k.md`, what is the operating permit number for the Kestrel Tarn reservoir gauge? Reply with just the number.",
+    "files": [
+     "delivery_dossier_e_30k.md",
+     "delivery_dossier_f_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_g_30k.md`, what is the operating permit number for the Saddle Levee intake? Reply with just the number.",
+    "files": [
+     "delivery_dossier_g_30k.md",
+     "delivery_dossier_h_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Levee sluice gate. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-98930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-98903)(?!WO\\-18737)(?!WO\\-31747)(?!WO\\-83048)(?!WO\\-78537)(?!WO\\-23870)(?!WO\\-52191)(?!WO\\-52686)[\\s\\S]){0,160}?WO\\-98930"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 8 ~30k-token dossiers, two a turn, forced on_demand. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_8_documents_search",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_c_30k.md`, what is the operating permit number for the Vane Crossing sluice gate? Reply with just the number.",
+    "files": [
+     "delivery_dossier_c_30k.md",
+     "delivery_dossier_d_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_e_30k.md`, what is the operating permit number for the Kestrel Tarn reservoir gauge? Reply with just the number.",
+    "files": [
+     "delivery_dossier_e_30k.md",
+     "delivery_dossier_f_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_g_30k.md`, what is the operating permit number for the Saddle Levee intake? Reply with just the number.",
+    "files": [
+     "delivery_dossier_g_30k.md",
+     "delivery_dossier_h_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Levee sluice gate. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "search",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-98930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-98903)(?!WO\\-18737)(?!WO\\-31747)(?!WO\\-83048)(?!WO\\-78537)(?!WO\\-23870)(?!WO\\-52191)(?!WO\\-52686)[\\s\\S]){0,160}?WO\\-98930"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 8 ~30k-token dossiers, two a turn, forced search. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
  }
 ]

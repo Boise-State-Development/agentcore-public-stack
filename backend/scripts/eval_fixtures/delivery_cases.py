@@ -26,7 +26,14 @@ Three groups (unified-attachment-delivery §8.4):
 - the whole-document questions (``whole_*``): list and count, compare two
   sections far apart, and summarise, on a ~30k to ~150k-token PDF held
   ``native`` or read ``on_demand``, at today's ceiling. Every scored value is
-  planted (``delivery.WholeFacts``).
+  planted (``delivery.WholeFacts``);
+- the overflow cells (``overflow_*``, phase 5): a conversation whose on-demand
+  set grows two documents a turn to 2, 4 or 8 ~30k-token dossiers, each turn
+  asking about one it just attached, then a question whose answer is in one
+  attached earlier and not named: only a search across the set, or reading
+  every document, finds it. Forced ``on_demand`` (never indexed, no steering)
+  against forced ``search`` (indexed, steered to ``query``). The readout sets
+  ``attachment_plan.SEARCH_STEER_MIN_DOCUMENTS``.
 """
 
 from __future__ import annotations
@@ -36,7 +43,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -61,12 +68,15 @@ def _case(
     arm: str = "auto",
     ceiling: str = "default",
     pauses: Optional[Dict[int, int]] = None,
+    turn_files: Optional[Dict[int, Sequence[str]]] = None,
 ) -> Dict[str, Any]:
     pauses = pauses or {}
+    turn_files = turn_files or {}
     return {
         "id": f"{FAMILY}.{name}",
         "family": FAMILY,
-        "turns": [{"prompt": p, **({"pause_seconds": pauses[i]} if i in pauses else {})}
+        "turns": [{"prompt": p, **({"pause_seconds": pauses[i]} if i in pauses else {}),
+                   **({"files": list(turn_files[i])} if i in turn_files else {})}
                   for i, p in enumerate(prompts)],
         "run": {**(run or _NO_TOOLS), "arm": arm, "ceiling": ceiling},
         "expect": expect,
@@ -208,6 +218,55 @@ def cases() -> List[Dict[str, Any]]:
     out.extend(forced_arm_cases())
     out.extend(ceiling_cases())
     out.extend(whole_document_cases())
+    out.extend(overflow_cases())
+    return out
+
+
+#: The overflow cells' set sizes, and the arms compared at each.
+OVERFLOW_SIZES = (2, 4, 8)
+OVERFLOW_ARMS = ("on_demand", "search")
+
+
+def overflow_prompts(size: int) -> Tuple[List[str], Dict[int, List[str]], "d.Fact"]:
+    """The turns of one overflow cell: two dossiers a turn, each turn asking about
+    the first it attaches, then the target dossier's late fact, unnamed.
+
+    The target is the second dossier of the turn before last (the second of the
+    only turn when there are two), so it was attached, never asked about, and is
+    not the most recent.
+    """
+    names = [d.dossier(letter) for letter in d.OVERFLOW_LETTERS[:size]]
+    prompts: List[str] = []
+    files: Dict[int, List[str]] = {}
+    for turn in range(size // 2):
+        pair = names[2 * turn:2 * turn + 2]
+        files[turn] = pair
+        early = d.prose(pair[0]).facts["early"]
+        lead = "Here are two site dossiers." if turn == 0 else "Here are two more site dossiers."
+        prompts.append(f"{lead} {early.question(f'`{pair[0]}`')}")
+    target_turn = max(0, size // 2 - 2)
+    target = d.prose(names[2 * target_turn + 1]).facts["late"]
+    prompts.append(
+        f"One of the site dossiers I've attached in this conversation gives the {target.attribute} for "
+        f"{target.subject}. What is it? Reply with just the number."
+    )
+    return prompts, files, target
+
+
+def overflow_cases() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for size in OVERFLOW_SIZES:
+        prompts, files, target = overflow_prompts(size)
+        others = [d.prose(d.dossier(letter)).facts["late"].value for letter in d.OVERFLOW_LETTERS[:size]]
+        expect = {"contains_any": [target.value],
+                  "regex": {"search": [leads(target.value, [target.lookalike, *(v for v in others if v != target.value)])]}}
+        for arm in OVERFLOW_ARMS:
+            out.append(_case(
+                f"overflow_{size}_documents_{arm}", prompts, [], expect,
+                f"Overflow cell (phase 5): {size} ~30k-token dossiers, two a turn, forced {arm}. The last turn asks "
+                "a 90%-depth fact from a dossier attached earlier and never named.",
+                arm=arm, turn_files=files,
+            ))
     return out
 
 

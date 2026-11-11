@@ -68,9 +68,32 @@ def test_the_committed_case_file_is_the_generated_one():
 def test_every_case_parses_and_names_only_delivery_fixtures():
     cases = load_cases(CASES_DIR, families=["attachment_delivery"])
     assert len(cases) >= 20
-    assert {c.run.arm for c in cases} == {"auto", "native", "text", "on_demand"}
+    assert {c.run.arm for c in cases} == {"auto", "native", "text", "on_demand", "search"}
     assert {c.run.ceiling for c in cases} == {"default", "200k"}
-    assert {f for c in cases for f in c.files} == set(d.GENERATED)
+    assert {f for c in cases for f in c.all_files} == set(d.GENERATED)
+
+
+def test_an_overflow_cell_grows_its_set_two_a_turn_and_asks_an_unnamed_earlier_document():
+    cases = {c.id.split(".", 1)[1]: c for c in load_cases(CASES_DIR, families=["attachment_delivery"])}
+    for size in delivery_cases.OVERFLOW_SIZES:
+        pair = [cases[f"overflow_{size}_documents_{arm}"] for arm in delivery_cases.OVERFLOW_ARMS]
+        assert [c.run.arm for c in pair] == ["on_demand", "search"]
+        assert pair[0].turns == pair[1].turns and pair[0].expect == pair[1].expect
+        case = pair[0]
+        assert case.files == () and len(case.all_files) == size == len(set(case.all_files))
+        assert all(len(case.meta_for(i).files) == 2 for i in range(size // 2))
+        assert case.meta_for(len(case.turns) - 1).files == ()
+        # The answer is in exactly one dossier, which the last prompt never names
+        # and which was not attached on the last attaching turn (unless there is only one).
+        _, _, target = delivery_cases.overflow_prompts(size)
+        holders = [n for n in case.all_files if target.value in d.GENERATED[n]().decode("utf-8")]
+        assert len(holders) == 1
+        assert holders[0] not in case.turns[-1]
+        if size > 2:
+            assert holders[0] not in case.meta_for(size // 2 - 1).files
+        # Every dossier alone is over Haiku 5.5's 25k document budget.
+        for name in case.all_files:
+            assert len(d.prose(name).text) // 4 * 1.40 > 25_000
 
 
 def test_each_gating_file_runs_every_legal_arm():

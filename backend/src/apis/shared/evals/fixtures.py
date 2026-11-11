@@ -82,12 +82,17 @@ async def register_upload(
 ) -> str:
     """Store ``data`` as a READY upload in ``session_id`` and return its ``upload_id``.
 
-    ``delivery`` is an ``attachment_delivery`` arm (``native``, ``text`` or
-    ``on_demand``): it is written on the row as the planner's fixture-only
-    override, the one way that value is ever set
+    ``delivery`` is an ``attachment_delivery`` arm (``native``, ``text``,
+    ``on_demand`` or ``search``): it is written on the row as the planner's
+    fixture-only override, the one way that value is ever set
     (``test_delivery_override_is_fixture_only.py``). A document forced
-    ``on_demand`` also gets the digest app-api builds for an upload, so its
-    message carries what an over-budget reference's does rather than a stub.
+    ``on_demand`` or ``search`` also gets the digest app-api builds for an
+    upload, so its message carries what an over-budget reference's does rather
+    than a stub. One forced ``search`` is also sent to the deployed prepare
+    queue as ``{"action": "index"}``, the message the pipeline sends itself, so
+    the deployed Lambda ingests it into the attachments KB
+    (``attachment_index.indexed_by_budget`` admits a ``search`` row whatever its
+    size); :func:`wait_for_searchable` waits for that.
 
     A document also gets the §4.1 facts the prepare Lambda writes for a real
     upload (``file_facts.compute_document_facts``), so the attachment planner's
@@ -122,9 +127,23 @@ async def register_upload(
             facts=await asyncio.to_thread(_document_facts, filename, mime_type, data),
         )
     )
-    if delivery == "on_demand":
+    if delivery in ("on_demand", "search"):
         await _store_digest(user_id, upload_id, filename, mime_type, data)
+    if delivery == "search":
+        await _enqueue_index(user_id, upload_id)
     return upload_id
+
+
+async def _enqueue_index(user_id: str, upload_id: str) -> None:
+    import json
+
+    import boto3
+
+    queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "")
+    if not queue_url:
+        raise FixtureError("LARGE_DOCUMENT_PREPARE_QUEUE_URL is not set; the search arm needs the deployed prepare queue")
+    body = json.dumps({"action": "index", "user_id": user_id, "upload_id": upload_id})
+    await asyncio.to_thread(boto3.client("sqs").send_message, QueueUrl=queue_url, MessageBody=body)
 
 
 def _document_facts(filename: str, mime_type: str, data: bytes) -> Optional[dict]:
@@ -313,6 +332,44 @@ async def wait_for_documents(
             states[upload_id] = state
         if echo is not None:
             echo(states)
+        if all(s["settled"] for s in states.values()) or now - start >= timeout:
+            return states
+        await sleep(poll)
+
+
+def searchable_settled(state: Dict[str, Any]) -> bool:
+    """Ready for the ``search`` arm: searchable, or in a KB state that will not change."""
+    return state["kbIndex"] in _KB_TERMINAL or state["textIndexed"] or state["preparation"] == "missing"
+
+
+async def wait_for_searchable(
+    user_id: str,
+    upload_ids: Sequence[str],
+    *,
+    timeout: float,
+    poll: float = 15.0,
+    sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> Dict[str, Dict[str, Any]]:
+    """Poll each upload's row until the attachments KB can search it (the ``search`` arm).
+
+    A document under the inline limit has no preparation to wait for, so only
+    its ``kbIndex`` counts. Returns ``{upload_id: state}`` with ``settled`` and
+    ``waitedSeconds``; one still unsettled at ``timeout`` goes ahead as it is,
+    and the planner then sends it ``on_demand``, which the row records.
+    """
+    from apis.shared.files.repository import get_file_upload_repository
+
+    repository = get_file_upload_repository()
+    start = clock()
+    while True:
+        now = clock()
+        states: Dict[str, Dict[str, Any]] = {}
+        for upload_id in upload_ids:
+            state = document_state(await repository.get_file(user_id, upload_id))
+            state["settled"] = searchable_settled(state)
+            state["waitedSeconds"] = round(now - start)
+            states[upload_id] = state
         if all(s["settled"] for s in states.values()) or now - start >= timeout:
             return states
         await sleep(poll)

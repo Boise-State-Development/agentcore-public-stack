@@ -470,7 +470,7 @@ _SEARCH_NOT_READY = {
         "re-indexed when this conversation is opened, which takes a few minutes."
     ),
     "unavailable": "is not available for search.",
-    "off": "is not indexed for search (only large documents are).",
+    "off": "is not indexed for search (only documents too large to keep in context are).",
 }
 
 

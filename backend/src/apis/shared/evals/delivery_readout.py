@@ -54,6 +54,12 @@ class CaseReadout:
     offloads: Counter = field(default_factory=Counter)
     #: Why failed samples failed: the non-completed status, else "wrong answer".
     failures: Counter = field(default_factory=Counter)
+    #: Median input tokens a sample sent over all its calls (``CallSummary.input_tokens``).
+    input_tokens: Optional[int] = None
+    #: The last turn's ``document_read`` calls by mode, over samples, and their
+    #: median count: whether the model searched, grepped or paged (phase 5).
+    last_turn_reads: Counter = field(default_factory=Counter)
+    last_turn_read_calls: Optional[int] = None
 
     @property
     def pass_rate(self) -> float:
@@ -92,6 +98,9 @@ class CaseReadout:
             "cuts": dict(self.cuts),
             "offloads": dict(self.offloads),
             "failures": dict(self.failures),
+            "inputTokens": self.input_tokens,
+            "lastTurnReads": dict(self.last_turn_reads),
+            "lastTurnReadCalls": self.last_turn_read_calls,
         }
 
 
@@ -131,6 +140,25 @@ def _first_turn(row: Mapping[str, Any], key: str) -> Optional[int]:
     return _turn(row, key, 0)
 
 
+def read_mode(call_input: Any) -> str:
+    """Which ``document_read`` mode one call used: ``query``, ``pattern``,
+    ``page_range``, ``offset`` or ``list`` (no argument names a document part)."""
+    args = call_input if isinstance(call_input, Mapping) else {}
+    for mode in ("query", "pattern", "page_range"):
+        if str(args.get(mode) or "").strip():
+            return mode
+    if args.get("offset"):
+        return "offset"
+    return "read" if args.get("upload_id") else "list"
+
+
+def _last_turn_reads(row: Mapping[str, Any]) -> List[str]:
+    turns = row.get("turns")
+    last = turns[-1] if isinstance(turns, list) and turns and isinstance(turns[-1], Mapping) else {}
+    trace = last.get("tool_trace") if isinstance(last.get("tool_trace"), list) else []
+    return [read_mode(e.get("input")) for e in trace if isinstance(e, Mapping) and e.get("name") == "document_read"]
+
+
 def delivery_readout(
     rows: Sequence[Mapping[str, Any]],
     calls_by_session: Optional[Mapping[str, Sequence[Mapping[str, Any]]]] = None,
@@ -147,8 +175,11 @@ def delivery_readout(
             case_id=case_id, samples=len(samples), arm=samples[0].get("arm"), ceiling=samples[0].get("ceiling"),
             model_id=samples[0].get("model_id"),
         )
-        costs, tokens = [], []
+        costs, tokens, inputs, read_counts = [], [], [], []
         for row in samples:
+            reads = _last_turn_reads(row)
+            out.last_turn_reads.update(reads)
+            read_counts.append(len(reads))
             if row.get("passed"):
                 out.passes += 1
             else:
@@ -160,6 +191,7 @@ def delivery_readout(
             summary = summarize_calls(calls, model_id=row.get("model_id"))
             if summary.calls:
                 costs.append(summary.cost_usd)
+                inputs.append(summary.input_tokens)
             tokens.append(summary.document_tokens)
             out.delivery[delivery_label(summary)] += 1
             if len(summary.turn_cache_statuses) > 1:
@@ -170,6 +202,8 @@ def delivery_readout(
             out.offloads.update(dict(summary.offloads))
         out.cost_per_sample = sum(costs) / len(costs) if costs else None
         out.document_tokens = _median(tokens)
+        out.input_tokens = _median(inputs)
+        out.last_turn_read_calls = _median(read_counts) if any(read_counts) else None
         out.first_token_ms = _median([_first_turn(r, "firstTokenMs") for r in samples])
         out.client_first_token_ms = _median([_first_turn(r, "clientFirstTokenMs") for r in samples])
         out.turn_duration_ms = _median([_first_turn(r, "turnDurationMs") for r in samples])
@@ -193,9 +227,10 @@ def format_delivery_readout(readouts: Sequence[CaseReadout], *, title: Optional[
     """A Markdown table, one row per case, then the run's totals."""
     lines = [f"### {title}", ""] if title else []
     lines += [
-        "| Case | Arm | Ceiling | Pass | $/sample | First token | Turn | Last turn (TTFT / duration) | Doc tokens | "
+        "| Case | Arm | Ceiling | Pass | $/sample | Input tokens/sample | First token | Turn | "
+        "Last turn (TTFT / duration) | Last-turn reads | Doc tokens | "
         "Delivery | Turn-2 cache | Turn-5 cache | Cuts/sample | Offloads/sample | Failures |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in readouts:
         name = r.case_id.split(".", 1)[-1]
@@ -207,9 +242,11 @@ def format_delivery_readout(readouts: Sequence[CaseReadout], *, title: Optional[
             "—" if r.last_first_token_ms is None and r.last_turn_duration_ms is None
             else f"{_ms(r.last_first_token_ms)} / {_ms(r.last_turn_duration_ms)}"
         )
+        inputs = "—" if r.input_tokens is None else f"{r.input_tokens:,}"
+        reads = "—" if r.last_turn_read_calls is None else f"{r.last_turn_read_calls} ({_counts(r.last_turn_reads)})"
         lines.append(
-            f"| {name} | {r.arm or '—'} | {r.ceiling or '—'} | {r.passes}/{r.samples} | {cost} | "
-            f"{_ms(r.first_token_ms)} | {_ms(r.turn_duration_ms)} | {last} | "
+            f"| {name} | {r.arm or '—'} | {r.ceiling or '—'} | {r.passes}/{r.samples} | {cost} | {inputs} | "
+            f"{_ms(r.first_token_ms)} | {_ms(r.turn_duration_ms)} | {last} | {reads} | "
             f"{doc_tokens} | {_counts(r.delivery)} | {_counts(r.second_turn_cache)} | "
             f"{_counts(r.fifth_turn_cache)} | {cuts} | {offloads} | {_counts(r.failures)} |"
         )
@@ -225,4 +262,4 @@ def format_delivery_readout(readouts: Sequence[CaseReadout], *, title: Optional[
     return "\n".join(lines)
 
 
-__all__ = ["CaseReadout", "delivery_label", "delivery_readout", "format_delivery_readout"]
+__all__ = ["CaseReadout", "delivery_label", "delivery_readout", "format_delivery_readout", "read_mode"]

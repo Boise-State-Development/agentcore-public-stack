@@ -334,7 +334,7 @@ def test_a_delivery_case_defaults_to_the_auto_arm_and_the_deployments_ceiling():
 
 
 @pytest.mark.parametrize("key,value", [
-    ("arm", "native"), ("arm", "text"), ("arm", "on_demand"),
+    ("arm", "native"), ("arm", "text"), ("arm", "on_demand"), ("arm", "search"),
     ("ceiling", "200k"),
 ])
 def test_the_forced_arms_and_the_ceiling_arms_parse(key, value):
@@ -342,9 +342,28 @@ def test_the_forced_arms_and_the_ceiling_arms_parse(key, value):
     assert getattr(case.run, key) == value
 
 
-def test_search_stays_reserved_until_phase_five():
-    with pytest.raises(CaseError, match="reserved: the legacy profile"):
-        parse_case(_delivery(arm="search"), family="attachment_delivery")
+def test_no_arm_is_reserved_since_phase_five():
+    from apis.shared.evals.cases import DELIVERY_ARMS, RESERVED_ARMS
+
+    assert "search" in DELIVERY_ARMS and RESERVED_ARMS == ()
+    with pytest.raises(CaseError, match="arm"):
+        parse_case(_delivery(arm="tool"), family="attachment_delivery")
+
+
+def test_a_delivery_turn_may_attach_its_own_files():
+    raw = _delivery()
+    raw["files"] = ["a.md"]
+    raw["turns"] = [{"prompt": "one", "files": ["b.md"]}, {"prompt": "two"}, {"prompt": "three", "files": ["c.md", "d.md"]}]
+    case = parse_case(raw, family="attachment_delivery")
+    assert [case.meta_for(i).files for i in range(3)] == [("b.md",), (), ("c.md", "d.md")]
+    assert case.all_files == ("a.md", "b.md", "c.md", "d.md")
+
+
+def test_only_a_delivery_turn_attaches_files_and_only_in_its_own_session():
+    raw = _delivery()
+    raw["turns"] = [{"prompt": "one"}, {"prompt": "two", "session": 2, "files": ["b.md"]}]
+    with pytest.raises(CaseError, match="files"):
+        parse_case(raw, family="attachment_delivery")
 
 
 def test_every_ceiling_names_its_runtime_environment():

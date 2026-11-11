@@ -1,8 +1,9 @@
 # Unified attachment delivery: one planner, decided in tokens, measured by evals
 
-**Status:** Proposed 2026-11-09. Phases 0–2 built and validated on dev (2026-11-10).
+**Status:** Proposed 2026-11-09. Phases 0–4 built and validated on dev (2026-11-10/11).
 §11 Q3 resolved 2026-11-10 from the phase 0 readout: the document budget is half the
-chat ceiling and the chat ceiling keeps counting documents (§5.2). Phase 3 is next.
+chat ceiling and the chat ceiling keeps counting documents (§5.2). Phase 5 (overflow,
+§4.3.2) built 2026-11-10; its steering threshold waits on the overflow readout on dev.
 **Motivating gap:** users report that they cannot attach documents that are large
 enough, or enough of them, to a conversation. The limits they hit (4 MB per file,
 5 files per message, 7 MB per message) are mostly ours, not the model's, and they
@@ -220,7 +221,7 @@ remaining budget.
 | `native` | PDF `document` block, or `image` block | PDF within the page limit and the budget, on a model with image input; any image |
 | `text` | The extracted text, wrapped as `<document>` | Any non-PDF document within the budget; a PDF with a text layer that is over the visual page limit but within the budget; any document on a text-only model |
 | `on_demand` | Digest plus `document_read` | Over the remaining budget, or facts not yet ready and over today's byte limits |
-| `search` | Digest plus `document_read` with `query` | `on_demand` and indexed in the attachments KB; preferred by guidance once the conversation's on-demand set passes a size the eval sets |
+| `search` | Digest plus `document_read` with `query` | `on_demand` and indexed in the attachments KB; preferred by guidance once the conversation's on-demand set passes a size the eval sets (§4.3.2) |
 | `tool` | An inventory line; content through the spreadsheet or deck tools | Tabular and presentation files |
 
 Rules that hold across the ladder:
@@ -239,6 +240,66 @@ Rules that hold across the ladder:
   uses, so no image is rejected for size and none exceeds 5 MB encoded.
 - A file is never dropped. Today's "skipped" and "send it in a follow-up" outcomes
   become `on_demand`.
+
+### 4.3.2 Overflow: indexing and the conversation's on-demand set (phase 5, built)
+
+Phase 3 spends the budget per turn, so several turns can each attach a document the
+model cannot hold, and the conversation fills with documents read on demand. Reading
+one on demand is cheap. Finding a fact in one of eight, when the question does not say
+which, means a `pattern` call per document. Phase 5 indexes those documents and
+steers the model to search across them.
+
+- **What is indexed.** Under the `token` profile, `attachment_plan.indexes_for_search`
+  decides. It admits a document whose row facts say the planner would send it
+  `on_demand` on its own on `SEARCH_INDEX_REFERENCE_MODEL`: the smallest document
+  budget any curated model gets (Haiku 5.5's 25k) at the default 1.40 tokenizer
+  factor and the 100-page limit. So a ~18k-token docx or a 10-page prose PDF
+  qualifies, and a 3k-token memo does not. A reference-class document keeps its own
+  rule: prepared, under either profile. The `legacy` profile indexes nothing new.
+  `attachment_index.is_eligible` and `search_status` read the rule. So do the daily
+  reconcile and the re-index on open, so turning the profile off removes these
+  documents at their next sync.
+- **When.** The prepare Lambda's facts run (`{"action": "facts"}`) writes the facts
+  and then syncs the index entry in the same invocation. That run is the only one that
+  can decide, because the facts are what decide. The Lambda reads
+  `ATTACHMENT_PLAN_ENABLED` for this, set by CDK only while the flag is on. Ingest
+  takes the 68–264 s the large-document spec measured, so a document sent in the
+  turn that attaches it is not searchable yet. It goes `on_demand`, and nothing
+  waits for the index.
+- **`search` mode.** A file the ladder sends `on_demand` (over the budget, over the
+  byte budget, reference-class, or pending facts) whose row the KB can already search
+  is planned `search`. The reason code is the same as for `on_demand`, so
+  `attachmentPlan` reads as the mode plus why the file is not held. The guidance
+  offers that file `query` first, even when it is over a budget. A forced
+  `on_demand` row never goes `search`.
+- **The conversation's on-demand set.** `plan_conversation` judges the conversation's
+  earlier document rows on the turn's model. Each row is counted if it is
+  reference-class, forced on demand, or one that model could not hold on its own.
+  This turn's `on_demand` and `search` files are added. A file the turn that attached it
+  sent on demand only because the budget was shared is counted as held, so the
+  estimate errs low. The result goes on `attachmentPlan.conversation` (`documents`,
+  `searchable`, `tokens` at the model's factor, `steer`, `reason`).
+- **The steer.** When the set has at least `SEARCH_STEER_MIN_DOCUMENTS` documents and
+  any of them is searchable, the turn's user message gets one line. It says how many
+  documents are read on demand and how many are indexed, and it says to call
+  `document_read` with `query` and no `upload_id` first, because one search covers
+  every indexed document. The line has counts and no names. It is on every turn the
+  planner steers, so a conversation whose earlier turns said `pattern` first is told
+  what changed. It is never in the system prompt or a tool spec. No tool spec changed:
+  `document_read`'s `query` argument already existed under `ATTACHMENT_KB_ENABLED`.
+  So `toolConfig` and the system prompt are byte-identical, and the line only adds to
+  this turn's message, which is append-only history.
+- **The read.** The set needs the conversation's file rows, which the route had not
+  read. One `SessionIndex` Query runs in a worker thread, started before attachment
+  resolution and awaited at message assembly. So it overlaps the S3 fetches, the
+  model resolution and the agent build. It runs only under the `token` profile with
+  the KB on, never for a brief, a resume or a continuation, and it keeps the caller's
+  rows only. The route logs the await's wait (`attachment conversation set: …
+  wait_ms=`), which is the read's only cost to the first token.
+- **The eval arm.** `deliveryOverride = "search"` forces a fixture into the KB
+  whatever its size (`indexes_for_search`) and turns the conversation's steer on.
+  `on_demand` keeps the file out of the KB and the steer off. A set holding both is
+  steered.
 
 ### 4.3.1 Images: the model copy (phase 4b, built)
 
@@ -453,8 +514,10 @@ chat_ceiling    = CompactionPolicy.resolve(window).ceiling, compared with the wh
 - **What the budget is spent against.** Phase 3 spends it per turn: the conversation's
   earlier attachments are already governed by compaction and the offload, which count
   them. Counting the documents a warm conversation still holds needs the live message
-  list, which the route does not have before the agent is resolved; that is left to
-  phase 5, which steers the conversation's on-demand set to `search`.
+  list, which the route does not have before the agent is resolved. Phase 5 does not
+  count what is held. It counts what is *not* held: the conversation's on-demand set,
+  judged from the session's file rows on the turn's model. Above a size, it steers
+  that set to `search` (§4.3.2). The budget itself is still per turn.
 - **The compaction ceiling, the hard ceiling and the offload are unchanged.** A
   document over the ceiling is cut or offloaded exactly as today; the budget only
   makes that rarer by not holding a document the ceiling cannot keep.
@@ -642,7 +705,7 @@ for the affected cells, and the cost and first-token deltas are stated in the PR
 | 2. Facts | Prepare every document at upload; one estimator; compaction and offload read row facts | Estimates change |
 | 3. Tokens | The ladder in §4.3 and the document budget in §5.2 behind `ATTACHMENT_PLAN_ENABLED`; values from the phase 0 readout (half the chat ceiling, per-model tokenizer factors) | Yes, flagged |
 | 4. Limits | Handles in persisted messages; 20 files; PDF page rules; image downscale | Yes, flagged |
-| 5. Overflow | Over-budget sets indexed and steered to `search` | Yes, flagged |
+| 5. Overflow | Over-budget sets indexed and steered to `search` (§4.3.2): `indexes_for_search` widens KB eligibility under the `token` profile; `search` mode; the conversation's on-demand set and its steering line; the `search` eval arm and the `overflow_*` cells. `SEARCH_STEER_MIN_DOCUMENTS` is 3 until the overflow readout sets it | Yes, flagged (`ATTACHMENT_PLAN_ENABLED`) |
 | 6. Retire | Delete the legacy profile, the flags and knobs it absorbed, and their tests and docs (§9.1) | None intended |
 
 Phases 3 to 5 each end with an `attachment_delivery` run and a release-ledger readout.
@@ -719,10 +782,12 @@ when it is promoted.
 |---|---|
 | The budget lets more be held than today | It sits inside the chat ceiling, which still counts documents, so total input stays under the size the 2026-09 replay priced. The cold-cache offload is unchanged, so a held document is never re-written after a pause; cold-turn cost is a reported measure |
 | The budget compares a wrong document size | It reads row facts (phase 2), never bytes/4, at the model's measured tokenizer factor (§2.1); an unlisted model is over-counted, which only sends a file `on_demand` sooner |
-| A per-turn budget lets several turns each attach up to it | Compaction and the offload still govern what the conversation holds; phase 5's `search` steering covers a large on-demand set |
+| A per-turn budget lets several turns each attach up to it | Compaction and the offload still govern what the conversation holds; phase 5's `search` steering covers a large on-demand set (§4.3.2) |
+| Phase 5 indexes documents the KB never held | Bounded by the per-user 500 MB cap and the 30-day eviction, as before. Only a document the smallest curated budget cannot hold qualifies, and each is under the 4 MB inline limit. On dev's last 30 days (2026-11-10), 7 of 61 such documents with facts qualified, 5.3 MB in all: about $0.03 a month at $5/GB-month, against 363 MB ($1.81) of reference-class documents already indexed. Ingest is included in the managed KB's storage price; a search is $0.001 |
+| The steering line costs tokens every turn | About 70 tokens in the user message, and only on turns whose set is over the threshold with something searchable. It is append-only history, so it never rewrites the cached prefix |
 | Text mode loses layout a native docx block kept | The docx and html arms compare `native` and `text` in phase 0 before the rule changes |
 | Image restore from S3 adds first-token latency | Measured at realistic scale and accepted explicitly, or images keep bytes in Memory with a lower count |
-| Preparing every upload raises Lambda invocations and KB ingest | Small files skip sharding; KB eligibility stays as it is until phase 5 |
+| Preparing every upload raises Lambda invocations and KB ingest | Small files skip sharding. KB eligibility widened in phase 5 to documents the planner sends on demand, under the `token` profile only (§4.3.2) |
 | 20 native PDFs exceed the request payload or the stricter many-image limit | The planner counts native blocks and bytes per request against the probed ceilings |
 
 ## 11. Open questions

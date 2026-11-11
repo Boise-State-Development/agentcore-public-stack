@@ -85,3 +85,26 @@ def test_merging_refuses_another_model_or_k():
         merge_family_baseline(_baseline([], {}), {**_baseline([], {}), "modelId": "other"})
     with pytest.raises(ReportError, match="k=3"):
         merge_family_baseline(_baseline([], {}), {**_baseline([], {}), "k": 1})
+
+
+def test_the_readout_counts_input_tokens_and_the_last_turns_read_modes():
+    from apis.shared.evals.delivery_readout import delivery_readout, format_delivery_readout, read_mode
+
+    assert [read_mode(x) for x in ({"query": "permit"}, {"upload_id": "u", "pattern": "WO-"}, {"upload_id": "u", "page_range": "3"},
+                                   {"upload_id": "u"}, {})] == ["query", "pattern", "page_range", "read", "list"]
+    rows = [
+        {"case_id": "attachment_delivery.overflow_4_documents_search", "session_id": "s1", "passed": True,
+         "arm": "search", "turns": [{}, {"tool_trace": [{"name": "document_read", "input": {"query": "x"}}]}]},
+        {"case_id": "attachment_delivery.overflow_4_documents_search", "session_id": "s2", "passed": True,
+         "arm": "search", "turns": [{"tool_trace": [{"name": "document_read", "input": {"query": "x"},
+                                                     }, {"name": "document_read", "input": {"upload_id": "u", "pattern": "y"}}]}]},
+    ]
+    calls = {
+        "s1": [{"tokenUsage": {"inputTokens": 100, "cacheReadInputTokens": 1_000, "cacheWriteInputTokens": 50}}],
+        "s2": [{"tokenUsage": {"inputTokens": 300, "cacheReadInputTokens": 2_000}}],
+    }
+    [readout] = delivery_readout(rows, calls)
+    assert readout.input_tokens == 1_725  # median of 1,150 and 2,300
+    assert readout.last_turn_reads == {"query": 2, "pattern": 1} and readout.last_turn_read_calls == 1
+    table = format_delivery_readout([readout])
+    assert "1,725" in table and "pattern 1, query 2" in table

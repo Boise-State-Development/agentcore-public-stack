@@ -13,6 +13,7 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Sequence, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -62,8 +63,10 @@ from apis.shared.files.attachment_plan import (
     CLASS_TABULAR,
     FORCED_TEXT_MAX_CHARS,
     MODE_NATIVE,
-    MODE_ON_DEMAND,
+    MODE_SEARCH,
     MODE_TEXT,
+    ON_DEMAND_MODES,
+    PROFILE_TOKEN,
     REASON_DOCUMENTS_AS_TEXT,
     REASON_FORCED,
     REASON_FACTS_PENDING,
@@ -86,13 +89,17 @@ from apis.shared.files.attachment_plan import (
     REASON_TEXT_ONLY_UNREADABLE,
     REASON_TEXT_UNAVAILABLE,
     AttachmentPlan,
+    ConversationFacts,
+    ConversationPlan,
     FileFacts,
     LimitsProfile,
     ModelFacts,
     cap_message_attachments,
     current_limits_profile,
+    facts_from_row,
     file_class,
     plan_attachments,
+    plan_conversation,
     reads_from_original,
     refine_for_model,
 )
@@ -1846,6 +1853,7 @@ def _file_facts(file, upload_rows: dict) -> FileFacts:
             by_reference=True,
             has_row=True,
             forced_mode=meta.delivery_override,
+            searchable=_row_searchable(meta),
             **facts,
         )
     row = upload_rows.get(id(file))
@@ -1857,8 +1865,22 @@ def _file_facts(file, upload_rows: dict) -> FileFacts:
         upload_id=row.upload_id if row is not None else None,
         has_row=row is not None,
         forced_mode=getattr(row, "delivery_override", None),
+        searchable=_row_searchable(row),
         **facts,
     )
+
+
+def _row_searchable(meta) -> bool:
+    """Whether the attachments KB can search this row now: what ``document_read``'s
+    query mode would say (``attachment_index.search_status``). From the row; no read."""
+    if meta is None or not attachment_kb_enabled():
+        return False
+    from apis.shared.files.attachment_index import SEARCH_SEARCHABLE, search_status
+
+    try:
+        return search_status(meta, kb_enabled=True) == SEARCH_SEARCHABLE
+    except Exception:  # noqa: BLE001 - an unreadable row is not searchable, never a failed turn
+        return False
 
 
 def _row_admission_facts(meta) -> dict:
@@ -1948,6 +1970,122 @@ def _attachment_marker_names(all_files: list, oversized_inline: list) -> list:
     return [f.filename for f in all_files if f.filename not in oversized_names]
 
 
+def _start_session_files_read(
+    session_id: Optional[str],
+    user_id: str,
+    *,
+    is_brief: bool,
+    is_resume: bool,
+    is_continuation: bool,
+) -> Optional["asyncio.Task[list]"]:
+    """Start reading the conversation's file rows for phase 5's on-demand set.
+
+    Unified attachment delivery §4.3 (the ``search`` row): the turn's guidance
+    needs the conversation's earlier documents, which the route has not read.
+    One ``SessionIndex`` Query in a worker thread, started before attachment
+    resolution and awaited at message assembly (``_plan_conversation_set``), so
+    it overlaps the S3 fetches and the agent build instead of adding to the
+    time to first token. Only under the ``token`` profile with the attachments
+    KB on (with the KB off nothing is searchable and the set changes nothing),
+    and never on a turn whose message is not composed (a brief, a resume, a
+    continuation). Rows are the caller's own: a session id alone does not name
+    a conversation.
+    """
+    if is_brief or is_resume or is_continuation or not session_id:
+        return None
+    if not attachment_kb_enabled() or current_limits_profile().name != PROFILE_TOKEN:
+        return None
+    from apis.shared.files.models import FileStatus
+    from apis.shared.files.repository import get_file_upload_repository
+
+    async def _read() -> list:
+        started = time.monotonic()
+        rows = await asyncio.to_thread(
+            get_file_upload_repository().list_session_files_sync, session_id, FileStatus.READY
+        )
+        logger.debug("session files read in %.1f ms", (time.monotonic() - started) * 1000)
+        return [r for r in rows if r.user_id == user_id]
+
+    task = asyncio.create_task(_read())
+    # A turn that ends before message assembly never awaits it; retrieve its
+    # exception so a failed read is not reported as an unretrieved one.
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    return task
+
+
+async def _plan_conversation_set(attachments: "TurnAttachments") -> Optional[ConversationPlan]:
+    """Await the session-files read and plan the conversation's on-demand set (phase 5).
+
+    Records the result on ``attachments.plan`` (``attachmentPlan.conversation``
+    on the turn's ``C#`` row). Never raises: a failed read is a turn with no
+    conversation-level steering, exactly as before phase 5. Logs how long the
+    await waited, which is the read's only cost to the first token.
+    """
+    task = attachments.session_files_task
+    if task is None or attachments.profile is None or attachments.model_facts is None:
+        return None
+    waited = time.monotonic()
+    try:
+        rows = await task
+    except Exception:  # noqa: BLE001 - steering is an improvement, never a failed turn
+        logger.warning("Conversation file rows unavailable; no search steering this turn", exc_info=True)
+        return None
+    wait_ms = (time.monotonic() - waited) * 1000
+    try:
+        earlier = tuple(facts_from_row(r, searchable=_row_searchable(r)) for r in rows)
+        conversation = plan_conversation(
+            attachments.plan,
+            attachments.plan_facts,
+            ConversationFacts(earlier=earlier),
+            attachments.model_facts,
+            profile=attachments.profile,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Conversation on-demand set not planned", exc_info=True)
+        return None
+    logger.info(
+        "attachment conversation set: rows=%d documents=%d searchable=%d steer=%s wait_ms=%.1f",
+        len(rows),
+        conversation.documents if conversation else 0,
+        conversation.searchable if conversation else 0,
+        conversation.reason if conversation else "none",
+        wait_ms,
+    )
+    if conversation is not None:
+        base = attachments.plan or AttachmentPlan(profile=attachments.profile.name)
+        attachments.plan = dataclass_replace(base, conversation=conversation)
+    return conversation
+
+
+def _search_upload_ids(plan: Optional[AttachmentPlan]) -> frozenset:
+    """Upload ids the planner sent ``search`` this turn (phase 5)."""
+    if plan is None:
+        return frozenset()
+    return frozenset(e.upload_id for e in plan.entries if e.mode == MODE_SEARCH and e.upload_id)
+
+
+def _conversation_search_sentence(conversation: Optional[ConversationPlan], search_available: bool) -> str:
+    """The phase 5 steering line, or ``""``.
+
+    In the turn's user message, never the system prompt or a tool spec, so the
+    cacheable prefix is the same whether or not it is there; it is persisted
+    with the message like the rest of the guidance. Counts only, no names: the
+    query searches every indexed document in the conversation, so the model
+    needs no list. Present on every turn the planner steers, so a conversation
+    whose earlier guidance said ``pattern`` is told once per turn what changed.
+    """
+    if conversation is None or not conversation.steer or not search_available:
+        return ""
+    n, k = conversation.documents, conversation.searchable
+    indexed = "all of them are" if k >= n else f"{k} of them {'is' if k == 1 else 'are'}"
+    return (
+        f"_This conversation has {n} documents that are read on demand rather than kept in "
+        f"context, and {indexed} indexed for search. To find something in them, call "
+        f"`document_read` with `query` and no `upload_id` first: one search covers every "
+        f"indexed document. Then read the pages or passages it points to._"
+    )
+
+
 def _reference_search_available(document_read_available: bool) -> bool:
     """Whether this turn's ``document_read`` has its ``query`` argument.
 
@@ -1972,6 +2110,8 @@ def _build_attachment_guidance(
     references: list | None = None,
     document_read_available: bool = True,
     search_available: bool = False,
+    search_upload_ids: frozenset | None = None,
+    conversation_set: ConversationPlan | None = None,
 ) -> str:
     """Return a short markdown addendum describing how attachments will be
     handled, to append to the user's message so the agent (and the user)
@@ -1994,6 +2134,10 @@ def _build_attachment_guidance(
     ``document_read`` when this turn has it (``document_read_available``).
     ``search_available`` is whether that tool has its ``query`` argument (the
     deployment's attachments KB, §4F); the sentence then names search first.
+    ``search_upload_ids`` are the files the planner sent ``search`` (on demand
+    and indexed, unified-attachment-delivery phase 5): offered ``query`` even
+    when over a budget. ``conversation_set`` is the conversation's on-demand set;
+    when the planner steers it, one more sentence says to search across it first.
     """
     parts: list[str] = []
 
@@ -2035,9 +2179,10 @@ def _build_attachment_guidance(
         # Only large documents are indexed for search (attachments KB, §4F), so
         # an over-budget file is never offered `query`: it would answer "not
         # indexed for search".
+        indexed = ref.upload_id in (search_upload_ids or ())
         find = (
             "first with `query` (a plain-language search, which also covers scanned pages) or `pattern`"
-            if search_available and not over_budget_ref
+            if search_available and (indexed or not over_budget_ref)
             else "first with `pattern`"
         )
         if ref.format == "pdf":
@@ -2050,6 +2195,10 @@ def _build_attachment_guidance(
                 f"{lead} To answer from it, {call}: {find} to find the "
                 f"relevant passages, then read on from there._"
             )
+
+    steer = _conversation_search_sentence(conversation_set, document_read_available and search_available)
+    if steer:
+        parts.append(steer)
 
     if diverted_tabular:
         names = ", ".join(f"`{f.filename}`" for f in diverted_tabular)
@@ -2882,6 +3031,13 @@ class TurnAttachments:
     # The ``FileContent`` objects ``_send_compact_images`` swapped to their
     # compact copy, so the persisted handle names the copy actually sent.
     compact_image_ids: set = field(default_factory=set)
+    # The conversation's file rows (phase 5's on-demand set), read by a task
+    # started before resolution and awaited at message assembly, so its one
+    # Query overlaps the turn's build (``_start_session_files_read``). ``None``
+    # unless the ``token`` profile and the attachments KB are both on.
+    session_files_task: Optional["asyncio.Task[list]"] = None
+    # The turn model's facts, kept by ``_plan_for_model`` for the conversation plan.
+    model_facts: Optional[ModelFacts] = None
 
     @property
     def max_files_per_message(self) -> int:
@@ -3211,7 +3367,7 @@ async def _resolve_turn_attachments(
     diverted_tabular = _planned(REASON_TABULAR)
     diverted_presentations = _planned(REASON_PRESENTATION)
     oversized_inline = _planned(REASON_OVERSIZED)
-    reference_indices = [i for i in plan.indices(MODE_ON_DEMAND) if isinstance(all_files[i], ReferenceAttachment)]
+    reference_indices = [i for i in plan.indices(*ON_DEMAND_MODES) if isinstance(all_files[i], ReferenceAttachment)]
     reference_documents = [all_files[i] for i in reference_indices]
     if reference_documents:
         logger.info(
@@ -3279,7 +3435,7 @@ async def _resolve_turn_attachments(
         record_reference_attachments(budget_references)
         # One list in attachment order, so the message's reference blocks read
         # in the order the user attached the files.
-        by_index = {i: all_files[i] for i in plan.indices(MODE_ON_DEMAND)}
+        by_index = {i: all_files[i] for i in plan.indices(*ON_DEMAND_MODES)}
         by_index.update(zip(budget_indices, budget_references))
         reference_indices = sorted(by_index)
         reference_documents = [by_index[i] for i in reference_indices]
@@ -3413,16 +3569,18 @@ def _plan_for_model(attachments: TurnAttachments, turn_model: "TurnModel") -> No
     if attachments.plan is None or attachments.profile is None:
         return
     budgeted = attachments.profile.document_budget_share > 0
-    attachments.plan = refine_for_model(
-        attachments.plan,
-        attachments.plan_facts,
-        ModelFacts(
+    if attachments.model_facts is None:
+        attachments.model_facts = ModelFacts(
             text_only=turn_model.text_only,
             converse=_is_converse_model(turn_model),
             context_window=turn_model.context_window,
             model_id=turn_model.model_id,
             chat_ceiling=_chat_ceiling(turn_model.context_window) if budgeted else None,
-        ),
+        )
+    attachments.plan = refine_for_model(
+        attachments.plan,
+        attachments.plan_facts,
+        attachments.model_facts,
         profile=attachments.profile,
     )
 
@@ -3462,7 +3620,7 @@ def _carry_out_token_plan(attachments: TurnAttachments, turn_model: "TurnModel")
     # Every file the model's plan sent on demand that the byte pass had kept
     # inline: over the document budget, a PDF judged by its pages before its
     # facts (``facts_pending``), or one past the request's native pages.
-    over = set(attachments.plan.indices(MODE_ON_DEMAND)) & set(attachments.inline_indices)
+    over = set(attachments.plan.indices(*ON_DEMAND_MODES)) & set(attachments.inline_indices)
     if not over:
         return
     moved: list = []
@@ -5564,6 +5722,15 @@ async def _run_invocation(
     # Attachments: recover the previous turn's unanswered uploads, fetch this
     # turn's from S3, dedupe, partition (inline / spreadsheet / deck /
     # oversized) and hold the inline set to one message's byte budget.
+    # Phase 5's on-demand set: the conversation's file rows, read alongside
+    # resolution and the build, awaited only at message assembly.
+    session_files_task = _start_session_files_read(
+        input_data.session_id,
+        user_id,
+        is_brief=is_brief,
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+    )
     attachments = TurnAttachments() if is_brief else await _resolve_turn_attachments(
         input_data,
         user_id,
@@ -5571,6 +5738,7 @@ async def _run_invocation(
         is_resume=is_resume,
         is_continuation=is_continuation,
     )
+    attachments.session_files_task = session_files_task
 
     # Covers the unconsumed-attachment recovery read (answered from the
     # snapshot), the S3 fetch behind `resolve_files`, and the partitioning.
@@ -6458,6 +6626,9 @@ async def _run_invocation(
             #   3. Attachment guidance is appended (tabular routed to tools, etc.)
             # The original text becomes the single source of truth for UI display,
             # while the full augmented prompt stays in AgentCore Memory for the LLM.
+            # Phase 5: the conversation's on-demand set, from the rows read
+            # alongside the build; awaited here, never before.
+            conversation_set = await _plan_conversation_set(attachments)
             attachment_guidance = _build_attachment_guidance(
                 attachments.diverted_tabular,
                 attachments.diverted_presentations,
@@ -6473,6 +6644,8 @@ async def _run_invocation(
                 references=attachments.reference_documents,
                 document_read_available=document_read_available,
                 search_available=_reference_search_available(document_read_available),
+                search_upload_ids=_search_upload_ids(attachments.plan),
+                conversation_set=conversation_set,
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of

@@ -45,7 +45,7 @@ ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal", "attachment_deliver
 
 #: The delivery measurement family (unified-attachment-delivery spec §8.4).
 #: Advisory: its gating set is the cells where two arms are both legal for a
-#: file, and until the forced arms exist every case runs the one ``auto`` arm.
+#: file.
 DELIVERY_FAMILY = "attachment_delivery"
 #: Families a run includes only when ``--family`` names them. The delivery
 #: family attaches documents up to ~300k tokens, so a release or nightly pass
@@ -58,11 +58,13 @@ DEFAULT_FAMILIES: Tuple[str, ...] = tuple(f for f in FAMILIES if f not in OPT_IN
 #: whatever the deployment decides for the file. Each other arm is the
 #: planner's fixture-only ``delivery`` value, written on the file row by the
 #: registrar (``fixtures.register_upload``), never sent on the request.
-DELIVERY_ARMS: Tuple[str, ...] = ("auto", "native", "text", "on_demand")
-#: ``search`` needs a document in the attachments KB, and the ``legacy``
-#: profile ingests only a prepared reference-class document, so no fixture
-#: under 4 MB can be forced into it. Reserved until phase 5's ``search`` mode.
-RESERVED_ARMS: Tuple[str, ...] = ("search",)
+#: ``search`` (phase 5) indexes each file into the attachments KB whatever its
+#: size and steers the conversation to ``document_read``'s ``query``; it needs
+#: the ``token`` profile and the KB on the target, and the run waits for each
+#: file to be searchable before the first turn (``fixtures.wait_for_searchable``).
+DELIVERY_ARMS: Tuple[str, ...] = ("auto", "native", "text", "on_demand", "search")
+#: Arms a case may not name yet. None since phase 5.
+RESERVED_ARMS: Tuple[str, ...] = ()
 #: The compaction ceiling a case runs under (§8.4): ``default`` is the
 #: deployment's (a 100k cap) and ``200k`` a 200k cap. (Phase 0's third arm,
 #: the 100k cap with §5.2's document subtraction, was deleted with the switch
@@ -242,6 +244,10 @@ class TurnMeta:
     #: Seconds to wait before sending this turn (``attachment_delivery``'s
     #: paced cases: a pause past the prompt-cache TTL).
     pause_seconds: int = 0
+    #: Fixture files attached on this turn (``attachment_delivery`` only), as a
+    #: user attaching documents partway through a conversation would; the
+    #: case's own ``files`` arrive with the first turn.
+    files: Tuple[str, ...] = ()
 
 
 #: The generated reference documents a case may attach (``large_documents``).
@@ -276,6 +282,11 @@ class EvalCase:
 
     def meta_for(self, index: int) -> TurnMeta:
         return self.turn_meta[index] if index < len(self.turn_meta) else TurnMeta()
+
+    @property
+    def all_files(self) -> Tuple[str, ...]:
+        """Every fixture file the case attaches: its own, then each turn's, in order."""
+        return self.files + tuple(name for meta in self.turn_meta for name in meta.files)
 
     @property
     def gating(self) -> bool:
@@ -419,7 +430,7 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     turn_meta: List[TurnMeta] = []
     session_users: Dict[int, str] = {}
     for i, turn in enumerate(turns_raw):
-        _check_keys(turn, ("prompt", "session", "as", "pause_seconds"), f"{where}.turns[{i}]")
+        _check_keys(turn, ("prompt", "session", "as", "pause_seconds", "files"), f"{where}.turns[{i}]")
         prompt = turn.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise CaseError(f"{where}.turns[{i}].prompt: expected text")
@@ -437,8 +448,11 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
             raise CaseError(f"{where}.turns[{i}].pause_seconds: expected 0..{MAX_PAUSE_SECONDS}")
         if pause and family != DELIVERY_FAMILY:
             raise CaseError(f"{where}.turns[{i}].pause_seconds: only {DELIVERY_FAMILY} cases pause")
+        turn_files = _str_tuple(turn.get("files"), f"{where}.turns[{i}].files")
+        if turn_files and (family != DELIVERY_FAMILY or session != 1):
+            raise CaseError(f"{where}.turns[{i}].files: only {DELIVERY_FAMILY} cases attach on a later turn, in session 1")
         turns.append(prompt)
-        turn_meta.append(TurnMeta(session=session, as_user=as_user, pause_seconds=pause))
+        turn_meta.append(TurnMeta(session=session, as_user=as_user, pause_seconds=pause, files=turn_files))
 
     run_raw = raw.get("run") or {}
     _check_keys(
@@ -454,10 +468,7 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         if family != DELIVERY_FAMILY:
             raise CaseError(f"{where}.run.{key}: only {DELIVERY_FAMILY} cases name a {key}")
         if value in reserved:
-            raise CaseError(
-                f"{where}.run.{key}: '{value}' is reserved: the legacy profile can only put a prepared "
-                "reference-class document in the attachments KB (unified-attachment-delivery §8.4, phase 5)"
-            )
+            raise CaseError(f"{where}.run.{key}: '{value}' is reserved")
         if value not in allowed:
             raise CaseError(f"{where}.run.{key}: expected one of {', '.join(allowed + reserved)}")
     client_surface = run_raw.get("client_surface")
@@ -619,7 +630,7 @@ def load_cases(
 
     if fixtures_dir is not None:
         for case in cases:
-            for name in case.files:
+            for name in case.all_files:
                 if name not in generated and not (fixtures_dir / name).is_file():
                     raise CaseError(f"{case.id}: fixture file '{name}' not found in {fixtures_dir}")
     return cases

@@ -52,8 +52,10 @@ already extracted. Every *other* document-class upload (one under the inline
 limit) arrives as ``{"action": "facts", "user_id", "upload_id"}``: it reads the
 original, computes the same facts, and writes only ``facts``. It writes no
 sidecar, no shard, no ``preparation`` and no digest (app-api builds that one
-in-process, as before), and never indexes, so a small file's delivery and KB
-eligibility are exactly what they were.
+in-process, as before). With the KB on it then syncs the upload's index entry,
+which ingests only a document the attachment planner's ``token`` profile would
+send on demand (phase 5, ``attachment_index.indexed_by_budget``); on the
+``legacy`` profile no small file is ever eligible, as before.
 
 **PDF thumbnail.** Both paths render a PDF's first page to
 ``_derived/thumb.png`` (``apis/shared/files/pdf_thumbnail.py``) while the PDF
@@ -640,7 +642,14 @@ async def _handle(message: Dict[str, Any], final_attempt: bool) -> str:
             outcome += f", index: {await index_after_prepare(message['user_id'], message['upload_id'])}"
         return outcome
     if kind == "facts":
-        return await compute_facts(message["user_id"], message["upload_id"], final_attempt=final_attempt)
+        outcome = await compute_facts(message["user_id"], message["upload_id"], final_attempt=final_attempt)
+        # Unified attachment delivery phase 5: under the token profile a document
+        # the planner would send on demand is indexed by its facts, not only a
+        # prepared reference-class one. ``sync_upload`` decides from the row
+        # (``attachment_index.is_eligible``), so anything else is "not_eligible".
+        if outcome == "ready" and attachment_kb_enabled():
+            outcome += f", index: {await index_after_prepare(message['user_id'], message['upload_id'])}"
+        return outcome
     if kind == "thumbnail":
         return await render_thumbnail(message["user_id"], message["upload_id"], final_attempt=final_attempt)
     if kind == "preview":

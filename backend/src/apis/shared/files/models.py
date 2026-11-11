@@ -202,7 +202,7 @@ Delivery = Literal["inline", "reference"]
 # folder import sets for real users. Only a direct row write sets it: no request
 # field, no app-api route and no ``FileUploadService`` method takes it
 # (``tests/apis/shared/files/test_delivery_override_is_fixture_only.py``).
-DELIVERY_OVERRIDE_VALUES = frozenset({"native", "text", "on_demand"})
+DELIVERY_OVERRIDE_VALUES = frozenset({"native", "text", "on_demand", "search"})
 
 
 def is_reference_document(meta: "FileMetadata") -> bool:

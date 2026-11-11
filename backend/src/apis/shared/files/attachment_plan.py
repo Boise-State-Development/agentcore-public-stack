@@ -79,8 +79,24 @@ write sets it: no request field and no app-api route can
   original by ``document_read``, as an over-budget one is
   (:func:`reads_from_original`).
 
-``search`` is not forceable: in the ``legacy`` profile only a prepared
-reference-class document is ingested into the attachments KB (phase 5).
+The ``token`` profile can also force ``search``: the file is delivered as a
+forced ``on_demand`` one, it is indexed into the attachments KB whatever its size
+(:func:`indexes_for_search`), and the conversation's guidance prefers
+``document_read``'s ``query`` (:func:`plan_conversation`). The ``legacy`` profile
+plans a forced ``search`` as ``on_demand``.
+
+**Overflow (phase 5, §4.3's ``search`` row).** Under the ``token`` profile a
+document the planner would send ``on_demand`` on its own, on the smallest
+document budget any curated model gets, is indexed into the attachments KB at
+upload (:func:`indexes_for_search`, read by ``attachment_index``), not only a
+reference-class one. A file that is ``on_demand`` and whose row says it is
+searchable is planned ``search``; one not indexed yet stays ``on_demand`` and
+nothing waits for it. :func:`plan_conversation` then looks at the
+conversation's whole on-demand set (earlier attachments, from the session's file
+rows, plus this turn's) and decides whether the turn's guidance steers the
+model to search across them first. The steering is a line in the turn's user
+message, never the system prompt or a tool spec, so the cacheable prefix does
+not move.
 
 **What is recorded.** :meth:`AttachmentPlan.to_row` is written on the turn's
 ``C#`` cost row as ``attachmentPlan`` after the stream: modes, classes, reason
@@ -125,7 +141,8 @@ MODE_NATIVE = "native"
 MODE_TEXT = "text"
 #: A digest or stub in the message; ``document_read`` reads the content.
 MODE_ON_DEMAND = "on_demand"
-#: ``on_demand`` plus ``document_read``'s ``query`` (phase 5; not chosen by ``legacy``).
+#: ``on_demand`` plus ``document_read``'s ``query``: the file is indexed in the
+#: attachments KB (phase 5; never chosen by ``legacy``).
 MODE_SEARCH = "search"
 #: An inventory line; the spreadsheet or deck tools read the content.
 MODE_TOOL = "tool"
@@ -135,8 +152,13 @@ MODE_DROPPED = "dropped"
 
 MODES = (MODE_NATIVE, MODE_TEXT, MODE_ON_DEMAND, MODE_SEARCH, MODE_TOOL, MODE_DROPPED)
 
+#: The modes ``document_read`` reads a file in: its content is not in the message.
+ON_DEMAND_MODES = (MODE_ON_DEMAND, MODE_SEARCH)
+
 #: Modes a file row's ``delivery_override`` may force.
-FORCEABLE_MODES = frozenset({MODE_NATIVE, MODE_TEXT, MODE_ON_DEMAND})
+FORCEABLE_MODES = frozenset({MODE_NATIVE, MODE_TEXT, MODE_ON_DEMAND, MODE_SEARCH})
+#: Forced modes delivered by reference (``document_read`` reads the original).
+_FORCED_BY_REFERENCE = frozenset({MODE_ON_DEMAND, MODE_SEARCH})
 
 #: Characters of extracted text a forced ``text`` file may carry: about 400k
 #: estimated tokens, above any fixture the delivery evals attach. A forced
@@ -187,6 +209,16 @@ REASON_FACTS_PENDING = "facts_pending"
 #: ``token``: a native PDF would take the turn's native pages past the model's
 #: per-request page limit, so it goes ``text`` (or ``on_demand``) instead.
 REASON_REQUEST_PAGE_LIMIT = "request_page_limit"
+
+# Conversation-level steering (phase 5, :class:`ConversationPlan`). Stable strings.
+#: The on-demand set reached ``SEARCH_STEER_MIN_DOCUMENTS`` and some of it is indexed.
+STEER_SET_SIZE = "set_size"
+#: Under the threshold: the per-file guidance (``pattern`` first) stands.
+STEER_BELOW_THRESHOLD = "below_threshold"
+#: Nothing in the set is indexed yet: search would answer "not searchable".
+STEER_NONE_SEARCHABLE = "none_searchable"
+#: An eval arm forced the set's steering (a ``search`` or ``on_demand`` row).
+STEER_FORCED = "forced"
 
 #: An image's stored copies (``image_downscale``).
 VARIANT_HIGH = "high"
@@ -310,6 +342,10 @@ class FileFacts:
     compact_bytes: Optional[int] = None
     compact_width: Optional[int] = None
     compact_height: Optional[int] = None
+    #: The row says the attachments KB can search it (``attachment_index``'s
+    #: ``searchable``). Read by the ``token`` profile only: an ``on_demand``
+    #: file that is searchable is planned ``search`` (phase 5).
+    searchable: bool = False
 
 
 @dataclass(frozen=True)
@@ -334,6 +370,9 @@ class ConversationFacts:
     """What the conversation already holds. Read by the ``token`` profile."""
 
     attachment_tokens: int = 0
+    #: The conversation's earlier document attachments, from its file rows
+    #: (phase 5): what :func:`plan_conversation` judges the on-demand set from.
+    earlier: Tuple["FileFacts", ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +422,9 @@ class AttachmentPlan:
     requested_inline_bytes: int = 0
     #: Per-document character share for a TEXT-only model (0 when none).
     text_char_limit: int = 0
+    #: The conversation's on-demand set and whether the turn steers it to
+    #: search (phase 5, :func:`plan_conversation`); ``None`` when it has none.
+    conversation: Optional["ConversationPlan"] = None
 
     def indices(self, *modes: str, reason: Optional[str] = None) -> List[int]:
         return [
@@ -406,8 +448,9 @@ class AttachmentPlan:
         return replace(self, entries=entries)
 
     def to_row(self) -> Optional[Dict[str, Any]]:
-        """``attachmentPlan`` for the turn's ``C#`` row, or ``None`` when nothing was attached."""
-        if not self.entries and not self.dropped_over_count:
+        """``attachmentPlan`` for the turn's ``C#`` row, or ``None`` when nothing
+        was attached and the conversation has no on-demand set."""
+        if not self.entries and not self.dropped_over_count and self.conversation is None:
             return None
         row: Dict[str, Any] = {
             "profile": self.profile,
@@ -415,7 +458,36 @@ class AttachmentPlan:
         }
         if self.dropped_over_count:
             row["droppedOverCount"] = int(self.dropped_over_count)
+        if self.conversation is not None:
+            row["conversation"] = self.conversation.to_row()
         return row
+
+
+@dataclass(frozen=True)
+class ConversationPlan:
+    """The conversation's on-demand set and the turn's steering (phase 5).
+
+    Counts and numbers only. ``documents`` is every document in the set: earlier
+    attachments the turn's model could not hold on their own, reference-class
+    ones, and this turn's ``on_demand`` and ``search`` files. ``searchable`` is
+    how many of them the attachments KB can search now. ``tokens`` is their text
+    at the model's tokenizer factor, what holding them all would cost.
+    """
+
+    documents: int
+    searchable: int
+    tokens: int
+    steer: bool
+    reason: str
+
+    def to_row(self) -> Dict[str, Any]:
+        return {
+            "documents": int(self.documents),
+            "searchable": int(self.searchable),
+            "tokens": int(self.tokens),
+            "steer": MODE_SEARCH if self.steer else MODE_ON_DEMAND,
+            "reason": self.reason,
+        }
 
 
 @dataclass(frozen=True)
@@ -658,7 +730,7 @@ def delivers_by_reference(meta: Any) -> bool:
     forced = getattr(meta, "delivery_override", None)
     if forced in (MODE_NATIVE, MODE_TEXT):
         return False
-    if forced == MODE_ON_DEMAND:
+    if forced in _FORCED_BY_REFERENCE:
         return document_format_for(meta.mime_type, meta.filename) is not None
     return is_reference_document(meta)
 
@@ -666,12 +738,12 @@ def delivers_by_reference(meta: Any) -> bool:
 def reads_from_original(meta: Any) -> bool:
     """Whether a by-reference row is read from its original rather than prepared sidecars.
 
-    True for a row forced ``on_demand`` that is under the reference size: the
-    prepare Lambda never prepares it, so it renders like an over-budget
-    reference (its upload digest, or a ``ready`` stub) and ``document_read``
-    reads the original. Every user row answers ``False``.
+    True for a row forced ``on_demand`` (or ``search``) that is under the
+    reference size: the prepare Lambda never prepares it, so it renders like an
+    over-budget reference (its upload digest, or a ``ready`` stub) and
+    ``document_read`` reads the original. Every user row answers ``False``.
     """
-    return getattr(meta, "delivery_override", None) == MODE_ON_DEMAND and not is_reference_document(meta)
+    return getattr(meta, "delivery_override", None) in _FORCED_BY_REFERENCE and not is_reference_document(meta)
 
 
 def _forced(facts: FileFacts) -> Optional[str]:
@@ -811,8 +883,8 @@ def plan_attachments(
         cls = classes[i]
         forced = _forced(facts)
         if facts.by_reference:
-            modes[i] = MODE_ON_DEMAND
-            reasons[i] = REASON_FORCED if forced == MODE_ON_DEMAND else REASON_REFERENCE_CLASS
+            modes[i] = _on_demand_mode(facts, profile)
+            reasons[i] = REASON_FORCED if forced in _FORCED_BY_REFERENCE else REASON_REFERENCE_CLASS
             continue
         if cls == CLASS_TABULAR:
             modes[i], reasons[i] = MODE_TOOL, REASON_TABULAR
@@ -829,7 +901,7 @@ def plan_attachments(
         if cls != CLASS_IMAGE and facts.size_bytes > profile.inline_document_max_bytes:
             if profile.document_budget_share > 0 and facts.has_row and cls in (CLASS_PDF, CLASS_DOCUMENT):
                 # The token profile never drops a file it can read later (§4.3).
-                modes[i], reasons[i] = MODE_ON_DEMAND, REASON_OVER_BUDGET_REFERENCE
+                modes[i], reasons[i] = _on_demand_mode(facts, profile), REASON_OVER_BUDGET_REFERENCE
                 continue
             modes[i], reasons[i] = MODE_DROPPED, REASON_OVERSIZED
             continue
@@ -852,7 +924,7 @@ def plan_attachments(
             if reasons[i] != REASON_FORCED and running + size > profile.inline_total_max_bytes:
                 document_reads_it = files[i].has_row and classes[i] in (CLASS_PDF, CLASS_DOCUMENT)
                 if profile.over_budget_by_reference and document_reads_it:
-                    modes[i], reasons[i] = MODE_ON_DEMAND, REASON_OVER_BUDGET_REFERENCE
+                    modes[i], reasons[i] = _on_demand_mode(facts, profile), REASON_OVER_BUDGET_REFERENCE
                 else:
                     modes[i], reasons[i] = MODE_DROPPED, REASON_OVER_BUDGET
                 continue
@@ -879,6 +951,14 @@ def plan_attachments(
     if model is None:
         return plan
     return refine_for_model(plan, files, model, profile=profile)
+
+
+def _on_demand_mode(facts: FileFacts, profile: LimitsProfile) -> str:
+    """``search`` for an ``on_demand`` file the KB can search, on the ``token``
+    profile; ``on_demand`` otherwise. A file forced ``on_demand`` stays it."""
+    if profile.document_budget_share > 0 and facts.searchable and _forced(facts) != MODE_ON_DEMAND:
+        return MODE_SEARCH
+    return MODE_ON_DEMAND
 
 
 def _request_byte_budget(profile: LimitsProfile) -> int:
@@ -936,6 +1016,8 @@ def _images_first_budget(
         if reasons[i] != REASON_FORCED and running + size > budget:
             if files[i].has_row and classes[i] in (CLASS_PDF, CLASS_DOCUMENT):
                 modes[i], reasons[i] = MODE_ON_DEMAND, REASON_OVER_BUDGET_REFERENCE
+                if files[i].searchable:
+                    modes[i] = MODE_SEARCH
             else:
                 modes[i], reasons[i] = MODE_DROPPED, REASON_OVER_BUDGET
             continue
@@ -1094,7 +1176,7 @@ def _token_ladder(
 
         def over(reason: str = REASON_OVER_DOCUMENT_BUDGET) -> None:
             if facts.has_row:
-                entries[e.index] = replace(e, mode=MODE_ON_DEMAND, reason=reason, tokens=0)
+                entries[e.index] = replace(e, mode=_on_demand_mode(facts, profile), reason=reason, tokens=0)
             else:
                 # Nothing to read it from later: send it as the rule says, and say why.
                 mode = MODE_TEXT if cls == CLASS_DOCUMENT and _renders_as_text(facts) else MODE_NATIVE
@@ -1117,7 +1199,9 @@ def _token_ladder(
                 native_pages += pages
                 take(MODE_NATIVE, REASON_FACTS_PENDING, cost)
             elif facts.has_row:
-                entries[e.index] = replace(e, mode=MODE_ON_DEMAND, reason=REASON_FACTS_PENDING, tokens=0)
+                entries[e.index] = replace(
+                    e, mode=_on_demand_mode(facts, profile), reason=REASON_FACTS_PENDING, tokens=0
+                )
             else:
                 native_pages += pages
                 take(MODE_NATIVE, REASON_NO_ROW, cost)
@@ -1159,6 +1243,158 @@ def _renders_as_text(facts: FileFacts) -> bool:
     return _extension(facts.filename) in DOCUMENTS_AS_TEXT_EXTENSIONS
 
 
+# ---------------------------------------------------------------------------
+# Overflow: indexing and the conversation's on-demand set (phase 5)
+# ---------------------------------------------------------------------------
+
+#: The model a document is judged against at upload, when the turn's model is
+#: not known: the smallest ``document_budget`` any curated model gets (Haiku
+#: 5.5's 25k, half its 50k chat ceiling) at the default tokenizer factor (1.40)
+#: and the small-window page limit. A document this model could not hold on its
+#: own is one the planner sends ``on_demand`` on some curated model, so it is
+#: indexed. No model id, so the factor and page limit are the defaults, which
+#: err towards indexing.
+SEARCH_INDEX_REFERENCE_MODEL = ModelFacts(chat_ceiling=50_000)
+
+#: Documents in a conversation's on-demand set from which the turn's guidance
+#: steers the model to ``document_read``'s ``query`` first, when some of them are
+#: indexed. Set by the phase 5 eval (``docs/testing/attachment-delivery-arms-2026-11.md``).
+SEARCH_STEER_MIN_DOCUMENTS = 3
+
+
+def _row_int(value: Any) -> Optional[int]:
+    try:
+        return int(value) if value is not None and not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def facts_from_row(meta: Any, *, searchable: bool = False) -> FileFacts:
+    """The planner's facts for a file row read by someone else. No read, no parse.
+
+    The fields a document's delivery depends on: its size, class, whether it is
+    delivered by reference, its fixture override, its pages and its §4.1 facts
+    when current. ``searchable`` is the caller's (``attachment_index.search_status``).
+    """
+    from apis.shared.files.file_facts import facts_current
+
+    out: Dict[str, Any] = {}
+    preparation = getattr(meta, "preparation", None)
+    pages = _row_int(preparation.get("pageCount")) if isinstance(preparation, dict) else None
+    pages = pages or _row_int(getattr(meta, "page_count", None))
+    if facts_current(meta):
+        facts = meta.facts
+        tokens = facts.get("tokens") if isinstance(facts.get("tokens"), dict) else {}
+        out["text_tokens"] = _row_int(tokens.get("text"))
+        out["native_tokens"] = _row_int(tokens.get("native"))
+        layer = facts.get("hasTextLayer")
+        out["has_text_layer"] = layer if isinstance(layer, bool) else None
+        pages = _row_int(facts.get("pages")) or pages
+    forced = getattr(meta, "delivery_override", None)
+    return FileFacts(
+        filename=meta.filename,
+        mime_type=meta.mime_type,
+        size_bytes=int(getattr(meta, "size_bytes", 0) or 0),
+        upload_id=getattr(meta, "upload_id", None),
+        by_reference=delivers_by_reference(meta),
+        has_row=True,
+        forced_mode=forced if forced in FORCEABLE_MODES else None,
+        page_count=pages or None,
+        searchable=bool(searchable),
+        **out,
+    )
+
+
+def indexes_for_search(facts: FileFacts, profile: LimitsProfile) -> bool:
+    """Whether a document is indexed into the attachments KB under this profile.
+
+    Only the ``token`` profile widens indexing (§10: eligibility "stays as it is
+    until phase 5"): a document whose row facts say the planner would send it
+    ``on_demand`` on its own on :data:`SEARCH_INDEX_REFERENCE_MODEL`, or one an
+    eval forced ``search``. A reference-class document is indexed under either
+    profile by ``attachment_index``'s own rule. Without facts, nothing is
+    claimed: the facts run that writes them is the one that ingests.
+    """
+    if profile.document_budget_share <= 0:
+        return False
+    if file_class(facts.filename, facts.mime_type) not in (CLASS_PDF, CLASS_DOCUMENT):
+        return False
+    if facts.forced_mode == MODE_SEARCH:
+        return True
+    if facts.forced_mode in FORCEABLE_MODES or facts.text_tokens is None:
+        return False
+    alone = replace(facts, by_reference=False, has_row=True, forced_mode=None, searchable=False)
+    plan = plan_attachments([alone], SEARCH_INDEX_REFERENCE_MODEL, profile=profile)
+    return plan.entries[0].mode in ON_DEMAND_MODES
+
+
+def _in_on_demand_set(facts: FileFacts, model: ModelFacts, profile: LimitsProfile) -> bool:
+    """Whether an earlier attachment is read on demand on this turn's model:
+    reference-class or forced by reference, or a document the model could not
+    hold on its own. One the turn that attached it sent ``on_demand`` only
+    because the budget was shared is counted as held; the estimate errs low."""
+    if file_class(facts.filename, facts.mime_type) not in (CLASS_PDF, CLASS_DOCUMENT):
+        return False
+    if facts.by_reference or _forced(facts) in _FORCED_BY_REFERENCE:
+        return True
+    if _forced(facts) is not None:
+        return False
+    alone = replace(facts, has_row=True)
+    plan = plan_attachments([alone], model, profile=profile)
+    return plan.entries[0].mode in ON_DEMAND_MODES
+
+
+def plan_conversation(
+    plan: Optional[AttachmentPlan],
+    files: Sequence[FileFacts],
+    held: ConversationFacts,
+    model: ModelFacts,
+    *,
+    profile: LimitsProfile,
+) -> Optional[ConversationPlan]:
+    """The conversation's on-demand set, and whether this turn steers it to search.
+
+    ``files`` and ``plan`` are this turn's attachments; ``held.earlier`` the
+    conversation's other document rows (a file attached this turn is counted
+    once, from the plan). ``None`` on the ``legacy`` profile, without a token
+    budget, and when the set is empty, so a conversation with no documents
+    records nothing. The steer is on when an eval forced it (a ``search`` row
+    in the set turns it on, an ``on_demand`` one off, ``search`` winning), else
+    when the set has at least :data:`SEARCH_STEER_MIN_DOCUMENTS` documents and
+    any of them is searchable. Pure: the rows were read by the caller.
+    """
+    if profile.document_budget_share <= 0 or document_budget(model, profile) is None or model.text_only:
+        return None
+    this_turn = {f.upload_id for f in files if f.upload_id}
+    members: List[FileFacts] = []
+    if plan is not None:
+        members.extend(files[e.index] for e in plan.entries if e.mode in ON_DEMAND_MODES)
+    for facts in held.earlier:
+        if facts.upload_id and facts.upload_id in this_turn:
+            continue
+        if _in_on_demand_set(facts, model, profile):
+            members.append(facts)
+    if not members:
+        return None
+    factor = tokenizer_factor(model.model_id)
+    tokens = sum(text_cost(m.text_tokens, factor) for m in members if m.text_tokens)
+    searchable = sum(1 for m in members if m.searchable)
+    forced = {_forced(m) for m in members}
+    if searchable == 0:
+        steer, reason = False, STEER_NONE_SEARCHABLE
+    elif MODE_SEARCH in forced:
+        steer, reason = True, STEER_FORCED
+    elif MODE_ON_DEMAND in forced:
+        steer, reason = False, STEER_FORCED
+    elif len(members) >= SEARCH_STEER_MIN_DOCUMENTS:
+        steer, reason = True, STEER_SET_SIZE
+    else:
+        steer, reason = False, STEER_BELOW_THRESHOLD
+    return ConversationPlan(
+        documents=len(members), searchable=searchable, tokens=tokens, steer=steer, reason=reason
+    )
+
+
 __all__ = [
     "CLASS_DOCUMENT",
     "CLASS_IMAGE",
@@ -1173,6 +1409,17 @@ __all__ = [
     "MODE_DROPPED",
     "MODE_NATIVE",
     "MODE_ON_DEMAND",
+    "ON_DEMAND_MODES",
+    "SEARCH_INDEX_REFERENCE_MODEL",
+    "SEARCH_STEER_MIN_DOCUMENTS",
+    "STEER_BELOW_THRESHOLD",
+    "STEER_FORCED",
+    "STEER_NONE_SEARCHABLE",
+    "STEER_SET_SIZE",
+    "ConversationPlan",
+    "facts_from_row",
+    "indexes_for_search",
+    "plan_conversation",
     "MODE_SEARCH",
     "MODE_TEXT",
     "MODE_TOOL",
