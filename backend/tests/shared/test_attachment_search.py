@@ -234,7 +234,7 @@ class TestQueryMode:
         search = AsyncMock(return_value=[search_mod.AttachmentHit("up-1", "manual.pdf", "30 days", 12, 0.9, False)])
         monkeypatch.setattr(search_mod, "search_attachments", search)
         result = _query()
-        search.assert_awaited_once_with(USER, SESSION, "notice period", upload_id=None)
+        search.assert_awaited_once_with(USER, SESSION, "notice period", upload_id=None, ancestor_session_ids=[])
         assert result.mode == "query" and result.hits == 1 and result.bytes_returned == len("30 days")
         assert result.payload["results"] == [{"upload_id": "up-1", "filename": "manual.pdf", "page": 12, "text": "30 days"}]
         assert "page_range" in result.payload["hint"]
@@ -347,7 +347,9 @@ class TestTool:
         monkeypatch.setattr(f"{TOOL_MODULE}.read_document", read)
         tool = make_document_read_tool("s1", "u1", searchable=True)
         result = asyncio.run(_call(tool, query="notice period", upload_id="up-1", pattern="x"))
-        search.assert_awaited_once_with("u1", "s1", "notice period", upload_id="up-1", kb_enabled=True)
+        search.assert_awaited_once_with(
+            "u1", "s1", "notice period", upload_id="up-1", kb_enabled=True, ancestor_session_ids=()
+        )
         read.assert_not_awaited()
         assert result["status"] == "success"
 

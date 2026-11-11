@@ -199,6 +199,21 @@ class DocumentReadResult:
 _FOLDER_SOURCE_MARK = ":folder:"
 
 
+def _scope_session_ids(session_id: str, ancestor_session_ids: Sequence[str]) -> List[str]:
+    """The conversation, then a fork's parent and root; blanks and repeats dropped."""
+    return list(dict.fromkeys(sid for sid in (session_id, *ancestor_session_ids) if sid))
+
+
+async def _list_scope_files(session_ids: Sequence[str]) -> List[FileMetadata]:
+    """READY rows of each session, in order, read concurrently. Not owner-filtered:
+    the session index is keyed by conversation, so every caller filters on user."""
+    repo = get_file_upload_repository()
+    per_session = await asyncio.gather(
+        *(repo.list_session_files(sid, status=FileStatus.READY) for sid in session_ids)
+    )
+    return [meta for rows in per_session for meta in rows]
+
+
 async def list_session_documents(
     user_id: str,
     session_id: str,
@@ -216,11 +231,8 @@ async def list_session_documents(
     copied messages name them. Another user's rows are never listed.
     """
     _require_identity(user_id, session_id)
-    repo = get_file_upload_repository()
-    session_ids = list(dict.fromkeys(sid for sid in (session_id, *ancestor_session_ids) if sid))
-    files = []
-    for sid in session_ids:
-        files.extend(await repo.list_session_files(sid, status=FileStatus.READY))
+    session_ids = _scope_session_ids(session_id, ancestor_session_ids)
+    files = await _list_scope_files(session_ids)
     documents: List[Dict[str, Any]] = []
     folder_files = False
     listed: set = set()
@@ -500,8 +512,14 @@ async def search_documents(
     *,
     upload_id: Optional[str] = None,
     kb_enabled: bool = True,
+    ancestor_session_ids: Sequence[str] = (),
 ) -> DocumentReadResult:
     """Semantic search over this conversation's indexed large documents.
+
+    ``ancestor_session_ids`` (a fork's parent and root) widens the conversation
+    to the caller's documents attached there, as ``list_session_documents``
+    does: a fork's copied messages name them, and they stay indexed under the
+    session they were attached in. Another user's rows are never searched.
 
     With ``upload_id``, that document only. A document that is not searchable yet
     (or any more) comes back as its status and the suggestion to use ``pattern``,
@@ -516,16 +534,22 @@ async def search_documents(
     if not query_text:
         raise WorkspaceValidationError("query must not be empty")
 
+    session_ids = _scope_session_ids(session_id, ancestor_session_ids)
     if upload_id:
         meta = await _get_owned_ready_file(user_id, upload_id)
-        if meta.session_id != session_id:
+        if meta.session_id not in session_ids:
             raise WorkspaceFileNotFoundError(f"No file with id '{upload_id}' found in this conversation")
         candidates = [meta]
     else:
-        files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
-        candidates = [
-            m for m in files if m.user_id == user_id and document_format_for(m.mime_type, m.filename) is not None
-        ]
+        files = await _list_scope_files(session_ids)
+        seen: set = set()
+        candidates = []
+        for m in files:
+            if m.user_id != user_id or m.upload_id in seen:
+                continue
+            seen.add(m.upload_id)
+            if document_format_for(m.mime_type, m.filename) is not None:
+                candidates.append(m)
 
     statuses = {m.upload_id: search_status(m, kb_enabled=kb_enabled) for m in candidates}
     searchable = [m for m in candidates if statuses[m.upload_id] == SEARCH_SEARCHABLE]
@@ -560,7 +584,13 @@ async def search_documents(
         return DocumentReadResult(mode="query", payload=payload)
 
     try:
-        hits = await search_attachments(user_id, session_id, query_text, upload_id=upload_id or None)
+        hits = await search_attachments(
+            user_id,
+            session_id,
+            query_text,
+            upload_id=upload_id or None,
+            ancestor_session_ids=session_ids[1:],
+        )
     except Exception as exc:  # noqa: BLE001 - a failed search degrades to pattern, never to an error
         logger.warning("attachment search failed (%s); suggesting pattern", type(exc).__name__)
         payload.update(

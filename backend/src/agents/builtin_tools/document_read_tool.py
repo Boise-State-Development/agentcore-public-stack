@@ -195,8 +195,9 @@ def make_document_read_tool(
 
     ``ancestor_session_ids`` is a fork's parent and root
     (``apis.shared.sessions.fork.ancestor_session_ids``): the fork's copied
-    messages name documents attached there, so the listing includes this
-    user's documents in those sessions too. It never changes the spec.
+    messages name documents attached there, so the listing and the ``query``
+    search include this user's documents in those sessions too. It never
+    changes the spec.
 
     ``text_only`` is for a model whose catalog row declares TEXT input only:
     page-range reads return text instead of a native document block. The
@@ -252,7 +253,12 @@ def make_document_read_tool(
         try:
             if query and query.strip():
                 result = await search_documents(
-                    user_id, session_id, query, upload_id=upload_id or None, kb_enabled=searchable
+                    user_id,
+                    session_id,
+                    query,
+                    upload_id=upload_id or None,
+                    kb_enabled=searchable,
+                    ancestor_session_ids=ancestor_session_ids,
                 )
             elif not upload_id:
                 listing = await list_session_documents(

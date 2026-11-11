@@ -11,6 +11,11 @@ nothing to time to first token.
 Each evicted, still-eligible document gets one ``{"action": "index", "force":
 true}`` on the large-document queue; the pipeline re-checks eligibility and the
 per-user cap itself. Never raises.
+
+A fork's documents were attached in its parent or root and are indexed there
+(``apis.shared.sessions.fork.ancestor_session_ids``), so opening a fork also
+re-queues the caller's evicted documents in those sessions; otherwise a fork's
+search would go quiet once the conversation it came from fell idle.
 """
 
 from __future__ import annotations
@@ -36,12 +41,29 @@ def _send_all(queue_url: str, user_id: str, upload_ids: list) -> None:
         )
 
 
-async def requeue_evicted_attachments(session_id: str, user_id: str, repository=None) -> int:
+async def _ancestor_session_ids(session_id: str, user_id: str) -> tuple:
+    """A fork's parent and root, from its own row; empty for any other session."""
+    from apis.shared.sessions.fork import ancestor_session_ids
+    from apis.shared.sessions.metadata import load_session_meta
+
+    meta = await load_session_meta(session_id, user_id)
+    if meta.owned_by_other:
+        return ()
+    return ancestor_session_ids(session_id, meta.row)
+
+
+async def requeue_evicted_attachments(
+    session_id: str,
+    user_id: str,
+    repository=None,
+    ancestor_session_ids=None,
+) -> int:
     """Queue a re-index for each of the caller's evicted documents in the session.
 
     Returns how many were queued. Rows are matched on the caller: the session
     index is keyed by conversation, not owner. ``repository`` defaults to the
-    shared file repository.
+    shared file repository. ``ancestor_session_ids`` (a fork's parent and root)
+    is read from the session's row when not given.
     """
     if not attachment_kb_enabled():
         return 0
@@ -53,8 +75,13 @@ async def requeue_evicted_attachments(session_id: str, user_id: str, repository=
         from apis.shared.files.repository import get_file_upload_repository
 
         repository = repository or get_file_upload_repository()
-        files = await repository.list_session_files(session_id)
-        upload_ids = evicted_upload_ids(f for f in files if f.user_id == user_id)
+        if ancestor_session_ids is None:
+            ancestor_session_ids = await _ancestor_session_ids(session_id, user_id)
+        session_ids = list(dict.fromkeys(s for s in (session_id, *ancestor_session_ids) if s))
+        per_session = await asyncio.gather(*(repository.list_session_files(s) for s in session_ids))
+        upload_ids = list(dict.fromkeys(
+            evicted_upload_ids(f for rows in per_session for f in rows if f.user_id == user_id)
+        ))
         if not upload_ids:
             return 0
         await asyncio.to_thread(_send_all, queue_url, user_id, upload_ids)
