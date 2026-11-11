@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { 
   FileUploadService, 
@@ -16,7 +16,8 @@ import {
   isReferenceDocument,
   isAttachableSourceFile,
   resolveMimeTypeFor,
-  ALLOWED_EXTENSIONS
+  ALLOWED_EXTENSIONS,
+  presignRetryDelay,
 } from './file-upload.service';
 import { ConfigService } from '../config.service';
 import { FEATURES } from '../features';
@@ -371,6 +372,47 @@ describe('FileUploadService', () => {
             expect(headers['Content-Type']).toBe('text/plain');
           } finally {
             vi.unstubAllGlobals();
+          }
+        });
+      });
+
+      describe('presign gateway retry', () => {
+        const presignAt = (n: number) =>
+          vi.waitFor(
+            () => {
+              const reqs = httpMock.match(r => r.url.endsWith('/presign'));
+              if (reqs.length !== 1) throw new Error(`waiting for presign #${n}`);
+              return reqs[0];
+            },
+            { timeout: 3000 },
+          );
+
+        it('sends a presign that got a 502 once more', async () => {
+          const upload = service.uploadFile('session1', sizedFile('notes.txt', 'text/plain', 10));
+          (await presignAt(1)).flush('Bad Gateway', { status: 502, statusText: 'Bad Gateway' });
+
+          // The retry is a fresh request; ending it with a 400 keeps the test
+          // off the S3 PUT, and proves its outcome is what the caller sees.
+          (await presignAt(2)).flush({ detail: 'nope' }, { status: 400, statusText: 'Bad Request' });
+          const err = await upload.catch(e => e);
+          expect(err.message).toContain('nope');
+        });
+
+        it('gives up after one retry', async () => {
+          const upload = service.uploadFile('session1', sizedFile('notes.txt', 'text/plain', 10));
+          (await presignAt(1)).flush('Unavailable', { status: 503, statusText: 'Service Unavailable' });
+          (await presignAt(2)).flush('Unavailable', { status: 503, statusText: 'Service Unavailable' });
+
+          await expect(upload).rejects.toBeDefined();
+          httpMock.expectNone(r => r.url.endsWith('/presign'));
+        });
+
+        it('does not retry a 504 or a 4xx', () => {
+          for (const status of [504, 400, 401, 413]) {
+            const err = new HttpErrorResponse({ status });
+            let rethrown: unknown;
+            presignRetryDelay(err).subscribe({ error: e => (rethrown = e) });
+            expect(rethrown).toBe(err);
           }
         });
       });
