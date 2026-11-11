@@ -3,7 +3,9 @@
 **Status:** Proposed 2026-11-09. Phases 0–4 built and validated on dev (2026-11-10/11).
 §11 Q3 resolved 2026-11-10 from the phase 0 readout: the document budget is half the
 chat ceiling and the chat ceiling keeps counting documents (§5.2). Phase 5 (overflow,
-§4.3.2) built 2026-11-10; its steering threshold waits on the overflow readout on dev.
+§4.3.2) built 2026-11-10 and validated on dev 2026-11-11; the overflow readout
+(`docs/testing/attachment-overflow-search-2026-11.md`) set its steering threshold above
+every set measured, because steering to search did not save tokens at 2, 4 or 8 documents.
 **Motivating gap:** users report that they cannot attach documents that are large
 enough, or enough of them, to a conversation. The limits they hit (4 MB per file,
 5 files per message, 7 MB per message) are mostly ours, not the model's, and they
@@ -269,9 +271,10 @@ steers the model to search across them.
 - **`search` mode.** A file the ladder sends `on_demand` (over the budget, over the
   byte budget, reference-class, or pending facts) whose row the KB can already search
   is planned `search`. The reason code is the same as for `on_demand`, so
-  `attachmentPlan` reads as the mode plus why the file is not held. The guidance
-  offers that file `query` first, even when it is over a budget. A forced
-  `on_demand` row never goes `search`.
+  `attachmentPlan` reads as the mode plus why the file is not held. A forced
+  `on_demand` row never goes `search`. An over-budget file's guidance keeps `pattern`
+  first even in `search` mode, because naming `query` first cost Haiku 5.5 more tokens
+  at the same answers. A reference-class document keeps `query` first, as before.
 - **The conversation's on-demand set.** `plan_conversation` judges the conversation's
   earlier document rows on the turn's model. Each row is counted if it is
   reference-class, forced on demand, or one that model could not hold on its own.
@@ -279,7 +282,7 @@ steers the model to search across them.
   sent on demand only because the budget was shared is counted as held, so the
   estimate errs low. The result goes on `attachmentPlan.conversation` (`documents`,
   `searchable`, `tokens` at the model's factor, `steer`, `reason`).
-- **The steer.** When the set has at least `SEARCH_STEER_MIN_DOCUMENTS` documents and
+- **The steer.** When the set has at least `SEARCH_STEER_MIN_DOCUMENTS` (9) documents and
   any of them is searchable, the turn's user message gets one line. It says how many
   documents are read on demand and how many are indexed, and it says to call
   `document_read` with `query` and no `upload_id` first, because one search covers
@@ -296,6 +299,17 @@ steers the model to search across them.
   the KB on, never for a brief, a resume or a continuation, and it keeps the caller's
   rows only. The route logs the await's wait (`attachment conversation set: …
   wait_ms=`), which is the read's only cost to the first token.
+- **The threshold (the overflow readout, 2026-11-11).** The overflow cells grow a set
+  two ~30k-token dossiers a turn to 2, 4 or 8, then ask for an unnamed fact from an
+  earlier one. Both arms answered 36/36. Steering to search cost more input tokens on
+  Haiku 5.5 at every size (+31% to +42% a sample) and on Sonnet 4.6 at 2 and 4 (+5% to
+  +9%). It saved them only on Sonnet 4.6 at 8 (−10%, and the last turn took 4.0 s instead
+  of 8.8 s). A `query` result is up to five 2,000-character chunks, and it stays in the
+  history. On a question that names its subject, it costs more than the `pattern` lines
+  it replaces. So the threshold sits above every set measured. A question with no
+  distinctive term, a scanned document, and a smaller `query` result are the cells to
+  run before steering is turned on at any size
+  (`docs/testing/attachment-overflow-search-2026-11.md`).
 - **The eval arm.** `deliveryOverride = "search"` forces a fixture into the KB
   whatever its size (`indexes_for_search`) and turns the conversation's steer on.
   `on_demand` keeps the file out of the KB and the steer off. A set holding both is
@@ -705,7 +719,7 @@ for the affected cells, and the cost and first-token deltas are stated in the PR
 | 2. Facts | Prepare every document at upload; one estimator; compaction and offload read row facts | Estimates change |
 | 3. Tokens | The ladder in §4.3 and the document budget in §5.2 behind `ATTACHMENT_PLAN_ENABLED`; values from the phase 0 readout (half the chat ceiling, per-model tokenizer factors) | Yes, flagged |
 | 4. Limits | Handles in persisted messages; 20 files; PDF page rules; image downscale | Yes, flagged |
-| 5. Overflow | Over-budget sets indexed and steered to `search` (§4.3.2): `indexes_for_search` widens KB eligibility under the `token` profile; `search` mode; the conversation's on-demand set and its steering line; the `search` eval arm and the `overflow_*` cells. `SEARCH_STEER_MIN_DOCUMENTS` is 3 until the overflow readout sets it | Yes, flagged (`ATTACHMENT_PLAN_ENABLED`) |
+| 5. Overflow | Over-budget sets indexed and steered to `search` (§4.3.2): `indexes_for_search` widens KB eligibility under the `token` profile; `search` mode; the conversation's on-demand set and its steering line; the `search` eval arm and the `overflow_*` cells. Built and validated on dev (2026-11-11). The overflow readout set `SEARCH_STEER_MIN_DOCUMENTS` to 9, above every set measured, because steering did not save tokens at 2–8 documents. Search is unavailable in a fork (it predates phase 5; follow-up) | Yes, flagged (`ATTACHMENT_PLAN_ENABLED`) |
 | 6. Retire | Delete the legacy profile, the flags and knobs it absorbed, and their tests and docs (§9.1) | None intended |
 
 Phases 3 to 5 each end with an `attachment_delivery` run and a release-ledger readout.
@@ -782,7 +796,9 @@ when it is promoted.
 |---|---|
 | The budget lets more be held than today | It sits inside the chat ceiling, which still counts documents, so total input stays under the size the 2026-09 replay priced. The cold-cache offload is unchanged, so a held document is never re-written after a pause; cold-turn cost is a reported measure |
 | The budget compares a wrong document size | It reads row facts (phase 2), never bytes/4, at the model's measured tokenizer factor (§2.1); an unlisted model is over-counted, which only sends a file `on_demand` sooner |
-| A per-turn budget lets several turns each attach up to it | Compaction and the offload still govern what the conversation holds; phase 5's `search` steering covers a large on-demand set (§4.3.2) |
+| A per-turn budget lets several turns each attach up to it | Compaction and the offload still govern what the conversation holds; phase 5 indexes the on-demand documents, and its `search` steering is held above 8 documents until a cell shows it pays (§4.3.2) |
+| Steering to search costs more than it saves | Measured: at 2–8 documents it did, on Haiku 5.5 at every size and on Sonnet 4.6 below 8, so the threshold is above the measured range (§4.3.2) |
+| Search does not reach a fork's documents | The fork's rows belong to the root and KB search filters on the caller's session id, so the model falls back to `pattern` (seen on dev; the answer was correct). Follow-up: scope search to `rootSessionId`, as #2000 did for rehydration |
 | Phase 5 indexes documents the KB never held | Bounded by the per-user 500 MB cap and the 30-day eviction, as before. Only a document the smallest curated budget cannot hold qualifies, and each is under the 4 MB inline limit. On dev's last 30 days (2026-11-10), 7 of 61 such documents with facts qualified, 5.3 MB in all: about $0.03 a month at $5/GB-month, against 363 MB ($1.81) of reference-class documents already indexed. Ingest is included in the managed KB's storage price; a search is $0.001 |
 | The steering line costs tokens every turn | About 70 tokens in the user message, and only on turns whose set is over the threshold with something searchable. It is append-only history, so it never rewrites the cached prefix |
 | Text mode loses layout a native docx block kept | The docx and html arms compare `native` and `text` in phase 0 before the rule changes |

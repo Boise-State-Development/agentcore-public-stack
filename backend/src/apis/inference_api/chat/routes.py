@@ -63,7 +63,6 @@ from apis.shared.files.attachment_plan import (
     CLASS_TABULAR,
     FORCED_TEXT_MAX_CHARS,
     MODE_NATIVE,
-    MODE_SEARCH,
     MODE_TEXT,
     ON_DEMAND_MODES,
     PROFILE_TOKEN,
@@ -2057,13 +2056,6 @@ async def _plan_conversation_set(attachments: "TurnAttachments") -> Optional[Con
     return conversation
 
 
-def _search_upload_ids(plan: Optional[AttachmentPlan]) -> frozenset:
-    """Upload ids the planner sent ``search`` this turn (phase 5)."""
-    if plan is None:
-        return frozenset()
-    return frozenset(e.upload_id for e in plan.entries if e.mode == MODE_SEARCH and e.upload_id)
-
-
 def _conversation_search_sentence(conversation: Optional[ConversationPlan], search_available: bool) -> str:
     """The phase 5 steering line, or ``""``.
 
@@ -2110,7 +2102,6 @@ def _build_attachment_guidance(
     references: list | None = None,
     document_read_available: bool = True,
     search_available: bool = False,
-    search_upload_ids: frozenset | None = None,
     conversation_set: ConversationPlan | None = None,
 ) -> str:
     """Return a short markdown addendum describing how attachments will be
@@ -2134,9 +2125,11 @@ def _build_attachment_guidance(
     ``document_read`` when this turn has it (``document_read_available``).
     ``search_available`` is whether that tool has its ``query`` argument (the
     deployment's attachments KB, §4F); the sentence then names search first.
-    ``search_upload_ids`` are the files the planner sent ``search`` (on demand
-    and indexed, unified-attachment-delivery phase 5): offered ``query`` even
-    when over a budget. ``conversation_set`` is the conversation's on-demand set;
+    A file the planner sent ``search`` because it is over a budget still gets
+    ``pattern`` first: on the phase 5 overflow cells, naming ``query`` first for
+    such a file cost Haiku 5.5 more input tokens at the same answers
+    (``docs/testing/attachment-overflow-search-2026-11.md``).
+    ``conversation_set`` is the conversation's on-demand set;
     when the planner steers it, one more sentence says to search across it first.
     """
     parts: list[str] = []
@@ -2179,10 +2172,9 @@ def _build_attachment_guidance(
         # Only large documents are indexed for search (attachments KB, §4F), so
         # an over-budget file is never offered `query`: it would answer "not
         # indexed for search".
-        indexed = ref.upload_id in (search_upload_ids or ())
         find = (
             "first with `query` (a plain-language search, which also covers scanned pages) or `pattern`"
-            if search_available and (indexed or not over_budget_ref)
+            if search_available and not over_budget_ref
             else "first with `pattern`"
         )
         if ref.format == "pdf":
@@ -6644,7 +6636,6 @@ async def _run_invocation(
                 references=attachments.reference_documents,
                 document_read_available=document_read_available,
                 search_available=_reference_search_available(document_read_available),
-                search_upload_ids=_search_upload_ids(attachments.plan),
                 conversation_set=conversation_set,
             )
             # When multiple spreadsheets are visible, ship the full inventory

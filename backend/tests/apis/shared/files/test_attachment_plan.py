@@ -1211,8 +1211,19 @@ def test_the_set_is_earlier_on_demand_documents_plus_this_turns():
     earlier = [indexed(pdf("a.pdf", 10)), indexed(pdf("b.pdf", 10)), doc("held.md", MD, 2_000), up("t.xlsx", XLSX)]
     conv = _conv([pdf("c.pdf", 10)], earlier)
     assert (conv.documents, conv.searchable) == (3, 2)
-    assert conv.steer and conv.reason == ap.STEER_SET_SIZE
     assert conv.tokens == 3 * math.ceil(PROSE_PAGE * 10 * 1.40)
+
+
+def test_at_the_threshold_the_set_is_steered():
+    n = ap.SEARCH_STEER_MIN_DOCUMENTS
+    conv = _conv([pdf("new.pdf", 10)], [indexed(pdf(f"{i}.pdf", 10)) for i in range(n - 1)])
+    assert conv.documents == n and conv.steer and conv.reason == ap.STEER_SET_SIZE
+
+
+def test_the_threshold_is_above_every_set_the_overflow_readout_measured():
+    """Steering cost tokens at 2 and 4 on both models, and at 8 on Haiku 5.5
+    (docs/testing/attachment-overflow-search-2026-11.md)."""
+    assert ap.SEARCH_STEER_MIN_DOCUMENTS > 8
 
 
 def test_a_file_attached_this_turn_is_counted_once():
@@ -1251,12 +1262,13 @@ def test_a_forced_arm_decides_the_steer():
 def test_the_conversation_is_recorded_on_the_row():
     plan = plan_attachments([], HAIKU55, profile=TOKEN)
     assert plan.to_row() is None
-    conv = _conv([], [indexed(pdf(f"{i}.pdf", 10)) for i in range(3)])
+    n = ap.SEARCH_STEER_MIN_DOCUMENTS
+    conv = _conv([], [indexed(pdf(f"{i}.pdf", 10)) for i in range(n)])
     row = replace(plan, conversation=conv).to_row()
     assert row == {
         "profile": "token",
         "files": [],
-        "conversation": {"documents": 3, "searchable": 3, "tokens": conv.tokens, "steer": "search", "reason": "set_size"},
+        "conversation": {"documents": n, "searchable": n, "tokens": conv.tokens, "steer": "search", "reason": "set_size"},
     }
     assert json.dumps(row)  # numbers and codes only
 

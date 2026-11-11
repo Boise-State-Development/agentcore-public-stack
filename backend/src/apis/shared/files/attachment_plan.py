@@ -1258,8 +1258,16 @@ SEARCH_INDEX_REFERENCE_MODEL = ModelFacts(chat_ceiling=50_000)
 
 #: Documents in a conversation's on-demand set from which the turn's guidance
 #: steers the model to ``document_read``'s ``query`` first, when some of them are
-#: indexed. Set by the phase 5 eval (``docs/testing/attachment-delivery-arms-2026-11.md``).
-SEARCH_STEER_MIN_DOCUMENTS = 3
+#: indexed. Set by the phase 5 overflow readout
+#: (``docs/testing/attachment-overflow-search-2026-11.md``): at 2, 4 and 8
+#: documents both arms answered 36/36, and steering to search cost more input
+#: tokens on Haiku 5.5 at every size (+31% to +42%) and on Sonnet 4.6 at 2 and 4
+#: (+5% to +9%). It saved tokens only on Sonnet 4.6 at 8 (-10%). A ``query``
+#: result stays in the history, and on a question that names its subject it
+#: costs more than the ``pattern`` lines it replaces. So the steer starts above
+#: the largest set measured, and the indexing and ``search`` mode stand on
+#: their own.
+SEARCH_STEER_MIN_DOCUMENTS = 9
 
 
 def _row_int(value: Any) -> Optional[int]:
