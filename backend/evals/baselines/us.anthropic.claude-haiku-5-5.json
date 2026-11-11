@@ -1113,6 +1113,13 @@
       "passes": 3,
       "samples": 3,
       "answer": "CC-63136"
+    },
+    "attachment_delivery.count_twenty_documents": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "CC-25686"
     }
   },
   "judgeModel": "us.anthropic.claude-sonnet-4-6",
