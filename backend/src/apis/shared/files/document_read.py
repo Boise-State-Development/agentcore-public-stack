@@ -199,20 +199,35 @@ class DocumentReadResult:
 _FOLDER_SOURCE_MARK = ":folder:"
 
 
-async def list_session_documents(user_id: str, session_id: str) -> Dict[str, Any]:
+async def list_session_documents(
+    user_id: str,
+    session_id: str,
+    *,
+    ancestor_session_ids: Sequence[str] = (),
+) -> Dict[str, Any]:
     """The session's READY documents the tool can read, newest first.
 
     A file from an attached folder also carries ``path``: the folder's name and
     the file's path inside it (drive-folder spec §4.4), so a model that lost the
     manifest to compaction can still find its way around the folder.
+
+    ``ancestor_session_ids`` (a fork's parent and root) appends this user's
+    documents in those sessions after the session's own, because the fork's
+    copied messages name them. Another user's rows are never listed.
     """
     _require_identity(user_id, session_id)
-    files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
+    repo = get_file_upload_repository()
+    session_ids = list(dict.fromkeys(sid for sid in (session_id, *ancestor_session_ids) if sid))
+    files = []
+    for sid in session_ids:
+        files.extend(await repo.list_session_files(sid, status=FileStatus.READY))
     documents: List[Dict[str, Any]] = []
     folder_files = False
+    listed: set = set()
     for meta in files:
-        if meta.user_id != user_id:
+        if meta.user_id != user_id or meta.upload_id in listed:
             continue
+        listed.add(meta.upload_id)
         fmt = document_format_for(meta.mime_type, meta.filename)
         if fmt is None:
             continue
@@ -227,7 +242,9 @@ async def list_session_documents(user_id: str, session_id: str) -> Dict[str, Any
             }
         )
     if folder_files:
-        paths = await _folder_paths(user_id, session_id)
+        paths: Dict[str, str] = {}
+        for sid in session_ids:
+            paths.update(await _folder_paths(user_id, sid))
         for doc in documents:
             path = paths.get(doc["upload_id"])
             if path:

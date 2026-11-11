@@ -45,7 +45,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from agents.main_agent.multimodal.file_sanitizer import FileSanitizer
 from agents.main_agent.session.compaction_policy import CHARS_PER_TOKEN
@@ -124,17 +124,44 @@ def match_document(
 # ---------------------------------------------------------------------------
 
 
-def load_session_documents(session_id: str, user_id: Optional[str]) -> List[Any]:
-    """This user's READY document-class uploads in the session, newest first."""
+def load_session_documents(
+    session_id: str,
+    user_id: Optional[str],
+    ancestor_session_ids: Sequence[str] = (),
+) -> List[Any]:
+    """This user's READY document-class uploads in the session, newest first,
+    then each of ``ancestor_session_ids``'s in the order given.
+
+    A fork's copied messages name uploads that live on the session they were
+    attached in, its parent or root (``apis.shared.sessions.fork.ancestor_session_ids``),
+    so a fork passes those. The order is fixed (own rows first, then the
+    ancestors as listed, each newest first), which keeps ``match_document``'s
+    answer, and so the restored bytes, the same on every restore. One query
+    per session, sequential: the restore runs synchronously and a fork with an
+    attachment is rare, so one or two more Queries on its cold restore are
+    accepted rather than a thread pool over a shared boto3 resource.
+
+    Every row is filtered to ``user_id``: an ancestor's partition can hold
+    another user's uploads (a shared project's conversation), and those are
+    never matched.
+    """
     from apis.shared.files.document_read import is_document_class
     from apis.shared.files.models import FileStatus
     from apis.shared.files.repository import get_file_upload_repository
 
-    rows = get_file_upload_repository().list_session_files_sync(session_id, status=FileStatus.READY)
-    return [
-        meta for meta in rows
-        if (not user_id or meta.user_id == user_id) and is_document_class(meta.mime_type, meta.filename)
-    ]
+    repo = get_file_upload_repository()
+    out: List[Any] = []
+    seen: Set[str] = set()
+    for sid in (session_id, *ancestor_session_ids):
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        rows = repo.list_session_files_sync(sid, status=FileStatus.READY)
+        out.extend(
+            meta for meta in rows
+            if (not user_id or meta.user_id == user_id) and is_document_class(meta.mime_type, meta.filename)
+        )
+    return out
 
 
 def stored_bytes(meta: Any) -> bytes:
@@ -183,9 +210,13 @@ def rehydrate_documents(
     *,
     session_id: Optional[str],
     user_id: Optional[str],
+    ancestor_session_ids: Sequence[str] = (),
 ) -> RehydrationResult:
     """Replace every inline document block with its digest block (matched to
-    an upload row) or, failing that, the placeholder. Never raises."""
+    an upload row) or, failing that, the placeholder. Never raises.
+
+    ``ancestor_session_ids`` is a fork's parent and root, whose upload rows its
+    copied document blocks came from (see :func:`load_session_documents`)."""
     from apis.shared.files.document_digest import render_digest
 
     from apis.shared.feature_flags import document_read_enabled
@@ -228,7 +259,7 @@ def rehydrate_documents(
             if enabled:
                 try:
                     if candidates is None:
-                        candidates = load_session_documents(session_id, user_id)
+                        candidates = load_session_documents(session_id, user_id, ancestor_session_ids)
                         # The rows are read here anyway: keep their facts so
                         # this session's estimates need no read of their own.
                         remember_session_documents(user_id, session_id, candidates)

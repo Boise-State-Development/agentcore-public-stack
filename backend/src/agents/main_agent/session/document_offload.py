@@ -283,10 +283,15 @@ def offload_documents(
     *,
     session_id: Optional[str],
     user_id: Optional[str],
+    ancestor_session_ids: Sequence[str] = (),
 ) -> OffloadResult:
     """Replace each candidate block with its digest, in place, using the
     restore path's own matcher and renderer so the bytes equal what a cold
-    restore would produce. Unmatched candidates stay inline. Never raises."""
+    restore would produce. Unmatched candidates stay inline. Never raises.
+
+    ``ancestor_session_ids`` is a fork's parent and root, read the same way the
+    restore reads them, so a seeded fork offloads its parent's documents to the
+    very bytes its next cold restore renders."""
     from agents.main_agent.session.document_rehydration import digest_for, load_session_documents, match_document
     from apis.shared.feature_flags import document_read_enabled
     from apis.shared.files.document_digest import render_digest
@@ -296,7 +301,7 @@ def offload_documents(
     if not candidates:
         return result
     try:
-        rows = load_session_documents(session_id or "", user_id)
+        rows = load_session_documents(session_id or "", user_id, ancestor_session_ids)
     except Exception:  # noqa: BLE001
         logger.warning("document_offload: upload rows unavailable; leaving documents inline", exc_info=True)
         result.skipped_unmatched = len(candidates)

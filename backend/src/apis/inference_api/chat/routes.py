@@ -13,7 +13,7 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Sequence, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -131,6 +131,7 @@ from apis.inference_api.chat.agent_binding_resolver import (
     ResolvedSkills,
     resolve_agent_invocation,
 )
+from apis.shared.sessions.fork import ancestor_session_ids as fork_ancestor_session_ids
 from apis.shared.sessions.metadata import (
     ensure_session_metadata_exists,
     load_session_meta,
@@ -1327,6 +1328,7 @@ async def _session_has_documents(
     session_id: str,
     user_id: str,
     turn_has_document: bool = False,
+    ancestor_session_ids: Sequence[str] = (),
 ) -> bool:
     """Whether ``document_read`` should exist on this turn.
 
@@ -1360,6 +1362,13 @@ async def _session_has_documents(
         from apis.shared.files.document_read import session_has_documents
 
         present = await session_has_documents(user_id, session_id)
+        # A fork's copied messages carry documents attached in its parent or
+        # root (``ancestor_session_ids``). Asked only when the fork has none
+        # of its own, and once per process: the positive answer is memoized.
+        for ancestor in ancestor_session_ids:
+            if present:
+                break
+            present = await session_has_documents(user_id, ancestor)
     except Exception:  # noqa: BLE001 - the gate must never fail a turn
         logger.warning("document_read gate lookup failed; tool not injected this turn", exc_info=True)
         return False
@@ -1372,6 +1381,7 @@ async def _document_tools_gate(
     session_id: str,
     user_id: str,
     turn_has_document: bool = False,
+    ancestor_session_ids: Sequence[str] = (),
 ) -> bool:
     """The single answer to "does this turn carry ``document_read``" — the
     builder and the resume path's cache key both read it, so the two can
@@ -1390,7 +1400,7 @@ async def _document_tools_gate(
         return False
     if not session_id or not user_id:
         return False
-    return await _session_has_documents(session_id, user_id, turn_has_document)
+    return await _session_has_documents(session_id, user_id, turn_has_document, ancestor_session_ids)
 
 
 def _resolved_files_include_a_document(resolved_files: list | None) -> bool:
@@ -1418,6 +1428,7 @@ async def _build_document_tools(
     user_id: str,
     turn_has_document: bool = False,
     text_only: bool = False,
+    ancestor_session_ids: Sequence[str] = (),
 ) -> list:
     """Context-bound ``document_read`` for a session that has a readable attachment.
 
@@ -1435,12 +1446,16 @@ async def _build_document_tools(
     page-range reads return text; the model is in the cache key, so the flag
     needs no key element of its own.
     """
-    if not await _document_tools_gate(session_id, user_id, turn_has_document):
+    if not await _document_tools_gate(session_id, user_id, turn_has_document, ancestor_session_ids):
         return []
 
     from agents.builtin_tools.document_read_tool import make_document_read_tool
 
-    tools = [make_document_read_tool(session_id, user_id, text_only=text_only)]
+    tools = [
+        make_document_read_tool(
+            session_id, user_id, text_only=text_only, ancestor_session_ids=ancestor_session_ids
+        )
+    ]
 
     # Source provenance rides the same gate, for the same reason: the governing
     # capability is the user's own attachment, and there is nothing to verify a
@@ -4224,6 +4239,7 @@ async def _build_turn_tools(
     turn_has_document: bool,
     text_only_model: bool = False,
     turn_project_id: Optional[str] = None,
+    document_ancestor_session_ids: Sequence[str] = (),
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
@@ -4321,6 +4337,7 @@ async def _build_turn_tools(
         user_id=user_id,
         turn_has_document=turn_has_document,
         text_only=text_only_model,
+        ancestor_session_ids=document_ancestor_session_ids,
     )
     extra_tools = extra_tools + document_tools
 
@@ -6109,7 +6126,8 @@ async def _run_invocation(
                 # readable document; the gate is monotonic, so re-asking it
                 # rebuilds the same key (an orphaned paused agent otherwise).
                 has_document_tools=await _document_tools_gate(
-                    input_data.session_id, user_id
+                    input_data.session_id, user_id,
+                    ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
                 ),
                 # The assistant the original turn ran against is a key element
                 # (spreadsheet tools close over it). Replay the snapshot's
@@ -6222,6 +6240,9 @@ async def _run_invocation(
                 turn_has_document=attachments.turn_has_document,
                 text_only_model=turn_model.text_only,
                 turn_project_id=turn_project_id,
+                # A fork's parent and root, off the row this turn already
+                # read: its copied documents' upload rows live there.
+                document_ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
             )
             # Client-executed tools (terminal only; the SPA never declares any).
             # Key-described by construction: the digest is a cache-key element,
