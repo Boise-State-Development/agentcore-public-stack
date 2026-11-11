@@ -9,6 +9,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
+import { CLOUDFRONT_ORIGIN_KEEPALIVE_SECONDS } from '../network/alb-construct';
 import {
   AppConfig,
   buildCorsOrigins,
@@ -226,7 +227,11 @@ function handler(event) {
         ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
         : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
       readTimeout: cdk.Duration.seconds(60),
-      keepaliveTimeout: cdk.Duration.seconds(60),
+      // Below the ALB's idle timeout, so CloudFront never reuses a connection
+      // the ALB has just closed. At 60 s, equal to the ALB's timeout, the two
+      // raced and a request now and then came back as a 502 (AbortedOrigin).
+      // See ALB_IDLE_TIMEOUT_SECONDS.
+      keepaliveTimeout: cdk.Duration.seconds(CLOUDFRONT_ORIGIN_KEEPALIVE_SECONDS),
     });
 
     // Security headers for the /api/* behavior. Distinct from the SPA policy
