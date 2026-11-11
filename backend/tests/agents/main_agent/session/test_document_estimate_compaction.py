@@ -277,7 +277,8 @@ class TestUpdateAfterTurn:
         mgr, _ = self._manager(make_session_manager)
         reads = []
 
-        def _load(session_id, user_id):
+        def _load(session_id, user_id, ancestor_session_ids=()):
+            assert ancestor_session_ids == ()  # not a fork
             reads.append((session_id, user_id))
             return [_Row()]
 

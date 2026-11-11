@@ -40,7 +40,7 @@ from typing import Optional, Dict, Any, List, Set, Tuple, TYPE_CHECKING
 
 from agents.main_agent.config.constants import Defaults, EnvVars
 from apis.shared.observability.build_stages import mark_stage
-from apis.shared.sessions.fork import ForkOrigin
+from apis.shared.sessions.fork import ForkOrigin, ancestor_session_ids
 from apis.shared.sessions.rewind import RewindState
 
 from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
@@ -761,6 +761,21 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             state.epoch, len(messages) - len(kept), len(messages),
         )
         return kept
+
+    def document_ancestor_session_ids(self) -> Tuple[str, ...]:
+        """A fork's parent and root, whose upload rows its copied document
+        blocks name; empty for any other session.
+
+        Read off the row the restore already loaded (``_restore_row``), so it
+        costs no read. Both attributes are written once when the fork is made,
+        so holding them on this instance can never go stale (unlike the
+        per-session state CLAUDE.md warns about).
+        """
+        config = getattr(self, "config", None)
+        session_id = getattr(config, "session_id", None)
+        if not session_id:
+            return ()
+        return ancestor_session_ids(session_id, getattr(self, "_restore_row", None))
 
     def fork_origin(self) -> Optional[ForkOrigin]:
         """Where this session was forked from, as its restore read it; None if not a fork."""
@@ -2185,7 +2200,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                     )
                 return None
 
-            result = offload_documents(messages, candidates, session_id=session_id, user_id=self.user_id)
+            result = offload_documents(
+                messages, candidates, session_id=session_id, user_id=self.user_id,
+                ancestor_session_ids=self.document_ancestor_session_ids(),
+            )
             result.slices_aged, result.slice_tokens = age_document_slices(
                 messages, max_turns=DOCUMENT_SLICE_MAX_TURNS, documents=documents
             )
@@ -2262,7 +2280,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             from .document_rehydration import load_session_documents
 
             user_id = getattr(self, "user_id", None)
-            rows = await asyncio.to_thread(load_session_documents, session_id, user_id)
+            rows = await asyncio.to_thread(
+                load_session_documents, session_id, user_id, self.document_ancestor_session_ids()
+            )
             if remember_session_documents(user_id, session_id, rows):
                 return self.document_index(documents.model_id)
         except Exception as e:  # noqa: BLE001 - the estimate falls back to the bytes
@@ -2632,6 +2652,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             messages,
             session_id=getattr(self.config, "session_id", None),
             user_id=self.user_id,
+            ancestor_session_ids=self.document_ancestor_session_ids(),
         )
         if result.rehydrated:
             logger.info(

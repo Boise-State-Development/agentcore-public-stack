@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from strands import tool
 from strands.types.tools import ToolContext
@@ -189,8 +189,14 @@ def make_document_read_tool(
     *,
     text_only: bool = False,
     searchable: Optional[bool] = None,
+    ancestor_session_ids: Sequence[str] = (),
 ):
     """Create a ``document_read`` tool bound to the given identity.
+
+    ``ancestor_session_ids`` is a fork's parent and root
+    (``apis.shared.sessions.fork.ancestor_session_ids``): the fork's copied
+    messages name documents attached there, so the listing includes this
+    user's documents in those sessions too. It never changes the spec.
 
     ``text_only`` is for a model whose catalog row declares TEXT input only:
     page-range reads return text instead of a native document block. The
@@ -249,7 +255,9 @@ def make_document_read_tool(
                     user_id, session_id, query, upload_id=upload_id or None, kb_enabled=searchable
                 )
             elif not upload_id:
-                listing = await list_session_documents(user_id, session_id)
+                listing = await list_session_documents(
+                    user_id, session_id, ancestor_session_ids=ancestor_session_ids
+                )
                 listing["hint"] = (
                     "Call again with upload_id plus page_range (PDF), pattern, or neither."
                 )
