@@ -31,11 +31,25 @@ const TABULAR_EXTENSIONS = new Set<string>(['.csv', '.xls', '.xlsx']);
 const PPTX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
 /**
+ * Whether the server sends images as its own downscaled copies, never as the
+ * uploaded bytes. True under the `token` profile (spec §4.3.1, §4.4.1): every
+ * image is stored with a high copy and a compact one (≤340 KB), the planner
+ * takes images first and switches them all to compact when they do not fit,
+ * and so no image is ever left out. The composer cannot know a copy's size,
+ * and an uploaded photo's bytes say nothing about it.
+ */
+export function imagesAreDownscaled(limits: Readonly<AttachmentLimits>): boolean {
+  return limits.profile === 'token';
+}
+
+/**
  * Whether the backend sends this file inline, so that it counts toward the
- * combined budget. Mirrors the backend planner's `legacy` profile (`attachment_plan.py`): spreadsheets route to the
- * spreadsheet tools and decks to the PowerPoint tools, and a document over the
- * per-file inline limit is attached by reference; none of them is inline at any
- * size. Images are inline and count, as the server counts them.
+ * combined budget. Mirrors the backend planner (`attachment_plan.py`):
+ * spreadsheets route to the spreadsheet tools and decks to the PowerPoint
+ * tools, and a document over the per-file inline limit is attached by
+ * reference; none of them is inline at any size. Under the `legacy` profile an
+ * image is inline and counts its uploaded bytes, as the server counts them;
+ * under `token` it never counts (`imagesAreDownscaled`).
  */
 export function countsTowardInlineBudget(
   filename: string,
@@ -47,6 +61,7 @@ export function countsTowardInlineBudget(
   const ext = getFileExtension(filename);
   if (TABULAR_MIME_TYPES.has(mime) || TABULAR_EXTENSIONS.has(ext)) return false;
   if (mime === PPTX_MIME_TYPE || ext === '.pptx') return false;
+  if (mime.startsWith('image/') && imagesAreDownscaled(limits)) return false;
   if (isReferenceDocument(mime, sizeBytes, limits)) return false;
   return true;
 }
