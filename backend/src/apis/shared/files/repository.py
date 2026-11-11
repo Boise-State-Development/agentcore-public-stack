@@ -286,6 +286,23 @@ class FileUploadRepository:
             logger.error(f"Error updating model image {upload_id}: {e}")
             raise
 
+    async def update_file_page_count(self, user_id: str, upload_id: str, page_count: int) -> Optional[FileMetadata]:
+        """Store a PDF's admission page count (``pageCount``). ``None`` when the row is gone."""
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET pageCount = :pages, updatedAt = :now",
+                ExpressionAttributeValues={":pages": int(page_count), ":now": utc_now_iso()},
+                ConditionExpression="attribute_exists(PK)",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating page count {upload_id}: {e}")
+            raise
+
     async def replace_file_content_fields(
         self, user_id: str, upload_id: str, size_bytes: int
     ) -> Optional[FileMetadata]:
@@ -300,7 +317,7 @@ class FileUploadRepository:
         try:
             response = self._table.update_item(
                 Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
-                UpdateExpression="SET sizeBytes = :size, updatedAt = :now REMOVE digest, preparation, facts, modelImage",
+                UpdateExpression="SET sizeBytes = :size, updatedAt = :now REMOVE digest, preparation, facts, modelImage, pageCount",
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={":size": size_bytes, ":now": utc_now_iso(), ":ready": FileStatus.READY.value},
                 ConditionExpression="attribute_exists(PK) AND #status = :ready",

@@ -61,9 +61,10 @@ from apis.shared.files.attachment_plan import (
     REASON_FORCED,
     REASON_FACTS_PENDING,
     REASON_NO_ROW,
-    REASON_OVER_DOCUMENT_BUDGET,
     REASON_PDF_PAGE_LIMIT,
+    REASON_REQUEST_PAGE_LIMIT,
     REASON_WITHIN_BUDGET,
+    VARIANT_COMPACT,
     REASON_PROVIDER_NEEDS_TEXT,
     REASON_OVER_BUDGET,
     REASON_OVER_BUDGET_REFERENCE,
@@ -1824,6 +1825,7 @@ def _file_facts(file, upload_rows: dict) -> FileFacts:
             **facts,
         )
     row = upload_rows.get(id(file))
+    facts = {**_row_admission_facts(row), **_row_token_facts(row)}
     return FileFacts(
         filename=file.filename,
         mime_type=file.content_type,
@@ -1831,8 +1833,36 @@ def _file_facts(file, upload_rows: dict) -> FileFacts:
         upload_id=row.upload_id if row is not None else None,
         has_row=row is not None,
         forced_mode=getattr(row, "delivery_override", None),
-        **_row_token_facts(row),
+        **facts,
     )
+
+
+def _row_admission_facts(meta) -> dict:
+    """What admission recorded on the row (phase 4b): an image's two stored
+    copies (``modelImage``) and a PDF's page count (``pageCount``). No read."""
+    if meta is None:
+        return {}
+    out: dict = {}
+    pages = getattr(meta, "page_count", None)
+    if isinstance(pages, int) and not isinstance(pages, bool) and pages > 0:
+        out["page_count"] = pages
+    record = getattr(meta, "model_image", None)
+    if isinstance(record, dict):
+
+        def _int(value):
+            try:
+                return int(value) if value is not None and not isinstance(value, bool) else None
+            except (TypeError, ValueError):
+                return None
+
+        out["image_width"] = _int(record.get("width"))
+        out["image_height"] = _int(record.get("height"))
+        compact = record.get("compact") if isinstance(record.get("compact"), dict) else None
+        if compact:
+            out["compact_bytes"] = _int(compact.get("sizeBytes"))
+            out["compact_width"] = _int(compact.get("width"))
+            out["compact_height"] = _int(compact.get("height"))
+    return out
 
 
 def _emit_attachment_over_quota_metric(
@@ -2821,6 +2851,10 @@ class TurnAttachments:
     # renders from (no read).
     reference_indices: list = field(default_factory=list)
     upload_rows: dict = field(default_factory=dict)
+    # An image's compact copy (``image_downscale``), by the identity of the
+    # ``FileContent`` built from its high copy: ``(base64, mime_type)``. Read
+    # only when the plan sends that image's ``compact`` variant.
+    compact_images: dict = field(default_factory=dict)
 
     @property
     def max_files_per_message(self) -> int:
@@ -3052,6 +3086,7 @@ async def _resolve_turn_attachments(
     # ``FileContent`` built from it. Read only if that file falls out of the
     # combined inline budget below and goes by reference instead.
     upload_rows: dict = {}
+    compact_images: dict = {}
     if upload_ids_to_resolve:
         try:
             file_resolver = get_file_resolver()
@@ -3075,6 +3110,8 @@ async def _resolve_turn_attachments(
                 row = getattr(rf, "meta", None)
                 if row is not None:
                     upload_rows[id(content)] = row
+                if getattr(rf, "compact_bytes", None):
+                    compact_images[id(content)] = (rf.compact_bytes, rf.compact_content_type)
                 all_files.append(content)
             turn_has_document = _resolved_files_include_a_document(resolved_files)
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
@@ -3248,6 +3285,7 @@ async def _resolve_turn_attachments(
         profile=profile,
         reference_indices=reference_indices,
         upload_rows=upload_rows,
+        compact_images=compact_images,
     )
 
 
@@ -3393,7 +3431,11 @@ def _carry_out_token_plan(attachments: TurnAttachments, turn_model: "TurnModel")
     _plan_for_model(attachments, turn_model)
     if attachments.plan is None or not attachments.files_to_send:
         return
-    over = set(attachments.plan.with_reason(REASON_OVER_DOCUMENT_BUDGET))
+    _send_compact_images(attachments)
+    # Every file the model's plan sent on demand that the byte pass had kept
+    # inline: over the document budget, a PDF judged by its pages before its
+    # facts (``facts_pending``), or one past the request's native pages.
+    over = set(attachments.plan.indices(MODE_ON_DEMAND)) & set(attachments.inline_indices)
     if not over:
         return
     moved: list = []
@@ -3413,7 +3455,35 @@ def _carry_out_token_plan(attachments: TurnAttachments, turn_model: "TurnModel")
     attachments.reference_indices = sorted(by_index)
     attachments.reference_documents = [by_index[i] for i in attachments.reference_indices]
     record_reference_attachments([ref for _, ref in moved])
-    logger.info("token plan: %d attachment(s) over the document budget sent on demand", len(moved))
+    logger.info("token plan: %d attachment(s) sent on demand", len(moved))
+
+
+def _send_compact_images(attachments: TurnAttachments) -> None:
+    """Swap in the compact copy of every image the plan sends as ``compact``.
+
+    The resolver fetched both stored copies concurrently, so this reads
+    nothing. A ``FileContent`` whose compact copy is missing keeps its high
+    copy, which the plan's byte pass already counted. Pure, in place.
+    """
+    if not attachments.compact_images or attachments.plan is None:
+        return
+    variants = {e.index: e.variant for e in attachments.plan.entries}
+    swapped = 0
+    files = list(attachments.files_to_send)
+    for k, (index, file) in enumerate(zip(attachments.inline_indices, files)):
+        compact = attachments.compact_images.get(id(file))
+        if variants.get(index) != VARIANT_COMPACT or compact is None:
+            continue
+        encoded, mime = compact
+        replacement = file.model_copy(update={"bytes": encoded, "content_type": mime})
+        row = attachments.upload_rows.pop(id(file), None)
+        if row is not None:
+            attachments.upload_rows[id(replacement)] = row
+        files[k] = replacement
+        swapped += 1
+    if swapped:
+        attachments.files_to_send = files
+        logger.info("token plan: %d image(s) sent as their compact copy", swapped)
 
 
 def _inline_by_reason(attachments: TurnAttachments, *reasons: str) -> list:
@@ -3540,7 +3610,7 @@ async def _carry_out_forced_modes(attachments: TurnAttachments, turn_model: "Tur
         return
     # A PDF the token profile sends as text (past the model's page limit) takes
     # the same extraction as a forced ``text`` PDF.
-    forced = _inline_by_reason(attachments, REASON_FORCED, REASON_PDF_PAGE_LIMIT)
+    forced = _inline_by_reason(attachments, REASON_FORCED, REASON_PDF_PAGE_LIMIT, REASON_REQUEST_PAGE_LIMIT)
     if not forced:
         return
     entries = {e.index: e for e in attachments.plan.entries}

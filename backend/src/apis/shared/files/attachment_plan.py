@@ -184,6 +184,13 @@ REASON_NO_ROW = "no_row"
 #: them): the file is sent the way the legacy rules would send it, for this
 #: turn only (§4.1), and counted at its bytes estimate.
 REASON_FACTS_PENDING = "facts_pending"
+#: ``token``: a native PDF would take the turn's native pages past the model's
+#: per-request page limit, so it goes ``text`` (or ``on_demand``) instead.
+REASON_REQUEST_PAGE_LIMIT = "request_page_limit"
+
+#: An image's stored copies (``image_downscale``).
+VARIANT_HIGH = "high"
+VARIANT_COMPACT = "compact"
 
 PROFILE_LEGACY = "legacy"
 #: Phase 3 (§9 / §9.1): selected by ``ATTACHMENT_PLAN_ENABLED``.
@@ -262,6 +269,15 @@ class LimitsProfile:
     #: Per-file upload ceiling for an image, before downscaling. ``None`` keeps
     #: the general upload limit (the ``legacy`` profile).
     image_upload_max_bytes: Optional[int] = None
+    #: Images one message may carry; ``None`` is no separate image cap.
+    images_per_message: Optional[int] = None
+    #: A PDF over this many pages is refused at admission, and its count is
+    #: recorded on the row. ``None``: no page rule (the ``legacy`` profile).
+    pdf_max_pages: Optional[int] = None
+    #: Raw bytes of native attachments one request may carry: the probed 32 MB
+    #: request payload (§2.1) is base64, so 24 MB raw, less headroom for the
+    #: history, system prompt and tools. ``0`` disables.
+    request_attachment_max_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -286,6 +302,14 @@ class FileFacts:
     text_tokens: Optional[int] = None
     native_tokens: Optional[int] = None
     has_text_layer: Optional[bool] = None
+    #: An image's ``modelImage`` (``image_downscale``): the high copy's pixels
+    #: (``size_bytes`` is its bytes) and the compact copy's bytes and pixels.
+    #: Read by the ``token`` profile only.
+    image_width: Optional[int] = None
+    image_height: Optional[int] = None
+    compact_bytes: Optional[int] = None
+    compact_width: Optional[int] = None
+    compact_height: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -327,6 +351,10 @@ class PlanEntry:
     tokens: int
     reason: str
     upload_id: Optional[str] = None
+    #: Which stored copy of an image is sent: ``high`` or ``compact``
+    #: (``image_downscale``). ``None`` for every other file, and for an image
+    #: the ``legacy`` profile plans (sent as uploaded).
+    variant: Optional[str] = None
 
     def to_row(self) -> Dict[str, Any]:
         row: Dict[str, Any] = {
@@ -337,6 +365,8 @@ class PlanEntry:
         }
         if self.upload_id:
             row["uploadId"] = self.upload_id
+        if self.variant:
+            row["variant"] = self.variant
         return row
 
 
@@ -440,6 +470,10 @@ def token_profile() -> LimitsProfile:
         document_budget_share=DOCUMENT_BUDGET_CEILING_SHARE,
         downscale_images=True,
         image_upload_max_bytes=TOKEN_IMAGE_UPLOAD_MAX_BYTES,
+        max_files_per_message=TOKEN_FILES_PER_MESSAGE,
+        images_per_message=TOKEN_IMAGES_PER_MESSAGE,
+        pdf_max_pages=TOKEN_PDF_MAX_PAGES,
+        request_attachment_max_bytes=TOKEN_REQUEST_ATTACHMENT_MAX_BYTES,
     )
 
 
@@ -469,6 +503,13 @@ UPLOAD_PRESENTATION_MAX_BYTES = 25 * 1024 * 1024
 #: An image the ``token`` profile accepts before downscaling (§4.4). The stored
 #: model copy is always under ``image_downscale.MODEL_IMAGE_MAX_BYTES``.
 TOKEN_IMAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
+#: The Claude apps' counts and page limit (§2, §4.4).
+TOKEN_FILES_PER_MESSAGE = 20
+TOKEN_IMAGES_PER_MESSAGE = 20
+TOKEN_PDF_MAX_PAGES = 1_000
+#: 16 MB raw of native blocks per request: 21.3 MB on the wire, leaving ~10 MB
+#: of the probed 32 MB payload for the history, system prompt and tools.
+TOKEN_REQUEST_ATTACHMENT_MAX_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -557,8 +598,8 @@ def client_limits(
     return {
         "profile": profile.name,
         "filesPerMessage": count if count > 0 else None,
-        "imagesPerMessage": None,
-        "pdfMaxPages": None,
+        "imagesPerMessage": profile.images_per_message,
+        "pdfMaxPages": profile.pdf_max_pages,
         "inlineDocumentMaxBytes": profile.inline_document_max_bytes,
         "inlineBudgetBytes": budget if budget > 0 else None,
         "maxBytes": {
@@ -790,7 +831,13 @@ def plan_attachments(
     # The combined budget: first-fit in attachment order. Images count — they
     # are in the same persisted message. A forced file always stays.
     requested = sum(max(0, files[i].size_bytes) for i in candidates)
-    if profile.turn_guard and candidates and profile.inline_total_max_bytes > 0:
+    variants: Dict[int, str] = {}
+    budget = _request_byte_budget(profile)
+    if profile.downscale_images and candidates and budget > 0:
+        # The ``token`` profile: images first, since an image has no other
+        # mode, then documents, which fall back to on_demand (§4.4.1).
+        _images_first_budget(files, classes, candidates, modes, reasons, variants, budget)
+    elif profile.turn_guard and candidates and profile.inline_total_max_bytes > 0:
         running = 0
         for i in candidates:
             size = max(0, files[i].size_bytes)
@@ -811,6 +858,7 @@ def plan_attachments(
             tokens=_estimate_tokens(facts, classes[i]) if modes[i] in (MODE_NATIVE, MODE_TEXT) else 0,
             reason=reasons[i] or REASON_INLINE,
             upload_id=facts.upload_id,
+            variant=variants.get(i) if modes[i] == MODE_NATIVE else None,
         )
         for i, facts in enumerate(files)
     )
@@ -823,6 +871,132 @@ def plan_attachments(
     if model is None:
         return plan
     return refine_for_model(plan, files, model, profile=profile)
+
+
+def _request_byte_budget(profile: LimitsProfile) -> int:
+    """Raw bytes of native blocks one turn may carry: the smaller of the persisted
+    message's budget and the request's, ``0`` when neither applies."""
+    caps = []
+    if profile.turn_guard and profile.inline_total_max_bytes > 0:
+        caps.append(profile.inline_total_max_bytes)
+    if profile.request_attachment_max_bytes > 0:
+        caps.append(profile.request_attachment_max_bytes)
+    return min(caps) if caps else 0
+
+
+def _has_model_copy(facts: FileFacts) -> bool:
+    return facts.image_width is not None
+
+
+def _images_first_budget(
+    files: Sequence[FileFacts],
+    classes: Sequence[str],
+    candidates: Sequence[int],
+    modes: List[Optional[str]],
+    reasons: List[Optional[str]],
+    variants: Dict[int, str],
+    budget: int,
+) -> None:
+    """The ``token`` profile's byte pass (§4.4.1).
+
+    Images are placed first: every one at its ``high`` copy when they all fit,
+    else every one at its ``compact`` copy (twenty compact copies are under
+    10 MB, so an uploaded image always fits). Then documents first-fit in
+    attachment order; one that does not fit goes ``on_demand`` when it has a
+    row to read it from, and is dropped only when it has nothing. A forced file
+    always stays.
+    """
+    images = [i for i in candidates if classes[i] == CLASS_IMAGE]
+    others = [i for i in candidates if classes[i] != CLASS_IMAGE]
+    high_total = sum(max(0, files[i].size_bytes) for i in images)
+    use_compact = high_total > budget
+    running = 0
+    for i in images:
+        facts = files[i]
+        size = max(0, facts.size_bytes)
+        variant = VARIANT_HIGH if _has_model_copy(facts) else None
+        if use_compact and facts.compact_bytes is not None:
+            size, variant = max(0, int(facts.compact_bytes)), VARIANT_COMPACT
+        if running + size > budget:
+            modes[i], reasons[i] = MODE_DROPPED, REASON_OVER_BUDGET
+            continue
+        running += size
+        if variant:
+            variants[i] = variant
+    for i in others:
+        size = max(0, files[i].size_bytes)
+        if reasons[i] != REASON_FORCED and running + size > budget:
+            if files[i].has_row and classes[i] in (CLASS_PDF, CLASS_DOCUMENT):
+                modes[i], reasons[i] = MODE_ON_DEMAND, REASON_OVER_BUDGET_REFERENCE
+            else:
+                modes[i], reasons[i] = MODE_DROPPED, REASON_OVER_BUDGET
+            continue
+        running += size
+
+
+#: Claude models that read images at the standard tier (1,568 px, 1,568 visual
+#: tokens): every Claude model before 4.7 (Anthropic vision docs). They are
+#: sent the ``compact`` copy, which is what they would downscale to anyway.
+_STANDARD_IMAGE_TIER_MODELS = (
+    "claude-3",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-1",
+    "claude-opus-4-5",
+    "claude-opus-4-6",
+    "claude-sonnet-4-2",
+    "claude-opus-4-2",
+)
+
+
+def reads_standard_image_tier(model: ModelFacts) -> bool:
+    """Whether this model reads at most Claude's standard image tier."""
+    mid = (model.model_id or "").lower()
+    return any(key in mid for key in _STANDARD_IMAGE_TIER_MODELS)
+
+
+def image_cost(facts: FileFacts, variant: Optional[str], model: ModelFacts) -> int:
+    """An image's visual tokens on this model, from the copy sent (§4.3.1).
+
+    One token per 28 px patch of the sent copy, capped at what the model reads
+    (4,784 at Claude's high tier, 1,568 at the standard tier). Without a copy's
+    size, the cap itself.
+    """
+    from apis.shared.files.image_downscale import COMPACT_VISUAL_TOKENS, MAX_VISUAL_TOKENS, visual_tokens
+
+    cap = COMPACT_VISUAL_TOKENS if reads_standard_image_tier(model) else MAX_VISUAL_TOKENS
+    if variant == VARIANT_COMPACT and facts.compact_width and facts.compact_height:
+        w, h = facts.compact_width, facts.compact_height
+    elif facts.image_width and facts.image_height:
+        w, h = facts.image_width, facts.image_height
+    else:
+        return cap
+    return min(cap, visual_tokens(int(w), int(h)))
+
+
+#: A PDF whose facts are not ready is costed as if each page carried this
+#: much text: the measured prose page (32-page fixture, 30,779 ``tokens.text``)
+#: rounded up, so a pending PDF is never judged cheaper than it is.
+PENDING_PDF_TEXT_TOKENS_PER_PAGE = 1_000
+#: Without a page count either, pages are estimated from the bytes at this
+#: many bytes a page. Low on purpose (a text page is 3-30 KB), so the estimate
+#: errs towards more pages and ``on_demand``.
+PENDING_PDF_BYTES_PER_PAGE = 25_000
+
+
+def pending_pdf_pages(facts: FileFacts) -> int:
+    """A PDF's pages when its facts are pending: the admission count, else the bytes."""
+    if facts.page_count:
+        return int(facts.page_count)
+    return max(1, math.ceil(max(0, int(facts.size_bytes)) / PENDING_PDF_BYTES_PER_PAGE))
+
+
+def pending_pdf_cost(facts: FileFacts, model: ModelFacts) -> int:
+    """A conservative native cost for a PDF without facts (§4.4.1)."""
+    pages = pending_pdf_pages(facts)
+    per_page = PDF_PAGE_IMAGE_TOKENS + PENDING_PDF_TEXT_TOKENS_PER_PAGE * tokenizer_factor(model.model_id)
+    return int(math.ceil(pages * per_page))
 
 
 def refine_for_model(
@@ -895,42 +1069,72 @@ def _token_ladder(
     """
     remaining = document_budget(model, profile) or 0
     page_limit = pdf_page_limit(model)
+    # Native PDF pages this turn: the per-request page limit is the model's
+    # (§2.1), so a second native PDF must not take the turn past it.
+    native_pages = 0
+    standard_tier = reads_standard_image_tier(model)
     for e in list(entries):
         if e.mode != MODE_NATIVE or e.reason == REASON_FORCED:
             continue
         facts = files[e.index]
         cls = e.file_class
 
-        def take(mode: str, reason: str, cost: int) -> None:
+        def take(mode: str, reason: str, cost: int, variant: Optional[str] = None) -> None:
             nonlocal remaining
             remaining -= cost
-            entries[e.index] = replace(e, mode=mode, reason=reason, tokens=cost)
+            entries[e.index] = replace(e, mode=mode, reason=reason, tokens=cost, variant=variant)
 
-        def over() -> None:
+        def over(reason: str = REASON_OVER_DOCUMENT_BUDGET) -> None:
             if facts.has_row:
-                entries[e.index] = replace(e, mode=MODE_ON_DEMAND, reason=REASON_OVER_DOCUMENT_BUDGET, tokens=0)
+                entries[e.index] = replace(e, mode=MODE_ON_DEMAND, reason=reason, tokens=0)
             else:
                 # Nothing to read it from later: send it as the rule says, and say why.
                 mode = MODE_TEXT if cls == CLASS_DOCUMENT and _renders_as_text(facts) else MODE_NATIVE
                 take(mode, REASON_NO_ROW, document_cost(facts, cls, mode, model))
 
         if cls == CLASS_IMAGE:
-            take(MODE_NATIVE, REASON_INLINE, document_cost(facts, cls, MODE_NATIVE, model))
-        elif cls in (CLASS_PDF, CLASS_DOCUMENT) and facts.text_tokens is None:
-            # No facts, so no honest cost: the bytes are ~9x low for a .docx
-            # and blind to a PDF's pages. Today's rules decide this turn (§4.1);
-            # the reason makes the race countable on the cost rows.
-            mode = MODE_TEXT if cls == CLASS_DOCUMENT and _renders_as_text(facts) else MODE_NATIVE
+            variant = e.variant
+            if variant == VARIANT_HIGH and standard_tier and facts.compact_bytes is not None:
+                # The model reads no more than the compact copy: fewer bytes, same tokens.
+                variant = VARIANT_COMPACT
+            take(MODE_NATIVE, REASON_INLINE, image_cost(facts, variant, model), variant)
+        elif cls == CLASS_PDF and facts.text_tokens is None:
+            # No facts, so no measured cost. Today's rule sent a 159-page PDF
+            # whole; judge it instead by its admission page count (else its
+            # bytes), costed per page at the measured page image plus a full
+            # prose page of text, which over-states it (§4.4.1).
+            pages = pending_pdf_pages(facts)
+            cost = pending_pdf_cost(facts, model)
+            if pages <= page_limit and native_pages + pages <= page_limit and cost <= remaining:
+                native_pages += pages
+                take(MODE_NATIVE, REASON_FACTS_PENDING, cost)
+            elif facts.has_row:
+                entries[e.index] = replace(e, mode=MODE_ON_DEMAND, reason=REASON_FACTS_PENDING, tokens=0)
+            else:
+                native_pages += pages
+                take(MODE_NATIVE, REASON_NO_ROW, cost)
+        elif cls == CLASS_DOCUMENT and facts.text_tokens is None:
+            # No facts, so no honest cost: the bytes are ~9x low for a .docx.
+            # Today's rules decide this turn (§4.1); the reason makes the race
+            # countable on the cost rows.
+            mode = MODE_TEXT if _renders_as_text(facts) else MODE_NATIVE
             take(mode, REASON_FACTS_PENDING, document_cost(facts, cls, mode, model))
         elif cls == CLASS_PDF:
             pages = facts.page_count
             within_pages = not pages or int(pages) <= page_limit
+            within_request = not pages or native_pages + int(pages) <= page_limit
             native_cost = document_cost(facts, cls, MODE_NATIVE, model)
             text_cost = document_cost(facts, cls, MODE_TEXT, model)
-            if within_pages and native_cost <= remaining:
+            text_ok = facts.has_text_layer and facts.text_tokens is not None and text_cost <= remaining
+            if within_pages and within_request and native_cost <= remaining:
+                native_pages += int(pages or 0)
                 take(MODE_NATIVE, REASON_WITHIN_BUDGET, native_cost)
-            elif not within_pages and facts.has_text_layer and facts.text_tokens is not None and text_cost <= remaining:
+            elif not within_pages and text_ok:
                 take(MODE_TEXT, REASON_PDF_PAGE_LIMIT, text_cost)
+            elif within_pages and not within_request and text_ok:
+                take(MODE_TEXT, REASON_REQUEST_PAGE_LIMIT, text_cost)
+            elif within_pages and not within_request:
+                over(REASON_REQUEST_PAGE_LIMIT)
             else:
                 over()
         elif cls == CLASS_DOCUMENT and _renders_as_text(facts):
@@ -972,6 +1176,12 @@ __all__ = [
     "REASON_NO_ROW",
     "REASON_OVER_DOCUMENT_BUDGET",
     "REASON_PDF_PAGE_LIMIT",
+    "REASON_REQUEST_PAGE_LIMIT",
+    "VARIANT_COMPACT",
+    "VARIANT_HIGH",
+    "image_cost",
+    "pending_pdf_cost",
+    "reads_standard_image_tier",
     "REASON_WITHIN_BUDGET",
     "AttachmentPlan",
     "ConversationFacts",
