@@ -38,6 +38,12 @@ def _ensure_image_base64(image_data: Dict[str, Any]) -> Dict[str, Any]:
     if not image_data:
         return image_data
 
+    # A handle in place of the bytes (unified-attachment-delivery §6.2). No
+    # client renders a user message's image from these bytes (the web app
+    # shows the upload's own preview), so the format is all that is returned.
+    if handle_of(image_data) is not None:
+        return {"format": image_data.get("format", "png")}
+
     # Check for source.bytes pattern (from Code Interpreter tool)
     source = image_data.get("source", {})
     if isinstance(source, dict) and "bytes" in source:

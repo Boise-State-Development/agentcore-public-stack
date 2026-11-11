@@ -515,9 +515,30 @@ message on the persist path, and the `CreateEvent` payload drops from 4.5 MB (a
 blob event) to 518 bytes, its JSON encode from 8 ms to 0.04 ms. The persist is
 awaited before the model call, so this is a first-token saving, not a cost.
 
+**Built (phase 4a, images).** An attached image is persisted as a handle naming the
+stored copy the turn sent: `{"attachmentHandle": {"class": "image", "uploadId",
+"variant", "mimeType", "bucket", "key", "sizeBytes"}}`. The variant is the `high` or
+`compact` copy `image_downscale` wrote, or the original for a legacy row
+(`file_resolver.model_image_source`). The route records each sent copy
+(`_remember_sent_images`: its key, size and first and last 48 bytes, from the
+base64 ends only), and the persist matches a block to it on size, head and tail,
+so nothing is decoded or hashed. An image with no stored copy (a direct attachment)
+keeps its bytes. Restore (`agents/main_agent/session/image_restore.py`, first in
+`initialize`) reads every handled image in one concurrent batch (8 threads) and puts
+back exactly those bytes. A key outside the user's own `user-files/{user_id}/`
+prefix is never read. An unreadable or resized copy becomes `[Image unavailable:
+upload_id=…]`. `image_restored` on the ledger carries count, bytes and
+milliseconds. `test_image_handles.py` pins byte identity through the SDK's Memory
+encoding.
+
+Only a restore pays the read (a cold agent with images in its history, never a
+warm turn). The attaching turn gets faster: its `CreateEvent` no longer carries the
+images (20 compact copies were up to 6.8 MB, a blob event awaited before the model
+call). The restore's added first-token latency is measured on dev at ~10 images and
+stated in the PR, and the developer driving the change accepts it before merge.
+
 What still carries bytes: `document_read` slices inside tool results (re-sent on
-restore, bounded by the tool's cap) and images (4a's second half, after 4b's
-downscale).
+restore, bounded by the tool's cap), and images with no stored copy.
 
 ## 7. Flags
 

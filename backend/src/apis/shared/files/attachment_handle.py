@@ -20,10 +20,16 @@ those three facts, so restore matches the same row and renders the same bytes.
 The only reader of the bytes was the lazy digest, for a row with no digest yet;
 it now reads the row's stored S3 object, the bytes the block was built from.
 
+**Images** are re-sent on restore, so their handle names the stored copy the
+turn sent (``variant``, ``bucket``, ``key``: the high or compact copy
+``image_downscale`` wrote, or the original for a legacy row), and restore reads
+that object back byte for byte (``agents.main_agent.session.image_restore``).
+The image is matched to its copy by size, head and tail, so the persist path
+decodes and hashes nothing. An image with no stored copy keeps its bytes.
+
 **What keeps its bytes.** ``document_read`` slices inside tool results are
 re-sent on restore and bounded by the tool's cap, so they are persisted as
-before. Images are phase 4's second half (they are re-sent on restore and need
-the stored, downscaled object).
+before.
 
 **Old messages.** A message persisted with bytes still restores the old way; the
 reader accepts both shapes for as long as Memory keeps such events (§9.1).
@@ -97,6 +103,7 @@ def handle_block(document: Dict[str, Any], upload_id: Optional[str]) -> Dict[str
 def persisted_message(
     message: Dict[str, Any],
     resolve: Callable[[str, str, int], Optional[str]],
+    images: Optional[List[ImageRef]] = None,
 ) -> Dict[str, Any]:
     """``message`` as it is written to Memory: each attached document's bytes
     replaced by a handle. Never mutates ``message``; returns it unchanged when
@@ -106,6 +113,12 @@ def persisted_message(
     ``None`` (a direct attachment with no row; restore then writes the same
     placeholder it writes today). Only top-level blocks of a user message are
     attachments; tool results are left alone.
+
+    ``images`` are the stored copies this session's turns sent. An attached
+    image whose bytes match one (size, head and tail) becomes a handle naming
+    that copy, which restore reads back byte for byte. An image that matches
+    none (a direct attachment with no row) keeps its bytes, because restore
+    re-sends images.
     """
     if not isinstance(message, dict) or message.get("role") != "user":
         return message
@@ -113,7 +126,20 @@ def persisted_message(
     if not isinstance(content, list):
         return message
     out: Optional[List[Any]] = None
+    claimed: set = set()
     for i, block in enumerate(content):
+        if isinstance(block, dict) and set(block) == {"image"} and images:
+            image = block.get("image")
+            source = image.get("source") if isinstance(image, dict) else None
+            raw = source.get("bytes") if isinstance(source, dict) else None
+            if isinstance(raw, (bytes, bytearray)):
+                ref = next((r for r in images if id(r) not in claimed and r.matches(bytes(raw))), None)
+                if ref is not None:
+                    claimed.add(id(ref))
+                    if out is None:
+                        out = list(content)
+                    out[i] = image_handle_block(image, ref)
+            continue
         if not isinstance(block, dict) or set(block) != {"document"}:
             continue
         document = block.get("document")
@@ -131,6 +157,62 @@ def persisted_message(
     if out is None:
         return message
     return {**message, "content": out}
+
+
+# ---------------------------------------------------------------------------
+# Images
+# ---------------------------------------------------------------------------
+
+#: Bytes of an image's head and tail kept to match a block to the copy it was built from.
+_FINGERPRINT_BYTES = 48
+
+
+@dataclass(frozen=True)
+class ImageRef:
+    """The stored copy a turn sent for one image, and how to recognise its bytes."""
+
+    upload_id: str
+    variant: str
+    mime_type: str
+    bucket: str
+    key: str
+    size_bytes: int
+    head: bytes
+    tail: bytes
+
+    def matches(self, raw: bytes) -> bool:
+        return (
+            len(raw) == self.size_bytes
+            and raw[: len(self.head)] == self.head
+            and raw[len(raw) - len(self.tail):] == self.tail
+        )
+
+
+def image_fingerprint_b64(encoded: str) -> Tuple[int, bytes, bytes]:
+    """``(size, head, tail)`` of base64 ``encoded``'s bytes, decoding only its ends."""
+    import base64
+
+    text = encoded.strip()
+    pad = text[-2:].count("=")
+    size = len(text) * 3 // 4 - pad
+    head = base64.b64decode(text[:64])[:_FINGERPRINT_BYTES]
+    tail_chunk = text[-64:] if len(text) >= 64 else text
+    tail = base64.b64decode(tail_chunk)[-_FINGERPRINT_BYTES:]
+    return size, head, tail
+
+
+def image_handle_block(image: Dict[str, Any], ref: ImageRef) -> Dict[str, Any]:
+    """The persisted form of one attached ``image`` payload sent from ``ref``'s copy."""
+    return {"image": {"format": image.get("format"), "source": {HANDLE_KEY: {
+        "version": HANDLE_VERSION,
+        "class": "image",
+        "uploadId": ref.upload_id,
+        "variant": ref.variant,
+        "mimeType": ref.mime_type,
+        "bucket": ref.bucket,
+        "key": ref.key,
+        "sizeBytes": ref.size_bytes,
+    }}}}
 
 
 def strip_handles_for_display(document: Dict[str, Any]) -> Dict[str, Any]:
@@ -198,23 +280,58 @@ def session_uploads(user_id: Optional[str], session_id: Optional[str]) -> List[U
         return list(reversed(list(entry.values()))) if entry else []
 
 
+_IMAGES: "OrderedDict[Tuple[str, str], List[ImageRef]]" = OrderedDict()
+
+
+def remember_turn_images(user_id: Optional[str], session_id: Optional[str], refs: Iterable[ImageRef]) -> int:
+    """Keep the stored copies a turn is sending, for ``(user, session)``, so its
+    persisted message can name them. Newest first; never raises."""
+    if not user_id or not session_id:
+        return 0
+    kept = [r for r in refs or () if isinstance(r, ImageRef)]
+    if not kept:
+        return 0
+    key = (str(user_id), str(session_id))
+    with _LOCK:
+        entry = _IMAGES.pop(key, None) or []
+        entry = (kept + entry)[:_MAX_FILES_PER_SESSION]
+        _IMAGES[key] = entry
+        while len(_IMAGES) > _MAX_SESSIONS:
+            _IMAGES.popitem(last=False)
+    return len(kept)
+
+
+def turn_images(user_id: Optional[str], session_id: Optional[str]) -> List[ImageRef]:
+    """The image copies kept for ``(user, session)``, newest first."""
+    if not user_id or not session_id:
+        return []
+    with _LOCK:
+        return list(_IMAGES.get((str(user_id), str(session_id))) or [])
+
+
 def clear_session_uploads() -> None:
-    """Forget every session's uploads (tests)."""
+    """Forget every session's uploads and image copies (tests)."""
     with _LOCK:
         _SESSIONS.clear()
+        _IMAGES.clear()
 
 
 __all__ = [
     "HANDLE_KEY",
     "HANDLE_VERSION",
+    "ImageRef",
     "UploadRef",
     "clear_session_uploads",
     "document_class",
     "handle_block",
     "handle_of",
     "handle_size",
+    "image_fingerprint_b64",
+    "image_handle_block",
     "persisted_message",
     "remember_session_uploads",
+    "remember_turn_images",
     "session_uploads",
     "strip_handles_for_display",
+    "turn_images",
 ]
