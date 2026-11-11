@@ -49,6 +49,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from agents.main_agent.multimodal.file_sanitizer import FileSanitizer
 from agents.main_agent.session.compaction_policy import CHARS_PER_TOKEN
+from apis.shared.files.attachment_handle import handle_of, handle_size
 from apis.shared.files.document_estimate import document_tokens, remember_session_documents
 
 logger = logging.getLogger(__name__)
@@ -136,9 +137,21 @@ def load_session_documents(session_id: str, user_id: Optional[str]) -> List[Any]
     ]
 
 
-def digest_for(meta: Any, raw: bytes) -> Optional[Any]:
+def stored_bytes(meta: Any) -> bytes:
+    """The upload's stored S3 object: the bytes its document block was built from."""
+    from apis.shared.files.document_read import _get_object_bytes
+
+    return _get_object_bytes(meta.s3_bucket, meta.s3_key)
+
+
+def digest_for(meta: Any, raw: Optional[bytes]) -> Optional[Any]:
     """The row's ready ``DocumentDigest``, or one built now from ``raw``
-    (outline only) and persisted best-effort. ``None`` if neither works."""
+    (outline only) and persisted best-effort. ``None`` if neither works.
+
+    ``raw`` is ``None`` for a block persisted as a handle: the bytes are then
+    read from the row's stored object, only on this rare path (a row with no
+    ready digest), so a restore of a prepared document reads nothing.
+    """
     from apis.shared.files.document_digest import DocumentDigest, estimate_tokens, extract_outline, render_digest
     from apis.shared.files.repository import get_file_upload_repository
 
@@ -149,6 +162,8 @@ def digest_for(meta: Any, raw: bytes) -> Optional[Any]:
     fmt = meta.file_format
     if not fmt:
         return None
+    if raw is None:
+        raw = stored_bytes(meta)
     digest = extract_outline(fmt, raw)
     digest.tokens = estimate_tokens(render_digest(digest, filename=meta.filename, upload_id=meta.upload_id))
     try:
@@ -195,10 +210,17 @@ def rehydrate_documents(
                 continue
             doc = block["document"] if isinstance(block["document"], dict) else {}
             source = doc.get("source") or {}
-            if not isinstance(source, dict) or "bytes" not in source:
+            if not isinstance(source, dict):
                 continue
-            raw = source.get("bytes", b"")
-            size = len(raw) if isinstance(raw, (bytes, bytearray)) else 0
+            # A handle (unified-attachment-delivery §6.2) carries the size the
+            # bytes had, so it matches and renders exactly as they would.
+            persisted_handle = handle_of(doc)
+            if persisted_handle is None and "bytes" not in source:
+                continue
+            raw = source.get("bytes", b"") if persisted_handle is None else None
+            size = handle_size(persisted_handle) if persisted_handle is not None else (
+                len(raw) if isinstance(raw, (bytes, bytearray)) else 0
+            )
             name = str(doc.get("name", "unknown"))
             fmt = str(doc.get("format", "unknown"))
 
@@ -212,7 +234,10 @@ def rehydrate_documents(
                         remember_session_documents(user_id, session_id, candidates)
                     meta = match_document(name, fmt, size, candidates, used)
                     if meta is not None:
-                        digest = digest_for(meta, bytes(raw) if isinstance(raw, (bytes, bytearray)) else b"")
+                        if persisted_handle is not None:
+                            digest = digest_for(meta, None)
+                        else:
+                            digest = digest_for(meta, bytes(raw) if isinstance(raw, (bytes, bytearray)) else b"")
                         if digest is not None:
                             was_lazy = not (isinstance(getattr(meta, "digest", None), dict) and meta.digest.get("status") == "ready")
                             replacement = render_digest(
@@ -236,7 +261,9 @@ def rehydrate_documents(
                 # ``document_stripped`` ledger event is comparable to
                 # ``document_offload`` / ``document_rehydrated``. A stripped
                 # block matched no row, so it has no facts: its bytes decide.
-                result.stripped_tokens += document_tokens(fmt, raw)
+                result.stripped_tokens += (
+                    document_tokens(fmt, raw) if persisted_handle is None else size // CHARS_PER_TOKEN
+                )
             content[idx] = {"text": replacement}
 
     return result
@@ -250,4 +277,5 @@ __all__ = [
     "match_document",
     "placeholder_text",
     "rehydrate_documents",
+    "stored_bytes",
 ]

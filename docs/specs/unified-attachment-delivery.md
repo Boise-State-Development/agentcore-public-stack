@@ -496,6 +496,29 @@ it merges.
 
 This subsection is the riskiest change in the spec and is verified separately (§11, Q1).
 
+**Built (phase 4a, documents).** While the `token` profile is active
+(`attachment_plan.persist_document_handles`), `TurnBasedSessionManager.append_message`
+writes a copy of the user message in which each top-level document block's `source`
+is `{"attachmentHandle": {"version": 1, "uploadId", "sizeBytes", "class"}}`
+(`apis/shared/files/attachment_handle.py`). The live message is never touched. The
+upload id comes from the rows the route already resolved (`remember_session_uploads`),
+matched with restore's own `match_document`, so no read is added; an unmatched block
+gets a handle with no id. `rehydrate_documents` reads a handle exactly as it reads
+bytes: it matches the same row on name, format and the handle's `sizeBytes` and renders
+the same digest or placeholder, so the restored prefix is byte-identical either way
+(`test_document_handles.py` round-trips both through the SDK's Memory encoding). The
+lazy digest, for a row with no ready digest, reads the row's stored S3 object instead
+of the message's bytes. `GET /messages` returns a handle as `{format, name}`.
+
+Measured locally for a 3 MB PDF and a 400 KB docx: the handle costs 26 µs per
+message on the persist path, and the `CreateEvent` payload drops from 4.5 MB (a
+blob event) to 518 bytes, its JSON encode from 8 ms to 0.04 ms. The persist is
+awaited before the model call, so this is a first-token saving, not a cost.
+
+What still carries bytes: `document_read` slices inside tool results (re-sent on
+restore, bounded by the tool's cap) and images (4a's second half, after 4b's
+downscale).
+
 ## 7. Flags
 
 | Change | Flag | Why |
@@ -683,8 +706,31 @@ when it is promoted.
 
 ## 11. Open questions
 
-1. **Does anything besides the lazy digest read persisted document bytes?** The restore
-   path says no; share, handoff and fork views have not been checked.
+1. ~~**Does anything besides the lazy digest read persisted document bytes?**~~
+   Answered 2026-11-10: **no reader needs them.** Every reader of a stored message:
+   - **Restore** (`_strip_document_bytes` → `rehydrate_documents`) replaces each attached
+     document with its digest or a placeholder, matched on name, format and size. The
+     bytes were read only by the lazy digest, which now reads the row's S3 object.
+   - **`GET /messages`** (`apis/shared/sessions/messages.py`) base64-encoded the bytes
+     into the response, but no client reads them. The SPA builds attachment cards from
+     the `[Attached files: …]` marker and the session's file rows
+     (`message-map.service.ts`); the TUI reads `name` and `format` only
+     (`aps_tui/client/catalog.py`). A handle is returned as `{format, name}`.
+   - **Share snapshots and share forks** (`shares/service.py`) keep the document's name
+     and drop the block. **Export** (`export_targets/render.py`) writes a placeholder
+     with the name. **Handoff excerpts** (`handoff/excerpt.py`) write a name line.
+   - **Fork** (`fork_service._copy_messages`) copies stored messages verbatim, so a
+     handle is copied as a handle and the child restores it like any other.
+     `_seed_forked_conversation` seeds from the parent's live list, which keeps bytes.
+   - **Rewind** hides spans and reads text only. The **conversation archive** and index
+     store text only. **Voice** keeps only text blocks of the text history
+     (`strands/bidi/models/bedrock.py`).
+   - **Handoff briefs**, **offload**, **slice ageing**, **context attribution**, the
+     **ledger** and the **cost row footprint** read the live list, never Memory.
+   - **Admin views** read `C#` rows and session metadata, never message content.
+
+   The one stored document that is re-sent is a `document_read` slice inside a tool
+   result. It keeps its bytes (§6.2).
 2. **Per-file cap.** This spec holds 50 MB, which the prepare pipeline is measured for.
    500 MB is a different pipeline (streaming preparation, memory, shard counts).
 3. ~~**The document budget per model, and whether the chat ceiling excludes documents.**~~
@@ -703,5 +749,12 @@ when it is promoted.
    Left as `tool` until an arm measures it.
 7. **Growth inside one turn.** Compaction acts between turns, so `document_read`
    slices can take a turn past the ceiling across tool rounds. Not addressed here.
-8. **Memory event retention.** §9.1 lets the bytes-reading restore path go once it has
-   passed since phase 4. The period needs confirming.
+8. ~~**Memory event retention.**~~ Answered 2026-11-10: **365 days by default,
+   per deployment.** `MemoryConstruct` sets `eventExpiryDuration` to
+   `min(CDK_CONVERSATION_RETENTION_DAYS, 365)`, default 365, the most AgentCore Memory
+   allows (its range is 3 to 365 days). Dev's memory reads 365 (`GetMemory`, 2026-11-10).
+   An event keeps the expiry it was written with. Raising the setting in 2026-10 did not
+   extend events already written. So the bytes-reading restore path (`rehydrate_documents`
+   for a `source.bytes` block, and `digest_for` with bytes) can go **365 days after phase
+   4a reaches production**, or the deployment's own retention if lower. Until then both
+   shapes restore.

@@ -261,6 +261,7 @@ case "$SERVICE" in
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/mcp_apps/ui_resource_store.py"
             "backend/src/apis/shared/files/provenance_store.py"
+            "backend/src/apis/shared/files/attachment_handle.py"
             "backend/src/apis/shared/extraction/__init__.py"
             "backend/src/apis/shared/extraction/extraction_store.py"
             "backend/src/apis/shared/extraction/field_sets.py"

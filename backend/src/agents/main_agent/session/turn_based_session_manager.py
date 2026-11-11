@@ -36,7 +36,7 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
+from typing import Optional, Dict, Any, List, Set, Tuple, TYPE_CHECKING
 
 from agents.main_agent.config.constants import Defaults, EnvVars
 from apis.shared.observability.build_stages import mark_stage
@@ -394,8 +394,43 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.debug("Skipping message with empty content")
             return
 
-        super().append_message(filtered_message, agent, **kwargs)
+        super().append_message(self._persisted_form(filtered_message), agent, **kwargs)
         self.message_count += 1
+
+    def _persisted_form(self, message: Dict) -> Dict:
+        """``message`` as written to Memory: under the ``token`` profile each
+        attached document's bytes become a handle (unified-attachment-delivery
+        §6.2). The live message, which the warm agent keeps sending, is never
+        touched. Restore reads a handle as it reads bytes
+        (``document_rehydration``), so the restored prefix is the same.
+
+        The upload id comes from the rows this turn already resolved
+        (``remember_session_uploads``), matched as restore matches, so no read
+        is added. Never raises: on any doubt the message keeps its bytes.
+        """
+        try:
+            from apis.shared.files.attachment_plan import persist_document_handles
+
+            if not persist_document_handles():
+                return message
+            from apis.shared.files.attachment_handle import persisted_message, session_uploads
+
+            from .document_rehydration import match_document
+
+            uploads = session_uploads(getattr(self, "user_id", None), getattr(self.config, "session_id", None))
+            used: Set[str] = set()
+
+            def _resolve(name: str, fmt: str, size: int) -> Optional[str]:
+                ref = match_document(name, fmt, size, uploads, used) if uploads else None
+                if ref is None:
+                    return None
+                used.add(ref.upload_id)
+                return ref.upload_id
+
+            return persisted_message(message, _resolve)
+        except Exception as e:  # noqa: BLE001 - persisting the bytes is always correct
+            logger.warning("Document handles skipped for this message: %s", e)
+            return message
 
     # ------------------------------------------------------------------
     # Long-term memory retrieval, bounded

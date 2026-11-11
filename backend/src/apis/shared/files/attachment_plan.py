@@ -485,6 +485,14 @@ def current_limits_profile() -> LimitsProfile:
     return token_profile() if attachment_plan_enabled() else legacy_profile()
 
 
+def persist_document_handles() -> bool:
+    """Whether the user message written to AgentCore Memory carries a handle
+    (upload id, name, size, class) in place of each document's bytes (§6.2):
+    the ``token`` profile's rule. The live message keeps the bytes; restore
+    reads a handle exactly as it reads bytes (``attachment_handle``)."""
+    return current_limits_profile().name == PROFILE_TOKEN
+
+
 def documents_as_text() -> bool:
     """Whether the per-call projection renders every renderable non-PDF document
     as text on a Converse model: the active profile's rule, so the projection
@@ -1195,6 +1203,7 @@ __all__ = [
     "document_budget",
     "document_cost",
     "documents_as_text",
+    "persist_document_handles",
     "pdf_page_limit",
     "token_profile",
     "tokenizer_factor",
