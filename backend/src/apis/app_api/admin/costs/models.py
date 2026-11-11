@@ -232,6 +232,9 @@ class AttachmentPlanFile(BaseModel):
     tokens: int = 0
     reason: str
     upload_id: Optional[str] = Field(None, alias="uploadId")
+    # Images under the ``token`` profile: which stored copy was sent,
+    # ``high`` or ``compact`` (spec §4.4.1); ``None`` for everything else.
+    variant: Optional[str] = None
 
 
 class AttachmentPlanRecord(BaseModel):

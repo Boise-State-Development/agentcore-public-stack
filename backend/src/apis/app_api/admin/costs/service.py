@@ -340,6 +340,7 @@ def _call_attachment_plan(record: Dict[str, Any]) -> Optional[AttachmentPlanReco
                 tokens=_as_int(entry.get("tokens")) or 0,
                 reason=str(entry["reason"]),
                 upload_id=str(entry["uploadId"]) if entry.get("uploadId") else None,
+                variant=str(entry["variant"]) if entry.get("variant") else None,
             )
         )
     return AttachmentPlanRecord(
