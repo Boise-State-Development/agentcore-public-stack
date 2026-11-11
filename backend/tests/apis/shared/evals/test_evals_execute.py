@@ -277,3 +277,181 @@ async def test_a_declined_call_is_answered_as_declined():
 async def test_a_model_that_never_stops_calling_fails_rather_than_looping():
     row = await run_sample(_terminal_case({"output": "x"}), sample=0, model_id="m", run_turn=PausingRunner(pauses=99))
     assert not row["passed"] and row["status"] == "client_tool_loop"
+
+
+# --------------------------------------------------------------------------- delivery timing (§8.2, §8.5)
+
+
+def _delivery_case():
+    return parse_case(
+        {
+            "id": "attachment_delivery.example",
+            "family": "attachment_delivery",
+            "turns": [{"prompt": "What is the permit?"}],
+            "run": {"enabled_tools": [], "arm": "auto"},
+            "expect": {"contains_any": ["WP-1"]},
+            "files": ["delivery_prose_5k.md"],
+        },
+        family="attachment_delivery",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_row_carries_each_turns_timing_the_upload_time_and_the_arm():
+    class TimedRunner(FakeRunner):
+        async def __call__(self, **kwargs):
+            result = await super().__call__(**kwargs)
+            result.first_token_ms, result.turn_duration_ms = 1200, 3400
+            result.client_first_token_ms, result.client_duration_ms = 1500, 3600
+            return result
+
+    async def register(session_id: str, filename: str) -> str:
+        return "upload-1"
+
+    row = await run_sample(_delivery_case(), sample=0, model_id="m", run_turn=TimedRunner(["WP-1"]),
+                           register_fixture=register)
+    assert row["timing"] == [{"firstTokenMs": 1200, "turnDurationMs": 3400,
+                              "clientFirstTokenMs": 1500, "clientDurationMs": 3600}]
+    assert isinstance(row["upload_ms"], int)
+    assert row["arm"] == "auto" and row["ceiling"] == "default"
+    json.dumps(row)
+
+
+@pytest.mark.asyncio
+async def test_rows_outside_the_delivery_family_carry_no_arm_and_missing_timing_is_none():
+    row = await run_sample(_retention_case(), sample=0, model_id="m", run_turn=FakeRunner(["a", "b", "QX-4471"]))
+    assert "arm" not in row and "upload_ms" not in row
+    assert row["timing"][0] == {"firstTokenMs": None, "turnDurationMs": None,
+                                "clientFirstTokenMs": None, "clientDurationMs": None}
+
+
+@pytest.mark.asyncio
+async def test_a_quota_exceeded_turn_stops_the_run_instead_of_scoring():
+    from apis.shared.evals.execute import QuotaExceededError
+
+    class OverQuota(FakeRunner):
+        async def __call__(self, **kwargs):
+            result = await super().__call__(**kwargs)
+            result.quota_exceeded = True
+            return result
+
+    with pytest.raises(QuotaExceededError, match="over its quota"):
+        await run_sample(_retention_case(), sample=0, model_id="m", run_turn=OverQuota(["a", "b", "c"]))
+
+
+@pytest.mark.asyncio
+async def test_a_forced_arm_reaches_the_registrar_and_a_paced_turn_waits_first():
+    case = parse_case(
+        {
+            "id": "attachment_delivery.paced",
+            "family": "attachment_delivery",
+            "turns": [{"prompt": "one"}, {"prompt": "two", "pause_seconds": 330}],
+            "run": {"enabled_tools": [], "arm": "on_demand", "ceiling": "200k"},
+            "expect": {"contains_any": ["WP-1"]},
+            "files": ["delivery_prose_5k.md"],
+        },
+        family="attachment_delivery",
+    )
+    registered, slept, sent = [], [], []
+
+    async def register(session_id: str, filename: str, **kwargs) -> str:
+        registered.append(kwargs)
+        return "upload-1"
+
+    class Recording(FakeRunner):
+        async def __call__(self, **kwargs):
+            sent.append((kwargs["prompt"], list(slept)))
+            return await super().__call__(**kwargs)
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    row = await run_sample(case, sample=0, model_id="m", run_turn=Recording(["a", "WP-1"]),
+                           register_fixture=register, sleep=sleep)
+    assert registered == [{"arm": "on_demand"}]
+    assert sent == [("one", []), ("two", [330])]
+    assert row["arm"] == "on_demand" and row["ceiling"] == "200k" and row["passed"]
+
+
+@pytest.mark.asyncio
+async def test_the_auto_arm_registers_as_before():
+    seen = []
+
+    async def register(session_id: str, filename: str, **kwargs) -> str:
+        seen.append(kwargs)
+        return "upload-1"
+
+    await run_sample(_delivery_case(), sample=0, model_id="m", run_turn=FakeRunner(["WP-1"]), register_fixture=register)
+    assert seen == [{}]
+
+
+def _overflow_case(arm: str):
+    return parse_case(
+        {
+            "id": "attachment_delivery.overflow",
+            "family": "attachment_delivery",
+            "turns": [
+                {"prompt": "one", "files": ["delivery_dossier_a_30k.md", "delivery_dossier_b_30k.md"]},
+                {"prompt": "two", "files": ["delivery_dossier_c_30k.md"]},
+                {"prompt": "three"},
+            ],
+            "run": {"enabled_tools": [], "arm": arm},
+            "expect": {"contains_any": ["WO-1"]},
+        },
+        family="attachment_delivery",
+    )
+
+
+@pytest.mark.asyncio
+async def test_each_turn_attaches_its_own_files_registered_before_the_first_turn():
+    order = []
+
+    async def register(session_id: str, filename: str, **kwargs) -> str:
+        order.append(("register", filename[len("delivery_dossier_"):][0], kwargs))
+        return f"up-{filename[len('delivery_dossier_'):][0]}"
+
+    class Recording(FakeRunner):
+        async def __call__(self, **kwargs):
+            order.append(("turn", kwargs["prompt"], kwargs["file_upload_ids"]))
+            return await super().__call__(**kwargs)
+
+    row = await run_sample(_overflow_case("on_demand"), sample=0, model_id="m", run_turn=Recording(["a", "b", "WO-1"]),
+                           register_fixture=register)
+    assert order == [
+        ("register", "a", {"arm": "on_demand"}), ("register", "b", {"arm": "on_demand"}),
+        ("register", "c", {"arm": "on_demand"}),
+        ("turn", "one", ["up-a", "up-b"]), ("turn", "two", ["up-c"]), ("turn", "three", None),
+    ]
+    assert row["upload_ids"] == ["up-a", "up-b", "up-c"] and "index" not in row
+
+
+@pytest.mark.asyncio
+async def test_the_search_arm_waits_for_every_file_to_be_searchable_first():
+    events = []
+
+    async def register(session_id: str, filename: str, **kwargs) -> str:
+        return f"up-{filename[len('delivery_dossier_'):][0]}"
+
+    async def wait(upload_ids):
+        events.append(("wait", list(upload_ids)))
+        return {u: {"kbIndex": "indexed", "settled": True} for u in upload_ids}
+
+    class Recording(FakeRunner):
+        async def __call__(self, **kwargs):
+            events.append(("turn", kwargs["prompt"]))
+            return await super().__call__(**kwargs)
+
+    row = await run_sample(_overflow_case("search"), sample=0, model_id="m", run_turn=Recording(["a", "b", "WO-1"]),
+                           register_fixture=register, wait_searchable=wait)
+    assert events[0] == ("wait", ["up-a", "up-b", "up-c"]) and [e[0] for e in events[1:]] == ["turn"] * 3
+    assert set(row["index"]) == {"up-a", "up-b", "up-c"} and row["arm"] == "search"
+
+
+@pytest.mark.asyncio
+async def test_the_search_arm_without_a_wait_is_a_setup_error():
+    async def register(session_id: str, filename: str, **kwargs) -> str:
+        return "up"
+
+    with pytest.raises(ValueError, match="searchability wait"):
+        await run_sample(_overflow_case("search"), sample=0, model_id="m", run_turn=FakeRunner(["a", "b", "c"]),
+                         register_fixture=register)

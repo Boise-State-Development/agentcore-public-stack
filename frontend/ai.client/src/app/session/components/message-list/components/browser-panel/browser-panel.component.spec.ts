@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
-import { BrowserPanelComponent } from './browser-panel.component';
+import { BrowserPanelComponent, viewerOriginFor } from './browser-panel.component';
 import {
   BrowserLoginRequest,
   BrowserLoginService,
@@ -11,6 +11,8 @@ import { BrowserPaneStateService } from '../../../../services/browser-pane/brows
 import { DockedPaneService } from '../../../../services/docked-pane/docked-pane.service';
 
 const SANDBOX = 'https://mcp-sandbox.example.test';
+/** The viewer's own origin — a different host from the one MCP Apps run on. */
+const VIEWER = 'https://d111111abcdef8.cloudfront.net';
 const SIGNED =
   'https://bedrock-agentcore.us-west-2.amazonaws.com/live?X-Amz-Signature=deadbeef';
 
@@ -50,6 +52,7 @@ describe('BrowserPanelComponent', () => {
         expiresAt: new Date(Date.now() + 300_000).toISOString(),
         viewport: { width: 1280, height: 800 },
         controlState: 'user',
+        viewerOrigin: VIEWER,
       }),
       hasLapsed: vi.fn().mockReturnValue(false),
       complete: vi.fn().mockResolvedValue(undefined),
@@ -127,11 +130,14 @@ describe('BrowserPanelComponent', () => {
       expect(service.mintLiveView).toHaveBeenCalledTimes(1);
     });
 
-    it('frames the sandbox origin and declares the stream host in the CSP', async () => {
+    it("frames the viewer's own origin and declares the stream host in the CSP", async () => {
       const el = await openPanel();
 
       const src = el.querySelector('iframe')!.getAttribute('src')!;
-      expect(src.startsWith(`${SANDBOX}/live-view.html?csp=`)).toBe(true);
+      // Never the MCP App origin: an App framed beside the viewer there could
+      // read the signed URL and what the user types.
+      expect(src.startsWith(`${VIEWER}/live-view.html?csp=`)).toBe(true);
+      expect(src.startsWith(SANDBOX)).toBe(false);
 
       // connect-src must name the minted URL's own origin — without it DCV's
       // WebSocket is blocked and the stream is silently black.
@@ -357,7 +363,28 @@ describe('BrowserPanelComponent', () => {
       expect(post).not.toHaveBeenCalled();
     });
 
-    it('posts the URL to the sandbox origin when the viewer says it is ready', async () => {
+    it("posts the URL to the viewer's origin when the viewer says it is ready", async () => {
+      const post = stubFrame(await openPanel());
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: VIEWER,
+          data: { type: 'browser-live-view/ready' },
+        }),
+      );
+
+      expect(post).toHaveBeenCalledOnce();
+      const [message, target] = post.mock.calls[0];
+      expect(message.url).toBe(SIGNED);
+      expect(message.viewport).toEqual({ width: 1280, height: 800 });
+      // Explicit target, never '*': a wildcard would post a live credential to
+      // whatever happened to be in the frame.
+      expect(target).toBe(VIEWER);
+    });
+
+    it('ignores a ready message from the MCP App origin', async () => {
+      // MCP Apps run on the sandbox origin. A frame there announcing itself as
+      // the viewer must not be handed a live signed URL.
       const post = stubFrame(await openPanel());
 
       window.dispatchEvent(
@@ -367,13 +394,59 @@ describe('BrowserPanelComponent', () => {
         }),
       );
 
-      expect(post).toHaveBeenCalledOnce();
-      const [message, target] = post.mock.calls[0];
-      expect(message.url).toBe(SIGNED);
-      expect(message.viewport).toEqual({ width: 1280, height: 800 });
-      // Explicit target, never '*': that origin also serves untrusted MCP App
-      // HTML, and a wildcard would post a live credential to whatever is there.
-      expect(target).toBe(SANDBOX);
+      expect(post).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the viewer origin', () => {
+    it('frames nothing when app-api names no viewer origin', async () => {
+      service.mintLiveView.mockResolvedValueOnce({
+        url: SIGNED,
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        viewport: { width: 1280, height: 800 },
+        controlState: 'user',
+      });
+      const el = await openPanel();
+
+      expect(el.querySelector('iframe')).toBeNull();
+      expect(el.querySelector('[role="alert"]')?.textContent).toContain(
+        "isn't available in this environment",
+      );
+    });
+
+    it('refuses to frame the viewer on the MCP App origin', async () => {
+      service.mintLiveView.mockResolvedValueOnce({
+        url: SIGNED,
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        viewport: { width: 1280, height: 800 },
+        controlState: 'user',
+        viewerOrigin: SANDBOX,
+      });
+      const el = await openPanel();
+
+      expect(el.querySelector('iframe')).toBeNull();
+      expect(el.querySelector('[role="alert"]')).not.toBeNull();
+    });
+
+    it('accepts only a bare https origin, or http://localhost', () => {
+      expect(viewerOriginFor({ viewerOrigin: VIEWER }, SANDBOX)).toBe(VIEWER);
+      expect(viewerOriginFor({ viewerOrigin: `${VIEWER}/` }, SANDBOX)).toBe(VIEWER);
+      expect(viewerOriginFor({ viewerOrigin: 'http://localhost:4300' }, SANDBOX)).toBe(
+        'http://localhost:4300',
+      );
+      for (const bad of [
+        undefined,
+        '',
+        'http://d111111abcdef8.cloudfront.net',
+        `${VIEWER}/live-view.html`,
+        `${VIEWER}?csp=x`,
+        'javascript:alert(1)',
+        'not a url',
+        SANDBOX,
+        `${SANDBOX}/`,
+      ]) {
+        expect(viewerOriginFor({ viewerOrigin: bad }, SANDBOX)).toBeNull();
+      }
     });
   });
 

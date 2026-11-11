@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -267,6 +268,8 @@ async def run_agent_headless(
         payload["interrupt_responses"] = interrupt_responses
 
     acc = InvocationStreamAccumulator()
+    sent_at = time.monotonic()
+    first_text_at: Optional[float] = None
     try:
         async with _build_http_client(timeout_seconds) as client:
             async with client.stream(
@@ -293,6 +296,13 @@ async def run_agent_headless(
                         response.aiter_lines()
                     ):
                         acc.handle(name, data)
+                        if (
+                            first_text_at is None
+                            and name == "content_block_delta"
+                            and data.get("type") == "text"
+                            and data.get("text")
+                        ):
+                            first_text_at = time.monotonic()
                         if on_event is not None:
                             await on_event(name, data)
     except httpx.TimeoutException:
@@ -301,6 +311,12 @@ async def run_agent_headless(
     except httpx.HTTPError as exc:
         result.error = f"transport: {type(exc).__name__}: {exc}"
 
+    result.client_duration_ms = int((time.monotonic() - sent_at) * 1000)
+    if first_text_at is not None:
+        result.client_first_token_ms = int((first_text_at - sent_at) * 1000)
+    result.turn_duration_ms = acc.turn_duration_ms
+    result.quota_exceeded = acc.quota_exceeded
+    result.first_token_ms = acc.first_token_ms
     result.final_message = acc.final_message
     result.stop_reason = acc.stop_reason
     result.tool_trace = acc.tool_trace

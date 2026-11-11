@@ -139,6 +139,23 @@ class ChatAgent(BaseAgent):
             )
             if offloader is not None:
                 plugins.append(offloader)
+
+            # MCP form elicitation (docs/specs/mcp-elicitation.md): the
+            # ExecuteToolStage middleware that pauses on an opted-in server's
+            # form and replays the call with the answer. A deployment constant,
+            # so no agent-cache key element; it handles only tools from clients
+            # built with an elicitation callback and passes everything else
+            # straight through, after the model has answered.
+            from apis.shared.feature_flags import mcp_elicitation_enabled
+
+            if mcp_elicitation_enabled():
+                from agents.main_agent.integrations.mcp_elicitation import (
+                    McpElicitationPlugin,
+                    install_log_filter,
+                )
+
+                install_log_filter()
+                plugins.append(McpElicitationPlugin())
             plugins = plugins or None
 
             mark_stage("plugins")
@@ -287,6 +304,7 @@ class ChatAgent(BaseAgent):
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
         turn_clock: Any = None,
         invocation_state: Optional[Dict[str, Any]] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -374,6 +392,7 @@ class ChatAgent(BaseAgent):
             original_message=original_message,
             turn_agent_id=turn_agent_id,
             turn_project_id=turn_project_id,
+            turn_attachment_plan=turn_attachment_plan,
             turn_lease=turn_lease,
             turn_started_at=turn_started_at,
             poll_side_frame=poll_side_frame,

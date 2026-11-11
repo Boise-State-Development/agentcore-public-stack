@@ -30,6 +30,7 @@ from apis.shared.files.models import PresignRequest
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 GENERAL_CAP = 4 * 1024 * 1024
 PRESENTATION_CAP = 25 * 1024 * 1024
+SPREADSHEET_CAP = 25 * 1024 * 1024
 
 
 @pytest.fixture
@@ -69,6 +70,27 @@ class TestMaxSizeFor:
             service.max_size_for("deck.pptx", "application/octet-stream")
             == PRESENTATION_CAP
         )
+
+    def test_spreadsheets_get_the_spreadsheet_cap(self, service):
+        # analyze_spreadsheet accepts 25 MB (ANALYZE_MAX_FILE_SIZE_BYTES);
+        # admission must not be the smaller of the two.
+        for filename, mime in (
+            ("data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            ("data.xls", "application/vnd.ms-excel"),
+            ("data.csv", "text/csv"),
+            ("data.xlsx", "application/octet-stream"),
+        ):
+            assert service.max_size_for(filename, mime) == SPREADSHEET_CAP, filename
+
+    def test_spreadsheet_cap_matches_analyze_spreadsheet(self, monkeypatch):
+        monkeypatch.delenv("FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET", raising=False)
+        from agents.builtin_tools.spreadsheet_analysis import analyze_tool
+
+        default = FileUploadService(
+            repository=MagicMock(), s3_client=MagicMock(), bucket_name="b"
+        )
+        assert default.spreadsheet_max_file_size == analyze_tool.ANALYZE_MAX_FILE_SIZE_BYTES
+        assert default.max_download_bytes() >= default.spreadsheet_max_file_size
 
     def test_defaults_match_the_documented_values(self):
         # Constructed with no overrides — these are the values the frontend

@@ -343,6 +343,7 @@ class StreamCoordinator:
         original_message: Optional[str] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
@@ -372,6 +373,10 @@ class StreamCoordinator:
             turn_project_id: The Shared Project whose harness ran this turn (None for any
                 other turn). Recorded on each cost row as ``projectId``; the metadata writer
                 also adds the call to the project's monthly ``COST#`` rollup.
+            turn_attachment_plan: The turn's ``AttachmentPlan.to_row()`` (per file: mode,
+                class, tokens, reason, upload id; ``docs/specs/unified-attachment-delivery.md``
+                §8.2), or None for a turn with no attachments. Written as ``attachmentPlan``
+                on the turn's last cost row, after the stream. Per turn, like turn_agent_id.
             turn_lease: This turn's single-flight ``SessionLease``, which doubles as the
                 mid-turn steering inbox. Stamped onto the session manager for the life of
                 the turn so ``SteeringHook`` can read it at each tool boundary — and
@@ -456,7 +461,11 @@ class StreamCoordinator:
         # named stays pinned. Best-effort: never blocks the turn.
         if session_manager is not None and hasattr(session_manager, "apply_document_offload"):
             try:
-                session_manager.apply_document_offload(agent, prompt=prompt)
+                session_manager.apply_document_offload(
+                    agent,
+                    prompt=prompt,
+                    model_id=getattr(getattr(main_agent_wrapper, "model_config", None), "model_id", None),
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"apply_document_offload failed, continuing: {e}")
 
@@ -981,6 +990,12 @@ class StreamCoordinator:
                         user_id=user_id,
                     ):
                         yield sse
+                    for sse in await self._extract_mcp_elicitation_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
+                        yield sse
                     for sse in await self._extract_client_tool_call_events(
                         agent,
                         session_id=session_id,
@@ -1178,6 +1193,9 @@ class StreamCoordinator:
                                     current_messages=current_messages,
                                     context_window=turn_context_window,
                                     history_tokens=history_tokens,
+                                    model_id=getattr(
+                                        getattr(main_agent_wrapper, "model_config", None), "model_id", None
+                                    ),
                                 )
                                 # The cut (and its forced / floor_unreachable
                                 # flags) belongs on the call that triggered it,
@@ -1430,6 +1448,7 @@ class StreamCoordinator:
                         citations=citations,
                         turn_agent_id=turn_agent_id,
                         turn_project_id=turn_project_id,
+                        turn_attachment_plan=turn_attachment_plan,
                     )
 
                     # Skip the original error event and exit the loop - we've handled the error
@@ -1688,6 +1707,7 @@ class StreamCoordinator:
                     citations=citations,
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
+                    turn_attachment_plan=turn_attachment_plan,
                     outcome=turn_outcome,
                     empty_answer=empty_answer,
                 )
@@ -1826,6 +1846,7 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
                 meter_usage=meter_usage,
                 model_retries=model_retries_seen,
             )
@@ -1877,6 +1898,7 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
                 meter_usage=meter_usage,
                 model_retries=model_retries_seen,
             )
@@ -1954,6 +1976,7 @@ class StreamCoordinator:
                     citations=citations,
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
+                    turn_attachment_plan=turn_attachment_plan,
                 )
         finally:
             # The first model output was the stream's last event (or the turn
@@ -1988,6 +2011,16 @@ class StreamCoordinator:
                 discard_provenance(user_id, session_id)
             except Exception:  # noqa: BLE001
                 logger.debug("source provenance discard failed", exc_info=True)
+
+            # Stop the turn's analyze_spreadsheet sandbox (#259). The agent's
+            # AfterInvocationEvent normally does this; a dropped client can
+            # skip it, so release here too. Idempotent.
+            try:
+                sandbox_hook = getattr(main_agent_wrapper, "analyze_sandbox_hook", None)
+                if sandbox_hook is not None:
+                    await sandbox_hook.release()
+            except Exception:  # noqa: BLE001
+                logger.debug("analyze sandbox release failed", exc_info=True)
 
     @staticmethod
     def _completed_turn_outcome(
@@ -2119,6 +2152,7 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
         meter_usage: bool = True,
         model_retries: int = 0,
         original_message: Optional[str] = None,
@@ -2358,6 +2392,7 @@ class StreamCoordinator:
                             citations=citations,
                             turn_agent_id=turn_agent_id,
                             turn_project_id=turn_project_id,
+                            turn_attachment_plan=turn_attachment_plan,
                             # The breakdown describes the call in flight, so
                             # only a row for that call may carry it.
                             attach_context_breakdown=metered[-1] == in_flight_idx,
@@ -2799,6 +2834,72 @@ class StreamCoordinator:
             )
         return events
 
+    async def _extract_mcp_elicitation_required_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield one SSE-formatted ``mcp_elicitation_required`` event per form
+        an MCP server is waiting on, persisting each one so the form rehydrates
+        after a refresh (``docs/specs/mcp-elicitation.md`` §4).
+
+        Raised by ``elicitation_middleware`` through
+        ``ExecuteToolContext.interrupt``; Strands stops for it exactly as it
+        does for a hook or tool interrupt, so the ``PausedTurnSnapshot`` on
+        this same ``done`` event covers it. One difference from the other
+        extractors: a call that elicits twice pauses twice, and the first
+        round's interrupt is still in the state, answered. Only an unanswered
+        one is a form to show.
+
+        Persistence is best-effort, as for the other kinds.
+        """
+        from apis.shared.mcp_elicitation.forms import (
+            ELICITATION_EVENT_TYPE,
+            event_payload,
+            event_sse,
+        )
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != ELICITATION_EVENT_TYPE:
+                continue
+            if interrupt.response is not None:
+                continue
+            if not reason.get("fields"):
+                logger.warning("MCP elicitation interrupt has no fields: id=%s", interrupt.id)
+                continue
+
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            kind="mcp_elicitation",
+                            tool_use_id=reason.get("toolUseId") or None,
+                            tool_name=reason.get("toolName") or None,
+                            elicitation=json.dumps(event_payload(interrupt.id, reason)),
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist mcp_elicitation pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
+            events.append(event_sse(interrupt.id, reason))
+        return events
+
     async def _extract_client_tool_call_events(
         self,
         agent: Any,
@@ -2974,12 +3075,12 @@ class StreamCoordinator:
                 deadline_at=ref.deadline_at,
                 target_url=ref.target_url,
                 reason=prompt_reason,
-                # Same origin MCP Apps are framed from, and for the same
-                # reasons: its CloudFront function locks `frame-ancestors` to
-                # the SPA and composes `connect-src` from `?csp=`, which is how
-                # the viewer is allowed to open DCV's WebSocket. Empty when the
-                # sandbox origin is not deployed — the SPA then shows the
-                # prompt without a viewer rather than framing nothing.
+                # Only "is a viewer deployed": the mcp-sandbox origin ships
+                # beside the viewer's own distribution, and is empty when it is
+                # not deployed, in which case the SPA shows the prompt without
+                # a viewer. The SPA never frames the viewer from this origin —
+                # MCP Apps run there — and takes the viewer's own origin from
+                # app-api's mint response, so the Runtime carries no new env.
                 sandbox_origin=os.environ.get(
                     "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN", ""
                 ).strip(),
@@ -4040,6 +4141,7 @@ class StreamCoordinator:
         citations: Optional[List],
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
         attach_context_breakdown: bool = True,
         outcome: Optional[str] = None,
         empty_answer: bool = False,
@@ -4147,6 +4249,8 @@ class StreamCoordinator:
                     include_context_breakdown=attach_context_breakdown and is_last,
                     turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
                     turn_project_id=turn_project_id,
+                    # The turn's attachment plan, on its last row only (a turn counts once there).
+                    turn_attachment_plan=turn_attachment_plan if is_last else None,
                     turn_outcome=outcome,
                     empty_answer=empty_answer and is_last,
                     tool_calls=(
@@ -4190,6 +4294,7 @@ class StreamCoordinator:
         citations: Optional[List],
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Meter the model calls a failed turn made before it failed.
 
@@ -4253,6 +4358,7 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
                 attach_context_breakdown=False,
                 outcome="error",
             )
@@ -4328,6 +4434,7 @@ class StreamCoordinator:
         call_index: Optional[int] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
         tool_calls: Optional[Dict[str, Dict[str, int]]] = None,
         context_ledger: Optional[Dict[str, Any]] = None,
         turn_duration_ms: Optional[int] = None,
@@ -4585,6 +4692,13 @@ class StreamCoordinator:
                 # writer reads it back to bump PROJECT#{id}/COST#{YYYY-MM}.
                 if turn_project_id:
                     metadata_kwargs["projectId"] = turn_project_id
+                # How each of the turn's attachments was delivered (the planner's
+                # decision: modes, classes, reason codes, token estimates and
+                # upload ids — never a filename). Turn-level, so only the last
+                # row carries it. Written here, after the stream, never before
+                # the first token.
+                if turn_attachment_plan:
+                    metadata_kwargs["attachmentPlan"] = turn_attachment_plan
 
                 # Content-free tool census for this call (tool name → calls /
                 # errors), another extra field. Read by the admin session
@@ -4638,7 +4752,13 @@ class StreamCoordinator:
                     try:
                         from agents.main_agent.session.document_context import summarize_document_context
 
-                        footprint = summarize_document_context(getattr(strands_agent, "messages", None))
+                        index_of = getattr(turn_session_manager, "document_index", None)
+                        footprint = summarize_document_context(
+                            getattr(strands_agent, "messages", None),
+                            index_of(getattr(getattr(agent, "model_config", None), "model_id", None))
+                            if callable(index_of)
+                            else None,
+                        )
                         if footprint:
                             metadata_kwargs.update(footprint)
                     except Exception as doc_err:  # noqa: BLE001 - never block the cost row

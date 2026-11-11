@@ -479,3 +479,97 @@ class TestReindexOnOpen:
 
         monkeypatch.delenv("ATTACHMENT_KB_ENABLED", raising=False)
         assert run(attachment_reindex.requeue_evicted_attachments(SESSION, USER)) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 (unified-attachment-delivery §4.3 ``search``): over-budget documents
+# ---------------------------------------------------------------------------
+
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _small_doc(upload_id: str = "up-s", *, text_tokens: Optional[int] = 60_000, kb: Optional[dict] = None,
+               forced: Optional[str] = None, size: int = 200_000) -> FileMetadata:
+    """A document under the inline limit: facts, no preparation, never reference-class."""
+    facts = None
+    if text_tokens is not None:
+        facts = {"version": 1, "class": "document", "tokens": {"text": text_tokens, "native": size // 4},
+                 "pages": None, "hasTextLayer": True, "units": "paragraph"}
+    return FileMetadata(
+        upload_id=upload_id, user_id=USER, session_id=SESSION, filename="memo.docx", mime_type=DOCX_MIME,
+        size_bytes=size, s3_key=f"user-files/{USER}/{SESSION}/{upload_id}/memo.docx",
+        s3_bucket="test-file-uploads", status=FileStatus.READY, facts=facts, kb_index=kb,
+        delivery_override=forced,
+    )
+
+
+@pytest.fixture
+def token_profile(monkeypatch):
+    monkeypatch.setenv("ATTACHMENT_PLAN_ENABLED", "true")
+
+
+class TestOverBudgetIndexing:
+    def test_the_legacy_profile_never_indexes_a_small_document(self, monkeypatch):
+        monkeypatch.delenv("ATTACHMENT_PLAN_ENABLED", raising=False)
+        assert not ai.is_eligible(_small_doc())
+        assert ai.search_status(_small_doc(), kb_enabled=True) == ai.SEARCH_OFF
+
+    def test_the_token_profile_indexes_one_the_planner_sends_on_demand(self, token_profile):
+        assert ai.indexed_by_budget(_small_doc()) and ai.is_eligible(_small_doc())
+
+    @pytest.mark.parametrize("row", [
+        _small_doc(text_tokens=2_000),       # Haiku 5.5 holds it
+        _small_doc(text_tokens=None),        # no facts yet: the facts run ingests
+        _small_doc(forced="on_demand"),      # an eval's on_demand arm is never searchable
+    ], ids=["held", "no-facts", "forced-on-demand"])
+    def test_not_eligible(self, token_profile, row):
+        assert not ai.is_eligible(row)
+        assert ai.search_status(row, kb_enabled=True) == ai.SEARCH_OFF
+
+    def test_an_eval_search_arm_is_indexed_whatever_its_size(self, token_profile):
+        assert ai.is_eligible(_small_doc(text_tokens=500, forced="search"))
+
+    def test_a_reference_class_document_keeps_its_own_rule(self, token_profile):
+        assert ai.is_eligible(_row()) and not ai.is_eligible(_row(prepared=False))
+        assert not ai.indexed_by_budget(_row())
+
+    @pytest.mark.parametrize("kb,expected", [
+        (None, ai.SEARCH_INDEXING),
+        ({"status": "indexing"}, ai.SEARCH_INDEXING),
+        ({"status": "indexing", "textIndexedAt": "2026-11-10T00:00:00+00:00"}, ai.SEARCH_SEARCHABLE),
+        ({"status": "indexed"}, ai.SEARCH_SEARCHABLE),
+        ({"status": "evicted"}, ai.SEARCH_EVICTED),
+        ({"status": "skipped_cap"}, ai.SEARCH_UNAVAILABLE),
+        ({"status": "failed"}, ai.SEARCH_UNAVAILABLE),
+    ])
+    def test_search_status_needs_no_preparation(self, token_profile, kb, expected):
+        assert ai.search_status(_small_doc(kb=kb), kb_enabled=True) == expected
+        assert ai.search_status(_small_doc(kb=kb), kb_enabled=False) == ai.SEARCH_OFF
+
+    def test_it_is_ingested_by_its_original_and_counted_against_the_cap(self, env, token_profile):
+        run(env["put"](_small_doc()))
+
+        assert run(ai.sync_upload(env["indexer"], USER, "up-s")) == ai.STATUS_INDEXING
+        [source] = env["backend"].ingested
+        assert source.document_id == "att#user-1#sess-1#up-s"
+        assert source.s3_key == "user-files/user-1/sess-1/up-s/memo.docx"
+        assert _owner_total() == 200_000
+
+    def test_turning_the_profile_off_removes_it_at_the_next_sync(self, env, token_profile, monkeypatch):
+        run(env["put"](_small_doc()))
+        run(ai.sync_upload(env["indexer"], USER, "up-s"))
+        monkeypatch.setenv("ATTACHMENT_PLAN_ENABLED", "false")
+
+        assert run(ai.sync_upload(env["indexer"], USER, "up-s")) == ai.STATUS_REMOVED
+        assert env["backend"].deleted == ["att#user-1#sess-1#up-s"]
+        assert _owner_total() == 0
+
+    def test_a_held_document_is_never_ingested(self, env, token_profile):
+        run(env["put"](_small_doc(text_tokens=2_000)))
+
+        assert run(ai.sync_upload(env["indexer"], USER, "up-s")) == "not_eligible"
+        assert env["backend"].ingested == []
+
+    def test_an_evicted_over_budget_document_is_reindexed_on_open(self, token_profile):
+        rows = [_small_doc(kb={"status": "evicted"}), _small_doc("up-h", text_tokens=2_000, kb={"status": "evicted"})]
+        assert ai.evicted_upload_ids(rows) == ["up-s"]

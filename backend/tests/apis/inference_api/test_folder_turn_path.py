@@ -168,12 +168,16 @@ class TestAttachmentPhase:
         repo["repo"] = FakeFolderRepo({"fa-1": _folder("fa-1", files=[sheet])})
         out = await run(["fa-1"])
         assert out.turn_has_document is False
-        assert routes._folders_have(out.folders, routes.is_tabular_file) is True
+        assert routes._folders_have(out.folders, lambda n, m: routes.file_class(n, m) == routes.CLASS_TABULAR) is True
 
     @pytest.mark.asyncio
     async def test_a_folder_counts_one_against_the_cap_after_the_files(self, flag_on, repo, phase, monkeypatch):
         run, state = phase
-        monkeypatch.setattr(routes, "MAX_FILES_PER_MESSAGE", 3)
+        from dataclasses import replace
+
+        from apis.shared.files.attachment_plan import legacy_profile
+
+        monkeypatch.setattr(routes, "current_limits_profile", lambda: replace(legacy_profile(), max_files_per_message=3))
         repo["repo"] = FakeFolderRepo({"fa-1": _folder("fa-1"), "fa-2": _folder("fa-2")})
         out = await run(["fa-1", "fa-2"], upload_ids=["up-a", "up-b"])
         assert state["resolver"].calls[0]["upload_ids"] == ["up-a", "up-b"]

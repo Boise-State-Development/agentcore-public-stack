@@ -429,3 +429,126 @@ class TestOrphanSweep:
         assert "swept 1 upload(s) and 1 session(s)" in capsys.readouterr().out
         assert s3.list_objects_v2(Bucket="files").get("Contents", []) == []
         assert ended == ["eval-old"]
+
+
+# --------------------------------------------------------------------------- attachment_delivery (§8)
+
+
+def test_presign_uploads_need_a_cognito_session():
+    base = ["run", "--out", "x", "--model-id", MODEL, "--prefix", "dev-example"]
+    assert eval_harness.parse_args(base + ["--user-id", "u"]).upload_via == "direct"
+    with pytest.raises(SystemExit):
+        eval_harness.parse_args(base + ["--user-id", "u", "--upload-via", "presign"])
+    args = eval_harness.parse_args(base + ["--auth", "cognito", "--base-url", "https://dev.example/api",
+                                           "--upload-via", "presign"])
+    assert args.upload_via == "presign"
+
+
+def test_the_estimate_prices_sized_attachments():
+    from apis.shared.evals.cases import load_cases
+
+    cases = {c.id: c for c in load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"])}
+    _, small, _ = eval_harness.estimate([(cases["attachment_delivery.lookup_md_5k"], 0)], MODEL)
+    _, large, _ = eval_harness.estimate([(cases["attachment_delivery.lookup_md_300k"], 0)], MODEL)
+    # ~300k tokens written to the cache at 1.25x Haiku 4.5's $1.10.
+    assert large > 0.4 > small
+
+
+def test_a_run_with_no_family_leaves_out_the_opt_in_family(tmp_path, capsys):
+    from apis.shared.evals.cases import DEFAULT_FAMILIES, load_cases
+
+    default = len(load_cases(eval_harness.CASES_DIR, families=list(DEFAULT_FAMILIES)))
+    delivery = len(load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"]))
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+    ])
+    assert code == 0
+    every = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery",
+    ])
+    assert every == 0
+    first, second = capsys.readouterr().out.split("estimate only", 1)
+    assert f"{default} cases × k=3" in first
+    # One run, one ceiling: the default run leaves out the 200k and documents-excluded cases.
+    others = sum(1 for c in load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"])
+                 if c.run.ceiling != "default")
+    assert f"skipping {others} attachment_delivery case(s) of other ceilings" in second
+    assert f"{delivery - others} cases × k=3" in second
+
+
+def test_a_non_default_ceiling_needs_a_local_stack(tmp_path, capsys):
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--ceiling", "200k",
+    ])
+    assert code == 2
+    assert "needs a local stack" in capsys.readouterr().err
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--ceiling", "200k", "--invocations-url", "http://localhost:8011",
+    ])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS=200000" in out and "6 cases × k=3" in out
+
+
+def _write_delivery_run(out: Path):
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 1, "startedAt": "t"}), encoding="utf-8")
+    (out / "results.jsonl").write_text(json.dumps({
+        "case_id": "attachment_delivery.lookup_md_5k", "family": "attachment_delivery", "sample": 0,
+        "model_id": MODEL, "passed": True, "failures": [], "final_message": "WP", "tool_calls": [],
+        "session_id": "eval-x", "timing": [{"firstTokenMs": 900, "turnDurationMs": 2100}],
+    }) + "\n", encoding="utf-8")
+
+
+def test_readout_prints_the_per_case_table_and_writes_json(tmp_path, capsys):
+    run = tmp_path / "run"
+    _write_delivery_run(run)
+    report = tmp_path / "readout.json"
+    assert eval_harness.main(["readout", "--out", str(run), "--no-cost-rows", "--json", str(report)]) == 0
+    out = capsys.readouterr().out
+    assert "| lookup_md_5k | — | — | 1/1 |" in out and "0.9s" in out
+    assert json.loads(report.read_text())["cases"][0]["firstTokenMs"] == 900
+
+
+def test_baseline_family_splices_into_the_existing_file(tmp_path, golden, capsys):
+    flags, baselines = golden
+    run1 = tmp_path / "run1"
+    _write_run(run1)
+    assert eval_harness.main(flags + ["baseline", "--out", str(run1)]) == 0
+    path = baselines / eval_harness.baseline_filename(MODEL)
+    before = json.loads(path.read_text())
+
+    run2 = tmp_path / "run2"
+    _write_run(run2, failing="a")
+    assert eval_harness.main(flags + ["baseline", "--out", str(run2), "--family", "tool_selection"]) == 0
+    after = json.loads(path.read_text())
+    assert before["cases"]["tool_selection.a"]["passed"] and not after["cases"]["tool_selection.a"]["passed"]
+    assert "tool_selection" in after["familyPromotions"]
+
+
+def test_match_narrows_the_run_to_matching_case_ids(tmp_path, capsys):
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--match", r"ceiling_pdf_(30|80)k_.*_default_",
+    ])
+    assert code == 0
+    # native and on_demand, two sizes, two paces, at the default ceiling.
+    assert "8 cases × k=3" in capsys.readouterr().out
+
+
+def test_baseline_match_promotes_the_subset_a_run_covered(tmp_path, golden, capsys):
+    """A family that grew since its first baseline can be promoted for the cases a run covered."""
+    flags, baselines = golden
+    run = tmp_path / "run"
+    _write_run(run)
+    # Drop every sample of cases g and h: without --match the run is partial.
+    rows = [r for r in (run / "results.jsonl").read_text().splitlines()
+            if not json.loads(r)["case_id"].endswith((".g", ".h"))]
+    (run / "results.jsonl").write_text("\n".join(rows) + "\n")
+    assert eval_harness.main(flags + ["baseline", "--out", str(run)]) == 2
+    assert eval_harness.main(flags + ["baseline", "--out", str(run), "--match", r"\.[a-f]$"]) == 0
+    written = json.loads(next(baselines.glob("*.json")).read_text())
+    assert sorted(written["cases"]) == [f"tool_selection.{c}" for c in "abcdef"]

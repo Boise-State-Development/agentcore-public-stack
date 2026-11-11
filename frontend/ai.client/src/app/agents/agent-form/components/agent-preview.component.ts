@@ -192,10 +192,11 @@ export class AgentPreviewComponent implements OnDestroy {
    * The launch card as the author's own agent sees it — built from the live form rather
    * than a fetched record, so a name typed a second ago is already on the tile.
    *
-   * `listed: false` regardless of the real listing state: the store affordances are Add
-   * and Agent details, and neither means anything on the page where you are editing the
-   * thing. Capabilities are likewise omitted — the header's capability strip already
-   * names what this agent runs with, from the live selections rather than the saved ones.
+   * `listed: false` and `pinnable: false` regardless of the real state: the store
+   * affordances are Add and Agent details, and neither they nor a pin control mean
+   * anything on the page where you are editing the thing. Capabilities are likewise
+   * omitted — the header's capability strip already names what this agent runs with,
+   * from the live selections rather than the saved ones.
    */
   readonly cardView = computed<AgentLaunchCardView>(() => ({
     agentId: this.agentId() ?? '',
@@ -204,6 +205,7 @@ export class AgentPreviewComponent implements OnDestroy {
     emoji: this.emoji(),
     starters: this.starters(),
     listed: false,
+    pinnable: false,
   }));
 
   readonly chatConfigMessagesOnly: Partial<ChatContainerConfig> = {

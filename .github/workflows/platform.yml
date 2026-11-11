@@ -12,7 +12,7 @@ on:
       - 'infrastructure/cdk.context.json'
       - 'infrastructure/bin/infrastructure.ts'
       - 'infrastructure/bootstrap-assets/**'
-      # Staged into the mcp-sandbox bucket at synth (mcp-sandbox-bucket-construct).
+      # Staged into the mcp-sandbox and browser-live-view buckets at synth.
       # Without this a viewer change deploys NOWHERE: frontend-deploy.yml does not
       # ship it, so the push goes green and the old asset stays live.
       - 'infrastructure/assets/**'
@@ -412,6 +412,18 @@ jobs:
       # "true" enables. Sets the flag on the AgentCore Runtime and app-api; no
       # resources. The SPA's matching switch is `features.sourceProvenance`.
       CDK_SOURCE_PROVENANCE_ENABLED: ${{ vars.CDK_SOURCE_PROVENANCE_ENABLED }}
+      # Attachment planner, token profile: attachments decided in tokens against
+      # a per-model document budget (docs/specs/unified-attachment-delivery.md
+      # phase 3). In development, so only "true" enables. Sets the flag on the
+      # AgentCore Runtime and app-api; no resources. A rollout switch. The SPA's
+      # matching switch is `features.attachmentPlan`.
+      CDK_ATTACHMENT_PLAN_ENABLED: ${{ vars.CDK_ATTACHMENT_PLAN_ENABLED }}
+      # MCP form elicitation: an opted-in external MCP server may ask the user
+      # for input partway through a tool call (docs/specs/mcp-elicitation.md).
+      # In development, so only "true" enables. Sets the flag on the AgentCore
+      # Runtime and app-api; no resources. The SPA's matching switch is
+      # `features.mcpElicitation`.
+      CDK_MCP_ELICITATION_ENABLED: ${{ vars.CDK_MCP_ELICITATION_ENABLED }}
       # Release ledger writes: each model call's cost row also bumps the
       # version-keyed LEDGER# rollups in the existing system-cost-rollup table
       # (docs/specs/release-ledger.md §5.2). In development, so only "true"
@@ -628,11 +640,11 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      # The browser sign-in live view is served from the mcp-sandbox origin and
+      # The browser sign-in live view is served from its own origin and
       # needs the Amazon DCV Web Client SDK deployed alongside it. The SDK is a
       # EULA-licensed AWS download and this repo is PUBLIC, so it is fetched and
       # verified here rather than committed. Must run BEFORE the deploy: CDK
-      # stages assets/mcp-sandbox at synth time, so an absent SDK silently ships
+      # stages assets/browser-live-view at synth time, so an absent SDK silently ships
       # a viewer that cannot load. See docs/specs/authenticated-web-assessment.md.
       - name: Fetch Amazon DCV Web Client SDK
         run: bash scripts/build/fetch-dcv-sdk.sh

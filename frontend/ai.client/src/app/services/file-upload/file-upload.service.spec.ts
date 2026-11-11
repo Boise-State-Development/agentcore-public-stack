@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { 
   FileUploadService, 
@@ -12,20 +12,32 @@ import {
   FileTooLargeError,
   InvalidFileTypeError,
   QuotaExceededError,
-  MAX_FILE_SIZE_BYTES,
-  PPTX_MAX_FILE_SIZE_BYTES,
-  LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES,
   maxFileSizeFor,
   isReferenceDocument,
   isAttachableSourceFile,
   resolveMimeTypeFor,
-  ALLOWED_EXTENSIONS
+  ALLOWED_EXTENSIONS,
+  presignRetryDelay,
 } from './file-upload.service';
 import { ConfigService } from '../config.service';
 import { FEATURES } from '../features';
+import { type AttachmentLimits, FALLBACK_ATTACHMENT_LIMITS } from './attachment-limits';
 
 const FLAG_OFF = { largeDocumentAttachments: false };
 const FLAG_ON = { largeDocumentAttachments: true };
+
+/** What GET /files/limits serves with large-document attachments on and off. */
+const LIMITS_ON: AttachmentLimits = { ...FALLBACK_ATTACHMENT_LIMITS };
+const LIMITS_OFF: AttachmentLimits = {
+  ...FALLBACK_ATTACHMENT_LIMITS,
+  largeDocuments: false,
+  maxBytes: { ...FALLBACK_ATTACHMENT_LIMITS.maxBytes, largeDocument: null },
+};
+// Today's limits, pinned so phase 1 of unified-attachment-delivery is "no change".
+const MAX_FILE_SIZE_BYTES = FALLBACK_ATTACHMENT_LIMITS.maxBytes.document;
+const PPTX_MAX_FILE_SIZE_BYTES = FALLBACK_ATTACHMENT_LIMITS.maxBytes.presentation;
+const SPREADSHEET_MAX_FILE_SIZE_BYTES = FALLBACK_ATTACHMENT_LIMITS.maxBytes.spreadsheet;
+const LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES = FALLBACK_ATTACHMENT_LIMITS.maxBytes.largeDocument as number;
 
 /** A File that reports `size` without allocating it (a 50 MB string is slow). */
 function sizedFile(name: string, type: string, size: number): File {
@@ -206,6 +218,18 @@ describe('FileUploadService', () => {
         expect(() => service.validateFile(file)).toThrow(FileTooLargeError);
       });
 
+      // analyze_spreadsheet reads up to 25 MB; the 4 MB inline cap refused
+      // spreadsheets the tool accepts (unified-attachment-delivery §1.3).
+      it('should allow a 10 MB spreadsheet and cap it at the spreadsheet limit', () => {
+        const xlsx = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        expect(SPREADSHEET_MAX_FILE_SIZE_BYTES).toBe(25 * 1024 * 1024);
+        expect(() => service.validateFile(sizedFile('big.xlsx', xlsx, 10 * 1024 * 1024))).not.toThrow();
+        expect(() => service.validateFile(sizedFile('big.csv', '', 10 * 1024 * 1024))).not.toThrow();
+        expect(() =>
+          service.validateFile(sizedFile('huge.xlsx', xlsx, SPREADSHEET_MAX_FILE_SIZE_BYTES + 1))
+        ).toThrow('Maximum: 25 MB');
+      });
+
       it('should throw InvalidFileTypeError for invalid MIME type', () => {
         const file = new File(['content'], 'test.exe', { type: 'application/exe' });
         expect(() => service.validateFile(file)).toThrow(InvalidFileTypeError);
@@ -349,6 +373,72 @@ describe('FileUploadService', () => {
           } finally {
             vi.unstubAllGlobals();
           }
+        });
+      });
+
+      describe('presign gateway retry', () => {
+        const presignAt = (n: number) =>
+          vi.waitFor(
+            () => {
+              const reqs = httpMock.match(r => r.url.endsWith('/presign'));
+              if (reqs.length !== 1) throw new Error(`waiting for presign #${n}`);
+              return reqs[0];
+            },
+            { timeout: 3000 },
+          );
+
+        it('sends a presign that got a 502 once more', async () => {
+          const upload = service.uploadFile('session1', sizedFile('notes.txt', 'text/plain', 10));
+          (await presignAt(1)).flush('Bad Gateway', { status: 502, statusText: 'Bad Gateway' });
+
+          // The retry is a fresh request; ending it with a 400 keeps the test
+          // off the S3 PUT, and proves its outcome is what the caller sees.
+          (await presignAt(2)).flush({ detail: 'nope' }, { status: 400, statusText: 'Bad Request' });
+          const err = await upload.catch(e => e);
+          expect(err.message).toContain('nope');
+        });
+
+        it('gives up after one retry', async () => {
+          const upload = service.uploadFile('session1', sizedFile('notes.txt', 'text/plain', 10));
+          (await presignAt(1)).flush('Unavailable', { status: 503, statusText: 'Service Unavailable' });
+          (await presignAt(2)).flush('Unavailable', { status: 503, statusText: 'Service Unavailable' });
+
+          await expect(upload).rejects.toBeDefined();
+          httpMock.expectNone(r => r.url.endsWith('/presign'));
+        });
+
+        it('does not retry a 504 or a 4xx', () => {
+          for (const status of [504, 400, 401, 413]) {
+            const err = new HttpErrorResponse({ status });
+            let rethrown: unknown;
+            presignRetryDelay(err).subscribe({ error: e => (rethrown = e) });
+            expect(rethrown).toBe(err);
+          }
+        });
+      });
+
+      describe('server size rejection', () => {
+        it('reports the file\'s real size and the limit the server names', async () => {
+          // Under the client cap, so the server is the one that refuses it.
+          const file = sizedFile('deck.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 3 * 1024 * 1024);
+          const upload = service.uploadFile('session1', file);
+          const presign = await vi.waitFor(() => httpMock.expectOne(r => r.url.endsWith('/presign')));
+          presign.flush({ detail: 'File exceeds 2MB limit' }, { status: 400, statusText: 'Bad Request' });
+
+          const err = await upload.catch(e => e);
+          expect(err).toBeInstanceOf(FileTooLargeError);
+          expect(err.message).toBe('File too large: 3 MB. Maximum: 2 MB');
+          expect(err.message).not.toContain('0 B');
+        });
+
+        it('falls back to the file\'s class limit when the message names none', async () => {
+          const file = sizedFile('deck.pptx', '', 3 * 1024 * 1024);
+          const upload = service.uploadFile('session1', file);
+          const presign = await vi.waitFor(() => httpMock.expectOne(r => r.url.endsWith('/presign')));
+          presign.flush({ detail: 'File too large' }, { status: 400, statusText: 'Bad Request' });
+
+          const err = await upload.catch(e => e);
+          expect(err.message).toBe('File too large: 3 MB. Maximum: 25 MB');
         });
       });
 
@@ -551,19 +641,19 @@ describe('FileUploadService', () => {
       describe('maxFileSizeFor', () => {
         it('should return the general cap for ordinary files', () => {
           const file = new File(['c'], 'doc.pdf', { type: 'application/pdf' });
-          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, LIMITS_OFF)).toBe(MAX_FILE_SIZE_BYTES);
         });
 
         it('should return the presentation cap by MIME type', () => {
           const file = new File(['c'], 'deck.pptx', {
             type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
           });
-          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, LIMITS_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
         });
 
         it('should return the presentation cap by extension when MIME is empty', () => {
           const file = new File(['c'], 'deck.pptx', { type: '' });
-          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, LIMITS_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
         });
 
         it('should return the large-document ceiling for every document class when the flag is on', () => {
@@ -580,28 +670,28 @@ describe('FileUploadService', () => {
             ['scan.pdf', ''],
           ];
           for (const [name, type] of documents) {
-            expect(maxFileSizeFor(new File(['c'], name, { type }), FLAG_ON)).toBe(
+            expect(maxFileSizeFor(new File(['c'], name, { type }), LIMITS_ON)).toBe(
               LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES
             );
           }
         });
 
         it('should keep spreadsheets, images and decks on their own caps when the flag is on', () => {
-          expect(maxFileSizeFor(new File(['c'], 'data.csv', { type: 'text/csv' }), FLAG_ON)).toBe(
-            MAX_FILE_SIZE_BYTES
+          expect(maxFileSizeFor(new File(['c'], 'data.csv', { type: 'text/csv' }), LIMITS_ON)).toBe(
+            SPREADSHEET_MAX_FILE_SIZE_BYTES
           );
           expect(
             maxFileSizeFor(
               new File(['c'], 'sales.xlsx', {
                 type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
               }),
-              FLAG_ON
+              LIMITS_ON
             )
-          ).toBe(MAX_FILE_SIZE_BYTES);
-          expect(maxFileSizeFor(new File(['c'], 'photo.png', { type: 'image/png' }), FLAG_ON)).toBe(
+          ).toBe(SPREADSHEET_MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(new File(['c'], 'photo.png', { type: 'image/png' }), LIMITS_ON)).toBe(
             MAX_FILE_SIZE_BYTES
           );
-          expect(maxFileSizeFor(new File(['c'], 'deck.pptx', { type: '' }), FLAG_ON)).toBe(
+          expect(maxFileSizeFor(new File(['c'], 'deck.pptx', { type: '' }), LIMITS_ON)).toBe(
             PPTX_MAX_FILE_SIZE_BYTES
           );
         });
@@ -616,22 +706,22 @@ describe('FileUploadService', () => {
         const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
         it('accepts a type the chat takes, within its cap', () => {
-          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 1024 }, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 1024 }, LIMITS_OFF)).toBe(true);
         });
 
         it('judges a provider-native document on what it downloads as', () => {
           const gdoc = { name: 'Notes', mimeType: 'application/vnd.google-apps.document', downloadMimeType: DOCX, sizeBytes: null };
-          expect(isAttachableSourceFile(gdoc, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile(gdoc, LIMITS_OFF)).toBe(true);
           const form = { name: 'Survey', mimeType: 'application/vnd.google-apps.form', sizeBytes: null };
-          expect(isAttachableSourceFile(form, FLAG_OFF)).toBe(false);
+          expect(isAttachableSourceFile(form, LIMITS_OFF)).toBe(false);
         });
 
         it('refuses a type the chat does not take', () => {
-          expect(isAttachableSourceFile({ name: 'a.zip', mimeType: 'application/zip', sizeBytes: 10 }, FLAG_OFF)).toBe(false);
+          expect(isAttachableSourceFile({ name: 'a.zip', mimeType: 'application/zip', sizeBytes: 10 }, LIMITS_OFF)).toBe(false);
         });
 
         it('falls back to the extension when the provider reports a vague type', () => {
-          expect(isAttachableSourceFile({ name: 'notes.md', mimeType: 'application/octet-stream', sizeBytes: 10 }, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile({ name: 'notes.md', mimeType: 'application/octet-stream', sizeBytes: 10 }, LIMITS_OFF)).toBe(true);
           expect(resolveMimeTypeFor('notes.md', 'application/octet-stream')).toBe('text/markdown');
           expect(resolveMimeTypeFor('query.sql', 'application/sql')).toBe('text/plain');
           expect(resolveMimeTypeFor('query.sql', '')).toBe('text/plain');
@@ -639,14 +729,14 @@ describe('FileUploadService', () => {
 
         it('applies the class cap, which the large-document flag raises for documents', () => {
           const big = { name: 'scan.pdf', mimeType: 'application/pdf', sizeBytes: 10 * 1024 * 1024 };
-          expect(isAttachableSourceFile(big, FLAG_OFF)).toBe(false);
-          expect(isAttachableSourceFile(big, FLAG_ON)).toBe(true);
+          expect(isAttachableSourceFile(big, LIMITS_OFF)).toBe(false);
+          expect(isAttachableSourceFile(big, LIMITS_ON)).toBe(true);
           const deck = { name: 'deck.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', sizeBytes: 10 * 1024 * 1024 };
-          expect(isAttachableSourceFile(deck, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile(deck, LIMITS_OFF)).toBe(true);
         });
 
         it('lets an unknown size through for the backend to judge', () => {
-          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf' }, FLAG_OFF)).toBe(true);
+          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf' }, LIMITS_OFF)).toBe(true);
         });
       });
 
@@ -654,21 +744,22 @@ describe('FileUploadService', () => {
         const MB = 1024 * 1024;
 
         it('should be a document over the inline limit and within the ceiling', () => {
-          expect(isReferenceDocument('application/pdf', 4 * MB)).toBe(false);
-          expect(isReferenceDocument('application/pdf', 4 * MB + 1)).toBe(true);
-          expect(isReferenceDocument('application/pdf', 50 * MB)).toBe(true);
-          expect(isReferenceDocument('application/pdf', 50 * MB + 1)).toBe(false);
+          expect(isReferenceDocument('application/pdf', 4 * MB, LIMITS_ON)).toBe(false);
+          expect(isReferenceDocument('application/pdf', 4 * MB + 1, LIMITS_ON)).toBe(true);
+          expect(isReferenceDocument('application/pdf', 50 * MB, LIMITS_ON)).toBe(true);
+          expect(isReferenceDocument('application/pdf', 50 * MB + 1, LIMITS_ON)).toBe(false);
         });
 
         it('should never be a spreadsheet, deck or image', () => {
-          expect(isReferenceDocument('text/csv', 10 * MB)).toBe(false);
+          expect(isReferenceDocument('text/csv', 10 * MB, LIMITS_ON)).toBe(false);
           expect(
             isReferenceDocument(
               'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-              10 * MB
+              10 * MB,
+              LIMITS_ON
             )
           ).toBe(false);
-          expect(isReferenceDocument('image/png', 10 * MB)).toBe(false);
+          expect(isReferenceDocument('image/png', 10 * MB, LIMITS_ON)).toBe(false);
         });
       });
 
@@ -729,6 +820,32 @@ describe('FileUploadService', () => {
           expect(MAX_FILE_SIZE_BYTES).toBe(4 * 1024 * 1024);
         });
       });
+    });
+  });
+
+  describe('thumbnails rendered by the prepare Lambda', () => {
+    const url = 'http://localhost:8000/files/up-1/thumbnail';
+    const body = { uploadId: 'up-1', url: 'https://s3/thumb.png', expiresAt: '2026-11-10T00:10:00Z', cached: true };
+
+    it('reports a 202 as pending', async () => {
+      const result = service.getThumbnail('up-1');
+      httpMock.expectOne(url).flush({ status: 'rendering' }, { status: 202, statusText: 'Accepted' });
+      expect(await result).toEqual({ status: 'pending' });
+    });
+
+    it('asks again while pending, then returns the rendered thumbnail', async () => {
+      const spy = vi
+        .spyOn(service, 'getThumbnail')
+        .mockResolvedValueOnce({ status: 'pending' })
+        .mockResolvedValueOnce({ status: 'ready', response: body });
+      expect(await service.getThumbnailWhenRendered('up-1', [0, 0, 0])).toEqual({ status: 'ready', response: body });
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+
+    it('gives up as unavailable after its last ask', async () => {
+      const spy = vi.spyOn(service, 'getThumbnail').mockResolvedValue({ status: 'pending' });
+      expect(await service.getThumbnailWhenRendered('up-1', [0, 0])).toEqual({ status: 'unavailable' });
+      expect(spy).toHaveBeenCalledTimes(3);
     });
   });
 });

@@ -14,10 +14,10 @@ from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactor
 from agents.main_agent.session import SessionFactory
 from agents.main_agent.session.hooks import (
     AgentStatusHook,
+    AnalyzeSandboxHook,
     ContextLedgerHook,
     ToolCensusHook,
     DisplayTextHook,
-    McpAppAwaitingSubmissionHook,
     SteeringHook,
     StopHook,
     OAuthConsentHook,
@@ -364,8 +364,6 @@ class BaseAgent(ABC):
           OAuth-gated MCP tool is about to run without a cached token
         - AgentStatusHook: Records model/tool boundaries so the UI can say what
           the agent is doing while the turn streams
-        - McpAppAwaitingSubmissionHook: Marks an MCP App's "form shown,
-          nothing written yet" result so the UI does not call it a failure
         - Approval hooks: Gate dangerous operations for user confirmation
 
         Returns:
@@ -430,6 +428,15 @@ class BaseAgent(ABC):
         # bypass, @-mention, memory binding) adopts it instead of re-counting.
         hooks.append(ContextAttributionHook(session_id=self.session_id))
 
+        # Scopes the analyze_spreadsheet Code Interpreter sandbox to this turn
+        # (#259): BeforeInvocation registers the turn token that lets the tool
+        # reuse one sandbox across its calls, AfterInvocation stops it. Held on
+        # the wrapper so the stream coordinator can release it from its own
+        # `finally` too. Inert unless the tool is used or
+        # ANALYZE_SANDBOX_REUSE_ENABLED=false.
+        self.analyze_sandbox_hook = AnalyzeSandboxHook(self.session_id, self.user_id)
+        hooks.append(self.analyze_sandbox_hook)
+
         # Live narration of what the agent is doing (model call / tool call
         # boundaries) plus Strands-measured per-tool durations. Held on the
         # wrapper so the stream coordinator can drain the transitions into
@@ -438,13 +445,6 @@ class BaseAgent(ABC):
         # return immediately when AGENT_STATUS_ENABLED=false.
         self.agent_status_hook = AgentStatusHook()
         hooks.append(self.agent_status_hook)
-
-        # An MCP App write tool that handed the operation to its form returns
-        # `isError: true` on purpose; mark it `awaiting_user_submission` at
-        # intake so the stream and the persisted message both say "waiting
-        # for you" rather than "failed". Only `structuredContent` changes,
-        # which no model formatter sends.
-        hooks.append(McpAppAwaitingSubmissionHook())
 
         # Content-free tool census (tool name → calls/errors per model call).
         # Held on the wrapper so the stream coordinator can read each call's

@@ -9,11 +9,12 @@ from enum import Enum
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, JSONResponse
 
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.feature_flags import attachment_kb_enabled
 from apis.shared.files.attachment_index import search_status
+from apis.shared.files.attachment_plan import client_limits
 from apis.shared.files.repository import InvalidCursorError
 from apis.shared.files.models import (
     ImportFileRequest,
@@ -28,6 +29,9 @@ from apis.shared.files.models import (
     ThumbnailResponse,
     FileListResponse,
     QuotaResponse,
+    AttachmentLimitsResponse,
+    AttachmentPreviewsResponse,
+    MAX_PREVIEW_IDS,
     QuotaExceededError as QuotaExceededModel,
     ALLOWED_MIME_TYPES,
 )
@@ -51,9 +55,11 @@ from .service import (
     FileTooLargeError,
     FileNotFoundError,
     FileUploadError,
+    ImageUnreadableUploadError,
+    TooManyPagesError,
 )
 from .sheet_preview import WorkbookTooLargeError, WorkbookUnreadableError
-from .thumbnails import ThumbnailRenderError, ThumbnailUnsupportedError
+from .thumbnails import ThumbnailPending, ThumbnailRenderError, ThumbnailUnsupportedError
 
 from apis.shared.security.log_sanitize import scrub_log
 
@@ -165,6 +171,9 @@ async def complete_upload(
             detail=f"File exceeds {e.max_size // (1024*1024)}MB limit",
         )
 
+    except (ImageUnreadableUploadError, TooManyPagesError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
     except FileUploadError as e:
         logger.warning("Upload completion error")
         raise HTTPException(
@@ -252,6 +261,8 @@ async def import_file_from_source(
                 required_space=e.required_space,
             ).model_dump(by_alias=True),
         )
+    except (ImageUnreadableUploadError, TooManyPagesError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except FileUploadError as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -426,7 +437,11 @@ async def get_sheet_preview(
         )
 
 
-@router.get("/{upload_id}/thumbnail", response_model=ThumbnailResponse)
+@router.get(
+    "/{upload_id}/thumbnail",
+    response_model=ThumbnailResponse,
+    responses={202: {"description": "Not rendered yet; a render has been queued. Ask again shortly."}},
+)
 async def get_thumbnail(
     upload_id: str,
     user: User = Depends(get_current_user_from_session),
@@ -435,12 +450,12 @@ async def get_thumbnail(
     """
     Return a presigned URL for a PNG thumbnail of the file's first page.
 
-    Lazy-renders on first request and caches the resulting `_thumb.png`
-    sibling object next to the original. Subsequent calls hit the cache and
-    return immediately.
+    The prepare Lambda renders a PDF's first page at upload; this presigns it.
 
     Status codes:
     - 200: Thumbnail available (response body indicates `cached`).
+    - 202: Not rendered yet, and a render has been queued: ask again in a few
+           seconds. Body `{"status": "rendering"}`.
     - 404: File not found or not owned by the caller.
     - 415: MIME type has no thumbnail renderer (UI should fall back to its
            skeleton card).
@@ -458,6 +473,8 @@ async def get_thumbnail(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=str(e),
         )
+    except ThumbnailPending:
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "rendering"})
     except ThumbnailRenderError as e:
         logger.warning(f"Thumbnail render failed for {scrub_log(upload_id)}: {scrub_log(e)}")
         raise HTTPException(
@@ -482,6 +499,31 @@ class SortOrder(str, Enum):
     """Sort order options for file listing."""
     ASC = "asc"
     DESC = "desc"
+
+
+@router.get("/previews", response_model=AttachmentPreviewsResponse)
+async def get_attachment_previews(
+    ids: str = Query(..., description="Comma-separated upload ids, at most 20"),
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    The attachment cards' previews for a message's files, in one call.
+
+    Each id maps to its preview (a Word file's opening lines, a spreadsheet's or
+    CSV's first rows, a deck's first slide) or `null` when there is none to
+    show: not the caller's, not ready, a type without one, or not written yet.
+    The prepare Lambda writes them at upload.
+    """
+    upload_ids = [part.strip() for part in ids.split(",") if part.strip()]
+    if not upload_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No upload ids given")
+    if len(upload_ids) > MAX_PREVIEW_IDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"At most {MAX_PREVIEW_IDS} upload ids per request",
+        )
+    return AttachmentPreviewsResponse(previews=await service.get_previews(user.user_id, upload_ids))
 
 
 @router.get("", response_model=FileListResponse)
@@ -546,6 +588,26 @@ async def delete_file(
         )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# =============================================================================
+# Limits Endpoint
+# =============================================================================
+
+
+@router.get("/limits", response_model=AttachmentLimitsResponse)
+async def get_limits(
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """What an attachment may be, as admission and the turn enforce it.
+
+    The SPA and the TUI judge a drop against this before uploading
+    (docs/specs/unified-attachment-delivery.md §4.4). Built from the attachment
+    planner's active limits profile and upload ceilings, never restated.
+    """
+    del user  # authenticated; the limits are per deployment today
+    return AttachmentLimitsResponse.model_validate(client_limits(uploads=service.upload_limits()))
 
 
 # =============================================================================

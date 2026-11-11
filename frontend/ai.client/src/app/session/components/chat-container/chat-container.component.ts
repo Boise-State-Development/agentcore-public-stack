@@ -252,12 +252,19 @@ export class ChatContainerComponent {
    *
    * The fallback is deliberately `listed: false`: an Assistant carries no listing, so
    * neither store affordance is offered rather than guessed at.
+   *
+   * Pinning is offered only from the Agent shape, and never for a project's harness: the
+   * server refuses that pin (400), and the Agent shape does not say what it is. The
+   * Assistant shape does, so it is read here.
    */
   protected readonly launchCardView = computed<AgentLaunchCardView | null>(() => {
     const agent = this.agent();
-    if (agent) return agentLaunchCardView(agent);
-
     const assistant = this.assistant();
+    if (agent) {
+      const view = agentLaunchCardView(agent);
+      return assistant?.kind === 'project' ? { ...view, pinnable: false } : view;
+    }
+
     if (!assistant) return null;
     return {
       agentId: assistant.assistantId,
@@ -267,6 +274,7 @@ export class ChatContainerComponent {
       emoji: assistant.emoji,
       starters: assistant.starters ?? [],
       listed: false,
+      pinnable: false,
     };
   });
 

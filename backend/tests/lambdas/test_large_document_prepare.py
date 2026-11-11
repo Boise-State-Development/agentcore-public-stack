@@ -96,8 +96,10 @@ class TestPrepare:
             f"{base}_derived/pages-0011-0020.pdf",
             f"{base}_derived/pages-0021-0023.pdf",
             f"{base}_derived/text.jsonl",
+            f"{base}_derived/thumb.png",
             f"{base}manual.pdf",
         ]
+        assert _body(s3, f"{base}_derived/thumb.png").startswith(b"\x89PNG\r\n\x1a\n")
         assert ld.decode_text_layer(_body(s3, f"{base}_derived/text.jsonl")) == PAGES
         row = await repository.get_file("u1", "up-1")
         prep = row.preparation
@@ -127,7 +129,7 @@ class TestPrepare:
         [
             ("memo.docx", DOCX, build_docx(["One", "Two", "Three"]), ["One", "Two", "Three"]),
             ("notes.txt", "text/plain", b"a\r\nb\n\nc", ["a", "b", "", "c"]),
-            ("page.html", "text/html", b"<h1>A</h1>\n<p>b</p>", ["<h1>A</h1>", "<p>b</p>"]),
+            ("page.html", "text/html", b"<h1>A</h1>\n<p>b</p>", ["# A", "", "b"]),
         ],
         # Fixed ids: the default id embeds the raw bytes, and a .docx zip carries the
         # time it was built, so xdist workers collecting a second apart disagreed on
@@ -138,7 +140,9 @@ class TestPrepare:
         s3, repository = store
         await _upload(store, raw, filename=filename, mime=mime)
         assert await _prepare(store) == "ready"
-        assert _keys(s3, "user-files/u1/s1/up-1/_derived/") == ["user-files/u1/s1/up-1/_derived/text.jsonl"]
+        # A Word file also gets its card preview.
+        preview = ["user-files/u1/s1/up-1/_derived/preview.json"] if filename.endswith(".docx") else []
+        assert _keys(s3, "user-files/u1/s1/up-1/_derived/") == sorted([*preview, "user-files/u1/s1/up-1/_derived/text.jsonl"])
         assert ld.decode_text_layer(_body(s3, "user-files/u1/s1/up-1/_derived/text.jsonl")) == expected
         prep = (await repository.get_file("u1", "up-1")).preparation
         assert prep["status"] == "ready" and int(prep["pageCount"]) == 0 and int(prep["shardPages"]) == 0
@@ -161,7 +165,7 @@ class TestPrepare:
             "u1", "up-1", ld.preparation_record(status=ld.STATUS_FAILED, error="ClientError")
         )
         assert await _prepare(store) == "ready"
-        assert len(_keys(s3, "user-files/u1/s1/up-1/_derived/")) == 4
+        assert len(_keys(s3, "user-files/u1/s1/up-1/_derived/")) == 5  # 3 shards, text layer, thumbnail
 
     async def test_a_bad_document_records_failed_and_never_raises(self, store):
         s3, repository = store

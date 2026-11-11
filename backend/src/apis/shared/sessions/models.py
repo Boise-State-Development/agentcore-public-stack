@@ -63,7 +63,9 @@ class PendingInterrupt(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     interrupt_id: str = Field(..., alias="interruptId", description="Strands interrupt id used to resume the paused turn")
-    kind: Literal["oauth", "tool_approval", "user_question", "browser_login", "client_tool"] = Field(
+    kind: Literal[
+        "oauth", "tool_approval", "user_question", "browser_login", "client_tool", "mcp_elicitation"
+    ] = Field(
         default="oauth",
         description="Discriminator: which variant this interrupt represents",
     )
@@ -106,6 +108,16 @@ class PendingInterrupt(BaseModel):
     questions: Optional[str] = Field(
         default=None,
         description="(user_question) JSON-encoded list of questions to re-render",
+    )
+
+    # mcp_elicitation-only fields
+    elicitation: Optional[str] = Field(
+        default=None,
+        description=(
+            "(mcp_elicitation) JSON-encoded form a server asked the user to fill "
+            "in: toolName, serverName, message and the normalized fields. Never "
+            "the user's answer"
+        ),
     )
 
     # browser_login-only fields
@@ -671,6 +683,16 @@ class BrowserLiveViewResponse(BaseModel):
         description=(
             "'user' while the automation stream is DISABLED and the human can "
             "drive; 'agent' when the view is read-only because the agent holds it"
+        ),
+    )
+    viewer_origin: str = Field(
+        default="",
+        alias="viewerOrigin",
+        description=(
+            "Origin to frame the sign-in viewer from and the only origin the "
+            "SPA may post `url` to. Its own CloudFront distribution, never the "
+            "mcp-sandbox origin MCP Apps run on. Empty when no viewer is "
+            "deployed, in which case the SPA frames nothing"
         ),
     )
 

@@ -125,3 +125,22 @@ class TestCreateContentBlock:
 
         assert block["document"]["format"] == "txt"
         assert block["document"]["source"]["bytes"] is data
+
+
+class TestAdmittedExtensionsReachTheTurn:
+    """Every document extension upload admits must build a block, or the file
+    is admitted and then dropped from the turn (unified-attachment-delivery §1.3)."""
+
+    def test_sql_is_a_txt_document(self):
+        assert DocumentHandler.is_document("schema.sql") is True
+        assert DocumentHandler.get_document_format("SCHEMA.SQL") == "txt"
+
+    def test_document_handler_covers_admitted_extensions(self):
+        from apis.shared.files.models import ALLOWED_EXTENSIONS
+
+        # pptx never goes inline (PowerPoint tools); images use ImageHandler.
+        not_documents = {".pptx", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+        missing = {
+            ext for ext in ALLOWED_EXTENSIONS if ext not in not_documents
+        } - DocumentHandler.SUPPORTED_EXTENSIONS
+        assert missing == set()

@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "modelId": "us.anthropic.claude-sonnet-4-6",
+  "k": 3,
+  "families": [
+    "attachment_delivery"
+  ],
+  "promotedAt": "2026-11-10T18:03:15.483434Z",
+  "source": {
+    "startedAt": "2026-11-10T17:54:42.996129Z",
+    "target": "runtime:dev-boisestateai-v2",
+    "gitCommit": "eba6caaec75114d8fec9e4d78e81eca658dd9d69",
+    "imageTags": {
+      "inference-api": "b1fefacc7d8d7339",
+      "app-api": "bb0c0fa527a2f786"
+    }
+  },
+  "cases": {
+    "attachment_delivery.lookup_md_5k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-96625"
+    },
+    "attachment_delivery.lookup_md_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-78096"
+    },
+    "attachment_delivery.lookup_md_80k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-66685"
+    },
+    "attachment_delivery.lookup_md_150k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-24282"
+    },
+    "attachment_delivery.lookup_md_300k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-77180"
+    },
+    "attachment_delivery.lookup_txt_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-39741"
+    },
+    "attachment_delivery.lookup_pdf_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-60930"
+    },
+    "attachment_delivery.lookup_pdf_80k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-58797"
+    },
+    "attachment_delivery.lookup_pdf_150k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-66350"
+    },
+    "attachment_delivery.lookup_docx_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-25778"
+    },
+    "attachment_delivery.lookup_html_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-28557"
+    },
+    "attachment_delivery.lookup_pptx_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**WO-95665**"
+    },
+    "attachment_delivery.lookup_csv_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**WO-20975**"
+    },
+    "attachment_delivery.lookup_xlsx_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**WO-97893**"
+    },
+    "attachment_delivery.lookup_png": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WP-60418"
+    },
+    "attachment_delivery.cross_document_30k": {
+      "family": "attachment_delivery",
+      "passed": false,
+      "passes": 1,
+      "samples": 3,
+      "answer": "Both values are confirmed from their respective source documents:\n\n- **Tamsin Basin treatment plant operating permit** → sourced from `delivery_prose_30k.md` (Section 4)\n- **Thorn Levee reservoir gauge calibration certificate** → sourced from `delivery_report_30k.pdf` (Section 16)\n\n> **WP-51759; CC-73502**"
+    },
+    "attachment_delivery.cross_document_80k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Both values are confirmed in their respective documents.\n\n**WP-38313; CC-80537**"
+    },
+    "attachment_delivery.absent_fact_30k": {
+      "family": "attachment_delivery",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "The document mentions a permit number for the Orrin Basin intake, but it is explicitly labeled as the **backup** permit number, kept for audit only — not the **operating** permit number. No operating permit number for the Orrin Basin intake appears anywhere in the document.\n\nNOT IN DOCUMENT"
+    },
+    "attachment_delivery.absent_fact_150k": {
+      "family": "attachment_delivery",
+      "passed": false,
+      "passes": 0,
+      "samples": 3,
+      "answer": "I searched the document for any mention of the Saddle Shoals sluice gate and its operating permit number. The document contains one reference to it in Section 106:\n\n> \"The backup permit number for the Saddle Shoals sluice gate is WP-19441, kept for audit only.\"\n\nThis is described as a **backup** permit number, not an operating permit number. The document does not provide an operating permit number for the Saddle Shoals sluice gate.\n\nNOT IN DOCUMENT"
+    },
+    "attachment_delivery.follow_up_30k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-78096"
+    },
+    "attachment_delivery.follow_up_150k": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "WO-24282"
+    },
+    "attachment_delivery.count_five_documents": {
+      "family": "attachment_delivery",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "CC-63136"
+    }
+  }
+}

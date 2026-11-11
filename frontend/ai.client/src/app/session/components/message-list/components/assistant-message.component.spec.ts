@@ -408,24 +408,101 @@ describe('AssistantMessageComponent', () => {
   });
 
   describe('reasoning content', () => {
-    it('should render reasoning blocks and flush tool groups', () => {
+    it('folds reasoning between tool calls into one rail, in order', () => {
       fixture.componentRef.setInput('messages', [makeMessage([
         makeToolBlock('search'),
         {
           type: 'reasoningContent',
           reasoningContent: { reasoningText: { text: 'Thinking...' } },
+          reasoningDurationMs: 1200,
         },
         makeToolBlock('fetch'),
       ])]);
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
-      expect(blocks.length).toBe(3);
+      expect(blocks.length).toBe(1);
       expect(blocks[0].type).toBe('tool_group');
-      expect(blocks[0].group!.calls.length).toBe(1);
-      expect(blocks[1].type).toBe('reasoningContent');
-      expect(blocks[2].type).toBe('tool_group');
-      expect(blocks[2].group!.calls.length).toBe(1);
+      const group = blocks[0].group!;
+      expect(group.calls.map((c) => c.toolName)).toEqual(['search', 'fetch']);
+      expect(group.batches!.length).toBe(2);
+      expect(group.steps!.map((st) => st.kind)).toEqual(['batch', 'thinking', 'batch']);
+      const thinking = group.steps![1];
+      expect(thinking.kind === 'thinking' && thinking.thinking).toMatchObject({
+        key: 'msg-1:1',
+        text: 'Thinking...',
+        durationMs: 1200,
+        redacted: false,
+        active: false,
+      });
+    });
+
+    it('folds reasoning that opens and closes a tool segment, across messages', () => {
+      // The agent loop starts a new message at every tool round trip, so the
+      // reasoning before a call usually sits in a different message from it.
+      fixture.componentRef.setInput('messages', [
+        { ...makeMessage([
+          { type: 'reasoningContent', reasoningContent: { reasoningText: { text: 'First.' } } },
+          makeToolBlock('search'),
+        ]), id: 'm1' },
+        { ...makeMessage([
+          { type: 'reasoningContent', reasoningContent: { reasoningText: { text: 'Second.' } } },
+          makeTextBlock('Here is the answer.'),
+        ]), id: 'm2' },
+      ]);
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.map((b) => b.type)).toEqual(['tool_group', 'text']);
+      expect(blocks[0].group!.steps!.map((st) => st.key)).toEqual([
+        'm1:0',
+        expect.any(String),
+        'm2:0',
+      ]);
+    });
+
+    it('keeps reasoning with no tool call beside it as its own block', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        { type: 'reasoningContent', reasoningContent: { reasoningText: { text: 'Hmm.' } } },
+        makeTextBlock('Answer.'),
+        makeToolBlock('search'),
+      ])]);
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.map((b) => b.type)).toEqual(['reasoningContent', 'text', 'tool_group']);
+      // A rail with no reasoning folded in carries no steps at all.
+      expect(blocks[2].group!.steps).toBeUndefined();
+    });
+
+    it('marks the open reasoning span of the streaming message active', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        makeToolBlock('search'),
+        { type: 'reasoningContent', reasoningContent: { reasoningText: { text: 'Now ' } } },
+      ])]);
+      fixture.componentRef.setInput('streamingMessageId', 'msg-1');
+      fixture.detectChanges();
+
+      const steps = component.displayBlocks()[0].group!.steps!;
+      const last = steps[steps.length - 1];
+      expect(last.kind === 'thinking' && last.thinking.active).toBe(true);
+    });
+
+    it('a promoted visual still breaks a segment with reasoning in it', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        makeToolBlock('search'),
+        { type: 'reasoningContent', reasoningContent: { reasoningText: { text: 'Plot it.' } } },
+        makePromotedVisualToolBlock('chart'),
+      ])]);
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.map((b) => b.type)).toEqual([
+        'tool_group',
+        'tool_use_minimized',
+        'promoted_visual',
+      ]);
+      expect(blocks[0].group!.steps!.map((st) => st.kind)).toEqual(['batch', 'thinking']);
     });
 
     it('should not render a reasoning block with empty text and no redaction', () => {

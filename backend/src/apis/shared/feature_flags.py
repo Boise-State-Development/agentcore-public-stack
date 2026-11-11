@@ -317,7 +317,7 @@ def attachment_tool_autoenable_enabled() -> bool:
     — gated on the caller's RBAC grant, so it enables, never grants. **Default ON with a kill switch** (house style):
     unset or empty resolves to enabled; only the literal ``"false"`` disables.
 
-    Why: CSV/XLSX never go inline (``_partition_attachments``), and the
+    Why: CSV/XLSX never go inline (the attachment planner sends them to their tools), and the
     analysis tools are opt-in in the picker, so on the default tool set an
     attached spreadsheet was a dead end — the model told the user to go find a
     sidebar toggle (docs/specs/load-test-assessment-2026-09.md §1 fix 5). The
@@ -752,9 +752,9 @@ def attachment_turn_guard_enabled() -> bool:
     """Whether a turn's attachments are held to the per-message file count and
     the aggregate inline-bytes budget before the message is built.
 
-    Covers ``_apply_message_file_cap`` and ``_apply_inline_byte_budget`` in
-    the inference API chat route (docs/specs/document-context-offload.md §4E,
-    PR-6). **Default ON with a kill switch** (house style): unset or empty
+    Read as an input of the attachment planner's ``legacy`` profile
+    (``apis.shared.files.attachment_plan``: its count cap and its combined
+    budget; docs/specs/document-context-offload.md §4E, PR-6). **Default ON with a kill switch** (house style): unset or empty
     resolves to enabled; only the literal ``"false"`` (case-insensitive)
     disables.
 
@@ -772,8 +772,9 @@ def inline_budget_by_reference_enabled() -> bool:
     """Whether an uploaded document that does not fit in a turn's combined
     inline budget goes by reference instead of being dropped.
 
-    ``_apply_inline_byte_budget`` holds a turn's inline attachments to
-    ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` first-fit; with this on, a
+    The attachment planner's ``legacy`` profile holds a turn's inline
+    attachments to ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` first-fit and reads
+    this as an input; with this on, a
     document-class *upload* it moves out becomes a ``ReferenceAttachment``
     (``over_budget=True``): its stored digest (or a ``status="ready"`` stub) in
     the user message and ``document_read`` to read it from the original, from the
@@ -1392,6 +1393,34 @@ def source_provenance_enabled() -> bool:
     return os.environ.get("SOURCE_PROVENANCE_ENABLED", "").strip().lower() == "true"
 
 
+def mcp_elicitation_enabled() -> bool:
+    """Whether an MCP server may ask the user for input partway through a tool
+    call (form elicitation, ``docs/specs/mcp-elicitation.md``).
+
+    On, an external MCP server whose catalog row sets ``elicitationEnabled`` is
+    told the client supports **form** elicitation, on 2026-07-28 connections
+    only (never URL mode, never the legacy handshake). When the server answers a
+    ``tools/call`` with an ``InputRequiredResult``, the turn pauses on an
+    interrupt, the SPA shows the server's form (``mcp_elicitation_required``),
+    and on resume the call is replayed with the user's answer. Nothing reaches
+    the system prompt, ``toolConfig`` or history beyond the server's own result.
+    Off, no elicitation callback is passed, the client's capabilities are
+    byte-identical to before, and the middleware is never registered.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime (written only while on) and on
+    app-api from ``config.mcpElicitation.enabled``. The SPA's matching switch is
+    ``features.mcpElicitation``.
+
+    A **feature switch**, not a rollout switch, and therefore permanent: it
+    widens what users can do (a server can expose tools gated on elicitation,
+    such as GitHub's ``delete_repository``), which a deployment may reasonably
+    decline.
+    """
+    return os.environ.get("MCP_ELICITATION_ENABLED", "").strip().lower() == "true"
+
+
 def web_search_default_max_results_enabled() -> bool:
     """Whether an AgentCore Web Search call that names no ``maxResults`` asks
     for 5 results instead of the connector's 10.
@@ -1529,3 +1558,49 @@ def release_ledger_enabled() -> bool:
     calls) that a deployment may reasonably decline.
     """
     return os.environ.get("RELEASE_LEDGER_ENABLED", "").strip().lower() == "true"
+
+
+def attachment_plan_enabled() -> bool:
+    """Whether the attachment planner runs its ``token`` profile
+    (``docs/specs/unified-attachment-delivery.md`` §4.3, §5.2, phase 3).
+
+    On, each turn's attachments are decided in tokens against a per-model
+    ``document_budget`` of half the compaction ceiling, costed in that model's
+    own tokens: a PDF ``native`` within the model's page limit and the budget,
+    every other renderable document as text within it, and anything over it
+    ``on_demand`` (a digest plus ``document_read``). Off, the ``legacy``
+    profile's byte rules decide, exactly as before. The flag selects a profile
+    of the one planner (``apis.shared.files.attachment_plan.current_limits_profile``),
+    never a second code path, and is read nowhere else.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK writes it to the AgentCore Runtime (which plans the turn) and
+    app-api (which reports the active profile on ``GET /files/limits``), the
+    Runtime copy only while on. The SPA's matching switch is
+    ``features.attachmentPlan``.
+
+    A **rollout switch**: what a deployment chooses is the profile's limits,
+    not whether a planner runs. **Retirement condition** (spec §9.1, #1422):
+    shipped in a production release, then two weeks there with the switch never
+    flipped and the ``attachment_delivery`` readout recorded; it retires in
+    phase 6 together with the ``legacy`` profile.
+    """
+    return os.environ.get("ATTACHMENT_PLAN_ENABLED", "").strip().lower() == "true"
+
+
+def analyze_sandbox_reuse_enabled() -> bool:
+    """Whether ``analyze_spreadsheet`` reuses one Code Interpreter sandbox per turn.
+
+    With this on, the sandbox (and the files already staged in it) lives for
+    the rest of the agent turn, so a second call on the same file skips the S3
+    download, the session start, the upload, the XLSX bootstrap and the schema
+    probe (#259). Off, every call starts and stops its own sandbox, exactly as
+    before. The event-loop fix (blocking S3 and Code Interpreter calls run in
+    worker threads) is not behind this flag.
+
+    **Default ON with a kill switch** (house style, a *rollout switch*: the
+    change is meant to be invisible): unset or empty resolves to enabled; only
+    the literal ``"false"`` (case-insensitive) disables.
+    """
+    return os.environ.get("ANALYZE_SANDBOX_REUSE_ENABLED", "").strip().lower() != "false"

@@ -1169,9 +1169,24 @@ class ChatScreen(Screen[None]):
             await self.transcript.mount(Notice(f"No such file: {path}", error=True))
             self.transcript.scroll_end(animate=False)
             return
+        catalog = self._catalog_or_create()
+        # The server's per-message count (GET /files/limits): refuse here, not
+        # after the upload, which the turn would then drop.
+        limits = await catalog.attachment_limits()
+        cap = limits.files_per_message if limits else None
+        if cap is not None and len(turn.pending_uploads) >= cap:
+            await self.transcript.mount(
+                Notice(
+                    f"Maximum {cap} files per message.",
+                    hint="Send this message first, then attach the rest to the next one.",
+                    error=True,
+                )
+            )
+            self.transcript.scroll_end(animate=False)
+            return
         self.status.set_state(f"Uploading {path.name}...", busy=True)
         try:
-            uploaded = await self._catalog_or_create().upload_file(self._store.session_id, path)
+            uploaded = await catalog.upload_file(self._store.session_id, path)
         except AgentCoreTuiError as exc:
             self.status.set_state("Ready")
             await self.transcript.mount(Notice(f"Could not attach {path.name}: {exc.message}", hint=exc.hint, error=True))

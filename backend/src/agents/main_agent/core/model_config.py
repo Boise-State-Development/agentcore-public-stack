@@ -181,6 +181,41 @@ def _bedrock_uses_adaptive_thinking(model_id: Optional[str]) -> bool:
     return any(marker in mid for marker in _BEDROCK_ADAPTIVE_THINKING_MARKERS)
 
 
+#: How a model bills the signed ``reasoningContent`` blocks replayed in history.
+#: Measured on dev 2026-11-11 with direct Converse calls (reasoning present vs
+#: stripped, everything else identical), at the thinking config each model's
+#: turns run under:
+#:
+#: - ``"bound"`` — Haiku 5.5 and Opus 5.5 with the ``drop_block`` binding
+#:   (``_apply_thinking_binding``): a block is billed, on every later turn,
+#:   while the system prompt and the history ahead of it are byte-identical to
+#:   when it was produced; once either changes (a compaction cut prepends the
+#:   summary to the first retained message) it is dropped and bills 0. A
+#:   thinking-only block (output cap hit while thinking) behaves the same.
+#: - ``"preserved"`` — the other adaptive models (Sonnet 4.6, Opus 4.7): every
+#:   signed block is billed, whatever changed ahead of it.
+#: - ``"stripped"`` — budget ("enabled") thinking (Haiku 4.5): a block from an
+#:   earlier turn bills 0; only the turn in flight's own blocks are input.
+#: - ``"text"`` — not an Anthropic model: Strands drops signed blocks for these
+#:   (``BedrockModel._rejects_reasoning_block``) and sends unsigned text as is.
+REASONING_REPLAY_BOUND = "bound"
+REASONING_REPLAY_PRESERVED = "preserved"
+REASONING_REPLAY_STRIPPED = "stripped"
+REASONING_REPLAY_TEXT = "text"
+
+
+def reasoning_replay_mode(model_id: Optional[str]) -> str:
+    """How ``model_id`` bills replayed reasoning; see ``REASONING_REPLAY_BOUND``."""
+    mid = (model_id or "").lower()
+    if any(marker in mid for marker in _BEDROCK_THINKING_BINDING_MARKERS):
+        return REASONING_REPLAY_BOUND
+    if _bedrock_uses_adaptive_thinking(mid):
+        return REASONING_REPLAY_PRESERVED
+    if "anthropic" in mid or "claude" in mid:
+        return REASONING_REPLAY_STRIPPED
+    return REASONING_REPLAY_TEXT
+
+
 def _apply_thinking_binding(config: Dict[str, Any], model_id: Optional[str]) -> None:
     """Ask a listed 5.5-generation model to drop stale replayed thinking blocks
     and to stream its reasoning.

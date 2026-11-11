@@ -22,6 +22,7 @@ export const environment = {
         attachmentKb: false,
         folderSync: true,
         sourceProvenance: false,
+        attachmentPlan: false,
         documentExtract: false,
         handoffs: false,
         handoffBrief: false,
@@ -32,5 +33,6 @@ export const environment = {
         awsLimits: false,
         knowledgeBaseMode: false,
         releaseLedger: false,
+        attachmentCards: false,
     } satisfies FeatureFlags,
 };

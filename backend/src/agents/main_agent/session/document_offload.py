@@ -16,10 +16,11 @@ Three rules, all enforced here as pure functions over ``agent.messages``:
   for it sits in the recent turns.
 * **Worth it** — the document's estimated tokens are at least
   ``DOCUMENT_OFFLOAD_MIN_TOKENS``; below that the re-write costs more than the
-  eviction saves (the ``clear_at_least`` idea). The estimate is
-  ``document_tokens.estimate_document_tokens`` — pages x the per-page image
-  estimate for a PDF, bytes/4 otherwise — *not* bytes/4 for everything, which
-  under-counted PDFs ~14x and held large scans below the floor forever.
+  eviction saves (the ``clear_at_least`` idea). The estimate is the file row's
+  facts (``document_estimate``: a PDF's text plus its page images, a text
+  format's text), falling back to ``estimate_document_tokens`` on the bytes for
+  a row without them — *not* bytes/4 for everything, which under-counted PDFs
+  ~14x and held large scans below the floor forever.
 * **Free or unavoidable** — decided by the session manager, which owns the
   cache-gap facts: the prompt cache has expired since the last turn, the
   model/agent prefix changed, or the last turn's input exceeded the
@@ -53,7 +54,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from agents.main_agent.multimodal.file_sanitizer import FileSanitizer
 from agents.main_agent.session.compaction_policy import CHARS_PER_TOKEN
-from apis.shared.files.document_tokens import estimate_document_tokens
+from agents.main_agent.session.document_estimate import EMPTY_INDEX, DocumentIndex, slice_reference
 
 logger = logging.getLogger(__name__)
 
@@ -170,17 +171,6 @@ def _inline_document(block: Any) -> Optional[Tuple[str, str, int]]:
     return str(doc.get("name", "")), str(doc.get("format", "")), len(raw)
 
 
-def _inline_document_bytes(block: Any) -> Optional[bytes]:
-    """The block's raw bytes, for weighing it (``estimate_document_tokens``)."""
-    if not isinstance(block, dict):
-        return None
-    doc = block.get("document")
-    if not isinstance(doc, dict):
-        return None
-    raw = (doc.get("source") or {}).get("bytes") if isinstance(doc.get("source"), dict) else None
-    return raw if isinstance(raw, (bytes, bytearray)) else None
-
-
 def pinned_document_names(
     messages: Sequence[Dict[str, Any]],
     incoming_prompt: Any = None,
@@ -236,8 +226,8 @@ class Candidate:
     name: str
     format: str
     size: int
-    #: Estimated prefix weight — pages x the per-page image estimate for PDFs,
-    #: bytes/4 otherwise. This, not ``size``, is what the ``min_tokens`` floor
+    #: Estimated prefix weight, from the row's facts (``document_estimate``).
+    #: This, not ``size``, is what the ``min_tokens`` floor
     #: and the ledger's ``documentTokens`` are measured against, so the row and
     #: the eviction decision always read the same quantity.
     tokens: int = 0
@@ -248,8 +238,10 @@ def candidate_documents(
     pinned: Set[str],
     *,
     min_tokens: int = DOCUMENT_OFFLOAD_MIN_TOKENS,
+    documents: Optional[DocumentIndex] = None,
 ) -> List[Candidate]:
     """Inline documents that are unpinned and large enough to be worth it."""
+    index = documents if documents is not None else EMPTY_INDEX
     out: List[Candidate] = []
     for mi, message in enumerate(messages):
         content = message.get("content") if isinstance(message, dict) else None
@@ -262,7 +254,7 @@ def candidate_documents(
             name, fmt, size = inline
             if name in pinned:
                 continue
-            tokens = estimate_document_tokens(fmt, _inline_document_bytes(block))
+            tokens = index.block_tokens(block.get("document"))
             if tokens < min_tokens:
                 continue
             out.append(Candidate(mi, bi, name, fmt, size, tokens))
@@ -291,23 +283,31 @@ def offload_documents(
     *,
     session_id: Optional[str],
     user_id: Optional[str],
+    ancestor_session_ids: Sequence[str] = (),
 ) -> OffloadResult:
     """Replace each candidate block with its digest, in place, using the
     restore path's own matcher and renderer so the bytes equal what a cold
-    restore would produce. Unmatched candidates stay inline. Never raises."""
+    restore would produce. Unmatched candidates stay inline. Never raises.
+
+    ``ancestor_session_ids`` is a fork's parent and root, read the same way the
+    restore reads them, so a seeded fork offloads its parent's documents to the
+    very bytes its next cold restore renders."""
     from agents.main_agent.session.document_rehydration import digest_for, load_session_documents, match_document
     from apis.shared.feature_flags import document_read_enabled
     from apis.shared.files.document_digest import render_digest
+    from apis.shared.files.document_estimate import remember_session_documents
 
     result = OffloadResult()
     if not candidates:
         return result
     try:
-        rows = load_session_documents(session_id or "", user_id)
+        rows = load_session_documents(session_id or "", user_id, ancestor_session_ids)
     except Exception:  # noqa: BLE001
         logger.warning("document_offload: upload rows unavailable; leaving documents inline", exc_info=True)
         result.skipped_unmatched = len(candidates)
         return result
+    # The rows are in hand: keep their facts for the session's later estimates.
+    remember_session_documents(user_id, session_id, rows)
 
     used: Set[str] = set()
     for cand in candidates:
@@ -350,6 +350,7 @@ def age_document_slices(
     messages: List[Dict[str, Any]],
     *,
     max_turns: int = DOCUMENT_SLICE_MAX_TURNS,
+    documents: Optional[DocumentIndex] = None,
 ) -> Tuple[int, int]:
     """Stub ``document_read`` page slices older than ``max_turns`` turns, in
     place. Returns ``(slices, estimated tokens evicted)``."""
@@ -360,6 +361,7 @@ def age_document_slices(
         cutoff = prompts[-max_turns]
     else:
         return 0, 0
+    index = documents if documents is not None else EMPTY_INDEX
     count = tokens = 0
     for idx in range(min(cutoff, len(messages))):
         message = messages[idx]
@@ -372,12 +374,13 @@ def age_document_slices(
             inner_content = block["toolResult"].get("content")
             if not isinstance(inner_content, list):
                 continue
+            upload_id, pages = slice_reference(inner_content)
             for ii, inner in enumerate(inner_content):
                 inline = _inline_document(inner)
                 if not inline:
                     continue
-                name, fmt, _size = inline
-                tokens += estimate_document_tokens(fmt, _inline_document_bytes(inner))
+                name, _fmt, _size = inline
+                tokens += index.block_tokens(inner.get("document"), upload_id=upload_id, pages_covered=pages)
                 inner_content[ii] = {"text": slice_stub(name)}
                 count += 1
     return count, tokens

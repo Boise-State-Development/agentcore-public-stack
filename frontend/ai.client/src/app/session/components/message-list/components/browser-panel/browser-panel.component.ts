@@ -43,6 +43,44 @@ export const BROWSER_RAIL_GUTTER_PX = 32;
 export const CHAT_FLOOR_PX = 360;
 
 /**
+ * The origin to frame the sign-in viewer from, or null when there is none to
+ * trust.
+ *
+ * Must be a bare `https:` origin (or `http://localhost` for a local stack),
+ * and must not be the MCP App origin: an App framed beside the viewer on that
+ * origin could script it. The backend never sends it — the viewer has its own
+ * distribution — so a match here is a misconfiguration, refused rather than
+ * framed.
+ */
+export function viewerOriginFor(
+  view: Pick<BrowserLiveView, 'viewerOrigin'>,
+  mcpAppOrigin: string | undefined,
+): string | null {
+  const raw = view.viewerOrigin;
+  if (!raw) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  const local = parsed.protocol === 'http:' && parsed.hostname === 'localhost';
+  if (parsed.protocol !== 'https:' && !local) return null;
+  // An origin, not a page: anything after the host is a misconfiguration.
+  if (parsed.origin !== raw.replace(/\/$/, '')) return null;
+  if (mcpAppOrigin && sameOrigin(parsed.origin, mcpAppOrigin)) return null;
+  return parsed.origin;
+}
+
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Right-docked pane holding the live browser the user drives to sign in
  * (`docs/specs/authenticated-web-assessment.md`). Replaces the inline viewer
  * and its full-screen overlay: the stream now opens beside the conversation,
@@ -302,6 +340,18 @@ export class BrowserPanelComponent {
   /** Origin of the minted live-view URL, for the frame's `connect-src`. */
   private readonly streamOrigin = signal<string | null>(null);
 
+  /**
+   * The viewer's own origin, from the first mint of this open.
+   *
+   * The only origin the panel frames, listens to or posts the signed URL to.
+   * It is NOT the request's `sandboxOrigin`: MCP Apps run there, and a
+   * same-origin App frame on this page could read the viewer's document —
+   * the signed URL and the password being typed. It arrives on the mint
+   * response, beside the credential it is the only place to send, and is held
+   * for the life of the open: re-mints replace the URL, never the frame.
+   */
+  private readonly viewerOrigin = signal<string | null>(null);
+
   protected readonly title = computed(() => {
     const target = this.request()?.targetUrl;
     const host = target ? hostLabel(target) : null;
@@ -362,7 +412,7 @@ export class BrowserPanelComponent {
    * rendering as an empty black box when minting fails.
    */
   protected readonly frameSrc = computed<SafeResourceUrl | null>(() => {
-    const origin = this.request()?.sandboxOrigin;
+    const origin = this.viewerOrigin();
     const stream = this.streamOrigin();
     if (!origin || !stream) return null;
     const csp = encodeURIComponent(
@@ -388,10 +438,10 @@ export class BrowserPanelComponent {
 
   constructor() {
     // The viewer announces itself once its listener is attached. Accepting it
-    // only from the sandbox origin keeps any other frame on the page from
-    // provoking us into posting a live signed URL.
+    // only from the viewer's own origin keeps any other frame on the page —
+    // an MCP App included — from provoking us into posting a live signed URL.
     const onMessage = (event: MessageEvent) => {
-      const origin = this.request()?.sandboxOrigin;
+      const origin = this.viewerOrigin();
       if (!origin || event.origin !== origin) return;
       const data = event.data as { type?: unknown } | null;
       if (!data || data.type !== 'browser-live-view/ready') return;
@@ -448,6 +498,11 @@ export class BrowserPanelComponent {
       // rather than an empty black box.
       const view = await this.service.mintLiveView(req.sessionId);
       if (seq !== this.mintSeq) return;
+      const viewer = viewerOriginFor(view, req.sandboxOrigin);
+      if (!viewer) {
+        this.error.set("The sign-in viewer isn't available in this environment.");
+        return;
+      }
       this.pending = view;
       try {
         this.streamOrigin.set(new URL(view.url).origin);
@@ -455,6 +510,7 @@ export class BrowserPanelComponent {
         this.error.set('The sign-in session address was not usable.');
         return;
       }
+      this.viewerOrigin.set(viewer);
       // The frame may not exist yet on this tick, so this call, the iframe's
       // `load` and the viewer's own `ready` all post — whichever arrives first
       // is the one that counts. The viewer is idempotent on the connection
@@ -480,12 +536,12 @@ export class BrowserPanelComponent {
   /**
    * Hand the freshly minted URL to the viewer.
    *
-   * Targeted at the sandbox origin explicitly rather than `'*'`: that origin
-   * also serves untrusted MCP App HTML, and a wildcard target would post a
-   * live signed URL to whatever happened to be in the frame.
+   * Targeted at the viewer's own origin explicitly rather than `'*'`: a
+   * wildcard target would post a live signed URL to whatever happened to be
+   * in the frame.
    */
   private postToFrame(): void {
-    const origin = this.request()?.sandboxOrigin;
+    const origin = this.viewerOrigin();
     const target = this.viewerFrame()?.nativeElement?.contentWindow;
     if (!target || !this.pending || !origin) return;
     target.postMessage(
@@ -539,6 +595,7 @@ export class BrowserPanelComponent {
     this.clearRefresh();
     this.pending = null;
     this.streamOrigin.set(null);
+    this.viewerOrigin.set(null);
     this.error.set(null);
   }
 

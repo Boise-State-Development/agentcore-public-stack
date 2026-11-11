@@ -26,6 +26,8 @@ from .diagnoses import (
 )
 from .models import (
     CompactionEvent,
+    AttachmentPlanFile,
+    AttachmentPlanRecord,
     DocumentReads,
     PrefixTokens,
     AttachmentProfile,
@@ -319,6 +321,32 @@ def _call_document_reads(record: Dict[str, Any]) -> Optional[DocumentReads]:
         calls=_as_int(raw.get("calls")) or 0,
         pages=_as_int(raw.get("pages")) or 0,
         bytes=_as_int(raw.get("bytes")) or 0,
+    )
+
+
+def _call_attachment_plan(record: Dict[str, Any]) -> Optional[AttachmentPlanRecord]:
+    """The row's ``attachmentPlan``, or ``None`` when absent or malformed."""
+    raw = record.get("attachmentPlan")
+    if not isinstance(raw, dict) or not raw.get("profile"):
+        return None
+    files = []
+    for entry in raw.get("files") or []:
+        if not isinstance(entry, dict) or not entry.get("mode") or not entry.get("reason"):
+            continue
+        files.append(
+            AttachmentPlanFile(
+                mode=str(entry["mode"]),
+                file_class=str(entry.get("class") or ""),
+                tokens=_as_int(entry.get("tokens")) or 0,
+                reason=str(entry["reason"]),
+                upload_id=str(entry["uploadId"]) if entry.get("uploadId") else None,
+                variant=str(entry["variant"]) if entry.get("variant") else None,
+            )
+        )
+    return AttachmentPlanRecord(
+        profile=str(raw["profile"]),
+        files=files,
+        dropped_over_count=_as_int(raw.get("droppedOverCount")) or 0,
     )
 
 
@@ -1120,6 +1148,7 @@ class AdminCostService:
                 window_trimmed=ledger.trimmed,
                 compaction_events=ledger.events or None,
                 **_document_row_fields(ledger),
+                attachment_plan=_call_attachment_plan(record),
             ))
 
         cache_traffic = total_cache_read + total_cache_write

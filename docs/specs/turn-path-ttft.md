@@ -87,7 +87,7 @@ call inside `async def`, which blocks the event loop for its round trip.
 | B1 | `preamble.ownership` | `load_session_meta`: **one** `SessionLookupIndex` query answering both "is this someone else's session" (→ 404) and "the caller's META row" (threaded as `session_meta` into everything below). | D ×1 sync | 6–7ms |
 | B2 | `preamble.skills` | `_apply_enabled_skills_filter(await _resolve_accessible_skill_ids(...))` **only when** `enabled_skills` is non-empty (opt-in, D6). | R + skill catalog | ~0 (6–21 with skills) |
 | B3 | *(unmarked)* | Model retirement resolve (`resolve_effective_model`, 60s catalog cache). Then the two **non-turn early exits**: `app_tool_call` and `app_context_update` (MCP Apps) build/reuse the agent with `cache_write=False` and return JSON. Then the **model access** RBAC check (row handed over from the retirement resolve, so no catalog read): a refusal streams a conversational denial here that persists nothing (`_forbidden_turn(..., persist=False)`), before B4–B5 write anything (no attachment-marker pop, no row pre-create, no title task) — unless quota is exceeded, which the refused path consults first so the quota message keeps precedence. Skipped for a non-resume retired-without-successor id, which B7 answers. | C, R | ~0 |
-| B4 | `preamble.files` | `pop_pending_attachments` (snapshot; a write only if a marker exists) → `_select_recovered_attachments` → per-message file cap (a folder counts one, after the files) → `resolve_files` (**one S3 GET per upload id**), overlapped with the folder rows (`folder_attachment_ids`, flag-gated: **one GetItem per folder**, ≤2, in worker threads; none without folders) → dedupe → `_partition_attachments` (inline / tabular / pptx / oversized) → inline byte budget → marker names. | S ×N, D ×0–2 | 1ms with no attachments |
+| B4 | `preamble.files` | `pop_pending_attachments` (snapshot; a write only if a marker exists) → `_select_recovered_attachments` → per-message file cap (`cap_message_attachments`; a folder counts one, after the files) → `resolve_files` (**one S3 GET per upload id**; the resolver asks `delivers_by_reference` first, so a reference row is never fetched), overlapped with the folder rows (`folder_attachment_ids`, flag-gated: **one GetItem per folder**, ≤2, in worker threads; none without folders) → dedupe → `plan_attachments` (`apis/shared/files/attachment_plan.py`: native / on_demand / tool / dropped per file, byte rules of the `legacy` profile, pure, ~70 µs for five files) → marker names. The model's rules (`refine_for_model`: text for a TEXT-only model or with documents-as-text) apply at B11, once the model is known. | S ×N, D ×0–2 | 1ms with no attachments |
 | B5 | `preamble.session_state` | `ensure_session_metadata_exists` (a conditional `put_item` on a new session; snapshot short-circuit otherwise) → `clear_paused_turn`, `clear_pending_interrupts`, `clear_truncated_turn`, `clear_interrupted_turn` (all snapshot short-circuits; a write only when a marker exists) → `set_pending_attachments` (write if uploads) → **title task spawned** on a first turn (`generate_conversation_title`, Nova Micro in `to_thread`, persists in the background). | D 0–3 | 3–4ms |
 | B6 | `preamble.quota` | `check_quota(session_total_cost=<from snapshot>)`: tier (cached), user cost summary (cached), session notice from the snapshot. Early return with a conversational message if exceeded. | cached | 5ms |
 | B7 | *(unmarked)* | Retired-model denial (conversational). `_load_user_settings` (**one GetItem**, feeds default model + personal instructions). | R, D ×1 sync | ~6ms |
@@ -457,6 +457,16 @@ did not move. The cold turn called `search_classes` three times and answered fro
 With MCP loading reduced to the slowest server, `rag` (1404–1485ms) is now the largest
 stage on this agent's first turn — P3b's case.
 
+*MCP negotiation on the 2.x SDK (2026-10-17).* Since `mcp` 2.1.1 each `start()` negotiates
+with `negotiate_auto`: a `server/discover` probe, then `initialize` if the server rejects
+it. A 2026-07-28 server (GitHub) answers the probe and needs nothing else. A legacy one
+pays one extra POST per connect: `mcp.excalidraw.com` went from 201ms to 325ms p50.
+`mcp_apps._UIExtensionClientSession` removes that after the first connect per process. A
+rejected probe followed by a good handshake marks the URL legacy for an hour
+(`mcp_transport.remember_legacy_server`), and later connects skip the probe: 205ms p50,
+back to 1.30 parity. A 5xx or timed-out probe is not a verdict. Only a cache-miss build
+connects at all, so a cache hit pays none of this.
+
 *P3a. Inside the constructor, no async plumbing.* In `BaseAgent.__init__`, `session_mgr`
 and `tools` do not depend on each other (hooks, which take the session manager, are built
 after both). Run them on two threads of one `ThreadPoolExecutor` and join — the same
@@ -615,6 +625,18 @@ message, or nothing when every file is ready; it never reaches the system prompt
 `toolConfig`. It reads the rows separately from `load_full_kb_context`, which costs a second
 small `Query` on project turns while both flags are on; sharing one listing would couple the
 two loaders for no measurable gain.
+
+*P3b‴. The conversation's on-demand set (unified-attachment-delivery phase 5, under
+`ATTACHMENT_PLAN_ENABLED` with the attachments KB on).* Every turn whose message is composed
+(not a brief, a resume or a continuation) starts `_start_session_files_read` just before B4:
+one `SessionIndex` `Query` for the conversation's READY file rows, run in a worker thread
+(`list_session_files_sync` via `asyncio.to_thread`; the async wrapper would block the loop).
+It is awaited only in C2, at attachment guidance (`_plan_conversation_set`), so it overlaps
+B4's S3 fetches, model resolution and the agent build. The planner (`plan_conversation`) then
+judges the rows in memory and may add one steering line to the user message. The await's wait
+is logged as `attachment conversation set: … wait_ms=`. Expected on dev: ≈0, since the `Query`
+is one round trip and the window it overlaps is the whole preamble. Read that log line on dev
+before turning the profile on anywhere else.
 
 *Tests.* P3a: a fake session factory and a fake tool loader that each sleep; assert the
 build's wall time is the max not the sum, that `tools` order is unchanged across runs

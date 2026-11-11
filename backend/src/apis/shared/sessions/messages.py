@@ -9,6 +9,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
+from apis.shared.files.attachment_handle import handle_of, strip_handles_for_display
 from apis.shared.models.assistant_prefill import is_continuation_prompt
 
 # Relative imports from shared sessions module
@@ -36,6 +37,12 @@ def _ensure_image_base64(image_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     if not image_data:
         return image_data
+
+    # A handle in place of the bytes (unified-attachment-delivery §6.2). No
+    # client renders a user message's image from these bytes (the web app
+    # shows the upload's own preview), so the format is all that is returned.
+    if handle_of(image_data) is not None:
+        return {"format": image_data.get("format", "png")}
 
     # Check for source.bytes pattern (from Code Interpreter tool)
     source = image_data.get("source", {})
@@ -80,6 +87,11 @@ def _ensure_document_base64(document_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     if not document_data:
         return document_data
+
+    # A handle in place of the bytes (unified-attachment-delivery §6.2): the
+    # name and format, which is all a client reads.
+    if handle_of(document_data) is not None:
+        return strip_handles_for_display(document_data)
 
     # Check for source.bytes pattern (from multimodal document input)
     source = document_data.get("source", {})

@@ -40,7 +40,7 @@ FIXTURES_DIR = BACKEND / "evals" / "fixtures"
 
 def test_every_fixture_a_case_names_is_committed_or_generated():
     cases = load_cases(CASES_DIR, fixtures_dir=FIXTURES_DIR, generated=b.GENERATED)
-    named = {name for case in cases for name in case.files}
+    named = {name for case in cases for name in case.all_files}
     assert set(b.GENERATED) <= named, f"generated but never used: {sorted(set(b.GENERATED) - named)}"
 
 

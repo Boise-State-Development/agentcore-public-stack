@@ -2,7 +2,11 @@
 
 A prepared reference-class document (``is_reference_document`` and
 ``large_document.is_prepared``) is ingested into one knowledge base per
-environment, by the S3 location of its **original** (§9 D2: the managed parser does
+environment, and so, under the attachment planner's ``token`` profile, is any
+document the planner would send ``on_demand`` on its own (unified-attachment-delivery
+phase 5, ``attachment_plan.indexes_for_search``; :func:`indexed_by_budget`). Such a
+document is under the inline limit, so it has facts but no sidecars, and it is
+ingested by the run that writes its facts. It is ingested by the S3 location of its **original** (§9 D2: the managed parser does
 its own OCR and layout, which is why Tier 2 exists; we never send our text layer).
 Tier 1 never depends on any of this: ``document_read``'s pattern, text and page
 modes keep reading the ``_derived/`` sidecars whatever the index says.
@@ -236,8 +240,10 @@ def search_status(meta: Optional[FileMetadata], *, kb_enabled: bool) -> str:
     for preparation (``complete_upload`` writes ``pending`` before it returns, so
     a missing preparation is not a race).
     """
-    if not kb_enabled or meta is None or not is_reference_document(meta):
+    if not kb_enabled or meta is None:
         return SEARCH_OFF
+    if not is_reference_document(meta):
+        return _budget_search_status(meta) if indexed_by_budget(meta) else SEARCH_OFF
     preparation = large_document.preparation_status(meta)
     if preparation in (None, large_document.STATUS_FAILED):
         return SEARCH_UNAVAILABLE
@@ -253,12 +259,47 @@ def search_status(meta: Optional[FileMetadata], *, kb_enabled: bool) -> str:
     return SEARCH_UNAVAILABLE
 
 
+def indexed_by_budget(meta: Optional[FileMetadata]) -> bool:
+    """A document under the inline limit that the ``token`` profile indexes (phase 5).
+
+    The planner decides (``attachment_plan.indexes_for_search``): one it would
+    send ``on_demand`` on its own on the smallest curated document budget, from
+    the row's facts, or one an eval forced ``search``. Always ``False`` on the
+    ``legacy`` profile and for a reference-class document, whose own rule is
+    preparation.
+    """
+    if meta is None or is_reference_document(meta):
+        return False
+    from apis.shared.files.attachment_plan import current_limits_profile, facts_from_row, indexes_for_search
+
+    return indexes_for_search(facts_from_row(meta), current_limits_profile())
+
+
+def _budget_search_status(meta: FileMetadata) -> str:
+    """``search_status`` for a document :func:`indexed_by_budget` admits: it has
+    no preparation to wait for, and the facts run that admitted it ingests it."""
+    status = kb_status(meta)
+    if status == STATUS_INDEXED or is_text_indexed(meta):
+        return SEARCH_SEARCHABLE
+    if status in (None, STATUS_QUEUED, STATUS_INDEXING):
+        return SEARCH_INDEXING
+    if status == STATUS_EVICTED:
+        return SEARCH_EVICTED
+    return SEARCH_UNAVAILABLE
+
+
 def is_eligible(meta: Optional[FileMetadata]) -> bool:
-    """A READY, reference-class, prepared row. The object's presence is checked separately."""
+    """A READY row that is reference-class and prepared, or that the ``token``
+    profile indexes by its facts (:func:`indexed_by_budget`). The object's
+    presence is checked separately."""
     if meta is None:
         return False
     status = meta.status if isinstance(meta.status, str) else meta.status.value
-    return status == FileStatus.READY.value and is_reference_document(meta) and large_document.is_prepared(meta)
+    if status != FileStatus.READY.value:
+        return False
+    if is_reference_document(meta):
+        return large_document.is_prepared(meta)
+    return indexed_by_budget(meta)
 
 
 # ---------------------------------------------------------------------------

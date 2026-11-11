@@ -719,6 +719,28 @@ describe('RAG Ingestion Configuration', () => {
   // Source provenance verification — in development, so only "true" enables
   // ============================================================
 
+  describe('Attachment plan feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_ATTACHMENT_PLAN_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_ATTACHMENT_PLAN_ENABLED;
+      expect(loadConfig(app).attachmentPlan.enabled).toBe(false);
+      process.env.CDK_ATTACHMENT_PLAN_ENABLED = '';
+      expect(loadConfig(app).attachmentPlan.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_ATTACHMENT_PLAN_ENABLED = 'TRUE';
+      expect(loadConfig(app).attachmentPlan.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'false']) {
+        process.env.CDK_ATTACHMENT_PLAN_ENABLED = value;
+        expect(loadConfig(app).attachmentPlan.enabled).toBe(false);
+      }
+    });
+  });
+
   describe('Source provenance feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_SOURCE_PROVENANCE_ENABLED;
@@ -739,6 +761,32 @@ describe('RAG Ingestion Configuration', () => {
       for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
         process.env.CDK_SOURCE_PROVENANCE_ENABLED = value;
         expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+      }
+    });
+  });
+
+  // ============================================================
+  // MCP form elicitation — in development, so only "true" enables
+  // ============================================================
+
+  describe('MCP elicitation feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_MCP_ELICITATION_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_MCP_ELICITATION_ENABLED;
+      expect(loadConfig(app).mcpElicitation.enabled).toBe(false);
+      process.env.CDK_MCP_ELICITATION_ENABLED = '';
+      expect(loadConfig(app).mcpElicitation.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_MCP_ELICITATION_ENABLED = 'TRUE';
+      expect(loadConfig(app).mcpElicitation.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_MCP_ELICITATION_ENABLED = value;
+        expect(loadConfig(app).mcpElicitation.enabled).toBe(false);
       }
     });
   });

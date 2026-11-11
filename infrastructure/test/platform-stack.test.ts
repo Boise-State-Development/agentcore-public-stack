@@ -183,22 +183,25 @@ describe('PlatformStack', () => {
       // browser-policy (the Chromium MANAGED policy every browser session
       // starts with — spec D6),
       // conversation-archive (per-turn transcripts conversation search is
-      // built from — docs/specs/conversation-search.md §4)
-      template.resourceCountIs('AWS::S3::Bucket', 13);
+      // built from — docs/specs/conversation-search.md §4),
+      // browser-live-view (the sign-in viewer, on an origin no MCP App shares)
+      template.resourceCountIs('AWS::S3::Bucket', 14);
     });
   });
 
   describe('CloudFront distributions', () => {
-    it('creates SPA + mcp-sandbox + artifacts distributions', () => {
+    it('creates SPA + mcp-sandbox + artifacts + browser-live-view distributions', () => {
       // Phase 3 of the platform-as-bootstrap refactor moved the
       // artifacts distribution into PlatformStack alongside the
-      // SPA + mcp-sandbox distributions. Three total now.
-      template.resourceCountIs('AWS::CloudFront::Distribution', 3);
+      // SPA + mcp-sandbox distributions. The browser sign-in viewer has
+      // its own (it must not share an origin with MCP Apps). Four total.
+      template.resourceCountIs('AWS::CloudFront::Distribution', 4);
     });
 
     it('creates CloudFront functions', () => {
       // SPA: api-path-strip + spa-routing
-      // MCP sandbox: csp-function
+      // MCP sandbox: csp-function (shared with the browser-live-view
+      // distribution, so it stays one function)
       template.resourceCountIs('AWS::CloudFront::Function', 3);
     });
 

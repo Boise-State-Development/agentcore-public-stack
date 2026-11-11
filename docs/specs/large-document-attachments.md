@@ -69,7 +69,7 @@ Most of this design is reuse:
 | Managed KB backend | [managed_backend.py](../../backend/src/apis/shared/kb_backend/managed_backend.py) | Direct ingestion from an `s3Location` (`document_payload`), delete by document id, the 10-documents-per-call batching and the account-wide operation semaphore |
 | Shared KB with per-user isolation | `conversations` KB: [reserved.py](../../backend/src/apis/shared/kb_backend/reserved.py), [index_search.py](../../backend/src/apis/shared/conversation_search/index_search.py), [conversation-index-construct.ts](../../infrastructure/lib/constructs/conversation-index/conversation-index-construct.ts) | One KB per environment, lazy `provision_managed_kb` saga, S3 event → SQS → consumer with `maxConcurrency: 2`, filter built in one module, architecture test forbidding other `Retrieve` callers |
 | Per-owner byte cap | [byte_cap.py](../../backend/src/apis/shared/kb_backend/byte_cap.py) | Atomic `totalBytes` accumulator that cannot be overshot by concurrent writers |
-| File key layout | `user-files/{user}/{session}/{upload_id}/{filename}` ([files/service.py:270](../../backend/src/apis/app_api/files/service.py:270)), thumbnail as `_thumb.png` sibling | A per-upload prefix for derived objects |
+| File key layout | `user-files/{user}/{session}/{upload_id}/{filename}` ([files/service.py:270](../../backend/src/apis/app_api/files/service.py:270)), thumbnail as `_thumb.png` sibling (since 2026-11-10 the prepare Lambda writes `_derived/thumb.png` instead, and `_thumb.png` is only read for older uploads) | A per-upload prefix for derived objects |
 
 ---
 

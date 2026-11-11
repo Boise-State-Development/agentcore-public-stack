@@ -311,3 +311,91 @@ class TestTerminalFormat:
     def test_an_unknown_surface_is_refused(self):
         with pytest.raises(CaseError, match="client_surface"):
             parse_case(self._raw(client_surface="tui"), family="terminal")
+
+
+# --------------------------------------------------------------------------- delivery arms (§8.4)
+
+
+def _delivery(**run):
+    return {
+        "id": "attachment_delivery.example",
+        "family": "attachment_delivery",
+        "turns": [{"prompt": "What is the permit?"}],
+        "run": {"enabled_tools": [], **run},
+        "expect": {"contains_any": ["WP-1"]},
+        "notes": "",
+    }
+
+
+def test_a_delivery_case_defaults_to_the_auto_arm_and_the_deployments_ceiling():
+    case = parse_case(_delivery(), family="attachment_delivery")
+    assert (case.run.arm, case.run.ceiling) == ("auto", "default")
+    assert not case.gating
+
+
+@pytest.mark.parametrize("key,value", [
+    ("arm", "native"), ("arm", "text"), ("arm", "on_demand"), ("arm", "search"),
+    ("ceiling", "200k"),
+])
+def test_the_forced_arms_and_the_ceiling_arms_parse(key, value):
+    case = parse_case(_delivery(**{key: value}), family="attachment_delivery")
+    assert getattr(case.run, key) == value
+
+
+def test_no_arm_is_reserved_since_phase_five():
+    from apis.shared.evals.cases import DELIVERY_ARMS, RESERVED_ARMS
+
+    assert "search" in DELIVERY_ARMS and RESERVED_ARMS == ()
+    with pytest.raises(CaseError, match="arm"):
+        parse_case(_delivery(arm="tool"), family="attachment_delivery")
+
+
+def test_a_delivery_turn_may_attach_its_own_files():
+    raw = _delivery()
+    raw["files"] = ["a.md"]
+    raw["turns"] = [{"prompt": "one", "files": ["b.md"]}, {"prompt": "two"}, {"prompt": "three", "files": ["c.md", "d.md"]}]
+    case = parse_case(raw, family="attachment_delivery")
+    assert [case.meta_for(i).files for i in range(3)] == [("b.md",), (), ("c.md", "d.md")]
+    assert case.all_files == ("a.md", "b.md", "c.md", "d.md")
+
+
+def test_only_a_delivery_turn_attaches_files_and_only_in_its_own_session():
+    raw = _delivery()
+    raw["turns"] = [{"prompt": "one"}, {"prompt": "two", "session": 2, "files": ["b.md"]}]
+    with pytest.raises(CaseError, match="files"):
+        parse_case(raw, family="attachment_delivery")
+
+
+def test_every_ceiling_names_its_runtime_environment():
+    from apis.shared.evals.cases import CEILING_ENV, CEILINGS
+
+    assert set(CEILING_ENV) == set(CEILINGS) and CEILING_ENV["default"] == {}
+    assert "100k_documents_excluded" not in CEILINGS  # deleted with §5.2's switch
+
+
+def test_a_pause_is_a_delivery_case_s_and_bounded():
+    raw = _delivery()
+    raw["turns"] = [{"prompt": "one"}, {"prompt": "two", "pause_seconds": 330}]
+    case = parse_case(raw, family="attachment_delivery")
+    assert [case.meta_for(i).pause_seconds for i in range(2)] == [0, 330]
+    raw["turns"][1]["pause_seconds"] = 5_000
+    with pytest.raises(CaseError, match="pause_seconds"):
+        parse_case(raw, family="attachment_delivery")
+    other = _case()
+    other["turns"] = [{"prompt": "one", "pause_seconds": 10}]
+    with pytest.raises(CaseError, match="only attachment_delivery cases pause"):
+        parse_case(other, family="tool_selection")
+
+
+def test_an_unknown_arm_and_an_arm_outside_the_family_are_refused():
+    with pytest.raises(CaseError, match="expected one of auto, native"):
+        parse_case(_delivery(arm="fast"), family="attachment_delivery")
+    with pytest.raises(CaseError, match="only attachment_delivery cases name a arm"):
+        parse_case(_case(run={"enabled_tools": ["calculator"], "arm": "auto"}), family="tool_selection")
+
+
+def test_the_delivery_family_is_opt_in():
+    from apis.shared.evals.cases import DEFAULT_FAMILIES, OPT_IN_FAMILIES
+
+    assert "attachment_delivery" in OPT_IN_FAMILIES and "attachment_delivery" not in DEFAULT_FAMILIES
+    assert set(DEFAULT_FAMILIES) | OPT_IN_FAMILIES == set(FAMILIES)

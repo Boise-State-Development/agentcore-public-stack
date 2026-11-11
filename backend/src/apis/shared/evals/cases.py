@@ -25,6 +25,7 @@ FAMILIES: Tuple[str, ...] = (
     "tool_selection",
     "document_qa",
     "attachment_tools",
+    "attachment_delivery",
     "project_kb",
     "agent_harness",
     "project_memory",
@@ -40,7 +41,47 @@ JUDGED_FAMILIES = frozenset({"general_chat"})
 #: Families that report but never fail a run: the judged ones, and a
 #: deterministic family under D18's ten-case floor (``terminal``), which gates
 #: once it reaches ten.
-ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal"})
+ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal", "attachment_delivery"})
+
+#: The delivery measurement family (unified-attachment-delivery spec §8.4).
+#: Advisory: its gating set is the cells where two arms are both legal for a
+#: file.
+DELIVERY_FAMILY = "attachment_delivery"
+#: Families a run includes only when ``--family`` names them. The delivery
+#: family attaches documents up to ~300k tokens, so a release or nightly pass
+#: over "every family" must not start paying for it unannounced.
+OPT_IN_FAMILIES = frozenset({DELIVERY_FAMILY})
+#: What a run with no ``--family`` covers.
+DEFAULT_FAMILIES: Tuple[str, ...] = tuple(f for f in FAMILIES if f not in OPT_IN_FAMILIES)
+
+#: Delivery arms a case may name. ``auto`` is the turn path as it stands:
+#: whatever the deployment decides for the file. Each other arm is the
+#: planner's fixture-only ``delivery`` value, written on the file row by the
+#: registrar (``fixtures.register_upload``), never sent on the request.
+#: ``search`` (phase 5) indexes each file into the attachments KB whatever its
+#: size and steers the conversation to ``document_read``'s ``query``; it needs
+#: the ``token`` profile and the KB on the target, and the run waits for each
+#: file to be searchable before the first turn (``fixtures.wait_for_searchable``).
+DELIVERY_ARMS: Tuple[str, ...] = ("auto", "native", "text", "on_demand", "search")
+#: Arms a case may not name yet. None since phase 5.
+RESERVED_ARMS: Tuple[str, ...] = ()
+#: The compaction ceiling a case runs under (§8.4): ``default`` is the
+#: deployment's (a 100k cap) and ``200k`` a 200k cap. (Phase 0's third arm,
+#: the 100k cap with §5.2's document subtraction, was deleted with the switch
+#: once the readout dropped §5.2.) A
+#: ceiling is a property of the Runtime, not of a request, so a run takes one
+#: (``eval_harness.py run --ceiling``) and the target must be started with
+#: :data:`CEILING_ENV`'s variables.
+CEILINGS: Tuple[str, ...] = ("default", "200k")
+RESERVED_CEILINGS: Tuple[str, ...] = ()
+#: The Runtime environment each ceiling needs (``compaction_models.CompactionConfig``).
+CEILING_ENV: Dict[str, Dict[str, str]] = {
+    "default": {},
+    "200k": {"AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "200000"},
+}
+#: Longest pause a turn may ask for before it is sent: past the 5-minute
+#: prompt-cache TTL, short of the Runtime session's idle timeout.
+MAX_PAUSE_SECONDS = 600
 
 #: The strands-evals evaluators a case may name: exactly the ones the judge adapter maps.
 JUDGE_EVALUATORS = CASE_EVALUATORS
@@ -181,6 +222,10 @@ class RunConfig:
     #: the model calls it: ``{name, description, input_schema, respond}``,
     #: ``respond`` being ``{"output": str, "is_error": bool}`` or ``{"declined": true}``.
     client_tools: Optional[Tuple[Mapping[str, Any], ...]] = None
+    #: ``attachment_delivery`` only: the delivery arm (``DELIVERY_ARMS``) and the
+    #: compaction ceiling (``CEILINGS``) the case runs under.
+    arm: str = "auto"
+    ceiling: str = "default"
 
 
 #: A project of the sample's own, created before its first turn and purged after
@@ -196,6 +241,13 @@ class TurnMeta:
 
     session: int = 1
     as_user: str = "eval"
+    #: Seconds to wait before sending this turn (``attachment_delivery``'s
+    #: paced cases: a pause past the prompt-cache TTL).
+    pause_seconds: int = 0
+    #: Fixture files attached on this turn (``attachment_delivery`` only), as a
+    #: user attaching documents partway through a conversation would; the
+    #: case's own ``files`` arrive with the first turn.
+    files: Tuple[str, ...] = ()
 
 
 #: The generated reference documents a case may attach (``large_documents``).
@@ -230,6 +282,11 @@ class EvalCase:
 
     def meta_for(self, index: int) -> TurnMeta:
         return self.turn_meta[index] if index < len(self.turn_meta) else TurnMeta()
+
+    @property
+    def all_files(self) -> Tuple[str, ...]:
+        """Every fixture file the case attaches: its own, then each turn's, in order."""
+        return self.files + tuple(name for meta in self.turn_meta for name in meta.files)
 
     @property
     def gating(self) -> bool:
@@ -373,7 +430,7 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     turn_meta: List[TurnMeta] = []
     session_users: Dict[int, str] = {}
     for i, turn in enumerate(turns_raw):
-        _check_keys(turn, ("prompt", "session", "as"), f"{where}.turns[{i}]")
+        _check_keys(turn, ("prompt", "session", "as", "pause_seconds", "files"), f"{where}.turns[{i}]")
         prompt = turn.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise CaseError(f"{where}.turns[{i}].prompt: expected text")
@@ -386,16 +443,34 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         # A conversation belongs to one user; a second member opens their own.
         if session_users.setdefault(session, as_user) != as_user:
             raise CaseError(f"{where}.turns[{i}]: session {session} already belongs to {session_users[session]}")
+        pause = turn.get("pause_seconds", 0)
+        if not isinstance(pause, int) or isinstance(pause, bool) or not 0 <= pause <= MAX_PAUSE_SECONDS:
+            raise CaseError(f"{where}.turns[{i}].pause_seconds: expected 0..{MAX_PAUSE_SECONDS}")
+        if pause and family != DELIVERY_FAMILY:
+            raise CaseError(f"{where}.turns[{i}].pause_seconds: only {DELIVERY_FAMILY} cases pause")
+        turn_files = _str_tuple(turn.get("files"), f"{where}.turns[{i}].files")
+        if turn_files and (family != DELIVERY_FAMILY or session != 1):
+            raise CaseError(f"{where}.turns[{i}].files: only {DELIVERY_FAMILY} cases attach on a later turn, in session 1")
         turns.append(prompt)
-        turn_meta.append(TurnMeta(session=session, as_user=as_user))
+        turn_meta.append(TurnMeta(session=session, as_user=as_user, pause_seconds=pause, files=turn_files))
 
     run_raw = raw.get("run") or {}
     _check_keys(
         run_raw,
         ("enabled_tools", "enabled_skills", "project", "agent", "project_memory", "member2_role", "client_surface",
-         "client_tools"),
+         "client_tools", "arm", "ceiling"),
         f"{where}.run",
     )
+    for key, allowed, reserved in (("arm", DELIVERY_ARMS, RESERVED_ARMS), ("ceiling", CEILINGS, RESERVED_CEILINGS)):
+        value = run_raw.get(key)
+        if value is None:
+            continue
+        if family != DELIVERY_FAMILY:
+            raise CaseError(f"{where}.run.{key}: only {DELIVERY_FAMILY} cases name a {key}")
+        if value in reserved:
+            raise CaseError(f"{where}.run.{key}: '{value}' is reserved")
+        if value not in allowed:
+            raise CaseError(f"{where}.run.{key}: expected one of {', '.join(allowed + reserved)}")
     client_surface = run_raw.get("client_surface")
     if client_surface is not None and client_surface not in ("terminal", "web"):
         raise CaseError(f"{where}.run.client_surface: expected 'terminal' or 'web'")
@@ -448,6 +523,8 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         member2_role=member2_role,
         client_surface=client_surface,
         client_tools=tuple(client_tools) if client_tools else None,
+        arm=run_raw.get("arm") or "auto",
+        ceiling=run_raw.get("ceiling") or "default",
     )
 
     expect = _parse_expect(raw.get("expect") or {}, f"{where}.expect")
@@ -553,7 +630,7 @@ def load_cases(
 
     if fixtures_dir is not None:
         for case in cases:
-            for name in case.files:
+            for name in case.all_files:
                 if name not in generated and not (fixtures_dir / name).is_file():
                     raise CaseError(f"{case.id}: fixture file '{name}' not found in {fixtures_dir}")
     return cases

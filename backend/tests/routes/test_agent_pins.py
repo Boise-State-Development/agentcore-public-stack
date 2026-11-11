@@ -24,7 +24,6 @@ from apis.shared.assistants.models import (
     PinnedAgentRef,
     UserPinState,
 )
-from apis.shared.auth import require_admin
 from tests.conftest import override_admin_auth
 from tests.routes.conftest import mock_auth_user
 
@@ -48,9 +47,7 @@ def _make_assistant(**overrides) -> Assistant:
         status="COMPLETE",
         emoji="📋",
         tagline="Find and cite university policy",
-        listing=AgentListing(
-            state="published", category="Administration", publisher_id="pub-registrar"
-        ).model_dump(by_alias=True),
+        listing=AgentListing(state="published", category="Administration", publisher_id="pub-registrar").model_dump(by_alias=True),
     )
     defaults.update(overrides)
     return Assistant.model_validate(defaults)
@@ -138,9 +135,7 @@ def test_an_unreachable_pin_is_omitted_but_not_deleted(client):
     with (
         patch(f"{PIN_SERVICE}.get_pin_state", AsyncMock(return_value=state)),
         patch(f"{PIN_SERVICE}.list_publishers", AsyncMock(return_value=[])),
-        patch(
-            f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
-        ),
+        patch(f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))),
         patch(f"{PIN_SERVICE}.remove_pin", remove),
     ):
         response = client.get("/agents/pins")
@@ -169,9 +164,7 @@ def test_a_pinned_agent_survives_its_takedown(client):
 
 # ── POST / DELETE /agents/{id}/pin ───────────────────────────────────────────────────
 def test_pinning_returns_the_new_row(client):
-    add = AsyncMock(
-        return_value=UserPinState(pinned=[PinnedAgentRef(agent_id="ast-001", order=0)])
-    )
+    add = AsyncMock(return_value=UserPinState(pinned=[PinnedAgentRef(agent_id="ast-001", order=0)]))
     with (
         patch(
             f"{PIN_SERVICE}.get_assistant_with_access_check",
@@ -191,12 +184,8 @@ def test_pinning_an_agent_you_cannot_reach_is_a_404(client):
     """Not-found and access-denied collapse: the store does not confirm ids exist."""
     add = AsyncMock()
     with (
-        patch(
-            f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
-        ),
-        patch(
-            f"{PIN_SERVICE}.resolve_assistant_permission", AsyncMock(return_value=(None, None))
-        ),
+        patch(f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))),
+        patch(f"{PIN_SERVICE}.resolve_assistant_permission", AsyncMock(return_value=(None, None))),
         patch(f"{PIN_SERVICE}.add_pin", add),
     ):
         response = client.post("/agents/ast-secret/pin")
@@ -218,9 +207,7 @@ def test_pinning_a_published_agent_you_cannot_open_is_a_legible_403(client):
     )
     add = AsyncMock()
     with (
-        patch(
-            f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
-        ),
+        patch(f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))),
         patch(
             f"{PIN_SERVICE}.resolve_assistant_permission",
             AsyncMock(return_value=(unreachable, None)),
@@ -238,9 +225,7 @@ def test_an_unpublished_agent_still_collapses_to_404(client):
     """The disclosure rule only relaxes for ids the store itself handed out."""
     private = _make_assistant(visibility="PRIVATE", listing=None)
     with (
-        patch(
-            f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
-        ),
+        patch(f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))),
         patch(
             f"{PIN_SERVICE}.resolve_assistant_permission",
             AsyncMock(return_value=(private, None)),
@@ -252,12 +237,37 @@ def test_an_unpublished_agent_still_collapses_to_404(client):
     assert response.status_code == 404
 
 
+def test_an_owner_can_pin_their_own_private_draft(client):
+    """#1897: pinning is gated on reach, not publication. The row comes back on read."""
+    draft = _make_assistant(ownerId="user-001", visibility="PRIVATE", status="DRAFT", listing=None)
+    state = UserPinState(pinned=[PinnedAgentRef(agent_id="ast-001", order=0)])
+    add = AsyncMock(return_value=state)
+    with (
+        patch(
+            f"{PIN_SERVICE}.get_assistant_with_access_check",
+            AsyncMock(return_value=(draft, "owner")),
+        ),
+        patch(f"{PIN_SERVICE}.list_publishers", AsyncMock(return_value=[])),
+        patch(f"{PIN_SERVICE}.add_pin", add),
+        patch(f"{PIN_SERVICE}.get_pin_state", AsyncMock(return_value=state)),
+    ):
+        pinned = client.post("/agents/ast-001/pin")
+        listed = client.get("/agents/pins")
+
+    assert pinned.status_code == 201
+    assert pinned.json()["agentId"] == "ast-001"
+    assert pinned.json()["publisher"] is None
+    add.assert_awaited_once_with("user-001", "ast-001")
+    rows = listed.json()["pins"]
+    assert [row["agentId"] for row in rows] == ["ast-001"]
+    assert rows[0]["source"] == "user"
+    assert rows[0]["category"] == ""
+
+
 def test_a_failure_classifying_the_denial_falls_back_to_404(client):
     """The nicety must never escalate a clean 404 into a 500."""
     with (
-        patch(
-            f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))
-        ),
+        patch(f"{PIN_SERVICE}.get_assistant_with_access_check", AsyncMock(return_value=(None, None))),
         patch(
             f"{PIN_SERVICE}.resolve_assistant_permission",
             AsyncMock(side_effect=RuntimeError("dynamo is having a day")),
@@ -294,22 +304,44 @@ def test_unpinning_needs_no_existence_check(client):
     remove.assert_awaited_once_with("user-001", "ast-gone")
 
 
-# ── the kill switch (D14) ────────────────────────────────────────────────────────────
-@pytest.mark.parametrize(
-    "method,path",
-    [("get", "/agents/pins"), ("post", "/agents/ast-001/pin"), ("delete", "/agents/ast-001/pin")],
-)
-def test_pin_routes_404_when_the_marketplace_is_off(client, monkeypatch, method, path):
-    monkeypatch.setenv("AGENT_MARKETPLACE_ENABLED", "false")
+# ── the kill switches (D14, #1897) ───────────────────────────────────────────────────
+PIN_ROUTES = [
+    ("get", "/agents/pins"),
+    ("post", "/agents/ast-001/pin"),
+    ("delete", "/agents/ast-001/pin"),
+]
+
+
+@pytest.mark.parametrize("method,path", PIN_ROUTES)
+def test_pin_routes_404_when_agents_are_off(client, monkeypatch, method, path):
+    monkeypatch.setenv("AGENTS_API_ENABLED", "false")
 
     assert getattr(client, method)(path).status_code == 404
 
 
+def test_pins_work_with_the_marketplace_off(client, monkeypatch):
+    """#1897: a pin is an Agent-surface bookmark, so the store switch does not gate it."""
+    monkeypatch.setenv("AGENT_MARKETPLACE_ENABLED", "false")
+    mine = _make_assistant(ownerId="user-001", visibility="PRIVATE", listing=None)
+    state = UserPinState(pinned=[PinnedAgentRef(agent_id="ast-001", order=0)])
+    with (
+        patch(
+            f"{PIN_SERVICE}.get_assistant_with_access_check",
+            AsyncMock(return_value=(mine, "owner")),
+        ),
+        patch(f"{PIN_SERVICE}.list_publishers", AsyncMock(return_value=[])),
+        patch(f"{PIN_SERVICE}.add_pin", AsyncMock(return_value=state)),
+        patch(f"{PIN_SERVICE}.get_pin_state", AsyncMock(return_value=state)),
+        patch(f"{PIN_SERVICE}.remove_pin", AsyncMock(return_value=UserPinState())),
+    ):
+        assert client.post("/agents/ast-001/pin").status_code == 201
+        assert [row["agentId"] for row in client.get("/agents/pins").json()["pins"]] == ["ast-001"]
+        assert client.delete("/agents/ast-001/pin").status_code == 204
+
+
 # ── admin store front (D10) ──────────────────────────────────────────────────────────
 def _listing_row(agent_id: str, name: str) -> AgentListingResponse:
-    return AgentListingResponse(
-        agent_id=agent_id, name=name, category="Administration", tagline="One line"
-    )
+    return AgentListingResponse(agent_id=agent_id, name=name, category="Administration", tagline="One line")
 
 
 def test_admin_store_front_reports_ids_that_no_longer_publish(client):

@@ -11,7 +11,10 @@ On every ``BeforeModelCallEvent`` the hook computes:
 
 - ``toolConfigHash``: canonical JSON of the tool specs the model will see, in
   registration order (order-sensitive on purpose — order flips are a real
-  cache-buster).
+  cache-buster). Only the keys a formatter sends are hashed
+  (``model_facing_tool_specs``). An MCP tool's ``outputSchema`` and
+  ``annotations`` sit on the registered spec but never reach the request, so
+  hashing them would rotate the hash with no cache miss behind it.
 - ``systemPromptHash``: the effective system prompt. Fires after plugin
   injection (e.g. AgentSkills' ``<available_skills>`` block lands on
   ``BeforeInvocationEvent``), so nondeterministic skill ordering is visible
@@ -32,6 +35,7 @@ from typing import Any, Dict, List, Optional
 
 from strands.hooks import BeforeModelCallEvent, HookProvider, HookRegistry
 
+from apis.shared.models.tool_specs import model_facing_tool_specs
 from apis.shared.observability import fingerprint_canonical_json, fingerprint_text
 
 logger = logging.getLogger(__name__)
@@ -78,7 +82,7 @@ def compute_prefix_fingerprint(tool_specs: Any, system_prompt: Any, messages: Li
     else:
         system_hash = fingerprint_canonical_json(system_prompt)
     return {
-        "toolConfigHash": fingerprint_canonical_json(tool_specs),
+        "toolConfigHash": fingerprint_canonical_json(model_facing_tool_specs(tool_specs)),
         "systemPromptHash": system_hash,
         # History *prefix*: everything except the newest message. For
         # a cache hit this must equal the previous call's full history.

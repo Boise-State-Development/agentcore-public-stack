@@ -26,7 +26,7 @@ MAX = 4 * 1024 * 1024
 PRESENTATION_MAX = 25 * 1024 * 1024
 
 
-def _meta(size_bytes=1024, mime="text/csv", filename="data.csv"):
+def _meta(size_bytes=1024, mime="image/png", filename="photo.png"):
     return FileMetadata(
         upload_id="up-1", user_id="u1", session_id="s1", filename=filename, mime_type=mime,
         size_bytes=size_bytes, s3_key="user-files/u1/s1/up-1/" + filename, s3_bucket="b",
