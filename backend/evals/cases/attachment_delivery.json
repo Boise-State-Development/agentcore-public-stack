@@ -656,6 +656,54 @@
   "notes": "Five ~5k-token documents, today's per-message cap. Each holds a certificate; only one is the subject's."
  },
  {
+  "id": "attachment_delivery.count_twenty_documents",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Twenty site notes are attached. What is the calibration certificate number for the Kestrel Levee pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "CC-25686"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!CC\\-25668)(?!CC\\-70074)(?!CC\\-33846)(?!CC\\-11897)(?!CC\\-63136)(?!CC\\-22404)(?!CC\\-14635)(?!CC\\-31025)(?!CC\\-67372)(?!CC\\-56456)(?!CC\\-72770)(?!CC\\-84453)(?!CC\\-84138)(?!CC\\-86367)(?!CC\\-96857)(?!CC\\-83298)(?!CC\\-37681)(?!CC\\-56043)(?!CC\\-68596)(?!CC\\-46381)[\\s\\S]){0,160}?CC\\-25686"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_5k.md",
+   "delivery_note_a_5k.md",
+   "delivery_note_b_5k.md",
+   "delivery_note_c_5k.md",
+   "delivery_note_d_5k.md",
+   "delivery_note_e_5k.md",
+   "delivery_note_f_5k.md",
+   "delivery_note_g_5k.md",
+   "delivery_note_h_5k.md",
+   "delivery_note_i_5k.md",
+   "delivery_note_j_5k.md",
+   "delivery_note_k_5k.md",
+   "delivery_note_l_5k.md",
+   "delivery_note_m_5k.md",
+   "delivery_note_n_5k.md",
+   "delivery_note_o_5k.md",
+   "delivery_note_p_5k.md",
+   "delivery_note_q_5k.md",
+   "delivery_note_r_5k.md",
+   "delivery_note_s_5k.md"
+  ],
+  "notes": "Twenty ~5k-token documents, the token profile's per-message cap (~100k tokens together). Each holds a certificate; only the seventeenth is the subject's."
+ },
+ {
   "id": "attachment_delivery.arm_pdf_30k_native",
   "family": "attachment_delivery",
   "turns": [
