@@ -137,11 +137,15 @@ class FileResolver:
                 meta=file_meta,
             )
 
+        # An image's model copy when the upload stored one (``image_downscale``):
+        # the bytes every turn sends for it, byte-identical on every read.
+        key, content_type = model_image_source(file_meta)
+
         # Fetch content from S3
         try:
             response = self._s3_client.get_object(
                 Bucket=file_meta.s3_bucket,
-                Key=file_meta.s3_key
+                Key=key
             )
             file_bytes = response["Body"].read()
         except ClientError as e:
@@ -153,10 +157,31 @@ class FileResolver:
 
         return ResolvedFileContent(
             filename=file_meta.filename,
-            content_type=file_meta.mime_type,
+            content_type=content_type,
             bytes=base64_content,
             meta=file_meta,
         )
+
+
+def model_image_source(file_meta: FileMetadata, variant: str = "high") -> tuple:
+    """``(key, mime_type)`` of the bytes a model is sent for this row.
+
+    ``variant`` is ``high`` (the default copy) or ``compact`` (the small copy
+    the planner sends when the high one does not fit, ``image_downscale``).
+    An image's stored copy when its row records one; the original for every
+    other row (and for an image uploaded under the ``legacy`` profile). A row
+    without a compact copy answers ``compact`` with its high copy.
+    """
+    record = file_meta.model_image if isinstance(file_meta.model_image, dict) else None
+    if not record:
+        return file_meta.s3_key, file_meta.mime_type
+    if variant == "compact" and isinstance(record.get("compact"), dict):
+        compact = record["compact"]
+        if compact.get("key") and compact.get("mimeType"):
+            return str(compact["key"]), str(compact["mimeType"])
+    if record.get("key") and record.get("mimeType"):
+        return str(record["key"]), str(record["mimeType"])
+    return file_meta.s3_key, file_meta.mime_type
 
 
 # Global instance

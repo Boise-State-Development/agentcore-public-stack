@@ -260,6 +260,32 @@ class FileUploadRepository:
             logger.error(f"Error updating file facts {upload_id}: {e}")
             raise
 
+    async def update_file_model_image(
+        self, user_id: str, upload_id: str, model_image: dict
+    ) -> Optional[FileMetadata]:
+        """Store an image's ``modelImage`` map (``image_downscale``) on its row.
+
+        Written before the row turns READY, so a turn never reads an image
+        without it. ``None`` when the row no longer exists.
+        """
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET modelImage = :mi, updatedAt = :now",
+                ExpressionAttributeValues={
+                    ":mi": self._convert_floats_to_decimals(dict(model_image)),
+                    ":now": utc_now_iso(),
+                },
+                ConditionExpression="attribute_exists(PK)",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating model image {upload_id}: {e}")
+            raise
+
     async def replace_file_content_fields(
         self, user_id: str, upload_id: str, size_bytes: int
     ) -> Optional[FileMetadata]:
@@ -274,7 +300,7 @@ class FileUploadRepository:
         try:
             response = self._table.update_item(
                 Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
-                UpdateExpression="SET sizeBytes = :size, updatedAt = :now REMOVE digest, preparation, facts",
+                UpdateExpression="SET sizeBytes = :size, updatedAt = :now REMOVE digest, preparation, facts, modelImage",
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={":size": size_bytes, ":now": utc_now_iso(), ":ready": FileStatus.READY.value},
                 ConditionExpression="attribute_exists(PK) AND #status = :ready",

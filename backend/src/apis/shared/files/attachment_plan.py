@@ -256,6 +256,12 @@ class LimitsProfile:
     #: ``document_budget`` as a share of the model's chat ceiling. ``0`` is the
     #: ``legacy`` profile: no token budget, the byte rules only.
     document_budget_share: float = 0.0
+    #: Images are downscaled at upload to the largest size any curated model
+    #: reads (``image_downscale``), and that copy is what a turn sends (§4.3).
+    downscale_images: bool = False
+    #: Per-file upload ceiling for an image, before downscaling. ``None`` keeps
+    #: the general upload limit (the ``legacy`` profile).
+    image_upload_max_bytes: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -432,6 +438,8 @@ def token_profile() -> LimitsProfile:
         documents_as_text=True,
         over_budget_by_reference=True,
         document_budget_share=DOCUMENT_BUDGET_CEILING_SHARE,
+        downscale_images=True,
+        image_upload_max_bytes=TOKEN_IMAGE_UPLOAD_MAX_BYTES,
     )
 
 
@@ -458,6 +466,9 @@ def documents_as_text() -> bool:
 #: in :func:`upload_limits` and nowhere else.
 UPLOAD_GENERAL_MAX_BYTES = 4 * 1024 * 1024
 UPLOAD_PRESENTATION_MAX_BYTES = 25 * 1024 * 1024
+#: An image the ``token`` profile accepts before downscaling (§4.4). The stored
+#: model copy is always under ``image_downscale.MODEL_IMAGE_MAX_BYTES``.
+TOKEN_IMAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -478,10 +489,13 @@ class UploadLimits:
     large_document_max_bytes: Optional[int] = None
     #: Folders one message may carry; ``None`` while folder attachments are off.
     folders_per_message: Optional[int] = None
+    #: An image, before downscaling; ``None`` means ``general_max_bytes``.
+    image_max_bytes: Optional[int] = None
 
 
-def upload_limits() -> UploadLimits:
-    """The per-class upload ceilings, with the two flags that widen admission."""
+def upload_limits(profile: Optional[LimitsProfile] = None) -> UploadLimits:
+    """The per-class upload ceilings, with the two flags that widen admission
+    and the active profile's image ceiling."""
     import os
 
     from apis.shared.feature_flags import (
@@ -499,6 +513,7 @@ def upload_limits() -> UploadLimits:
         spreadsheet_max_bytes=spreadsheet_max_file_size(),
         large_document_max_bytes=LARGE_DOCUMENT_MAX_BYTES if large_document_attachments_enabled() else None,
         folders_per_message=FOLDERS_PER_MESSAGE if folder_attachments_enabled() else None,
+        image_max_bytes=(profile or current_limits_profile()).image_upload_max_bytes,
     )
 
 
@@ -510,14 +525,17 @@ def upload_size_limit(filename: str, mime_type: str, limits: UploadLimits) -> in
         return limits.spreadsheet_max_bytes
     if limits.large_document_max_bytes is not None and is_document_class(mime_type, filename):
         return limits.large_document_max_bytes
+    if limits.image_max_bytes is not None and (mime_type or "").lower().startswith("image/"):
+        return limits.image_max_bytes
     return limits.general_max_bytes
 
 
 def upload_download_ceiling(limits: UploadLimits) -> int:
     """The widest class ceiling: what a server-side import may download before sizing."""
     caps = [limits.general_max_bytes, limits.presentation_max_bytes, limits.spreadsheet_max_bytes]
-    if limits.large_document_max_bytes is not None:
-        caps.append(limits.large_document_max_bytes)
+    for extra in (limits.large_document_max_bytes, limits.image_max_bytes):
+        if extra is not None:
+            caps.append(extra)
     return max(caps)
 
 
@@ -533,7 +551,7 @@ def client_limits(
     ``None`` until a profile sets them; ``None`` always means "no limit".
     """
     profile = profile or current_limits_profile()
-    uploads = uploads or upload_limits()
+    uploads = uploads or upload_limits(profile)
     count = profile.max_files_per_message if profile.turn_guard else profile.resolver_backstop_without_guard
     budget = profile.inline_total_max_bytes if profile.turn_guard else 0
     return {
@@ -545,7 +563,7 @@ def client_limits(
         "inlineBudgetBytes": budget if budget > 0 else None,
         "maxBytes": {
             "document": uploads.general_max_bytes,
-            "image": uploads.general_max_bytes,
+            "image": uploads.image_max_bytes or uploads.general_max_bytes,
             "spreadsheet": uploads.spreadsheet_max_bytes,
             "presentation": uploads.presentation_max_bytes,
             "largeDocument": uploads.large_document_max_bytes,
@@ -949,6 +967,7 @@ __all__ = [
     "PROFILE_LEGACY",
     "PROFILE_TOKEN",
     "PDF_PAGE_IMAGE_TOKENS",
+    "TOKEN_IMAGE_UPLOAD_MAX_BYTES",
     "REASON_FACTS_PENDING",
     "REASON_NO_ROW",
     "REASON_OVER_DOCUMENT_BUDGET",
