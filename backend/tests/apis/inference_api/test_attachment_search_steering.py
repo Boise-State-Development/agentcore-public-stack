@@ -10,8 +10,9 @@ These tests pin:
   the caller's rows only (a session id alone does not name a conversation);
 - the conversation plan lands on the turn's plan, and a failed read is a turn
   with no steering, never a failed turn;
-- a file the planner sent ``search`` is offered ``query`` even when it is over a
-  budget, and one it sent ``on_demand`` is not;
+- a file the planner sent ``search`` because it is over a budget still gets
+  ``pattern`` first (the overflow readout), and a large reference document keeps
+  ``query`` first;
 - the steering line is deterministic, counts only, and appears only when the
   planner steers and the tool has ``query``.
 """
@@ -33,6 +34,7 @@ from apis.shared.files.attachment_plan import (
     MODE_NATIVE,
     MODE_SEARCH,
     MODE_TEXT,
+    SEARCH_STEER_MIN_DOCUMENTS,
     ConversationPlan,
     plan_attachments,
     token_profile,
@@ -155,17 +157,22 @@ def _planned(rows_this_turn, earlier_rows, *, fail=False):
 
 
 def test_the_conversation_lands_on_the_turns_plan(token_on):
-    earlier = [_row("up-1", kb=INDEXED), _row("up-2", kb=INDEXED), _row("up-3")]
+    n = SEARCH_STEER_MIN_DOCUMENTS
+    earlier = [_row(f"up-{i}", kb=INDEXED) for i in range(n - 1)] + [_row("up-last")]
     attachments, conversation = _planned([], earlier)
-    assert (conversation.documents, conversation.searchable, conversation.steer) == (3, 2, True)
+    assert (conversation.documents, conversation.searchable, conversation.steer) == (n, n - 1, True)
     row = attachments.plan.to_row()
     assert row["conversation"]["steer"] == "search" and row["conversation"]["reason"] == "set_size"
+
+
+def test_below_the_threshold_the_row_says_so(token_on):
+    attachments, conversation = _planned([], [_row("up-1", kb=INDEXED), _row("up-2", kb=INDEXED)])
+    assert not conversation.steer and conversation.reason == "below_threshold"
 
 
 def test_this_turns_indexed_over_budget_file_goes_search(token_on):
     attachments, _ = _planned([_row("up-new", kb=INDEXED)], [])
     assert [e.mode for e in attachments.plan.entries] == [MODE_SEARCH]
-    assert routes._search_upload_ids(attachments.plan) == frozenset({"up-new"})
 
 
 def test_a_failed_read_is_a_turn_without_steering(token_on):
@@ -183,17 +190,19 @@ def test_no_task_no_plan(token_on):
 # --- the guidance ---
 
 
-def _guidance(refs, *, search_ids=frozenset(), conversation=None, search_available=True):
+def _guidance(refs, *, conversation=None, search_available=True):
     return routes._build_attachment_guidance(
         [], [], [], enabled_tools=["document_read"], references=refs,
-        search_available=search_available, search_upload_ids=search_ids, conversation_set=conversation,
+        search_available=search_available, conversation_set=conversation,
     )
 
 
-def test_an_indexed_over_budget_file_is_offered_query():
-    ref = ReferenceAttachment(meta=_row("up-a"), over_budget=True, token_budget=True)
-    assert "first with `query`" in _guidance([ref], search_ids=frozenset({"up-a"}))
+def test_an_over_budget_file_gets_pattern_first_even_when_indexed():
+    """The overflow readout: ``query`` first for such a file cost more at the same answers."""
+    ref = ReferenceAttachment(meta=_row("up-a", kb=INDEXED), over_budget=True, token_budget=True)
     assert "first with `pattern`" in _guidance([ref])
+    large = ReferenceAttachment(meta=_row("up-b", kb=INDEXED))
+    assert "first with `query`" in _guidance([large])
 
 
 STEER = ConversationPlan(documents=4, searchable=3, tokens=120_000, steer=True, reason="set_size")
