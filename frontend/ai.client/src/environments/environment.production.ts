@@ -26,7 +26,9 @@ export const environment = {
         attachmentKb: true,
         folderSync: true,
         sourceProvenance: false,
-        attachmentPlan: false,
+        // The `production` GitHub environment sets CDK_ATTACHMENT_PLAN_ENABLED=true
+        // from the release that ships this (a rollout switch, #1798).
+        attachmentPlan: true,
         documentExtract: false,
         handoffs: false,
         handoffBrief: false,
