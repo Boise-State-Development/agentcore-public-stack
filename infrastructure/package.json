@@ -28,6 +28,7 @@
     "picomatch": ">=2.3.2",
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "4.3.2"
-    }
+    },
+    "glob@>=9.0.0 <14.0.2": "^14.0.4"
   }
 }
