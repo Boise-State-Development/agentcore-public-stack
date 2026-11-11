@@ -1976,6 +1976,7 @@ def _start_session_files_read(
     is_brief: bool,
     is_resume: bool,
     is_continuation: bool,
+    ancestor_session_ids: Sequence[str] = (),
 ) -> Optional["asyncio.Task[list]"]:
     """Start reading the conversation's file rows for phase 5's on-demand set.
 
@@ -1989,6 +1990,12 @@ def _start_session_files_read(
     and never on a turn whose message is not composed (a brief, a resume, a
     continuation). Rows are the caller's own: a session id alone does not name
     a conversation.
+
+    A fork (``ancestor_session_ids``, its parent and root off the row the turn
+    already read) also reads those sessions' rows, concurrently in their own
+    threads: its copied messages carry the documents attached there, so they
+    are its earlier documents too. Deduplicated by upload id, the fork's own
+    rows first.
     """
     if is_brief or is_resume or is_continuation or not session_id:
         return None
@@ -1997,13 +2004,23 @@ def _start_session_files_read(
     from apis.shared.files.models import FileStatus
     from apis.shared.files.repository import get_file_upload_repository
 
+    session_ids = list(dict.fromkeys(sid for sid in (session_id, *ancestor_session_ids) if sid))
+
     async def _read() -> list:
         started = time.monotonic()
-        rows = await asyncio.to_thread(
-            get_file_upload_repository().list_session_files_sync, session_id, FileStatus.READY
+        repo = get_file_upload_repository()
+        per_session = await asyncio.gather(
+            *(asyncio.to_thread(repo.list_session_files_sync, sid, FileStatus.READY) for sid in session_ids)
         )
         logger.debug("session files read in %.1f ms", (time.monotonic() - started) * 1000)
-        return [r for r in rows if r.user_id == user_id]
+        seen: set = set()
+        rows = []
+        for r in (row for batch in per_session for row in batch):
+            if r.user_id != user_id or r.upload_id in seen:
+                continue
+            seen.add(r.upload_id)
+            rows.append(r)
+        return rows
 
     task = asyncio.create_task(_read())
     # A turn that ends before message assembly never awaits it; retrieve its
@@ -5722,6 +5739,7 @@ async def _run_invocation(
         is_brief=is_brief,
         is_resume=is_resume,
         is_continuation=is_continuation,
+        ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
     )
     attachments = TurnAttachments() if is_brief else await _resolve_turn_attachments(
         input_data,
