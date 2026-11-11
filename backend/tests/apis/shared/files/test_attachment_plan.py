@@ -447,6 +447,8 @@ _PHASE3_DEFAULTS = {
     "images_per_message": None, "pdf_max_pages": None, "request_attachment_max_bytes": 0,
     "image_width": None, "image_height": None, "compact_bytes": None,
     "compact_width": None, "compact_height": None, "variant": None,
+    # Phase 5 (overflow): the row's searchability and the plan's conversation set.
+    "searchable": False, "conversation": None,
 }
 
 
@@ -1072,3 +1074,201 @@ def test_limits_endpoint_serves_the_raised_limits():
     assert (body["filesPerMessage"], body["imagesPerMessage"], body["pdfMaxPages"]) == (20, 20, 1_000)
     legacy = ap.client_limits(ap.legacy_profile(), ap.upload_limits(ap.legacy_profile()))
     assert (legacy["filesPerMessage"], legacy["imagesPerMessage"], legacy["pdfMaxPages"]) == (5, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Overflow: ``search`` and the conversation's on-demand set (phase 5, §4.3)
+# ---------------------------------------------------------------------------
+
+S = ap.MODE_SEARCH
+
+
+def indexed(facts: FileFacts) -> FileFacts:
+    return replace(facts, searchable=True)
+
+
+SEARCH_CASES: List[Case] = [
+    Case("an over-budget document that is indexed goes search",
+         [indexed(pdf("ten.pdf", 10))], [(S, "pdf", "over_document_budget")], HAIKU55, TOKEN, tokens=[0]),
+    Case("one not indexed yet stays on demand: nothing waits for the index",
+         [pdf("ten.pdf", 10)], [(OD, "pdf", "over_document_budget")], HAIKU55, TOKEN),
+    Case("indexed but within the budget: still held",
+         [indexed(pdf("ten.pdf", 10))], [(N, "pdf", "within_budget")], SONNET46, TOKEN),
+    Case("an indexed reference-class document goes search",
+         [indexed(ref("huge.pdf", page_count=400))], [(S, "pdf", "reference_class")], SONNET46, TOKEN),
+    Case("an indexed document over the byte budget goes search",
+         [indexed(up("big.pdf", PDF, 5 * MIB))], [(S, "pdf", "over_budget_reference")], SONNET46, TOKEN),
+    Case("a pending PDF that is indexed goes search",
+         [indexed(up("syllabus.pdf", PDF, 1_400_000, page_count=159))], [(S, "pdf", "facts_pending")],
+         HAIKU55, TOKEN),
+    Case("a forced on_demand arm never goes search",
+         [indexed(ref("arm.pdf", size=3 * MIB, forced_mode="on_demand"))], [(OD, "pdf", "forced")], HAIKU55, TOKEN),
+    Case("a forced search arm goes search once indexed",
+         [indexed(ref("arm.pdf", size=3 * MIB, forced_mode="search"))], [(S, "pdf", "forced")], HAIKU55, TOKEN),
+    Case("a forced search arm not indexed yet is on demand",
+         [ref("arm.pdf", size=3 * MIB, forced_mode="search")], [(OD, "pdf", "forced")], HAIKU55, TOKEN),
+    Case("the legacy profile never plans search",
+         [indexed(ref("huge.pdf", page_count=400)), indexed(ref("arm.pdf", size=3 * MIB, forced_mode="search"))],
+         [(OD, "pdf", "reference_class"), (OD, "pdf", "forced")], CLAUDE, LEGACY),
+    Case("a document with no row has nothing to search: no_row as before",
+         [doc("pasted.docx", DOCX, 60_000, row=False)], [(T, "document", "no_row")], HAIKU55, TOKEN),
+]
+
+
+@pytest.mark.parametrize("case", SEARCH_CASES, ids=[c.name for c in SEARCH_CASES])
+def test_the_search_table(case: Case):
+    test_the_table(case)
+
+
+#: The ``search`` table's digest (phase 5). A change here is a change to who gets what.
+SEARCH_TABLE_DIGEST = "733bcbf398131d658c2d874da826dba577f1137ed22933248cbafc3297556264"
+
+
+def test_the_search_table_digest_is_pinned():
+    digest = hashlib.sha256(_table_payload(SEARCH_CASES).encode("utf-8")).hexdigest()
+    assert digest == SEARCH_TABLE_DIGEST, f"the search table changed: {digest}"
+
+
+def test_search_is_an_on_demand_mode_everywhere_the_route_reads_one():
+    assert set(ap.ON_DEMAND_MODES) == {OD, S}
+    plan = plan_attachments([indexed(pdf("a.pdf", 10)), pdf("b.pdf", 10)], HAIKU55, profile=TOKEN)
+    assert plan.indices(*ap.ON_DEMAND_MODES) == [0, 1]
+
+
+def test_search_planning_is_idempotent():
+    files = [indexed(pdf("a.pdf", 10)), indexed(ref("r.pdf")), pdf("b.pdf", 2)]
+    once = plan_attachments(files, HAIKU55, profile=TOKEN)
+    assert ap.refine_for_model(once, files, HAIKU55, profile=TOKEN) == once
+    before = plan_attachments(files, None, profile=TOKEN)
+    assert ap.refine_for_model(before, files, HAIKU55, profile=TOKEN) == once
+
+
+# --- what is indexed at upload (``indexes_for_search``) ---
+
+
+@pytest.mark.parametrize("facts,expected", [
+    # Over the smallest curated budget (25k at the 1.40 factor) on its own.
+    (pdf("ten.pdf", 10), True),
+    (doc("memo.docx", DOCX, 20_000), True),       # 28,000 at 1.40
+    (doc("notes.md", MD, 17_000), False),         # 23,800: Haiku 5.5 holds it
+    (pdf("short.pdf", 10, 3_000), False),         # 19,850 native
+    (pdf("scan.pdf", 20, scanned=True), True),    # 31,300 of page images
+    # No facts yet: nothing is claimed; the facts run is the one that ingests.
+    (up("fresh.pdf", PDF, 900_000, page_count=40), False),
+    # Eval arms: search is always indexed, any other forced mode never.
+    (up("tiny.md", MD, 1_000, forced_mode="search"), True),
+    (replace(pdf("ten.pdf", 10), forced_mode="on_demand"), False),
+    (replace(pdf("ten.pdf", 10), forced_mode="native"), False),
+    # Not a document: its own tool reads it.
+    (up("t.xlsx", XLSX, 3 * MIB, text_tokens=90_000), False),
+    (f("p.png", PNG, upload_id="up-p"), False),
+], ids=["prose-pdf", "docx-28k", "md-23k", "sparse-pdf", "scanned-pdf", "no-facts", "forced-search",
+        "forced-on-demand", "forced-native", "spreadsheet", "image"])
+def test_indexes_for_search_is_the_planners_on_demand(facts, expected):
+    assert ap.indexes_for_search(facts, TOKEN) is expected
+
+
+def test_the_legacy_profile_indexes_nothing_new():
+    assert not ap.indexes_for_search(pdf("ten.pdf", 10), LEGACY)
+    assert not ap.indexes_for_search(up("tiny.md", MD, 1_000, forced_mode="search"), LEGACY)
+
+
+def test_the_reference_model_is_the_smallest_curated_budget():
+    assert ap.document_budget(ap.SEARCH_INDEX_REFERENCE_MODEL, TOKEN) == ap.document_budget(HAIKU55, TOKEN) == 25_000
+    assert ap.tokenizer_factor(ap.SEARCH_INDEX_REFERENCE_MODEL.model_id) == 1.40
+
+
+def test_a_document_indexed_at_upload_is_one_the_smallest_budget_sends_on_demand():
+    """Every document ``indexes_for_search`` admits goes on demand on Haiku 5.5
+    when attached alone, so indexing never spends on a document the model holds."""
+    for facts in (pdf("ten.pdf", 10), doc("memo.docx", DOCX, 20_000), pdf("scan.pdf", 20, scanned=True)):
+        assert ap.indexes_for_search(facts, TOKEN)
+        assert plan_attachments([facts], HAIKU55, profile=TOKEN).entries[0].mode == OD
+
+
+# --- the conversation's on-demand set (``plan_conversation``) ---
+
+
+def _conv(files, earlier, model=HAIKU55, profile=TOKEN):
+    plan = plan_attachments(files, model, profile=profile)
+    return ap.plan_conversation(plan, files, ConversationFacts(earlier=tuple(earlier)), model, profile=profile)
+
+
+def test_no_documents_no_conversation_plan():
+    assert _conv([], []) is None
+    assert _conv([doc("small.md", MD, 500)], [doc("old.txt", TXT, 800)]) is None
+
+
+def test_the_legacy_profile_has_no_conversation_plan():
+    assert _conv([], [indexed(ref("a.pdf")), indexed(ref("b.pdf")), indexed(ref("c.pdf"))], CLAUDE, LEGACY) is None
+
+
+def test_a_text_only_model_has_no_conversation_plan():
+    assert _conv([], [indexed(pdf(f"{i}.pdf", 10)) for i in range(4)], TEXT_ONLY_T) is None
+
+
+def test_the_set_is_earlier_on_demand_documents_plus_this_turns():
+    earlier = [indexed(pdf("a.pdf", 10)), indexed(pdf("b.pdf", 10)), doc("held.md", MD, 2_000), up("t.xlsx", XLSX)]
+    conv = _conv([pdf("c.pdf", 10)], earlier)
+    assert (conv.documents, conv.searchable) == (3, 2)
+    assert conv.steer and conv.reason == ap.STEER_SET_SIZE
+    assert conv.tokens == 3 * math.ceil(PROSE_PAGE * 10 * 1.40)
+
+
+def test_a_file_attached_this_turn_is_counted_once():
+    this = indexed(pdf("a.pdf", 10))
+    conv = _conv([this], [this, indexed(pdf("b.pdf", 10))])
+    assert conv.documents == 2
+
+
+def test_the_set_is_judged_on_the_turns_model():
+    earlier = [indexed(pdf(f"{i}.pdf", 10)) for i in range(3)]
+    assert _conv([], earlier, HAIKU55).documents == 3
+    # Sonnet 4.6 holds a 10-page prose PDF, so nothing is on demand there.
+    assert _conv([], earlier, SONNET46) is None
+
+
+def test_below_the_threshold_the_per_file_guidance_stands():
+    conv = _conv([], [indexed(pdf("a.pdf", 10))] * (ap.SEARCH_STEER_MIN_DOCUMENTS - 1))
+    assert not conv.steer and conv.reason == ap.STEER_BELOW_THRESHOLD
+
+
+def test_nothing_searchable_no_steer():
+    conv = _conv([], [pdf(f"{i}.pdf", 10) for i in range(5)])
+    assert (conv.documents, conv.searchable, conv.steer, conv.reason) == (5, 0, False, ap.STEER_NONE_SEARCHABLE)
+
+
+def test_a_forced_arm_decides_the_steer():
+    search_arm = indexed(ref("s.pdf", size=3 * MIB, forced_mode="search"))
+    on_demand_arm = ref("o.pdf", size=3 * MIB, forced_mode="on_demand")
+    conv = _conv([], [search_arm])
+    assert conv.steer and conv.reason == ap.STEER_FORCED
+    conv = _conv([], [on_demand_arm, indexed(pdf("a.pdf", 10)), indexed(pdf("b.pdf", 10))])
+    assert not conv.steer and conv.reason == ap.STEER_FORCED
+    assert _conv([], [search_arm, on_demand_arm]).steer
+
+
+def test_the_conversation_is_recorded_on_the_row():
+    plan = plan_attachments([], HAIKU55, profile=TOKEN)
+    assert plan.to_row() is None
+    conv = _conv([], [indexed(pdf(f"{i}.pdf", 10)) for i in range(3)])
+    row = replace(plan, conversation=conv).to_row()
+    assert row == {
+        "profile": "token",
+        "files": [],
+        "conversation": {"documents": 3, "searchable": 3, "tokens": conv.tokens, "steer": "search", "reason": "set_size"},
+    }
+    assert json.dumps(row)  # numbers and codes only
+
+
+def test_facts_from_row_reads_a_rows_planner_fields():
+    meta = file_models.FileMetadata(
+        upload_id="up-1", user_id="u", session_id="s", filename="memo.docx", mime_type=DOCX,
+        size_bytes=40_000, s3_key="k", s3_bucket="b", status=file_models.FileStatus.READY,
+        facts={"version": 1, "class": "document", "tokens": {"text": 20_000, "native": 10_000},
+               "pages": None, "hasTextLayer": True, "units": "paragraph"},
+    )
+    facts = ap.facts_from_row(meta, searchable=True)
+    assert (facts.text_tokens, facts.native_tokens, facts.has_text_layer, facts.searchable) == (20_000, 10_000, True, True)
+    assert facts.has_row and not facts.by_reference and facts.upload_id == "up-1"
+    assert ap.indexes_for_search(facts, TOKEN)

@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from apis.shared.evals.cases import DELIVERY_FAMILY, EvalCase
 from apis.shared.evals.score import score_sample
@@ -182,6 +182,7 @@ async def run_sample(
     assistant_id: Optional[str] = None,
     inspect: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None,
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+    wait_searchable: Optional[Callable[[Sequence[str]], Awaitable[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Run every turn of ``case`` in one fresh session and score the last.
 
@@ -197,6 +198,11 @@ async def run_sample(
     ``staged`` is a session whose large documents were uploaded and prepared
     ahead of the run (``StagedSample``): the turns run in that session and
     attach those uploads too, and the row records each document's state.
+
+    A turn's own ``files`` are registered with the case's before the first
+    turn and attached on that turn. Under the ``search`` arm every fixture is
+    then awaited until the attachments KB can search it (``wait_searchable``,
+    required for that arm), and the row records the states as ``index``.
 
     Raises :class:`OAuthRequiredError` if any turn needs connector consent.
     Every other failure (an error, a timeout, an empty stream) is a failed
@@ -217,9 +223,22 @@ async def run_sample(
         if register_fixture is None:
             raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
         upload_ids.append(await register_fixture(session_id, filename, **forced_arm))
+    turn_upload_ids: Dict[int, List[str]] = {}
+    for index in range(len(case.turns)):
+        for filename in case.meta_for(index).files:
+            if register_fixture is None:
+                raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
+            turn_upload_ids.setdefault(index, []).append(await register_fixture(session_id, filename, **forced_arm))
+    every_upload = upload_ids + [u for ids in turn_upload_ids.values() for u in ids]
+    index_states: Optional[Dict[str, Any]] = None
+    if forced_arm.get("arm") == "search" and every_upload:
+        if wait_searchable is None:
+            raise ValueError(f"{case.id} runs the search arm but no searchability wait was given")
+        index_states = await wait_searchable(every_upload)
     # Upload to usable, for files attached at send time: the registrar returns
-    # once the upload is READY (direct row, or presign → PUT → complete).
-    upload_ms = int((time.monotonic() - upload_started) * 1000) if case.files else None
+    # once the upload is READY (direct row, or presign → PUT → complete), and
+    # under the search arm once each file is searchable.
+    upload_ms = int((time.monotonic() - upload_started) * 1000) if case.all_files else None
 
     turns: List[Dict[str, Any]] = []
     status = "completed"
@@ -247,8 +266,9 @@ async def run_sample(
             model_id=model_id,
             enabled_tools=list(case.run.enabled_tools) if case.run.enabled_tools is not None else None,
             enabled_skills=list(case.run.enabled_skills) if case.run.enabled_skills is not None else None,
-            # Files arrive with the first turn, as a user attaching them would.
-            file_upload_ids=(upload_ids or None) if index == 0 else None,
+            # The case's files arrive with the first turn, as a user attaching
+            # them would; a turn's own files with that turn.
+            file_upload_ids=(((upload_ids if index == 0 else []) + turn_upload_ids.get(index, [])) or None),
         )
         rounds = [result.to_dict()]
         # A client tool pauses the turn; the harness is the client, so it
@@ -310,8 +330,9 @@ async def run_sample(
             for n, sid in sorted(sessions.items())
         ]} if len(sessions) > 1 or any(case.meta_for(i).as_user != "eval" for i in range(len(case.turns))) else {}),
         **({"memory": memory_state} if memory_state is not None else {}),
-        "upload_ids": upload_ids,
+        "upload_ids": every_upload,
         **({"documents": list(staged.documents)} if staged is not None else {}),
+        **({"index": index_states} if index_states is not None else {}),
         "status": status,
         "error": error,
         "passed": scored.passed,

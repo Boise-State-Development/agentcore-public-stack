@@ -626,6 +626,18 @@ message, or nothing when every file is ready; it never reaches the system prompt
 small `Query` on project turns while both flags are on; sharing one listing would couple the
 two loaders for no measurable gain.
 
+*P3b‴. The conversation's on-demand set (unified-attachment-delivery phase 5, under
+`ATTACHMENT_PLAN_ENABLED` with the attachments KB on).* Every turn whose message is composed
+(not a brief, a resume or a continuation) starts `_start_session_files_read` just before B4:
+one `SessionIndex` `Query` for the conversation's READY file rows, run in a worker thread
+(`list_session_files_sync` via `asyncio.to_thread`; the async wrapper would block the loop).
+It is awaited only in C2, at attachment guidance (`_plan_conversation_set`), so it overlaps
+B4's S3 fetches, model resolution and the agent build. The planner (`plan_conversation`) then
+judges the rows in memory and may add one steering line to the user message. The await's wait
+is logged as `attachment conversation set: … wait_ms=`. Expected on dev: ≈0, since the `Query`
+is one round trip and the window it overlaps is the whole preamble. Read that log line on dev
+before turning the profile on anywhere else.
+
 *Tests.* P3a: a fake session factory and a fake tool loader that each sleep; assert the
 build's wall time is the max not the sum, that `tools` order is unchanged across runs
 (`test_prompt_cache_determinism.py` already pins order), and that a failure in either thread

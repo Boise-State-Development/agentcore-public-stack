@@ -226,7 +226,7 @@ def estimate(todo: Sequence[Tuple[EvalCase, int]], model_id: str) -> Tuple[int, 
     # Sized attachments (the delivery family's): written to the cache on the
     # first turn and read on each later one. Others are inside the per-turn figure.
     for case, _ in todo:
-        attached = sum(fixture_tokens(name) for name in case.files)
+        attached = sum(fixture_tokens(name) for name in case.all_files)
         dollars += attached * rate_in * (EST_CACHE_WRITE + EST_CACHE_READ * (len(case.turns) - 1)) / 1_000_000
     note = "" if rate_model == model_id else f" (priced at {rate_model} rates; no table entry for {model_id})"
     return turns, dollars, note
@@ -516,7 +516,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
                   file=sys.stderr)
             return 2
     uploader = None
-    if args.upload_via == "presign" and any(case.files for case in cases):
+    if args.upload_via == "presign" and any(case.all_files for case in cases):
         from smoke_turns import AppApiTransport
 
         uploader = AppApiTransport(args.base_url, label="eval:uploads")
@@ -568,9 +568,16 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     try:
         staged = await _stage_large_documents(out, todo, args)
+        if any(case.run.arm == "search" for case, _ in todo):
+            _resolve_prepare_queue(args)
     except FixtureError as exc:
         print(f"could not stage large documents: {exc}", file=sys.stderr)
         return 2
+
+    async def wait_searchable(upload_ids: Sequence[str]) -> Dict[str, Any]:
+        from apis.shared.evals.fixtures import wait_for_searchable
+
+        return await wait_for_searchable(args.user_id, upload_ids, timeout=args.document_timeout)
 
     results_path = out / RESULTS_FILE
     queue: asyncio.Queue = asyncio.Queue()
@@ -601,6 +608,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
                     staged=staged.get((case.id, sample)),
                     assistant_id=project.harness_agent_id if project else fixture_ids.get(fixture_key(case) or ""),
                     inspect=project.inspect if project else None,
+                    wait_searchable=wait_searchable,
                 )
             except (OAuthRequiredError, QuotaExceededError, HeadlessAuthError, FixtureError) as exc:
                 fatal.append(f"{type(exc).__name__}: {exc}")
@@ -686,6 +694,23 @@ def _echo_documents(states: Dict[str, Dict[str, Any]]) -> None:
     print(f"  documents after {waited}s: " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())), flush=True)
 
 
+def _resolve_prepare_queue(args: argparse.Namespace) -> None:
+    """Export the target's prepare queue URL: staged large documents and the
+    ``search`` arm's index messages are sent to the deployed pipeline."""
+    from apis.shared.evals.fixtures import FixtureError
+
+    if os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL"):
+        return
+    import boto3
+
+    try:
+        os.environ["LARGE_DOCUMENT_PREPARE_QUEUE_URL"] = boto3.client("sqs", region_name=args.region).get_queue_url(
+            QueueName=f"{args.prefix}-large-document-prepare"
+        )["QueueUrl"]
+    except Exception as exc:  # noqa: BLE001 — reported as a setup error
+        raise FixtureError(f"no large-document prepare queue for {args.prefix}: {exc}") from exc
+
+
 async def _stage_large_documents(
     out: Path, todo: Sequence[Tuple[EvalCase, int]], args: argparse.Namespace
 ) -> Dict[Tuple[str, int], Any]:
@@ -697,20 +722,12 @@ async def _stage_large_documents(
     than uploaded again.
     """
     from apis.shared.evals.execute import StagedSample, new_session_id
-    from apis.shared.evals.fixtures import FixtureError, register_reference_upload, wait_for_documents
+    from apis.shared.evals.fixtures import register_reference_upload, wait_for_documents
 
     wanted = [(case, sample) for case, sample in todo if case.large_documents]
     if not wanted:
         return {}
-    if not os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL"):
-        import boto3
-
-        try:
-            os.environ["LARGE_DOCUMENT_PREPARE_QUEUE_URL"] = boto3.client("sqs", region_name=args.region).get_queue_url(
-                QueueName=f"{args.prefix}-large-document-prepare"
-            )["QueueUrl"]
-        except Exception as exc:  # noqa: BLE001 — reported as a setup error
-            raise FixtureError(f"no large-document prepare queue for {args.prefix}: {exc}") from exc
+    _resolve_prepare_queue(args)
 
     from large_document_quality.fixtures import build_all
 

@@ -253,7 +253,10 @@ class TestHandlerRouting:
     def _event(self, body, receive_count="1"):
         return {"Records": [{"messageId": "m0", "body": body, "attributes": {"ApproximateReceiveCount": receive_count}}]}
 
-    def test_a_facts_message_runs_compute_facts_never_prepare_or_index(self, monkeypatch):
+    def test_a_facts_message_runs_compute_facts_never_prepare(self, monkeypatch):
+        """Facts, then an index sync (unified-attachment-delivery phase 5):
+        ``sync_upload`` ingests only a row ``attachment_index.is_eligible``
+        admits, so on the legacy profile it answers ``not_eligible``."""
         monkeypatch.setenv("ATTACHMENT_KB_ENABLED", "true")
         seen = {}
 
@@ -261,13 +264,29 @@ class TestHandlerRouting:
             seen.update(user_id=user_id, upload_id=upload_id, final=final_attempt)
             return "ready"
 
+        async def fake_index(user_id, upload_id):
+            return "not_eligible"
+
         with patch.object(handler, "compute_facts", side_effect=fake), \
                 patch.object(handler, "prepare_upload") as prepare, \
-                patch.object(handler, "index_after_prepare") as index:
+                patch.object(handler, "index_after_prepare", side_effect=fake_index) as index:
             body = json.dumps({"action": "facts", "user_id": "u1", "upload_id": "up-1"})
             assert handler.lambda_handler(self._event(body, receive_count="3"), None) == {"batchItemFailures": []}
         assert seen == {"user_id": "u1", "upload_id": "up-1", "final": True}
         prepare.assert_not_called()
+        index.assert_called_once_with("u1", "up-1")
+
+    @pytest.mark.parametrize("outcome", ["already_computed", "failed", "reference", "not_document"])
+    def test_only_freshly_written_facts_sync_the_index(self, monkeypatch, outcome):
+        monkeypatch.setenv("ATTACHMENT_KB_ENABLED", "true")
+
+        async def fake(user_id, upload_id, final_attempt=False):
+            return outcome
+
+        with patch.object(handler, "compute_facts", side_effect=fake), \
+                patch.object(handler, "index_after_prepare") as index:
+            body = json.dumps({"action": "facts", "user_id": "u1", "upload_id": "up-1"})
+            handler.lambda_handler(self._event(body), None)
         index.assert_not_called()
 
     def test_a_facts_message_with_the_kb_off_is_still_computed(self, monkeypatch):
@@ -276,10 +295,12 @@ class TestHandlerRouting:
         async def fake(user_id, upload_id, final_attempt=False):
             return "ready"
 
-        with patch.object(handler, "compute_facts", side_effect=fake) as compute:
+        with patch.object(handler, "compute_facts", side_effect=fake) as compute, \
+                patch.object(handler, "index_after_prepare") as index:
             body = json.dumps({"action": "facts", "user_id": "u1", "upload_id": "up-1"})
             handler.lambda_handler(self._event(body), None)
         compute.assert_called_once()
+        index.assert_not_called()
 
 
 class TestNativeFormula:

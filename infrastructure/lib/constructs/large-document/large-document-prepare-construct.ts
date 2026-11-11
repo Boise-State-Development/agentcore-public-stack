@@ -329,6 +329,14 @@ export class LargeDocumentPrepareConstruct extends Construct {
     const fn = this.prepareLambda;
 
     fn.addEnvironment('ATTACHMENT_KB_ENABLED', 'true');
+    // Unified attachment delivery phase 5: under the planner's `token` profile a
+    // document the planner would send on demand is indexed by its facts, not only
+    // a prepared reference-class one (`attachment_index.indexed_by_budget`). The
+    // Lambda decides eligibility, so it reads the same switch as the Runtime.
+    // Written only while on, as on the Runtime.
+    if (config.attachmentPlan.enabled) {
+      fn.addEnvironment('ATTACHMENT_PLAN_ENABLED', 'true');
+    }
     fn.addEnvironment('LARGE_DOCUMENT_PREPARE_QUEUE_URL', this.queue.queueUrl);
     fn.addEnvironment('DYNAMODB_ASSISTANTS_TABLE_NAME', assistantsTable.tableName);
     fn.addEnvironment('DYNAMODB_SESSIONS_METADATA_TABLE_NAME', sessionsMetadataTable.tableName);

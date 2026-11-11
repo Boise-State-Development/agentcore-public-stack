@@ -202,6 +202,18 @@ describe('the attachments KB in PlatformStack', () => {
     expect(prepareFunction(docsOnly).Environment.Variables).not.toHaveProperty('ATTACHMENT_KB_ENABLED');
   });
 
+  it('gives the prepare Lambda the token profile only while it is on (phase 5 indexing)', () => {
+    expect(prepareFunction(withKb).Environment.Variables).not.toHaveProperty('ATTACHMENT_PLAN_ENABLED');
+    const withPlan = synth({
+      largeDocumentAttachments: { enabled: true },
+      attachmentKb: { enabled: true },
+      attachmentPlan: { enabled: true },
+    });
+    expect(prepareFunction(withPlan).Environment.Variables.ATTACHMENT_PLAN_ENABLED).toBe('true');
+    const planWithoutKb = synth({ largeDocumentAttachments: { enabled: true }, attachmentPlan: { enabled: true } });
+    expect(prepareFunction(planWithoutKb).Environment.Variables).not.toHaveProperty('ATTACHMENT_PLAN_ENABLED');
+  });
+
   it('holds the byte accounting to its own partition and the session read to one index', () => {
     const s = statements(withKb, /LargeDocumentPrepare/);
     const bytes = s.find((x) => x.Sid === 'AttachmentKbRecordAndBytes')!;

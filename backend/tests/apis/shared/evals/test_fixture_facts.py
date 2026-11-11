@@ -39,3 +39,54 @@ def test_anything_else_gets_none(name, mime):
 
 def test_a_file_that_will_not_parse_gets_none():
     assert _document_facts("broken.pdf", "application/pdf", b"not a pdf") is None
+
+
+# --- the search arm (phase 5) ---
+
+
+def test_a_search_fixture_is_digested_and_sent_to_the_index(monkeypatch):
+    """A forced ``search`` row gets the on_demand digest and one ``index`` message
+    to the deployed prepare queue, which ingests it (``indexed_by_budget``)."""
+    import asyncio
+    import json
+
+    from apis.shared.evals import fixtures as fx
+
+    calls = {"digest": [], "sent": []}
+
+    async def digest(*args):
+        calls["digest"].append(args[1])
+
+    class Sqs:
+        def send_message(self, QueueUrl, MessageBody):
+            calls["sent"].append((QueueUrl, json.loads(MessageBody)))
+
+    monkeypatch.setattr(fx, "_store_digest", digest)
+    monkeypatch.setenv("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "https://sqs/q")
+    monkeypatch.setattr("boto3.client", lambda name, *a, **k: Sqs())
+    asyncio.run(fx._enqueue_index("u1", "up-1"))
+    assert calls["sent"] == [("https://sqs/q", {"action": "index", "user_id": "u1", "upload_id": "up-1"})]
+
+
+def test_the_search_arm_needs_the_prepare_queue(monkeypatch):
+    import asyncio
+
+    from apis.shared.evals import fixtures as fx
+
+    monkeypatch.delenv("LARGE_DOCUMENT_PREPARE_QUEUE_URL", raising=False)
+    with pytest.raises(fx.FixtureError, match="prepare queue"):
+        asyncio.run(fx._enqueue_index("u1", "up-1"))
+
+
+@pytest.mark.parametrize("state,settled", [
+    ({"preparation": None, "kbIndex": None, "textIndexed": False}, False),
+    ({"preparation": None, "kbIndex": "indexing", "textIndexed": False}, False),
+    ({"preparation": None, "kbIndex": "indexing", "textIndexed": True}, True),
+    ({"preparation": None, "kbIndex": "indexed", "textIndexed": False}, True),
+    ({"preparation": None, "kbIndex": "skipped_cap", "textIndexed": False}, True),
+    ({"preparation": "missing", "kbIndex": None, "textIndexed": False}, True),
+])
+def test_searchable_settled_needs_no_preparation(state, settled):
+    from apis.shared.evals.fixtures import searchable_settled
+
+    assert searchable_settled(state) is settled

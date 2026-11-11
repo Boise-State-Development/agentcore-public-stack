@@ -88,6 +88,11 @@ class CallSummary:
     #: Cuts and offloads over the sample, by reason (``CUT_KINDS`` / ``OFFLOAD_KINDS``).
     cuts: Tuple[Tuple[str, int], ...] = ()
     offloads: Tuple[Tuple[str, int], ...] = ()
+    #: Input tokens over every call, uncached, cache-read and cache-written
+    #: together: what the conversation sent, whichever way it was billed.
+    #: Concurrent samples share cache writes, so this compares arms where
+    #: dollars cannot (unified-attachment-delivery phase 5).
+    input_tokens: int = 0
 
     @property
     def cut_count(self) -> int:
@@ -219,6 +224,7 @@ def summarize_calls(rows: Sequence[Mapping[str, Any]], *, model_id: Optional[str
     mime: Dict[str, int] = {}
     models = []
     cost = 0.0
+    input_tokens = 0
     trimmed = 0
     truncated_tool_results = 0
     attached = tokens = digests = None
@@ -239,6 +245,9 @@ def summarize_calls(rows: Sequence[Mapping[str, Any]], *, model_id: Optional[str
         total = (row.get("cost") or {}).get("total") if isinstance(row.get("cost"), Mapping) else None
         if _num(total) is not None:
             cost += float(_num(total))  # type: ignore[arg-type]
+        usage = row.get("tokenUsage") if isinstance(row.get("tokenUsage"), Mapping) else {}
+        for key in ("inputTokens", "cacheReadInputTokens", "cacheWriteInputTokens"):
+            input_tokens += _int(usage.get(key)) or 0
         events = row.get("compactionEvents")
         for event in events if isinstance(events, list) else ():
             if isinstance(event, Mapping) and event.get("kind"):
@@ -289,6 +298,7 @@ def summarize_calls(rows: Sequence[Mapping[str, Any]], *, model_id: Optional[str
     return CallSummary(
         calls=len(rows),
         cost_usd=round(cost, 6),
+        input_tokens=input_tokens,
         cache_statuses=tuple(sorted(statuses.items())),
         compaction_events=tuple(sorted(compaction.items())),
         trimmed_messages=trimmed,

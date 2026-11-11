@@ -63,7 +63,7 @@ def test_a_user_row_carries_no_override():
     assert FileMetadata.from_dynamo_item(item).delivery_override is None
 
 
-@pytest.mark.parametrize("value", ["search", "tool", "NATIVE", "", 1, None])
+@pytest.mark.parametrize("value", ["tool", "dropped", "SEARCH", "NATIVE", "", 1, None])
 def test_anything_else_reads_as_unset(value):
     item = _row().to_dynamo_item()
     item["deliveryOverride"] = value

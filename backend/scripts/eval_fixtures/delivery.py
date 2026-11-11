@@ -539,6 +539,23 @@ for _letter in COUNT_NOTE_LETTERS:
     _PROSE[_note] = (f"note_{_letter}", SIZES["5k"], f"Site note {_letter.upper()}", as_markdown)
     _SLOTS.setdefault(_PROSE[_note][0], len(_SLOTS))
 
+#: Phase 5's overflow cells (unified-attachment-delivery §4.3, ``search``): a
+#: conversation whose on-demand set grows across turns. Eight ~30k-token site
+#: dossiers, each over Haiku 5.5's 25k document budget on its own, attached two
+#: a turn. Their slots come after every other fixture's, so adding them moved
+#: no existing document's subjects.
+OVERFLOW_LETTERS = "abcdefgh"
+for _letter in OVERFLOW_LETTERS:
+    _dossier = f"delivery_dossier_{_letter}_30k.md"
+    _PROSE[_dossier] = (f"dossier_{_letter}", SIZES["30k"], f"Site dossier {_letter.upper()}", as_markdown)
+    _SLOTS.setdefault(_PROSE[_dossier][0], len(_SLOTS))
+
+
+def dossier(letter: str) -> str:
+    """The overflow cells' fixture file for ``letter``."""
+    return f"delivery_dossier_{letter}_30k.md"
+
+
 GENERATED: Dict[str, Callable[[], bytes]] = {
     **{name: _prose_builder(name) for name in _PROSE},
     **{name: _table_builder(name) for name in _TABLES},
