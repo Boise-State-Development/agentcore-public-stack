@@ -319,7 +319,7 @@ class TestSessionKeyringAccessors:
         monkeypatch.setattr(keyring_store, "store", lambda service, base_url, secret, hint: hints.append(hint))
         config_module.save_session_to_keyring("https://h", "sealed")
         assert "AGENTCORE_" not in hints[0]
-        assert "keyring" in hints[0]
+        assert "credential_store" in hints[0]
 
     def test_delete_targets_the_session_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
         asked: list[tuple[str, str]] = []

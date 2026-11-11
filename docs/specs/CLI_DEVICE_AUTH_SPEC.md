@@ -351,54 +351,55 @@ compaction (see "Resolved: the callbacks `TurnSink` gained"); a tool picker so
 `enabled_tools` is user-controlled rather than always "all"; and a conversation
 list screen, which is now reachable because `/sessions` works with the session.
 
-### The container needs its keyring switched on
+### Hosts with no OS keyring: an encrypted credential file
 
 `login --sso` stores a live platform session, so it needs somewhere encrypted to
-put it. A container has no login session, therefore no D-Bus session bus and no
-unlocked keyring, and Python's `keyring` then selects `backends.fail.Keyring` and
-raises on every write — which presents as "no keyring is installed" even after
-the packages are in the image.
+put it. Containers, VMs and SSH boxes usually have no Secret Service, and
+Python's `keyring` then selects `backends.fail.Keyring`, which raises on every
+write.
 
-Resolved by giving the devcontainer a real one rather than weakening where the
-credential goes. Plaintext-on-disk and environment-variable fallbacks were both
-considered and rejected: they would have made the container the least safe place
-to sign in, and it is the place we sign in most.
+**Resolved (2026-11-11) by a store of the client's own**, used automatically
+when no OS keyring works: `tui/src/aps_tui/credential_file.py`, one JSON
+envelope at `user_data_path("aps-tui")/credentials.enc` (Linux:
+`~/.local/share/aps-tui/credentials.enc`). The plaintext is
+`{service: {account: secret}}`, encrypted with AES-256-GCM under a key derived
+from a passphrase by scrypt (n=2^15, r=8, p=1, about 0.1 s). The file is written
+0600 through a temp file and rename, and only on the first stored secret, so
+choosing a passphrase and then abandoning sign-in leaves nothing behind.
 
-* `.devcontainer/Dockerfile` installs `gnome-keyring libsecret-1-0 dbus-x11`,
-  which is enough for `keyring` to select its `SecretService` backend with **no
-  client-side code at all** — `config.save_session_to_keyring` and friends work
-  unchanged.
-* `scripts/local-dev/keyring-init.sh` starts the bus and unlocks the keyring with
-  a passphrase the developer types. The passphrase is never stored; a passphrase
-  in a file would sit next to the thing it encrypts.
-* The Dockerfile writes the bus-address rejoin to **`/etc/profile.d/`**, not
-  `~/.bashrc`. `docker exec ... bash -lc '...'` is a *non-interactive* login
-  shell and Ubuntu's stock `~/.bashrc` returns on its fourth line for exactly
-  that case, so anything appended there is unreachable from every scripted exec
-  in this repo's docs. (Worth knowing: the Dockerfile's pre-existing `~/.bashrc`
-  PATH block has the same problem.)
+Why this and not the alternatives:
 
-Verified in a clean container built from the changed image: `fail.Keyring` before
-init, `SecretService.Keyring` after, a session written in one `docker exec` and
-read in another, `aps-tui status` reporting `credential  : signed in`, the
-value absent from the keyring file on disk, and the session still readable after
-a `docker restart` when `~/.local/share/keyrings` is a named volume.
+* **Plaintext file or env var**: rejected for the same reason as before. The
+  passphrase is never stored, so it never sits next to what it encrypts.
+* **gnome-keyring in the devcontainer** (what this replaced, with
+  `scripts/local-dev/keyring-init.sh`): the same protection, since
+  `login.keyring` is also a passphrase-encrypted file, but it needed root, a
+  D-Bus session bus, a daemon started with exactly `--components=secrets
+  --daemonize`, and a liveness probe that survived stale bus sockets. Each of
+  those failed quietly. The file store needs none of it and behaves the same on
+  every distro.
+* **Installing a keyring from the client**: needs sudo and per-distro package
+  managers, and still leaves the daemon traps above.
 
-Three traps found while building it, each of which produced a *working* keyring
-inside the script and a broken one in the next command:
+How it is wired:
 
-1. **`--components=secrets` is mandatory.** Without it the daemon starts but
-   never claims `org.freedesktop.secrets`, so there is no Secret Service to find.
-2. **The daemon must `--daemonize`.** Backgrounding with `&` dies with the
-   `docker exec`, and because `org.freedesktop.secrets` is D-Bus *activatable*,
-   the next request spawns a replacement that never received a passphrase — so
-   the collection is locked. `setsid` is not a substitute: it detaches the
-   process before it reads the passphrase from the pipe.
-3. **A stale bus address outlives its daemon.** The socket file in `/tmp`
-   survives a container restart, so testing `[ -S "$socket" ]` reuses a dead bus.
-   Liveness has to be a real `ListNames` call.
-
-
+* `keyring_store.load/store/delete` dispatch to the file once selected, so no
+  caller knows which backend is active.
+* `cli._prepare_credential_store` chooses before any command reads a
+  credential, because unlocking needs `getpass` and Textual owns the terminal
+  once the app starts. `login` (both kinds) may create the file; `status`,
+  `logout` and chat only unlock an existing one. Chat with no credential and no
+  file asks for a new passphrase *before* starting the app, because first-run
+  setup will need somewhere to store what it collects.
+* `login --sso` prepares the store **before** opening the browser, so a host
+  that cannot store a session finds out before the user approves the sign-in.
+* `credential_store = "auto" | "keyring" | "file"` in the config file, or
+  `AGENTCORE_CREDENTIAL_STORE`, overrides the automatic choice. A typo is an
+  error rather than a silent `auto`.
+* With no terminal (CI, piped stdin), an existing file stays locked and reads
+  report why; creating one is refused with a pointer to `AGENTCORE_API_KEY`.
+* A forgotten passphrase cannot be recovered. The hint after three wrong
+  attempts names the file to delete.
 
 ### Resolved: how the dialect is wired into a turn
 
