@@ -19,6 +19,11 @@ and ``tokens.native`` 36,000, which together are 66k.
   extracts a .docx, HTML or text file to text whether it arrives as a document
   block or as text (``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED``), so the text is
   the cost. bytes/4 is about 9x low for a .docx, because the file is zipped.
+* **Per model.** Given the model the document goes to, text is billed at that
+  model's tokenizer factor and a native PDF's images at
+  ``PDF_PAGE_IMAGE_TOKENS`` a page, the planner's numbers from
+  ``tokenizer_costs`` (1.40x text on Haiku 5.5 and the Opus models, 0.95x on
+  Haiku 4.5 and Sonnet 4.6).
 * **A ``document_read`` slice** covers ``k`` of ``pages`` pages and costs the
   same share of the whole.
 
@@ -45,6 +50,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from apis.shared.files.document_tokens import estimate_document_tokens
+from apis.shared.files.tokenizer_costs import native_pdf_cost, text_cost, tokenizer_factor
 
 #: Facts versions this reader understands.
 _FACTS_VERSIONS = (1,)
@@ -115,13 +121,26 @@ def facts_tokens(
     *,
     pages_covered: Optional[int] = None,
     as_text: bool = False,
+    model_id: Optional[str] = None,
 ) -> int:
     """Estimated tokens of ``facts``'s document (see the module docstring).
 
     ``pages_covered`` is the page count of a ``document_read`` slice; the
     estimate is that share of the whole document.
+
+    ``model_id`` is the model the document is sent to. With it, the estimate
+    is the planner's own (``tokenizer_costs``): text at that model's tokenizer
+    factor, plus ``PDF_PAGE_IMAGE_TOKENS`` a page for a native PDF. Without it,
+    the facts' own count (``tokens.text`` + ``tokens.native``), for a caller
+    that does not know the model.
     """
-    if facts.file_format == "pdf" and not as_text:
+    if model_id:
+        factor = tokenizer_factor(model_id)
+        if facts.file_format == "pdf" and not as_text:
+            whole = native_pdf_cost(facts.text_tokens, facts.pages, facts.native_tokens, factor)
+        else:
+            whole = text_cost(facts.text_tokens, factor)
+    elif facts.file_format == "pdf" and not as_text:
         whole = facts.text_tokens + facts.native_tokens
     else:
         whole = facts.text_tokens
@@ -138,14 +157,16 @@ def document_tokens(
     *,
     pages_covered: Optional[int] = None,
     as_text: bool = False,
+    model_id: Optional[str] = None,
 ) -> int:
     """The estimate for one document block: its row's facts when known, else the bytes.
 
     Never raises. With no facts this is ``estimate_document_tokens(fmt, raw)``,
-    which parses a PDF's page count (a slice's own pages, for a slice).
+    which parses a PDF's page count (a slice's own pages, for a slice); that
+    fallback is not scaled by ``model_id``, because it is bytes, not text.
     """
     if facts is not None:
-        return facts_tokens(facts, pages_covered=pages_covered, as_text=as_text)
+        return facts_tokens(facts, pages_covered=pages_covered, as_text=as_text, model_id=model_id)
     try:
         return int(estimate_document_tokens(fmt, raw))
     except Exception:  # noqa: BLE001 - estimator must never raise

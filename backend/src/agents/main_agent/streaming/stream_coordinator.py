@@ -461,7 +461,11 @@ class StreamCoordinator:
         # named stays pinned. Best-effort: never blocks the turn.
         if session_manager is not None and hasattr(session_manager, "apply_document_offload"):
             try:
-                session_manager.apply_document_offload(agent, prompt=prompt)
+                session_manager.apply_document_offload(
+                    agent,
+                    prompt=prompt,
+                    model_id=getattr(getattr(main_agent_wrapper, "model_config", None), "model_id", None),
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"apply_document_offload failed, continuing: {e}")
 
@@ -1189,6 +1193,9 @@ class StreamCoordinator:
                                     current_messages=current_messages,
                                     context_window=turn_context_window,
                                     history_tokens=history_tokens,
+                                    model_id=getattr(
+                                        getattr(main_agent_wrapper, "model_config", None), "model_id", None
+                                    ),
                                 )
                                 # The cut (and its forced / floor_unreachable
                                 # flags) belongs on the call that triggered it,
@@ -4748,7 +4755,9 @@ class StreamCoordinator:
                         index_of = getattr(turn_session_manager, "document_index", None)
                         footprint = summarize_document_context(
                             getattr(strands_agent, "messages", None),
-                            index_of() if callable(index_of) else None,
+                            index_of(getattr(getattr(agent, "model_config", None), "model_id", None))
+                            if callable(index_of)
+                            else None,
                         )
                         if footprint:
                             metadata_kwargs.update(footprint)

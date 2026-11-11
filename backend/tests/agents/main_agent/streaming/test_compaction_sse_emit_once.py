@@ -97,9 +97,10 @@ class _RecordingSessionManager:
         current_messages: Optional[List[Dict]] = None,
         context_window: Optional[int] = None,
         history_tokens: Optional[int] = None,
+        model_id: Optional[str] = None,
     ) -> Optional[CompactionResult]:
         # Same seam as TurnBasedSessionManager.update_after_turn — the policy
-        # inputs (context_window / history_tokens) are accepted and ignored.
+        # inputs (context_window / history_tokens / model_id) are accepted and ignored.
         self.calls.append(input_tokens)
         return self._result
 
