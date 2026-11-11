@@ -325,6 +325,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # ``_turn_start_stamp`` is the one every head-of-turn decision reads.
         self._restore_turn_stamp: Optional[str] = None
         self._turn_start_stamp: Optional[str] = None
+        # Absolute history length at the head of this turn when the head
+        # changed the prefix without saving compaction state (a model or agent
+        # switch, a document offload); ``update_after_turn`` persists it as
+        # ``reasoning_live_from``. Per turn, consumed there.
+        self._prefix_rewritten_at: Optional[int] = None
 
         # Session control
         self.cancelled = False
@@ -1098,6 +1103,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             gap_seconds, previous_anchor, sliding_anchor,
         )
         state.truncation_anchor = sliding_anchor
+        # Tool results ahead of every stored message change: no replayed
+        # reasoning before this point is billed from now on.
+        state.reasoning_live_from = len(self._all_messages_for_summary)
         self._save_compaction_state(state)
         self.record_compaction_event(
             "truncation_anchor",
@@ -1592,6 +1600,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         state.last_input_tokens = input_tokens
         if self._current_prefix_key:
             state.last_prefix_key = self._current_prefix_key
+        rewritten_at = getattr(self, "_prefix_rewritten_at", None)
+        if rewritten_at is not None:
+            state.reasoning_live_from = max(state.reasoning_live_from or 0, rewritten_at)
+            self._prefix_rewritten_at = None
 
         policy = CompactionPolicy.resolve(self.compaction_config, context_window)
         # The thresholds this turn ran under, every turn, so the next turn's
@@ -1715,6 +1727,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 history_tokens if history_tokens is not None else input_tokens,
                 tail_bound_tokens=tail_bound,
                 documents=documents,
+                reasoning_live_from=(
+                    state.reasoning_live_from - getattr(self, "_live_offset", 0)
+                    if state.reasoning_live_from is not None
+                    else None
+                ),
             )
         # Whole turns the cut keeps, and whether it went inside the protected
         # tail to get there — persisted on the policy snapshot, numbers only.
@@ -1799,6 +1816,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             state.pending_since = datetime.now(timezone.utc).isoformat()
         else:
             state.checkpoint = new_checkpoint
+            # The next request carries the summary ahead of every message now
+            # stored.
+            state.reasoning_live_from = getattr(self, "_live_offset", 0) + len(messages)
             # The anchor rides the checkpoint: everything the slice retains stays
             # byte-identical until the next compaction-state change, so the single
             # mutation (slice + summary) is paid with exactly one cache re-write.
@@ -1869,6 +1889,16 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     # Paid-when-free application (spec §3.5)
     # =========================================================================
 
+    def _mark_prefix_rewritten(self, live_len: int) -> None:
+        """Note that this turn's head changed the prefix ahead of the live list's
+        first ``live_len`` messages, for ``CompactionState.reasoning_live_from``.
+
+        In memory only (a head-of-turn save would sit on the TTFT path);
+        ``update_after_turn`` persists it with the state it saves anyway.
+        """
+        mark = getattr(self, "_live_offset", 0) + int(live_len)
+        self._prefix_rewritten_at = max(getattr(self, "_prefix_rewritten_at", None) or 0, mark)
+
     def apply_pending_compaction(self, agent: "Agent", *, prefix_key: Optional[str] = None) -> Optional[str]:
         """Head-of-turn: apply a parked cut to the live list if the re-write is free.
 
@@ -1910,6 +1940,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             self._turn_start_stamp = turn_stamp
             previous_key = state.last_prefix_key
             self._current_prefix_key = prefix_key
+            messages = getattr(agent, "messages", None)
+            if prefix_key and previous_key and prefix_key != previous_key and isinstance(messages, list):
+                # Another model or agent: a new system prompt ahead of every
+                # replayed reasoning block. Persisted after the turn.
+                self._mark_prefix_rewritten(len(messages))
             if state.pending_checkpoint is None:
                 return None
 
@@ -1930,7 +1965,6 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 )
                 return None
 
-            messages = getattr(agent, "messages", None)
             if not isinstance(messages, list):
                 return None
             applied = self._apply_pending_in_place(messages, state)
@@ -1947,6 +1981,8 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             promoted = state.pending_checkpoint
             state.checkpoint = promoted
             state.truncation_anchor = max(state.truncation_anchor, promoted)
+            # The summary now heads every retained message.
+            state.reasoning_live_from = getattr(self, "_live_offset", 0) + len(messages)
             state.summary = state.pending_summary
             state.pending_checkpoint = None
             state.pending_summary = None
@@ -2043,6 +2079,8 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                     floor = min(c.cut for c in cuts)
                     current = self.compaction_state
                     current.truncation_anchor = min(current.truncation_anchor, floor)
+                    if current.reasoning_live_from is not None:
+                        current.reasoning_live_from = min(current.reasoning_live_from, floor)
                     current.pending_checkpoint = None
                     current.pending_summary = None
                     current.pending_hard_ceiling = None
@@ -2191,6 +2229,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             )
             if not result.offloaded and not result.slices_aged:
                 return None
+            self._mark_prefix_rewritten(len(messages))
 
             logger.info(
                 "document_offload: reason=%s documents=%d evicted≈%d tok digests≈%d tok slices=%d gap=%ss unmatched=%d",
