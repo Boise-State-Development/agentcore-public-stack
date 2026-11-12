@@ -115,6 +115,15 @@ Sonic on the next bootstrap run (skip-if-present by `modelId`, same as
 `DEFAULT_TOOLS`), with no grants. And cost history (`ROLLUP#MODEL`,
 per-message `modelInfo.modelId`) keeps naming the id forever.
 
+**Closed for named ids (2026-11).** `grants_model_access` now refuses an id
+the catalog was read and has no row for — wildcard holders included — so a
+deleted row no longer runs unmetered from a chat turn, an Agent binding or
+api-converse. A catalog that cannot be read still fails open to role grants
+(`EffectiveModel.catalog_read`). The trigger was a prod Agent Designer preview
+on `global.anthropic.claude-haiku-4-5-20251001-v1:0`, which prod catalogs only
+under its `us.*` id; it fired `UnmeteredModelCall`. The no-row parameter and
+caching gaps above still apply to paths that skip the access check.
+
 Until §7 lands, a tombstone is just a row: it keeps metering and caching
 correct, but it redirects and denies nothing.
 
@@ -394,7 +403,7 @@ the author may not hold yet):
 
 | Field | Holds |
 |---|---|
-| `status` | `active` (default; absent reads as active) · `deprecated` · `retired`. An unknown stored value also reads as `active` rather than failing validation: a row that fails to parse drops out of the catalog, and a model with no row runs unmetered (§2) |
+| `status` | `active` (default; absent reads as active) · `deprecated` · `retired`. An unknown stored value also reads as `active` rather than failing validation: a row that fails to parse drops out of the catalog, and a model with no row is refused by the access check (§2) |
 | `replacedBy` | a successor `modelId`. Unlike tools, where free text was right because successors split or don't exist, a model successor is *invoked*, so it has to be an id. Validated on write: must exist, must be `active` **and enabled** (the SPA only follows a redirect to a model it offers), must not be the model itself |
 | `retiresOn` | ISO `YYYY-MM-DD`, validated exactly as on `ToolDefinition` |
 | `retirementNote` | free text ≤ 300 chars |
@@ -424,7 +433,8 @@ the effective id:
 
 This makes the runtime catalog-aware for exactly one thing — `retired` — and
 leaves `AppRoleService.can_access_model` itself untouched. A model with no row
-still resolves to itself, so custom and hand-entered ids behave as today.
+still resolves to itself; since 2026-11 the shared access rule then refuses it
+(`grants_model_access`, see §2), so a custom or hand-entered id needs a row.
 
 **Pickers do not filter by status.** `filter_accessible_models` stays as it is,
 so `_validate_model` keeps accepting an Agent that keeps its deprecated model.

@@ -313,8 +313,38 @@ async def test_can_access_model_honours_a_direct_grant(
         user_id="user-1", granted_models=["m.pilot"]
     )
 
-    assert await service.can_access_model(user, "m.pilot", record=None) is True
-    assert await service.can_access_model(user, "m.other", record=None) is False
+    row = MagicMock()
+    row.enabled = True
+    row.available_to_roles = []
+
+    assert await service.can_access_model(user, "m.pilot", record=row) is True
+    assert await service.can_access_model(user, "m.other", record=row) is False
+
+
+@pytest.mark.asyncio
+async def test_lookup_refuses_an_id_the_catalog_lacks_even_for_a_wildcard(
+    service, mock_app_role_repo, make_app_role, user
+):
+    """No catalog row means no pricing, so a ``*`` grant does not run it."""
+    _wire_role(mock_app_role_repo, make_app_role(role_id="staff", models=["*"]))
+    with patch(
+        "apis.shared.models.managed_models.find_managed_model_by_model_id",
+        AsyncMock(return_value=None),
+    ):
+        assert await service.can_access_model(user, "global.gone") is False
+
+
+@pytest.mark.asyncio
+async def test_lookup_fails_open_to_grants_when_the_catalog_is_unreadable(
+    service, mock_app_role_repo, make_app_role, user
+):
+    """A catalog outage must not refuse every model call."""
+    _wire_role(mock_app_role_repo, make_app_role(role_id="staff", models=["*"]))
+    with patch(
+        "apis.shared.models.managed_models.find_managed_model_by_model_id",
+        AsyncMock(side_effect=RuntimeError("no table")),
+    ):
+        assert await service.can_access_model(user, "global.gone") is True
 
 
 @pytest.mark.asyncio

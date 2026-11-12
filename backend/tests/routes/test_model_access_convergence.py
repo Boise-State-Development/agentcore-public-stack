@@ -84,10 +84,17 @@ class TestPredicate:
         assert grants_model_access("legacy-model", LEGACY, set(), {"Faculty"}) is True
         assert grants_model_access("ungranted-model", UNGRANTED, set(), {"Faculty"}) is False
 
-    def test_no_catalog_row_is_role_grants_only(self):
-        assert grants_model_access("uncurated", None, {"uncurated"}, set()) is True
-        assert grants_model_access("uncurated", None, {"*"}, set()) is True
+    def test_no_catalog_row_is_refused_for_everyone(self):
+        """No row means no pricing: it would run unmetered and free against quota."""
+        assert grants_model_access("uncurated", None, {"uncurated"}, set()) is False
+        assert grants_model_access("uncurated", None, {"*"}, set()) is False
         assert grants_model_access("uncurated", None, set(), {"Faculty"}) is False
+
+    def test_unreadable_catalog_fails_open_to_role_grants(self):
+        """An outage must not refuse every call: the old role-grants-only rule applies."""
+        assert grants_model_access("uncurated", None, {"uncurated"}, set(), catalog_read=False) is True
+        assert grants_model_access("uncurated", None, {"*"}, set(), catalog_read=False) is True
+        assert grants_model_access("uncurated", None, set(), {"Faculty"}, catalog_read=False) is False
 
 
 class TestDeniedMessage:
@@ -109,6 +116,16 @@ class TestDeniedMessage:
         assert model_access_denied_message("uncurated", None).startswith(
             "**uncurated** isn't available to your account."
         )
+
+    def test_uncataloged_id_reads_as_not_offered(self):
+        msg = model_access_denied_message("uncurated", None, uncataloged=True)
+        assert msg.startswith("**uncurated** isn't offered on this platform.")
+        assert "administrator" not in msg
+
+    def test_uncataloged_agent_model_sends_the_user_to_the_owner(self):
+        msg = model_access_denied_message("uncurated", None, agent=True, uncataloged=True)
+        assert msg.startswith("This agent runs on **uncurated**, which isn't offered on this platform.")
+        assert "agent's owner" in msg
 
     def test_agent_variants(self):
         assert model_access_denied_message("granted-model", GRANTED, agent=True).startswith(
