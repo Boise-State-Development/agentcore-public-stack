@@ -9,25 +9,24 @@
 ## CORRECTION — the Gateway does not perform the exchange
 
 Read this first. Most of the sections below were written before the design was
-tested, and they describe a mechanism AWS does not offer. They are kept for the
-reasoning and the contracts, which are still accurate, but any instruction to
-configure a Gateway target with a token-exchange grant is wrong.
+tested, and they describe a mechanism that does not work with this platform's
+Gateway. They are kept for the reasoning and the contracts, which are still
+accurate, but any instruction to configure a Gateway target with a
+token-exchange grant is wrong here.
 
-**AgentCore Gateway cannot perform an RFC 8693 exchange.** Its outbound OAuth
-credential provider supports exactly two grants:
+**Update (November 2026, issue #454): AWS now offers the grant.** The
+`bedrock-agentcore-control` service model in botocore 1.43.103 lists
+`OAuthGrantType = ['CLIENT_CREDENTIALS', 'AUTHORIZATION_CODE', 'TOKEN_EXCHANGE']`,
+described as an on-behalf-of exchange of the inbound user token. When this
+section was first written, the model had only the first two, and a
+`create-gateway-target` call specifying `TOKEN_EXCHANGE` failed validation.
 
-```
-OAuthGrantType = ['CLIENT_CREDENTIALS', 'AUTHORIZATION_CODE']
-```
-
-Verified against the `bedrock-agentcore-control` service model across three
-installed SDK versions; the string `TOKEN_EXCHANGE` appears nowhere in the API
-model. A `create-gateway-target` call specifying it fails validation. (The
-platform's `GatewayOAuthGrantType.TOKEN_EXCHANGE` enum value and its
-`_GRANT_TYPE_TO_AWS` mapping are dead code for the same reason.)
-
-Separately, a Gateway with `AWS_IAM` inbound auth never receives the user's
-token, so it would have nothing to exchange even if the grant existed.
+It still does not apply here: a Gateway with `AWS_IAM` inbound auth never
+receives the user's token, so it has nothing to exchange. Using the grant would
+take a new Gateway with JWT inbound auth, because AWS does not allow changing a
+Gateway's authorizer type after creation. Since #454 the admin API refuses to
+save a Gateway target with `token_exchange` (or `authorization_code`); Client
+Credentials is the only OAuth grant a Gateway target can use.
 
 **What shipped instead: the agent runtime performs the exchange.**
 

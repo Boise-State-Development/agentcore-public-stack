@@ -478,9 +478,11 @@ class BaseAgent(ABC):
         """Resolve a Strands `selected_tool` to the set of tool names that
         pause for approval.
 
-        Two sources, one gate. An external MCP tool uses the per-tool set
+        Three sources, one gate. An external MCP tool uses the per-tool set
         cached by the integration (mirrors the provider lookup used by the
-        OAuth consent hook). The skill-authoring writes are a fixed set of
+        OAuth consent hook). A Gateway tool uses the set the Gateway
+        integration took from the catalog when it built this agent's Gateway
+        client (#454). The skill-authoring writes are a fixed set of
         built-in names (skill-creator spec D10), composed in here so the
         snapshot, resume route, breadcrumb and SPA card stay the MCP ones.
         Gating a name that was not built this turn is a no-op.
@@ -495,10 +497,17 @@ class BaseAgent(ABC):
         from strands.tools.mcp import MCPAgentTool
 
         integration = get_external_mcp_integration()
+        owner = self
 
         def approval_names_lookup(selected_tool: object) -> set[str]:
             if isinstance(selected_tool, MCPAgentTool):
-                return integration.approval_names_for_client(selected_tool.mcp_client)
+                client = selected_tool.mcp_client
+                # Read per call: the Gateway client is built after the hooks.
+                # Absent on the bare namespaces some tests build the hook from.
+                gateway = getattr(owner, "gateway_integration", None)
+                if gateway is not None and client is gateway.client:
+                    return gateway.approval_names_for_client(client)
+                return integration.approval_names_for_client(client)
             if getattr(selected_tool, "tool_name", None) in SKILL_AUTHORING_APPROVAL_NAMES:
                 return set(SKILL_AUTHORING_APPROVAL_NAMES)
             return set()
@@ -576,15 +585,15 @@ class BaseAgent(ABC):
             disconnected_lookup=disconnected_lookup,
         )
 
-    def _expand_gateway_tool_ids(self, gateway_tool_ids: List[str]) -> List[str]:
+    def _resolve_gateway_tools(self, gateway_tool_ids: List[str]):
         """Expand #419 catalog gateway tools into the gateway's runtime per-tool
-        ids (see `expand_gateway_tool_ids`), bridging the async catalog lookup
-        into this sync build path the same way `_register_external_mcp_tools`
-        does.
+        ids and collect their approval flags (see `resolve_gateway_tools`),
+        bridging the async catalog lookup into this sync build path the same
+        way `_register_external_mcp_tools` does.
         """
         from apis.shared.tools.repository import get_tool_catalog_repository
         from agents.main_agent.tools.gateway_integration import (
-            expand_gateway_tool_ids,
+            resolve_gateway_tools,
         )
 
         repo = get_tool_catalog_repository()
@@ -598,13 +607,13 @@ class BaseAgent(ABC):
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     return executor.submit(
-                        asyncio.run, expand_gateway_tool_ids(gateway_tool_ids, repo)
+                        asyncio.run, resolve_gateway_tools(gateway_tool_ids, repo)
                     ).result()
             return loop.run_until_complete(
-                expand_gateway_tool_ids(gateway_tool_ids, repo)
+                resolve_gateway_tools(gateway_tool_ids, repo)
             )
         except RuntimeError:
-            return asyncio.run(expand_gateway_tool_ids(gateway_tool_ids, repo))
+            return asyncio.run(resolve_gateway_tools(gateway_tool_ids, repo))
 
     def _build_filtered_tools(self) -> List:
         """
@@ -628,13 +637,16 @@ class BaseAgent(ABC):
         if gateway_tool_ids:
             # #419 catalog tools (`gateway_<id>`) must be expanded to the
             # gateway's runtime per-tool ids (`gateway_<target>___<tool>`)
-            # before the FilteredMCPClient can match them.
-            gateway_tool_ids = self._expand_gateway_tool_ids(gateway_tool_ids)
+            # before the FilteredMCPClient can match them. The same catalog
+            # rows say which of them pause for approval (#454).
+            resolution = self._resolve_gateway_tools(gateway_tool_ids)
             # The JWT-authorized Gateway needs *this user's* access token per
             # invocation — there is no machine-identity fallback. Passed
             # explicitly (never cached globally) so tokens can't cross users.
             gateway_client = self.gateway_integration.get_client(
-                gateway_tool_ids, auth_token=self.auth_token
+                resolution.runtime_ids,
+                auth_token=self.auth_token,
+                approval_names=resolution.approval_names,
             )
             if gateway_client:
                 local_tools = self.gateway_integration.add_to_tool_list(local_tools)
