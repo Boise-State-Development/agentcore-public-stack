@@ -28,7 +28,9 @@ answers for the user** (§9.6 rule 3): a resume never carries a delivery.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Sequence, Set
 
@@ -83,6 +85,7 @@ class DeliveryTurn:
     requests: List[DeliveryAttachRequest]
     store: DeliveryStore = field(default_factory=get_delivery_store)
     _attaching: Optional["asyncio.Task[List[AttachedDelivery]]"] = None
+    _attach_ms: float = 0.0
 
     @classmethod
     def for_turn(
@@ -123,20 +126,40 @@ class DeliveryTurn:
             self._attaching = asyncio.create_task(self._attach_all())
 
     async def blocks(self) -> List[str]:
-        """The wrapped cards to prepend, oldest first, or ``[]``. Never raises."""
+        """The wrapped cards to prepend, oldest first, or ``[]``. Never raises.
+
+        Logs one ``delivery_attach`` line per send that carries cards: ``waitMs`` is how long the
+        turn blocked here for the writes, which is this feature's whole cost before the first
+        token (0 when they finished behind the agent build); ``attachMs`` is the writes' own time.
+        """
         self.start()
+        waited_from = time.perf_counter()
         try:
             attached = await self._attaching  # type: ignore[misc]
         except Exception:  # noqa: BLE001 - a card that can't attach must not cost the turn
             logger.warning("Delivery attach failed; the turn runs without the cards", exc_info=True)
             return []
+        wait_ms = (time.perf_counter() - waited_from) * 1000
+        logger.info(
+            "delivery_attach %s",
+            json.dumps(
+                {
+                    "cards": len(self.requests),
+                    "attached": len(attached),
+                    "waitMs": round(wait_ms, 1),
+                    "attachMs": round(self._attach_ms, 1),
+                }
+            ),
+        )
         return [a.block for a in attached if a.block]
 
     async def _attach_all(self) -> List[AttachedDelivery]:
+        began = time.perf_counter()
         results = await asyncio.gather(
             *(asyncio.to_thread(self._attach_one, request) for request in self.requests),
             return_exceptions=True,
         )
+        self._attach_ms = (time.perf_counter() - began) * 1000
         attached: List[AttachedDelivery] = []
         for request, result in zip(self.requests, results):
             if isinstance(result, BaseException):
