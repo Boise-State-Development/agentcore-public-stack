@@ -1163,6 +1163,10 @@ class MessagesListResponse(BaseModel):
         alias="spawnedFrom",
         description="Set when this conversation was started by a handoff: {sessionId, handoffId, sourceTitle, agentName}. The SPA labels the first user bubble \"Context from {title}\" and links it to the source. Returned only on the first page.",
     )
+    deliveries: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Pending deliveries into this conversation (handoffs spec §4.8), oldest first: {deliveryId, fromSessionId, fromTitle, handoffId, origin, text, artifacts: [{artifactId, version, title, contentType}], createdAt}. The SPA shows each as a card on the composer, labelled \"From {fromTitle}\", and the next send carries it as `deliveries: [{deliveryId, text?}]`. An attached card is not listed: its block is in the user message it was sent with. Empty while HANDOFFS_ENABLED is off. Returned only on the first page.",
+    )
     from_archive: bool = Field(
         False,
         alias="fromArchive",

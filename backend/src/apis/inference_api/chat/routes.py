@@ -32,6 +32,7 @@ from apis.shared.errors import (
 )
 from apis.inference_api.runtime_health import ping_payload
 from apis.shared.handoff.context import build_handoff_message
+from apis.shared.handoff.delivery_turn import DeliveryTurn, join_delivery_blocks
 from apis.shared.handoff.turn import HandoffTurn
 from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
@@ -6188,6 +6189,16 @@ async def _run_invocation(
         is_preview=is_preview_session(input_data.session_id),
         user_email=current_user.email,
     )
+    # Deliveries (§4.8): the composer cards this send carries. Decided with no IO; the attaches
+    # start beside the agent build and are awaited only where the message is assembled.
+    delivery_turn = DeliveryTurn.for_turn(
+        user_id=user_id,
+        session_id=input_data.session_id,
+        deliveries=input_data.deliveries,
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        is_preview=is_preview_session(input_data.session_id),
+    )
 
     session_lease = None
     if not is_preview_session(input_data.session_id):
@@ -6669,6 +6680,10 @@ async def _run_invocation(
             # the outer function; reassigning it here would make the whole
             # name local and UnboundLocalError before the assignment runs).
             final_message = augmented_message
+            # Cards from the user's other conversations (§4.8), oldest first, before what they
+            # typed. Hidden from the bubble by the same `original_message` displayText split.
+            if delivery_turn is not None:
+                final_message = join_delivery_blocks(await delivery_turn.blocks(), final_message)
             # A handoff's context card, wrapped (§4.2). First, so it reads as the setting for
             # everything after it; the bubble still shows only what the user typed, through the
             # `original_message` displayText split below.
@@ -6900,6 +6915,8 @@ async def _run_invocation(
             if handoff_turn is not None:
                 # Beside the build, so the acceptance round trips cost the first token nothing.
                 handoff_turn.start()
+            if delivery_turn is not None:
+                delivery_turn.start()
             try:
                 # The deferred agent build (PR-3). Narrated, because this is
                 # where a cold turn spends over a second with nothing on the

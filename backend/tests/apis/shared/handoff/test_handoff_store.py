@@ -253,3 +253,15 @@ def test_without_a_table_writes_refuse_and_reads_are_empty(monkeypatch):
     assert store.delete_for_session("user-a", "src") == 0
     with pytest.raises(HandoffStoreUnavailable):
         store.create(handoff())
+
+
+def test_only_an_open_send_back_completes_and_only_once(store):
+    store.create(handoff("mention"))
+    send_back = handoff("sb").model_copy(update={"kind": "send_back"})
+    store.create(send_back)
+
+    assert store.complete_send_back("user-a", "mention") is None
+    assert store.complete_send_back("user-b", "sb") is None
+    done = store.complete_send_back("user-a", "sb")
+    assert done is not None and done.status == "done"
+    assert store.complete_send_back("user-a", "sb") is None

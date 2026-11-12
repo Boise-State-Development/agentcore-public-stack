@@ -232,6 +232,34 @@ class HandoffStore:
             raise
         return _from_item(resp["Attributes"])
 
+    def complete_send_back(self, user_id: str, handoff_id: str) -> Optional[Handoff]:
+        """A ``send_back`` row's delivery was made: ``open`` → ``done``, exactly once (spec §4.3).
+
+        A send-back runs nothing, so it never passes through ``running``. The kind is part of the
+        condition, so a mention handoff can't be completed this way. ``None`` if it isn't the
+        caller's, isn't a send-back, or was already sent or dismissed.
+        """
+        table = self._require_table()
+        try:
+            resp = table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{handoff_id}"},
+                UpdateExpression="SET #status = :done, #updatedAt = :now",
+                ConditionExpression="attribute_exists(SK) AND #status = :open AND #kind = :send_back",
+                ExpressionAttributeNames={"#status": "status", "#updatedAt": "updatedAt", "#kind": "kind"},
+                ExpressionAttributeValues={
+                    ":done": "done",
+                    ":open": "open",
+                    ":send_back": "send_back",
+                    ":now": datetime.now(timezone.utc).isoformat(),
+                },
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return None
+            raise
+        return _from_item(resp["Attributes"])
+
     def record_brief(
         self,
         user_id: str,

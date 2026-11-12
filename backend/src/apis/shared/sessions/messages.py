@@ -597,13 +597,19 @@ async def get_messages_from_cloud(
             from apis.shared.feature_flags import handoffs_enabled
 
             if not handoffs_enabled():
-                return [], None
-            from apis.shared.handoff.replay import load_handoff_replay
+                return [], None, []
+            from apis.shared.handoff.replay import load_delivery_replay, load_handoff_replay
 
             from .metadata import load_session_meta
 
-            meta = await load_session_meta(session_id, user_id)
-            return await load_handoff_replay(session_id, user_id, meta.row)
+            async def handoff_rows():
+                meta = await load_session_meta(session_id, user_id)
+                return await load_handoff_replay(session_id, user_id, meta.row)
+
+            (handoffs, spawned), deliveries = await asyncio.gather(
+                handoff_rows(), load_delivery_replay(session_id, user_id)
+            )
+            return handoffs, spawned, deliveries
 
         async def fetch_rewind():
             """Which stored messages a rewind has hidden (rewind spec §4).
@@ -767,7 +773,9 @@ async def get_messages_from_cloud(
         # Handoffs: the rows a source thread shows after `sourceMessageIndex`,
         # and the link a target's first bubble labels. First page only, like
         # the replays above; the SPA places rows by index, not by page.
-        handoff_rows, spawned_from = handoff_replay if not next_token else ([], None)
+        # Pending deliveries are composer cards, not thread content, so they ride
+        # the first page with the rest.
+        handoff_rows, spawned_from, deliveries = handoff_replay if not next_token else ([], None, [])
 
         return MessagesListResponse(
             messages=message_responses,
@@ -779,6 +787,7 @@ async def get_messages_from_cloud(
             extractions=extractions,
             handoffs=handoff_rows,
             spawned_from=spawned_from,
+            deliveries=deliveries,
             next_message_index=len(messages_raw) if rewind_state is not None else None,
         )
 
