@@ -11,10 +11,16 @@ import { DOCX_MIME } from '../../../../services/file-preview/file-preview.model'
 import { DockedPaneService } from '../../../../services/docked-pane/docked-pane.service';
 import { ConfigService } from '../../../../../services/config.service';
 
+/** Stands in for docx-preview's render step, painting into `host`. */
 const renderAsync = vi.fn();
 
 vi.mock('docx-preview', () => ({
-  renderAsync: (...args: unknown[]) => renderAsync(...args),
+  parseAsync: async () => ({}),
+  renderDocument: async (doc: unknown, options: unknown) => {
+    const host = document.createElement('div');
+    await renderAsync(doc, host, options);
+    return Array.from(host.childNodes);
+  },
 }));
 
 describe('FilePreviewPanelComponent', () => {
