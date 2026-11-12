@@ -1,8 +1,9 @@
 import { Injectable, inject, resource, computed, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { SessionService } from '../../../auth/session.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import {
   ConnectorStatusResponse,
   InitiateConsentResponse,
@@ -96,6 +97,12 @@ export class UserConnectorsService {
           headers: {
             OAuth2CallbackUrl: callback.toString(),
           },
+          // A status probe is a background badge, never a user action: both
+          // callers turn a failure into an inert state. A 403 here means the
+          // tool is granted but its connector's allowed roles exclude the
+          // caller, and a toast per such provider on every page load tells
+          // them nothing they can act on.
+          context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true),
         },
       ),
     );

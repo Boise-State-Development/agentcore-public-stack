@@ -34,11 +34,14 @@ from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
     get_provider_repository,
 )
+from apis.shared.oauth.connector_access import (
+    connector_role_ids,
+    connector_visible_to_user,
+)
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 
 from apis.app_api.file_sources.models import BrowseResult, FileSourceError, SourceRoot
 from apis.app_api.file_sources.service import (
-    connector_visible_to_user,
     http_error_for_file_source_error,
     require_file_source_token,
     resolve_file_source,
@@ -125,11 +128,12 @@ async def list_file_sources(
     """
     permissions = await role_service.resolve_user_permissions(current_user)
     providers = await provider_repo.list_providers(enabled_only=True)
+    role_ids = await connector_role_ids(permissions, role_service)
     file_sources = [
         p
         for p in providers
         if p.file_source_adapter_id
-        and connector_visible_to_user(p, permissions.app_roles)
+        and connector_visible_to_user(p, role_ids)
     ]
 
     connected_flags = await asyncio.gather(
