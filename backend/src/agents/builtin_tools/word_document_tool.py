@@ -43,8 +43,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
@@ -76,7 +74,9 @@ from agents.builtin_tools.office._storage import (
     _error,
     _get_code_interpreter_id,
     _NO_CI_MESSAGE,
+    _output_document_name,
     _region,
+    _safe_document_name,
     _storage_configured,
     _store_document,
     _validate_document_name,
@@ -494,14 +494,7 @@ async def _modify_word_document(
             "chat. Use list_word_documents to see what's available."
         )
 
-    out_base = output_name or source.filename
-    if out_base.lower().endswith(".docx"):
-        out_base = out_base[: -len(".docx")]
-    is_valid, error_msg = _validate_document_name(out_base)
-    if not is_valid:
-        return _error(
-            f"❌ Invalid output name '{out_base}': {error_msg}"
-        )
+    out_base = _output_document_name(output_name, source.filename, ".docx")
     output_filename = f"{out_base}.docx"
 
     script: Optional[SkillScript] = None
@@ -936,17 +929,13 @@ def _parse_new_paragraphs(raw: Any, label: str) -> Tuple[Tuple[NewParagraph, ...
 
 
 def _default_redline_name(source_base: str, suffix: str = "redline") -> str:
-    """``<source>-redline``, reduced to what ``_validate_document_name`` accepts.
+    """``<source>-redline``, made safe by ``_safe_document_name``.
 
-    Real file names carry spaces and punctuation ("Q3 Budget (draft)"), and
-    the validator allows only letters, digits, ``_`` and single inner hyphens.
-    Accents are folded to ASCII, every other run of disallowed characters
-    becomes one hyphen, and a name with nothing left falls back to "document".
-    A name the model passes is still validated as given.
+    A source name with nothing usable left falls back to "document". A name
+    the model passes instead goes through the same normalisation
+    (``_output_document_name``).
     """
-    ascii_base = unicodedata.normalize("NFKD", source_base).encode("ascii", "ignore").decode()
-    safe = re.sub(r"[^A-Za-z0-9_]+", "-", ascii_base).strip("-")
-    return f"{safe or 'document'}-{suffix}"
+    return f"{_safe_document_name(source_base) or 'document'}-{suffix}"
 
 
 async def _redline_word_document(
@@ -977,12 +966,7 @@ async def _redline_word_document(
         )
 
     source_base = source.filename[: -len(".docx")] if source.filename.lower().endswith(".docx") else source.filename
-    out_base = output_name or _default_redline_name(source_base)
-    if out_base.lower().endswith(".docx"):
-        out_base = out_base[: -len(".docx")]
-    is_valid, error_msg = _validate_document_name(out_base)
-    if not is_valid:
-        return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
+    out_base = _output_document_name(output_name, _default_redline_name(source_base), ".docx")
     output_filename = f"{out_base}.docx"
     reviewer = (author or user_name or "").strip() or "Reviewer"
 
@@ -1176,12 +1160,7 @@ async def _compare_word_documents(
     source_base = (
         original.filename[: -len(".docx")] if original.filename.lower().endswith(".docx") else original.filename
     )
-    out_base = output_name or _default_redline_name(source_base, "compared")
-    if out_base.lower().endswith(".docx"):
-        out_base = out_base[: -len(".docx")]
-    is_valid, error_msg = _validate_document_name(out_base)
-    if not is_valid:
-        return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
+    out_base = _output_document_name(output_name, _default_redline_name(source_base, "compared"), ".docx")
     output_filename = f"{out_base}.docx"
     reviewer = (author or "").strip() or DEFAULT_AUTHOR
 
