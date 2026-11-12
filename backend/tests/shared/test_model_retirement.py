@@ -140,6 +140,20 @@ class TestResolveEffectiveModel:
         effective = await resolve_effective_model("old")
         assert effective.model_id == "old"
         assert not effective.redirected and not effective.denied
+        # Unknown, not absent: model access falls back to role grants on it.
+        assert effective.catalog_read is False
+        assert effective.uncataloged is False
+
+    @pytest.mark.asyncio
+    async def test_an_id_the_catalog_lacks_is_uncataloged(self, monkeypatch):
+        monkeypatch.setattr(
+            retirement, "list_all_managed_models", AsyncMock(return_value=[_row("new")])
+        )
+        effective = await resolve_effective_model("global.gone")
+        assert effective.catalog_read is True
+        assert effective.record is None
+        assert effective.uncataloged is True
+        assert (await resolve_effective_model("new")).uncataloged is False
 
     @pytest.mark.asyncio
     async def test_reads_the_catalog(self, monkeypatch):

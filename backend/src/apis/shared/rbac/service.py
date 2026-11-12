@@ -33,7 +33,7 @@ absent row is the off state.
 
 import asyncio
 import logging
-from typing import List, Set, Optional, Union
+from typing import List, Set, Optional, Tuple, Union
 
 from apis.shared.auth.models import User
 from apis.shared.models.models import ManagedModel
@@ -56,22 +56,23 @@ class _LookupRecord:
 LOOKUP_RECORD = _LookupRecord()
 
 
-async def _lookup_model_record(model_id: str) -> Optional[ManagedModel]:
-    """The catalog row for ``model_id``; ``None`` for no row or an unreadable catalog.
+async def _lookup_model_record(model_id: str) -> Tuple[Optional[ManagedModel], bool]:
+    """``(row, catalog_read)`` for ``model_id``: ``(None, True)`` is "no row".
 
-    Fails open to the role grants, like ``resolve_effective_model``: a catalog
-    outage must not refuse every model call.
+    An unreadable catalog returns ``(None, False)``, which fails open to the role
+    grants, like ``resolve_effective_model``: a catalog outage must not refuse
+    every model call.
     """
     from apis.shared.models.managed_models import find_managed_model_by_model_id
 
     try:
-        return await find_managed_model_by_model_id(model_id)
+        return await find_managed_model_by_model_id(model_id), True
     except Exception:
         logger.warning(
             "Model catalog unavailable; checking model access on role grants only",
             exc_info=True,
         )
-        return None
+        return None, False
 
 
 class AppRoleService:
@@ -408,20 +409,27 @@ class AppRoleService:
         model_id: str,
         *,
         record: Union[Optional[ManagedModel], _LookupRecord] = LOOKUP_RECORD,
+        catalog_read: bool = True,
     ) -> bool:
         """Check if user can run ``model_id``, by the one shared rule.
 
         See :mod:`.model_access` for the rule, including what an id with no
         catalog row gets. Pass ``record`` when the caller already holds the
         catalog row (``EffectiveModel.record`` from retirement resolution —
-        ``None`` meaning "no row"), so the turn path pays no second lookup;
-        otherwise the row is found in the cached catalog.
+        ``None`` meaning "no row", which is refused), so the turn path pays no
+        second lookup; pass ``catalog_read=EffectiveModel.catalog_read`` with it,
+        so a ``None`` from an unreadable catalog fails open instead. Otherwise
+        the row is found in the cached catalog.
         """
         permissions = await self.resolve_user_permissions(user)
         if isinstance(record, _LookupRecord):
-            record = await _lookup_model_record(model_id)
+            record, catalog_read = await _lookup_model_record(model_id)
         return grants_model_access(
-            model_id, record, set(permissions.models), set(user.roles or [])
+            model_id,
+            record,
+            set(permissions.models),
+            set(user.roles or []),
+            catalog_read=catalog_read,
         )
 
     async def filter_accessible_models(

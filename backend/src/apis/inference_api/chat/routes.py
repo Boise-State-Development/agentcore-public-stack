@@ -5704,7 +5704,11 @@ async def _run_invocation(
     if input_data.model_id and not (retired_model_denial and not is_resume):
         app_role_service = get_app_role_service()
         known_record = requested_model is not None and requested_model.model_id == input_data.model_id
-        access_kwargs = {"record": requested_model.record} if known_record else {}
+        access_kwargs = (
+            {"record": requested_model.record, "catalog_read": requested_model.catalog_read}
+            if known_record
+            else {}
+        )
         if not await app_role_service.can_access_model(
             current_user, input_data.model_id, **access_kwargs
         ):
@@ -5720,7 +5724,9 @@ async def _run_invocation(
                     input_data,
                     user_id,
                     model_access_denied_message(
-                        input_data.model_id, requested_model.record if known_record else None
+                        input_data.model_id,
+                        requested_model.record if known_record else None,
+                        uncataloged=known_record and requested_model.uncataloged,
                     ),
                     persist=False,
                 )

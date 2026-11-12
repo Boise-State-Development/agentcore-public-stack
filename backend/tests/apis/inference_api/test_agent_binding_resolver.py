@@ -203,6 +203,19 @@ class TestModelResolution:
         assert svc.can_access_model.await_args.args[0].user_id == "u-bob"
 
     @pytest.mark.asyncio
+    async def test_model_missing_from_the_catalog_blocks_as_not_offered(self, monkeypatch):
+        """An Agent bound to an id whose row was deleted would run unpriced: refused."""
+        svc = _patch_access(monkeypatch, False)
+        _patch_retirement(monkeypatch, [_catalog_row("us.anthropic.haiku")])
+        cfg = AgentModelConfig(model_id="global.anthropic.haiku")
+        with pytest.raises(AgentBindingBlockedError) as ei:
+            await resolve_agent_invocation(_assistant(model_settings=cfg), _user())
+        assert "isn't offered on this platform" in ei.value.message
+        assert "agent's owner" in ei.value.message
+        kwargs = svc.can_access_model.await_args.kwargs
+        assert kwargs["record"] is None and kwargs["catalog_read"] is True
+
+    @pytest.mark.asyncio
     async def test_legacy_assistant_never_blocks(self, monkeypatch):
         # A legacy row (no model_settings) resolves to an empty plan regardless.
         _patch_access(monkeypatch, False)
