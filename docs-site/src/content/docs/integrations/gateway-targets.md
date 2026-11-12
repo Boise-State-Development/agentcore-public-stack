@@ -9,7 +9,11 @@ sidebar:
 Only the built-in connector section below is written. The rest of this page is a placeholder.
 :::
 
-DEFAULT vs DYNAMIC listing mode and 3LO consent.
+DEFAULT vs DYNAMIC listing mode, outbound credentials, and per-tool approval.
+
+Gateway targets are for shared tools that don't act as the signed-in user. Their OAuth credential is Client Credentials only: the Gateway signs in as itself. Register a tool that needs each user's own account (Canvas, Google, Zoom and similar) as an MCP External Server, where the user is asked to connect it the first time the tool runs.
+
+A tool marked **Needs approval** on a Gateway target pauses the chat for the user to approve or decline the call, as it does for an MCP External Server.
 
 ## Built-in connectors: AgentCore Web Search
 

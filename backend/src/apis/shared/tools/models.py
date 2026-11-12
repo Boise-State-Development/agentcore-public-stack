@@ -89,7 +89,7 @@ class GatewayListingMode(str, Enum):
 
     Maps to the `bedrock-agentcore-control` `listingMode` enum (uppercased at
     the AWS boundary by GatewayTargetService). DYNAMIC resolves tools at call
-    time but disables 3LO/OAuth and Gateway semantic search; DEFAULT lists
+    time but disables OAuth and Gateway semantic search; DEFAULT lists
     tools statically and is required for both.
     """
 
@@ -119,15 +119,25 @@ class GatewayOAuthGrantType(str, Enum):
     """OAuth grant the Gateway uses when calling an OAUTH-credentialed target.
 
     Maps to the `bedrock-agentcore-control` `oauthCredentialProvider.grantType`
-    enum. AUTHORIZATION_CODE is the on-behalf-of-user (3LO) flow that reuses our
-    existing AgentCore Identity consent path (USER_FEDERATION); CLIENT_CREDENTIALS
-    is machine-to-machine (2LO, no user consent). Only meaningful when
-    credential_type is OAUTH.
+    enum. Only CLIENT_CREDENTIALS (machine-to-machine, no user involved) can be
+    saved — see `SUPPORTED_GATEWAY_OAUTH_GRANT_TYPES` and issue #454.
+
+    AUTHORIZATION_CODE (3LO) and TOKEN_EXCHANGE stay in the enum only so rows
+    saved before #454 still load. 3LO had no consent handling for Gateway tools;
+    TOKEN_EXCHANGE needs a Gateway with JWT inbound auth, and ours uses AWS_IAM.
+    Per-user OAuth tools are registered as MCP External Servers instead. Only
+    meaningful when credential_type is OAUTH.
     """
 
     AUTHORIZATION_CODE = "authorization_code"
     CLIENT_CREDENTIALS = "client_credentials"
     TOKEN_EXCHANGE = "token_exchange"
+
+
+# Grants an admin may save on an OAUTH Gateway target (#454).
+SUPPORTED_GATEWAY_OAUTH_GRANT_TYPES = frozenset(
+    {GatewayOAuthGrantType.CLIENT_CREDENTIALS.value}
+)
 
 
 class ToolStatus(str, Enum):
@@ -564,9 +574,10 @@ class MCPGatewayConfig(BaseModel):
         description="OAuth scopes requested for OAUTH credential type",
     )
     grant_type: GatewayOAuthGrantType = Field(
-        default=GatewayOAuthGrantType.AUTHORIZATION_CODE,
-        description="OAuth grant for OAUTH credential type (3LO vs 2LO); "
-        "ignored for other credential types",
+        default=GatewayOAuthGrantType.CLIENT_CREDENTIALS,
+        description="OAuth grant for OAUTH credential type. Only "
+        "client_credentials can be saved; the others load from older rows. "
+        "Ignored for other credential types",
     )
     custom_parameters: Optional[Dict[str, str]] = Field(
         None,
@@ -739,6 +750,8 @@ class MCPGatewayConfig(BaseModel):
             aws_region=data.get("awsRegion"),
             lambda_function_name=data.get("lambdaFunctionName"),
             oauth_scopes=data.get("oauthScopes") or [],
+            # A row with no grantType was registered when authorization_code was
+            # the default, so read it as that rather than the current default.
             grant_type=data.get(
                 "grantType", GatewayOAuthGrantType.AUTHORIZATION_CODE
             ),
@@ -1536,7 +1549,7 @@ class MCPGatewayConfigRequest(BaseModel):
     lambda_function_name: Optional[str] = Field(None, alias="lambdaFunctionName")
     oauth_scopes: List[str] = Field(default_factory=list, alias="oauthScopes")
     grant_type: GatewayOAuthGrantType = Field(
-        default=GatewayOAuthGrantType.AUTHORIZATION_CODE, alias="grantType"
+        default=GatewayOAuthGrantType.CLIENT_CREDENTIALS, alias="grantType"
     )
     custom_parameters: Optional[Dict[str, str]] = Field(
         None, alias="customParameters"
@@ -1546,7 +1559,25 @@ class MCPGatewayConfigRequest(BaseModel):
     model_config = {"populate_by_name": True, "use_enum_values": True}
 
     def to_model(self) -> MCPGatewayConfig:
-        """Convert to MCPGatewayConfig model (runs the co-gating validator)."""
+        """Convert to MCPGatewayConfig model (runs the co-gating validator).
+
+        Also the one place a saved grant type is checked: rows written before
+        #454 may hold a grant that can no longer be saved, and they must keep
+        loading, so the check lives on the request rather than the model.
+
+        Raises:
+            ValueError: An OAUTH target with a grant other than
+                client_credentials.
+        """
+        if (
+            self.credential_type == GatewayCredentialType.OAUTH.value
+            and self.grant_type not in SUPPORTED_GATEWAY_OAUTH_GRANT_TYPES
+        ):
+            raise ValueError(
+                f"Gateway OAuth grant type '{self.grant_type}' is not supported; "
+                "use 'client_credentials'. For a tool that acts as the signed-in "
+                "user, register it as an MCP External Server instead."
+            )
         return MCPGatewayConfig(
             target_name=self.target_name,
             endpoint_url=self.endpoint_url,

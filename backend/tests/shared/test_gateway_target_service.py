@@ -131,8 +131,8 @@ class TestCreateTarget:
                     "oauthCredentialProvider": {
                         "providerArn": config.credential_provider_arn,
                         "scopes": ["repo", "read:user"],
-                        # Defaults to the 3LO authorization-code grant.
-                        "grantType": "AUTHORIZATION_CODE",
+                        # Defaults to the client-credentials grant (#454).
+                        "grantType": "CLIENT_CREDENTIALS",
                     }
                 },
             }
@@ -156,6 +156,21 @@ class TestCreateTarget:
         ][0]["credentialProvider"]["oauthCredentialProvider"]
         assert oauth["grantType"] == "CLIENT_CREDENTIALS"
         assert oauth["customParameters"] == {"audience": "https://api.example.com"}
+
+    def test_token_exchange_row_is_refused_not_a_key_error(self, service, boto_client):
+        # A pre-#454 row may still hold token_exchange; AWS must never see it,
+        # and the failure must be a ValueError (400), not a KeyError (500).
+        config = MCPGatewayConfig(
+            target_name="old-target",
+            endpoint_url="https://old/mcp",
+            credential_type=GatewayCredentialType.OAUTH,
+            credential_provider_arn="arn:aws:bedrock-agentcore:us-west-2:111:token-vault/default/oauth2credentialprovider/old",
+            grant_type=GatewayOAuthGrantType.TOKEN_EXCHANGE,
+        )
+
+        with pytest.raises(ValueError, match="token_exchange"):
+            service.create_target(config)
+        boto_client.create_gateway_target.assert_not_called()
 
     def test_api_key_credential_config(self, service, boto_client):
         boto_client.create_gateway_target.return_value = _create_response()

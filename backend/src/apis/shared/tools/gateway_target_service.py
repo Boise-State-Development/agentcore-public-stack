@@ -58,7 +58,6 @@ _CREDENTIAL_TYPE_TO_AWS: Dict[str, str] = {
 _GRANT_TYPE_TO_AWS: Dict[str, str] = {
     GatewayOAuthGrantType.AUTHORIZATION_CODE.value: "AUTHORIZATION_CODE",
     GatewayOAuthGrantType.CLIENT_CREDENTIALS.value: "CLIENT_CREDENTIALS",
-    GatewayOAuthGrantType.TOKEN_EXCHANGE.value: "TOKEN_EXCHANGE",
 }
 
 
@@ -446,10 +445,18 @@ class GatewayTargetService:
                 if isinstance(config.grant_type, str)
                 else config.grant_type.value
             )
+            # The admin request rejects every grant but client_credentials
+            # (#454); this keeps a pre-#454 token_exchange row from surfacing
+            # as a KeyError (500) if it ever reaches AWS by another path.
+            aws_grant = _GRANT_TYPE_TO_AWS.get(grant_value)
+            if aws_grant is None:
+                raise ValueError(
+                    f"Gateway OAuth grant type '{grant_value}' is not supported"
+                )
             oauth_provider: Dict[str, Any] = {
                 "providerArn": config.credential_provider_arn,
                 "scopes": list(config.oauth_scopes),
-                "grantType": _GRANT_TYPE_TO_AWS[grant_value],
+                "grantType": aws_grant,
             }
             # customParameters are part of the token-vault key — only send them
             # when set, and exactly as configured so target registration and
