@@ -20,6 +20,7 @@ import { HandoffNotificationService } from '../../services/handoff/handoff-notif
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
 import { HandoffStatus, HandoffView, WaitingOn } from '../../services/handoff/handoff.models';
 import { SessionService } from '../../services/session/session.service';
+import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
 import { HandoffRelayComponent } from './handoff-relay.component';
 
 /** The row's state as the user sees it: live while the target streams in this tab, persisted otherwise. */
@@ -118,11 +119,19 @@ export class HandoffRowComponent {
   private readonly sessions = inject(SessionService);
   protected readonly notifications = inject(HandoffNotificationService);
   private readonly handoffState = inject(HandoffStateService);
+  private readonly connectors = inject(UserConnectorsService);
   private readonly card = viewChild<ElementRef<HTMLAnchorElement>>('card');
 
   readonly row = input.required<HandoffView>();
 
   constructor() {
+    // A row waiting on a connection names the connector the way its consent card does, from the
+    // connector list. The card loads it too, but the row can show without one (a source mid-turn).
+    effect(() => {
+      if (this.state() !== 'needs_input' || this.row().waitingOn?.kind !== 'oauth_consent') return;
+      untracked(() => this.connectors.ensureLoaded());
+    });
+
     effect(() => {
       const handoffId = this.row().handoffId;
       if (this.handoffState.focusedHandoffId() !== handoffId) return;
@@ -165,7 +174,7 @@ export class HandoffRowComponent {
         return `Working on “${truncate(row.request, 60)}”`;
       }
       case 'needs_input':
-        return waitingLine(row.waitingOn);
+        return waitingLine(row.waitingOn, (providerId) => this.connectors.displayNameFor(providerId));
       case 'done': {
         const summary = this.insight.latestSummary(this.target()) ?? row.statusLine;
         return summary ? `Finished · ${summary}` : 'Finished';
@@ -196,10 +205,10 @@ function bringIntoView(card: HTMLElement): void {
   card.focus({ preventScroll: true });
 }
 
-function waitingLine(waiting: WaitingOn | undefined): string {
+function waitingLine(waiting: WaitingOn | undefined, providerName: (providerId: string) => string): string {
   switch (waiting?.kind) {
     case 'oauth_consent':
-      return waiting.name ? `Waiting for you to connect ${titleCase(waiting.name)}` : 'Waiting for you to connect an account';
+      return waiting.name ? `Waiting for you to connect ${providerName(waiting.name)}` : 'Waiting for you to connect an account';
     case 'tool_approval':
       return waiting.name ? `Waiting for your approval to run ${waiting.name}` : 'Waiting for your approval';
     case 'user_question':
@@ -209,10 +218,6 @@ function waitingLine(waiting: WaitingOn | undefined): string {
     default:
       return 'Needs your input';
   }
-}
-
-function titleCase(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function truncate(value: string, max: number): string {

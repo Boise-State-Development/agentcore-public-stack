@@ -786,8 +786,19 @@ async def api_converse(
 
     # 2.7 Model access check (RBAC)
     app_role_service = get_app_role_service()
-    access_kwargs = {"record": effective.record} if effective is not None else {}
+    access_kwargs = (
+        {"record": effective.record, "catalog_read": effective.catalog_read}
+        if effective is not None
+        else {}
+    )
     if not await app_role_service.can_access_model(user, request.model_id, **access_kwargs):
+        if effective is not None and effective.uncataloged:
+            # No catalog row means no pricing: the call would be stored at no
+            # cost and counted against no quota, so it is refused for everyone.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Model is not offered on this platform: {request.model_id}",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied to model: {request.model_id}",

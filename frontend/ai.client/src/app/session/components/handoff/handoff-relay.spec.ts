@@ -275,6 +275,20 @@ describe('Relayed prompts', () => {
     expect(outside).toEqual([]);
   });
 
+  it('names the connector the same way on the row, the relay and the consent card', () => {
+    vi.spyOn(TestBed.inject(UserConnectorsService), 'displayNameFor').mockImplementation((id) =>
+      id === 'canvas' ? 'Canvas for Faculty' : id,
+    );
+    TestBed.inject(HandoffStateService).upsertRow(waiting([CONSENT]));
+    render();
+    refresh();
+
+    const row = fixture.nativeElement.querySelector('app-handoff-row a') as HTMLElement;
+    expect(row.textContent).toContain('Waiting for you to connect Canvas for Faculty');
+    expect(relay()?.textContent).toContain('Rubric Builder needs you to connect Canvas for Faculty to keep going.');
+    expect(button('Connect to Canvas for Faculty')).toBeTruthy();
+  });
+
   it('waits for a running source turn to end; the amber mark does not', () => {
     const chatState = TestBed.inject(ChatStateService);
     TestBed.inject(HandoffStateService).upsertRow(waiting([CONSENT]));

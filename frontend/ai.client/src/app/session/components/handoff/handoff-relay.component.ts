@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, un
 import { RouterLink } from '@angular/router';
 
 import { OAuthConsentRequest } from '../../../services/oauth-consent/oauth-consent.service';
+import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
 import { ToolApprovalRequest } from '../../../services/tool-approval/tool-approval.service';
 import { UserQuestionRequest } from '../../../services/user-question/user-question.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
@@ -85,6 +86,7 @@ export class HandoffRelayComponent {
   private readonly relay = inject(HandoffRelayService);
   private readonly chatState = inject(ChatStateService);
   private readonly handoff = inject(AgentHandoffService);
+  private readonly connectors = inject(UserConnectorsService);
 
   readonly row = input.required<HandoffView>();
 
@@ -142,7 +144,8 @@ export class HandoffRelayComponent {
     const kinds = new Set(items.visible.map((p) => p.kind));
     if (kinds.size > 1) return `${agent} needs your input to keep going.`;
     if (items.consents.length > 0) {
-      return `${agent} needs you to connect ${joinNames(items.consents.map((r) => titleCase(r.providerId)))} to keep going.`;
+      const names = items.consents.map((r) => this.connectors.displayNameFor(r.providerId));
+      return `${agent} needs you to connect ${joinNames(names)} to keep going.`;
     }
     if (items.approvals.length > 0) return `${agent} needs your approval to keep going.`;
     if (items.questions.length > 0) return `${agent} has a question for you.`;
@@ -165,13 +168,4 @@ export class HandoffRelayComponent {
 function joinNames(names: string[]): string {
   if (names.length <= 1) return names[0] ?? 'an account';
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-}
-
-function titleCase(providerId: string): string {
-  return providerId
-    .replace(/[-_]+/g, ' ')
-    .split(' ')
-    .filter((part) => part.length > 0)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
 }

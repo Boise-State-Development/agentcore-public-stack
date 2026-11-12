@@ -126,6 +126,19 @@ def test_the_full_happy_path(store):
     assert done.status_line == "Finished · Drafted a 4-row rubric"
 
 
+@pytest.mark.parametrize("leaving_for", ["running", "done", "stopped"])
+def test_a_row_that_stops_waiting_drops_what_it_waited_on(store, leaving_for):
+    store.create(handoff())
+    accept(store)
+    store.transition("user-a", "h1", "needs_input", waitingOn={"kind": "oauth_consent", "name": "canvas"})
+
+    moved = store.transition("user-a", "h1", leaving_for)
+
+    assert moved.status == leaving_for
+    assert moved.waiting_on is None
+    assert store.get("user-a", "h1").waiting_on is None
+
+
 def test_needs_input_can_end_without_an_intermediate_running_write(store):
     store.create(handoff())
     accept(store)

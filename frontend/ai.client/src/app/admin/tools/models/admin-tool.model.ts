@@ -35,7 +35,8 @@ export type MCPAuthType = 'none' | 'aws-iam' | 'api-key' | 'bearer-token' | 'oau
 export type A2AAuthType = 'none' | 'aws-iam' | 'agentcore' | 'api-key';
 
 /**
- * AgentCore Gateway target listing mode. DYNAMIC disables 3LO + semantic search.
+ * AgentCore Gateway target listing mode. DYNAMIC disables OAuth, semantic
+ * search and per-tool flags.
  */
 export type GatewayListingMode = 'default' | 'dynamic';
 
@@ -45,7 +46,9 @@ export type GatewayListingMode = 'default' | 'dynamic';
 export type GatewayCredentialType = 'none' | 'gateway_iam_role' | 'oauth' | 'api_key';
 
 /**
- * OAuth grant the Gateway uses for an OAUTH-credentialed target.
+ * OAuth grant on an OAUTH-credentialed Gateway target. Only
+ * `client_credentials` can be saved; the others only appear on rows saved
+ * before #454.
  */
 export type GatewayOAuthGrantType =
   | 'authorization_code'
@@ -531,8 +534,8 @@ export function parseDomainList(text: string | null | undefined): string[] {
  * Available Gateway target listing modes for dropdowns.
  */
 export const GATEWAY_LISTING_MODES: { value: GatewayListingMode; label: string; description?: string }[] = [
-  { value: 'default', label: 'Default', description: 'Static tool listing — required for OAuth (3LO) and semantic search' },
-  { value: 'dynamic', label: 'Dynamic', description: 'Resolve tools at call time — disables 3LO and semantic search' },
+  { value: 'default', label: 'Default', description: 'Static tool listing — required for OAuth and semantic search' },
+  { value: 'dynamic', label: 'Dynamic', description: 'Resolve tools at call time — disables semantic search and per-tool flags' },
 ];
 
 /**
@@ -541,18 +544,16 @@ export const GATEWAY_LISTING_MODES: { value: GatewayListingMode; label: string; 
 export const GATEWAY_CREDENTIAL_TYPES: { value: GatewayCredentialType; label: string; description?: string }[] = [
   { value: 'none', label: 'None (public endpoint)', description: 'No outbound credentials — the endpoint is publicly reachable' },
   { value: 'gateway_iam_role', label: 'Gateway IAM Role (SigV4)', description: 'The gateway signs with its execution role — requires the AWS service to sign for' },
-  { value: 'oauth', label: 'OAuth (3LO / 2LO)', description: 'Reference an existing OAuth credential provider by ARN' },
+  { value: 'oauth', label: 'OAuth (Client Credentials)', description: 'The Gateway authenticates as itself through an existing OAuth credential provider (by ARN)' },
   { value: 'api_key', label: 'API Key', description: 'Reference an existing API-key credential provider by ARN' },
 ];
 
 /**
- * Available Gateway OAuth grant types for dropdowns.
+ * The only OAuth grant a Gateway target can be saved with (#454). Rows saved
+ * earlier may still carry `authorization_code` or `token_exchange`; per-user
+ * OAuth tools are registered as MCP External Servers instead.
  */
-export const GATEWAY_OAUTH_GRANT_TYPES: { value: GatewayOAuthGrantType; label: string; description?: string }[] = [
-  { value: 'authorization_code', label: 'Authorization Code (3LO)', description: 'On-behalf-of-user — requires the user to connect the provider' },
-  { value: 'client_credentials', label: 'Client Credentials (2LO)', description: 'Machine-to-machine — no user consent' },
-  { value: 'token_exchange', label: 'Token Exchange', description: 'Exchange an existing token' },
-];
+export const GATEWAY_SUPPORTED_OAUTH_GRANT_TYPE: GatewayOAuthGrantType = 'client_credentials';
 
 /**
  * Available tool statuses for dropdowns.

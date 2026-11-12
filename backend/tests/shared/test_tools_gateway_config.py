@@ -74,19 +74,40 @@ class TestMCPGatewayConfigSerialization:
             oauth_scopes=["repo", "read:user"],
             custom_parameters={"audience": "https://api.github.com"},
         )
-        # 3LO (authorization_code) is the default grant.
-        assert config.grant_type == GatewayOAuthGrantType.AUTHORIZATION_CODE
+        # Client credentials is the default (and only saveable) grant (#454).
+        assert config.grant_type == GatewayOAuthGrantType.CLIENT_CREDENTIALS
 
         data = config.to_dict()
-        assert data["grantType"] == "authorization_code"
+        assert data["grantType"] == "client_credentials"
         assert data["customParameters"] == {"audience": "https://api.github.com"}
 
         restored = MCPGatewayConfig.from_dict(data)
         assert restored.credential_type == GatewayCredentialType.OAUTH
         assert restored.oauth_scopes == ["repo", "read:user"]
         assert restored.credential_provider_arn == config.credential_provider_arn
-        assert restored.grant_type == GatewayOAuthGrantType.AUTHORIZATION_CODE
+        assert restored.grant_type == GatewayOAuthGrantType.CLIENT_CREDENTIALS
         assert restored.custom_parameters == {"audience": "https://api.github.com"}
+
+    @pytest.mark.parametrize("legacy", ["authorization_code", "token_exchange"])
+    def test_pre_454_grant_rows_still_load(self, legacy):
+        # Rows saved before #454 keep their grant on read; only a save rejects it.
+        restored = MCPGatewayConfig.from_dict(
+            {
+                "targetName": "old-target",
+                "endpointUrl": "https://old/mcp",
+                "credentialType": "oauth",
+                "credentialProviderArn": "arn:...:oauth2credentialprovider/old",
+                "grantType": legacy,
+            }
+        )
+        assert restored.grant_type == legacy
+
+    def test_row_without_grant_type_reads_as_authorization_code(self):
+        # Such a row was registered when 3LO was the default.
+        restored = MCPGatewayConfig.from_dict(
+            {"targetName": "t", "endpointUrl": "https://e/mcp"}
+        )
+        assert restored.grant_type == GatewayOAuthGrantType.AUTHORIZATION_CODE
 
     def test_client_credentials_grant_round_trip(self):
         config = MCPGatewayConfig(
@@ -205,6 +226,47 @@ class TestRequestResponseWiring:
         resp = MCPGatewayConfigResponse.from_model(model)
         assert resp.grant_type == "client_credentials"
         assert resp.custom_parameters == {"audience": "https://api.github.com"}
+
+    @pytest.mark.parametrize("grant", ["authorization_code", "token_exchange"])
+    def test_request_rejects_removed_oauth_grants(self, grant):
+        # #454: 3LO had no consent handling for Gateway tools, and token
+        # exchange needs a JWT-inbound Gateway. ValueError → 400 in the routes.
+        req = MCPGatewayConfigRequest(
+            **{
+                "targetName": "gh",
+                "endpointUrl": "https://gh/mcp",
+                "credentialType": "oauth",
+                "credentialProviderArn": "arn:...:oauth2credentialprovider/gh",
+                "grantType": grant,
+            }
+        )
+        with pytest.raises(ValueError, match="client_credentials"):
+            req.to_model()
+
+    def test_request_defaults_to_client_credentials(self):
+        req = MCPGatewayConfigRequest(
+            **{
+                "targetName": "gh",
+                "endpointUrl": "https://gh/mcp",
+                "credentialType": "oauth",
+                "credentialProviderArn": "arn:...:oauth2credentialprovider/gh",
+            }
+        )
+        assert req.to_model().grant_type == GatewayOAuthGrantType.CLIENT_CREDENTIALS
+
+    def test_non_oauth_request_ignores_a_stale_grant(self):
+        # The grant only matters for OAuth; an IAM target edited from an old row
+        # that stored authorization_code must still save.
+        req = MCPGatewayConfigRequest(
+            **{
+                "targetName": "policy-search",
+                "endpointUrl": "https://x.lambda-url.us-west-2.on.aws/mcp",
+                "credentialType": "gateway_iam_role",
+                "awsService": "lambda",
+                "grantType": "authorization_code",
+            }
+        )
+        assert req.to_model().credential_type == GatewayCredentialType.GATEWAY_IAM_ROLE
 
     def test_response_from_model_exposes_identifiers(self):
         config = MCPGatewayConfig(
