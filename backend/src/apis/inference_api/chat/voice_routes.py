@@ -25,7 +25,7 @@ import jwt
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -37,12 +37,17 @@ from apis.shared.sessions.metadata import (
 from apis.shared.tools.always_on import union_enabled_tools
 from apis.shared.tools.freshness import drop_disabled_tools
 from apis.shared.sessions.models import SessionMetadata, SessionPreferences
+from apis.shared.sessions.preview import is_preview_session
 from apis.shared.user_settings.models import (
     cap_memory_mode,
     memory_capabilities,
     memory_mode_from,
+    personal_instructions_from,
 )
 from apis.shared.user_settings.repository import UserSettingsRepository
+
+if TYPE_CHECKING:
+    from apis.shared.auth.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +184,30 @@ def _resolve_voice_identity(
     return user_id, handshake_token
 
 
+def _voice_user(auth_token: str, user_id: str) -> Optional["User"]:
+    """The caller as a ``User`` rebuilt from the connection's token, or None.
+
+    Voice cannot use ``Depends()``, so RBAC inputs come from the token using the
+    same claims ``get_current_user_trusted`` reads. With no token, or one without
+    a ``sub``, there is no ``User``: resolving against an empty role list would
+    answer with the ``default`` role's grant, which is not the caller's.
+    """
+    if not auth_token:
+        return None
+    user_info = _extract_user_from_token(auth_token)
+    if not user_info:
+        return None
+    from apis.shared.auth.models import User
+
+    return User(
+        email=user_info.get("email", ""),
+        name="",
+        user_id=user_info.get("user_id") or user_id,
+        roles=user_info.get("roles") or [],
+        raw_token=auth_token,
+    )
+
+
 async def _always_on_tool_ids_for_voice(
     auth_token: str, user_id: str
 ) -> list:
@@ -190,7 +219,7 @@ async def _always_on_tool_ids_for_voice(
     `/invocations`.
 
     RBAC is resolved from the caller's roles, so one is rebuilt here from the
-    connection's token using the same claims `get_current_user_trusted` reads.
+    connection's token (`_voice_user`).
 
     **Fails closed to today's behaviour.** With no token — or a token that
     carries no `sub` — nothing is pinned, rather than guessing with an empty
@@ -201,22 +230,14 @@ async def _always_on_tool_ids_for_voice(
     if not auth_token:
         logger.info("Voice connection has no token; not resolving always-on tools")
         return []
-    user_info = _extract_user_from_token(auth_token)
-    if not user_info:
+    user = _voice_user(auth_token, user_id)
+    if user is None:
         return []
-    from apis.shared.auth.models import User
     from apis.shared.tools.always_on import (
         resolve_always_on_tool_ids,
         resolve_system_tool_ids,
     )
 
-    user = User(
-        email=user_info.get("email", ""),
-        name="",
-        user_id=user_info.get("user_id") or user_id,
-        roles=user_info.get("roles") or [],
-        raw_token=auth_token,
-    )
     always_on = await resolve_always_on_tool_ids(user)
     system = await resolve_system_tool_ids(user)
     # Union preserving order; system ids appended after always-on. Dedup keeps
@@ -225,16 +246,46 @@ async def _always_on_tool_ids_for_voice(
     return always_on + [tid for tid in system if tid not in seen]
 
 
-async def _load_memory_mode(user_id: str) -> str:
-    """The user's long-term memory mode. Best-effort: on if unreadable."""
+async def _load_voice_settings(user_id: str) -> dict:
+    """The user's saved settings, or ``{}``. Best-effort: never blocks a voice session.
+
+    One read serves both the memory mode (missing means on) and the personal
+    instructions.
+    """
     try:
         repo = UserSettingsRepository()
         if not repo.enabled:
-            return "on"
-        return memory_mode_from(await repo.get_settings(user_id))
+            return {}
+        return await repo.get_settings(user_id) or {}
     except Exception:
         logger.warning("Failed to load user settings", exc_info=True)
-        return "on"
+        return {}
+
+
+async def _voice_system_prompt(
+    session_id: str, settings: dict, user: Optional["User"]
+) -> Optional[str]:
+    """The voice session's base system prompt, or None for the default.
+
+    Composed by the text path's plain-turn helper, so voice and text build the
+    same prompt: base → Role Instructions (#13) → Personal Instructions (#2020).
+    ``VoiceAgent`` then appends memory context and its voice guidelines after
+    these. A user with neither section gets None, so ``BaseAgent`` builds the
+    default prompt exactly as before. A preview session (an author testing an
+    Agent) gets none of the user's own sections, as in text chat.
+    """
+    if is_preview_session(session_id):
+        return None
+    from apis.inference_api.chat.role_instructions import (
+        compose_plain_turn_prompt,
+        resolve_role_instructions,
+    )
+
+    return compose_plain_turn_prompt(
+        None,
+        role_instructions=await resolve_role_instructions(user),
+        personal=personal_instructions_from(settings),
+    )
 
 
 async def _voice_session_incognito(session_id: str, user_id: str, requested: bool) -> bool:
@@ -593,14 +644,19 @@ async def voice_stream(
         # Create VoiceAgent
         VoiceAgent = _get_voice_agent_class()
         incognito = await _voice_session_incognito(session_id, user_id, requested_incognito)
+        settings = await _load_voice_settings(user_id)
         memory_retrieval, memory_extraction = memory_capabilities(
-            cap_memory_mode(await _load_memory_mode(user_id), "read_only" if incognito else "on")
+            cap_memory_mode(memory_mode_from(settings), "read_only" if incognito else "on")
+        )
+        system_prompt = await _voice_system_prompt(
+            session_id, settings, _voice_user(auth_token, user_id)
         )
         voice_agent = VoiceAgent(
             session_id=session_id,
             user_id=user_id,
             auth_token=auth_token,
             enabled_tools=enabled_tools_list,
+            system_prompt=system_prompt,
             voice=requested_voice,
             memory_retrieval=memory_retrieval,
             memory_extraction=memory_extraction,

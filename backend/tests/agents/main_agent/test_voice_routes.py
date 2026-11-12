@@ -83,6 +83,8 @@ class TestVoiceIdentityComesFromTheToken:
         ), patch.object(
             voice_routes, "_always_on_tool_ids_for_voice", new=AsyncMock(return_value=[])
         ), patch.object(
+            voice_routes, "_voice_system_prompt", new=AsyncMock(return_value=None)
+        ), patch.object(
             voice_routes, "_ensure_session_metadata", new=AsyncMock()
         ) as ensure:
             await voice_routes.voice_stream(ws, **params)
@@ -332,3 +334,130 @@ class TestVoiceSessionOwnership:
                 pass
 
         agent_class.assert_called_once()
+
+
+class TestVoiceSystemPrompt:
+    """#2020: voice composes role and personal instructions like a plain text turn.
+
+    The prompt is built by the text path's ``compose_plain_turn_prompt``
+    (base → Role Instructions → Personal Instructions), from the same settings
+    read that gives the memory mode.
+    """
+
+    @staticmethod
+    def _websocket(session_id: str = "s1", sub: str = "user-1") -> MagicMock:
+        ws = MagicMock()
+        ws.headers = {"authorization": f"Bearer {_token(sub, **{'cognito:groups': ['faculty']})}"}
+        ws.accept = AsyncMock()
+        ws.send_json = AsyncMock()
+        ws.close = AsyncMock()
+        ws.receive_json = AsyncMock(return_value={"type": "config", "session_id": session_id})
+        return ws
+
+    @staticmethod
+    async def _connect(ws: MagicMock, *, settings=None, settings_error=None, roles=()):
+        """Run voice_stream up to VoiceAgent construction; return (agent_class, roles_mock)."""
+        from apis.inference_api.chat import role_instructions, voice_routes
+
+        repo = MagicMock()
+        repo.enabled = True
+        repo.get_settings = AsyncMock(return_value=settings or {}, side_effect=settings_error)
+        agent_class = MagicMock(side_effect=RuntimeError("stop at VoiceAgent"))
+        with patch.object(
+            voice_routes, "_get_voice_agent_class", return_value=agent_class
+        ), patch.object(
+            voice_routes, "_always_on_tool_ids_for_voice", new=AsyncMock(return_value=[])
+        ), patch.object(
+            voice_routes, "session_owned_by_other_user", new=AsyncMock(return_value=False)
+        ), patch.object(
+            voice_routes, "_voice_session_incognito", new=AsyncMock(return_value=False)
+        ), patch.object(
+            voice_routes, "UserSettingsRepository", return_value=repo
+        ), patch.object(
+            role_instructions, "resolve_role_instructions", new=AsyncMock(return_value=list(roles))
+        ) as resolve_roles:
+            await voice_routes.voice_stream(ws)
+        agent_class.assert_called_once()
+        return agent_class, resolve_roles
+
+    @pytest.mark.asyncio
+    async def test_role_then_personal_instructions_reach_the_voice_agent(self):
+        from apis.shared.rbac.models import RoleInstruction
+
+        agent_class, resolve_roles = await self._connect(
+            self._websocket(),
+            settings={"personalInstructions": "  Call me Captain.  "},
+            roles=[RoleInstruction("faculty", "Faculty", "Cite primary sources.")],
+        )
+
+        prompt = agent_class.call_args.kwargs["system_prompt"]
+        assert prompt.index("## Role Instructions") < prompt.index("## Personal Instructions")
+        assert "Cite primary sources." in prompt
+        assert prompt.endswith("Call me Captain.")
+        # Personal instructions win a conflict with role ones, as in text chat.
+        assert "follow these personal instructions" in prompt
+        user = resolve_roles.await_args.args[0]
+        assert user.user_id == "user-1"
+        assert user.roles == ["faculty"]
+
+    @pytest.mark.asyncio
+    async def test_personal_instructions_alone(self):
+        agent_class, _ = await self._connect(
+            self._websocket(), settings={"personalInstructions": "Call me Captain."}
+        )
+
+        prompt = agent_class.call_args.kwargs["system_prompt"]
+        assert "## Role Instructions" not in prompt
+        assert prompt.endswith("Call me Captain.")
+
+    @pytest.mark.asyncio
+    async def test_personal_instructions_are_capped(self):
+        from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS
+
+        agent_class, _ = await self._connect(
+            self._websocket(), settings={"personalInstructions": "x" * (MAX_PERSONAL_INSTRUCTIONS_CHARS + 50)}
+        )
+
+        prompt = agent_class.call_args.kwargs["system_prompt"]
+        assert prompt.endswith("x" * MAX_PERSONAL_INSTRUCTIONS_CHARS)
+        assert "x" * (MAX_PERSONAL_INSTRUCTIONS_CHARS + 1) not in prompt
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_add_keeps_the_default_prompt(self):
+        """No role or personal instructions: None, so BaseAgent builds today's prompt."""
+        agent_class, _ = await self._connect(self._websocket(), settings={"personalInstructions": "   "})
+
+        assert agent_class.call_args.kwargs["system_prompt"] is None
+
+    @pytest.mark.asyncio
+    async def test_preview_session_gets_none_of_the_users_sections(self):
+        from apis.shared.rbac.models import RoleInstruction
+
+        agent_class, resolve_roles = await self._connect(
+            self._websocket(session_id="preview-abc"),
+            settings={"personalInstructions": "Call me Captain."},
+            roles=[RoleInstruction("faculty", "Faculty", "Cite primary sources.")],
+        )
+
+        assert agent_class.call_args.kwargs["system_prompt"] is None
+        resolve_roles.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unreadable_settings_still_start_the_session(self):
+        agent_class, _ = await self._connect(self._websocket(), settings_error=RuntimeError("ddb down"))
+
+        kwargs = agent_class.call_args.kwargs
+        assert kwargs["system_prompt"] is None
+        assert kwargs["memory_retrieval"] is True
+        assert kwargs["memory_extraction"] is True
+
+    @pytest.mark.asyncio
+    async def test_memory_mode_comes_from_the_same_settings_read(self):
+        agent_class, _ = await self._connect(
+            self._websocket(), settings={"memoryMode": "off", "personalInstructions": "Call me Captain."}
+        )
+
+        kwargs = agent_class.call_args.kwargs
+        assert kwargs["memory_retrieval"] is False
+        assert kwargs["memory_extraction"] is False
+        assert kwargs["system_prompt"].endswith("Call me Captain.")

@@ -162,10 +162,10 @@ from apis.shared.tools.injected import (
     injected_tools_are_key_described,
 )
 from apis.shared.user_settings.models import (
-    MAX_PERSONAL_INSTRUCTIONS_CHARS,
     cap_memory_mode,
     memory_capabilities,
     memory_mode_from,
+    personal_instructions_from,
 )
 from apis.shared.user_settings.repository import UserSettingsRepository
 
@@ -513,8 +513,7 @@ async def _load_user_settings(user_id: Optional[str]) -> dict:
 
 
 def _personal_instructions(settings: dict) -> Optional[str]:
-    text = (settings.get("personalInstructions") or "").strip()
-    return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
+    return personal_instructions_from(settings)
 
 
 def _memory_mode_for_turn(
