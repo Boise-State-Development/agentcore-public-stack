@@ -71,6 +71,13 @@ export class AgentHandoffService {
   /** Targets seen streaming, so a falling edge is a finish and not a row that never started. */
   private readonly streamingTargets = new Set<string>();
 
+  /**
+   * The needs-input toast each handoff has up, by handoff id. That toast never times out, so it is
+   * withdrawn here once its row stops waiting, however it got answered (under the row, in the
+   * target, in another tab); otherwise it would offer "Answer" on a prompt that is already gone.
+   */
+  private readonly waitingToasts = new Map<string, string>();
+
   constructor() {
     effect(() => {
       for (const row of this.state.allRows()) {
@@ -78,6 +85,14 @@ export class AgentHandoffService {
         if (!target) continue;
         const loading = this.chatState.isSessionLoading(target);
         untracked(() => this.trackTarget(row, target, loading));
+      }
+    });
+
+    effect(() => {
+      for (const row of this.state.allRows()) {
+        // A resumed target streams again before its row is re-read, so streaming counts as answered.
+        const resumed = !!row.targetSessionId && this.chatState.isSessionLoading(row.targetSessionId);
+        if (row.status !== 'needs_input' || resumed) untracked(() => this.withdrawWaitingToast(row.handoffId));
       }
     });
 
@@ -367,6 +382,8 @@ export class AgentHandoffService {
    */
   private announce(row: HandoffView): void {
     this.notifications.onStateChange(row);
+    // A new state replaces whatever this handoff was waiting on, including a second pause's toast.
+    this.withdrawWaitingToast(row.handoffId);
     const target = row.targetSessionId;
     if (!target || this.chatState.viewedSessionId() === target) return;
     const action = answeredInSource(row)
@@ -379,10 +396,22 @@ export class AgentHandoffService {
       const secondaryAction = this.notifications.canOffer()
         ? { label: 'Get a browser notification next time', handler: () => void this.notifications.requestPermission(row) }
         : undefined;
-      this.toast.warning(`${row.agentName} needs your input`, undefined, { action, secondaryAction, duration: 0 });
+      const toastId = this.toast.warning(`${row.agentName} needs your input`, undefined, {
+        action,
+        secondaryAction,
+        duration: 0,
+      });
+      this.waitingToasts.set(row.handoffId, toastId);
     } else if (row.status === 'stopped') {
       this.toast.info(`${row.agentName} stopped`, undefined, { action });
     }
+  }
+
+  private withdrawWaitingToast(handoffId: string): void {
+    const toastId = this.waitingToasts.get(handoffId);
+    if (toastId === undefined) return;
+    this.waitingToasts.delete(handoffId);
+    this.toast.dismiss(toastId);
   }
 
   private async dismiss(sourceSessionId: string, handoffId: string): Promise<void> {

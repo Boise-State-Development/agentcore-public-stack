@@ -45,7 +45,8 @@ describe('AgentHandoffService', () => {
   const submitHandoffRequest = vi.fn().mockResolvedValue(undefined);
   const draftRequest = vi.fn();
   const toastInfo = vi.fn();
-  const toastWarning = vi.fn();
+  const toastWarning = vi.fn().mockReturnValue('toast-1');
+  const toastDismiss = vi.fn();
   const navigate = vi.fn().mockResolvedValue(true);
 
   beforeEach(() => {
@@ -53,6 +54,7 @@ describe('AgentHandoffService', () => {
     draftRequest.mockClear();
     toastInfo.mockClear();
     toastWarning.mockClear();
+    toastDismiss.mockClear();
     loading = signal<ReadonlySet<string>>(new Set());
     TestBed.configureTestingModule({
       providers: [
@@ -69,7 +71,7 @@ describe('AgentHandoffService', () => {
         { provide: Router, useValue: { navigate } },
         {
           provide: ToastService,
-          useValue: { info: toastInfo, success: vi.fn(), warning: toastWarning },
+          useValue: { info: toastInfo, success: vi.fn(), warning: toastWarning, dismiss: toastDismiss },
         },
       ],
     });
@@ -244,5 +246,44 @@ describe('AgentHandoffService', () => {
       expect(openSource).not.toHaveBeenCalled();
       expect(navigate).toHaveBeenCalledWith(['/s', target], { queryParams: { agent: 'rubric' } });
     }
+  });
+
+  /** The needs-input toast never times out, so it must go once nothing is waiting any more. */
+  async function pauseWithToast(): Promise<string> {
+    vi.spyOn(TestBed.inject(HandoffNotificationService), 'onStateChange').mockImplementation(() => undefined);
+    await openReady();
+    await service.send('src');
+    const target = submitHandoffRequest.mock.calls[0][0].targetSessionId as string;
+    loading.set(new Set([target]));
+    TestBed.tick();
+    loading.set(new Set());
+    TestBed.tick();
+    await vi.waitFor(() => http.expectOne(`${API}/sessions/src/handoffs/h1`).flush({
+      ...state.rowsFor('src')[0],
+      status: 'needs_input',
+      relayedPrompts: [{ interruptId: 'i1', kind: 'user_question' }],
+    }), { timeout: 3000 });
+    await vi.waitFor(() => expect(toastWarning).toHaveBeenCalled());
+    expect(toastDismiss).not.toHaveBeenCalled();
+    return target;
+  }
+
+  it('a needs-input toast is withdrawn as soon as the target resumes', async () => {
+    const target = await pauseWithToast();
+
+    loading.set(new Set([target]));
+    TestBed.tick();
+
+    expect(toastDismiss).toHaveBeenCalledExactlyOnceWith('toast-1');
+  });
+
+  it('a needs-input toast is withdrawn when the row is re-read without the pause', async () => {
+    await pauseWithToast();
+
+    // Answered somewhere this tab never streamed (another tab): only the row's re-read says so.
+    state.upsertRow({ ...state.rowsFor('src')[0], status: 'done', relayedPrompts: undefined });
+    TestBed.tick();
+
+    expect(toastDismiss).toHaveBeenCalledExactlyOnceWith('toast-1');
   });
 });
