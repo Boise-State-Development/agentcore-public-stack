@@ -9,6 +9,7 @@ import { signal } from '@angular/core';
 import { UserConnectorsService } from './user-connectors.service';
 import { ConfigService } from '../../../services/config.service';
 import { SessionService } from '../../../auth/session.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 
 const API = 'http://localhost:8000';
 const LIST_URL = `${API}/connectors/`;
@@ -76,5 +77,19 @@ describe('UserConnectorsService', () => {
     await vi.waitFor(() =>
       expect(service.connectorsResource.value()?.[0]?.providerId).toBe('google'),
     );
+  });
+
+  it('probes connector status without the global error toast', async () => {
+    // A 403 on a status probe (tool granted, connector's roles exclude the
+    // caller) once raised an "Access Denied" toast per provider on every
+    // load of the Tools page. Callers already treat a failure as inert.
+    const pending = service.getStatus('google-tasks');
+    const req = httpMock.expectOne(`${API}/connectors/google-tasks/status`);
+    expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+    req.flush(
+      { detail: 'You do not have access to this connector' },
+      { status: 403, statusText: 'Forbidden' },
+    );
+    await expect(pending).rejects.toBeTruthy();
   });
 });

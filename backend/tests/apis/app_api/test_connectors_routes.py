@@ -27,7 +27,7 @@ from apis.shared.oauth.agentcore_identity import (
 from apis.shared.oauth.disconnect_repository import get_disconnect_repository
 from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
 from apis.shared.oauth.provider_repository import get_provider_repository
-from apis.shared.rbac.models import UserEffectivePermissions
+from apis.shared.rbac.models import AppRole, UserEffectivePermissions
 from apis.shared.rbac.service import get_app_role_service
 
 
@@ -200,6 +200,7 @@ def app_with_deps(app_for_user, monkeypatch):
         identity_result: TokenResult | None = None,
         identity_raises: Exception | None = None,
         disconnect_repo: _FakeDisconnectRepo | None = None,
+        roles: dict[str, AppRole] | None = None,
     ) -> tuple[FastAPI, MagicMock, _FakeDisconnectRepo]:
         app = app_for_user(user_id)
 
@@ -211,6 +212,8 @@ def app_with_deps(app_for_user, monkeypatch):
         role_service.resolve_user_permissions = AsyncMock(
             return_value=permissions or _make_permissions(user_id),
         )
+        known_roles = roles or {}
+        role_service.get_role = AsyncMock(side_effect=known_roles.get)
         app.dependency_overrides[get_app_role_service] = lambda: role_service
 
         disconnect_repo = disconnect_repo or _FakeDisconnectRepo()
@@ -290,6 +293,29 @@ class TestConnectorStatus:
 
         assert response.status_code == 403
         identity.get_token_for_user.assert_not_called()
+
+    def test_200_when_user_inherits_an_allowed_role(self, app_with_deps):
+        # Tool access follows `inheritsFrom`, so a role inheriting `admins`
+        # sees the tools behind `admins`' connectors. The connector check has
+        # to agree, or every such tool is listed and then refused (the Tools
+        # page's status probe 403'd once per connector).
+        app, _, _ = app_with_deps(
+            "alice",
+            provider=_make_provider(allowed_roles=["admins"]),
+            permissions=_make_permissions("alice", roles=["developer"]),
+            roles={
+                "developer": AppRole(
+                    role_id="developer",
+                    display_name="Developer",
+                    description="",
+                    inherits_from=["admins"],
+                ),
+                "admins": AppRole(role_id="admins", display_name="Admins", description=""),
+            },
+        )
+        response = TestClient(app).get("/connectors/google/status")
+
+        assert response.status_code == 200
 
     def test_503_when_workload_token_unavailable(self, app_with_deps):
         app, _, _ = app_with_deps(
