@@ -26,6 +26,9 @@ export interface Assistant {
   /** How strictly answers stay within the knowledge base (#112); default 'balanced'. */
   responseStrictness?: 'strict' | 'balanced' | 'flexible';
 
+  /** Whether people can talk to this assistant in voice mode (#625); default off. */
+  voiceEnabled?: boolean;
+
   // Share metadata (only present for shared assistants)
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;

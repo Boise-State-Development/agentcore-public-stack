@@ -283,7 +283,7 @@ class VoiceAgent(BaseAgent):
             # wire-contract dicts: bidi_audio_stream, bidi_transcript_stream, etc.
     """
 
-    def __init__(self, voice: Optional[str] = None, **kwargs):
+    def __init__(self, voice: Optional[str] = None, voice_guidelines: bool = True, **kwargs):
         """
         Initialize voice agent.
 
@@ -291,8 +291,14 @@ class VoiceAgent(BaseAgent):
             voice: Nova 2 Sonic voice id (see ``apis.shared.voice_catalog``).
                    Unknown or blank falls back to the NOVA_SONIC_VOICE env var,
                    then "tiffany" — never an id Bedrock would refuse.
+            voice_guidelines: Append the built-in "Voice Interaction
+                   Guidelines" block. On for a plain voice chat; an Agent turns
+                   it off unless its author asked for it (#625), because rules
+                   like "confirm understanding before taking actions" fight an
+                   in-character persona.
             **kwargs: All BaseAgent constructor args
         """
+        self._voice_guidelines = voice_guidelines
         self._voice = resolve_voice_id(
             voice,
             os.environ.get(EnvVars.NOVA_SONIC_VOICE, Defaults.NOVA_SONIC_VOICE),
@@ -376,11 +382,22 @@ class VoiceAgent(BaseAgent):
             raise
 
     def _build_voice_system_prompt(self) -> str:
-        """Build system prompt optimized for voice interaction."""
+        """Build system prompt optimized for voice interaction.
+
+        The base prompt (an Agent's composed instructions, or the default),
+        then memory context, then an Agent's whole knowledge base, then the
+        optional voice guidelines, then the voice-presentation line. The
+        presentation line always stays: it fixes grammar, not style.
+        """
         base = self.system_prompt if isinstance(self.system_prompt, str) else ""
-        memory_context = getattr(self, "memory_context", None)
-        if memory_context:
-            base = f"{base}\n\n{memory_context}" if base else memory_context
+        for block in (getattr(self, "memory_context", None), getattr(self, "knowledge_context", None)):
+            if block:
+                base = f"{base}\n\n{block}" if base else str(block)
+        presentation = self._voice_presentation_line()
+        if not getattr(self, "_voice_guidelines", True):
+            # The presentation line is written as one more bullet of the
+            # guidelines; on its own it needs a paragraph break before it.
+            return f"{base}\n\n{presentation}" if presentation else base
         voice_addendum = (
             "\n\n## Voice Interaction Guidelines\n"
             "- Keep responses concise and conversational\n"
@@ -388,7 +405,7 @@ class VoiceAgent(BaseAgent):
             "- Use natural speech patterns\n"
             "- Confirm understanding before taking actions\n"
         )
-        return base + voice_addendum + self._voice_presentation_line()
+        return base + voice_addendum + presentation
 
     def _voice_presentation_line(self) -> str:
         """One line telling the model which voice it speaks with.

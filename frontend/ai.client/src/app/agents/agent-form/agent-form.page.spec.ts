@@ -243,6 +243,86 @@ describe('AgentFormPage — invalid submit feedback', () => {
     });
   });
 
+  describe('voice mode (#625)', () => {
+    function checkbox(testId: string): HTMLInputElement | null {
+      return fixture.nativeElement.querySelector(`[data-testid="${testId}"]`);
+    }
+
+    it('defaults a new agent to voice off, and shows the instructions-only option once on', () => {
+      expect(component.form.get('voiceEnabled')?.value).toBe(false);
+      expect(checkbox('agent-voice-instructions-only')).toBeNull();
+
+      checkbox('agent-voice-enabled')!.click();
+      fixture.detectChanges();
+
+      const only = checkbox('agent-voice-instructions-only');
+      expect(only).toBeTruthy();
+      expect(only!.checked).toBe(true);
+    });
+
+    it('sends both settings on save', async () => {
+      component.form.patchValue({
+        name: 'Captain Ahab',
+        description: 'A role-play character for literature class',
+        instructions: 'You are Captain Ahab. Stay in character at all times.',
+        voiceEnabled: true,
+        voiceInstructionsOnly: false,
+      });
+      component.selectedModelId.set('anthropic.claude-opus-4-8');
+      await component.onSubmit();
+
+      expect(mockAgentService.createAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ voiceEnabled: true, voiceInstructionsOnly: false }),
+      );
+    });
+
+    it('loads the stored settings', () => {
+      (component as unknown as { applyAgentToForm(agent: unknown): void }).applyAgentToForm({
+        agentId: 'agt-1',
+        name: 'A',
+        description: 'd',
+        instructions: 'i',
+        voiceEnabled: true,
+        voiceInstructionsOnly: false,
+      });
+      expect(component.form.get('voiceEnabled')?.value).toBe(true);
+      expect(component.form.get('voiceInstructionsOnly')?.value).toBe(false);
+    });
+
+    it('names the selected tools that do not work in voice', () => {
+      component.tools.set([
+        { kind: 'tool', ref: 'calculator', label: 'Calculator', description: '', meta: { voiceAvailable: true } },
+        { kind: 'tool', ref: 'browse_web', label: 'Web Browser', description: '', meta: { voiceAvailable: false } },
+        { kind: 'tool', ref: 'create_visualization', label: 'Charts', description: '', meta: {} },
+      ]);
+      component.selectedToolRefs.set(new Set(['calculator', 'browse_web']));
+      component.form.patchValue({ voiceEnabled: true });
+      fixture.detectChanges();
+
+      expect(component.toolsNotInVoice()).toEqual(['Web Browser']);
+      const notice = checkbox('agent-voice-tools-notice') as HTMLElement | null;
+      expect(notice?.textContent).toContain('Web Browser');
+      expect(notice?.textContent).not.toContain('Calculator');
+    });
+
+    it('warns about a large knowledge base and one too large for voice', () => {
+      component.form.patchValue({ voiceEnabled: true });
+      const base = { reason: null, documentCount: 4, largeTokens: 50_000, budgetTokens: 800_000, skippedDocuments: [] };
+      component.voiceKnowledge.set({ ...base, mode: 'large', estimatedTokens: 120_000 });
+      expect(component.voiceKnowledgeNotice()?.text).toContain('about 120,000 tokens');
+
+      component.voiceKnowledge.set({ ...base, mode: 'too_large', reason: 'over_budget', estimatedTokens: 900_000 });
+      expect(component.voiceKnowledgeNotice()?.text).toContain("Voice won't use it");
+
+      component.voiceKnowledge.set({ ...base, mode: 'whole', estimatedTokens: 2_000 });
+      expect(component.voiceKnowledgeNotice()).toBeNull();
+
+      component.form.patchValue({ voiceEnabled: false });
+      component.voiceKnowledge.set({ ...base, mode: 'large', estimatedTokens: 120_000 });
+      expect(component.voiceKnowledgeNotice()).toBeNull();
+    });
+  });
+
   it('is done loading once the palettes resolve', () => {
     expect(component.loading()).toBe(false);
     expect(fixture.nativeElement.querySelector('form')).toBeTruthy();

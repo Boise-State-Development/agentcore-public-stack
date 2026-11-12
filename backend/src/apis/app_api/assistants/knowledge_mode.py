@@ -41,6 +41,7 @@ from apis.shared.security.log_sanitize import scrub_log
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/assistants/{assistant_id}/knowledge-base/mode", tags=["assistants"])
+voice_router = APIRouter(prefix="/assistants/{assistant_id}/knowledge-base/voice-mode", tags=["assistants"])
 
 _EDIT_PERMISSIONS = ("owner", "editor")
 
@@ -114,3 +115,82 @@ async def read_knowledge_mode(
             exc_info=True,
         )
         return KnowledgeModeResponse(mode="unknown")
+
+
+# ─────────────────────────────────────────────────────────────── voice mode (#625)
+#: How an Agent's knowledge base reaches a voice conversation. Voice has no
+#: retrieval step, so it gets the text documents whole or not at all
+#: (:func:`apis.shared.assistants.kb_full_context.voice_max_tokens`).
+#:
+#: ``whole``: sent whole and within the text budget, the size full context was
+#: tuned for. ``large``: sent whole, but over the text budget, so a session
+#: starts slower and costs more. ``too_large``: over voice's ceiling (or its
+#: files over the download cap); voice leaves it out. ``unreadable``: no text
+#: voice can read (a scan with no text layer, or only spreadsheets and decks).
+#: ``off``: the deployment keeps knowledge bases out of voice. ``empty`` and
+#: ``unknown`` as for the text mode.
+VoiceKnowledgeMode = Literal["whole", "large", "too_large", "unreadable", "off", "empty", "unknown"]
+
+
+class VoiceKnowledgeModeResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    mode: VoiceKnowledgeMode
+    #: :mod:`kb_full_context`'s ``REASON_*`` value when voice cannot use it.
+    reason: Optional[str] = None
+    document_count: int = Field(0, alias="documentCount")
+    estimated_tokens: int = Field(0, alias="estimatedTokens")
+    #: Above this, the Designer warns: the text budget.
+    large_tokens: int = Field(0, alias="largeTokens")
+    #: Above this, voice leaves the knowledge base out.
+    budget_tokens: int = Field(0, alias="budgetTokens")
+    #: Spreadsheets and decks, which voice cannot read.
+    skipped_documents: List[str] = Field(default_factory=list, alias="skippedDocuments")
+
+
+async def voice_knowledge_mode(assistant_id: str) -> VoiceKnowledgeModeResponse:
+    """How voice would use this knowledge base now. Access is the caller's job."""
+    from apis.shared.assistants import kb_full_context as fc
+    from apis.shared.feature_flags import assistant_kb_full_context_enabled
+
+    budget = fc.voice_max_tokens()
+    large = fc.full_context_max_tokens()
+    if not assistant_kb_full_context_enabled() or budget <= 0:
+        return VoiceKnowledgeModeResponse(mode="off", largeTokens=large, budgetTokens=budget)
+    found = await asyncio.to_thread(fc.assess_full_context, assistant_id, budget)
+    common = dict(
+        documentCount=found.document_count,
+        estimatedTokens=found.estimated_tokens,
+        largeTokens=large,
+        budgetTokens=budget,
+        skippedDocuments=list(found.skipped),
+    )
+    if found.reason == fc.REASON_EMPTY:
+        return VoiceKnowledgeModeResponse(mode="empty", largeTokens=large, budgetTokens=budget)
+    if found.eligible:
+        return VoiceKnowledgeModeResponse(mode="large" if found.estimated_tokens > large else "whole", **common)
+    too_large = found.reason in (fc.REASON_OVER_BUDGET, fc.REASON_DOCUMENT_OVER_BUDGET, fc.REASON_RAW_BYTES)
+    return VoiceKnowledgeModeResponse(mode="too_large" if too_large else "unreadable", reason=found.reason, **common)
+
+
+@voice_router.get("", response_model=VoiceKnowledgeModeResponse, response_model_by_alias=True)
+async def read_voice_knowledge_mode(
+    assistant_id: str,
+    current_user: User = Depends(get_current_user_from_session),
+) -> VoiceKnowledgeModeResponse:
+    """How this Agent's knowledge base reaches a voice conversation, for the Designer."""
+    assistant, permission = await resolve_assistant_permission(
+        assistant_id=assistant_id, user_id=current_user.user_id, user_email=current_user.email
+    )
+    if not assistant or not permission:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Assistant not found: {assistant_id}")
+    if permission not in _EDIT_PERMISSIONS:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the Agent's editors can see this")
+    try:
+        return await voice_knowledge_mode(assistant_id)
+    except Exception as exc:  # noqa: BLE001 — decoration on a working page
+        logger.error(
+            f"kb {scrub_log(assistant_id)}: could not work out the voice knowledge-base mode: {scrub_log(exc)}",
+            exc_info=True,
+        )
+        return VoiceKnowledgeModeResponse(mode="unknown")

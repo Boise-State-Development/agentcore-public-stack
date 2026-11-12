@@ -230,6 +230,26 @@ export class ChatContainerComponent {
     ...this.config(),
   }));
 
+  /**
+   * The conversation's Agent for voice mode (#625). The backend checks it against
+   * the Agent saved on the session, so this only matters for a brand-new chat.
+   */
+  protected readonly voiceAgentId = computed<string | null>(() => this.assistant()?.assistantId ?? null);
+
+  /**
+   * Voice mode (#625): offered on a plain chat, and on an Agent's chat only when the
+   * author turned voice on. Not offered in a Shared Project, whose harness has no
+   * voice setting. The backend enforces the same rules; this just hides a button
+   * that would only explain why it can't start.
+   */
+  protected readonly showVoiceControl = computed<boolean>(() => {
+    if (!this.resolvedConfig().showVoiceControl) return false;
+    const assistant = this.assistant();
+    if (!assistant) return true;
+    if (this.project() || assistant.kind === 'project') return false;
+    return (this.agent()?.voiceEnabled ?? assistant.voiceEnabled) === true;
+  });
+
   // Output events
   // `mentionAgentId` and `invokedSkillIds` ride through untouched: the container is a
   // layout shell, and dropping either field here would silently turn every `@`-mention

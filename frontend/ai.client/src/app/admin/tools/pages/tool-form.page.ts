@@ -1202,6 +1202,25 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
                 </p>
               </div>
 
+              <div>
+                <label class="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    formControlName="voiceAvailable"
+                    data-testid="tool-voice-available"
+                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                  />
+                  <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Available in voice mode
+                  </span>
+                </label>
+                <p class="ml-7 mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                  Voice conversations only use tools marked here. Mark a tool only if it usually
+                  answers in under a second and its result makes sense read aloud: voice goes
+                  silent after a slow tool, and charts or documents do nothing for a listener.
+                </p>
+              </div>
+
               <fieldset>
                 <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                   Availability in the tool picker
@@ -1408,6 +1427,8 @@ export class ToolFormPage implements OnInit {
     retirementNote: [''],
     retiresOn: [''],
     isPublic: [false],
+    // #625: off by default — a tool runs in voice only when an admin says it suits voice.
+    voiceAvailable: [false],
     // One control for what the backend still stores as two booleans, so the
     // incoherent pair (off by default + always on) cannot be produced here.
     toolEnablement: ['user_choice' as ToolEnablement],
@@ -1894,6 +1915,7 @@ export class ToolFormPage implements OnInit {
         retirementNote: tool.retirementNote ?? '',
         retiresOn: tool.retiresOn ?? '',
         isPublic: tool.isPublic,
+        voiceAvailable: tool.voiceAvailable ?? false,
         toolEnablement: toolEnablementOf(tool),
         // An already-saved always-on server was acknowledged when it was set;
         // don't re-prompt on every edit of an unrelated field.
@@ -2126,6 +2148,7 @@ export class ToolFormPage implements OnInit {
           retirementNote: formValue.retirementNote ?? '',
           retiresOn: formValue.retiresOn ?? '',
           isPublic: formValue.isPublic,
+          voiceAvailable: formValue.voiceAvailable === true,
           ...toolEnablementFlags(formValue.toolEnablement),
           requiresOauthProvider: requiresOauthProvider,
           forwardAuthToken: formValue.forwardAuthToken || false,
@@ -2150,6 +2173,7 @@ export class ToolFormPage implements OnInit {
           retirementNote: formValue.retirementNote ?? '',
           retiresOn: formValue.retiresOn ?? '',
           isPublic: formValue.isPublic,
+          voiceAvailable: formValue.voiceAvailable === true,
           ...toolEnablementFlags(formValue.toolEnablement),
           requiresOauthProvider: requiresOauthProvider,
           forwardAuthToken: formValue.forwardAuthToken || false,

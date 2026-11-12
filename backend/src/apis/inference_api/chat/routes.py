@@ -4952,6 +4952,7 @@ async def resolve_turn_agent(
     *,
     is_continuation: bool,
     record_use: bool = True,
+    kb_budget_tokens: Optional[int] = None,
 ) -> Union[StreamingResponse, ResolvedTurnAgent]:
     """Resolve the Agent a turn runs, for this caller (route step 8, the ``rag`` stage's first half).
 
@@ -4966,7 +4967,8 @@ async def resolve_turn_agent(
     the same access rules; both call this rather than a copy. ``record_use=False`` skips
     the share-interaction and last-used writes, for a call that is not the user using
     the Agent. A turn that must not run gets its conversational refusal back instead, to
-    stream as is.
+    stream as is. ``kb_budget_tokens`` replaces the full-context budget: voice mode (#625)
+    has no retrieval, so it asks for the whole knowledge base under its own ceiling.
     """
     from apis.shared.assistants.kb_access import granted
     from apis.shared.assistants.service import (
@@ -5230,10 +5232,12 @@ async def resolve_turn_agent(
     if assistant_kb_full_context_enabled():
         from apis.shared.assistants.kb_full_context import load_full_kb_context
 
+        kb_access = granted(input_data.rag_assistant_id, user_id, assistant_permission)
         kb_full_context_task = asyncio.create_task(
-            load_full_kb_context(
-                input_data.rag_assistant_id,
-                access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+            load_full_kb_context(input_data.rag_assistant_id, access=kb_access)
+            if kb_budget_tokens is None
+            else load_full_kb_context(
+                input_data.rag_assistant_id, access=kb_access, budget_tokens=kb_budget_tokens
             )
         )
 

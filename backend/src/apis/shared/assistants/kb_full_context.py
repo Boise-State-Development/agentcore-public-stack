@@ -97,6 +97,30 @@ MAX_RAW_BYTES = 16 * 1024 * 1024
 _FETCH_WORKERS = 8
 
 
+#: Voice mode's ceiling for a whole knowledge base (#625), in the same estimated
+#: tokens. Voice has no retrieval step: in text chat the server searches with
+#: the typed message before the model runs, and in voice the speech goes
+#: straight to Nova 2 Sonic, so a knowledge base reaches voice whole or not at
+#: all. The ceiling is 80% of Sonic's 1M-token context window, leaving room for
+#: the instructions and the conversation. Between the text budget (50K) and
+#: this the Designer warns that voice may start slower and cost more; above it,
+#: voice leaves the knowledge base out. ``0`` keeps knowledge bases out of voice.
+VOICE_MAX_TOKENS_ENV = "VOICE_KB_MAX_TOKENS"
+DEFAULT_VOICE_MAX_TOKENS = 800_000
+
+
+def voice_max_tokens() -> int:
+    """Voice mode's whole-knowledge-base ceiling, read per call like the text budget."""
+    raw = os.environ.get(VOICE_MAX_TOKENS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_VOICE_MAX_TOKENS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %d", VOICE_MAX_TOKENS_ENV, raw, DEFAULT_VOICE_MAX_TOKENS)
+        return DEFAULT_VOICE_MAX_TOKENS
+
+
 def full_context_max_tokens() -> int:
     """The token budget, read per call so a live config change takes effect."""
     raw = os.environ.get(FULL_CONTEXT_MAX_TOKENS_ENV, "").strip()
@@ -285,7 +309,9 @@ def _build(assistant_id: str, budget_tokens: int) -> Optional[KnowledgeBaseBlock
     return assess_full_context(assistant_id, budget_tokens).block
 
 
-async def load_full_kb_context(assistant_id: str, *, access: Optional[KbAccess]) -> Optional[KnowledgeBaseBlock]:
+async def load_full_kb_context(
+    assistant_id: str, *, access: Optional[KbAccess], budget_tokens: Optional[int] = None
+) -> Optional[KnowledgeBaseBlock]:
     """The whole knowledge base as one block, or ``None`` to use retrieval.
 
     The block is a ``str`` (:class:`KnowledgeBaseBlock`) that also names the
@@ -294,10 +320,13 @@ async def load_full_kb_context(assistant_id: str, *, access: Optional[KbAccess])
     ``access`` is required and keyword-only, exactly as for
     ``search_assistant_knowledgebase_with_cap``: a missing or mismatched grant
     returns ``None`` before anything is read. Never raises.
+
+    ``budget_tokens`` overrides the text budget; voice mode passes
+    :func:`voice_max_tokens`.
     """
     if not assistant_kb_full_context_enabled():
         return None
-    budget = full_context_max_tokens()
+    budget = full_context_max_tokens() if budget_tokens is None else budget_tokens
     if budget <= 0:
         return None
     if access is None or not access.may_read or access.assistant_id != assistant_id:

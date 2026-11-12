@@ -7,7 +7,8 @@ voice router pattern.
 
 Protocol:
     Client → Server:
-        {"type": "config", "session_id": "...", "auth_token": "...", "voice": "tiffany", ...}  (first message)
+        {"type": "config", "session_id": "...", "auth_token": "...", "voice": "tiffany",
+         "agent_id": "...", ...}  (first message; agent_id is the conversation's Agent, #625)
         {"type": "bidi_audio_input", "audio": "<base64>", "sample_rate": 16000}
         {"type": "bidi_text_input", "text": "..."}
         {"type": "ping"}
@@ -15,7 +16,9 @@ Protocol:
 
     Server → Client:
         {"type": "bidi_connection_start", "connection_id": "...", "status": "connected"}
-        {"type": "bidi_error", "message": "..."}
+        {"type": "bidi_error", "message": "...", "code": "..."}  (``code`` set when the
+            session ends for a reason the user should be told: ``voice_capacity``,
+            ``agent_voice_unavailable``)
         Agent stream events (audio, transcripts, tool use, etc.)
 """
 
@@ -35,7 +38,14 @@ from apis.shared.sessions.metadata import (
     store_session_metadata,
 )
 from apis.shared.tools.always_on import union_enabled_tools
-from apis.shared.tools.freshness import drop_disabled_tools
+from apis.shared.tools.freshness import drop_disabled_tools, keep_voice_tools
+from apis.inference_api.chat.voice_agent_plan import (
+    AGENT_VOICE_UNAVAILABLE_CODE,
+    VoiceAgentRefused,
+    clean_agent_claim,
+    resolve_voice_agent,
+    session_agent_id,
+)
 from apis.shared.sessions.models import SessionMetadata, SessionPreferences
 from apis.shared.sessions.preview import is_preview_session
 from apis.shared.user_settings.models import (
@@ -209,7 +219,7 @@ def _voice_user(auth_token: str, user_id: str) -> Optional["User"]:
 
 
 async def _always_on_tool_ids_for_voice(
-    auth_token: str, user_id: str
+    auth_token: str, user_id: str, *, include_always_on: bool = True
 ) -> list:
     """The admin-pinned tool ids this voice connection is entitled to.
 
@@ -238,7 +248,9 @@ async def _always_on_tool_ids_for_voice(
         resolve_system_tool_ids,
     )
 
-    always_on = await resolve_always_on_tool_ids(user)
+    # An Agent that binds its own tools takes no admin pins (D4), exactly as
+    # on a text turn; the platform's system tools still apply.
+    always_on = await resolve_always_on_tool_ids(user) if include_always_on else []
     system = await resolve_system_tool_ids(user)
     # Union preserving order; system ids appended after always-on. Dedup keeps
     # a byte-stable list for the cacheable toolConfig prefix.
@@ -304,18 +316,41 @@ async def _voice_session_incognito(session_id: str, user_id: str, requested: boo
     return bool(existing.preferences and existing.preferences.incognito)
 
 
-async def _ensure_session_metadata(session_id: str, user_id: str, incognito: bool = False) -> None:
+async def _ensure_session_metadata(
+    session_id: str, user_id: str, incognito: bool = False, assistant_id: Optional[str] = None
+) -> None:
     """Create session metadata entry if one doesn't already exist.
 
     This makes the voice session visible in the conversations side nav.
     If the session started as a text chat, existing metadata is preserved.
-    ``incognito`` is stamped only on a session created here.
+    ``incognito`` is stamped only on a session created here. ``assistant_id``
+    records the conversation's Agent (#625) so it reopens as an Agent chat; it
+    is written onto an existing row only when that row names no Agent yet
+    (``session_agent_id`` already refused to move a conversation between
+    Agents).
     """
     try:
         existing = await get_session_metadata(session_id, user_id)
         if existing:
-            logger.debug(f"Session metadata already exists for {_sanitize_log(session_id)}")
+            stored = existing.preferences.assistant_id if existing.preferences else None
+            if assistant_id and not stored:
+                prefs = existing.preferences.model_dump(by_alias=False) if existing.preferences else {}
+                prefs["assistant_id"] = assistant_id
+                await store_session_metadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    session_metadata=existing.model_copy(update={"preferences": SessionPreferences(**prefs)}),
+                )
+                logger.info(f"Bound voice session {_sanitize_log(session_id)} to its agent")
+            else:
+                logger.debug(f"Session metadata already exists for {_sanitize_log(session_id)}")
             return
+
+        preferences = None
+        if incognito or assistant_id:
+            preferences = SessionPreferences(
+                incognito=True if incognito else None, assistant_id=assistant_id
+            )
 
         now = datetime.now(timezone.utc).isoformat()
         metadata = SessionMetadata(
@@ -328,12 +363,84 @@ async def _ensure_session_metadata(session_id: str, user_id: str, incognito: boo
             message_count=0,
             starred=False,
             tags=[],
-            preferences=SessionPreferences(incognito=True) if incognito else None,
+            preferences=preferences,
         )
         await store_session_metadata(session_id=session_id, user_id=user_id, session_metadata=metadata)
         logger.info(f"Created session metadata for voice session {_sanitize_log(session_id)}")
     except Exception as e:
         logger.error(f"Failed to create session metadata for {_sanitize_log(session_id)}: {e}", exc_info=True)
+
+
+async def _read_session_metadata(session_id: str, user_id: str) -> Any:
+    """The session's metadata row, or ``None`` when it has none or it can't be read."""
+    try:
+        return await get_session_metadata(session_id, user_id)
+    except Exception:
+        logger.warning("Failed to read session metadata for the voice agent check", exc_info=True)
+        return None
+
+
+def _agent_resolver_user(auth_token: str, user_id: str) -> Any:
+    """The caller as a ``User`` for the Agent resolver.
+
+    The token's claims (``_voice_user``). Without a token (``SKIP_AUTH`` local
+    dev, the one way in without one) it is the local dev user, or a bare user
+    with no roles, which the resolver's access check then judges as such.
+    """
+    user = _voice_user(auth_token, user_id)
+    if user is not None:
+        return user
+    from apis.shared.auth.dependencies import _skip_auth_user
+    from apis.shared.auth.models import User
+
+    return _skip_auth_user() or User(email="", name="", user_id=user_id, roles=[])
+
+
+#: The ``code`` on a ``bidi_error`` frame when Nova 2 Sonic is at its
+#: concurrent-session quota (20 per account per Region, not adjustable).
+VOICE_CAPACITY_CODE = "voice_capacity"
+VOICE_CAPACITY_MESSAGE = (
+    "Voice mode isn't available right now because too many people are using it. "
+    "Please try again in a few minutes."
+)
+
+#: Exception type names Bedrock uses for "too many at once". Matched by name
+#: because the bidi stream's exceptions come from ``aws_sdk_bedrock_runtime``
+#: (the bidi extra), which this module must not import.
+_CAPACITY_ERROR_TYPES = frozenset({"ThrottlingException", "ServiceQuotaExceededException", "TooManyRequestsException"})
+_CAPACITY_ERROR_PHRASES = (
+    "too many requests",
+    "too many concurrent",
+    "concurrent session",
+    "concurrent stream",
+    "quota exceeded",
+    "throttl",
+)
+
+
+def _is_capacity_error(exc: BaseException) -> bool:
+    """Whether ``exc`` (or anything it wraps) is Bedrock refusing another session."""
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if type(current).__name__ in _CAPACITY_ERROR_TYPES:
+            return True
+        text = str(current).lower()
+        if any(phrase in text for phrase in _CAPACITY_ERROR_PHRASES):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+async def _end_for_capacity(websocket: WebSocket, session_id: str) -> None:
+    """Tell the client voice is at capacity, then close. Best-effort."""
+    logger.warning(f"Voice at capacity (Nova 2 Sonic concurrent sessions): session={_sanitize_log(session_id)}")
+    try:
+        await websocket.send_json({"type": "bidi_error", "code": VOICE_CAPACITY_CODE, "message": VOICE_CAPACITY_MESSAGE})
+        await websocket.close(code=4029, reason="Voice at capacity")
+    except Exception:
+        pass
 
 
 async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: Any) -> None:
@@ -563,6 +670,7 @@ async def voice_stream(
     requested_voice: Optional[str] = None
     frame_user_id: Optional[str] = None
     requested_incognito = False
+    claimed_agent_id: Optional[str] = None
 
     # Always read config message from client (sent on WebSocket open).
     # Required for auth_token in AgentCore mode and supplements any
@@ -583,6 +691,9 @@ async def voice_stream(
             # Incognito chat (#1738): honoured only if this connection
             # creates the session (`_voice_session_incognito`).
             requested_incognito = first_msg.get("incognito") is True
+            # The conversation's Agent (#625). A claim, checked against the
+            # session's saved Agent in `session_agent_id`.
+            claimed_agent_id = clean_agent_claim(first_msg.get("agent_id"))
             logger.info(f"Voice config received from client message")
     except asyncio.TimeoutError:
         logger.warning("No config message received within 10s, using query params")
@@ -622,19 +733,53 @@ async def voice_stream(
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    # Admin-pinned tools reach voice too (D5). Resolved BEFORE the connection
-    # log below, because that log is the first thing anyone reads when
-    # debugging a voice toolset — emitting it ahead of the union made it
-    # under-report by exactly the tools this feature adds.
-    always_on_ids = await _always_on_tool_ids_for_voice(auth_token, user_id)
+    # The conversation's Agent (#625): its instructions, knowledge base and
+    # tool bindings, resolved by the same resolver a text turn uses. Refused
+    # before anything else is built, with a message the client shows.
+    # One settings read serves the memory mode and the personal instructions.
+    settings = await _load_voice_settings(user_id)
+    agent_plan = None
+    agent_id = session_agent_id(await _read_session_metadata(session_id, user_id), claimed_agent_id)
+    if agent_id:
+        try:
+            agent_plan = await resolve_voice_agent(
+                session_id,
+                _agent_resolver_user(auth_token, user_id),
+                agent_id,
+                # Below the Agent's instructions, as on a text turn (#2020). A
+                # preview session gets none of the user's own sections.
+                personal_instructions=None if is_preview_session(session_id) else personal_instructions_from(settings),
+            )
+        except VoiceAgentRefused as refused:
+            logger.info(f"Voice session refused for its agent: session={_sanitize_log(session_id)}")
+            await websocket.send_json(
+                {"type": "bidi_error", "code": AGENT_VOICE_UNAVAILABLE_CODE, "message": refused.message}
+            )
+            await websocket.close(code=4003, reason="Agent not available in voice")
+            return
+
+    # An Agent's tool bindings replace the request's tools, as on a text turn.
+    if agent_plan is not None and agent_plan.tool_ids is not None:
+        enabled_tools_list = agent_plan.tool_ids
+
+    # Admin-pinned tools reach voice too (D5), unless the Agent binds its own
+    # tools (D4). Resolved BEFORE the connection log below, because that log is
+    # the first thing anyone reads when debugging a voice toolset — emitting it
+    # ahead of the union made it under-report by exactly the tools this
+    # feature adds.
+    always_on_ids = await _always_on_tool_ids_for_voice(
+        auth_token, user_id, include_always_on=not (agent_plan is not None and agent_plan.owns_toolset)
+    )
     enabled_tools_list = union_enabled_tools(enabled_tools_list, always_on_ids)
     # Same rule as the text path (`get_agent`): a disabled tool never loads.
     enabled_tools_list = await drop_disabled_tools(enabled_tools_list)
+    # Only tools an admin marked as fit for voice (#625), whatever enabled them.
+    enabled_tools_list = await keep_voice_tools(enabled_tools_list)
 
     logger.info(
         f"Voice WebSocket connected: session={_sanitize_log(session_id)}, "
         f"user={_sanitize_log(user_id)}, tools={len(enabled_tools_list or [])}, "
-        f"pinned={len(always_on_ids)}, "
+        f"pinned={len(always_on_ids)}, agent={'yes' if agent_plan else 'no'}, "
         f"auth_token={'present' if auth_token else 'missing'}"
     )
 
@@ -644,13 +789,20 @@ async def voice_stream(
         # Create VoiceAgent
         VoiceAgent = _get_voice_agent_class()
         incognito = await _voice_session_incognito(session_id, user_id, requested_incognito)
-        settings = await _load_voice_settings(user_id)
-        memory_retrieval, memory_extraction = memory_capabilities(
-            cap_memory_mode(memory_mode_from(settings), "read_only" if incognito else "on")
-        )
-        system_prompt = await _voice_system_prompt(
-            session_id, settings, _voice_user(auth_token, user_id)
-        )
+        if agent_plan is not None:
+            # A conversation with an Agent neither reads nor writes long-term
+            # memory, the same as its text turns. Its prompt (the Agent's
+            # instructions, then the user's personal instructions) is composed
+            # in `resolve_voice_agent`.
+            memory_retrieval, memory_extraction = False, False
+            system_prompt = agent_plan.system_prompt
+        else:
+            memory_retrieval, memory_extraction = memory_capabilities(
+                cap_memory_mode(memory_mode_from(settings), "read_only" if incognito else "on")
+            )
+            system_prompt = await _voice_system_prompt(
+                session_id, settings, _voice_user(auth_token, user_id)
+            )
         voice_agent = VoiceAgent(
             session_id=session_id,
             user_id=user_id,
@@ -660,6 +812,8 @@ async def voice_stream(
             voice=requested_voice,
             memory_retrieval=memory_retrieval,
             memory_extraction=memory_extraction,
+            knowledge_context=agent_plan.knowledge_context if agent_plan else None,
+            voice_guidelines=agent_plan.voice_guidelines if agent_plan else True,
         )
         if requested_voice and voice_agent.voice_id != str(requested_voice).strip().lower():
             logger.warning(
@@ -678,11 +832,23 @@ async def voice_stream(
             "voice": voice_agent.voice_id,
         })
 
-        # Start the voice agent
-        await voice_agent.start()
+        # Start the voice agent. Bedrock refuses the stream when Nova 2 Sonic
+        # is at its concurrent-session quota; the client is told so in words.
+        try:
+            await voice_agent.start()
+        except Exception as start_error:
+            if _is_capacity_error(start_error):
+                await _end_for_capacity(websocket, session_id)
+                return
+            raise
 
         # Create session metadata so voice sessions appear in the side nav
-        await _ensure_session_metadata(session_id, user_id, incognito=incognito)
+        await _ensure_session_metadata(
+            session_id,
+            user_id,
+            incognito=incognito,
+            assistant_id=agent_plan.assistant_id if agent_plan else None,
+        )
 
         # Run bidirectional communication
         receive_task = asyncio.create_task(
@@ -813,6 +979,10 @@ async def _send_to_client(
         logger.debug(f"Send task cancelled: session={_sanitize_log(session_id)}")
         raise
     except Exception as e:
+        if _is_capacity_error(e):
+            # The quota can also surface on the stream's first read.
+            await _end_for_capacity(websocket, session_id)
+            return
         logger.error(f"Error in send_to_client: {e}")
 
 

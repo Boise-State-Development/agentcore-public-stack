@@ -404,6 +404,9 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "enabledByDefault": True,
         "isPublic": False,
         "forwardAuthToken": False,
+        # Instant and spoken-friendly, so it runs in voice mode (#625). Every
+        # other default tool is off in voice; see backfill_voice_tool_flags.py.
+        "voiceAvailable": True,
     },
     {
         "toolId": "ask_user_question",
@@ -1022,6 +1025,8 @@ def seed_default_tools(
             # granted turns; `hidden` keeps it out of the user picker list.
             "system": tool_def.get("system", False),
             "hidden": tool_def.get("hidden", False),
+            # Voice mode (#625): off unless the default says otherwise.
+            "voiceAvailable": tool_def.get("voiceAvailable", False),
             "createdAt": now,
             "updatedAt": now,
             "createdBy": "bootstrap-seed",

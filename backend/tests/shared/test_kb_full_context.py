@@ -310,3 +310,28 @@ class TestMixedFormats:
         assert not over.eligible and over.reason == fc.REASON_OVER_BUDGET and over.block is None
         # The whole text is counted, so the author sees how far over it is.
         assert over.text_chars == found.text_chars
+
+
+class TestVoiceBudget:
+    """#625: voice has no retrieval, so it asks for the whole knowledge base under its own ceiling."""
+
+    def test_the_default_voice_ceiling_is_eighty_percent_of_sonics_window(self, monkeypatch):
+        monkeypatch.delenv(fc.VOICE_MAX_TOKENS_ENV, raising=False)
+        assert fc.voice_max_tokens() == 800_000
+
+    @pytest.mark.parametrize("raw,expected", [("1000", 1000), ("0", 0), ("-5", 0), ("lots", 800_000)])
+    def test_the_ceiling_reads_the_environment(self, monkeypatch, raw, expected):
+        monkeypatch.setenv(fc.VOICE_MAX_TOKENS_ENV, raw)
+        assert fc.voice_max_tokens() == expected
+
+    def test_a_knowledge_base_over_the_text_budget_reaches_voice_whole(self, kb, monkeypatch):
+        monkeypatch.setenv(fc.FULL_CONTEXT_MAX_TOKENS_ENV, "100")  # 400 chars
+        kb.add("d1", "vocab.txt", "palabra " * 100)  # 800 chars
+
+        assert _load() is None  # text chat searches it
+        block = asyncio.run(fc.load_full_kb_context(ASSISTANT_ID, access=OWNER_ACCESS, budget_tokens=1_000))
+        assert block is not None and "palabra" in block
+
+    def test_the_voice_budget_still_needs_the_grant(self, kb):
+        kb.add("d1", "vocab.txt", "palabra")
+        assert asyncio.run(fc.load_full_kb_context(ASSISTANT_ID, access=None, budget_tokens=1_000)) is None

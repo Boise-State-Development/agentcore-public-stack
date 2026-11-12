@@ -188,6 +188,7 @@ async def admin_create_tool(
             is_public=request.is_public,
             enabled_by_default=request.enabled_by_default,
             always_on=request.always_on,
+            voice_available=request.voice_available,
             mcp_config=mcp_config,
             a2a_config=a2a_config,
             mcp_gateway_config=mcp_gateway_config,
