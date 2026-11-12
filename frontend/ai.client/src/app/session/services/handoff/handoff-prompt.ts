@@ -22,10 +22,14 @@ function escapeAttr(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** Tags a body may neither open nor close (handoffs spec §9.6 rule 5), as in `context.py`. */
+const FORGEABLE_TAGS = [HANDOFF_CONTEXT_TAG, 'conversation_message', 'user_message_during_turn', 'artifact'];
+
 function neutralizeCloseTags(text: string): string {
-  let out = text;
-  for (const tag of [HANDOFF_CONTEXT_TAG, EXCERPT_TAG]) {
-    out = out.split(`</${tag}`).join(`<\\/${tag}`);
+  // The excerpt opens with its own tag, so only its closing form is defused.
+  let out = text.split(`</${EXCERPT_TAG}`).join(`<\\/${EXCERPT_TAG}`);
+  for (const tag of FORGEABLE_TAGS) {
+    out = out.split(`</${tag}`).join(`<\\/${tag}`).split(`<${tag}`).join(`<\\${tag}`);
   }
   return out;
 }
