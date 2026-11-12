@@ -63,6 +63,19 @@ export class UserConnectorsService {
   }
 
   /**
+   * The name a person sees for a provider: the connector's `displayName` ("Google Tasks For
+   * Faculty"), else the title-cased id ("Google Tasks") while the list loads, when it failed, or for
+   * a provider it doesn't list. Every surface that names a provider uses this, so one prompt never
+   * names it two ways. Reads the list's signal, so a `computed` calling it updates when the list
+   * lands; it never starts the load itself (`ensureLoaded`).
+   */
+  displayNameFor(providerId: string): string {
+    const connectors = this.connectorsResource.hasValue() ? this.connectorsResource.value() : undefined;
+    const connector = connectors?.find((c) => c.providerId === providerId);
+    return connector?.displayName || titleCaseProviderId(providerId);
+  }
+
+  /**
    * Side-effect-free check of whether AgentCore's vault has a usable token
    * for this user + provider. Use it to render a "Connected" badge without
    * committing the user to a consent flow — `initiateConsent` records a
@@ -124,4 +137,14 @@ export class UserConnectorsService {
   reload(): void {
     this.connectorsResource.reload();
   }
+}
+
+/** `google-tasks` → `Google Tasks`: the fallback name for a provider the catalog doesn't name. */
+export function titleCaseProviderId(providerId: string): string {
+  return providerId
+    .replace(/[-_]+/g, ' ')
+    .split(' ')
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
