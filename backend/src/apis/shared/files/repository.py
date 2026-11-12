@@ -533,7 +533,8 @@ class FileUploadRepository:
 
         Same ``SessionIndex`` query as :meth:`list_session_files`, but projects
         only ``uploadId, sessionId, sizeBytes, mimeType, source, status,
-        createdAt``. ``filename``, ``s3Key`` and ``s3Uri`` carry the user's
+        createdAt``. ``filename``, ``s3Key`` and (on rows written before it was
+        dropped) ``s3Uri`` carry the user's
         chosen file name and never leave DynamoDB on this path. Returns plain
         dicts (``sizeBytes`` as ``int``), not ``FileMetadata``, because that
         model requires the very fields this read refuses to fetch.

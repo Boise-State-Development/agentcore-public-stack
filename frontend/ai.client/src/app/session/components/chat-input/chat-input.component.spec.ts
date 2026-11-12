@@ -1539,7 +1539,6 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
       mimeType: 'application/pdf',
       sizeBytes: 2048,
       sessionId,
-      s3Uri: `s3://bucket/${uploadId}`,
       status: 'ready',
       createdAt: '2026-09-21T00:00:00Z',
     };
@@ -2691,7 +2690,6 @@ describe('ChatInputComponent — the `+` menu hand-offs', () => {
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     sizeBytes: 1234,
     sessionId: 's1',
-    s3Uri: 's3://b/k',
     status: 'ready',
     createdAt: '2026-10-13T00:00:00Z',
   };
@@ -3093,7 +3091,7 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
   }
 
   function restored(uploadId: string, filename: string, sizeBytes: number): FileMetadata {
-    return { uploadId, filename, mimeType: 'application/pdf', sizeBytes, sessionId: 's1', s3Uri: '', status: 'ready', createdAt: '' };
+    return { uploadId, filename, mimeType: 'application/pdf', sizeBytes, sessionId: 's1', status: 'ready', createdAt: '' };
   }
 
   function notice(): HTMLElement | null {

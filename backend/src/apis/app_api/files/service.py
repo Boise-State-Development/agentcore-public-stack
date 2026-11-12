@@ -452,7 +452,6 @@ class FileUploadService:
         return CompleteUploadResponse(
             upload_id=upload_id,
             status=FileStatus.READY.value,
-            s3_uri=file_meta.s3_uri,
             filename=file_meta.filename,
             size_bytes=file_meta.size_bytes,
         )

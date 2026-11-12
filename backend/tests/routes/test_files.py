@@ -181,7 +181,6 @@ class TestCompleteUpload:
         mock_file_service.complete_upload.return_value = CompleteUploadResponse(
             upload_id="upload-001",
             status="ready",
-            s3_uri="s3://bucket/key",
             filename="report.pdf",
             size_bytes=1024,
         )
@@ -260,7 +259,6 @@ class TestListFiles:
                     mime_type="application/pdf",
                     size_bytes=1024,
                     session_id="sess-001",
-                    s3_uri="s3://bucket/key",
                     status="ready",
                     created_at="2025-01-01T00:00:00Z",
                 ),

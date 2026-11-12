@@ -203,7 +203,7 @@ class TestImportFile:
         assert body["mimeType"] == "application/pdf"
         assert body["sessionId"] == "sess-1"
         assert body["status"] == "ready"
-        assert body["s3Uri"] == "s3://bucket/user-files/alice/sess-1/up-1/report.pdf"
+        assert "s3Uri" not in body
         # The vaulted token and the service's cap reach the adapter.
         assert adapter.calls == [("vault-token", "drive-file-1", DOWNLOAD_CAP)]
         upload_service.import_file.assert_awaited_once_with(

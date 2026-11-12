@@ -393,11 +393,6 @@ class FileMetadata(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     @property
-    def s3_uri(self) -> str:
-        """Get S3 URI for Bedrock document block."""
-        return f"s3://{self.s3_bucket}/{self.s3_key}"
-
-    @property
     def file_format(self) -> Optional[str]:
         """Get Bedrock document format from MIME type."""
         return get_file_format(self.mime_type)
@@ -422,7 +417,6 @@ class FileMetadata(BaseModel):
             "sizeBytes": self.size_bytes,
             "s3Key": self.s3_key,
             "s3Bucket": self.s3_bucket,
-            "s3Uri": self.s3_uri,
             "source": self.source,
             "status": self.status if isinstance(self.status, str) else self.status.value,
             "createdAt": to_iso(self.created_at),
@@ -574,7 +568,6 @@ class CompleteUploadResponse(BaseModel):
 
     upload_id: str = Field(..., alias="uploadId")
     status: str
-    s3_uri: str = Field(..., alias="s3Uri")
     filename: str
     size_bytes: int = Field(..., alias="sizeBytes")
 
@@ -713,7 +706,6 @@ class FileResponse(BaseModel):
     mime_type: str = Field(..., alias="mimeType")
     size_bytes: int = Field(..., alias="sizeBytes")
     session_id: str = Field(..., alias="sessionId")
-    s3_uri: str = Field(..., alias="s3Uri")
     status: str
     created_at: str = Field(..., alias="createdAt")
 
@@ -728,7 +720,6 @@ class FileResponse(BaseModel):
             mime_type=meta.mime_type,
             size_bytes=meta.size_bytes,
             session_id=meta.session_id,
-            s3_uri=meta.s3_uri,
             status=meta.status if isinstance(meta.status, str) else meta.status.value,
             created_at=to_iso(meta.created_at),
         )

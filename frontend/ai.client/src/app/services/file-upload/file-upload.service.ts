@@ -189,7 +189,6 @@ export interface PresignResponse {
 export interface CompleteUploadResponse {
   uploadId: string;
   status: string;
-  s3Uri: string;
   filename: string;
   sizeBytes: number;
 }
@@ -268,7 +267,6 @@ export interface FileMetadata {
   mimeType: string;
   sizeBytes: number;
   sessionId: string;
-  s3Uri: string;
   status: FileStatus;
   createdAt: string;
 }
@@ -522,7 +520,6 @@ export class FileUploadService {
         filename: pending.file.name,
         mimeType: pending.file.type || 'application/octet-stream',
         sizeBytes: pending.file.size,
-        s3Uri: '', // S3 URI not available in client-side pending upload
         status: 'ready',
         createdAt: new Date().toISOString(),
       };

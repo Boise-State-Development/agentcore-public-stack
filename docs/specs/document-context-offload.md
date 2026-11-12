@@ -102,8 +102,9 @@ one-line quality fix — would push the full document back into the prefix on
 every turn and regress cost. Fixing quality without paying that is exactly what
 the digest path below is for.
 
-The `s3Location` path referenced in the comment at line 971 was never
-implemented. Every document is inline bytes.
+Converse `s3Location` document sources were never implemented. Every inline
+document is bytes. unified-attachment-delivery.md §2.1 records Claude on Bedrock
+as accepting `bytes` sources only; see #401.
 
 ---
 

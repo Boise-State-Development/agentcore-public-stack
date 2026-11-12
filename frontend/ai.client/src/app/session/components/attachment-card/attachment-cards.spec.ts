@@ -50,7 +50,6 @@ function restored(id: string): FileMetadata {
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     sizeBytes: 4096,
     sessionId: 's1',
-    s3Uri: 's3://b/k',
     status: 'ready',
     createdAt: '2026-11-10T00:00:00Z',
   };
