@@ -40,6 +40,10 @@ from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
     get_provider_repository,
 )
+from apis.shared.oauth.connector_access import (
+    connector_role_ids,
+    connector_visible_to_user,
+)
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import add_export_receipt, get_session_metadata
@@ -54,7 +58,6 @@ from apis.app_api.export_targets.registry import registry
 from apis.app_api.file_sources.registry import registry as file_source_registry
 from apis.app_api.export_targets.render import render_transcript
 from apis.app_api.export_targets.service import (
-    connector_visible_to_user,
     http_error_for_export_target_error,
     require_export_target_token,
     resolve_export_target,
@@ -237,12 +240,13 @@ async def list_export_targets(
     """
     permissions = await role_service.resolve_user_permissions(current_user)
     providers = await provider_repo.list_providers(enabled_only=True)
+    role_ids = await connector_role_ids(permissions, role_service)
 
     candidates = []
     for provider in providers:
         if not provider.export_target_adapter_id:
             continue
-        if not connector_visible_to_user(provider, permissions.app_roles):
+        if not connector_visible_to_user(provider, role_ids):
             continue
         adapter = registry.get(provider.export_target_adapter_id)
         if adapter is None:

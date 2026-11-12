@@ -8,7 +8,7 @@ status/consent routes.
 """
 
 import logging
-from typing import List, Tuple
+from typing import Tuple
 
 from fastapi import HTTPException, status
 
@@ -19,6 +19,10 @@ from apis.shared.oauth.agentcore_identity import (
     WorkloadTokenUnavailableError,
     custom_parameters_for,
     get_agentcore_identity_client,
+)
+from apis.shared.oauth.connector_access import (
+    connector_role_ids,
+    connector_visible_to_user,
 )
 from apis.shared.oauth.models import OAuthProvider
 from apis.shared.oauth.provider_repository import OAuthProviderRepository
@@ -33,22 +37,6 @@ from apis.app_api.file_sources.models import (
 from apis.app_api.file_sources.registry import registry
 
 logger = logging.getLogger(__name__)
-
-
-def connector_visible_to_user(
-    provider: OAuthProvider, user_role_ids: List[str]
-) -> bool:
-    """True when an enabled connector is usable by a user with these roles.
-
-    An empty `allowed_roles` list means unrestricted access; a non-empty
-    list grants access to users who share at least one AppRole id. Mirrors
-    the visibility rule the connector catalog route applies.
-    """
-    if not provider.enabled:
-        return False
-    if not provider.allowed_roles:
-        return True
-    return bool(set(provider.allowed_roles) & set(user_role_ids))
 
 
 async def resolve_file_source(
@@ -72,7 +60,8 @@ async def resolve_file_source(
         )
 
     permissions = await role_service.resolve_user_permissions(current_user)
-    if not connector_visible_to_user(provider, permissions.app_roles):
+    role_ids = await connector_role_ids(permissions, role_service)
+    if not connector_visible_to_user(provider, role_ids):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this connector",
