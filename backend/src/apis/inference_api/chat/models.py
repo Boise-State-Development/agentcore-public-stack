@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 from apis.shared.browser_takeover import coerce_frame_height
 from apis.shared.handoff.brief import HandoffBriefRequest
+from apis.shared.handoff.delivery_turn import DELIVERY_FIELD_MAX_ITEMS, DeliveryAttachRequest
 from apis.shared.handoff.turn import HandoffContextRequest
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
@@ -224,6 +225,13 @@ class InvocationRequest(BaseModel):
     # resolves and builds the agent exactly as for that turn, then streams the brief from a
     # side call over a copy of the history instead of running a turn. Nothing is persisted.
     handoff_brief: Optional[HandoffBriefRequest] = None
+    # Deliveries (agent-handoffs-and-consults.md §4.8): the cards waiting on this conversation's
+    # composer that this send carries, `[{deliveryId, text?}]`, `text` present only when the card
+    # was edited. Each is attached exactly once (a conditional write, issued beside the agent build)
+    # and prepended to the user message in 0a's wrapper; the bubble shows `message` only. At most
+    # three per turn; the rest stay pending. An unknown, foreign or already-attached id is ignored
+    # with a warning, as is the whole field on a resume, a continuation, or with HANDOFFS_ENABLED off.
+    deliveries: Optional[List[DeliveryAttachRequest]] = Field(None, max_length=DELIVERY_FIELD_MAX_ITEMS)
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.
