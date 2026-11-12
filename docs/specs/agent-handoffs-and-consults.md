@@ -2059,6 +2059,39 @@ has started", and the only one that spends money while nobody is watching.
   `handoff_context`; replay as `deliveries`; the dismiss route. Bring back result on a `done` row; Send to
   *{title}* through the review sheet, without navigating; delivery cards on the composer. Artifact references on
   both paths, with the sender-conversation check and chips on the card and the sent bubble.
+  *Backend built (2026-11-12); the SPA half is its own PR.* Where it differs from the text above:
+  - **Routes.** Send-back has its own sub-route rather than a `kind` on `POST …/handoffs`, because that route's
+    callers omit `kind` and its response is the mention shape: `POST /sessions/{targetId}/handoffs/send-back`
+    `{messageIndex?, deliver}` renders the return excerpt and lists the artifacts that message produced (HEAD
+    `produced_by_message_index` equal to it). `deliver: true` is Bring back result; without it the `send_back` row
+    stays `open` for Send to *{title}*'s review, and `POST …/handoffs/{handoffId}/deliver` `{text, artifactIds}`
+    sends what the user kept. The source is always the target's `spawnedFrom`, so the link is never client-named.
+    `POST /sessions/{id}/deliveries/{deliveryId}/dismiss` removes a card (204 again for a dismissed one, 409 once
+    a send attached it).
+  - **A `send_back` row goes `open` → `done` directly** (`HandoffStore.complete_send_back`, conditioned on the
+    kind, so a mention row can't take that path). It runs nothing, so it never passes through `running`. The
+    route checks the delivery first (`prepare_delivery`), then closes the row, then writes the delivery, so a
+    refused card leaves the review open to fix and resend, and a double click sends once.
+  - **Attaching is one conditional `UpdateItem` per card, with no read first.** `pending` → `attached` on
+    `(owner, receiving session)` with `ReturnValues=ALL_NEW` both guards exactly-once and returns the text, so a
+    send with cards pays one round trip per card, issued together beside the agent build (`DeliveryTurn`, the
+    `HandoffTurn` pattern), instead of §4.8's `BatchGetItem` then write. Only the first three ids are tried, so a
+    stale id takes a slot and a card past it waits for the next send; the SPA only sends cards it holds as
+    pending. `edited` is written in the background after the block is built.
+  - **A sent bubble renders its card from its own message.** The block is in the persisted user message, behind
+    the displayText split, so replay (`deliveries` on `GET /messages`) lists pending cards only and an attached
+    card needs no link to a message id. The SPA PR parses the message's leading `<handoff_context>` blocks and
+    their `<artifact/>` lines.
+  - **Wrapper tags are defused in both directions of travel** (§9.6 rule 5): `<handoff_context`,
+    `<conversation_message`, `<user_message_during_turn` and `<artifact` can be neither opened nor closed by a
+    body, and the excerpt's own tag not closed, in `context.py` and its TypeScript copy alike. The parity fixture
+    gained a case for it.
+  - **Known gap:** a card attaches at the head of the turn. A turn that fails before the agent appends the user
+    message (an agent build that raises) spends the card without sending it. Measure how often on dev before
+    deciding whether a release on that path is worth its cost.
+  - **TTFT is not yet measured.** The attaches overlap the agent build and are awaited where the message is
+    assembled; on a source whose agent is cached, the build is short, so measure `head_of_turn` with one and three
+    cards on dev after merge and record it here.
 - **PR-0.4a — Files by reference (§4.9).** Settle §4.9's verify-first (the inventory of `FileMetadata` readers)
   first. Then:
   - `linkedFrom` on `FileMetadata`, which is additive, plus `is_linked_reference` and `resolve_linked_file`
