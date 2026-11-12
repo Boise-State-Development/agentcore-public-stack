@@ -596,7 +596,7 @@ describe('FileUploadService', () => {
       it('answers for a registered file that never uploaded from this browser', () => {
         const meta = {
           uploadId: 'imported-1', filename: 'Notes.docx', mimeType: 'application/x', sizeBytes: 9,
-          sessionId: 's1', s3Uri: 's3://b/k', status: 'ready' as const, createdAt: '',
+          sessionId: 's1', status: 'ready' as const, createdAt: '',
         };
         service.registerKnownFile(meta);
         expect(service.getReadyFileById('imported-1')).toEqual(meta);

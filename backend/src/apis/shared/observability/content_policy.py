@@ -65,7 +65,7 @@ CONTENT_BEARING: FrozenSet[str] = frozenset({
     # FILE# upload rows
     "filename",                       # user-chosen
     "s3Key",                          # embeds the filename
-    "s3Uri",
+    "s3Uri",                          # no longer written; rows from before keep it
     "digest.abstract",                # model-generated abstract of the document
     "digest.sections",                # heading text lifted from the document
 })

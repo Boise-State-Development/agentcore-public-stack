@@ -478,7 +478,7 @@ class TestUploadFile:
                 return httpx.Response(200)
             if request.url.path.endswith("/files/up-1/complete"):
                 return httpx.Response(
-                    200, json={"uploadId": "up-1", "status": "completed", "s3Uri": "s3://b/k", "filename": "notes.md", "sizeBytes": 5}
+                    200, json={"uploadId": "up-1", "status": "completed", "filename": "notes.md", "sizeBytes": 5}
                 )
             return httpx.Response(404)
 

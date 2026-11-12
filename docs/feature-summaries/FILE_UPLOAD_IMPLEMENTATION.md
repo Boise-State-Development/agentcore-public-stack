@@ -80,7 +80,6 @@ Mark upload as complete after S3 upload succeeds.
 {
   "uploadId": "19b7ec1b4d8_7f5b11724a504dd8",
   "status": "ready",
-  "s3Uri": "s3://bucket/user-files/...",
   "filename": "report.pdf",
   "sizeBytes": 1234567
 }
@@ -103,7 +102,7 @@ List user's files with optional session filter.
 **Response:**
 ```json
 {
-  "files": [{ "uploadId", "filename", "mimeType", "sizeBytes", "sessionId", "s3Uri", "status", "createdAt" }],
+  "files": [{ "uploadId", "filename", "mimeType", "sizeBytes", "sessionId", "status", "createdAt" }],
   "nextCursor": "...",
   "totalCount": 42
 }

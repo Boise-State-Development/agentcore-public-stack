@@ -58,11 +58,6 @@ class TestFileModels:
         assert is_allowed_mime_type("image/jpeg") is True
         assert is_allowed_mime_type("video/mp4") is False
 
-    def test_file_metadata_s3_uri(self):
-        from apis.shared.files.models import FileMetadata
-        fm = FileMetadata(upload_id="f1", user_id="u1", session_id="s1", filename="a.pdf", mime_type="application/pdf", size_bytes=100, s3_key="k", s3_bucket="b")
-        assert fm.s3_uri == "s3://b/k"
-
     def test_file_metadata_dynamo_roundtrip(self):
         from apis.shared.files.models import FileMetadata
         fm = FileMetadata(upload_id="f1", user_id="u1", session_id="s1", filename="a.pdf", mime_type="application/pdf", size_bytes=100, s3_key="k", s3_bucket="b")

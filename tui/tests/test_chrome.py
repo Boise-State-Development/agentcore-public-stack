@@ -262,7 +262,7 @@ class TestAttach:
             if request.url.host == "bucket.example":
                 return httpx.Response(200)
             if path.endswith("/complete"):
-                return httpx.Response(200, json={"uploadId": "up-9", "status": "completed", "s3Uri": "s3://b/k", "filename": "a.txt", "sizeBytes": 3})
+                return httpx.Response(200, json={"uploadId": "up-9", "status": "completed", "filename": "a.txt", "sizeBytes": 3})
             if path.endswith("/chat/stream"):
                 bodies.append(_json.loads(request.content))
                 from .conftest import sse_response

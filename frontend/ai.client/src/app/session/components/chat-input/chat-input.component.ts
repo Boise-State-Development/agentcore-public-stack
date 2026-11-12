@@ -280,7 +280,7 @@ interface MentionToken {
  * The composer holds restored attachments as `FileMetadata` — the card's own
  * server-side shape — so the template binds them directly instead of mapping
  * on every change detection pass. Only the four display fields are stored;
- * `s3Uri`, `createdAt` and `status` come back from the reconcile, and nothing
+ * `createdAt` and `status` come back from the reconcile, and nothing
  * reads them before it lands.
  */
 function toStoredAttachment(file: FileMetadata): StoredAttachment {
@@ -300,7 +300,6 @@ function toFileMetadata(attachment: StoredAttachment, sessionId: string): FileMe
     mimeType: attachment.mimeType,
     sizeBytes: attachment.sizeBytes,
     sessionId,
-    s3Uri: '',
     status: 'ready',
     createdAt: '',
   };
