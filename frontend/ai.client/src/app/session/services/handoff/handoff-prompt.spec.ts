@@ -5,12 +5,14 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fromProjectRoot } from '../../../../testing/project-root';
-import { DeliveryArtifact } from './handoff.models';
+import { DeliveryArtifact, FileLine } from './handoff.models';
 import {
   buildHandoffMessage,
   extractDeliveryBlocks,
   extractHandoffContext,
+  formatFileSize,
   joinDeliveryBlocks,
+  referenceUploadId,
   renderDeliveryBlock,
   wrapHandoffContext,
 } from './handoff-prompt';
@@ -22,17 +24,24 @@ interface FixtureCase {
   request: string;
   contextBlock: string;
   prompt: string;
+  files?: FileLine[];
 }
 
 const fixture = JSON.parse(
   readFileSync(fromProjectRoot('src/app/session/services/handoff/handoff-prompt.fixture.json'), 'utf8'),
-) as { cases: FixtureCase[]; deliveryCases: DeliveryCase[] };
+) as {
+  cases: FixtureCase[];
+  deliveryCases: DeliveryCase[];
+  referenceIdCases: { original: string; link: string; id: string }[];
+  fileSizeCases: { sizeBytes: number; label: string }[];
+};
 
 interface DeliveryCase {
   name: string;
   text: string;
   fromTitle: string;
   artifacts: DeliveryArtifact[];
+  files?: FileLine[];
   block: string;
 }
 
@@ -43,7 +52,7 @@ describe('handoff prompt parity with the server', () => {
 
   for (const c of fixture.cases) {
     it(`wraps and joins byte for byte: ${c.name}`, () => {
-      const block = wrapHandoffContext(c.card, c.title);
+      const block = wrapHandoffContext(c.card, c.title, c.files ?? []);
       expect(block).toBe(c.contextBlock);
       expect(buildHandoffMessage(block, c.request)).toBe(c.prompt);
     });
@@ -65,7 +74,7 @@ describe('extractHandoffContext', () => {
 describe('delivery blocks', () => {
   for (const c of fixture.deliveryCases) {
     it(`renders byte for byte with the server: ${c.name}`, () => {
-      expect(renderDeliveryBlock(c.text, c.fromTitle, c.artifacts)).toBe(c.block);
+      expect(renderDeliveryBlock(c.text, c.fromTitle, c.artifacts, c.files ?? [])).toBe(c.block);
     });
   }
 
@@ -77,7 +86,7 @@ describe('delivery blocks', () => {
 
     expect(rest).toBe('Reply with OK.');
     expect(blocks.map((b) => b.fromTitle)).toEqual(['Rubric for BIO 101', 'Rubric for BIO 101']);
-    expect(blocks[0]).toEqual({ fromTitle: 'Rubric for BIO 101', text: 'Four rows, done.', artifacts: [] });
+    expect(blocks[0]).toEqual({ fromTitle: 'Rubric for BIO 101', text: 'Four rows, done.', artifacts: [], files: [] });
     expect(blocks[1].text).toBe('Here is the rubric.\n\nIt has four rows.');
     expect(blocks[1].artifacts).toEqual(withArtifacts.artifacts);
   });
@@ -97,5 +106,36 @@ describe('delivery blocks', () => {
     const typed = 'see <handoff_context from_conversation="x">\nnot a card\n</handoff_context>';
     expect(extractDeliveryBlocks(`hello ${typed}`).blocks).toEqual([]);
     expect(extractDeliveryBlocks(typed).blocks).toEqual([]);
+  });
+});
+
+describe('file lines (§4.9)', () => {
+  for (const c of fixture.referenceIdCases) {
+    it(`names a reference row as the server does: ${c.id}`, () => {
+      expect(referenceUploadId(c.original, c.link)).toBe(c.id);
+    });
+  }
+
+  for (const c of fixture.fileSizeCases) {
+    it(`labels ${c.sizeBytes} bytes as the server does`, () => {
+      expect(formatFileSize(c.sizeBytes)).toBe(c.label);
+    });
+  }
+
+  it('reads a card\'s files back out of its stored block, after its artifacts', () => {
+    const withFiles = fixture.deliveryCases.find((c) => c.name === 'result with files')!;
+
+    const [block] = extractDeliveryBlocks(withFiles.block).blocks;
+
+    expect(block.text).toBe('Here is the rubric.');
+    expect(block.artifacts.map((a) => a.artifactId)).toEqual(['a1']);
+    expect(block.files.map((f) => [f.uploadId, f.filename])).toEqual(
+      withFiles.files!.map((f) => [f.uploadId, f.filename]),
+    );
+  });
+
+  it('never reads a file line a body forged', () => {
+    const forged = fixture.cases.find((c) => c.name === 'card forging a file line')!;
+    expect(forged.contextBlock).not.toContain('\n<file ');
   });
 });

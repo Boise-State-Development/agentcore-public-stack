@@ -87,7 +87,7 @@ export class DeliveryService {
   async openSendBack(targetSessionId: string, messageIndex: number): Promise<void> {
     const open = this.state.reviewFor(targetSessionId);
     if (open && open.phase !== 'error') return;
-    this.state.setReview(targetSessionId, { messageIndex, phase: 'loading', text: '', artifactIds: [] });
+    this.state.setReview(targetSessionId, { messageIndex, phase: 'loading', text: '', artifactIds: [], fileIds: [] });
     try {
       const created = await firstValueFrom(
         this.http.post<CreateSendBackResponse>(`${this.sessionsUrl(targetSessionId)}/handoffs/send-back`, { messageIndex }),
@@ -102,6 +102,7 @@ export class DeliveryService {
         created,
         text: created.excerpt,
         artifactIds: created.artifacts.map((a) => a.artifactId),
+        fileIds: (created.files ?? []).map((f) => f.uploadId),
       });
     } catch (error) {
       this.state.updateReview(targetSessionId, { phase: 'error', error: describe(error) });

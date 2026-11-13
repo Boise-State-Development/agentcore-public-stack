@@ -382,6 +382,9 @@ async def delete_upload(user_id: str, upload_id: str) -> bool:
     meta = await get_file_upload_repository().delete_file(user_id, upload_id)
     if meta is None:
         return False
+    if meta.linked_from is not None:
+        # A reference shares its original's objects (handoffs spec §4.9 rule 2): the row only.
+        return True
     # Everything under the upload's prefix: the original, and for a prepared
     # document its ``_derived/`` sidecars. The delete events take a document
     # out of the attachments KB, as for a user's own delete.

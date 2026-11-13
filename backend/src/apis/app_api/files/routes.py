@@ -18,6 +18,7 @@ from apis.shared.files.attachment_plan import client_limits
 from apis.shared.files.repository import InvalidCursorError
 from apis.shared.files.models import (
     ImportFileRequest,
+    is_linked_reference,
     PresignRequest,
     PresignResponse,
     CompleteUploadResponse,
@@ -374,6 +375,14 @@ async def get_search_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File {upload_id} not found or not owned by you",
         )
+    if is_linked_reference(meta):
+        # A reference's preparation and index are its original's (handoffs spec §4.9 rule 4).
+        from apis.shared.files.linked_files import resolve_linked_file
+
+        original = await resolve_linked_file(meta)
+        if original is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No longer available")
+        meta = original
     return SearchStatusResponse(
         upload_id=upload_id, status=search_status(meta, kb_enabled=attachment_kb_enabled())
     )

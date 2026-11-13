@@ -90,7 +90,7 @@ from apis.shared.feature_flags import attachment_kb_enabled
 from apis.shared.files import file_facts, large_document
 from apis.shared.files.document_digest import build_digest, document_digest_enabled, record_digest
 from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs, text_lines
-from apis.shared.files.models import FileMetadata, FileStatus, is_reference_document
+from apis.shared.files.models import FileMetadata, FileStatus, is_linked_reference, is_reference_document
 from apis.shared.files.attachment_preview import (
     PreviewUnavailable,
     build_preview,
@@ -304,6 +304,10 @@ async def prepare_upload(
     status = meta.status if isinstance(meta.status, str) else meta.status.value
     if status != FileStatus.READY.value:
         return "not_ready"
+    if is_linked_reference(meta):
+        # A file shared from another conversation (handoffs spec §4.9): its preparation is the
+        # original's, so nothing is prepared twice and no state is written onto the reference.
+        return "linked_reference"
     if not is_reference_document(meta):
         return "not_reference"
     if large_document.is_prepared(meta):

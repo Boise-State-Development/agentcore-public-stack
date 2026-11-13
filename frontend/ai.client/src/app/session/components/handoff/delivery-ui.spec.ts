@@ -244,6 +244,7 @@ describe('delivery UI', () => {
         phase: 'ready',
         text: 'Four rows, done.',
         artifactIds: ['rubric'],
+        fileIds: [],
         created: {
           handoffId: 'sb1',
           sourceSessionId: 'src',

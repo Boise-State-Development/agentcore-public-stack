@@ -2129,6 +2129,60 @@ has started", and the only one that spends money while nobody is watching.
   - the §4.7 metrics
 
   It can land after PR-0.4, or with it: the handoff half needs only PR-0.2's acceptance.
+
+  *Verify-first, settled (2026-11-13).* Every reader and writer of a `FileMetadata` row outside the repository,
+  and what a reference row needs from it. Thumbnails, previews and sidecars all live under the row's `s3Key`
+  (`derived_prefix`, `thumbnail_key`, the legacy `_thumb.png`), so a reference that shares the key reads all of
+  them and, before this PR, deleted all of them.
+
+  | Reader or writer | What it does with the row | Rule | Built |
+  |---|---|---|---|
+  | `FileUploadService.delete_file` (Files panel `DELETE /files/{id}`, folder removal) | deletes the object, thumbnail and `_derived/`, then decrements quota | 1, 2 | a reference removes its row only |
+  | `FileUploadService.delete_session_files` (session delete cascade) | the same per row | 1, 2 | row only for a reference |
+  | `FileUploadRepository.delete_session_files` | row only, no callers | 2 | unchanged |
+  | `evals.fixtures.delete_upload` | row, then every object under the key's prefix | 2 | row only for a reference |
+  | `FileUploadService.replace_file_content` (folder refresh) | new bytes at the same key, quota by the delta | 3 | refuses a reference |
+  | `modify_word_document`, `redline_word_document`, `compare_word_documents`, the spreadsheet and deck modify/template tools | read the source's bytes, save through `_store_document`: a **new** upload id and key in the caller's conversation | 3 | already a new file; pinned by tests |
+  | `document_read` (`read_document`, `document_provenance_units`) | `is_prepared`, sidecars, digest; the 8 MB check | 4, 5 | reads through to the original (`readable_view`); gone → "No longer available (deleted from *{title}*)" |
+  | `document_read`'s `query` (`search_documents` → `search_attachments`) | `search_status` from `kbIndex`; KB filter on this conversation and upload id | 4 | each reference searched under its original's session and id, alone, hits reported under the reference's id; nothing else of the source is reachable |
+  | `session_has_documents` (the gate), `list_session_documents`, `workspace_list` | list by `CONV#` and mime type | — | unchanged: the row is why |
+  | `workspace_read` | bytes at `s3Key` | 5 | gone message, never `NoSuchKey` |
+  | Word, spreadsheet and deck tools' reads (`_download_s3_bytes`), `analyze_spreadsheet` | bytes at `s3Key` | 5 | missing object → a "no longer available" error the tool relays |
+  | `get_preview_url`, `get_download_url`, `get_text_snippet`, `get_sheet_preview`, `get_or_create_thumbnail` | presign or read the key; thumbnail queued under the row's ids | 4, 5 | the original's row (`_readable_file`), so the prepare Lambda's key guard accepts the thumbnail; gone → 404 |
+  | `GET /files/{id}/search-status` | `kbIndex`, `preparation` | 4 | the original's |
+  | `requeue_evicted_attachments` (conversation open) | `kbIndex` eviction | 4 | a reference re-queues its evicted original |
+  | `FileResolver._resolve_single_file` (`file_upload_ids`) | inline bytes, or a `ReferenceAttachment` | 6 | refuses a reference with a warning |
+  | `_start_session_files_read` (phase 5's conversation set), `load_session_documents` / `digest_for` (rehydration, offload, `_fill_document_index`) | facts, preparation, digest; a lazy digest written back onto the row | 4, 6 | references left out (never in history; their `<file>` line already says how to read them); no digest is ever written onto one |
+  | large-document prepare Lambda `prepare_upload` | would record `preparation=failed` on an unprepared-looking row | 4 | returns `linked_reference` before any write |
+  | `list_user_files` (Files panel) | lists | 5 | each reference carries `linkedFrom` and `originalAvailable` (one batched read, only when the page holds one) |
+  | admin costs `_attachment_profile` (`list_session_file_stats`) | sums sizes | — | unchanged: a reference's `source: "linked"` is visible there; diagnostic only |
+  | attachments-KB `reconcile`, the S3 delete handler | walk KB documents and object keys, not rows | — | unchanged: they never see a reference |
+
+  *Built (2026-11-13).* `apis/shared/files/linked_files.py` holds the rules; where it differs from §4.9:
+  - **Reference ids are deterministic**: `{originalUploadId}_ref_{first 12 hex of the handoff or delivery id}`
+    (`reference_upload_id`, mirrored in `handoff-prompt.ts`). The review sheet's preview and the live bubble name
+    the id the row is written under, and a repeated write lands on the same row, so the `BatchWriteItem` needs no
+    condition. Exactly-once comes from the acceptance and attach conditions, which run first.
+  - **The gate is told by a hint, not by acceptance.** Tools are built in the handler, before the stream where
+    acceptance runs, so acceptance can't classify in time. Instead `HandoffTurn.prefetch` / `DeliveryTurn.prefetch`
+    read the `HANDOFF#` row and the files (or the cards) **read-only, before the lease**, and the gate awaits that
+    `document_hint` beside its own query, only when its memo hasn't already said yes. A send without files starts
+    nothing; a handoff without files prefetches nothing. Acceptance reuses the prefetched row. A delivery attach turn
+    therefore carries `document_read` on the turn that brings a document back, not one turn later.
+  - **A file that may not cross is dropped from a handoff with a warning, but refuses a delivery**
+    (`file_not_in_sender`), like an artifact: the handoff's ids come from a send that must not fail, the
+    delivery's from a review the user can fix.
+  - **Bring back result carries the target's own files** (up to five, newest first: a target is a new
+    conversation, so all of its own files postdate acceptance). The row's per-file Bring back is
+    `POST …/handoffs/send-back {deliver: true, fileIds: [id], filesOnly: true}`, a files-only card. Send to
+    *{title}* lists the same files as checkboxes (`files` on the response, `fileIds` on `…/deliver`).
+  - **A delivery's files are stored as originals** (`DeliveryFile`: id, session, title, name, type, size, and the
+    key, bucket and TTL so the attach writes the row without reading the original). The card's view omits the key.
+  - **A failed row write drops the lines**: the model is never told about a file it can't open.
+  - **Metrics**: `HandoffFiles` and `DeliveryFiles` carry the count as the value; `HandoffFilesUnticked` is
+    `handoff_context.filesUnticked`, sent by the review sheet; `LinkedFileRead` / `LinkedFileGone` by reader from
+    `readable_view` and the office tools' finders.
+  - **The wrapper defuses `<file` too**, opening and closing, in both copies.
 - **PR-0.5 — `suggest_handoff`.** Tool, `handoff_suggested` event, chip UI that opens the review sheet, replay,
   `CLAUDE.md` SSE table. Marginal CountTokens measured and recorded in the PR.
 - **Dev validation.**

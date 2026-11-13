@@ -1336,6 +1336,7 @@ async def _session_has_documents(
     user_id: str,
     turn_has_document: bool = False,
     ancestor_session_ids: Sequence[str] = (),
+    document_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> bool:
     """Whether ``document_read`` should exist on this turn.
 
@@ -1359,6 +1360,11 @@ async def _session_has_documents(
     because the memo is per-process while the DynamoDB query is not, the tool
     (and therefore the cacheable prefix) flapped A→B→A→B as microVMs
     recycled. Each flip re-writes the whole prefix at 1.25x input.
+
+    ``document_hint`` is a classified answer that arrives late: a handoff or delivery this turn
+    carries whose files include a document (handoffs spec §4.9). Its reference rows are written
+    during the stream, so the query can't see them yet; the hint, started before the lease, is
+    awaited beside the query and only when the memo hasn't already answered yes.
     """
     if turn_has_document:
         _remember_document_session(session_id)
@@ -1368,7 +1374,28 @@ async def _session_has_documents(
     try:
         from apis.shared.files.document_read import session_has_documents
 
-        present = await session_has_documents(user_id, session_id)
+        if document_hint is not None:
+            began = time.perf_counter()
+            hint_done_before = document_hint.done()
+            present, hinted = await asyncio.gather(
+                session_has_documents(user_id, session_id), _hint_answer(document_hint)
+            )
+            # The hint's whole cost before the first token: how long the gate waited with it beside
+            # the query it runs anyway. Read on dev for the PR-0.4a TTFT number (§4.9).
+            logger.info(
+                "document_hint %s",
+                json.dumps(
+                    {
+                        "hinted": hinted,
+                        "present": present,
+                        "readyAtGate": hint_done_before,
+                        "gateMs": round((time.perf_counter() - began) * 1000, 1),
+                    }
+                ),
+            )
+            present = present or hinted
+        else:
+            present = await session_has_documents(user_id, session_id)
         # A fork's copied messages carry documents attached in its parent or
         # root (``ancestor_session_ids``). Asked only when the fork has none
         # of its own, and once per process: the positive answer is memoized.
@@ -1384,11 +1411,21 @@ async def _session_has_documents(
     return present
 
 
+async def _hint_answer(hint: "asyncio.Task[bool]") -> bool:
+    """A document hint's answer; ``False`` if it failed. Never raises."""
+    try:
+        return bool(await hint)
+    except Exception:  # noqa: BLE001 - a failed hint is "no document", as before the feature
+        logger.warning("document hint failed; gate answers from the session query", exc_info=True)
+        return False
+
+
 async def _document_tools_gate(
     session_id: str,
     user_id: str,
     turn_has_document: bool = False,
     ancestor_session_ids: Sequence[str] = (),
+    document_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> bool:
     """The single answer to "does this turn carry ``document_read``" — the
     builder and the resume path's cache key both read it, so the two can
@@ -1407,7 +1444,27 @@ async def _document_tools_gate(
         return False
     if not session_id or not user_id:
         return False
-    return await _session_has_documents(session_id, user_id, turn_has_document, ancestor_session_ids)
+    return await _session_has_documents(
+        session_id, user_id, turn_has_document, ancestor_session_ids, document_hint=document_hint
+    )
+
+
+def _turn_document_hint(handoff_turn: Optional[HandoffTurn], delivery_turn: Optional[DeliveryTurn]):
+    """One hint for the gate from whichever of the two carries files, or ``None``."""
+    hints = [h for h in (
+        handoff_turn.document_hint() if handoff_turn is not None else None,
+        delivery_turn.document_hint() if delivery_turn is not None else None,
+    ) if h is not None]
+    if not hints:
+        return None
+    if len(hints) == 1:
+        return hints[0]
+
+    async def _any() -> bool:
+        answers = await asyncio.gather(*hints, return_exceptions=True)
+        return any(a is True for a in answers)
+
+    return asyncio.ensure_future(_any())
 
 
 def _resolved_files_include_a_document(resolved_files: list | None) -> bool:
@@ -1436,6 +1493,7 @@ async def _build_document_tools(
     turn_has_document: bool = False,
     text_only: bool = False,
     ancestor_session_ids: Sequence[str] = (),
+    document_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> list:
     """Context-bound ``document_read`` for a session that has a readable attachment.
 
@@ -1453,7 +1511,9 @@ async def _build_document_tools(
     page-range reads return text; the model is in the cache key, so the flag
     needs no key element of its own.
     """
-    if not await _document_tools_gate(session_id, user_id, turn_has_document, ancestor_session_ids):
+    if not await _document_tools_gate(
+        session_id, user_id, turn_has_document, ancestor_session_ids, document_hint=document_hint
+    ):
         return []
 
     from agents.builtin_tools.document_read_tool import make_document_read_tool
@@ -2018,6 +2078,10 @@ def _start_session_files_read(
         rows = []
         for r in (row for batch in per_session for row in batch):
             if r.user_id != user_id or r.upload_id in seen:
+                continue
+            # A file shared from a linked conversation already has its own <file> line,
+            # and its facts are its original's (handoffs spec §4.9): left out of the set.
+            if r.linked_from is not None:
                 continue
             seen.add(r.upload_id)
             rows.append(r)
@@ -4408,6 +4472,7 @@ async def _build_turn_tools(
     text_only_model: bool = False,
     turn_project_id: Optional[str] = None,
     document_ancestor_session_ids: Sequence[str] = (),
+    document_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
@@ -4506,6 +4571,7 @@ async def _build_turn_tools(
         turn_has_document=turn_has_document,
         text_only=text_only_model,
         ancestor_session_ids=document_ancestor_session_ids,
+        document_hint=document_hint,
     )
     extra_tools = extra_tools + document_tools
 
@@ -6206,6 +6272,14 @@ async def _run_invocation(
         is_preview=is_preview_session(input_data.session_id),
     )
 
+    # Read-only prefetches for the files a handoff or delivery carries (§4.9): started now, so
+    # they overlap the lease and the attachments phase, and classify for the document_read gate.
+    # A send without files starts nothing.
+    if handoff_turn is not None:
+        handoff_turn.prefetch()
+    if delivery_turn is not None:
+        delivery_turn.prefetch()
+
     session_lease = None
     if not is_preview_session(input_data.session_id):
         from apis.shared.sessions.session_lease import (
@@ -6438,6 +6512,9 @@ async def _run_invocation(
                 # A fork's parent and root, off the row this turn already
                 # read: its copied documents' upload rows live there.
                 document_ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
+                # Files a handoff or delivery carries in (handoffs spec §4.9), classified from
+                # rows read before the lease; None when the send carries neither.
+                document_hint=_turn_document_hint(handoff_turn, delivery_turn),
             )
             # Client-executed tools (terminal only; the SPA never declares any).
             # Key-described by construction: the digest is a cache-key element,

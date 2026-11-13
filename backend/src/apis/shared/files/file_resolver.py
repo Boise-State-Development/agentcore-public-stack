@@ -142,6 +142,12 @@ class FileResolver:
             logger.warning(f"File {upload_id} not ready: {file_meta.status}")
             return None
 
+        if file_meta.linked_from is not None:
+            # A file shared from another conversation is never inlined (handoffs spec §4.9 rule
+            # 6): it reaches the model as its <file> line and through the readers only.
+            logger.warning("File %s is a shared reference; not attached inline", upload_id)
+            return None
+
         if delivers_by_reference(file_meta):
             return ResolvedFileContent(
                 filename=file_meta.filename,
