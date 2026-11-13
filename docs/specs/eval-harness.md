@@ -516,3 +516,33 @@ The page is read-only. Starting a run from the page is still open (§12); it is 
 - **EH-10 — page. BUILT 2026-11-08.** `GET /admin/costs/ledger/evals` on the ledger router (`require_ledger_admin`, so `admin.costs` before the flag), returning the rows newest first through `export_row`, the models and tracks in range counted before the filters, and the build bands from `LEDGER#VERSION`. `track=untracked` names a row published before `--track` existed, so it is never folded into a track. The page is `frontend/ai.client/src/app/admin/evaluations/`; the pure derivations (gate grid, flip matrix, the noisy rule, trends) are in `evaluations.util.ts`, with specs. Two choices the punch list did not settle: the bands drawn are only those of builds a plotted run ran on, because on dev a day holds several builds and the full set stacks a band per merge over each run; and the noisy rule groups by build before counting flips, so a change of build is never a flip. The link from `release-quality-panel.component.ts` opens the page on the run's model, track and build, with the run selected. **Not done:** verification against ten nightly rows. On 2026-11-08 dev held two `LEDGER#EVAL` rows (one `manual`, one from before `--track`) and no `nightly` row, because the scheduled nightly runs from `main` and had failed four nights running. The page was checked on dev's two real rows and on a local fixture overlay for history. **To check once nightly rows accumulate:** on dev nearly every nightly run is on a new build (develop merges most days), so "three flips in ten runs on one build" will rarely fire there; whether the rule should read across builds on the nightly track is a decision for when there is history to look at.
 
 A trend needs history, so EH-9 should land as soon as possible: every nightly run before it publishes a row without per-case outcomes, and that history cannot be backfilled. The run directories that would hold it go with the nightly runner.
+
+## 17. Efficiency beside outcome
+
+**Status:** Built 2026-11-12. Advisory only.
+
+### 17.1 Problem
+
+`score` says whether a run kept the baseline's quality. It cannot say what the run paid for that quality. A change that makes every answer twice as slow, or twice as long, passes as long as the answers stay right, and a change meant to make turns cheaper (a model route, a smaller default, patch-style edits) has nowhere to show that quality held while cost or time fell. The weekly efficiency review (`.claude/skills/efficiency-review/`) ranks exactly those trades and until now could only say "needs an eval".
+
+### 17.2 Decisions
+
+**D22 — Five measures per sample, all already on the result row.** `outputTokens`; `inputTokens` (uncached, cache-read and cache-written together); `toolCalls` over every turn; `durationMs` (every turn's Runtime duration, summed, and unknown if any turn has none); `firstTokenMs` of the first turn. A case is its median sample. Tokens, not dollars: concurrent samples share cache writes, so the same work can be billed differently between runs.
+
+**D23 — Only cases that pass on both sides are compared.** A wrong answer is often a short one. Pairing a failed case would report lost quality as gained efficiency, so a family's efficiency is summed over the cases that pass in the baseline and in the run and that both measured.
+
+**D24 — It never gates.** Timing follows the day's load, and the nightly run has one sample per case. `score` prints the table after the gate table and marks a measure with `*` only when at least 5 paired cases back it and it moved 20% or more. The exit code is the gate's alone.
+
+**D25 — The baseline carries it; an older baseline says so.** `baseline` writes `efficiency` on each case entry, so `baseline --family` carries it with the family. A baseline promoted before this prints "no baseline efficiency" for its families, never "no change". The committed baselines gain it the next time each is promoted.
+
+**D26 — The ledger row carries the run's own numbers too.** `LEDGER#EVAL` gains `efficiency: {family: {run: {metric: {n, sum}}, vsBaseline?: {paired, metric: {n, base, run}}}}`. `run` is over the cases the run passed and needs no baseline, so two runs on the same model and track compare from the day this ships. Counts and sums only; `assert_content_free` gains the one field name.
+
+### 17.3 Code
+
+`apis/shared/evals/efficiency.py` (pure): `sample_efficiency`, `case_efficiency`, `compare_efficiency`, `run_efficiency`, `format_efficiency_table`, `moved`. `report.build_baseline` records it; `eval_harness.py score` prints it, writes it under `efficiency` in `--json`, and passes it to `eval_ledger_row`.
+
+### 17.4 Not done
+
+- The Evaluations page does not draw it.
+- No baseline exists for the models that carry most production spend; an efficiency comparison is only as useful as the model it ran on.
+- No case family covers iterative drafting, browsing loops or spreadsheet loops, the costliest usage patterns in `docs/one-pagers/conversation-usage-patterns.md`.

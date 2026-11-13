@@ -63,7 +63,7 @@ BUILD_FROM_IMAGE_TAG = "image_tag"
 EVAL_ROW_FIELDS = frozenset({
     "PK", "SK", "runKind", "date", "startedAt", "publishedAt", "appVersion", "build", "buildSource",
     "otherBuildCalls", "gitCommit", "modelId", "k", "target", "families", "gateFailed", "judgeModel",
-    "judgeMeans", "samples", "calls", "costUsd", "durationS", "track", "cases",
+    "judgeMeans", "samples", "calls", "costUsd", "durationS", "track", "cases", "efficiency",
 })
 SMOKE_ROW_FIELDS = frozenset({
     "PK", "SK", "runKind", "date", "startedAt", "publishedAt", "appVersion", "build", "buildSource",
@@ -241,9 +241,14 @@ def eval_ledger_row(
     call_rows: Sequence[Mapping[str, Any]] = (),
     cases: Optional[Mapping[str, Mapping[str, Any]]] = None,
     track: Optional[str] = None,
+    efficiency: Optional[Mapping[str, Mapping[str, Any]]] = None,
     published_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """The ``LEDGER#EVAL`` row: §8's report table, with nothing from any answer.
+
+    ``efficiency`` is ``{family: {"run": ..., "vsBaseline": ...}}`` from
+    ``apis.shared.evals.efficiency``: what the passing cases cost to answer
+    (tokens, tool calls, time), as counts and sums. Numbers only.
 
     ``comparisons`` are ``apis.shared.evals.score.FamilyComparison`` and
     ``judge_comparisons`` ``apis.shared.evals.report.JudgeComparison``. A
@@ -276,6 +281,8 @@ def eval_ledger_row(
         row["track"] = track
     if cases:
         row["cases"] = {str(case_id): dict(entry) for case_id, entry in cases.items()}
+    if efficiency:
+        row["efficiency"] = json.loads(json.dumps(efficiency))
     if meta.get("gitCommit"):
         row["gitCommit"] = str(meta["gitCommit"])
     if judge_comparisons:

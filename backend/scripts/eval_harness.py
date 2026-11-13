@@ -107,6 +107,14 @@ from eval_fixtures.build import GENERATED  # noqa: E402
 from eval_fixtures.build import build as build_fixture  # noqa: E402
 from eval_fixtures.delivery import estimated_tokens as fixture_tokens  # noqa: E402
 from eval_fixtures.references import reference_for  # noqa: E402
+from apis.shared.evals.efficiency import (  # noqa: E402
+    MIN_PAIRED_CASES,
+    MOVED_THRESHOLD,
+    compare_efficiency,
+    format_efficiency_table,
+    moved,
+    run_efficiency,
+)
 from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
     ReportError,
@@ -1052,6 +1060,7 @@ def _publish_eval(
     *,
     baseline: Mapping[str, Any],
     track: str,
+    efficiency: Optional[Mapping[str, Any]] = None,
 ) -> bool:
     """Write the comparison as a ``LEDGER#EVAL`` row (release-ledger spec §5.2). Best-effort.
 
@@ -1088,6 +1097,7 @@ def _publish_eval(
             meta, comparisons, served=served, result_rows=rows, judge_comparisons=judge_comparisons,
             judge_model=judge_model, call_rows=calls,
             cases=case_ledger_entries(rows, baseline.get("cases")), track=track,
+            efficiency=efficiency,
         )
         lp.assert_content_free(row, lp.EVAL_ROW_FIELDS, forbidden=[*ids, meta.get("user_id") or ""])
     except lp.PublishError as exc:
@@ -1127,6 +1137,19 @@ def cmd_score(args: argparse.Namespace) -> int:
         if judge_comparisons:
             print("\nLLM judges (advisory, mean score 0-1, paired cases only):\n")
             print(format_judge_table(judge_comparisons))
+    passed = {case_id: outcome.passed for case_id, outcome in case_outcomes(rows).items()}
+    efficiency = compare_efficiency(baseline, rows, passed)
+    print("\nEfficiency (advisory; mean per case in the run and change vs baseline, cases that pass in both;")
+    print(f"* = {MOVED_THRESHOLD:.0%} or more over {MIN_PAIRED_CASES}+ cases):\n")
+    print(format_efficiency_table(efficiency))
+    if moved_efficiency := moved(efficiency):
+        print("\nmoved: " + ", ".join(moved_efficiency))
+    efficiency_row = {
+        family: {"run": numbers} for family, numbers in run_efficiency(rows, passed).items()
+    }
+    for comparison in efficiency:
+        if comparison.metrics:
+            efficiency_row.setdefault(comparison.family, {})["vsBaseline"] = comparison.to_dict()
     if args.explain:
         calls = None if args.no_cost_rows else asyncio.run(_family_calls(meta, rows, args.explain))
         print()
@@ -1146,6 +1169,7 @@ def cmd_score(args: argparse.Namespace) -> int:
                         for c in judge_comparisons
                     ],
                     "gateFailed": any_gate_failed(comparisons),
+                    "efficiency": efficiency_row,
                 },
                 indent=2,
             )
@@ -1155,7 +1179,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     if args.publish:
         print()
         _publish_eval(meta, rows, comparisons, judge_comparisons, models[0] if len(models) == 1 else None,
-                      baseline=baseline, track=args.track)
+                      baseline=baseline, track=args.track, efficiency=efficiency_row)
     failed = any_gate_failed(comparisons)
     print("\nGATE: " + ("FAIL — a gating family regressed; run with --explain <family>" if failed else "pass"))
     return 1 if failed else 0
