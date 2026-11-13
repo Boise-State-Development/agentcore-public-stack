@@ -1,4 +1,4 @@
-import { HandoffView, SpawnedFrom } from '../handoff/handoff.models';
+import { DeliveryView, HandoffView, SpawnedFrom } from '../handoff/handoff.models';
 import { inject, Injectable, signal, WritableSignal, resource, computed, effect, untracked } from '@angular/core';
 import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
@@ -165,6 +165,12 @@ export interface MessagesListResponse {
   handoffs?: HandoffView[];
   /** Set when this conversation was started by a handoff: where its context came from. */
   spawnedFrom?: SpawnedFrom;
+  /**
+   * Cards waiting on this conversation's composer (handoffs spec §4.8), oldest first: results
+   * sent back from another of the user's conversations. The next send carries them. An attached
+   * card isn't listed; its block is in the user message it went with. First page only.
+   */
+  deliveries?: DeliveryView[];
   /**
    * True when Memory's events for this session have expired and these
    * messages are the conversation archive's text-only copy. The agent cannot

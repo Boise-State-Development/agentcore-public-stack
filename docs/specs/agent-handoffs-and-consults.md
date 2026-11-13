@@ -2089,9 +2089,34 @@ has started", and the only one that spends money while nobody is watching.
   - **Known gap:** a card attaches at the head of the turn. A turn that fails before the agent appends the user
     message (an agent build that raises) spends the card without sending it. Measure how often on dev before
     deciding whether a release on that path is worth its cost.
-  - **TTFT is not yet measured.** The attaches overlap the agent build and are awaited where the message is
-    assembled; on a source whose agent is cached, the build is short, so measure `head_of_turn` with one and three
-    cards on dev after merge and record it here.
+  - **TTFT, measured on dev 2026-11-12 and accepted.** A `delivery_attach` line per send records `waitMs` (how
+    long the turn blocked on the writes) and `attachMs` (the writes' own time). On a warm source: 1 card
+    0.1–0.2 ms (the 16–21 ms of writes finish behind the build), 2 cards 5.0 ms, 3 cards 4.3 and 4.5 ms with
+    one 45.6 ms outlier (the first three-card send on that container, whose writes took 50 ms). A send
+    without cards runs nothing. Every source call stayed a cache `hit`.
+  *SPA built (2026-11-13).* `DeliveryStateService` holds the cards per receiving conversation (seeded from
+  `deliveries`) and Send to *{title}*'s review per target; `DeliveryService` makes the calls.
+  - **Composer cards** (`DeliveryCardsComponent`, above the composer): "From *{title}*", a one-line preview,
+    Preview, Edit and Remove (dismissed on the server), and artifact chips. The first three say "Goes with your
+    next message", the rest "Goes with the message after".
+  - **The send** takes up to three cards (`takeForSend`), oldest first, sending `text` only for an edited card,
+    and puts them back if the send is refused before it starts (`StreamNotStartedError`). The live bubble's
+    text is the same blocks the server stores, with `displayText` the typed words, so the live and reloaded
+    bubbles render through one path.
+  - **The sent bubble** reads its cards back out of its own text (`extractDeliveryBlocks`, the exact shape the
+    server writes and only at the start of a message with `displayText`), as "From *{title}*" with Show result
+    and the chips. A message the user typed is never read as a card.
+  - **Bring back result** is a sibling button under a done row, and reads "Added to your next message" once the
+    card is on the composer. **Send to *{title}*** is an icon in the action row of every answer in a conversation
+    with `spawnedFrom`; it opens `SendBackSheetComponent` (the review sheet's look, not its code: the mention
+    sheet is built around an Agent, a request and a brief) with the result editable and each artifact a
+    checkbox. Neither navigates; Send's toast offers Open.
+  - **Artifact chips** (`DeliveryArtifactChipsComponent`) open `/artifacts/{id}`. One read of the user's
+    artifact library (`ArtifactAvailabilityService`, re-read after 30 s) marks a chip "Newer version available"
+    or, as plain text, "No longer available"; until it lands a chip is a plain link.
+  - **Parity.** `renderDeliveryBlock` is the TypeScript copy of `render_delivery_block`, pinned by the
+    fixture's `deliveryCases`, which both sides' tests read.
+  - **Not built:** the `DeliveryArtifactOpened` count (§4.7) needs the notification-events route to accept it.
 - **PR-0.4a — Files by reference (§4.9).** Settle §4.9's verify-first (the inventory of `FileMetadata` readers)
   first. Then:
   - `linkedFrom` on `FileMetadata`, which is additive, plus `is_linked_reference` and `resolve_linked_file`

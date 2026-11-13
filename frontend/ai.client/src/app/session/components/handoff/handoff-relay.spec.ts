@@ -15,6 +15,7 @@ import { ChatHttpService } from '../../services/chat/chat-http.service';
 import { ChatRequestService } from '../../services/chat/chat-request.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { StreamParserService } from '../../services/chat/stream-parser.service';
+import { DeliveryStateService } from '../../services/handoff/delivery-state.service';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
 import type { HandoffView, RelayedPrompt } from '../../services/handoff/handoff.models';
 import type { Message } from '../../services/models/message.model';
@@ -287,6 +288,44 @@ describe('Relayed prompts', () => {
     expect(row.textContent).toContain('Waiting for you to connect Canvas for Faculty');
     expect(relay()?.textContent).toContain('Rubric Builder needs you to connect Canvas for Faculty to keep going.');
     expect(button('Connect to Canvas for Faculty')).toBeTruthy();
+  });
+
+  it('a finished row offers Bring back result, which puts the answer on the composer and stays put', async () => {
+    TestBed.inject(HandoffStateService).upsertRow(waiting([], { status: 'done', relayedPrompts: undefined, waitingOn: undefined }));
+    render();
+    refresh();
+
+    const bringBack = Array.from(fixture.nativeElement.querySelectorAll('button') as NodeListOf<HTMLButtonElement>).find(
+      (b) => b.textContent?.trim() === 'Bring back result',
+    );
+    expect(bringBack).toBeDefined();
+    bringBack!.click();
+    const req = TestBed.inject(HttpTestingController).expectOne((r) => r.url.endsWith('/sessions/tgt/handoffs/send-back'));
+    expect(req.request.body).toEqual({ deliver: true });
+    req.flush({
+      handoffId: 'sb1',
+      sourceSessionId: 'src',
+      sourceTitle: 'Course planning',
+      fromTitle: 'Rubric for BIO 101',
+      messageIndex: 3,
+      excerpt: 'Four rows, done.',
+      excerptHash: 'h',
+      artifacts: [],
+      deliveryId: 'd1',
+    });
+    await vi.waitFor(() => expect(TestBed.inject(DeliveryStateService).cardsFor('src')).toHaveLength(1));
+    refresh();
+
+    expect(fixture.nativeElement.textContent).toContain('Added to your next message');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('only a finished row offers it', () => {
+    TestBed.inject(HandoffStateService).upsertRow(waiting([CONSENT]));
+    render();
+    refresh();
+
+    expect(fixture.nativeElement.textContent).not.toContain('Bring back result');
   });
 
   it('waits for a running source turn to end; the amber mark does not', () => {

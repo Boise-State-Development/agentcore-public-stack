@@ -18,6 +18,7 @@ import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { AgentHandoffService } from '../../services/handoff/agent-handoff.service';
 import { HandoffNotificationService } from '../../services/handoff/handoff-notification.service';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
+import { DeliveryService } from '../../services/handoff/delivery.service';
 import { HandoffStatus, HandoffView, WaitingOn } from '../../services/handoff/handoff.models';
 import { SessionService } from '../../services/session/session.service';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
@@ -90,6 +91,26 @@ type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'sto
           aria-hidden="true"
         />
       </a>
+      <!-- Bring back result (§4.3): a sibling of the link, never inside it, on a finished row. -->
+      @if (offerBringBack()) {
+        <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 text-xs/5">
+          @if (delivery.wasBroughtBack(row().handoffId)) {
+            <span class="flex items-center gap-1 text-gray-600 dark:text-gray-400" role="status">
+              <ng-icon name="heroCheckCircle" class="size-3.5" aria-hidden="true" />
+              Added to your next message
+            </span>
+          } @else {
+            <button
+              type="button"
+              (click)="bringBack()"
+              [disabled]="delivery.isBringingBack(row().handoffId)"
+              class="rounded-md font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-wait disabled:opacity-60 dark:text-primary-50"
+            >
+              {{ delivery.isBringingBack(row().handoffId) ? 'Bringing back…' : 'Bring back result' }}
+            </button>
+          }
+        </div>
+      }
       @if (offerNotifications()) {
         <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 text-xs/5">
           <button
@@ -119,6 +140,7 @@ export class HandoffRowComponent {
   private readonly sessions = inject(SessionService);
   protected readonly notifications = inject(HandoffNotificationService);
   private readonly handoffState = inject(HandoffStateService);
+  protected readonly delivery = inject(DeliveryService);
   private readonly connectors = inject(UserConnectorsService);
   private readonly card = viewChild<ElementRef<HTMLAnchorElement>>('card');
 
@@ -185,6 +207,15 @@ export class HandoffRowComponent {
         return 'Stopped';
     }
   });
+
+  /** A finished handoff can send its answer back here (the target is the user's own by now). */
+  protected readonly offerBringBack = computed(
+    () => this.state() === 'done' && !!this.row().targetSessionId && this.row().kind !== 'send_back',
+  );
+
+  protected bringBack(): void {
+    void this.delivery.bringBack(this.row());
+  }
 
   protected readonly offerNotifications = computed(
     () => this.state() === 'needs_input' && this.notifications.canOffer(),

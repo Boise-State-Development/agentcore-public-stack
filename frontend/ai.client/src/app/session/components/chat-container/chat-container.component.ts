@@ -39,6 +39,8 @@ import { ProjectsService } from '../../../projects/services/projects.service';
 import { MessageMapService } from '../../services/session/message-map.service';
 import { ExpiredSessionNoticeComponent } from '../expired-session-notice/expired-session-notice.component';
 import { HandoffReviewSheetComponent } from '../handoff/handoff-review-sheet.component';
+import { DeliveryCardsComponent } from '../handoff/delivery-cards.component';
+import { SendBackSheetComponent } from '../handoff/send-back-sheet.component';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -85,6 +87,8 @@ export interface ChatContainerConfig {
     VoiceOverlayComponent,
     ExpiredSessionNoticeComponent,
     HandoffReviewSheetComponent,
+    DeliveryCardsComponent,
+    SendBackSheetComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-container.component.html',

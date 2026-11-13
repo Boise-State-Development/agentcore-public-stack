@@ -153,3 +153,67 @@ export interface HandoffReview {
   /** Present when a brief was requested (`features.handoffBrief`). */
   brief?: HandoffBrief;
 }
+
+/** A reference to an artifact the sending conversation made, pinned at the version sent (§4.8). */
+export interface DeliveryArtifact {
+  artifactId: string;
+  version: number;
+  title: string;
+  contentType: string;
+}
+
+/**
+ * A card waiting on a conversation's composer (`deliveries` on `GET /messages`, handoffs spec §4.8):
+ * text from another of the user's conversations that the next send there carries.
+ */
+export interface DeliveryView {
+  deliveryId: string;
+  fromSessionId: string;
+  fromTitle: string;
+  handoffId?: string;
+  origin: 'user' | 'agent';
+  text: string;
+  artifacts: DeliveryArtifact[];
+  createdAt: string;
+}
+
+/** `POST /sessions/{targetId}/handoffs/send-back`: a target's answer, offered back to its source. */
+export interface CreateSendBackResponse {
+  handoffId: string;
+  sourceSessionId: string;
+  sourceTitle: string;
+  /** The sending conversation's title, which the card is labelled with. */
+  fromTitle: string;
+  messageIndex: number;
+  excerpt: string;
+  excerptHash: string;
+  artifacts: DeliveryArtifact[];
+  /** Present when the delivery was made at once (Bring back result). */
+  deliveryId?: string;
+}
+
+/** `POST /sessions/{targetId}/handoffs/{handoffId}/deliver`: Send to *{title}* made its card. */
+export interface DeliverSendBackResponse {
+  deliveryId: string;
+  sourceSessionId: string;
+  sourceTitle: string;
+}
+
+/** Send to *{title}*'s review sheet, in the target conversation (§4.3). */
+export interface SendBackReview {
+  messageIndex: number;
+  phase: 'loading' | 'ready' | 'sending' | 'error';
+  error?: string;
+  created?: CreateSendBackResponse;
+  /** The card as it will be sent (editable). */
+  text: string;
+  /** The offered artifacts the user is sending (unticking one leaves it behind). */
+  artifactIds: string[];
+}
+
+/** One delivery block read back out of a user message the model received (the sent bubble's card). */
+export interface DeliveryBlock {
+  fromTitle: string;
+  text: string;
+  artifacts: DeliveryArtifact[];
+}

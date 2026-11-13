@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroSquare2Stack, heroCheck, heroArrowPath, heroHandThumbUp, heroHandThumbDown } from '@ng-icons/heroicons/outline';
+import { heroSquare2Stack, heroCheck, heroArrowPath, heroArrowUturnLeft, heroHandThumbUp, heroHandThumbDown } from '@ng-icons/heroicons/outline';
 import { heroHandThumbUpSolid, heroHandThumbDownSolid } from '@ng-icons/heroicons/solid';
 import { MarkdownService } from 'ngx-markdown';
 import { FeedbackReason, Message, isTextContentBlock } from '../../../services/models/message.model';
@@ -19,6 +19,9 @@ import { FEEDBACK_REASONS, MessageFeedbackService, parseMessageRef } from '../..
 import { TooltipDirective } from '../../../../components/tooltip';
 import { ShortcutTargetsService } from '../../../../components/shortcuts/shortcut-targets.service';
 import { shortcutAria, withShortcut } from '../../../../components/shortcuts/shortcuts';
+import { FEATURES } from '../../../../services/features';
+import { DeliveryService } from '../../../services/handoff/delivery.service';
+import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
 
 @Component({
   selector: 'app-message-actions',
@@ -29,6 +32,7 @@ import { shortcutAria, withShortcut } from '../../../../components/shortcuts/sho
       heroSquare2Stack,
       heroCheck,
       heroArrowPath,
+      heroArrowUturnLeft,
       heroHandThumbUp,
       heroHandThumbDown,
       heroHandThumbUpSolid,
@@ -64,6 +68,21 @@ import { shortcutAria, withShortcut } from '../../../../components/shortcuts/sho
             <ng-icon name="heroSquare2Stack" class="size-4" aria-hidden="true" />
           }
         </button>
+
+        @if (sendBackTitle(); as title) {
+          <!-- Send to {title} (handoffs spec §4.3): this conversation came from a handoff, so an
+               answer here can go back to where it started. Opens a review; nothing navigates. -->
+          <button
+            type="button"
+            class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            [appTooltip]="'Send to ' + title"
+            appTooltipPosition="top"
+            [attr.aria-label]="'Send to ' + title"
+            (click)="sendBack()"
+          >
+            <ng-icon name="heroArrowUturnLeft" class="size-4" aria-hidden="true" />
+          </button>
+        }
 
         @if (showFeedback()) {
           <!-- Thumbs: the outcome signal joined to the cost rows. A second click
@@ -230,6 +249,28 @@ export class MessageActionsComponent {
   /** Emitted when the user asks to continue the truncated / interrupted
    *  response. */
   continueRequested = output<void>();
+
+  private readonly features = inject(FEATURES);
+  private readonly handoffState = inject(HandoffStateService);
+  private readonly delivery = inject(DeliveryService);
+
+  /** Where this answer's conversation came from, when a handoff started it and there is an answer to send. */
+  private readonly sendBackTarget = computed(() => {
+    if (!this.features.handoffs) return null;
+    const ref = parseMessageRef(this.lastMessage()?.id ?? '');
+    if (!ref) return null;
+    const origin = this.handoffState.spawnedFrom(ref.sessionId);
+    return origin ? { ref, origin } : null;
+  });
+
+  protected readonly sendBackTitle = computed(
+    () => this.sendBackTarget()?.origin.sourceTitle || (this.sendBackTarget() ? 'the original conversation' : null),
+  );
+
+  protected sendBack(): void {
+    const target = this.sendBackTarget();
+    if (target) void this.delivery.openSendBack(target.ref.sessionId, target.ref.index);
+  }
 
   /** Continue click: emit as before, and record the implicit signal. */
   protected onContinue(): void {

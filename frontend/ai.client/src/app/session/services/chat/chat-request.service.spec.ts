@@ -11,6 +11,8 @@ import { SessionService } from '../session/session.service';
 import { SessionPrewarmService } from '../session/session-prewarm.service';
 import { TurnTimingService } from './turn-timing.service';
 import { FEATURES } from '../../../services/features';
+import { DeliveryStateService } from '../handoff/delivery-state.service';
+import { joinDeliveryBlocks, renderDeliveryBlock } from '../handoff/handoff-prompt';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -146,6 +148,64 @@ describe('ChatRequestService', () => {
     expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).toMatchObject({ incognito: true });
     // The toggle is spent: the next new chat starts as not incognito.
     expect(incognito.pending()).toBe(false);
+  });
+
+  describe('delivery cards (handoffs spec §4.8)', () => {
+    const card = (id: string, minute: number) => ({
+      deliveryId: id,
+      fromSessionId: 'tgt',
+      fromTitle: 'Rubric for BIO 101',
+      origin: 'user' as const,
+      text: `Result ${id}.`,
+      artifacts: [],
+      createdAt: `2026-11-12T00:0${minute}:00Z`,
+    });
+
+    beforeEach(() => {
+      Object.assign(TestBed.inject(FEATURES), { handoffs: true });
+    });
+
+    it('a send carries the waiting cards, and the bubble holds the text the server will store', async () => {
+      const deliveries = TestBed.inject(DeliveryStateService);
+      deliveries.hydrate('session1', [card('b', 2), card('a', 1)]);
+      deliveries.edit('session1', 'b', 'Edited b.');
+      const messageMap = TestBed.inject(MessageMapService) as any;
+
+      await service.submitChatRequest('Reply with OK.', 'session1');
+
+      expect(mockChatHttpService.sendChatRequest.mock.calls[0][0].deliveries).toEqual([
+        { deliveryId: 'a' },
+        { deliveryId: 'b', text: 'Edited b.' },
+      ]);
+      const [, typed, , , modelText] = messageMap.addUserMessage.mock.calls[0];
+      expect(typed).toBe('Reply with OK.');
+      expect(modelText).toBe(
+        joinDeliveryBlocks(
+          [renderDeliveryBlock('Result a.', 'Rubric for BIO 101'), renderDeliveryBlock('Edited b.', 'Rubric for BIO 101')],
+          'Reply with OK.',
+        ),
+      );
+      expect(deliveries.cardsFor('session1')).toEqual([]);
+    });
+
+    it('a send the server refused before starting puts the cards back for the retry', async () => {
+      const deliveries = TestBed.inject(DeliveryStateService);
+      deliveries.hydrate('session1', [card('a', 1)]);
+      (TestBed.inject(MessageMapService) as any).addUserMessage.mockReturnValue({ id: 'msg-session1-4' });
+      mockChatHttpService.sendChatRequest.mockRejectedValueOnce(new StreamNotStartedError('busy'));
+
+      await expect(service.submitChatRequest('Hi', 'session1')).rejects.toBeInstanceOf(StreamNotStartedError);
+
+      expect(deliveries.cardsFor('session1').map((c) => c.deliveryId)).toEqual(['a']);
+    });
+
+    it('a send without cards carries no field and leaves the bubble as typed', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      await service.submitChatRequest('Hi', 'session1');
+
+      expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).not.toHaveProperty('deliveries');
+      expect(messageMap.addUserMessage.mock.calls[0]).toHaveLength(4);
+    });
   });
 
   describe('folder attachments', () => {
