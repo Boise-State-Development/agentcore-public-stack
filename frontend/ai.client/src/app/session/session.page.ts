@@ -59,7 +59,7 @@ import { GreetingProvider } from '../../branding/greeting.provider';
   selector: 'app-session-page',
   imports: [ChatContainerComponent],
   templateUrl: './session.page.html',
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './session.page.css',
 })
 export class ConversationPage implements OnDestroy {

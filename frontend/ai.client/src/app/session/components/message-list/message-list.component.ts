@@ -150,7 +150,7 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     HandoffRowComponent,
   ],
   templateUrl: './message-list.component.html',
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './message-list.component.css',
 })
 export class MessageListComponent {

@@ -356,7 +356,7 @@ export const PROJECT_SKILLS_HINT = "Skills for this project are chosen on its Sk
     })
   ],
   templateUrl: './chat-input.component.html',
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './chat-input.component.css'
 })
 export class ChatInputComponent {
