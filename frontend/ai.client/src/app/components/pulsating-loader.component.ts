@@ -35,49 +35,65 @@ import { isPlatformBrowser } from '@angular/common';
  * - the elapsed timer is measured from the moment the turn was sent.
  *
  * `notice` outranks both. It states a specific fact that is NOT the healthy
- * path (the model is being retried), so it takes the warning colour and the
- * amber dot — the dot matters because it is the part a user tracks
- * peripherally, and changing only the text leaves the indicator looking
- * routine during an outage.
+ * path (the model is being retried, or nothing has said what the turn is
+ * doing for a long time), so it takes the warning colour and the amber dot —
+ * the dot matters because it is the part a user tracks peripherally, and
+ * changing only the text leaves the indicator looking routine during an
+ * outage.
+ *
+ * `hint` is the opposite register: a muted line UNDER the status for a turn
+ * that is quiet because it is working hard. It never replaces the status and
+ * never changes the dot, so a long tool call or a long think still reads as
+ * the routine, healthy indicator it is.
  */
 @Component({
   selector: 'app-pulsating-loader',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div
-      class="flex items-center gap-2"
       role="status"
       [attr.aria-busy]="true"
       aria-live="polite"
       [attr.aria-label]="ariaLabel()"
     >
-      <span class="pulse-dot" [class.is-notice]="!!notice()" aria-hidden="true"></span>
+      <div class="flex items-center gap-2">
+        <span class="pulse-dot" [class.is-notice]="!!notice()" aria-hidden="true"></span>
 
-      <span class="sep" aria-hidden="true">&bull;</span>
-
-      <!-- Tabular figures so the seconds tick without the line jittering, and
-           aria-hidden so a screen reader is not re-announced to every second. -->
-      @if (elapsedLabel(); as elapsed) {
-        <span class="text-xs tabular-nums text-gray-400 dark:text-gray-500" aria-hidden="true">{{ elapsed }}</span>
         <span class="sep" aria-hidden="true">&bull;</span>
-      }
 
-      <!-- Tracked by its own text, so a change in state destroys this node and
-           builds a new one — which is what lets the enter animation run on
-           every transition. The timer is a sibling for the same reason in
-           reverse: it must NOT re-animate once a second. -->
-      @for (frame of stateFrames(); track frame) {
-        <span
-          class="state text-sm"
-          [class.is-notice]="!!notice()"
-          [class.shimmer]="!notice()"
-        >
-          @if (statusTool(); as tool) {
-            {{ label() }} <span class="font-mono text-[13px]">{{ tool }}</span>{{ trailer() }}
-          } @else {
-            {{ label() }}{{ trailer() }}
-          }
-        </span>
+        <!-- Tabular figures so the seconds tick without the line jittering, and
+             aria-hidden so a screen reader is not re-announced to every second. -->
+        @if (elapsedLabel(); as elapsed) {
+          <span class="text-xs tabular-nums text-gray-400 dark:text-gray-500" aria-hidden="true">{{ elapsed }}</span>
+          <span class="sep" aria-hidden="true">&bull;</span>
+        }
+
+        <!-- Tracked by its own text, so a change in state destroys this node and
+             builds a new one — which is what lets the enter animation run on
+             every transition. The timer is a sibling for the same reason in
+             reverse: it must NOT re-animate once a second. -->
+        @for (frame of stateFrames(); track frame) {
+          <span
+            class="state text-sm"
+            [class.is-notice]="!!notice()"
+            [class.shimmer]="!notice()"
+          >
+            @if (statusTool(); as tool) {
+              {{ label() }} <span class="font-mono text-[13px]">{{ tool }}</span>{{ trailer() }}
+            } @else {
+              {{ label() }}{{ trailer() }}
+            }
+          </span>
+        }
+      </div>
+
+      <!-- Indented past the dot and its gap so it reads as a note on the
+           status line, not a second status. Carried in the accessible name
+           too; aria-hidden here so it is not announced twice. -->
+      @if (hint(); as hintText) {
+        <p class="hint mt-1 ps-[19px] text-xs text-gray-500 dark:text-gray-400" aria-hidden="true">
+          {{ hintText }}
+        </p>
       }
     </div>
 
@@ -217,6 +233,10 @@ import { isPlatformBrowser } from '@angular/common';
         color: var(--color-state-warning-400);
       }
 
+      .hint {
+        animation: state-enter 0.3s ease-out;
+      }
+
       @keyframes loader-ring {
         0% {
           transform: scale(0.35);
@@ -272,7 +292,8 @@ import { isPlatformBrowser } from '@angular/common';
         }
 
         .state,
-        .state.shimmer {
+        .state.shimmer,
+        .hint {
           animation: none;
         }
       }
@@ -283,11 +304,18 @@ export class PulsatingLoaderComponent implements OnInit, OnDestroy {
   private platformId = inject(PLATFORM_ID);
 
   /**
-   * A specific fact that is not the healthy path — currently only "the model
-   * is being retried". Outranks `status`: a retry in progress is the more
-   * important truth.
+   * A specific fact that is not the healthy path — the model is being
+   * retried, or the turn has been silent with no phase to explain it.
+   * Outranks `status`: it is the more important truth.
    */
   notice = input<string | null>(null);
+
+  /**
+   * A muted note shown under the status while a healthy turn is quiet for a
+   * long time ("Large tasks can take a few minutes."). Adds to the status;
+   * never replaces it, never changes the dot.
+   */
+  hint = input<string | null>(null);
 
   /**
    * What the agent is doing, from `agent_status`. Null falls back to the
@@ -330,7 +358,7 @@ export class PulsatingLoaderComponent implements OnInit, OnDestroy {
    * list_assignments…" — which reads as the ongoing action it is.
    *
    * A notice gets none: every notice string already ends in its own
-   * punctuation ("Still working…", "…attempt 2."), so appending here would
+   * punctuation ("…still waiting…", "…attempt 2."), so appending here would
    * double it.
    */
   protected readonly trailer = computed(() => (this.notice() ? '' : '…'));
@@ -364,7 +392,9 @@ export class PulsatingLoaderComponent implements OnInit, OnDestroy {
    */
   protected readonly ariaLabel = computed(() => {
     const tool = this.statusTool();
-    return tool ? `${this.label()} ${tool}` : this.label();
+    const state = tool ? `${this.label()} ${tool}` : this.label();
+    const hint = this.hint();
+    return hint ? `${state}. ${hint}` : state;
   });
 
   ngOnInit(): void {

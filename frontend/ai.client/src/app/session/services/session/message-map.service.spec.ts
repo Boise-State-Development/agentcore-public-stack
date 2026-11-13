@@ -114,7 +114,7 @@ describe('MessageMapService', () => {
       ]);
       expect(parser.streamingMessageIdFor('s1')()).toBeNull();
       expect(parser.modelRetryFor('s1')()).toBeNull();
-      // The loader's "Still working…" reads silence since this clock; it must
+      // The loader's silence hint reads silence since this clock; it must
       // be the new turn's, not the failed turn's last frame.
       expect(parser.lastEventAtFor('s1')()).toBeGreaterThanOrEqual(before);
       // The failed turn's ending does not carry into the new one.
