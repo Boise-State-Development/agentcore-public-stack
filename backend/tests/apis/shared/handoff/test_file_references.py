@@ -8,6 +8,7 @@ delete rules are asserted against what is actually left in the bucket and the ta
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict
@@ -635,6 +636,23 @@ def test_a_delivery_carries_a_senders_reference_as_its_original(aws, linked):
     assert [(f.upload_id, f.session_id) for f in row.files] == [("orig-1", "src")]
 
 
+def serialize_attach(store: DeliveryStore, monkeypatch) -> None:
+    """Make ``store.attach`` atomic, as DynamoDB's conditional update is per item.
+
+    moto's in-memory table is not thread-safe: two threads can both pass the same condition, so
+    without this the race the test is about is decided by moto rather than by the code (it failed
+    that way once in CI under load). The two turns still run concurrently around it.
+    """
+    lock = threading.Lock()
+    real = store.attach
+
+    def attach(*args, **kwargs):
+        with lock:
+            return real(*args, **kwargs)
+
+    monkeypatch.setattr(store, "attach", attach)
+
+
 def _attach_turn(store: DeliveryStore, delivery_id: str) -> DeliveryTurn:
     turn = DeliveryTurn.for_turn(
         user_id="alice",
@@ -677,6 +695,7 @@ def test_two_concurrent_sends_attaching_one_delivery_write_one_set_of_rows(aws, 
     put(aws, original("rubric", session_id="tgt", filename="rubric.docx", mime=DOCX), objects=False)
     store = DeliveryStore(table=aws.sessions)
     row = _send(aws, file_ids=["rubric"], store=store)
+    serialize_attach(store, monkeypatch)
     writes = []
     import apis.shared.handoff.delivery_turn as delivery_turn
 
