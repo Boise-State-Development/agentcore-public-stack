@@ -1,6 +1,8 @@
 # Field set authoring
 
-**Status:** proposed — not built.
+**Status:** PR 1 implemented (§8): `serialize_field_set`, its two pinned tests, and
+the unconditional check on every skill-file write. PR 2 (routes, flag) and PR 3 (the
+editor) not built.
 **Closes:** `docs/specs/structured-extraction.md` §4, "what is given up" #1.
 **Depends on:** structured extraction (`DOCUMENT_EXTRACT_ENABLED`), in development.
 
@@ -157,7 +159,24 @@ did not author it.
 **This is a behaviour change for deployments that are not using this feature**: a
 `POST .../resources` of a file named `field-set.*.md` that does not parse now returns
 400 where it returned 200. It is a correct 400 — the file could never have worked — but
-it is a change, and it gets a CHANGELOG line of its own. *(Open question 1 below.)*
+it is a change, and it gets a CHANGELOG line of its own. *(Open question 1, decided
+unconditional on 2026-11-13.)*
+
+**As built (PR 1)**, in `validate_field_set_upload`
+(`apis.shared.extraction.field_sets`), called from `SkillBundleFiles.add_resource`:
+
+* **Three entry points, one check.** The user upload, the admin upload and the agent's
+  `my_skill_write_file` all go through `add_resource`, so all three refuse. The routes
+  answer 400 with the parser's message; the agent tool returns it as an error result the
+  model can correct, which makes the authoring tools a first, feedback-bearing way to
+  write a set before the editor exists.
+* **`reference` kind only.** `turn_has_field_set` reads field sets from `references/`
+  alone, so a same-named `asset` or `script` is not a field set and is stored as before.
+* **A name the resolver would skip is refused too.** `field-set.NSF_Review.md` is not a
+  field set to `field_set_name_for`, so it used to store fine and then silently never
+  appear. It now answers with the naming rule.
+* **Nothing already stored is touched.** No migration: a broken file written before this
+  stays, and still fails at extraction as it did.
 
 ---
 
@@ -315,22 +334,32 @@ would be inventing a permission for a capability the user demonstrably has.
 
 | PR | Contents |
 |---|---|
-| **1** | `serialize_field_set` in `apis.shared.extraction.field_sets`, both pinned tests (§6), validate-on-write in `SkillBundleFiles` (§4.2) |
-| **2** | The four app-api routes (§4.1), the flag, CDK config + ceilings entry, docs-site row |
+| **1** ✅ | `serialize_field_set` in `apis.shared.extraction.field_sets`, both pinned tests (§6), validate-on-write in `SkillBundleFiles` (§4.2) |
+| **2** | The four app-api routes (§4.1), the flag, CDK config + ceilings entry, docs-site row. Also the parser reporting unknown columns, so the structured `PUT` can carry them (below) |
 | **3** | The SPA: route, list section on the skill form, the card editor, markdown mode |
 
 PR 1 is useful on its own: it stops a malformed field set being storable at all, through
 any path, whether or not the editor is ever turned on.
 
+**What PR 1's serializer carries, and what waits for PR 2.** `serialize_field_set(set,
+preamble=…)` writes the frontmatter, optional prose before the table, the table in
+authored order with the canonical column names, and `## Rules` verbatim. It parses its
+own output before returning and refuses, by name, any value the format cannot carry (a
+`|` or a line break in a cell, a comma inside one enum value, a title the frontmatter
+would strip), so it never saves a set that reads back as a different one. It does not
+yet carry **unknown columns** or prose *after* the table: the parser drops both, so
+there is nothing to hand the serializer until PR 2 makes the parser report them as
+`unmanagedColumns`. Neither affects the schema, so the semantic round trip holds today.
+
 ---
 
 ## 9. Open questions for review
 
-1. **Unconditional validation (§4.2).** It is a 400 where there was a 200 for any
-   deployment with a file named `field-set.*.md`. Correct, but a change. Flag-gate it
-   instead?
+1. ~~**Unconditional validation (§4.2).**~~ **Decided 2026-11-13: unconditional.** A
+   flag-gated check would let invalid files collect quietly until a deployment turned
+   extraction on, then fail in front of users who did not write them.
 2. **Does the escape hatch earn its place in slice one (§5.4)?** It is small, and it is
    the honest answer to `## Rules` and unknown columns. It is also a second editor over
    one file.
-3. **Sequencing against the render gap (§1.2).** Authoring hands an office a schema whose
-   results it still cannot read in the thread. Build the render first?
+3. ~~**Sequencing against the render gap (§1.2).**~~ **Settled:** the render shipped
+   first, in structured extraction's PR-3 (#1940).

@@ -20,6 +20,7 @@ import re
 from typing import List, Optional, Tuple
 
 from apis.shared.auth.models import User
+from apis.shared.extraction.field_sets import validate_field_set_upload
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.bundle import generate_skill_md
 from apis.shared.skills.models import SkillDefinition, SkillResourceRef
@@ -119,6 +120,15 @@ class SkillBundleFiles:
             )
         if not content:
             raise ValueError(f"Reference file '{filename}' is empty.")
+        if kind == "reference":
+            # A field set is checked here, on every write path (the user and
+            # admin uploads and the agent's my_skill_write_file), whatever any
+            # flag says: one stored invalid fails later, mid-turn, in front of
+            # someone who did not write it (field-set-authoring §4.2, D6).
+            # Only `references/` is read for field sets, so other kinds pass.
+            # FieldSetError is a ValueError, so it reaches the author as a 400
+            # or a tool error carrying the parser's own message.
+            validate_field_set_upload(filename, content)
 
         existing = list(skill.resources)
         # Adding a NEW filename must respect the per-skill cap; replacing an
