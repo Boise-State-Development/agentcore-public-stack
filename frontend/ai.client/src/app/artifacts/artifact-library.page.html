@@ -290,7 +290,10 @@
               </button>
               <p class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
                 <span>{{ styleFor(row.contentType).label }}</span>
-                @if (row.version > 1) {
+                @if (row.followsLatest) {
+                  <span aria-hidden="true">·</span>
+                  <span>Latest version</span>
+                } @else if (row.version > 1) {
                   <span aria-hidden="true">·</span>
                   <span>{{ versionLabel(row.version) }}</span>
                 }
@@ -422,7 +425,9 @@
 
               <p class="mt-1 grow text-xs/5 text-gray-500 dark:text-gray-400">
                 {{ styleFor(row.contentType).label }}
-                @if (row.version > 1) {
+                @if (row.followsLatest) {
+                  <span aria-hidden="true"> · </span>Latest version
+                } @else if (row.version > 1) {
                   <span aria-hidden="true"> · </span>{{ versionLabel(row.version) }}
                 }
                 <span aria-hidden="true"> · </span>

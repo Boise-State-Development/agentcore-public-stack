@@ -50,6 +50,7 @@ from .service import (
     RenderTokenConfigError,
     RenderTokenService,
     ShareAccessDeniedError,
+    ShareCannotFollowError,
     ShareNotFoundError,
     get_artifact_content_service,
     get_artifact_share_service,
@@ -72,6 +73,7 @@ def _share_response(share: dict) -> ArtifactShareResponse:
         share_id=share["share_id"],
         artifact_id=share.get("artifact_id", ""),
         version=int(share.get("version", 0)),
+        follows_latest=bool(share.get("follows_latest")),
         owner_id=share.get("owner_id", ""),
         access_level=share.get("access_level", "specific"),
         allowed_emails=share.get("allowed_emails"),
@@ -101,7 +103,8 @@ async def create_artifact_share(
     user: User = Depends(get_current_user_from_session),
     service: ArtifactShareService = Depends(get_artifact_share_service),
 ) -> ArtifactShareResponse:
-    """Share one immutable artifact version.
+    """Share an artifact: one immutable version, or with ``followsLatest``
+    a link that always shows the newest one.
 
     The version row is looked up with a partition key built from the
     authenticated session, so a caller can only share their own
@@ -121,6 +124,7 @@ async def create_artifact_share(
             access_level=request.access_level,
             allowed_emails=request.allowed_emails,
             project_id=project_id,
+            follows_latest=request.follows_latest,
         )
         if project_id:
             # Unlisted, a project share is one nobody can find: list it or undo it.
@@ -133,6 +137,11 @@ async def create_artifact_share(
             project_outputs.record(AuditAction.PROJECT_OUTPUT_SHARED, user, share)
     except project_outputs.ArtifactProjectError as exc:
         raise HTTPException(exc.status_code, str(exc))
+    except ShareCannotFollowError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "A share with project members always shows one version",
+        )
     except ArtifactNotFoundError:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Artifact version not found"
@@ -214,7 +223,7 @@ async def update_artifact_share(
     user: User = Depends(get_current_user_from_session),
     service: ArtifactShareService = Depends(get_artifact_share_service),
 ) -> ArtifactShareResponse:
-    """Change who may view an existing share. Owner only."""
+    """Change who may view an existing share, or whether it follows the latest. Owner only."""
     try:
         before = _get_share_lookup(share_id) or {}
         project_id = None
@@ -229,6 +238,7 @@ async def update_artifact_share(
             access_level=request.access_level,
             allowed_emails=request.allowed_emails,
             project_id=project_id,
+            follows_latest=request.follows_latest,
         )
         old_project, new_project = before.get("project_id"), share.get("project_id")
         for pid in {old_project, new_project} - {None}:
@@ -240,6 +250,11 @@ async def update_artifact_share(
                 project_outputs.record(AuditAction.PROJECT_OUTPUT_SHARED, user, share)
     except project_outputs.ArtifactProjectError as exc:
         raise HTTPException(exc.status_code, str(exc))
+    except ShareCannotFollowError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "A share with project members always shows one version",
+        )
     except ShareNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Share not found")
     except NotShareOwnerError:
@@ -373,6 +388,7 @@ async def list_shared_with_me(
                 title=item["title"],
                 content_type=item["content_type"],
                 version=item["version"],
+                follows_latest=item.get("follows_latest", False),
                 owner_email=item["owner_email"],
                 shared_at=item["shared_at"],
                 share_url=f"/shared-artifact/{item['share_id']}",
@@ -398,10 +414,16 @@ async def get_shared_artifact(
     Access-controlled: a revoked share is a 404 and a viewer outside the
     allowlist is a 403, so a recipient learns nothing about a share they
     cannot open beyond whether the link is dead or simply not theirs.
+
+    For a share that follows the latest, ``version`` and ``title`` are
+    the newest version's.
     """
     try:
         share = service.get_for_viewer(share_id=share_id, viewer=user)
     except ShareNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Share not found")
+    except ArtifactNotFoundError:
+        # A following share whose artifact has been deleted.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Share not found")
     except ShareAccessDeniedError:
         logger.info(
@@ -428,6 +450,7 @@ async def get_shared_artifact(
         title=share.get("title", ""),
         content_type=share.get("content_type", ""),
         version=int(share.get("version", 0)),
+        follows_latest=bool(share.get("follows_latest")),
         created_at=share.get("created_at", ""),
         owner_email=share.get("owner_email", ""),
         can_download=True,

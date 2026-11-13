@@ -45,7 +45,8 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
  * and the backend resolves the owner behind the ACL.
  *
  * Read-only by construction. There is no share button, no version menu
- * (a share pins one immutable version), and no way to edit.
+ * (a share shows one version: the pinned one, or the newest when the
+ * owner made the link follow the latest), and no way to edit.
  */
 @Component({
   selector: 'app-shared-artifact-view',
@@ -94,7 +95,11 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
             />
             <span
               class="text-xs font-medium text-gray-500 dark:text-gray-400"
-              >Shared read-only snapshot</span
+              >{{
+                artifact()?.followsLatest
+                  ? 'Shared read-only · always the latest version'
+                  : 'Shared read-only snapshot'
+              }}</span
             >
             @if (artifact(); as a) {
               <span class="text-xs text-gray-400 dark:text-gray-500">
@@ -162,7 +167,11 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
               {{ a.title || 'Untitled artifact' }}
             </h1>
             <p class="text-xs text-gray-500 dark:text-gray-400">
-              Version {{ a.version }} · shared by {{ a.ownerEmail }}
+              @if (a.followsLatest) {
+                Latest version (v{{ a.version }}) · shared by {{ a.ownerEmail }}
+              } @else {
+                Version {{ a.version }} · shared by {{ a.ownerEmail }}
+              }
             </p>
           </div>
 
@@ -403,8 +412,9 @@ export class SharedArtifactViewPage implements OnInit {
   }
 
   /** Fetch the raw source once. No-op while a fetch is in flight or the
-   *  source is already loaded — the version is pinned, so it can't go
-   *  stale under us the way the owner panel's can. */
+   *  source is already loaded. A pinned version can't go stale under us
+   *  the way the owner panel's can; a following share can, but only to a
+   *  version made after this page opened, which a reload picks up. */
   private async ensureSource(): Promise<void> {
     if (this.sourceLoading || this.source()) return;
     this.sourceLoading = true;
