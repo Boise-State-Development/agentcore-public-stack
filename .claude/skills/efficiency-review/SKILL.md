@@ -3,7 +3,7 @@ name: efficiency-review
 description: >-
   Weekly cross-pillar review of a deployment: cost, speed and answer quality
   joined on the turn, so an efficiency is a gain on one pillar that costs the
-  others nothing. Scans the per-call cost rows and thumb rows (read-only,
+  others nothing. Scans the per-call cost rows and feedback rows (read-only,
   content-free), runs scripts/efficiency_review.py, compares the last 7 days
   with the 7 before and with the previous run, and ends in a short ranked list
   of candidates with what each does to all three pillars. Use when the user
@@ -49,23 +49,23 @@ projections are the privacy boundary: never add `title`, `displayText`,
 `citations`, `fileName` or any message field.
 
 ```bash
-aws dynamodb scan --profile <PROFILE> --table-name <PREFIX>-sessions-metadata --filter-expression "begins_with(SK, :c) AND #t >= :d" --projection-expression "sessionId,userId,#t,messageId,#c,tokenUsage,modelInfo.modelId,latency,cacheStatus,cacheGapSeconds,wastedUsd,toolCalls,hasDocuments,turnDurationMs,compactionEvents,turnAgentId,projectId,agentSwitched,modelSwitched,rewound,outcome,emptyAnswer,appVersion,callKind,usageEstimated" --expression-attribute-names '{"#t":"timestamp","#c":"cost"}' --expression-attribute-values '{":c":{"S":"C#"},":d":{"S":"<START>"}}' --output json > $RAW/cost_rows.json
+aws dynamodb scan --profile <PROFILE> --table-name <PREFIX>-sessions-metadata --filter-expression "(begins_with(SK, :c) AND #t >= :d) OR (begins_with(SK, :f) AND updatedAt >= :d)" --projection-expression "sessionId,userId,#t,messageId,#c,tokenUsage,modelInfo.modelId,latency,cacheStatus,cacheGapSeconds,wastedUsd,toolCalls,outputChars,hasDocuments,turnDurationMs,compactionEvents,turnAgentId,projectId,agentSwitched,modelSwitched,rewound,outcome,emptyAnswer,appVersion,callKind,usageEstimated,#v,reason,retryMessageId,#s,#k,#n,updatedAt" --expression-attribute-names '{"#t":"timestamp","#c":"cost","#v":"value","#n":"count","#s":"signal","#k":"kind"}' --expression-attribute-values '{":c":{"S":"C#"},":f":{"S":"F#"},":d":{"S":"<START>"}}' --output json > $RAW/rows.json
 ```
 
-Thumbs, once for `FEEDBACK#down` and once for `FEEDBACK#up` (the reason is a fixed code, never text):
+One pass returns two row families: `C#` cost rows and `F#` feedback rows
+(thumbs, and the implicit `copy` / `continue` signals, which have no fleet
+index and so are only reachable by a scan). A thumb's `reason` is a fixed
+code, never text. `signal`, `kind`, `count` and `value` are DynamoDB reserved
+words, hence the aliases.
 
-```bash
-aws dynamodb query --profile <PROFILE> --table-name <PREFIX>-sessions-metadata --index-name UserTimestampIndex --key-condition-expression "GSI1PK = :p AND GSI1SK >= :d" --projection-expression "sessionId,messageId,#v,reason,retryMessageId,updatedAt" --expression-attribute-names '{"#v":"value"}' --expression-attribute-values '{":p":{"S":"FEEDBACK#down"},":d":{"S":"<START>"}}' --output json > $RAW/feedback_down.json
-```
-
-The cost-row scan grows with traffic (about 250 MB for 80K calls); run it in
-the background with a 10-minute timeout. If `/usage-patterns-dashboard` ran
-today, its scan lacks `latency`, `rewound` and `projectId`; scan again.
+The scan grows with traffic (about 250 MB for 80K calls); run it in the
+background with a 10-minute timeout. If `/usage-patterns-dashboard` ran today,
+its scan lacks `latency`, `outputChars` and the feedback rows; scan again.
 
 ## 2. Build
 
 ```bash
-python3 -I .claude/skills/efficiency-review/scripts/efficiency_review.py --cost-rows $RAW/cost_rows.json --feedback $RAW/feedback_down.json $RAW/feedback_up.json --window-start <START> --window-end <END> --previous docs/efficiency-reviews/<previous end>.json --out $OUT
+python3 -I .claude/skills/efficiency-review/scripts/efficiency_review.py --rows $RAW/rows.json --window-start <START> --window-end <END> --previous docs/efficiency-reviews/<previous end>.json --out $OUT
 ```
 
 Omit `--previous` on a first run. It prints `review.md`; `summary.json` holds
@@ -82,7 +82,10 @@ the same numbers. Neither carries a session or user id.
    - *By model calls per turn* and *by turn length*: where time and cost concentrate together.
    - *Tool turns, with and without an error*: the gap is an upper bound. Long loops have more chances to fail, so never claim the whole difference.
    - *By model*: cost per turn beside turn time and completion. A cheaper, faster model is an efficiency only where quality holds, which needs the eval harness, not this table.
-   - *Tools*: a tool's turn cost is the cost of turns that used it, not the cost it caused.
+   - *Tools*: a tool's turn cost is the cost of turns that used it, not the cost it caused. Where *Excl. auth* has a value, it is the rate to act on: an `auth` error is an expired token the consent hook retried, not a tool defect.
+   - *Model time*: the share of turn time spent inside model calls. The rest is tool execution and the pre-stream build, so it says whether a speed lever is "fewer or shorter model calls" or "faster tools".
+   - *Output composition*: how much of the output was thinking. An estimate (signature characters over 3.1 per token), and only for calls that recorded it; use it to size an effort or thinking lever, never to bill.
+   - *Copied* and *how conversations ended*: the two quality signals that exist on turns nobody thumbed. A copy is weak positive evidence. An ending on an error, a stop, an empty answer or a failed tool is weak negative evidence: a satisfied user also goes quiet, so compare shares between slices rather than reading one as a failure rate.
 4. **Cache.** `miss_ttl_expired` is human pace and is only reduced by smaller
    contexts (a longer TTL was replayed and loses money; see
    `docs/one-pagers/conversation-usage-patterns.md`). `partial_miss` and

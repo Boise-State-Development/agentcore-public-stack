@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Weekly efficiency review: cost, speed and quality joined on the turn.
 
-Reads a content-free scan of per-call ``C#`` cost rows (and, optionally, thumb
-rows) and writes ``summary.json`` and ``review.md``. Stdlib only; run with
+Reads one content-free scan holding per-call ``C#`` cost rows and ``F#``
+feedback rows (thumbs and implicit signals) and writes ``summary.json`` and ``review.md``. Stdlib only; run with
 ``python3 -I``. Nothing here reads message text, titles or file names, and no
 session or user id is written to either output.
 
@@ -23,6 +23,8 @@ TOOL_LEAD_MIN_CALLS = 30
 TOOL_LEAD_ERROR_RATE = 0.10
 PREMIUM_MARKERS = ("opus", "fable", "gpt-6-astra")
 CALL_BANDS = ((1, 1, "1"), (2, 2, "2"), (3, 4, "3-4"), (5, 9, "5-9"), (10, 10**6, "10+"))
+REASONING_SIGNATURE_CHARS_PER_TOKEN = 3.1  # as in the compaction policy; an estimate
+BAD_ENDINGS = ("error", "stopped", "interrupted")
 DURATION_BANDS = ((0, 10, "under 10 s"), (10, 30, "10-30 s"), (30, 90, "30-90 s"), (90, 10**6, "over 90 s"))
 
 Row = Dict[str, Any]
@@ -97,6 +99,7 @@ def build_turns(rows: Iterable[Row]) -> List[Dict[str, Any]]:
             current.update(
                 session=session_id,
                 user=_text(row.get("userId")),
+                stamp=_text(row.get("timestamp")) or "",
                 day=(_text(row.get("timestamp")) or "")[:10],
                 message_id=int(_num(row.get("messageId"), -1)),
                 model=_model(row),
@@ -118,6 +121,8 @@ def _new_turn() -> Dict[str, Any]:
         "calls": 0, "cost": 0.0, "output_cost": 0.0, "wasted": 0.0, "ttft_ms": None,
         "tool_calls": 0, "tool_errors": 0, "tool_ms": 0.0, "tool_timed": 0,
         "tools": Counter(), "statuses": Counter(), "rewound": False,
+        "model_ms": 0.0, "error_kinds": Counter(),
+        "output_tokens": 0.0, "text_chars": 0.0, "reasoning_chars": 0.0, "signature_chars": 0.0, "measured_output_tokens": 0.0,
     }
 
 
@@ -131,26 +136,55 @@ def _add_call(turn: Dict[str, Any], row: Row) -> None:
     if turn["ttft_ms"] is None:
         first_token = _num(row.get("latency", {}).get("M", {}).get("timeToFirstToken"))
         turn["ttft_ms"] = first_token or None
+    turn["model_ms"] += _num(row.get("latency", {}).get("M", {}).get("endToEndLatency"))
+    output_tokens = _num(row.get("tokenUsage", {}).get("M", {}).get("outputTokens"))
+    turn["output_tokens"] += output_tokens
+    chars = row.get("outputChars", {}).get("M")
+    if chars:
+        turn["measured_output_tokens"] += output_tokens
+        turn["text_chars"] += _num(chars.get("text"))
+        turn["reasoning_chars"] += _num(chars.get("reasoning"))
+        turn["signature_chars"] += _num(chars.get("reasoningSignature"))
     for name, entry in row.get("toolCalls", {}).get("M", {}).items():
         fields = entry.get("M", {})
         calls = int(_num(fields.get("calls")))
         turn["tool_calls"] += calls
+        for kind, count in fields.get("errorKinds", {}).get("M", {}).items():
+            turn["error_kinds"][kind] += int(_num(count))
         turn["tool_errors"] += int(_num(fields.get("errors")))
         turn["tool_ms"] += _num(fields.get("durationMs"))
         turn["tool_timed"] += int(_num(fields.get("timedCalls")))
         turn["tools"][name] += calls
 
 
-def _thumbs(feedback_rows: Iterable[Row]) -> Dict[tuple, Dict[str, Any]]:
+def split_rows(items: Iterable[Row]) -> tuple:
+    """Cost rows and feedback rows from one scan. A feedback row has no ``cost``
+    and carries a ``value`` (a thumb) or ``signal == "implicit"``."""
+    cost_rows: List[Row] = []
+    feedback: List[Row] = []
+    for item in items:
+        if "modelInfo" in item:
+            cost_rows.append(item)
+        elif "value" in item or "signal" in item:
+            feedback.append(item)
+    return cost_rows, feedback
+
+
+def _feedback(feedback_rows: Iterable[Row]) -> tuple:
+    """``(thumbs, implicit)`` keyed by ``(sessionId, messageId)``."""
     thumbs: Dict[tuple, Dict[str, Any]] = {}
+    implicit: Dict[tuple, Counter] = defaultdict(Counter)
     for row in feedback_rows:
         key = (_text(row.get("sessionId")), int(_num(row.get("messageId"), -1)))
+        if _text(row.get("signal")) == "implicit":
+            implicit[key][_text(row.get("kind")) or "unknown"] += int(_num(row.get("count"), 1))
+            continue
         thumbs[key] = {
             "value": int(_num(row.get("value"))),
             "reason": _text(row.get("reason")),
             "retried": "retryMessageId" in row,
         }
-    return thumbs
+    return thumbs, implicit
 
 
 def _pillars(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -179,6 +213,8 @@ def _pillars(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         "thumbs_up": up,
         "thumbs_down": down,
         "down_rate": _round(_rate(down, up + down), 4),
+        "copied_share": _round(_rate(sum(1 for t in turns if t.get("copied")), count), 4),
+        "model_time_share": _round(_rate(sum(t["model_ms"] for t in turns) / 1000, sum(durations)), 3),
         "wasted_usd": round(sum(t["wasted"] for t in turns), 2),
     }
 
@@ -221,6 +257,8 @@ def _tool_table(rows: Iterable[Row], turns: List[Dict[str, Any]]) -> List[Dict[s
             tool["ms"] += _num(fields.get("durationMs"))
             tool["timed"] += _num(fields.get("timedCalls"))
             tool["chars"] += _num(fields.get("resultChars"))
+            for kind, count in fields.get("errorKinds", {}).get("M", {}).items():
+                tool["kind_" + kind] += _num(count)
     for turn in turns:
         for name in turn["tools"]:
             totals[name]["turn_cost"] += turn["cost"]
@@ -236,6 +274,11 @@ def _tool_table(rows: Iterable[Row], turns: List[Dict[str, Any]]) -> List[Dict[s
             "calls": int(tool["calls"]),
             "errors": int(tool["errors"]),
             "error_rate": _round(_rate(tool["errors"], tool["calls"]), 4),
+            "error_kinds": {name[5:]: int(count) for name, count in tool.items() if name.startswith("kind_")},
+            "error_rate_excluding_auth": (
+                _round(_rate(tool["errors"] - tool["kind_auth"], tool["calls"]), 4)
+                if any(name.startswith("kind_") for name in tool) else None
+            ),
             "mean_s": _round(tool["ms"] / tool["timed"] / 1000, 2) if tool["timed"] >= FLOOR else None,
             "result_chars_per_call": int(tool["chars"] / tool["timed"]) if tool["timed"] >= FLOOR else None,
             "turns": int(tool["turns"]),
@@ -254,6 +297,19 @@ def _sessions(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         session["turns"] += 1
         session["tools"] += turn["tool_calls"]
         session["models"][turn["model"]] += turn["cost"]
+    last_turn: Dict[str, Dict[str, Any]] = {}
+    for turn in turns:
+        previous = last_turn.get(turn["session"])
+        if previous is None or turn["stamp"] > previous["stamp"]:
+            last_turn[turn["session"]] = turn
+    judged = [t for t in last_turn.values() if t["outcome"]]
+    endings = Counter(
+        t["outcome"] if t["outcome"] in BAD_ENDINGS
+        else "empty answer" if t["empty"]
+        else "tool error" if t["tool_errors"] > t["error_kinds"].get("auth", 0)
+        else "clean"
+        for t in judged
+    )
     costs = sorted((s["cost"] for s in sessions.values()), reverse=True)
     total = sum(costs) or 1.0
     light_premium = [
@@ -266,7 +322,39 @@ def _sessions(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         "top_5pct_share": round(sum(costs[: max(1, len(costs) // 20)]) / total, 3),
         "premium_light_conversations": len(light_premium),
         "premium_light_usd": round(sum(s["cost"] for s in light_premium), 2),
+        "endings": dict(endings),
+        "ended_badly_share": _round(_rate(len(judged) - endings.get("clean", 0), len(judged)), 4),
     }
+
+
+def _output_composition(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Per model: how much of the measured output was thinking. An estimate:
+    signature characters stand in for billed reasoning tokens."""
+    groups: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for turn in turns:
+        if not turn["measured_output_tokens"]:
+            continue
+        group = groups[turn["model"]]
+        group["turns"] += 1
+        for field in ("measured_output_tokens", "text_chars", "reasoning_chars", "signature_chars", "output_cost"):
+            group[field] += turn[field]
+    table = []
+    for model, group in groups.items():
+        reasoning_tokens = group["signature_chars"] / REASONING_SIGNATURE_CHARS_PER_TOKEN
+        table.append({
+            "model": model,
+            "turns": int(group["turns"]),
+            "output_tokens": int(group["measured_output_tokens"]),
+            "text_chars": int(group["text_chars"]),
+            "reasoning_chars": int(group["reasoning_chars"]),
+            "signature_chars": int(group["signature_chars"]),
+            "est_reasoning_share": (
+                _round(min(1.0, reasoning_tokens / group["measured_output_tokens"]), 3)
+                if group["turns"] >= FLOOR and group["measured_output_tokens"] else None
+            ),
+        })
+    table.sort(key=lambda entry: -entry["output_tokens"])
+    return table
 
 
 def _leads(summary: Dict[str, Any]) -> List[str]:
@@ -289,8 +377,13 @@ def _leads(summary: Dict[str, Any]) -> List[str]:
             direction = "worse" if (change > 0) == worse_when_up else "better"
             leads.append(f"{label} moved {change:+.0%} week over week ({before} -> {now}): {direction}")
     for tool in summary["tools_this_week"]:
-        if tool["calls"] >= TOOL_LEAD_MIN_CALLS and (tool["error_rate"] or 0) >= TOOL_LEAD_ERROR_RATE:
-            leads.append(f"tool `{tool['tool']}` failed {tool['error_rate']:.0%} of {tool['calls']} calls in the last 7 days")
+        rate = tool["error_rate_excluding_auth"] if tool["error_rate_excluding_auth"] is not None else tool["error_rate"]
+        if tool["calls"] >= TOOL_LEAD_MIN_CALLS and (rate or 0) >= TOOL_LEAD_ERROR_RATE:
+            basis = " (auth retries excluded)" if tool["error_rate_excluding_auth"] is not None else ""
+            leads.append(f"tool `{tool['tool']}` failed {rate:.0%} of {tool['calls']} calls in the last 7 days{basis}")
+    bad = summary["sessions"]["ended_badly_share"]
+    if bad is not None and bad >= 0.05:
+        leads.append(f"{bad:.0%} of conversations ended on an error, a stop, an empty answer or a failed tool")
     statuses = {entry["status"]: entry for entry in summary["cache"]}
     idle = statuses.get("miss_ttl_expired")
     if idle and idle["share"] >= 0.20:
@@ -311,14 +404,18 @@ def _leads(summary: Dict[str, Any]) -> List[str]:
     return leads
 
 
-def build(rows: List[Row], feedback: List[Row], start: str, end: str, previous: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def build(items: List[Row], start: str, end: str, previous: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    rows, feedback = split_rows(items)
     rows = [r for r in rows if start <= (_text(r.get("timestamp")) or "")[:10] <= end]
     turns = build_turns(rows)
-    thumbs = _thumbs(feedback)
+    thumbs, implicit = _feedback(feedback)
     for turn in turns:
-        thumb = thumbs.get((turn["session"], turn["message_id"]))
+        key = (turn["session"], turn["message_id"])
+        thumb = thumbs.get(key)
         turn["thumb"] = thumb["value"] if thumb else None
         turn["retried"] = bool(thumb and thumb["retried"])
+        turn["copied"] = implicit.get(key, {}).get("copy", 0) > 0
+        turn["continued"] = implicit.get(key, {}).get("continue", 0) > 0
 
     end_day = date.fromisoformat(end)
     week_start = (end_day - timedelta(days=6)).isoformat()
@@ -377,6 +474,8 @@ def build(rows: List[Row], feedback: List[Row], start: str, end: str, previous: 
             "rewound_turns": sum(1 for t in turns if t["rewound"]),
             "down_reasons": dict(Counter(v["reason"] or "none" for v in thumbs.values() if v["value"] == -1)),
             "down_then_retried": sum(1 for v in thumbs.values() if v["retried"]),
+            "implicit_signals": dict(sum((counts for counts in implicit.values()), Counter())),
+            "tool_error_kinds": dict(sum((t["error_kinds"] for t in turns), Counter())),
             "estimated_usage_calls": sum(1 for r in rows if "usageEstimated" in r),
         },
         "coverage": {
@@ -385,7 +484,15 @@ def build(rows: List[Row], feedback: List[Row], start: str, end: str, previous: 
             "tool_turns_with_timing": _round(_rate(len(timed_tool_turns), len(tool_turns)), 3),
             "turns_with_thumb": _round(_rate(sum(1 for t in turns if t["thumb"]), len(turns)), 4),
             "turns_with_version": _round(_rate(sum(1 for t in turns if t["version"]), len(turns)), 3),
+            "turns_with_implicit_signal": _round(_rate(sum(1 for t in turns if t["copied"] or t["continued"]), len(turns)), 4),
+            "tool_errors_with_kind": _round(
+                _rate(sum(sum(t["error_kinds"].values()) for t in turns), sum(t["tool_errors"] for t in turns)), 3
+            ),
+            "output_tokens_with_composition": _round(
+                _rate(sum(t["measured_output_tokens"] for t in turns), sum(t["output_tokens"] for t in turns)), 3
+            ),
         },
+        "output": _output_composition(turns),
     }
     summary["leads"] = _leads(summary)
     if previous:
@@ -403,8 +510,8 @@ def _pct(value: Optional[float]) -> str:
 
 def _pillar_table(rows: List[Dict[str, Any]], label: str) -> List[str]:
     lines = [
-        f"| {label} | Turns | Cost | $/turn | Turn p50 / p90 (s) | First token p50 (s) | Completed | Down rate (n) |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        f"| {label} | Turns | Cost | $/turn | Turn p50 / p90 (s) | First token p50 (s) | Model time | Completed | Copied | Down rate (n) |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         thumbs = row["thumbs_up"] + row["thumbs_down"]
@@ -412,7 +519,8 @@ def _pillar_table(rows: List[Dict[str, Any]], label: str) -> List[str]:
         lines.append(
             f"| {row.get('key', '')} | {row['turns']} | ${row['cost_usd']} | {per_turn} | "
             f"{_cell(row['turn_p50_s'])} / {_cell(row['turn_p90_s'])} | {_cell(row['ttft_p50_s'])} | "
-            f"{_pct(row['completed_share'])} | {_pct(row['down_rate'])} ({thumbs}) |"
+            f"{_pct(row['model_time_share'])} | {_pct(row['completed_share'])} | {_pct(row['copied_share'])} | "
+            f"{_pct(row['down_rate'])} ({thumbs}) |"
         )
     return lines
 
@@ -449,12 +557,22 @@ def render(summary: Dict[str, Any]) -> str:
         f"| {c['status']} | {c['calls']} | ${c['cost_usd']} | {c['share']:.1%} | ${c['wasted_usd']} |" for c in summary["cache"]
     ]
     lines += ["", "## Tools (by cost of the turns that used them)", ""]
-    lines += ["| Tool | Calls | Error rate | Mean s | Result chars | Turn cost | Down rate |", "|---|---:|---:|---:|---:|---:|---:|"]
     lines += [
-        f"| `{t['tool']}` | {t['calls']} | {_pct(t['error_rate'])} | {_cell(t['mean_s'])} | "
+        "| Tool | Calls | Error rate | Excl. auth | Mean s | Result chars | Turn cost | Down rate |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    lines += [
+        f"| `{t['tool']}` | {t['calls']} | {_pct(t['error_rate'])} | {_pct(t['error_rate_excluding_auth'])} | {_cell(t['mean_s'])} | "
         f"{_cell(t['result_chars_per_call'])} | ${t['cost_of_turns_usd']} | {_pct(t['down_rate'])} |"
         for t in summary["tools"]
     ]
+    lines += ["", "## Output composition (estimate; only calls that recorded it)", ""]
+    lines += ["| Model | Turns | Output tokens | Text chars | Reasoning chars | Signature chars | Est. reasoning share |", "|---|---:|---:|---:|---:|---:|---:|"]
+    lines += [
+        f"| {o['model']} | {o['turns']} | {o['output_tokens']} | {o['text_chars']} | {o['reasoning_chars']} | "
+        f"{o['signature_chars']} | {_pct(o['est_reasoning_share'])} |"
+        for o in summary["output"]
+    ] or ["| none recorded yet | | | | | | |"]
     sessions, quality = summary["sessions"], summary["quality"]
     lines += [
         "", "## Concentration and quality signals", "",
@@ -462,6 +580,9 @@ def render(summary: Dict[str, Any]) -> str:
         f"- premium model on short, tool-free conversations: ${sessions['premium_light_usd']} across {sessions['premium_light_conversations']}",
         f"- outcomes: {quality['outcomes']}; empty answers: {quality['empty_answers']}; rewound turns: {quality['rewound_turns']}",
         f"- down-thumb reasons: {quality['down_reasons']}; followed by a retry: {quality['down_then_retried']}",
+        f"- implicit signals: {quality['implicit_signals']}",
+        f"- how conversations ended (last turn): {sessions['endings']}; not clean: {_pct(sessions['ended_badly_share'])}",
+        f"- tool error kinds: {quality['tool_error_kinds']}",
         f"- calls with estimated usage (stopped mid-generation): {quality['estimated_usage_calls']}",
         "",
     ]
@@ -470,17 +591,16 @@ def render(summary: Dict[str, Any]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--cost-rows", required=True, help="DynamoDB scan JSON of C# rows")
-    parser.add_argument("--feedback", nargs="*", default=[], help="DynamoDB query JSON of thumb rows (down, up)")
+    parser.add_argument("--rows", required=True, nargs="+", help="DynamoDB scan JSON of C# and F# rows (one file or several)")
     parser.add_argument("--window-start", required=True)
     parser.add_argument("--window-end", required=True)
     parser.add_argument("--previous", help="the previous run's summary.json")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
-    feedback = [row for path in args.feedback for row in _load_items(path)]
+    items = [row for path in args.rows for row in _load_items(path)]
     previous = json.loads(Path(args.previous).read_text()) if args.previous else None
-    summary = build(_load_items(args.cost_rows), feedback, args.window_start, args.window_end, previous)
+    summary = build(items, args.window_start, args.window_end, previous)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
